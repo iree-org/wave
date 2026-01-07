@@ -1494,11 +1494,10 @@ static LogicalResult verifyReadWriteBounds(Location loc,
 }
 
 /// Common verification logic for ReadOp and WriteOp.
-static LogicalResult
-verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
-                  std::optional<int64_t> elementsPerThread, Type memoryType,
-                  Type valueType,
-                  std::optional<WaveReadWriteBoundsAttr> bounds) {
+static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
+                                       std::optional<int64_t> elementsPerThread,
+                                       Type memoryType, Type valueType,
+                                       WaveReadWriteBoundsAttr bounds) {
   // Skip verification if memory is already resolved to MemRefType.
   auto tensorType = dyn_cast<WaveTensorType>(memoryType);
   if (!tensorType)
@@ -1508,19 +1507,16 @@ verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                           tensorType, valueType)))
     return failure();
 
-  WaveReadWriteBoundsAttr boundsAttr =
-      bounds.value_or(WaveReadWriteBoundsAttr());
-  if (!boundsAttr)
+  if (!bounds)
     return success();
 
-  return verifyReadWriteBounds(op->getLoc(), tensorType,
-                               boundsAttr.getMapping());
+  return verifyReadWriteBounds(op->getLoc(), tensorType, bounds.getMapping());
 }
 
 LogicalResult ReadOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getResult().getType(),
-                           getBounds());
+                           getBoundsAttr());
 }
 
 llvm::FailureOr<mlir::ChangeResult>
@@ -1620,7 +1616,7 @@ LogicalResult ExtractSliceOp::verify() {
 LogicalResult WriteOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getValueToStore().getType(),
-                           getBounds());
+                           getBoundsAttr());
 }
 
 llvm::FailureOr<mlir::ChangeResult>

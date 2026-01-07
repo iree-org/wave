@@ -12,7 +12,6 @@
 #include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 
 #define DEBUG_TYPE "wave-resolve-distributed-allocations"
 
@@ -29,8 +28,14 @@ namespace {
 struct ResolveDistributedAllocations
     : public wave::impl::WaterWaveResolveDistributedAllocationsPassBase<
           ResolveDistributedAllocations> {
-  void runOnOperation() override {
-    getOperation()->walk([&](AllocateOp allocateOp) {
+
+  /// Resolve all allocate operations within the given operation using the
+  /// provided type converter. Returns failure if any allocation fails to
+  /// resolve.
+  LogicalResult resolveAllocations(Operation *root,
+                                   WaveTypeConverter &typeConverter) {
+    LogicalResult result = success();
+    root->walk([&](AllocateOp allocateOp) {
       if (isa<MemRefType>(allocateOp.getResult().getType()))
         return;
 
@@ -40,24 +45,48 @@ struct ResolveDistributedAllocations
       if (tensorType.getAddressSpaceValue() != WaveAddressSpace::Shared)
         return;
 
-      WaveHyperparameterAttr hyperparams = getHyperparameters(allocateOp);
-      if (!hyperparams) {
-        allocateOp.emitError("no hyperparameters found for allocate operation");
-        return signalPassFailure();
-      }
-
       WaveExprListAttr distributedShape = allocateOp.getDistributedShape();
-      WaveTypeConverter typeConverter(hyperparams);
       Type memrefType = typeConverter.convertTensorFromComponents(
           distributedShape.getSymbols(), distributedShape.getMap(),
           tensorType.getElementType(), tensorType.getAddressSpaceValue());
       if (!memrefType) {
         allocateOp.emitError("failed to create memref type");
-        return signalPassFailure();
+        result = failure();
+        return;
       }
 
       allocateOp.getResult().setType(memrefType);
     });
+    return result;
+  }
+
+  void runOnOperation() override {
+    auto *waveDialect = getContext().getLoadedDialect<WaveDialect>();
+    WalkResult walkResult =
+        getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) {
+          // If we hit an AllocateOp before finding hyperparameters, error.
+          if (op->getDialect() == waveDialect && isa<AllocateOp>(op)) {
+            op->emitError() << "allocate operation with no hyperparameters "
+                               "provided by any ancestor";
+            return WalkResult::interrupt();
+          }
+
+          auto hyperparam = op->getAttrOfType<WaveHyperparameterAttr>(
+              WaveDialect::kHyperparameterAttrName);
+          if (!hyperparam)
+            return WalkResult::advance();
+
+          // Found hyperparameters, resolve all allocations in this subtree.
+          WaveTypeConverter typeConverter(hyperparam);
+          if (failed(resolveAllocations(op, typeConverter)))
+            return WalkResult::interrupt();
+
+          // Skip children since we already processed this subtree.
+          return WalkResult::skip();
+        });
+
+    if (walkResult.wasInterrupted())
+      return signalPassFailure();
   }
 };
 

@@ -165,8 +165,7 @@ def WaterWaveResolveDistributedAllocationsPass
   }];
 
   let dependentDialects = [
-    "::mlir::gpu::GPUDialect",
-    "::mlir::memref::MemRefDialect"
+    "::mlir::gpu::GPUDialect"
   ];
 }
 
