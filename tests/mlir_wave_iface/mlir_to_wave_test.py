@@ -291,6 +291,22 @@ class TestConvertIndexMappingAttrToSympy:
         assert result.size == 16
         assert result.stride == 1
 
+    def test_index_mapping_with_null_start(self):
+        attr = ir.Attribute.parse("#wave<index_mapping[] -> (<NULL>, 1, 1)>")
+        result = _convert_index_mapping_attr_to_sympy(attr)
+        assert isinstance(result, IndexSequence)
+        assert result.start is None
+        assert result.size == 1
+        assert result.stride == 1
+
+    def test_index_mapping_with_null_step_stride(self):
+        attr = ir.Attribute.parse("#wave<index_mapping[] -> (1, <NULL>, <NULL>)>")
+        result = _convert_index_mapping_attr_to_sympy(attr)
+        assert isinstance(result, IndexSequence)
+        assert result.start == 1
+        assert result.size is None
+        assert result.stride is None
+
 
 class TestConvertIndexMappingDictToSympy:
     """Tests for _convert_index_mapping_dict_to_sympy function."""

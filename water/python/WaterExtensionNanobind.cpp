@@ -167,13 +167,25 @@ struct PyWaveIndexMappingAttr
         nb::arg("stride"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.");
     c.def_prop_ro("start", [](MlirAttribute self) {
-      return mlirWaveIndexMappingAttrGetStart(self);
+      MlirAffineMap start = mlirWaveIndexMappingAttrGetStart(self);
+      if (mlirAffineMapIsNull(start)) {
+        return nb::none();
+      }
+      return nb::cast(start);
     });
     c.def_prop_ro("step", [](MlirAttribute self) {
-      return mlirWaveIndexMappingAttrGetStep(self);
+      MlirAffineMap step = mlirWaveIndexMappingAttrGetStep(self);
+      if (mlirAffineMapIsNull(step)) {
+        return nb::none();
+      }
+      return nb::cast(step);
     });
     c.def_prop_ro("stride", [](MlirAttribute self) {
-      return mlirWaveIndexMappingAttrGetStride(self);
+      MlirAffineMap stride = mlirWaveIndexMappingAttrGetStride(self);
+      if (mlirAffineMapIsNull(stride)) {
+        return nb::none();
+      }
+      return nb::cast(stride);
     });
     c.def_prop_ro("symbols", [](MlirAttribute self) {
       std::vector<MlirAttribute> symbols;

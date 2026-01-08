@@ -40,3 +40,19 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     return
   }
 }
+
+// -----
+
+// Should not crash on null stride.
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
+// expected-error @below {{failed to convert starting at this operation}}
+func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
+  // expected-error @below {{failed to legalize}}
+  %0 = wave.read %mem index [{
+    M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , <NULL>, 64),
+    N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
+    : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
+  return
+  }
+}
