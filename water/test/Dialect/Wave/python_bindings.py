@@ -117,6 +117,20 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
+    mapping = ir.Attribute.parse("#wave<index_mapping[] -> (<NULL>, 1, 1)>")
+    assert mapping.start is None
+    assert isinstance(mapping.step, ir.AffineMap)
+    assert isinstance(mapping.stride, ir.AffineMap)
+    # CHECK: #wave<index_mapping[] -> (<NULL>, 1, 1)>
+    print(mapping)
+
+    mapping = ir.Attribute.parse("#wave<index_mapping[] -> (1, <NULL>, <NULL>)>")
+    assert isinstance(mapping.start, ir.AffineMap)
+    assert mapping.step is None
+    assert mapping.stride is None
+    # CHECK: #wave<index_mapping[] -> (1, <NULL>, <NULL>)>
+    print(mapping)
+
     # CHECK: #wave.hyperparameters<{A = 1 : i64, B = 2 : i64, C = 3 : i64}>
     hyper_param = wave.WaveHyperparameterAttr.get({"A": 1, "B": 2, "C": 3})
     print(hyper_param)

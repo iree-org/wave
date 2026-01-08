@@ -53,37 +53,6 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                << val;
 
       auto mapping = cast<wave::WaveIndexMappingAttr>(val);
-      auto checkNoDims = [&](AffineMap map, StringRef which) -> LogicalResult {
-        if (map.getNumDims() != 0)
-          return op->emitError(
-                     "wave indexing " + which +
-                     " map should have no dimensions, only symbols, got ")
-                 << map.getNumDims() << " dimensions for symbol "
-                 << named.getName();
-        return success();
-      };
-
-      AffineMap startMap = mapping.getStart();
-      AffineMap stepMap = mapping.getStep();
-      AffineMap strideMap = mapping.getStride();
-      if (failed(checkNoDims(startMap, "start")) ||
-          failed(checkNoDims(stepMap, "step")) ||
-          failed(checkNoDims(strideMap, "stride")))
-        return failure();
-
-      unsigned declared = mapping.getSymbols().size();
-      if (startMap.getNumSymbols() != declared ||
-          stepMap.getNumSymbols() != declared ||
-          strideMap.getNumSymbols() != declared) {
-        return op->emitError(
-                   "inconsistent symbol count between symbol_names and "
-                   "affine maps for index symbol '")
-               << named.getName() << "' (expected " << declared
-               << ", got start=" << startMap.getNumSymbols()
-               << ", step=" << stepMap.getNumSymbols()
-               << ", stride=" << strideMap.getNumSymbols() << ")";
-      }
-
       for (auto symbol : mapping.getSymbols()) {
         auto iterSymbol = dyn_cast<wave::WaveIterSymbolAttr>(symbol);
         if (!iterSymbol)

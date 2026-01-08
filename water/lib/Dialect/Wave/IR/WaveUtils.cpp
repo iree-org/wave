@@ -32,6 +32,8 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
     if (!entry)
       return ShapedType::kDynamic;
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(entry);
+    if (!mapAttr.getStep())
+      return ShapedType::kDynamic;
     std::optional<SmallVector<int64_t>> folded =
         wave::evaluateMapWithHyperparams(mapAttr.getStep(),
                                          mapAttr.getSymbols(), hyper);

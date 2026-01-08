@@ -130,18 +130,16 @@ def _convert_index_mapping_attr_to_sympy(
             raise ValueError(f"Unsupported symbol attribute: {symbol_name}")
 
     symbols = list(map(wrap_symbol, attr.symbols))
-    assert (
-        len(attr.start.results) == 1
-    ), f"Expected start map to have one expression, got {attr.start}"
-    assert (
-        len(attr.step.results) == 1
-    ), f"Expected step map to have one expression, got {attr.step}"
-    assert (
-        len(attr.stride.results) == 1
-    ), f"Expected stride map to have one expression, got {attr.stride}"
-    start = _convert_affine_expr_to_sympy_expr(attr.start.results[0], symbols)
-    step = _convert_affine_expr_to_sympy_expr(attr.step.results[0], symbols)
-    stride = _convert_affine_expr_to_sympy_expr(attr.stride.results[0], symbols)
+
+    def convert_map(map: ir.AffineMap | None) -> sympy.Expr | None:
+        if map is None:
+            return None
+        assert len(map.results) == 1, f"Expected map to have one expression, got {map}"
+        return _convert_affine_expr_to_sympy_expr(map.results[0], symbols)
+
+    start = convert_map(attr.start)
+    step = convert_map(attr.step)
+    stride = convert_map(attr.stride)
     return IndexSequence(start, step, stride)
 
 
