@@ -518,3 +518,142 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     return
   }
 }
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @allocate_register_index(
+    %a: !wave.tensor<[@M, @K] of f16>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    %cst = arith.constant 1.0 : f16
+    // CHECK: wave.register
+    // CHECK-DAG:  N : [#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)
+    // CHECK-DAG:  K : [#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)
+    %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
+    %cst0 = arith.constant 0.0 : f32
+    %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
+    // CHECK: wave.allocate
+    // CHECK-DAG:  M : [#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)
+    // CHECK-DAG:  N : [#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)
+    %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
+      : !wave.tensor<[@M, @N] of f32, <shared>>
+    %c = wave.mma %a, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    wave.write %c, %alloc : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <shared>>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @tiling_constraints_in_iter(
+    %x: !wave.tensor<[@M, @K] of f16>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>,
+      #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64, BLOCK_M = 64 : i64}>
+  } {
+    // The computation below is bogus and is generally dead code (writing to a local allocation),
+    // its point is to only access the values defined inside the loop so no propagation of
+    // tiling constraints through block arguments is possible.
+    wave.iterate @K iter_args() {
+      %cst = arith.constant 1.0 : f16
+      // CHECK: wave.register
+      // CHECK: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+      %a_reg = wave.register %cst : !wave.tensor<[@M, @K] of f16, <register>>
+      %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
+      // CHECK: wave.register
+      // CHECK: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+      %cst0 = arith.constant 0.0 : f32
+      %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
+      %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
+        : !wave.tensor<[@M, @N] of f32, <shared>>
+      // CHECK: wave.mma
+      // CHECK: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+      %c = wave.mma %a_reg, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
+        : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+      wave.write %c, %alloc : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <shared>>
+      wave.yield
+    } : () -> ()
+
+    // Tiling constraints must not appear outside of the loop.
+    %cst = arith.constant 0.0 : f16
+    // CHECK: wave.register
+    // CHECK-NOT: wave.iter<"K">
+    // CHECK-NOT: _Iter_K * BLOCK_K
+    %y = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
+    %cst0 = arith.constant 0.0 : f32
+    %z_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
+    // CHECK: wave.mma
+    // CHECK-NOT: wave.iter<"K">
+    // CHECK-NOT: _Iter_K * BLOCK_K
+    %z = wave.mma %x, %y, %z_reg {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32>
+    return %z : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @tiling_constraints_in_nested_iter(
+    %x: !wave.tensor<[@M, @K] of f16>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>,
+      #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64, BLOCK_M = 64 : i64}>
+  } {
+    wave.iterate @K iter_args() {
+      wave.iterate @M iter_args() {
+        %cst = arith.constant 1.0 : f16
+        // CHECK: wave.register
+        // CHECK-DAG: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+        // CHECK-DAG: M : [#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)
+        %a_reg = wave.register %cst : !wave.tensor<[@M, @K] of f16, <register>>
+        %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
+        // CHECK: wave.register
+        // CHECK: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+        %cst0 = arith.constant 0.0 : f32
+        %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
+        %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
+          : !wave.tensor<[@M, @N] of f32, <shared>>
+        // CHECK: wave.mma
+        // CHECK-DAG: K : [#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1
+        // CHECK-DAG: M : [#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)
+        %c = wave.mma %a_reg, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
+          : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+        wave.write %c, %alloc : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <shared>>
+        wave.yield
+      } : () -> ()
+
+      // Tiling constraints must not appear outside of the, but this concerns only the inner loop here.
+      %cst = arith.constant 0.0 : f16
+      // CHECK: wave.register
+      // CHECK: wave.iter<"K">
+      // CHECK: _Iter_K * BLOCK_K
+      // CHECK-NOT: wave.iter<"M">
+      // CHECK-NOT: _Iter_M * BLOCK_M
+      %y = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
+      %cst0 = arith.constant 0.0 : f32
+      %z_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
+      // CHECK: wave.mma
+      // CHECK: wave.iter<"K">
+      // CHECK: _Iter_K * BLOCK_K
+      // CHECK-NOT: wave.iter<"M">
+      // CHECK-NOT: _Iter_M * BLOCK_M
+      %z = wave.mma %x, %y, %z_reg {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32>
+      wave.yield
+    } : () -> ()
+    return
+  }
+}

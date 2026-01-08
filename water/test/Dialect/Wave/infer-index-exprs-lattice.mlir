@@ -740,7 +740,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       ^bb1(%a_arg: !wave.tensor<[@M, @K] of f32>):
         // CHECK: wave.add
         // CHECK-SAME: index
-        // CHECK-SAME: M : [#wave.iter<"M">, #wave.iter<"K">] -> (_Iter_M + _Iter_K, 1, 1)
+        // CHECK-SAME: M : [#wave.iter<"K">, #wave.iter<"M">] -> (_Iter_K + _Iter_M, 1, 1)
         %partial_result = wave.add %a_arg, %b_arg {wave_test.override_operand_index = [{
           M = #wave<index_mapping[#wave.iter<"M">] -> (_Iter_M, 1, 1)>
         }, {
@@ -818,5 +818,70 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
     } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
     return %result : !wave.tensor<[@M, @K] of f32>
+  }
+}
+
+// -----
+
+// Check that we propagate lattices between adjacent operands of a write.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @write_sideways_propagation
+  func.func @write_sideways_propagation(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>,
+    %c: !wave.tensor<[@M] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: index
+    // CHECK: M : [] -> (42, 1, <NULL>)
+    wave.write %a, %b {wave_test.override_operand_index = [
+      unit, {
+      M = #wave<index_mapping[#wave.iter<"K">] -> (<NULL>, 1, <NULL>)>
+    }]
+    } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+    %c_reg = wave.read %c {wave_test.override_result_index = [{
+      M = #wave<index_mapping[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
+    }]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    wave.write %c_reg, %b : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+    return
+  }
+}
+
+// -----
+
+// Check that sideways propagation between operands of a write that would
+// lead to a conflict is not happening.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @write_sideways_no_conflicting_propagation
+  func.func @write_sideways_no_conflicting_propagation(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>,
+    %c: !wave.tensor<[@M] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.write
+    // CHECK: index
+    // CHECK: M : [] -> (1, <NULL>, <NULL>)
+    wave.write %a, %b {wave_test.override_operand_index = [
+      unit, {
+      M = #wave<index_mapping[#wave.iter<"K">] -> (1, <NULL>, <NULL>)>
+    }]
+    } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+    // CHECK: wave.read
+    // CHECK: index
+    // CHECK: M : [] -> (42, <NULL>, <NULL>)
+    %c_reg = wave.read %c {wave_test.override_result_index = [{
+      M = #wave<index_mapping[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
+    }]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    wave.write %c_reg, %b : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+    return
   }
 }

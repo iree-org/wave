@@ -4,6 +4,9 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#ifndef WATER_DIALECT_WAVE_TRANSFORMS_UTILS_H
+#define WATER_DIALECT_WAVE_TRANSFORMS_UTILS_H
+
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 
 namespace wave {
@@ -43,3 +46,5 @@ llvm::LogicalResult verifyNormalFormPassPrecondition(wave::WaveNormalForm form,
                                                      llvm::StringRef passName);
 
 } // namespace wave
+
+#endif

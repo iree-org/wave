@@ -458,7 +458,14 @@ private:
 };
 
 void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value);
+} // namespace wave
 
+namespace llvm {
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                              const wave::IndexExprsLatticeStorage &value);
+} // namespace llvm
+
+namespace wave {
 namespace detail {
 
 // Default propagation of index expressions from all operands to all results
@@ -520,6 +527,14 @@ public:
                                                 operandExprs, resultExprs);
   }
 };
+
+// A tag trait indicating that the operation requires index expressions to be
+// propagated between operands during backward analysis. This needs no methods,
+// its mere presence is enough.
+template <typename OpTy>
+class RequiresIndexExprsSidewaysBackwardPropagationOpTrait
+    : public mlir::OpTrait::TraitBase<
+          OpTy, RequiresIndexExprsSidewaysBackwardPropagationOpTrait> {};
 
 } // namespace wave
 

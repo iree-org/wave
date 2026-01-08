@@ -249,4 +249,9 @@ def IdentityIndexExprsOpTrait
   let cppNamespace = "::wave";
 }
 
+def RequiresIndexExprsSidewaysBackwardPropagationOpTrait
+    : NativeOpTrait<"RequiresIndexExprsSidewaysBackwardPropagationOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEINTERFACES

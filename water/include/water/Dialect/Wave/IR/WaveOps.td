@@ -245,7 +245,8 @@ def YieldOp : Op<WaveDialect, "yield",
 // Memory-related operations
 //-----------------------------------------------------------------------------
 
-def AllocateOp : WaveOp<"allocate"> {
+def AllocateOp : WaveOp<"allocate", [
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Represents an allocation in an address space";
   let description = [{
     Allocates memory for a Wave tensor in the address space indicated by the
@@ -359,7 +360,8 @@ def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
-    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
+    RequiresIndexExprsSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor

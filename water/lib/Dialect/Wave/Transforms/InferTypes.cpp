@@ -1138,6 +1138,8 @@ public:
                 return getLatticeElement(v)->getValue();
               });
           auto emitError = [op]() { return op->emitError(); };
+          LDBG() << "initializing index expressions forward for "
+                 << PrintNoRegions(op);
           if (llvm::failed(iface.initializeIndexExprsForward(
                   resultExprs, *initObject, emitError)))
             return WalkResult::interrupt();
@@ -1145,7 +1147,11 @@ public:
           for (auto &&[result, lattice] :
                llvm::zip_equal(op->getResults(), resultExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(result);
+            LDBG() << "  result #" << result.getResultNumber()
+                   << " original: " << *latticeObject;
             unsafeSet(latticeObject, lattice);
+            LDBG() << "  result #" << result.getResultNumber()
+                   << " updated: " << *latticeObject;
           }
         }
 
@@ -1442,6 +1448,11 @@ public:
         return llvm::failure();
 
       parent->walk([&](Operation *op) -> WalkResult {
+        if (op->hasTrait<
+                wave::RequiresIndexExprsSidewaysBackwardPropagationOpTrait>()) {
+          for (Value operand : op->getOperands())
+            addDependency(getLatticeElement(operand), getProgramPointAfter(op));
+        }
         if (auto iface =
                 llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
           llvm::SmallVector<wave::IndexExprsLatticeStorage> operandExprs =
@@ -1450,13 +1461,17 @@ public:
               });
           auto emitError = [op]() { return op->emitError(); };
 
+          LDBG() << "initializing index expressions backward for "
+                 << PrintNoRegions(op);
           if (llvm::failed(iface.initializeIndexExprsBackward(
                   operandExprs, *initObject, emitError)))
             return WalkResult::interrupt();
-          for (auto &&[operand, lattice] :
-               llvm::zip_equal(op->getOperands(), operandExprs)) {
+          for (auto &&[i, operand, lattice] :
+               llvm::enumerate(op->getOperands(), operandExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(operand);
+            LDBG() << "  operand #" << i << " original: " << *latticeObject;
             unsafeSet(latticeObject, lattice);
+            LDBG() << "  operand #" << i << " updated: " << *latticeObject;
           }
           return WalkResult::advance();
         } else if (op->hasTrait<OpTrait::IsTerminator>()) {
@@ -1622,7 +1637,7 @@ public:
         llvm::map_to_vector(results, extractLattice);
 
     auto reportError = [op]() { return op->emitError(); };
-    llvm::FailureOr<ChangeResult> result =
+    llvm::FailureOr<mlir::ChangeResult> result =
         llvm::cast<wave::WaveInferIndexExprsOpInterface>(op)
             .propagateIndexExprsBackward(operandLattices, resultLattices,
                                          reportError);

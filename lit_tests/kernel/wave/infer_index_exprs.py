@@ -24,6 +24,7 @@ import torch
 def _get_gemm_kernel(
     shape: tuple[int, int, int],
     mfma_variant: MMAType,
+    use_shmem: bool = False,
     dtype: torch.dtype = torch.float16,
     block_shape: tuple[int, int, int] | None = None,
     waves_per_block: tuple[int, int] | None = None,
@@ -72,8 +73,8 @@ def _get_gemm_kernel(
     # These can be influenced by introducing constraints.
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K, GLOBAL_ADDRESS_SPACE, dtype],
-        b: tkl.Memory[N, K, GLOBAL_ADDRESS_SPACE, dtype],
+        a: tkl.Memory[M, K, ADDRESS_SPACE, dtype],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, dtype],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -94,7 +95,7 @@ def _get_gemm_kernel(
         tkw.write(repeat, c)
 
     hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE if use_shmem else GLOBAL_ADDRESS_SPACE,
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
@@ -106,17 +107,19 @@ def _get_gemm_kernel(
 
 
 def testGemm():
-    gemm, hyperparams = _get_gemm_kernel(
-        shape=(1024, 1024, 1024), mfma_variant=MMAType.F32_16x16x16_F16
-    )
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        run_bench=False,
-        check_water_analysis=True,
-        print_mlir_after_water=True,
-    )
-    compiled_gemm = wave_compile(options, gemm)
-    assert compiled_gemm is not None
+    for use_shmem in [True, False]:
+        gemm, hyperparams = _get_gemm_kernel(
+            shape=(1024, 1024, 1024),
+            mfma_variant=MMAType.F32_16x16x16_F16,
+            use_shmem=use_shmem,
+        )
+        options = WaveCompileOptions(
+            subs=hyperparams,
+            run_bench=False,
+            check_water_analysis=True,
+        )
+        compiled_gemm = wave_compile(options, gemm)
+        assert compiled_gemm is not None
 
 
 if __name__ == "__main__":

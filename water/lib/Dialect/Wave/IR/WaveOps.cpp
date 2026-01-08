@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "water/Dialect/Wave/IR/IndexExpr.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -991,9 +993,11 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
 /// given constraints on them and put them into `symbolMappings` as named pairs
 /// (symbol, index mapping attribute). Thread-independent means affected by
 /// workgroup, tiling and device constraints, and NOT affected by wave
-/// constraints or MMA shapes.
+/// constraints or MMA shapes. The first argument indicates for which operation
+/// the constraints are being used, which is in particular necessary to only
+/// apply tiling constraints inside the relevant loops.
 static void mixInThreadIndependentConstraints(
-    llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
+    Operation *where, llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
     llvm::SmallVector<NamedAttribute> &symbolMappings) {
@@ -1005,20 +1009,35 @@ static void mixInThreadIndependentConstraints(
     auto mappingIt = llvm::find_if(symbolMappings, [&](NamedAttribute attr) {
       return attr.getName() == symbol.getName();
     });
-#ifndef NDEBUG
-    if (mappingIt == symbolMappings.end()) {
-      llvm::errs() << "symbol: " << symbol.getName() << "\n";
-      assert(false && "expected a mapping for the symbol");
-    }
-#endif // NDEBUG
     wave::WaveIndexMappingAttr mapping =
-        llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
+        mappingIt != symbolMappings.end()
+            ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
+            : nullptr;
     for (Attribute constraint : it->second) {
-      // Tiling constraints are handled separately in loop propagation.
-      if (!isa<wave::TilingConstraintAttr>(constraint))
-        mapping = wave::applyConstraintGeneric(constraint, mapping);
+      // Tiling constraints should only be applied inside the corresponding
+      // parent iterate op.
+      auto tilingConstraint = dyn_cast<wave::TilingConstraintAttr>(constraint);
+      if (!tilingConstraint) {
+        mapping = applyConstraintGeneric(constraint, mapping);
+        continue;
+      }
+
+      for (Operation *parent = where->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        auto iterateOp = dyn_cast<wave::IterateOp>(parent);
+        if (!iterateOp)
+          continue;
+        wave::WaveSymbolAttr iterSymbol = iterateOp.getIterator();
+        if (iterSymbol.getName() == symbol.getName()) {
+          mapping = wave::applyConstraint(tilingConstraint, mapping);
+          break;
+        }
+      }
     }
-    mappingIt->setValue(mapping);
+    if (mappingIt != symbolMappings.end())
+      mappingIt->setValue(mapping);
+    else if (mapping)
+      symbolMappings.emplace_back(symbol.getName(), mapping);
   }
 }
 
@@ -1051,7 +1070,7 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   }
 
   mixInThreadIndependentConstraints(
-      indexingSymbols, initObject.symbolConstraints, symbolMappings);
+      *this, indexingSymbols, initObject.symbolConstraints, symbolMappings);
   resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
 
   return llvm::success();
@@ -1094,10 +1113,10 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  mixInThreadIndependentConstraints({mSymbol, nSymbol, kSymbol},
+  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol, kSymbol},
                                     initObject.symbolConstraints,
                                     operandSymbolMappings);
-  mixInThreadIndependentConstraints({mSymbol, nSymbol},
+  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol},
                                     initObject.symbolConstraints,
                                     accumulatorSymbolMappings);
 
@@ -1619,8 +1638,7 @@ LogicalResult WriteOp::verify() {
                            getBoundsAttr());
 }
 
-llvm::FailureOr<mlir::ChangeResult>
-wave::WriteOp::propagateElementsPerThreadForward(
+llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::raw_ostream &errs) {
@@ -1629,7 +1647,7 @@ wave::WriteOp::propagateElementsPerThreadForward(
   // memory with any layout.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
-    return mlir::ChangeResult::NoChange;
+    return ChangeResult::NoChange;
 
   // Validate register operand (value_to_store) matches attribute.
   wave::ElementsPerThreadLatticeValue expectedValue(*elementsPerThread);
@@ -1642,8 +1660,7 @@ wave::WriteOp::propagateElementsPerThreadForward(
       "elements_per_thread attribute", "operand", "", errs);
 }
 
-llvm::FailureOr<mlir::ChangeResult>
-wave::WriteOp::propagateElementsPerThreadBackward(
+llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::raw_ostream &errs) {
@@ -1673,14 +1690,32 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsForward(
   return ChangeResult::NoChange;
 }
 
-// WriteOp has no results, nothing to propagate to. Not propagating sideways
-// between operands either, the same index expression is used for the memory
-// operand, we can then read from the same memory with different index.
+// Propagating "sideways" between operands, but only if this would not result in
+// conflicts.
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  return ChangeResult::NoChange;
+  auto joined =
+      IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
+
+  // XXX: if sideways propagation would result in a new conflict, don't
+  // propagate. This is a questionable design carried over from the initial
+  // Python prototype.
+  if (joined.isTop() && !(operandExprs[0].isTop() || operandExprs[1].isTop())) {
+    return ChangeResult::NoChange;
+  }
+
+  ChangeResult changeResult = ChangeResult::NoChange;
+  if (operandExprs[0] != joined) {
+    operandExprs[0] = joined;
+    changeResult = ChangeResult::Change;
+  }
+  if (operandExprs[1] != joined) {
+    operandExprs[1] = joined;
+    changeResult = ChangeResult::Change;
+  }
+  return changeResult;
 }
 
 // Special case for WriteOp where we want an index expression even

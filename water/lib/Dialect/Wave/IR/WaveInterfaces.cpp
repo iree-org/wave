@@ -14,10 +14,12 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include <cstdint>
 
 using namespace mlir;
 
@@ -600,16 +602,17 @@ static AffineMap subtractMaps(AffineMap a, AffineMap b) {
                         a.getContext());
 }
 
+const static wave::WaveIndexSymbol threadLikeIndexSymbols[] = {
+    wave::WaveIndexSymbol::THREAD_0, wave::WaveIndexSymbol::THREAD_1,
+    wave::WaveIndexSymbol::THREAD_2, wave::WaveIndexSymbol::GPR_NUMBER};
+
 // Return the list of thread-like index symbols.
 // TODO: It would be nice to cache the list somehow, but we need to tie it to
 // the context and ensure thread safety, potentially by storing it as an
 // attribute or some other named/typed entity in the context object.
 static SmallVector<Attribute> getThreadLikeIndexSymbols(MLIRContext *ctx) {
   return llvm::map_to_vector(
-      ArrayRef{wave::WaveIndexSymbol::THREAD_0, wave::WaveIndexSymbol::THREAD_1,
-               wave::WaveIndexSymbol::THREAD_2,
-               wave::WaveIndexSymbol::GPR_NUMBER},
-      [&](wave::WaveIndexSymbol symbol) -> Attribute {
+      threadLikeIndexSymbols, [&](wave::WaveIndexSymbol symbol) -> Attribute {
         return wave::WaveIndexSymbolAttr::get(ctx, symbol);
       });
 }
@@ -927,7 +930,7 @@ wave::IndexExprsLatticeStorage::meet(const IndexExprsLatticeStorage &lhs,
 
 void wave::IndexExprsLatticeStorage::unsafeSet(
     const IndexExprsLatticeStorage &value) {
-  this->value = value.value;
+  operator=(value);
 }
 
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
@@ -988,6 +991,13 @@ void wave::operator<<(Diagnostic &diag, const IndexExprsLatticeStorage &value) {
   llvm::raw_string_ostream os(str);
   value.print(os);
   diag << os.str();
+}
+
+llvm::raw_ostream &
+llvm::operator<<(llvm::raw_ostream &os,
+                 const wave::IndexExprsLatticeStorage &lattice) {
+  lattice.print(os);
+  return os;
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
