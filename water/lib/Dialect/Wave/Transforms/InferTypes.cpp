@@ -544,12 +544,13 @@ public:
                        lattice->join(InferTypeLatticeStorage(tensorType)));
   }
 
-  /// Visit the non-forwarded arguments of a region, such as the
-  /// induction variables of a loop.
+  // Visit the non-forwarded arguments of a region, such as the
+  // induction variables of a loop.
   void
   visitNonControlFlowArguments(RegionSuccessor & /*successor*/,
                                ArrayRef<BlockArgument> /*arguments*/) override {
-    // nothing
+    // This is called for induction variables of an IterateOp, which is handled
+    // by the forward analysis.
   }
 };
 } // namespace
@@ -988,12 +989,13 @@ public:
     return llvm::success();
   }
 
-  /// Visit the non-forwarded arguments of a region, such as the
-  /// induction variables of a loop.
+  // Visit the non-forwarded arguments of a region, such as the
+  // induction variables of a loop.
   void
   visitNonControlFlowArguments(RegionSuccessor & /*successor*/,
                                ArrayRef<BlockArgument> /*arguments*/) override {
-    // nothing
+    // This is called for induction variables of an IterateOp, which is handled
+    // by the forward analysis.
   }
 };
 
@@ -1644,12 +1646,13 @@ public:
     return llvm::success();
   }
 
-  /// Visit the non-forwarded arguments of a region, such as the
-  /// induction variables of a loop.
+  // Visit the non-forwarded arguments of a region, such as the
+  // induction variables of a loop.
   void
   visitNonControlFlowArguments(RegionSuccessor & /*successor*/,
                                ArrayRef<BlockArgument> /*arguments*/) override {
-    // nothing
+    // This is called for induction variables of an IterateOp, which is handled
+    // by the forward analysis.
   }
 
 private:

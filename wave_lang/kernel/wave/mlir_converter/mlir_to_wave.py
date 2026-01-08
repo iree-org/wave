@@ -67,33 +67,33 @@ def _convert_affine_expr_to_sympy_expr(
     Raises:
         ValueError: If the expression is not supported.
     """
-    if ir.AffineConstantExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineConstantExpr):
         return sympy.Integer(ir.AffineConstantExpr(expr).value)
-    if ir.AffineSymbolExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineSymbolExpr):
         return symbol_mapping[ir.AffineSymbolExpr(expr).position]
-    if ir.AffineAddExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineAddExpr):
         add_expr = ir.AffineAddExpr(expr)
         return _convert_affine_expr_to_sympy_expr(
             add_expr.lhs, symbol_mapping
         ) + _convert_affine_expr_to_sympy_expr(add_expr.rhs, symbol_mapping)
-    if ir.AffineMulExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineMulExpr):
         mul_expr = ir.AffineMulExpr(expr)
         return _convert_affine_expr_to_sympy_expr(
             mul_expr.lhs, symbol_mapping
         ) * _convert_affine_expr_to_sympy_expr(mul_expr.rhs, symbol_mapping)
-    if ir.AffineFloorDivExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineFloorDivExpr):
         floor_div_expr = ir.AffineFloorDivExpr(expr)
         return sympy.floor(
             _convert_affine_expr_to_sympy_expr(floor_div_expr.lhs, symbol_mapping)
             / _convert_affine_expr_to_sympy_expr(floor_div_expr.rhs, symbol_mapping)
         )
-    if ir.AffineCeilDivExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineCeilDivExpr):
         ceil_div_expr = ir.AffineCeilDivExpr(expr)
         return sympy.ceiling(
             _convert_affine_expr_to_sympy_expr(ceil_div_expr.lhs, symbol_mapping)
             / _convert_affine_expr_to_sympy_expr(ceil_div_expr.rhs, symbol_mapping)
         )
-    if ir.AffineModExpr.isinstance(expr):
+    if isinstance(expr, ir.AffineModExpr):
         mod_expr = ir.AffineModExpr(expr)
         return _convert_affine_expr_to_sympy_expr(
             mod_expr.lhs, symbol_mapping
