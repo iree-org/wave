@@ -436,3 +436,15 @@ func.func @iterate_vector_types() {
 }
 
 }
+
+// -----
+
+// CHECK-LABEL: @empty_yield
+func.func @empty_yield() {
+  // CHECK: wave.iterate @I
+  wave.iterate @I iter_args() {
+    // CHECK: wave.yield
+    wave.yield
+  } : () -> ()
+  return
+}

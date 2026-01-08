@@ -238,7 +238,7 @@ def YieldOp : Op<WaveDialect, "yield",
     Arg<Variadic<WaveIterableType>, "Yielded values">:$values
   );
 
-  let assemblyFormat = "$values attr-dict `:` type($values)";
+  let assemblyFormat = "$values attr-dict (`:` type($values)^)?";
 }
 
 //-----------------------------------------------------------------------------
