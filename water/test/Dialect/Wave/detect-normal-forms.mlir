@@ -102,8 +102,9 @@ module @empty_module {
 // -----
 
 // wave.allocate returns memref, so resolved_allocations is satisfied.
+// index_exprs is also trivially satisfied since wave.allocate doesn't require index expressions.
 // CHECK-LABEL: @resolved_allocations_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>
 module @resolved_allocations_satisfied_module {
   func.func @resolved_allocations_satisfied() {
     %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}

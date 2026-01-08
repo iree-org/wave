@@ -494,6 +494,8 @@ def apply_water_middle_end_passes(mlir_text: str) -> str:
     binary = get_water_opt()
 
     # Define the pass pipeline for Wave lowering
+    # Note: water-wave-infer-index-exprs is not included because for vector-only
+    # IR (after elements-per-thread propagation), index expressions aren't needed.
     pipeline = [
         "water-wave-detect-normal-forms",
         "water-wave-propagate-elements-per-thread",

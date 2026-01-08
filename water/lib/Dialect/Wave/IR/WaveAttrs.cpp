@@ -897,6 +897,19 @@ wave::detail::verifyNormalFormAttr(Operation *root, wave::WaveNormalForm form,
                                  wave::WaveNormalForm::IndexExprsSpecified)) {
       if (op->hasTrait<wave::HasWaveIndexMapping>() &&
           !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
+        // Only require index expressions for ops with WaveTensorType
+        // operands/results, or Read/Write ops (which access memory).
+        auto isWaveTensor = [](Type t) {
+          return llvm::isa<wave::WaveTensorType>(t);
+        };
+        bool hasWaveTensor =
+            llvm::any_of(op->getOperandTypes(), isWaveTensor) ||
+            llvm::any_of(op->getResultTypes(), isWaveTensor);
+        bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
+
+        if (!hasWaveTensor && !isMemoryAccessOp)
+          return WalkResult::advance();
+
         if (emitDiagnostics) {
           op->emitError()
               << "normal form requires index expressions to be "

@@ -53,11 +53,11 @@ struct LowerWaveToMLIRPass
     MLIRContext *ctx = &getContext();
     Operation *op = getOperation();
 
-    // TODO: require index expressions to be present
     if (failed(wave::verifyNormalFormPassPrecondition(
             wave::WaveNormalForm::AllTypesSpecified |
                 wave::WaveNormalForm::MemoryOnlyTypes |
-                wave::WaveNormalForm::ResolvedAllocations,
+                wave::WaveNormalForm::ResolvedAllocations |
+                wave::WaveNormalForm::IndexExprsSpecified,
             op, getPassName())))
       return signalPassFailure();
 

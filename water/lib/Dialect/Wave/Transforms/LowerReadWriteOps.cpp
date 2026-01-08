@@ -451,11 +451,9 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   // with non-unit extent is considered to be vectorized.
 
   // Read/Write ops only carry a single index expression: the first (and only)
-  // dictionary inside the array attribute.
+  // dictionary inside the array attribute. The IndexExprsSpecified normal form
+  // guarantees this attribute is present.
   ArrayAttr indexArr = op.getIndexAttr();
-  if (!indexArr)
-    return rewriter.notifyMatchFailure(
-        op, "cannot lower without 'index' attribute");
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
          "'index' must be an array with exactly one dictionary");
   DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
