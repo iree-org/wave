@@ -370,7 +370,24 @@ private:
   // Recursively compute the maximum bit width of intermediate results.
   unsigned computeMaxIntermediateWidth(AffineExpr expr, AffineApplyOp applyOp,
                                        DataFlowSolver &solver) {
-    ConstantIntRanges range = inferRange(expr, applyOp, solver);
+    // Collect ranges for all dimensions and symbols.
+    SmallVector<ConstantIntRanges> dimRanges, symbolRanges;
+    AffineMap map = applyOp.getAffineMap();
+
+    for (auto i : llvm::seq<unsigned>(0, map.getNumDims())) {
+      Value operand = applyOp.getMapOperands()[i];
+      dimRanges.push_back(getRangeForValue(operand, solver));
+    }
+
+    for (auto i : llvm::seq<unsigned>(0, map.getNumSymbols())) {
+      Value operand = applyOp.getMapOperands()[map.getNumDims() + i];
+      symbolRanges.push_back(getRangeForValue(operand, solver));
+    }
+
+    // Use upstream intrange::inferAffineExpr.
+    ConstantIntRanges range =
+        intrange::inferAffineExpr(expr, dimRanges, symbolRanges);
+
     unsigned width = range.umin().getActiveBits();
     width = std::max(width, range.umax().getActiveBits());
     width = std::max(width, range.smin().getSignificantBits());
@@ -386,51 +403,6 @@ private:
     }
 
     return width;
-  }
-
-  // Infer the integer range of an affine expression.
-  ConstantIntRanges inferRange(AffineExpr expr, AffineApplyOp applyOp,
-                               DataFlowSolver &solver) {
-    if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
-      APInt value(64, constExpr.getValue());
-      return ConstantIntRanges::constant(value);
-    }
-
-    if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
-      Value operand = applyOp.getMapOperands()[dimExpr.getPosition()];
-      return getRangeForValue(operand, solver);
-    }
-
-    if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
-      unsigned numDims = applyOp.getAffineMap().getNumDims();
-      Value operand = applyOp.getMapOperands()[numDims + symExpr.getPosition()];
-      return getRangeForValue(operand, solver);
-    }
-
-    if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
-      ConstantIntRanges lhs = inferRange(binExpr.getLHS(), applyOp, solver);
-      ConstantIntRanges rhs = inferRange(binExpr.getRHS(), applyOp, solver);
-
-      // Use InferIntRangeCommon.h utilities for computing ranges.
-      std::array<ConstantIntRanges, 2> operands = {lhs, rhs};
-      switch (binExpr.getKind()) {
-      case AffineExprKind::Add:
-        return intrange::inferAdd(operands, intrange::OverflowFlags::Nsw);
-      case AffineExprKind::Mul:
-        return intrange::inferMul(operands, intrange::OverflowFlags::Nsw);
-      case AffineExprKind::Mod:
-        return intrange::inferRemS(operands);
-      case AffineExprKind::FloorDiv:
-        return intrange::inferFloorDivS(operands);
-      case AffineExprKind::CeilDiv:
-        return intrange::inferCeilDivS(operands);
-      default:
-        break;
-      }
-    }
-
-    // Conservative fallback.
-    return ConstantIntRanges::maxRange(64);
   }
 
   // Get the integer range for a Value using dataflow analysis.
