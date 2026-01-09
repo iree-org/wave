@@ -90,3 +90,40 @@ func.func @scf_for_loop(%global: memref<64x64xf32>, %lds: memref<64x64xf32, #gpu
 
   return
 }
+
+// CHECK-LABEL: func.func @double_buffer_loop
+func.func @double_buffer_loop(%global: memref<512x64xf32>, %lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %c64 = arith.constant 64 : index
+
+  // Initial load to buffer 1.
+  %base_init = amdgpu.make_dma_base %global[%c0, %c0], %lds1[%c0, %c0] : memref<512x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc_init = amdgpu.make_dma_descriptor %base_init globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc_init : !amdgpu.tdm_descriptor
+
+  // Double buffer loop: load next chunk while processing current chunk.
+  // CHECK: scf.for
+  scf.for %i = %c0 to %c8 step %c1 iter_args(%current_buf = %lds1, %next_buf = %lds2) -> (memref<64x64xf32, #gpu.address_space<workgroup>>, memref<64x64xf32, #gpu.address_space<workgroup>>) {
+    // Load next data to next_buf.
+    %next_idx = arith.addi %i, %c1 : index
+    %global_offset = arith.muli %next_idx, %c64 : index
+    %base_next = amdgpu.make_dma_base %global[%global_offset, %c0], %next_buf[%c0, %c0] : memref<512x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+    %desc_next = amdgpu.make_dma_descriptor %base_next globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+    amdgpu.tensor_load_to_lds %desc_next : !amdgpu.tdm_descriptor
+
+    // Barrier to ensure previous load completed.
+    // CHECK: amdgpu.memory_counter_wait tensor(1)
+    // CHECK-NEXT: amdgpu.lds_barrier
+    amdgpu.lds_barrier
+
+    // Process current buffer (read from the buffer loaded in previous iteration).
+    %vec = vector.load %current_buf[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+    // Swap buffers for next iteration.
+    scf.yield %next_buf, %current_buf : memref<64x64xf32, #gpu.address_space<workgroup>>, memref<64x64xf32, #gpu.address_space<workgroup>>
+  }
+
+  return
+}
