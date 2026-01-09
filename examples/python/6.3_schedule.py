@@ -26,13 +26,13 @@ from utils import parse_args, list_tests, run_test
 def test_gfx1250_optim_gemm(is_debug=False):
     """
     GEMM scheduling matching GFX1250 optimization kernel pattern.
-    
+
     - Prologue: Prefetch 2 iterations worth of data
-    - Main loop: 
+    - Main loop:
       * Stage 0: Load from shared memory (ds_load)
       * Stage 1: Async load next iteration + Compute current data (overlapped)
     - Epilogue: Drain pipeline with remaining compute
-    
+
     Key configuration:
     - 256x256x64 blocks
     - 1024x1024x1024 problem size
@@ -114,17 +114,17 @@ def test_gfx1250_optim_gemm(is_debug=False):
         mma = tkw.get_node_by_tag("mma")
 
         pipeline_loop = tkw.pipeline(k_loop)
-        
+
         # Create 2-stage pipeline
         with pipeline_loop as pl:
             # Stage 0: Load from shared memory (ds_load)
             pl.set_stage(
                 [
-                    (global_to_shared_a, global_to_shared_b), 
+                    (global_to_shared_a, global_to_shared_b),
                     (),
                 ],
             )
-            
+
             # Stage 1: Async load next iteration + Compute current
             pl.set_stage(
                 [
@@ -165,12 +165,12 @@ def test_gfx1250_optim_gemm(is_debug=False):
                 ],
             ),
         ]
-        
+
         tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
         # Apply the cluster-based reordering to create the desired instruction pattern
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
-        #tkw.stagger(pipeline_loop.KERNEL)
+        # tkw.stagger(pipeline_loop.KERNEL)
 
     # Define compile options
     M_val, N_val, K_val = shape
@@ -202,14 +202,16 @@ def test_gfx1250_optim_gemm(is_debug=False):
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
         dump_binaries="./",
-        dump_intermediates="./"
+        dump_intermediates="./",
     )
 
     # Set runtime configuration for execution
     options = set_default_run_config(options)
 
     # Compile the kernel with the gfx1250 optimization schedule
-    gemm_gfx1250_optim = wave_compile(options, gemm_gfx1250_optim, gfx1250_optim_gemm_schedule)
+    gemm_gfx1250_optim = wave_compile(
+        options, gemm_gfx1250_optim, gfx1250_optim_gemm_schedule
+    )
     with open("gemm_gfx1250_optim.asm", "w") as f:
         f.write(gemm_gfx1250_optim.asm)
 
@@ -231,13 +233,13 @@ def test_gfx1250_optim_gemm(is_debug=False):
 def test_gfx1250_tbuf_gemm(is_debug=False):
     """
     GEMM scheduling matching GFX1250 optimization kernel pattern.
-    
+
     - Prologue: Prefetch 2 iterations worth of data
-    - Main loop: 
+    - Main loop:
       * Stage 0: Load from shared memory (ds_load)
       * Stage 1: Async load next iteration + Compute current data (overlapped)
     - Epilogue: Drain pipeline with remaining compute
-    
+
     Key configuration:
     - 256x256x64 blocks
     - 1024x1024x1024 problem size
@@ -404,14 +406,16 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
         dump_binaries="./",
-        dump_intermediates="./"
+        dump_intermediates="./",
     )
 
     # Set runtime configuration for execution
     options = set_default_run_config(options)
 
     # Compile the kernel with the gfx1250 optimization schedule
-    gemm_gfx1250_optim = wave_compile(options, gemm_gfx1250_optim, gfx1250_optim_tbuf_gemm_schedule)
+    gemm_gfx1250_optim = wave_compile(
+        options, gemm_gfx1250_optim, gfx1250_optim_tbuf_gemm_schedule
+    )
     with open("gemm_gfx1250_optim_tbuf.asm", "w") as f:
         f.write(gemm_gfx1250_optim.asm)
 
