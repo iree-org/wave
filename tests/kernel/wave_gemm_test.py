@@ -352,6 +352,7 @@ global_to_lds_shapes += [
     [
         pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x16_F16, 64, marks=require_cdna4),
         pytest.param(MMAType.GFX1250_F32_16x16x32_F16, 32, marks=require_gfx1250),
     ],
 )

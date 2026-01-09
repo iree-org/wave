@@ -329,21 +329,11 @@ def test_gather_to_shared_scaled_dims():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared_scaled_dims
-    # CHECK:          #[[map1:.*]] = affine_map<()[s0] -> ((s0 floordiv 8) mod 8)>
-    # CHECK:          #[[map2:.*]] = affine_map<()[s0] -> (s0 mod 8)>
-    # CHECK:          #[[map6:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK:          #[[map7:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16 + 4)>
     # CHECK:          func.func @scaled_gemm
     # CHECK:          %[[thread_id_x:.*]] = gpu.thread_id x
     # CHECK-COUNT-1:    memref.alloc()
-    # Check some swizzling was done
-    # CHECK:          %[[col:.*]] = affine.apply #[[map1]]()[%[[thread_id_x]]]
-    # CHECK:          %[[row:.*]] = affine.apply #[[map2]]()[%[[thread_id_x]]]
-    # CHECK:          %{{.*}} = arith.xori %[[row]], %[[col]] : index
-    # CHECK:          %[[row_swizzled:.*]] = affine.apply #[[map6]]()[%[[thread_id_x]]]
-    # CHECK:          %[[row_swizzled_2:.*]] = affine.apply #[[map7]]()[%[[thread_id_x]]]
-    # CHECK:          %{{.*}} = arith.xori %[[row_swizzled]], %[[row]] : index
-    # CHECK:          %{{.*}} = arith.xori %[[row_swizzled_2]], %[[row]] : index
+    # Note: Swizzling is disabled for this test due to row phase inconsistency
+    # between reads and gathers.
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}

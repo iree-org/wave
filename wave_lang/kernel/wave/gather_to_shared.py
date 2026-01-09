@@ -629,6 +629,21 @@ def gather_to_shared_swizzling(
 
         max_phase = 8
 
+        # Check row phase inconsistency between reads and gathers.
+        gather_local_index = remove_global_indexing(gather.src_index, constraints)
+        read_local_index = remove_global_indexing(read.index, constraints)
+        gather_row_expr = sympy.simplify(
+            subs_idxc(gather_local_index[row_dim].start) % max_phase
+        )
+        read_row_expr = sympy.simplify(
+            subs_idxc(read_local_index[row_dim].start) % max_phase
+        )
+        if gather_row_expr != read_row_expr:
+            logger.info(
+                f"row phase inconsistency between reads and gathers: {gather_row_expr} != {read_row_expr}. Skipping swizzling as it is not supported."
+            )
+            continue
+
         for read in reads:
             index = remove_global_indexing(read.index, constraints)
             col_seq = index[col_dim]
