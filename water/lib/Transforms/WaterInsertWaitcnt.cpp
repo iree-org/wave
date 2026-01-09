@@ -464,54 +464,6 @@ public:
   /// Check if there's a waitcnt requirement
   bool hasRequirement() const { return requirement.hasRequirement(); }
 
-  /// Check if a value depends on pending operations and compute required wait
-  WaitcntRequirement
-  checkSSADependency(Value val,
-                     llvm::SmallSetVector<Operation *, 4> &barriers) const {
-    // Check if val is produced by any pending operation
-    Operation *defOp = val.getDefiningOp();
-    if (!defOp)
-      return {};
-
-    if (!isPendingOp(defOp))
-      return {};
-
-    WaitcntRequirement result;
-    for (auto &pendingOps : pendingOpsLists) {
-      if (pendingOps->empty())
-        continue;
-
-      Operation *barrier = nullptr;
-
-      // Search from the back to find the most recent dependency
-      bool found = false;
-      auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
-      for (Operation *op : llvm::reverse(pendingOps->ops)) {
-        if (op == defOp) {
-          found = true;
-          break;
-        }
-
-        if (!barrier && isBarrier(op))
-          barrier = op;
-
-        auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
-        if (!req.isSameCounterType(opReq))
-          continue;
-
-        req = req + opReq;
-      }
-
-      if (found) {
-        result.merge(req);
-        if (barrier)
-          barriers.insert(barrier);
-      }
-    }
-
-    return result;
-  }
-
   /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
   WaitcntRequirement
   checkMemoryDependency(Operation *op,
@@ -691,14 +643,7 @@ public:
 
     llvm::SmallSetVector<Operation *, 4> barriers;
 
-    // Check if any operands depend on pending operations (value dependency)
     WaitcntRequirement opRequirement = after->getRequirement();
-    for (Value operand : op->getOperands()) {
-      if (auto req = before.checkSSADependency(operand, barriers)) {
-        // Merge this requirement (take minimum for conservative wait)
-        opRequirement.merge(req);
-      }
-    }
 
     // Check for memory dependencies (RAW, WAR, WAW)
     if (auto memReq = before.checkMemoryDependency(op, barriers)) {
