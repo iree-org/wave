@@ -41,6 +41,10 @@ static std::optional<Value> propagateViewOps(Value value) {
   return value;
 }
 
+static bool trackOp(Operation *op) {
+  return isa<amdgpu::TensorLoadToLDSOp>(op);
+}
+
 static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
   auto makeDesc = value.getDefiningOp<amdgpu::MakeDmaDescriptorOp>();
   if (!makeDesc)
@@ -639,9 +643,8 @@ public:
       LDBG() << "  No operation requirement";
     }
 
-    // Check if this is an async memory operation (vector load/store)
-    if (WaitcntRequirement::getOperationRequirement(op, false)
-            .hasRequirement()) {
+    // Check if this is an async memory operation
+    if (trackOp(op)) {
       // Add this operation to the pending list
       newState.addPendingOp(op);
     }

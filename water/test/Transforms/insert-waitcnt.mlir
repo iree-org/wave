@@ -171,3 +171,27 @@ func.func @triple_buffer_loop(%global: memref<512x64xf32>, %lds1: memref<64x64xf
 
   return
 }
+
+// CHECK-LABEL: func.func @vector_ops_only
+func.func @vector_ops_only(%lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %cst = arith.constant dense<0.0> : vector<4xf32>
+
+  // Loop with vector load/store but no tensor operations.
+  // CHECK: scf.for
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  scf.for %i = %c0 to %c4 step %c1 {
+    // Vector load from LDS1.
+    %vec = vector.load %lds1[%i, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+    // Barrier.
+    amdgpu.lds_barrier
+
+    // Vector store to LDS2.
+    vector.store %vec, %lds2[%i, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+  }
+
+  return
+}
