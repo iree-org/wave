@@ -56,6 +56,11 @@ static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
 
 /// Check if the operation is a load operation and return the base memref.
 static std::optional<Value> isLoadOp(Operation *op) {
+  // Use interface
+  if (auto load = dyn_cast<vector::LoadOp>(op))
+    return load.getBase();
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return load.getMemref();
   if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op))
     return propagateTensorDesc(load.getDesc(), true);
 
@@ -200,7 +205,7 @@ struct WaitcntRequirement {
 
   static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
     WaitcntRequirement req;
-    if (isa<amdgpu::TensorLoadToLDSOp>(op))
+    if (isa<amdgpu::TensorLoadToLDSOp, memref::LoadOp, vector::LoadOp>(op))
       req.tensor_cnt = zero ? 0 : 1;
 
     return req;
