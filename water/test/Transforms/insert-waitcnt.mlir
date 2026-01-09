@@ -40,3 +40,28 @@ func.func @raw_dependency_vector_load(%global: memref<64x64xf32>, %lds: memref<6
 
   return
 }
+
+// CHECK-LABEL: func.func @multiple_pending_ops
+func.func @multiple_pending_ops(%global: memref<64x64xf32>, %lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+
+  // First tensor load to LDS1.
+  %base1 = amdgpu.make_dma_base %global[%c0, %c0], %lds1[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc1 = amdgpu.make_dma_descriptor %base1 globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc1 : !amdgpu.tdm_descriptor
+
+  // Second tensor load to LDS2.
+  %base2 = amdgpu.make_dma_base %global[%c0, %c0], %lds2[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc2 = amdgpu.make_dma_descriptor %base2 globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc2 : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+
+  // Vector load from LDS1 - has RAW dependency with first load, should wait for 1 (second op is still pending).
+  // CHECK: amdgpu.memory_counter_wait tensor(1)
+  // CHECK: amdgpu.lds_barrier
+  %vec = vector.load %lds1[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  return
+}
