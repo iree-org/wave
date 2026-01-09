@@ -20,3 +20,23 @@ func.func @no_dependency(%global1: memref<64x64xf32>, %global2: memref<64x64xf32
 
   return
 }
+
+// CHECK-LABEL: func.func @raw_dependency_vector_load
+func.func @raw_dependency_vector_load(%global: memref<64x64xf32>, %lds: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+
+  // Tensor load to LDS (write to LDS).
+  %base = amdgpu.make_dma_base %global[%c0, %c0], %lds[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc = amdgpu.make_dma_descriptor %base globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+
+  // Vector load from LDS (read from LDS) - creates RAW dependency.
+  // CHECK: amdgpu.memory_counter_wait tensor(0)
+  // CHECK: amdgpu.lds_barrier
+  %vec = vector.load %lds[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  return
+}
