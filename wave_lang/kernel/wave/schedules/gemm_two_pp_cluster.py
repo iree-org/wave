@@ -107,6 +107,106 @@ def get_tagged_gemm(
     return gemm, options
 
 
+def get_tagged_BxA_T_gemm(
+    shape: tuple[int, int, int] = (1024, 1024, 1024),
+    block_shape: tuple[int, int, int] = (256, 256, 64),
+    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
+    compile_to_mlir: bool = False,
+    use_global_to_shared: bool = False,
+    threads_per_wave: int = 64,
+):
+    """
+    Returns a tagged GEMM kernel with compile options.
+
+    The kernel includes tags on key operations for scheduling:
+    - "k_loop": The main reduction loop
+    - "read_a": Reading from matrix A
+    - "read_b": Reading from matrix B
+    - "mma": Matrix multiply-accumulate operations
+
+    Args:
+        shape: (M, N, K) dimensions for the GEMM
+        mfma_variant: The MMA type to use for matrix multiplication
+        compile_to_mlir: Whether to compile to MLIR or continue to binary
+        use_global_to_shared: Whether to use async GatherToLDS (global_to_shared) operations
+
+    Returns:
+        Tuple of (kernel_function, compile_options)
+    """
+    # Symbol definitions
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    m_iter = tkl.sym.m_iter
+    n_iter = tkl.sym.n_iter
+    k_iter = tkl.sym.k_iter
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # Basic constraints needed for compilation
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.IteratorBindings({m_iter: M, n_iter: N, k_iter: K})]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+        )
+    ]
+
+    # Define the kernel
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[N, M, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(
+            acc: tkl.Register[N, M, tkl.f32],
+        ) -> tkl.Register[N, M, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(b_reg, a_reg, acc, tag="mma")
+            return acc
+
+        # transpose the output to match the expected shape
+        # this operation allows us to use global_stores_b128 in gfx1250
+        tkw.write(repeat, c, source=(n_iter, m_iter), target=(m_iter, n_iter))
+
+    hyperparams = {
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    # Define compile options
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        use_scheduling_barriers=False,
+        compile_to_mlir=compile_to_mlir,
+        use_global_to_shared=use_global_to_shared,
+    )
+
+    return gemm, options
+
+
 def get_two_pp_cluster_schedule():
     """
     Returns a schedule function that implements a 2-stage pipelined prefetch

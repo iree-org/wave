@@ -139,3 +139,96 @@ def get_async_two_cluster_triple_buffer():
         tkw.stagger(pipeline_loop.KERNEL)
 
     return async_two_cluster_three_stage_schedule
+
+
+def get_gfx1250_tbuf_gemm_schedule():
+    """
+    Returns a schedule function that implements a 3-stage pipelined prefetch
+    with async global_to_shared operations, cluster-based reordering, and wave staggering.
+    This schedule uses GatherToLDS (global_to_shared) to combine global load + shared write
+    This schedule expects a kernel with the following tags:
+    - "k_loop": The reduction loop to pipeline
+    - "read_a", "read_b": Read operations (will include both Read and GatherToLDS nodes)
+    - "mma": MMA operations to partition
+    - Requires use_global_to_shared=True in WaveCompileOptions
+    Returns:
+    """
+
+    @wave_schedule.wave_schedule()
+    def gfx1250_tbuf_gemm_schedule():
+        # Get nodes to be manipulated in the schedule
+        k_loop = tkw.get_node_by_tag("k_loop")
+
+        # Get all nodes with tag "read_a" - includes both Read and GatherToLDS nodes
+        all_read_a = tkw.get_node_by_tag("read_a")
+        global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.TensorLoadToLDS)
+        shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
+
+        # Get all nodes with tag "read_b" - includes both Read and GatherToLDS nodes
+        all_read_b = tkw.get_node_by_tag("read_b")
+        global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.TensorLoadToLDS)
+        shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
+
+        global_to_shared_fused = tkw.get_node_by_tag("read_a,read_b")
+
+        if len(global_to_shared_fused) == 0:
+            global_to_shared_fused.extend(global_to_shared_a)
+            global_to_shared_fused.extend(global_to_shared_b)
+
+        mma = tkw.get_node_by_tag("mma")
+
+        # First, create the 3-stage pipeline
+        pipeline_loop = tkw.pipeline(k_loop)
+
+        with pipeline_loop as pl:
+            pl.set_stage(
+                [
+                    (global_to_shared_fused,),
+                    (),
+                ],
+            )
+            pl.set_stage(
+                [
+                    (),
+                    (),
+                ],
+            )
+            pl.set_stage(
+                [
+                    (shared_load_a, shared_load_b),
+                    (mma,),
+                ],
+            )
+
+        # Now apply advanced scheduling to the KERNEL stage
+        # Filter nodes to only include those in the KERNEL stage
+        global_to_shared_fused = tkw.filter_nodes(
+            global_to_shared_fused, subgraph=pipeline_loop.KERNEL
+        )
+        shared_load_a = tkw.filter_nodes(shared_load_a, subgraph=pipeline_loop.KERNEL)
+        shared_load_b = tkw.filter_nodes(shared_load_b, subgraph=pipeline_loop.KERNEL)
+        mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
+
+        # Create cluster ordering with async operations
+        clusters = [
+            tkw.cluster(
+                [
+                    shared_load_a,
+                    shared_load_b,
+                    tkw.SchedulingBarrier([]),
+                ],
+            ),
+            tkw.cluster(
+                [
+                    global_to_shared_fused,
+                    tkw.SchedulingBarrier([]),
+                    mma,
+                    tkw.SchedulingBarrier([]),
+                ],
+            ),
+        ]
+        # Apply the cluster-based reordering to the KERNEL stage
+        tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
+        tkw.stagger(pipeline_loop.KERNEL)
+
+    return gfx1250_tbuf_gemm_schedule

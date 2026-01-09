@@ -405,8 +405,6 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         schedule=SchedulingType.MANUAL,
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
-        dump_binaries="./",
-        dump_intermediates="./",
     )
 
     # Set runtime configuration for execution
@@ -416,8 +414,10 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
     gemm_gfx1250_optim = wave_compile(
         options, gemm_gfx1250_optim, gfx1250_optim_tbuf_gemm_schedule
     )
-    with open("gemm_gfx1250_optim_tbuf.asm", "w") as f:
-        f.write(gemm_gfx1250_optim.asm)
+
+    if is_debug:
+        with open("gemm_gfx1250_optim_tbuf.asm", "w") as f:
+            f.write(gemm_gfx1250_optim.asm)
 
     # Create test data
     datatype = torch.float16

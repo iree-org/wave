@@ -53,11 +53,13 @@ from wave_lang.kernel.wave.templates.test_kernels import (
 )
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
     get_tagged_gemm,
+    get_tagged_BxA_T_gemm,
     get_two_pp_cluster_schedule,
     get_async_two_pp_clusters,
 )
 from wave_lang.kernel.wave.schedules.gemm_triple_buffer import (
     get_async_two_cluster_triple_buffer,
+    get_gfx1250_tbuf_gemm_schedule,
 )
 
 from wave_lang.kernel.lang import DataType
@@ -3291,3 +3293,30 @@ def testSpecializeGemm(
         check_device=False,
         check_stride=False,
     )
+
+
+@require_e2e
+@require_gfx1250
+@pytest.mark.parametrize("shape", [(1024, 1024, 1024)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.GFX1250_F32_16x16x32_F16])
+def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
+    gemm, options = get_tagged_BxA_T_gemm(
+        shape=shape,
+        block_shape=(256, 256, 64),
+        mfma_variant=mfma_variant,
+        threads_per_wave=32,
+        use_global_to_shared=True,
+        compile_to_mlir=False,
+    )
+
+    schedule = get_gfx1250_tbuf_gemm_schedule()
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    a = device_randn(shape[0], shape[2], dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.cpu(), b.cpu().t())
+    assert_close(c.cpu(), torch_ref.to(torch.float32), atol=1e-2, rtol=1e-2)
