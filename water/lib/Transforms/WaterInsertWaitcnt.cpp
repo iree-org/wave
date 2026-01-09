@@ -68,32 +68,31 @@ static std::optional<Value> propagateViewOps(Value value) {
   return value;
 }
 
+static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
+  auto makeDesc = value.getDefiningOp<amdgpu::MakeDmaDescriptorOp>();
+  if (!makeDesc)
+    return value;
+
+  value = makeDesc.getBase();
+  auto makeBase = value.getDefiningOp<amdgpu::MakeDmaBaseOp>();
+  if (!makeBase)
+    return value;
+
+  return propagateViewOps(isLoad ? makeBase.getGlobal() : makeBase.getLds());
+}
+
 /// Check if the operation is a load operation and return the base memref.
 static std::optional<Value> isLoadOp(Operation *op) {
-  // TODO: replace with the interface when available.
-  if (auto load = dyn_cast<vector::LoadOp>(op))
-    return propagateViewOps(load.getBase());
-  if (auto load = dyn_cast<memref::LoadOp>(op))
-    return propagateViewOps(load.getMemRef());
-  if (auto copy = dyn_cast<memref::CopyOp>(op))
-    return propagateViewOps(copy.getSource());
-  if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
-    return propagateViewOps(gather.getSrc());
+  if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op))
+    return propagateTensorDesc(load.getDesc(), true);
 
   return std::nullopt;
 }
 
 /// Check if the operation is a store operation and return the base memref.
 static std::optional<Value> isStoreOp(Operation *op) {
-  // TODO: replace with the interface when available.
-  if (auto store = dyn_cast<vector::StoreOp>(op))
-    return propagateViewOps(store.getBase());
-  if (auto store = dyn_cast<memref::StoreOp>(op))
-    return propagateViewOps(store.getMemRef());
-  if (auto copy = dyn_cast<memref::CopyOp>(op))
-    return propagateViewOps(copy.getTarget());
-  if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
-    return propagateViewOps(gather.getDst());
+  if (auto store = dyn_cast<amdgpu::TensorLoadToLDSOp>(op))
+    return propagateTensorDesc(store.getDesc(), false);
 
   return std::nullopt;
 }
