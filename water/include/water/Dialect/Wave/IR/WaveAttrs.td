@@ -393,6 +393,11 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
     symbol_names array corresponds 1:1 to the symbols in the affine
     expressions, where s0 maps to symbol_names[0], s1 to symbol_names[1], etc.
 
+    The order of symbols used in the mapping is fixed and they are sorted
+    upon construction.
+
+    Each of the start, step or stride expression may be null.
+
     Custom syntax: [symbol_name attributes] -> (start_expr, step_expr, stride_expr)
     Example: [wave.index_symbol<WG0>, wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + 42, 1, BLOCK_M)
   }];
