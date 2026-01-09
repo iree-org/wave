@@ -172,7 +172,7 @@ def matrix_add(
     # defines matrix in memory of req dimension with specific data types
     a: Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
     b: Memory[M, N, ADDRESS_SPACE_B, tkl.f16],
-    c: Memory[M, N, ADDRESS_SPACE_C, tkl.f16],
+    c: Memory[M, N, ADDRESS_SPACE_C, tkl.f32],
 ):
     # Initialize the accumulator register with zeroes
     c_reg = Register[M, N, tkl.f16](0.0)
@@ -184,8 +184,10 @@ def matrix_add(
     # compute the sum
     c_reg = a_reg + b_reg
 
+    c_casted = wave.cast(c_reg, tkl.f32)
+
     # writing results back to memory
-    wave.write(c_reg, c)
+    wave.write(c_casted, c)
 
 
 @run_test
@@ -234,7 +236,7 @@ def mlir_converter_matrix_add():
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
-    # CHECK-NEXT: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16, <global>>)
+    # CHECK-NEXT: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>)
     # CHECK-SAME: wave.constraints =
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
@@ -273,7 +275,13 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
-    # CHECK: wave.write %[[ADD]], %[[ARG2]]
+    # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
+    # CHECK-SAME: index
+    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
+    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
+
+    # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
     # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
     # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
@@ -282,7 +290,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
     # CHECK-SAME: elements_per_thread = 32 : i64
-    # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
 
     # CHECK: return
 
