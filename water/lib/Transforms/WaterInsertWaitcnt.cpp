@@ -450,9 +450,10 @@ public:
             // RAW: current load after pending store
             // WAR: current store after pending load
             // WAW: current store after pending store
+            // We don't care about WAW dependencies for now.
             bool hasRAW = isCurrentLoad && isPendingStore;
             bool hasWAR = isCurrentStore && isPendingLoad;
-            bool hasWAW = isCurrentStore && isPendingStore;
+            bool hasWAW = false; // isCurrentStore && isPendingStore;
 
             if (hasRAW || hasWAR || hasWAW) {
               // Found dependency - compute requirement by counting forward from
