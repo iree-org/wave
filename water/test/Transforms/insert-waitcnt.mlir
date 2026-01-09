@@ -65,3 +65,28 @@ func.func @multiple_pending_ops(%global: memref<64x64xf32>, %lds1: memref<64x64x
 
   return
 }
+
+// CHECK-LABEL: func.func @scf_for_loop
+func.func @scf_for_loop(%global: memref<64x64xf32>, %lds: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+
+  // Tensor load to LDS before loop.
+  %base = amdgpu.make_dma_base %global[%c0, %c0], %lds[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc = amdgpu.make_dma_descriptor %base globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+
+  // Loop that reads from LDS - should insert wait before loop.
+  // CHECK: amdgpu.memory_counter_wait tensor(0)
+  // CHECK: amdgpu.lds_barrier
+  // CHECK: scf.for
+  scf.for %i = %c0 to %c4 step %c1 {
+    %vec = vector.load %lds[%i, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+  }
+
+  return
+}
