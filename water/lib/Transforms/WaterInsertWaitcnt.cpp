@@ -33,33 +33,6 @@ static bool isBarrier(Operation *op) {
   return isa<gpu::BarrierOp>(op) || isa<amdgpu::LDSBarrierOp>(op);
 }
 
-static bool isRegisterAddressSpace(MemRefType type) {
-  auto attr = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
-  return attr && attr.getInt() == 128;
-}
-
-static bool isWorkgroupAddressSpace(MemRefType type) {
-  auto attr = dyn_cast_or_null<gpu::AddressSpaceAttr>(type.getMemorySpace());
-  return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
-}
-
-static bool isWorkgroupAddressSpace(std::optional<Value> value) {
-  if (!value)
-    return false;
-
-  auto memrefType = cast<MemRefType>(value->getType());
-  return isWorkgroupAddressSpace(memrefType);
-}
-
-static bool isGlobalAddressSpace(std::optional<Value> value) {
-  if (!value)
-    return false;
-
-  auto memrefType = cast<MemRefType>(value->getType());
-  return !isWorkgroupAddressSpace(memrefType) &&
-         !isRegisterAddressSpace(memrefType);
-}
-
 /// Try to propagate view operations to the base memref.
 static std::optional<Value> propagateViewOps(Value value) {
   while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
@@ -192,21 +165,16 @@ struct PendingOperations {
 
 /// Waitcnt requirement for synchronization
 struct WaitcntRequirement {
-  std::optional<unsigned> load_cnt;
-  std::optional<unsigned> ds_cnt;
+  std::optional<unsigned> tensor_cnt;
 
   WaitcntRequirement() = default;
 
   WaitcntRequirement(amdgpu::MemoryCounterWaitOp waitOp) {
-    if (auto loadCnt = waitOp.getLoadAttr())
-      load_cnt = loadCnt.getInt();
-    if (auto dsCnt = waitOp.getDsAttr())
-      ds_cnt = dsCnt.getInt();
+    if (auto tensorCnt = waitOp.getTensorAttr())
+      tensor_cnt = tensorCnt.getInt();
   }
 
-  bool hasRequirement() const {
-    return load_cnt.has_value() || ds_cnt.has_value();
-  }
+  bool hasRequirement() const { return tensor_cnt.has_value(); }
 
   /// Merge with another requirement (take minimum for conservative join)
   /// Returns true if this requirement changed
@@ -214,15 +182,9 @@ struct WaitcntRequirement {
     bool changed = false;
 
     // Take minimum of each counter (lower value = more restrictive)
-    if (other.load_cnt.has_value()) {
-      if (!load_cnt.has_value() || *other.load_cnt < *load_cnt) {
-        load_cnt = other.load_cnt;
-        changed = true;
-      }
-    }
-    if (other.ds_cnt.has_value()) {
-      if (!ds_cnt.has_value() || *other.ds_cnt < *ds_cnt) {
-        ds_cnt = other.ds_cnt;
+    if (other.tensor_cnt.has_value()) {
+      if (!tensor_cnt.has_value() || *other.tensor_cnt < *tensor_cnt) {
+        tensor_cnt = other.tensor_cnt;
         changed = true;
       }
     }
@@ -230,49 +192,36 @@ struct WaitcntRequirement {
     return changed;
   }
 
-  std::optional<unsigned> getLoadCnt() const { return load_cnt; }
-  std::optional<unsigned> getStoreCnt() const { return std::nullopt; }
-  std::optional<unsigned> getDsCnt() const { return ds_cnt; }
+  std::optional<unsigned> getTensorCnt() const { return tensor_cnt; }
 
   bool isSameCounterType(const WaitcntRequirement &other) const {
-    return load_cnt.has_value() == other.load_cnt.has_value() ||
-           ds_cnt.has_value() == other.ds_cnt.has_value();
+    return tensor_cnt.has_value() == other.tensor_cnt.has_value();
   }
 
   static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
     WaitcntRequirement req;
-    std::optional<Value> loadBase = isLoadOp(op);
-    std::optional<Value> storeBase = isStoreOp(op);
-    if (isWorkgroupAddressSpace(loadBase) ||
-        isWorkgroupAddressSpace(storeBase)) {
-      req.ds_cnt = zero ? 0 : 1;
-    } else if (isGlobalAddressSpace(loadBase) ||
-               isGlobalAddressSpace(storeBase)) {
-      req.load_cnt = zero ? 0 : 1;
-    }
+    if (isa<amdgpu::TensorLoadToLDSOp>(op))
+      req.tensor_cnt = zero ? 0 : 1;
+
     return req;
   }
 
   WaitcntRequirement operator+(const WaitcntRequirement &other) const {
     WaitcntRequirement result;
-    if (load_cnt || other.load_cnt)
-      result.load_cnt = load_cnt.value_or(0) + other.load_cnt.value_or(0);
-    if (ds_cnt || other.ds_cnt)
-      result.ds_cnt = ds_cnt.value_or(0) + other.ds_cnt.value_or(0);
+    if (tensor_cnt || other.tensor_cnt)
+      result.tensor_cnt = tensor_cnt.value_or(0) + other.tensor_cnt.value_or(0);
     return result;
   }
 
   bool operator>(const WaitcntRequirement &other) const {
-    if (load_cnt && other.load_cnt && *load_cnt > *other.load_cnt)
-      return true;
-    if (ds_cnt && other.ds_cnt && *ds_cnt > *other.ds_cnt)
+    if (tensor_cnt && other.tensor_cnt && *tensor_cnt > *other.tensor_cnt)
       return true;
     return false;
   }
   operator bool() const { return hasRequirement(); }
 
   void print(raw_ostream &os) const {
-    os << "WaitcntRequirement: load_cnt=" << load_cnt << " ds_cnt=" << ds_cnt;
+    os << "WaitcntRequirement: tensor_cnt=" << tensor_cnt;
   }
 };
 
@@ -283,8 +232,9 @@ inline raw_ostream &operator<<(raw_ostream &os,
 }
 
 static bool mayAlias(Value lhs, Value rhs, ArrayRef<Value> tokens) {
-  if (isWorkgroupAddressSpace(cast<MemRefType>(lhs.getType())) !=
-      isWorkgroupAddressSpace(cast<MemRefType>(rhs.getType())))
+  auto memref1 = cast<MemRefType>(lhs.getType());
+  auto memref2 = cast<MemRefType>(rhs.getType());
+  if (memref1.getMemorySpace() != memref2.getMemorySpace())
     return false;
 
   return llvm::is_contained(tokens, lhs);
@@ -803,10 +753,9 @@ public:
       // If the current operation is already a memory_counter_wait operation
       // they will be merged later.
       rewriter.setInsertionPoint(operation);
-      amdgpu::MemoryCounterWaitOp::create(
-          rewriter, operation->getLoc(), getAttr(req.getLoadCnt()),
-          getAttr(req.getStoreCnt()), getAttr(req.getDsCnt()), nullptr,
-          nullptr);
+      amdgpu::MemoryCounterWaitOp::create(rewriter, operation->getLoc(),
+                                          nullptr, nullptr, nullptr, nullptr,
+                                          getAttr(req.getTensorCnt()));
     });
   }
 };
