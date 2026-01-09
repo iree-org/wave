@@ -147,6 +147,10 @@ mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 /// Returns the typeID of a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
 
+/// Gets the underlying dictionary mapping from a WaveHyperparameterAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveHyperparameterAttrGetMapping(MlirAttribute attr);
+
 //===---------------------------------------------------------------------===//
 // WaveWorkgroupDimAttr
 //===---------------------------------------------------------------------===//
@@ -284,6 +288,17 @@ mlirWaveExprListAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
 /// Returns the typeID of a WaveExprListAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveExprListAttrGetTypeID();
 
+/// Get the affine map from a WaveExprListAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap mlirWaveExprListAttrGetMap(MlirAttribute attr);
+
+/// Get the number of symbols in a WaveExprListAttr.
+MLIR_CAPI_EXPORTED intptr_t
+mlirWaveExprListAttrGetNumSymbols(MlirAttribute attr);
+
+/// Get the symbol at index from a WaveExprListAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveExprListAttrGetSymbol(MlirAttribute attr, intptr_t index);
+
 //===---------------------------------------------------------------------===//
 // WaveReadWriteBoundsAttr
 //===---------------------------------------------------------------------===//
@@ -317,6 +332,20 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
 /// Returns the typeID of a HardwareConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWHardwareConstraintAttrGetTypeID();
 
+/// Field getters for HardwareConstraintAttr.
+MLIR_CAPI_EXPORTED unsigned
+mlirHardwareConstraintAttrGetThreadsPerWave(MlirAttribute attr);
+MLIR_CAPI_EXPORTED intptr_t
+mlirHardwareConstraintAttrGetNumWavesPerBlock(MlirAttribute attr);
+MLIR_CAPI_EXPORTED unsigned
+mlirHardwareConstraintAttrGetWavesPerBlockElem(MlirAttribute attr, intptr_t i);
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirHardwareConstraintAttrGetMmaType(MlirAttribute attr);
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirHardwareConstraintAttrGetVectorShapes(MlirAttribute attr);
+MLIR_CAPI_EXPORTED unsigned
+mlirHardwareConstraintAttrGetMaxBitsPerLoad(MlirAttribute attr);
+
 //===---------------------------------------------------------------------===//
 // DeviceConstraintAttr
 //===---------------------------------------------------------------------===//
@@ -332,6 +361,16 @@ mlirDeviceConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
 
 /// Returns the typeID of a DeviceConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirDeviceConstraintAttrGetTypeID();
+
+/// Field getters.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirDeviceConstraintAttrGetDim(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirDeviceConstraintAttrGetTileSize(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED unsigned
+mlirDeviceConstraintAttrGetDeviceDim(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
 // WorkgroupConstraintAttr
@@ -349,6 +388,19 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWorkgroupConstraintAttrGet(
 /// Returns the typeID of a WorkgroupConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWorkgroupConstraintAttrGetTypeID();
 
+/// Field getters.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWorkgroupConstraintAttrGetDim(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWorkgroupConstraintAttrGetTileSize(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWorkgroupConstraintAttrGetWorkgroupDim(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED bool
+mlirWorkgroupConstraintAttrGetPrimary(MlirAttribute attr);
+
 //===---------------------------------------------------------------------===//
 // WaveConstraintAttr
 //===---------------------------------------------------------------------===//
@@ -362,6 +414,13 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWaveConstraintAttrGet(
 
 /// Returns the typeID of a WaveConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveConstraintAttrGetTypeID();
+
+/// Field getters.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveConstraintAttrGetDim(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveConstraintAttrGetTileSize(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
 // TilingConstraintAttr
@@ -377,6 +436,13 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirTilingConstraintAttrGet(
 
 /// Returns the typeID of a TilingConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirTilingConstraintAttrGetTypeID();
+
+/// Field getters.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirTilingConstraintAttrGetDim(MlirAttribute attr);
+
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirTilingConstraintAttrGetTileSize(MlirAttribute attr);
 
 #ifdef __cplusplus
 }

@@ -190,6 +190,12 @@ MlirTypeID mlirWaveHyperparameterAttrGetTypeID() {
   return wrap(TypeID::get<wave::WaveHyperparameterAttr>());
 }
 
+MlirAttribute mlirWaveHyperparameterAttrGetMapping(MlirAttribute attr) {
+  auto mapping =
+      llvm::cast<wave::WaveHyperparameterAttr>(unwrap(attr)).getMapping();
+  return wrap(mapping);
+}
+
 //===---------------------------------------------------------------------===//
 // WaveWorkgroupDimAttr
 //===---------------------------------------------------------------------===//
@@ -287,6 +293,19 @@ MlirTypeID mlirWaveExprListAttrGetTypeID() {
   return wrap(TypeID::get<wave::WaveExprListAttr>());
 }
 
+MlirAffineMap mlirWaveExprListAttrGetMap(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveExprListAttr>(unwrap(attr)).getMap());
+}
+
+intptr_t mlirWaveExprListAttrGetNumSymbols(MlirAttribute attr) {
+  return llvm::cast<wave::WaveExprListAttr>(unwrap(attr)).getSymbols().size();
+}
+
+MlirAttribute mlirWaveExprListAttrGetSymbol(MlirAttribute attr,
+                                            intptr_t index) {
+  return wrap(
+      llvm::cast<wave::WaveExprListAttr>(unwrap(attr)).getSymbols()[index]);
+}
 //===---------------------------------------------------------------------===//
 // WaveReadWriteBoundsAttr
 //===---------------------------------------------------------------------===//
@@ -342,6 +361,33 @@ MlirTypeID mlirWHardwareConstraintAttrGetTypeID() {
   return wrap(TypeID::get<wave::HardwareConstraintAttr>());
 }
 
+unsigned mlirHardwareConstraintAttrGetThreadsPerWave(MlirAttribute attr) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getThreadsPerWave();
+}
+intptr_t mlirHardwareConstraintAttrGetNumWavesPerBlock(MlirAttribute attr) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getWavesPerBlock()
+      .size();
+}
+unsigned mlirHardwareConstraintAttrGetWavesPerBlockElem(MlirAttribute attr,
+                                                        intptr_t i) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getWavesPerBlock()[i];
+}
+MlirAttribute mlirHardwareConstraintAttrGetMmaType(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr)).getMmaType());
+}
+MlirAttribute mlirHardwareConstraintAttrGetVectorShapes(MlirAttribute attr) {
+  return wrap(llvm::dyn_cast<wave::HardwareConstraintAttr>(unwrap(attr))
+                  .getVectorShapes());
+}
+unsigned mlirHardwareConstraintAttrGetMaxBitsPerLoad(MlirAttribute attr) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getMaxBitsPerLoad();
+}
+
 //===---------------------------------------------------------------------===//
 // DeviceConstraintAttr
 //===---------------------------------------------------------------------===//
@@ -364,6 +410,19 @@ MlirAttribute mlirDeviceConstraintAttrGet(MlirContext mlirCtx,
 
 MlirTypeID mlirDeviceConstraintAttrGetTypeID() {
   return wrap(TypeID::get<wave::DeviceConstraintAttr>());
+}
+
+MlirAttribute mlirDeviceConstraintAttrGetDim(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::DeviceConstraintAttr>(unwrap(attr)).getDim());
+}
+
+MlirAttribute mlirDeviceConstraintAttrGetTileSize(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::DeviceConstraintAttr>(unwrap(attr)).getTileSize());
+}
+
+unsigned mlirDeviceConstraintAttrGetDeviceDim(MlirAttribute attr) {
+  return llvm::cast<wave::DeviceConstraintAttr>(unwrap(attr)).getDeviceDim();
 }
 
 //===---------------------------------------------------------------------===//
@@ -393,6 +452,24 @@ MlirTypeID mlirWorkgroupConstraintAttrGetTypeID() {
   return wrap(TypeID::get<wave::WorkgroupConstraintAttr>());
 }
 
+MlirAttribute mlirWorkgroupConstraintAttrGetDim(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WorkgroupConstraintAttr>(unwrap(attr)).getDim());
+}
+
+MlirAttribute mlirWorkgroupConstraintAttrGetTileSize(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::WorkgroupConstraintAttr>(unwrap(attr)).getTileSize());
+}
+
+MlirAttribute mlirWorkgroupConstraintAttrGetWorkgroupDim(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WorkgroupConstraintAttr>(unwrap(attr))
+                  .getWorkgroupDim());
+}
+
+bool mlirWorkgroupConstraintAttrGetPrimary(MlirAttribute attr) {
+  return llvm::cast<wave::WorkgroupConstraintAttr>(unwrap(attr)).getPrimary();
+}
+
 //===---------------------------------------------------------------------===//
 // WaveConstraintAttr
 //===---------------------------------------------------------------------===//
@@ -411,6 +488,14 @@ MlirAttribute mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
 
 MlirTypeID mlirWaveConstraintAttrGetTypeID() {
   return wrap(TypeID::get<wave::WaveConstraintAttr>());
+}
+
+MlirAttribute mlirWaveConstraintAttrGetDim(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveConstraintAttr>(unwrap(attr)).getDim());
+}
+
+MlirAttribute mlirWaveConstraintAttrGetTileSize(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveConstraintAttr>(unwrap(attr)).getTileSize());
 }
 
 //===---------------------------------------------------------------------===//
@@ -433,6 +518,15 @@ MlirAttribute mlirTilingConstraintAttrGet(MlirContext mlirCtx,
 
 MlirTypeID mlirTilingConstraintAttrGetTypeID() {
   return wrap(TypeID::get<wave::TilingConstraintAttr>());
+}
+
+MlirAttribute mlirTilingConstraintAttrGetDim(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::TilingConstraintAttr>(unwrap(attr)).getDim());
+}
+
+MlirAttribute mlirTilingConstraintAttrGetTileSize(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::TilingConstraintAttr>(unwrap(attr)).getTileSize());
 }
 
 //===---------------------------------------------------------------------===//

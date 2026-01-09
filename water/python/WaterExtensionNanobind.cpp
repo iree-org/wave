@@ -246,6 +246,9 @@ struct PyWaveHyperparameterAttr
         },
         nb::arg("symbol_dict"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveHyperparameterAttr from parameters.");
+    c.def_prop_ro("mapping", [](MlirAttribute self) {
+      return mlirWaveHyperparameterAttrGetMapping(self);
+    });
   }
 };
 
@@ -437,6 +440,18 @@ struct PyWaveExprListAttr
         },
         nb::arg("symbols"), nb::arg("map"),
         "Gets a wave.WaveExprListAttr from a list of symbol attributes.");
+    c.def_prop_ro("symbols", [](MlirAttribute self) {
+      std::vector<MlirAttribute> symbols;
+      intptr_t numSymbols = mlirWaveExprListAttrGetNumSymbols(self);
+      symbols.reserve(numSymbols);
+      for (intptr_t i = 0; i < numSymbols; i++) {
+        symbols.push_back(mlirWaveExprListAttrGetSymbol(self, i));
+      }
+      return symbols;
+    });
+    c.def_prop_ro("map", [](MlirAttribute self) {
+      return mlirWaveExprListAttrGetMap(self);
+    });
   }
 };
 
@@ -543,6 +558,33 @@ struct PyHardwareConstraintAttr
         nb::arg("mma_type") = nb::none(), nb::arg("vector_shapes") = nb::none(),
         nb::arg("max_bits_per_load") = 128, nb::arg("context") = nb::none(),
         "Gets a wave.HardwareConstraintAttr from parameters.");
+
+    c.def_prop_ro("threads_per_wave", [](MlirAttribute self) {
+      return mlirHardwareConstraintAttrGetThreadsPerWave(self);
+    });
+    c.def_prop_ro("waves_per_block", [](MlirAttribute self) {
+      std::vector<unsigned> out;
+      intptr_t n = mlirHardwareConstraintAttrGetNumWavesPerBlock(self);
+      out.reserve(n);
+      for (intptr_t i = 0; i < n; ++i)
+        out.push_back(mlirHardwareConstraintAttrGetWavesPerBlockElem(self, i));
+      return out;
+    });
+    c.def_prop_ro("mma_type", [](MlirAttribute self) -> nb::object {
+      MlirAttribute attr = mlirHardwareConstraintAttrGetMmaType(self);
+      if (mlirAttributeIsNull(attr))
+        return nb::none();
+      return nb::cast(attr);
+    });
+    c.def_prop_ro("vector_shapes", [](MlirAttribute self) -> nb::object {
+      MlirAttribute attr = mlirHardwareConstraintAttrGetVectorShapes(self);
+      if (mlirAttributeIsNull(attr))
+        return nb::none();
+      return nb::cast(attr);
+    });
+    c.def_prop_ro("max_bits_per_load", [](MlirAttribute self) {
+      return mlirHardwareConstraintAttrGetMaxBitsPerLoad(self);
+    });
   }
 };
 
@@ -578,6 +620,15 @@ struct PyDeviceConstraintAttr
         nb::arg("dim"), nb::arg("tile_size"), nb::arg("device_dim"),
         nb::arg("context") = nb::none(),
         "Gets a wave.DeviceConstraintAttr from parameters.");
+    c.def_prop_ro("dim", [](MlirAttribute self) {
+      return mlirDeviceConstraintAttrGetDim(self);
+    });
+    c.def_prop_ro("tile_size", [](MlirAttribute self) {
+      return mlirDeviceConstraintAttrGetTileSize(self);
+    });
+    c.def_prop_ro("device_dim", [](MlirAttribute self) {
+      return mlirDeviceConstraintAttrGetDeviceDim(self);
+    });
   }
 };
 
@@ -614,6 +665,18 @@ struct PyWorkgroupConstraintAttr
         nb::arg("dim"), nb::arg("tile_size"), nb::arg("workgroup_dim"),
         nb::arg("primary") = true, nb::arg("context") = nb::none(),
         "Gets a wave.WorkgroupConstraintAttr from parameters.");
+    c.def_prop_ro("dim", [](MlirAttribute self) {
+      return mlirWorkgroupConstraintAttrGetDim(self);
+    });
+    c.def_prop_ro("tile_size", [](MlirAttribute self) {
+      return mlirWorkgroupConstraintAttrGetTileSize(self);
+    });
+    c.def_prop_ro("workgroup_dim", [](MlirAttribute self) {
+      return mlirWorkgroupConstraintAttrGetWorkgroupDim(self);
+    });
+    c.def_prop_ro("primary", [](MlirAttribute self) {
+      return mlirWorkgroupConstraintAttrGetPrimary(self);
+    });
   }
 };
 
@@ -647,6 +710,12 @@ struct PyWaveConstraintAttr
         },
         nb::arg("dim"), nb::arg("tile_size"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveConstraintAttr from parameters.");
+    c.def_prop_ro("dim", [](MlirAttribute self) {
+      return mlirWaveConstraintAttrGetDim(self);
+    });
+    c.def_prop_ro("tile_size", [](MlirAttribute self) {
+      return mlirWaveConstraintAttrGetTileSize(self);
+    });
   }
 };
 
@@ -680,6 +749,12 @@ struct PyTilingConstraintAttr
         },
         nb::arg("dim"), nb::arg("tile_size"), nb::arg("context") = nb::none(),
         "Gets a wave.TilingConstraintAttr from parameters.");
+    c.def_prop_ro("dim", [](MlirAttribute self) {
+      return mlirTilingConstraintAttrGetDim(self);
+    });
+    c.def_prop_ro("tile_size", [](MlirAttribute self) {
+      return mlirTilingConstraintAttrGetTileSize(self);
+    });
   }
 };
 
