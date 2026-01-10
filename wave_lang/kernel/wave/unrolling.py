@@ -56,7 +56,14 @@ def unroll(
     if iterate.condition is not None:
         raise ValueError("Unrolling is not supported for iterates with conditions.")
 
-    iterate.count = iterate.count // unroll_factor
+    # Only update the step, not the count. The scf.for loop uses:
+    #   scf.for %i = 0 to count step step_val
+    # With unrolling, we process `unroll_factor` iterations worth of work per
+    # loop iteration. To maintain the correct number of total iterations:
+    # - Original: count iterations with step=1
+    # - After unroll: count iterations with step=unroll_factor
+    #   This gives count/unroll_factor actual loop iterations, each doing
+    #   unroll_factor iterations worth of work.
     iterate.update_arg("step", iterate.step * unroll_factor)
 
     graph = trace.get_subgraph(iterate.subgraph_name)

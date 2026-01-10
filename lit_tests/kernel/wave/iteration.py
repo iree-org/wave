@@ -425,10 +425,11 @@ def test_partial_unroll_iteration():
         # CHECK-NEXT: return
 
         # Partially Unroll the iterate
+        # With the new unrolling behavior, count stays unchanged, only step is multiplied
         unroll(iterate, 2, trace, constraints)
         print_graph(trace.get_subgraph(iterate.subgraph_name))
-        assert iterate.count == 4
-        assert iterate.step == 2
+        assert iterate.count == 8  # count unchanged
+        assert iterate.step == 2  # step multiplied by unroll_factor
 
         # TODO: Check that the bounds are correct, and steps
 
@@ -452,10 +453,11 @@ def test_partial_unroll_iteration():
         # CHECK-NEXT: return
 
         # Unroll the unrolled iterate again
+        # With the new unrolling behavior, count stays unchanged, only step is multiplied
         unroll(iterate, 2, trace, constraints)
         print_graph(trace.get_subgraph(iterate.subgraph_name))
-        assert iterate.count == 2
-        assert iterate.step == 4
+        assert iterate.count == 8  # count unchanged
+        assert iterate.step == 4  # step multiplied again (2 * 2 = 4)
 
         # CHECK: placeholder
         # CHECK-NEXT: placeholder

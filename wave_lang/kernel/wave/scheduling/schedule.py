@@ -250,7 +250,12 @@ def apply_pipelined_schedule(
     )
 
     # Update new reduction count.
-    new_reduction.count = max_induction_variable - (num_stages - 1)
+    # With step > 1 (e.g., from unrolling), we need to reduce the count by more
+    # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
+    # data for the "next" iteration (offset by step), so we need to ensure
+    # that stays within bounds.
+    step = get_custom(new_reduction).step
+    new_reduction.count = max_induction_variable - (num_stages - 1) * step
 
     return new_reduction, node_mapping
 

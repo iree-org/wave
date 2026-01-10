@@ -855,6 +855,11 @@ def construct_pipelined_loop(
     )
 
     # Construct kernel.
+    # The induction variable offsets must account for the step size.
+    # In a pipelined loop with num_stages stages, stage i operates on data
+    # from i iterations ahead. With step > 1 (e.g., from unrolling),
+    # "i iterations ahead" means i * step in terms of the induction variable.
+    step = reduction.step
     pipelined_reduction, pipelined_reduction_graph = construct_kernel(
         graph,
         reduction,
@@ -863,7 +868,7 @@ def construct_pipelined_loop(
         initiation_interval,
         rotating_registers,
         induction_variable,
-        [induction_variable + i for i in range(num_stages)],
+        [induction_variable + i * step for i in range(num_stages)],
         visualize,
         use_scheduling_barriers,
         outer_vars=outer_vars,
@@ -875,6 +880,8 @@ def construct_pipelined_loop(
         get_custom(pipelined_reduction).subgraph_name, pipelined_reduction_graph
     )
     # Construct epilogue.
+    # The epilogue induction variables must account for the step size.
+    # With step > 1, each "iteration" covers step original iterations.
     construct_epilogue(
         graph,
         reduction,
@@ -884,7 +891,10 @@ def construct_pipelined_loop(
         initiation_interval,
         rotating_registers,
         induction_variable,
-        [max_induction_variable - num_stages + i for i in range(num_stages)],
+        [
+            max_induction_variable - num_stages * step + i * step
+            for i in range(num_stages)
+        ],
         create_drain_stage_schedule(num_stages),
         num_rotating_registers,
         visualize,

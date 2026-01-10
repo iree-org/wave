@@ -108,14 +108,15 @@ def test_unroll_schedule_op():
     #
     # Verify that the loop has been unrolled:
     # - Original: K=256, BLOCK_K=16 => count=16, step=1 => scf.for ... to %c16 step %c1
-    # - After unroll by 2: count=8, step=2 => scf.for ... to %c8 step %c2
+    # - After unroll by 2: count=16, step=2 => scf.for ... to %c16 step %c2
+    #   (8 loop iterations, each doing 2 iterations worth of work)
     #
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG: %[[C2:.*]] = arith.constant 2 : index
-    # CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+    # CHECK-DAG: %[[C16:.*]] = arith.constant 16 : index
     #
-    # The unrolled loop should iterate from 0 to 8 with step 2
-    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C8]] step %[[C2]]
+    # The unrolled loop should iterate from 0 to 16 with step 2
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C16]] step %[[C2]]
     #
     # Inside the loop body, we should see 2 MMA operations (unrolled)
     # CHECK: amdgpu.mfma
@@ -131,8 +132,8 @@ def test_unroll_schedule_op_factor_4():
 
     The kernel has K=512 and BLOCK_K=16, so the iterate count is 32.
     Unrolling by factor 4 should result in:
-    - count = 8 (512/16/4 = 8)
-    - step = 4
+    - count = 32 (unchanged), step = 4
+    - scf.for ... to 32 step 4 => 8 loop iterations
     - Each iteration processes 4x the original work (4 MMAs per iteration)
     """
     constraints: list[tkw.Constraint] = [
@@ -192,12 +193,12 @@ def test_unroll_schedule_op_factor_4():
 
     # CHECK-LABEL: func.func @gemm_unroll_4
     #
-    # After unroll by 4: count=8, step=4 => scf.for ... to %c8 step %c4
+    # After unroll by 4: count=32, step=4 => scf.for ... to %c32 step %c4
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
-    # CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+    # CHECK-DAG: %[[C32:.*]] = arith.constant 32 : index
     #
-    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C8]] step %[[C4]]
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C32]] step %[[C4]]
     #
     # Inside the loop body, we should see 4 MMA operations (unrolled)
     # CHECK: amdgpu.mfma
@@ -309,11 +310,12 @@ def test_unroll_and_reorder():
     # CHECK-LABEL: func.func @gemm_unroll_reorder
     #
     # Verify that the loop structure is correct (unrolled by 2)
+    # K=256, BLOCK_K=16 => count=16, after unroll by 2: count=16, step=2
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG: %[[C2:.*]] = arith.constant 2 : index
-    # CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+    # CHECK-DAG: %[[C16:.*]] = arith.constant 16 : index
     #
-    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C8]] step %[[C2]]
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C16]] step %[[C2]]
     #
     # Verify the reordering: all reads come first, then barrier, then MMAs
     # The reads (4 total after unroll by 2: 2 for A, 2 for B) should precede MMAs
