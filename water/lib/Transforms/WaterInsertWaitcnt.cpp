@@ -59,25 +59,30 @@ static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
   return propagateViewOps(isLoad ? makeBase.getGlobal() : makeBase.getLds());
 }
 
-/// Check if the operation is a load operation and return the base memref.
-static std::optional<Value> isLoadOp(Operation *op) {
-  // Use interface
-  if (auto load = dyn_cast<vector::LoadOp>(op))
-    return load.getBase();
-  if (auto load = dyn_cast<memref::LoadOp>(op))
-    return load.getMemref();
-  if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op))
-    return propagateTensorDesc(load.getDesc(), true);
-
-  return std::nullopt;
+/// Check if the operation is a load operation and return list of base memrefs
+/// to track.
+static SmallVector<Value> isLoadOp(Operation *op) {
+  SmallVector<Value> result;
+  if (auto load = dyn_cast<vector::LoadOp>(op)) {
+    result.push_back(load.getBase());
+  } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    result.push_back(load.getMemref());
+  } else if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op)) {
+    if (auto memref = propagateTensorDesc(load.getDesc(), true))
+      result.push_back(*memref);
+  }
+  return result;
 }
 
-/// Check if the operation is a store operation and return the base memref.
-static std::optional<Value> isStoreOp(Operation *op) {
-  if (auto store = dyn_cast<amdgpu::TensorLoadToLDSOp>(op))
-    return propagateTensorDesc(store.getDesc(), false);
-
-  return std::nullopt;
+/// Check if the operation is a store operation and return list of base memrefs
+/// to track.
+static SmallVector<Value> isStoreOp(Operation *op) {
+  SmallVector<Value> result;
+  if (auto store = dyn_cast<amdgpu::TensorLoadToLDSOp>(op)) {
+    if (auto memref = propagateTensorDesc(store.getDesc(), false))
+      result.push_back(*memref);
+  }
+  return result;
 }
 
 template <typename T>
@@ -105,11 +110,11 @@ struct PendingOperations {
 
     ops.push_back(op);
     auto &back = opsTokens.emplace_back();
-    if (auto memref = isStoreOp(op))
-      back.push_back(*memref);
+    for (Value memref : isStoreOp(op))
+      back.push_back(memref);
 
-    if (auto memref = isLoadOp(op))
-      back.push_back(*memref);
+    for (Value memref : isLoadOp(op))
+      back.push_back(memref);
 
     return back;
   }
@@ -486,10 +491,10 @@ public:
 
             return pendingResult;
           };
-          if (auto loadBase = isLoadOp(pendingOp))
-            result.merge(checkPendingMemref(*loadBase, true, false));
-          if (auto storeBase = isStoreOp(pendingOp))
-            result.merge(checkPendingMemref(*storeBase, false, true));
+          for (Value loadBase : isLoadOp(pendingOp))
+            result.merge(checkPendingMemref(loadBase, true, false));
+          for (Value storeBase : isStoreOp(pendingOp))
+            result.merge(checkPendingMemref(storeBase, false, true));
         }
       }
 
@@ -497,10 +502,10 @@ public:
     };
     // TODO: atomics will have both load and store flags set
     WaitcntRequirement result;
-    if (auto loadBase = isLoadOp(op))
-      result.merge(checkMemref(*loadBase, true, false));
-    if (auto storeBase = isStoreOp(op))
-      result.merge(checkMemref(*storeBase, false, true));
+    for (Value loadBase : isLoadOp(op))
+      result.merge(checkMemref(loadBase, true, false));
+    for (Value storeBase : isStoreOp(op))
+      result.merge(checkMemref(storeBase, false, true));
     return result;
   }
 
