@@ -4,6 +4,134 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+//===----------------------------------------------------------------------===//
+// WaterInsertWaitcnt Pass - Algorithm Summary
+//===----------------------------------------------------------------------===//
+//
+// This pass inserts memory counter wait instructions
+// (amdgpu.memory_counter_wait) to ensure proper synchronization between
+// asynchronous memory operations on AMD GPUs. It is analogous to LLVM's
+// SIInsertWaitcnts pass but operates at the MLIR level.
+//
+// ## Overview
+//
+// AMD GPUs execute certain memory operations asynchronously, particularly
+// tensor loads (global memory → LDS via DMA). These operations can complete
+// out of order, requiring explicit synchronization via wait instructions.
+// This pass detects memory dependencies and inserts the minimal set of waits
+// needed for correctness.
+//
+// ## Key Concepts
+//
+// 1. **Tracked Operations**: Currently tracks `amdgpu.tensor_load_to_lds`
+//    operations as asynchronous. These operations read from global memory
+//    and write to LDS (Local Data Share).
+//
+// 2. **Memory Dependencies**: Detects three types of hazards:
+//    - RAW (Read After Write): Reading from a location being written by a
+//      pending async operation
+//    - WAR (Write After Read): Writing to a location being read by a pending
+//      async operation
+//    - WAW (Write After Write): Currently disabled, as tensor operations to
+//      the same LDS location can be allowed to overlap
+//
+// 3. **Barriers**: Operations like `amdgpu.lds_barrier` and `gpu.barrier`
+//    serve as synchronization points. Waits are inserted at barriers to
+//    ensure pending operations complete before proceeding.
+//
+// 4. **Wait Counts**: The `tensor_cnt` parameter specifies how many operations
+//    should remain pending. For example:
+//    - `tensor(0)`: Wait for all pending operations to complete
+//    - `tensor(1)`: Wait until at most 1 operation remains pending
+//    - `tensor(2)`: Wait until at most 2 operations remain pending
+//
+// ## Algorithm Details
+//
+// ### Phase 1: Dataflow Analysis
+//
+// Uses dense forward dataflow analysis (DenseForwardDataFlowAnalysis) to
+// propagate state through the program:
+//
+// **State (WaitcntState)**:
+// - `pendingOpsLists`: Lists of pending asynchronous operations along with
+//   memory tokens (memrefs they touch). Multiple lists handle different
+//   control flow paths.
+// - `requirement`: The waitcnt requirement needed after this program point.
+//
+// **Transfer Function** (visitOperation):
+// 1. For barriers: Add to pending operations list (barriers separate groups
+//    of async operations)
+// 2. For memory operations: Check if they access memory touched by pending
+//    operations
+// 3. If dependency found: Compute wait count needed and propagate requirement
+//    backwards to the barrier
+// 4. For tracked operations: Add to pending list for subsequent operations
+//
+// **Join Operation**:
+// - Merges states from different control flow paths
+// - Takes conservative approach: keeps all unique pending operation sequences
+// - Merges requirements by taking minimum (most restrictive)
+//
+// **Control Flow Handling** (visitRegionBranchControlFlowTransfer):
+// - Propagates memory tokens through loop iter_args and branch results
+// - Maps values across region boundaries
+// - Maintains dominance information to determine which tokens remain valid
+//
+// ### Phase 2: Memory Reference Resolution
+//
+// To track which memory locations operations touch:
+//
+// 1. **View Propagation** (`propagateViewOps`): Strips away view operations
+//    (subview, reinterpret_cast) to get base memrefs.
+//
+// 2. **Select Handling** (`collectUnderlyingValues`): When memory references
+//    flow through `arith.select`, conservatively tracks all possible values
+//    (both true and false branches). This handles dynamic buffer selection in
+//    double/triple buffering patterns.
+//
+// 3. **Tensor Descriptor Unwrapping** (`propagateTensorDesc`): For tensor
+//    operations, extracts the actual memref from the DMA descriptor chain:
+//    TensorLoadToLDSOp → MakeDmaDescriptorOp → MakeDmaBaseOp → memref
+//
+// ### Phase 3: Dependency Detection
+//
+// For each operation accessing memory (`checkMemoryDependency`):
+// 1. Extract all memory references (handling selects)
+// 2. For each pending operation in reverse order (most recent first):
+//    - Check if memories may alias (same address space + memory in tokens)
+//    - Detect RAW/WAR hazards
+//    - If hazard found: Count operations from dependency point to end of list
+//      (this count determines how many operations can remain pending)
+//    - Track which barrier separates the operations
+//
+// ### Phase 4: Wait Insertion
+//
+// After analysis completes:
+// 1. Walk all operations
+// 2. Check if operation has a waitcnt requirement (from analysis)
+// 3. Insert `amdgpu.memory_counter_wait` with computed tensor_cnt before
+//    the operation (typically a barrier)
+//
+// ## Example: Double Buffering
+//
+// ```mlir
+// tensor_load_to_lds %desc1  // Load to buffer1
+// scf.for ... iter_args(%curr = %buf1, %next = %buf2) {
+//   tensor_load_to_lds %desc_next  // Load to next buffer
+//   // Now 2 operations pending: desc1 and desc_next
+//   amdgpu.lds_barrier
+//   // Need tensor(1): wait until only 1 remains (ensures desc1 done)
+//   %vec = vector.load %curr
+//   scf.yield %next, %curr
+// }
+// ```
+//
+// The analysis detects RAW between `tensor_load_to_lds %desc1` and
+// `vector.load %curr` (when curr=buf1), counts 1 operation after desc1,
+// and inserts `memory_counter_wait tensor(1)` at the barrier.
+//
+//===----------------------------------------------------------------------===//
+
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
