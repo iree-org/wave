@@ -50,6 +50,9 @@ from wave_lang.kernel.wave.templates.gemm import (
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
+    get_gemm_unroll_kernel_and_schedule,
+    get_gemm_unroll_then_pipeline_kernel_and_schedule,
+    get_gemm_pipeline_then_unroll_kernel_and_schedule,
 )
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
     get_tagged_gemm,
@@ -2588,6 +2591,126 @@ def test_gemm_prefetch_reorder_manual_schedule(
     gemm(a, b, c)
 
     # Verify results with IREE reference
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(256, 256, 512)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@pytest.mark.parametrize("unroll_factor", [2, 4])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_unroll_schedule(
+    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+):
+    """
+    Test GEMM with unroll-only schedule.
+
+    This test validates that the tkw.unroll schedule operation correctly
+    unrolls the iterate loop and produces correct numerical results.
+    """
+    gemm_unroll, unroll_schedule, options = get_gemm_unroll_kernel_and_schedule(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        unroll_factor=unroll_factor,
+        compile_to_mlir=False,
+    )
+
+    options = set_default_run_config(options)
+    gemm_unroll = wave_compile(options, gemm_unroll, unroll_schedule)
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    gemm_unroll(a, b, c)
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(256, 256, 512)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@pytest.mark.parametrize("unroll_factor", [2])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_unroll_then_pipeline_schedule(
+    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+):
+    """
+    Test GEMM with unroll-then-pipeline schedule.
+
+    This test validates that unrolling first, then pipelining the unrolled
+    iterate produces correct numerical results.
+    """
+    (
+        gemm_unroll_then_pipeline,
+        unroll_then_pipeline_schedule,
+        options,
+    ) = get_gemm_unroll_then_pipeline_kernel_and_schedule(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        unroll_factor=unroll_factor,
+        compile_to_mlir=False,
+    )
+
+    options = set_default_run_config(options)
+    gemm_unroll_then_pipeline = wave_compile(
+        options, gemm_unroll_then_pipeline, unroll_then_pipeline_schedule
+    )
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    gemm_unroll_then_pipeline(a, b, c)
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(256, 256, 544)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@pytest.mark.parametrize("unroll_factor", [2])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_pipeline_then_unroll_schedule(
+    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+):
+    """
+    Test GEMM with pipeline-then-unroll schedule.
+
+    This test validates that pipelining first, then unrolling the KERNEL stage
+    produces correct numerical results.
+
+    Note: K=544, BLOCK_K=32 => count=17, after 2-stage pipeline => count=16
+    which is divisible by unroll_factor=2.
+    """
+    (
+        gemm_pipeline_then_unroll,
+        pipeline_then_unroll_schedule,
+        options,
+    ) = get_gemm_pipeline_then_unroll_kernel_and_schedule(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        unroll_factor=unroll_factor,
+        compile_to_mlir=False,
+    )
+
+    options = set_default_run_config(options)
+    gemm_pipeline_then_unroll = wave_compile(
+        options, gemm_pipeline_then_unroll, pipeline_then_unroll_schedule
+    )
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    gemm_pipeline_then_unroll(a, b, c)
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
