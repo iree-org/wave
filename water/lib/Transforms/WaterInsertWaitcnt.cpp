@@ -9,6 +9,7 @@
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -34,11 +35,28 @@ static bool isBarrier(Operation *op) {
 }
 
 /// Try to propagate view operations to the base memref.
-static std::optional<Value> propagateViewOps(Value value) {
+static Value propagateViewOps(Value value) {
   while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
     value = view.getViewSource();
 
   return value;
+}
+
+/// Collect all underlying values through view and select operations.
+static SmallVector<Value> collectUnderlyingValues(Value value) {
+  SmallVector<Value> result;
+  SmallVector<Value> worklist;
+  worklist.push_back(value);
+  while (!worklist.empty()) {
+    Value current = propagateViewOps(worklist.pop_back_val());
+    if (auto select = current.getDefiningOp<arith::SelectOp>()) {
+      worklist.push_back(select.getTrueValue());
+      worklist.push_back(select.getFalseValue());
+    } else {
+      result.push_back(current);
+    }
+  }
+  return result;
 }
 
 /// Check if we need to track the operation for waitcnt requirements.
@@ -62,16 +80,15 @@ static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
 /// Check if the operation is a load operation and return list of base memrefs
 /// to track.
 static SmallVector<Value> isLoadOp(Operation *op) {
-  SmallVector<Value> result;
   if (auto load = dyn_cast<vector::LoadOp>(op)) {
-    result.push_back(load.getBase());
+    return collectUnderlyingValues(load.getBase());
   } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    result.push_back(load.getMemref());
+    return collectUnderlyingValues(load.getMemref());
   } else if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op)) {
     if (auto memref = propagateTensorDesc(load.getDesc(), true))
-      result.push_back(*memref);
+      return collectUnderlyingValues(*memref);
   }
-  return result;
+  return {};
 }
 
 /// Check if the operation is a store operation and return list of base memrefs
