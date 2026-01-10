@@ -64,7 +64,8 @@ static bool trackOp(Operation *op) {
   return isa<amdgpu::TensorLoadToLDSOp>(op);
 }
 
-static std::optional<Value> propagateTensorDesc(Value value, bool isLoad) {
+/// Try to get the base memref from the tensor descriptor.
+static Value propagateTensorDesc(Value value, bool isLoad) {
   auto makeDesc = value.getDefiningOp<amdgpu::MakeDmaDescriptorOp>();
   if (!makeDesc)
     return value;
@@ -85,8 +86,8 @@ static SmallVector<Value> isLoadOp(Operation *op) {
   } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
     return collectUnderlyingValues(load.getMemref());
   } else if (auto load = dyn_cast<amdgpu::TensorLoadToLDSOp>(op)) {
-    if (auto memref = propagateTensorDesc(load.getDesc(), true))
-      return collectUnderlyingValues(*memref);
+    Value memref = propagateTensorDesc(load.getDesc(), true);
+    return collectUnderlyingValues(memref);
   }
   return {};
 }
@@ -96,8 +97,8 @@ static SmallVector<Value> isLoadOp(Operation *op) {
 static SmallVector<Value> isStoreOp(Operation *op) {
   SmallVector<Value> result;
   if (auto store = dyn_cast<amdgpu::TensorLoadToLDSOp>(op)) {
-    if (auto memref = propagateTensorDesc(store.getDesc(), false))
-      result.push_back(*memref);
+    Value memref = propagateTensorDesc(store.getDesc(), false);
+    return collectUnderlyingValues(memref);
   }
   return result;
 }
