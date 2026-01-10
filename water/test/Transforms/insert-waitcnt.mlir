@@ -195,3 +195,49 @@ func.func @vector_ops_only(%lds1: memref<64x64xf32, #gpu.address_space<workgroup
 
   return
 }
+
+// CHECK-LABEL: func.func @select_memref
+func.func @select_memref(%global: memref<64x64xf32>, %lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>, %cond: i1) {
+  %c0 = arith.constant 0 : index
+
+  // Tensor load to LDS1.
+  %base1 = amdgpu.make_dma_base %global[%c0, %c0], %lds1[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc1 = amdgpu.make_dma_descriptor %base1 globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc1 : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+
+  // Select between LDS1 and LDS2 based on condition.
+  %selected = arith.select %cond, %lds1, %lds2 : memref<64x64xf32, #gpu.address_space<workgroup>>
+
+  // Vector load from selected buffer - should detect dependency with LDS1.
+  // CHECK: amdgpu.memory_counter_wait tensor(0)
+  // CHECK-NEXT: amdgpu.lds_barrier
+  %vec = vector.load %selected[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  return
+}
+
+// CHECK-LABEL: func.func @select_tensor_base
+func.func @select_tensor_base(%global: memref<64x64xf32>, %lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>, %cond: i1) {
+  %c0 = arith.constant 0 : index
+
+  // Select which LDS buffer to use for tensor load.
+  %selected_lds = arith.select %cond, %lds1, %lds2 : memref<64x64xf32, #gpu.address_space<workgroup>>
+
+  // Tensor load using selected LDS buffer - writes to either LDS1 or LDS2.
+  %base = amdgpu.make_dma_base %global[%c0, %c0], %selected_lds[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc = amdgpu.make_dma_descriptor %base globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+
+  // Vector load from LDS1 - should detect dependency since tensor load might have written here.
+  // CHECK: amdgpu.memory_counter_wait tensor(0)
+  // CHECK-NEXT: amdgpu.lds_barrier
+  %vec = vector.load %lds1[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  return
+}
