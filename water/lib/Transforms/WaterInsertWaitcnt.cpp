@@ -41,6 +41,7 @@ static std::optional<Value> propagateViewOps(Value value) {
   return value;
 }
 
+/// Check if we need to track the operation for waitcnt requirements.
 static bool trackOp(Operation *op) {
   return isa<amdgpu::TensorLoadToLDSOp>(op);
 }
@@ -504,15 +505,17 @@ public:
   }
 
 private:
-  /// Pending asynchronous operations
+  /// Pending asynchronous operations.
   SmallVector<std::shared_ptr<PendingOperations>, 4> pendingOpsLists;
 
-  /// Required waitcnt after this state
+  /// Required waitcnt after this state.
   WaitcntRequirement requirement;
 
+  /// Cached sets of pending operations and tokens for quick lookup.
   mutable llvm::SmallDenseSet<Operation *> pendingOpsSet;
   mutable llvm::SmallDenseSet<Value> pendingOpsTokens;
 
+  /// Copy on write for pending operations lists.
   void cow() {
     for (auto &pendingOps : pendingOpsLists) {
       if (pendingOps.use_count() > 1) {
@@ -524,6 +527,7 @@ private:
     }
   }
 
+  /// Check if the operation or value is in pending operations lists.
   bool isPendingOp(llvm::PointerUnion<Operation *, Value> opOrVal) const {
     if (pendingOpsLists.empty())
       return false;
