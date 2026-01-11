@@ -51,6 +51,7 @@ from wave_lang.kernel.wave.templates.gemm import (
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
     get_gemm_unroll_kernel_and_schedule,
+    get_gemm_unroll_with_iteration_access_kernel_and_schedule,
     get_gemm_pipeline_then_unroll_kernel_and_schedule,
 )
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
@@ -2624,6 +2625,50 @@ def test_gemm_unroll_schedule(
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
 
     gemm_unroll(a, b, c)
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(256, 256, 512)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@pytest.mark.parametrize("unroll_factor", [2])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_unroll_with_iteration_access_schedule(
+    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+):
+    """
+    Test GEMM with unroll schedule using get_node_by_tag_and_iteration API.
+
+    This test validates that:
+    1. The get_node_by_tag_and_iteration API correctly identifies operations
+       from specific unrolled iterations
+    2. Operations from different iterations can be accessed and reordered independently
+    3. The resulting kernel produces correct numerical results
+    """
+    (
+        gemm_unroll_iter_access,
+        unroll_iter_access_schedule,
+        options,
+    ) = get_gemm_unroll_with_iteration_access_kernel_and_schedule(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        unroll_factor=unroll_factor,
+        compile_to_mlir=False,
+    )
+    options = set_default_run_config(options)
+
+    gemm_unroll_iter_access = wave_compile(
+        options, gemm_unroll_iter_access, unroll_iter_access_schedule
+    )
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    gemm_unroll_iter_access(a, b, c)
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)

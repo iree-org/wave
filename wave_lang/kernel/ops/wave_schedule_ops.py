@@ -76,6 +76,10 @@ def filter_nodes(nodes: Any, subgraph: Any = None, node_type: Any = None): ...
 
 
 @define_schedule_op
+def get_node_by_tag_and_iteration(tag: str, iteration: int): ...
+
+
+@define_schedule_op
 def unroll(loop: Any, factor: int): ...
 
 
@@ -180,6 +184,65 @@ class GetNodeByTagAndType(CustomScheduleOp):
         logger.info(f"Found {len(nodes)} nodes by tag: {tag} and type: {node_type}")
 
         # Return nodes directly instead of wrapping in proxy
+        return nodes
+
+
+@dataclass
+class GetNodeByTagAndIteration(CustomScheduleOp):
+    """
+    Get nodes with a specific tag that belong to a specific unrolled iteration.
+
+    After unrolling by factor N, each iteration's nodes can be accessed via the
+    `unroll_iteration` attribute that is set on nodes during unrolling:
+    - iteration=0: Original nodes (unroll_iteration=0)
+    - iteration=1: First unrolled copy (unroll_iteration=1)
+    - iteration=2: Second unrolled copy (unroll_iteration=2)
+    - ...
+    - iteration=N-1: Last unrolled copy (unroll_iteration=N-1)
+
+    Usage in a schedule:
+        # After unrolling by 2
+        reads_iter0 = tkw.get_node_by_tag_and_iteration("read_a", iteration=0)
+        reads_iter1 = tkw.get_node_by_tag_and_iteration("read_a", iteration=1)
+
+    Args:
+        tag: The tag to filter nodes by
+        iteration: The unroll iteration index (0-based)
+
+    Returns:
+        List of nodes matching the tag that belong to the specified iteration
+    """
+
+    tag: str
+    iteration: int
+    schedule_op_name = "get_node_by_tag_and_iteration"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        tag: str,
+        iteration: int,
+    ):
+        assert constraints is not None, "Constraints are required"
+        assert iteration >= 0, "Iteration must be non-negative"
+
+        # Get all nodes with this tag
+        all_nodes = get_node_by_tag_helper(kernel_trace, tag)
+
+        # Filter nodes by their unroll_iteration attribute
+        nodes = [
+            node
+            for node in all_nodes
+            if getattr(node, "unroll_iteration", None) == iteration
+        ]
+
+        logger.info(
+            f"Found {len(nodes)} nodes by tag '{tag}' for iteration {iteration}"
+        )
+
         return nodes
 
 

@@ -626,6 +626,16 @@ class CustomOp(ABC):
     def tag(self) -> Optional[str]:
         return getattr(self.fx_node, "tag", None)
 
+    @property
+    def unroll_iteration(self) -> Optional[int]:
+        """Returns the unroll iteration index for this node, or None if not unrolled."""
+        return getattr(self.fx_node, "unroll_iteration", None)
+
+    @unroll_iteration.setter
+    def unroll_iteration(self, value: Optional[int]):
+        if value is not None:
+            setattr(self.fx_node, "unroll_iteration", value)
+
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
         instance = cls(*node.args)

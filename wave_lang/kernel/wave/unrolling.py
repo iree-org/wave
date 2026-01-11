@@ -98,6 +98,13 @@ def unroll(
     reduction_axis = iterate.axis
     induction_var = get_induction_symbol(reduction_axis)
     original_body_nodes = list(graph.nodes)
+
+    # Mark original nodes as iteration 0 (excluding placeholders)
+    for node in original_body_nodes:
+        original = get_custom(node)
+        if not isinstance(original, Placeholder):
+            original.unroll_iteration = 0
+
     for unroll_idx in range(0, unroll_factor - 1):
         for node in original_body_nodes:
             original = get_custom(node)
@@ -108,6 +115,10 @@ def unroll(
                 arg_transform=value_mapper,
                 anchor=list(graph.nodes)[-2],
             )
+            # Mark this copy with its unroll iteration index
+            # unroll_idx=0 means this is the 2nd iteration (iteration 1), etc.
+            copy.unroll_iteration = unroll_idx + 1
+
             # update nodes using the induction_var for indexing
             if copy.index:
                 updated_index = {}

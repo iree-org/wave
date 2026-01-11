@@ -350,6 +350,122 @@ def get_gemm_unroll_kernel_and_schedule(
     return gemm_unroll, unroll_schedule, options
 
 
+def get_gemm_unroll_with_iteration_access_kernel_and_schedule(
+    shape: tuple[int, int, int] = (256, 256, 512),
+    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
+    unroll_factor: int = 2,
+    compile_to_mlir: bool = True,
+):
+    """
+    Returns a GEMM kernel with unroll schedule that accesses ops by iteration.
+
+    Demonstrates using get_node_by_tag_and_iteration to access operations
+    from specific unrolled iterations independently.
+
+    Args:
+        shape: Tuple of (M, N, K) dimensions for the matrix multiplication
+        mfma_variant: The MMA type to use for hardware constraint
+        unroll_factor: Factor to unroll the loop by
+        compile_to_mlir: Whether to compile to MLIR IR
+
+    Returns:
+        tuple: (kernel_function, schedule_function, compile_options)
+    """
+    # Symbol definitions
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # Basic constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=mfma_variant,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_unroll_iter_access(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    @wave_schedule.wave_schedule()
+    def unroll_iter_access_schedule():
+        # First, unroll the loop
+        k_loop = tkw.get_node_by_tag("k_loop")
+        tkw.unroll(k_loop, unroll_factor)
+
+        # Access operations from specific iterations
+        # iteration=0: Original operations
+        reads_a_iter0 = tkw.get_node_by_tag_and_iteration("read_a", iteration=0)
+        reads_b_iter0 = tkw.get_node_by_tag_and_iteration("read_b", iteration=0)
+        mma_iter0 = tkw.get_node_by_tag_and_iteration("mma", iteration=0)
+
+        # iteration=1: Unrolled operations
+        reads_a_iter1 = tkw.get_node_by_tag_and_iteration("read_a", iteration=1)
+        reads_b_iter1 = tkw.get_node_by_tag_and_iteration("read_b", iteration=1)
+        mma_iter1 = tkw.get_node_by_tag_and_iteration("mma", iteration=1)
+
+        # Reorder: all reads from both iterations first, barrier, then all MMAs
+        clusters = [
+            tkw.cluster(
+                [
+                    reads_a_iter0,
+                    reads_b_iter0,
+                    reads_a_iter1,
+                    reads_b_iter1,
+                    tkw.SchedulingBarrier([]),
+                    mma_iter0,
+                    mma_iter1,
+                ],
+            ),
+        ]
+
+        tkw.reorder_graph(k_loop, clusters)
+
+    M_val, N_val, K_val = shape
+    options = WaveCompileOptions(
+        subs={
+            M: M_val,
+            N: N_val,
+            K: K_val,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        compile_to_mlir=compile_to_mlir,
+    )
+
+    return gemm_unroll_iter_access, unroll_iter_access_schedule, options
+
+
 def get_gemm_pipeline_then_unroll_kernel_and_schedule(
     shape: tuple[int, int, int] = (256, 256, 544),
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,

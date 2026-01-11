@@ -337,6 +337,128 @@ def test_unroll_and_reorder():
 
 
 @run_test
+def test_get_node_by_tag_and_iteration():
+    """
+    Test the get_node_by_tag_and_iteration API for accessing unrolled operations.
+
+    After unrolling by factor 2, operations from each iteration can be accessed:
+    - iteration=0: Original operations (no _unrolled suffix)
+    - iteration=1: Unrolled operations (with _unrolled0 suffix)
+
+    This test demonstrates that we can access and reorder operations from
+    specific unrolled iterations independently.
+    """
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    @tkw.wave(constraints)
+    def gemm_iter_access(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    @wave_schedule.wave_schedule()
+    def iter_access_schedule():
+        # First, unroll the loop by 2
+        k_loop = tkw.get_node_by_tag("k_loop")
+        tkw.unroll(k_loop, 2)
+
+        # Access operations from specific iterations using get_node_by_tag_and_iteration
+        # iteration=0: Original operations
+        reads_a_iter0 = tkw.get_node_by_tag_and_iteration("read_a", iteration=0)
+        reads_b_iter0 = tkw.get_node_by_tag_and_iteration("read_b", iteration=0)
+        mma_iter0 = tkw.get_node_by_tag_and_iteration("mma", iteration=0)
+
+        # iteration=1: Unrolled operations (with _unrolled0 suffix)
+        reads_a_iter1 = tkw.get_node_by_tag_and_iteration("read_a", iteration=1)
+        reads_b_iter1 = tkw.get_node_by_tag_and_iteration("read_b", iteration=1)
+        mma_iter1 = tkw.get_node_by_tag_and_iteration("mma", iteration=1)
+
+        # Reorder: iteration 0 reads, then iteration 1 reads, barrier, then all MMAs
+        clusters = [
+            tkw.cluster(
+                [
+                    reads_a_iter0,
+                    reads_b_iter0,
+                    reads_a_iter1,
+                    reads_b_iter1,
+                    tkw.SchedulingBarrier([]),
+                    mma_iter0,
+                    mma_iter1,
+                ],
+            ),
+        ]
+
+        tkw.reorder_graph(k_loop, clusters)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 256,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        compile_to_mlir=True,
+    )
+
+    gemm_iter_access = wave_compile(options, gemm_iter_access, iter_access_schedule)
+    print(gemm_iter_access.asm)
+
+    # CHECK-LABEL: func.func @gemm_iter_access
+    #
+    # Verify that the loop structure is correct (unrolled by 2)
+    # K=256, BLOCK_K=16 => count=16, step=2
+    # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG: %[[C2:.*]] = arith.constant 2 : index
+    # CHECK-DAG: %[[C16:.*]] = arith.constant 16 : index
+    #
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C16]] step %[[C2]]
+    #
+    # Verify the reordering: reads from both iterations first, then barrier, then MMAs
+    # CHECK: vector.load
+    # CHECK: vector.load
+    # CHECK: vector.load
+    # CHECK: vector.load
+    #
+    # Scheduling barrier between reads and MMAs
+    # CHECK: rocdl.sched.barrier
+    #
+    # Then all MMAs
+    # CHECK: amdgpu.mfma
+    # CHECK: amdgpu.mfma
+    #
+    # CHECK: scf.yield
+
+
+@run_test
 def test_unroll_then_pipeline():
     """
     Test unrolling an iterate node BEFORE pipelining it.
