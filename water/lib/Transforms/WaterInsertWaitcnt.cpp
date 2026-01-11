@@ -16,8 +16,8 @@
 // ## Overview
 //
 // AMD GPUs execute certain memory operations asynchronously, particularly
-// tensor loads (global memory → LDS via DMA). These operations can complete
-// out of order, requiring explicit synchronization via wait instructions.
+// tensor loads (global memory → LDS via DMA). These operations require explicit
+// synchronization via wait instructions.
 // This pass detects memory dependencies and inserts the minimal set of waits
 // needed for correctness.
 //
