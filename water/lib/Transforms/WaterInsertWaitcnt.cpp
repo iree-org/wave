@@ -35,9 +35,10 @@
 //    - WAW (Write After Write): Currently disabled, as tensor operations to
 //      the same LDS location can be allowed to overlap
 //
-// 3. **Barriers**: Operations like `amdgpu.lds_barrier` and `gpu.barrier`
-//    serve as synchronization points. Waits are inserted at barriers to
-//    ensure pending operations complete before proceeding.
+// 3. **Barriers**: Operations like `amdgpu.lds_barrier`, `gpu.barrier`, and
+//    `rocdl.s.barrier.signal` serve as synchronization points. Waits are
+//    inserted at barriers to ensure pending operations complete before
+//    proceeding.
 //
 // 4. **Wait Counts**: The `tensor_cnt` parameter specifies how many operations
 //    should remain pending. For example:
@@ -139,6 +140,7 @@
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Dominance.h"
@@ -159,7 +161,7 @@ namespace mlir::water {
 
 namespace {
 static bool isBarrier(Operation *op) {
-  return isa<gpu::BarrierOp>(op) || isa<amdgpu::LDSBarrierOp>(op);
+  return isa<gpu::BarrierOp, amdgpu::LDSBarrierOp, ROCDL::BarrierSignalOp>(op);
 }
 
 /// Try to propagate view operations to the base memref.
