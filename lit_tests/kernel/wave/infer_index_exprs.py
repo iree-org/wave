@@ -108,18 +108,25 @@ def _get_gemm_kernel(
 
 def testGemm():
     for use_shmem in [True, False]:
-        gemm, hyperparams = _get_gemm_kernel(
-            shape=(1024, 1024, 1024),
-            mfma_variant=MMAType.F32_16x16x16_F16,
-            use_shmem=use_shmem,
-        )
-        options = WaveCompileOptions(
-            subs=hyperparams,
-            run_bench=False,
-            check_water_analysis=True,
-        )
-        compiled_gemm = wave_compile(options, gemm)
-        assert compiled_gemm is not None
+        for mfma_variant, target in [
+            (MMAType.F32_32x32x16_F16, "gfx950"),
+            (MMAType.F32_16x16x16_F16, "gfx942"),
+        ]:
+            print(f"Testing {mfma_variant} on {target} with LDS={use_shmem}")
+            gemm, hyperparams = _get_gemm_kernel(
+                shape=(1024, 1024, 1024),
+                # shape = (32,	160,	1867),
+                mfma_variant=mfma_variant,
+                use_shmem=use_shmem,
+            )
+            options = WaveCompileOptions(
+                subs=hyperparams,
+                run_bench=False,
+                check_water_analysis=True,
+                target=target,
+            )
+            compiled_gemm = wave_compile(options, gemm)
+            assert compiled_gemm is not None
 
 
 if __name__ == "__main__":

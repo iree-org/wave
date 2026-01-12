@@ -64,10 +64,10 @@ class MMAType(Enum):
     I32_32x32x16_I8 = 0x12C1
 
     # Intrinsics introduced in CDNA4
-    F32_32x32x16_BF16 = 0x1320
-    F32_16x16x32_BF16 = 0x1321
-    F32_32x32x16_F16 = 0x1322
-    F32_16x16x32_F16 = 0x1323
+    F32_16x16x32_F16 = 0x1320
+    F32_32x32x16_F16 = 0x1321
+    F32_16x16x32_BF16 = 0x1322
+    F32_32x32x16_BF16 = 0x1323
 
     # Intrinsics introduced in RDNA4
     RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
