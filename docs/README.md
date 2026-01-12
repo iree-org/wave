@@ -16,19 +16,17 @@ a website build and publishes the latest content.
 
 ### Setup virtual environment with requirements
 
-From this docs/ directory:
+From the project root directory:
 
 ```shell
 python -m venv .venv
 source .venv/bin/activate
 
-# Install sphinx website generator requirements and PyTorch dep.
-python -m pip install -r requirements.txt
-python -m pip install -r ../pytorch-cpu-requirements.txt
+# Install PyTorch (CPU version for docs)
+python -m pip install -r pytorch-cpu-requirements.txt
 
-# Install wave itself.
-# Editable so you can make local changes and preview them easily.
-python -m pip install -e ..
+# Install wave with docs dependencies
+python -m pip install -e ".[docs]"
 ```
 
 ### Build docs

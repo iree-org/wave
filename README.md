@@ -105,7 +105,7 @@ Before installing Wave, ensure you have the following prerequisites:
    pip install --upgrade pip
    pip install -r requirements-iree-pinned.txt
    pip install -r pytorch-rocm-requirements.txt
-   pip install -r requirements.txt -e .
+   pip install -e ".[dev]"
    ```
 
    > **Note:** If you do not have access to Instinct GPUs, you can still install Wave as above but with the CPU version of PyTorch:

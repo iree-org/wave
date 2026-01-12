@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import distutils.command.build
-import json
 import os
 import shutil
 import subprocess
@@ -13,9 +12,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from setuptools import Extension, find_namespace_packages, setup
+from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
-from setuptools_rust import RustExtension
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 REPO_ROOT = THIS_DIR
@@ -162,7 +160,7 @@ class CMakeBuild(build_ext):
                     f"LLVM SHA mismatch: installed={installed_sha}, expected={llvm_sha}"
                 )
 
-        print(f"Removing old LLVM installation...")
+        print("Removing old LLVM installation...")
         shutil.rmtree(llvm_install_dir, ignore_errors=True)
 
         print(f"Building LLVM from commit: {llvm_sha}")
@@ -217,58 +215,6 @@ class CMakeBuild(build_ext):
         return llvm_install_dir
 
 
-VERSION_FILE = os.path.join(REPO_ROOT, "version.json")
-VERSION_FILE_LOCAL = os.path.join(REPO_ROOT, "version_local.json")
-
-
-def load_version_info(version_file):
-    with open(version_file, "rt") as f:
-        return json.load(f)
-
-
-try:
-    version_info = load_version_info(VERSION_FILE_LOCAL)
-except FileNotFoundError:
-    print("version_local.json not found. Default to dev build")
-    version_info = load_version_info(VERSION_FILE)
-
-PACKAGE_VERSION = version_info["package-version"]
-print(f"Using PACKAGE_VERSION: '{PACKAGE_VERSION}'")
-
-with open(os.path.join(REPO_ROOT, "README.md"), "rt") as f:
-    README = f.read()
-
-packages = find_namespace_packages(
-    include=[
-        "wave_lang",
-        "wave_lang.*",
-    ],
-)
-
-print("Found packages:", packages)
-
-# Lookup version pins from requirements files.
-requirement_pins = {}
-
-
-def load_requirement_pins(requirements_file: str):
-    with open(Path(THIS_DIR) / requirements_file, "rt") as f:
-        lines = f.readlines()
-    pin_pairs = [line.strip().split("==") for line in lines if "==" in line]
-    requirement_pins.update(dict(pin_pairs))
-
-
-if WAVE_IS_STABLE_REL:
-    load_requirement_pins("requirements-iree-stable.txt")
-
-
-def get_version_spec(dep: str):
-    if dep in requirement_pins:
-        return f"=={requirement_pins[dep]}"
-    else:
-        return ""
-
-
 # Override build command so that we can build into _python_build
 # instead of the default "build". This avoids collisions with
 # typical CMake incantations, which can produce all kinds of
@@ -305,49 +251,10 @@ if BUILD_WATER:
         ),
     ]
 
+# Only build-related configuration here.
+# All metadata and dependencies are in pyproject.toml.
+# Rust extensions are configured in pyproject.toml under [tool.setuptools-rust].
 setup(
-    name="wave-lang",
-    version=f"{PACKAGE_VERSION}",
-    author="IREE Authors",
-    author_email="iree-technical-discussion@lists.lfaidata.foundation",
-    description="Wave Language for Machine Learning",
-    long_description=README,
-    long_description_content_type="text/markdown",
-    license="Apache-2.0",
-    classifiers=[
-        "Development Status :: 5 - Production/Stable",
-        "License :: OSI Approved :: Apache Software License",
-        "Programming Language :: Python :: 3",
-    ],
-    project_urls={
-        "homepage": "https://iree.dev/",
-        "repository": "https://github.com/iree-org/wave/",
-        "documentation": "https://wave.readthedocs.io/en/latest/",
-    },
-    packages=packages,
-    include_package_data=True,
-    package_data={},
-    entry_points={
-        "torch_dynamo_backends": [],
-    },
-    install_requires=[
-        f"numpy{get_version_spec('numpy')}",
-        f"iree-base-compiler{get_version_spec('iree-base-compiler')}",
-        f"iree-base-runtime{get_version_spec('iree-base-runtime')}",
-        f"Jinja2{get_version_spec('Jinja2')}",
-        f"ml_dtypes{get_version_spec('ml_dtypes')}",
-        f"typing_extensions{get_version_spec('typing_extensions')}",
-    ],
-    extras_require={
-        "testing": [
-            f"pytest{get_version_spec('pytest')}",
-            f"pytest-xdist{get_version_spec('pytest-xdist')}",
-        ],
-    },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
     ext_modules=ext_modules,
-    rust_extensions=[
-        RustExtension("aplp_lib", "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml")
-    ],
-    zip_safe=False,
 )

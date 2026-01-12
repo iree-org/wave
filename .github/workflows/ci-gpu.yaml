@@ -181,7 +181,7 @@ jobs:
           # wheels saves multiple minutes and a lot of bandwidth on runner setup.
           pip install --no-compile -r pytorch-cpu-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
-          pip install -r requirements.txt -e .
+          pip install -e ".[dev]"
 
       - name: Install pip deps (CDNA4)
         if: ${{ env.IS_CDNA4 == 'true' }}
@@ -198,7 +198,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
-          pip install -r requirements.txt -e .
+          pip install -e ".[dev]"
 
       - name: Install pip deps (CDNA3/RDNA4)
         if: ${{ env.HAS_GPU == 'true' && env.IS_CDNA4 == 'false' }}
@@ -206,7 +206,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r pytorch-rocm-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
-          pip install -r requirements.txt -e .
+          pip install -e ".[dev]"
 
       - name: Run unit tests
         run: |

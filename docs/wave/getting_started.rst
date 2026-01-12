@@ -64,7 +64,7 @@ For Developers
       pip install --upgrade pip
       pip install -r requirements-iree-pinned.txt
       pip install -r pytorch-rocm-requirements.txt
-      pip install -r requirements.txt -e .
+      pip install -e ".[dev]"
 
    *Note:*
 

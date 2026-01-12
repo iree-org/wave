@@ -46,7 +46,7 @@ def _extend_context_manager(
     *,
     from_current: bool = True,
     add_ops: Optional[DecompositionOpsList] = None,
-    remove_ops: Optional[DecompositionOpsList] = None
+    remove_ops: Optional[DecompositionOpsList] = None,
 ):
     table: DecompositionTable
     if from_current:

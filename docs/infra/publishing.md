@@ -1,7 +1,7 @@
 # Publishing wave-lang packages to PyPI
 
-1. Update version.json as needed and commit to `main` (make sure it doesn't
-conflict with existing versions on PyPI).
+1. Update the `version` field in `pyproject.toml` as needed and commit to `main`
+(make sure it doesn't conflict with existing versions on PyPI).
 
 2. Consider triggering the "Build and release packages" workflow, which is
 necessary if the latest wheels don't have the right version. This workflow is
