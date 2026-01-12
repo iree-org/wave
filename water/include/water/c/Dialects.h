@@ -206,25 +206,29 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 
+// TODO: instead of hardcoding and running the risk of divergence, make this
+// generated from tablegen. Consider doing the same for Python.
 enum WaveMmaKind {
-  WaveMmaKind_F32_16x16x16_F16 = 4128,
-  WaveMmaKind_F32_32x32x8_F16 = 4129,
-  WaveMmaKind_F32_16x16x32_K8_F16 = 4130,
-  WaveMmaKind_F32_32x32x16_K8_F16 = 4131,
-  WaveMmaKind_I32_16x16x16_I8 = 4288,
-  WaveMmaKind_I32_32x32x8_I8 = 4289,
-  WaveMmaKind_F32_16x16x32_F8 = 4656,
-  WaveMmaKind_F32_32x32x16_F8 = 4657,
-  WaveMmaKind_F32_16x16x32_K4_F8 = 4658,
-  WaveMmaKind_F32_32x32x16_K4_F8 = 4659,
-  WaveMmaKind_I32_16x16x32_I8 = 4800,
-  WaveMmaKind_I32_32x32x16_I8 = 4801,
-  WaveMmaKind_F32_16x16x128_F8F6F4 = 4928,
-  WaveMmaKind_F32_32x32x64_F8F6F4 = 4929,
-  WaveMmaKind_F32_16x16x32_F16 = 4896,
-  WaveMmaKind_F32_32x32x16_F16 = 4897,
-  WaveMmaKind_F32_16x16x32_BF16 = 4898,
-  WaveMmaKind_F32_32x32x16_BF16 = 4899,
+  WaveMmaKind_F32_16x16x16_F16 = 0x1020,
+  WaveMmaKind_F32_32x32x8_F16 = 0x1021,
+  WaveMmaKind_F32_16x16x32_K8_F16 = 0x1022,
+  WaveMmaKind_F32_32x32x16_K8_F16 = 0x1023,
+  WaveMmaKind_I32_16x16x16_I8 = 0x10C0,
+  WaveMmaKind_I32_32x32x8_I8 = 0x10C1,
+
+  WaveMmaKind_F32_16x16x32_F8 = 0x1230,
+  WaveMmaKind_F32_32x32x16_F8 = 0x1231,
+  WaveMmaKind_F32_16x16x32_K4_F8 = 0x1232,
+  WaveMmaKind_F32_32x32x16_K4_F8 = 0x1233,
+  WaveMmaKind_I32_16x16x32_I8 = 0x12C0,
+  WaveMmaKind_I32_32x32x16_I8 = 0x12C1,
+
+  WaveMmaKind_F32_16x16x128_F8F6F4 = 0x1340,
+  WaveMmaKind_F32_32x32x64_F8F6F4 = 0x1341,
+  WaveMmaKind_F32_16x16x32_F16 = 0x1320,
+  WaveMmaKind_F32_32x32x16_F16 = 0x1321,
+  WaveMmaKind_F32_16x16x32_BF16 = 0x1322,
+  WaveMmaKind_F32_32x32x16_BF16 = 0x1323,
 };
 
 /// Checks whether the given MLIR attribute is a WaveMmaKindAttr.
