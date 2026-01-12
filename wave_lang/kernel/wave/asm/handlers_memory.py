@@ -11,6 +11,7 @@ from wave_lang.support.ir_imports import (
     stream_d,
     vector_d,
 )
+from wave_lang.kernel.wave.constraints import MMAType
 
 from .handlers_shared import *
 from .kernel_model import BindingUse, KernelInfo, MemRefInfo, VecAccess
@@ -189,6 +190,7 @@ class _MemoryHandlers:
 
     def handle_mfma_op(self, operation: amdgpu_d.MFMAOp, kernel_info: KernelInfo):
         """Handle amdgpu.mfma operations - emit MFMA instruction with proper input sourcing."""
+
         # Get the operand SSA values from the MFMA operation
         # MFMA format: %result = amdgpu.mfma %lhs * %rhs + %acc
         if len(operation.operands) >= 3:
@@ -206,12 +208,44 @@ class _MemoryHandlers:
             acc_regs = ctx.ssa_to_reg.get(acc_ssa)
 
             if lhs_regs and rhs_regs:
-                # Call kernel context MFMA emission
-                result_regs = ctx.emit_mfma_f32_16x16x16_f16(
-                    lhs_regs,
-                    rhs_regs,
-                    acc_regs if acc_regs and len(acc_regs) == 4 else None,
-                )
+                # Dispatch to correct MFMA based on mma_type from compile options
+                mma_type = ctx.mma_type
+
+                if mma_type == MMAType.F32_16x16x32_F16:
+                    # 16x16x32 MFMA (requires 4 VGPRs per operand = 8 x f16)
+                    if len(lhs_regs) != 4 or len(rhs_regs) != 4:
+                        raise ValueError(
+                            f"MFMA 16x16x32 requires 4 VGPRs per operand. "
+                            f"Got lhs={len(lhs_regs)} (ssa={lhs_ssa}), "
+                            f"rhs={len(rhs_regs)} (ssa={rhs_ssa}), "
+                            f"acc_ssa={acc_ssa}."
+                        )
+
+                    result_regs = ctx.emit_mfma_f32_16x16x32_f16(
+                        lhs_regs,
+                        rhs_regs,
+                        acc_regs if acc_regs and len(acc_regs) == 4 else None,
+                    )
+                elif mma_type == MMAType.F32_16x16x16_F16 or mma_type is None:
+                    # 16x16x16 MFMA (default, requires 2 VGPRs per operand = 4 x f16)
+                    if len(lhs_regs) != 2 or len(rhs_regs) != 2:
+                        raise ValueError(
+                            f"MFMA 16x16x16 requires 2 VGPRs per operand. "
+                            f"Got lhs={len(lhs_regs)} (ssa={lhs_ssa}), "
+                            f"rhs={len(rhs_regs)} (ssa={rhs_ssa}), "
+                            f"acc_ssa={acc_ssa}."
+                        )
+
+                    result_regs = ctx.emit_mfma_f32_16x16x16_f16(
+                        lhs_regs,
+                        rhs_regs,
+                        acc_regs if acc_regs and len(acc_regs) == 4 else None,
+                    )
+                else:
+                    raise NotImplementedError(
+                        f"Unsupported MMA type: {mma_type}. "
+                        f"Supported: F32_16x16x16_F16, F32_16x16x32_F16"
+                    )
 
                 # Track result in SSA mapping
                 result_ssa = str(operation.result)
@@ -317,13 +351,21 @@ class _MemoryHandlers:
             byte_offset_expr, max_immediate=65528
         )
 
-        # Max offset for ds_read_b64 on CDNA3/CDNA4
+        # Max offset for ds_read_b64/ds_read_b128 on CDNA3/CDNA4
         # The ISA spec says 16-bit unsigned (0-65535), which is correct.
         # Previous conservative limit (2040) was causing excessive constant
         # materialization for LDS addresses in the 4096+ range.
         # Testing shows 8192 works correctly for GEMM kernels.
         DS_MAX_OFFSET = 8192  # Increased to cover typical LDS offset ranges
-        DS_ALIGN = 8  # ds_read_b64 requires 8-byte alignment
+
+        # Determine load size from operation result type
+        num_elements, element_bytes, _ = parse_vector_type_from_obj(
+            operation.results[0].type
+        )
+        total_bytes = num_elements * element_bytes
+
+        # Alignment depends on load size
+        DS_ALIGN = 16 if total_bytes == 16 else 8
 
         if DEBUG_DS_OFFSET:
             print(f"[DS_OFFSET_DEBUG] memref={memref_ssa[:60]}...")
@@ -369,13 +411,29 @@ class _MemoryHandlers:
             addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
             lds_offset = 0
 
-        # Allocate destination pair and emit ds_read_b64
-        dst_range = ctx.vreg_pair()
-        ctx.emit_lds_read_b64(dst_range, addr_vreg, lds_offset)
+        # Allocate destination registers and emit appropriate ds_read instruction
+        # based on load size
+        if total_bytes == 16:
+            # 128-bit load for 8 x f16 (used with 16x16x32 MFMA)
+            dst_range = ctx.vreg_quad()
+            ctx.emit_lds_read_b128(dst_range, addr_vreg, lds_offset)
+            result_regs = tuple(KVReg(dst_range.base_reg.id + i) for i in range(4))
+        elif total_bytes == 8:
+            # 64-bit load for 4 x f16 (used with 16x16x16 MFMA)
+            dst_range = ctx.vreg_pair()
+            ctx.emit_lds_read_b64(dst_range, addr_vreg, lds_offset)
+            result_regs = (
+                KVReg(dst_range.base_reg.id),
+                KVReg(dst_range.base_reg.id + 1),
+            )
+        else:
+            raise NotImplementedError(
+                f"LDS load of {total_bytes} bytes not supported. "
+                f"Expected 8 (ds_read_b64) or 16 (ds_read_b128) bytes."
+            )
 
         # Track in SSA mapping as tuple of KVReg
         result_ssa = str(operation.results[0])
-        result_regs = (KVReg(dst_range.base_reg.id), KVReg(dst_range.base_reg.id + 1))
         ctx.ssa_to_reg[result_ssa] = result_regs
 
     def _ensure_global_load_srd(self, kernel_info, memref_ssa):
@@ -677,15 +735,21 @@ class _MemoryHandlers:
             instoffset = const_offset
 
         # IMPORTANT: Wait for pending loads BEFORE setting up store SRD
-        # Otherwise we overwrite the load SRD while loads are still in flight
-        self.walker.kernel_ctx.program.emit(
-            KInstr(
-                Instruction.S_WAITCNT,
-                (),
-                ("vmcnt(0)",),
-                comment="MARKER: wait for loads before store SRD setup",
-            )
-        )
+        # Otherwise we overwrite the load SRD while loads are still in flight.
+        # Use ticketing to emit only once per store phase, not per-store.
+        ticketing = self.walker.kernel_ctx.ticketing
+        if ticketing._vmem_last_ticket >= 0:
+            # Only emit wait if we haven't already waited for all VMEM
+            threshold = ticketing.compute_vmem_wait(0)  # Wait for all pending
+            if threshold is not None:
+                self.walker.kernel_ctx.program.emit(
+                    KInstr(
+                        Instruction.S_WAITCNT,
+                        (),
+                        (f"vmcnt({threshold})",),
+                        comment="wait for VMEM before store SRD setup",
+                    )
+                )
 
         # Now it's safe to set up the store SRD (may reuse same physical regs)
         self._ensure_global_store_srd(kernel_info, memref_ssa)

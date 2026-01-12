@@ -1,11 +1,14 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
 from ..lang.kernel_buffer import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo, CoalescingType
+
+if TYPE_CHECKING:
+    from .constraints import MMAType
 
 
 def _get_location_capture_config():
@@ -27,7 +30,7 @@ class WaveCompileOptions:
     func_name: str = "isolated_benchmark"
 
     # === Symbol mappings ===
-    subs: dict[str | IndexSymbol, Any] = field(default_factory=list)
+    subs: dict[str | IndexSymbol, Any] = field(default_factory=dict)
     dynamic_symbols: list[str] = field(default_factory=list)
 
     # === Scheduling options ===
@@ -124,3 +127,4 @@ class WaveCompileOptions:
     compile_to_asm: bool = (
         False  # Compile to AMDGCN assembly (for lit tests, no amdclang++)
     )
+    mma_type: Optional["MMAType"] = None  # MMA type for ASM backend dispatch

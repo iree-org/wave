@@ -240,7 +240,10 @@ class KernelGenerator:
             "s_branch": self._handle_branch,
             "s_cmp_lt_u32": self._handle_compare,
             "_loop_inc": self._handle_loop_inc,
+            "_loop_begin": self._handle_noop,
+            "_loop_end": self._handle_noop,
             "_mfma_acc": self._handle_mfma_acc,
+            "_mfma_acc_16x16x32": self._handle_mfma_acc_16x16x32,
             "buffer_load_dword_lds": self._handle_buffer_load_lds,
             "buffer_load_dwordx4_lds": self._handle_buffer_load_lds,
             "_init_acc_quad": self._handle_init_acc_quad,
@@ -420,13 +423,27 @@ class KernelGenerator:
         return None
 
     def _handle_mfma_acc(self, instr: KInstr) -> str:
-        """Handle MFMA with accumulator (in-place update)."""
+        """Handle MFMA 16x16x16 with accumulator (in-place update)."""
         if len(instr.uses) >= 3:
             acc = self._resolve_operand(instr.uses[0])
             a = self._resolve_operand(instr.uses[1])
             b = self._resolve_operand(instr.uses[2])
             return self._formatter.format(
                 "v_mfma_f32_16x16x16_f16",
+                defs=[acc],
+                uses=[a, b, acc],
+                comment=instr.comment,
+            )
+        return None
+
+    def _handle_mfma_acc_16x16x32(self, instr: KInstr) -> str:
+        """Handle MFMA 16x16x32 with accumulator (in-place update)."""
+        if len(instr.uses) >= 3:
+            acc = self._resolve_operand(instr.uses[0])
+            a = self._resolve_operand(instr.uses[1])
+            b = self._resolve_operand(instr.uses[2])
+            return self._formatter.format(
+                "v_mfma_f32_16x16x32_f16",
                 defs=[acc],
                 uses=[a, b, acc],
                 comment=instr.comment,
@@ -480,6 +497,10 @@ class KernelGenerator:
                     )
                 )
             return lines
+        return None
+
+    def _handle_noop(self, instr: KInstr) -> Optional[str]:
+        """No-op pseudo instruction (emits no assembly)."""
         return None
 
 

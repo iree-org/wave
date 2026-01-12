@@ -40,11 +40,13 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+import wave_lang.kernel.wave.wave_schedule as wave_schedule
 from wave_lang.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
     SHARED_ADDRESS_SPACE,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
     get_default_arch,
@@ -121,6 +123,11 @@ Notes:
         action="store_true",
         help="Skip ASM backend benchmark (only run LLVM)",
     )
+    parser.add_argument(
+        "--use_schedule",
+        action="store_true",
+        help="Use manual scheduling with pipelining and wave staggering",
+    )
     # Internal worker-mode args (used when launched under rocprofv3).
     parser.add_argument(
         "--_worker",
@@ -136,6 +143,11 @@ Notes:
     parser.add_argument(
         "--_shape_name",
         type=str,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--_use_schedule",
+        action="store_true",
         help=argparse.SUPPRESS,
     )
     return parser.parse_args()
@@ -194,7 +206,7 @@ def create_gemm_kernel(block_m: int, block_n: int, wave_m: int, wave_n: int):
         tkw.WaveConstraint(N, BLOCK_N / waves_along_n),
         tkw.HardwareConstraint(
             threads_per_wave=wave_size,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            mma_type=tkw.MMAType.F32_16x16x32_F16,
         ),
     ]
 
@@ -207,17 +219,172 @@ def create_gemm_kernel(block_m: int, block_n: int, wave_m: int, wave_n: int):
         """GEMM kernel: C = A @ B^T with K-loop."""
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
-        @tkw.iterate(K, init_args=[c_reg])
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            acc = tkw.mma(a_reg, b_reg, acc)
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
             return acc
 
         tkw.write(repeat, c)
 
     symbols = (M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ADDRESS_SPACE, ADDRESS_SPACE_0)
     return gemm_kernel, symbols
+
+
+def create_gemm_schedule():
+    """Create a GEMM schedule with software pipelining for optimal latency hiding.
+
+    This schedule issues reads for MULTIPLE iterations before the first MFMA,
+    then interleaves subsequent reads with MMAs. This allows the ticketing
+    system to compute non-zero lgkmcnt values:
+
+    Pattern: read[0,1,2,3] → mma[0] → read[4,5] → mma[1] → read[6,7] → mma[2] → mma[3]
+
+    With 4 reads issued before mma[0]:
+    - mma[0] needs tickets 0,1 but last=3 → lgkmcnt(2) (allows 2,3 in-flight)
+    - mma[1] needs tickets 2,3, last=5 → lgkmcnt(2)
+    - etc.
+
+    This keeps reads in-flight while executing each MFMA, allowing the GPU
+    to hide LDS latency.
+
+    Requires use_global_to_shared=True in compile options.
+
+    Returns:
+        A wave_schedule decorated function
+    """
+
+    @wave_schedule.wave_schedule()
+    def interleaved_gemm_schedule():
+        # Get the k_loop iterate node
+        k_loop = tkw.get_node_by_tag("k_loop")
+
+        # Get all nodes with tag "read_a" - includes both Read and GatherToLDS nodes
+        all_read_a = tkw.get_node_by_tag("read_a")
+        gather_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
+        shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
+
+        # Get all nodes with tag "read_b" - includes both Read and GatherToLDS nodes
+        all_read_b = tkw.get_node_by_tag("read_b")
+        gather_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
+        shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
+
+        # Get MMA operations
+        mma = tkw.get_node_by_tag("mma")
+
+        # Build software-pipelined ordering:
+        # 1. GatherToLDS operations (global→shared transfers)
+        # 2. Prefetch reads for multiple iterations ahead
+        # 3. Interleave MMAs with reads for future iterations
+
+        interleaved_ops = []
+
+        # First: all GatherToLDS ops (global→shared transfers for current iteration)
+        interleaved_ops.append(gather_a)
+        interleaved_ops.append(gather_b)
+
+        num_mma = len(mma) if hasattr(mma, "__len__") else 1
+        num_load_a = len(shared_load_a) if hasattr(shared_load_a, "__len__") else 1
+        num_load_b = len(shared_load_b) if hasattr(shared_load_b, "__len__") else 1
+
+        # Software pipelining: prefetch reads for first 2 iterations before any MFMA
+        prefetch_depth = min(2, num_mma)  # How many iterations to prefetch
+
+        for i in range(prefetch_depth):
+            if i < num_load_a:
+                interleaved_ops.append(shared_load_a[i])
+            if i < num_load_b:
+                interleaved_ops.append(shared_load_b[i])
+
+        # Now interleave: mma[i] → reads for iteration (i + prefetch_depth)
+        for i in range(num_mma):
+            interleaved_ops.append(mma[i])
+            # Issue reads for future iteration
+            future_idx = i + prefetch_depth
+            if future_idx < num_load_a:
+                interleaved_ops.append(shared_load_a[future_idx])
+            if future_idx < num_load_b:
+                interleaved_ops.append(shared_load_b[future_idx])
+
+        # Create the cluster with the pipelined ordering
+        cluster = tkw.cluster(interleaved_ops)
+
+        # Apply the reordering
+        tkw.reorder_graph(k_loop, [cluster])
+
+    return interleaved_gemm_schedule
+
+
+def create_compile_options(
+    symbols,
+    config: dict,
+    backend: str,
+    use_schedule: bool = False,
+    **kwargs,
+) -> WaveCompileOptions:
+    """Create compile options for GEMM kernel.
+
+    Args:
+        symbols: Symbol tuple from create_gemm_kernel
+        config: Configuration dict with M, N, K, BLOCK_M, etc.
+                Supports both uppercase keys (M, N, K) and lowercase (m, n, k).
+        backend: Either "asm" or "llvm"
+        use_schedule: If True, use manual scheduling with pipelining
+        **kwargs: Additional options to pass to WaveCompileOptions
+                  (e.g., dump_intermediates, use_global_to_shared)
+
+    Returns:
+        Configured WaveCompileOptions
+    """
+    M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ADDRESS_SPACE, ADDRESS_SPACE_0 = symbols
+
+    # Support both uppercase and lowercase config keys
+    def get_config(key):
+        return config.get(key) or config.get(key.lower())
+
+    # Note: use_global_to_shared can be set via kwargs if needed
+
+    # Build options dict - only include schedule if using schedule
+    options_kwargs = dict(
+        subs={
+            M: get_config("M"),
+            N: get_config("N"),
+            K: get_config("K"),
+            BLOCK_M: get_config("BLOCK_M"),
+            BLOCK_N: get_config("BLOCK_N"),
+            BLOCK_K: get_config("BLOCK_K"),
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        backend=backend,
+        wave_runtime=True,
+        compile_to_mlir=False,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+        **kwargs,
+    )
+    # Set MANUAL scheduling when using a schedule
+    if use_schedule:
+        options_kwargs["schedule"] = SchedulingType.MANUAL
+        # Enable GatherToLDS for proper scheduling with separate global/shared ops
+        options_kwargs["use_global_to_shared"] = True
+    options = WaveCompileOptions(**options_kwargs)
+    options = set_default_run_config(options)
+
+    # Unroll the K-loop by factor of 2 for better performance
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = 2 } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+
+    return options
 
 
 def compile_and_run_kernel(
@@ -228,6 +395,9 @@ def compile_and_run_kernel(
     a: torch.Tensor,
     b: torch.Tensor,
     c: torch.Tensor,
+    mlir_dump_dir: Optional[str] = "./mlir",
+    use_schedule: bool = False,
+    schedule_fn=None,
 ):
     """Compile and run the GEMM kernel with the specified backend.
 
@@ -239,34 +409,33 @@ def compile_and_run_kernel(
         a: Input tensor A (M x K)
         b: Input tensor B (N x K)
         c: Output tensor C (M x N)
+        mlir_dump_dir: Optional directory to write MLIR output for inspection.
+                       If None, MLIR is not written.
+        use_schedule: If True, use manual scheduling with pipelining
+        schedule_fn: Optional custom schedule function. If None and use_schedule=True,
+                     uses the default async_gemm_schedule.
 
     Returns:
         The compiled kernel function
     """
-    M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ADDRESS_SPACE, ADDRESS_SPACE_0 = symbols
-
-    options = WaveCompileOptions(
-        subs={
-            M: shape_config["M"],
-            N: shape_config["N"],
-            K: shape_config["K"],
-            BLOCK_M: shape_config["BLOCK_M"],
-            BLOCK_N: shape_config["BLOCK_N"],
-            BLOCK_K: shape_config["BLOCK_K"],
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-        },
-        canonicalize=True,
-        backend=backend,
-        wave_runtime=True,
-        compile_to_mlir=False,
-        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-        enforce_locations=False,
+    options = create_compile_options(
+        symbols, shape_config, backend, use_schedule=use_schedule
     )
-    options = set_default_run_config(options)
 
-    compiled_kernel = wave_compile(options, kernel)
+    if use_schedule:
+        schedule = schedule_fn if schedule_fn else create_gemm_schedule()
+        compiled_kernel = wave_compile(options, kernel, schedule)
+    else:
+        compiled_kernel = wave_compile(options, kernel)
     compiled_kernel(a, b, c)
+
+    # Write the MLIR to a file for inspection if requested
+    if mlir_dump_dir is not None:
+        dump_dir = Path(mlir_dump_dir)
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        mlir_file = dump_dir / f"{backend}_{shape_config['name']}.mlir"
+        mlir_file.write_text(compiled_kernel.asm)
+        logger.info(f"MLIR written to: {mlir_file}")
 
     return compiled_kernel
 
@@ -437,6 +606,7 @@ def _rocprofv3_benchmark_avg_ms(
     backend: str,
     num_warmup: int,
     num_iterations: int,
+    use_schedule: bool = False,
 ) -> float:
     rocprof = shutil.which("rocprofv3")
     if not rocprof:
@@ -476,6 +646,8 @@ def _rocprofv3_benchmark_avg_ms(
             "--_shape_name",
             shape_name,
         ]
+        if use_schedule:
+            cmd.append("--_use_schedule")
 
         env = os.environ.copy()
         # Keep cache disabled for fair comparison.
@@ -538,7 +710,16 @@ def _worker_main(args) -> None:
     c = device_zeros((m, n), dtype=torch.float32)
 
     kernel, symbols = create_gemm_kernel(block_m, block_n, wave_m, wave_n)
-    compiled = compile_and_run_kernel(kernel, symbols, match, args._backend, a, b, c)
+    compiled = compile_and_run_kernel(
+        kernel,
+        symbols,
+        match,
+        args._backend,
+        a,
+        b,
+        c,
+        use_schedule=getattr(args, "_use_schedule", False),
+    )
 
     # Warmup (outside measured region).
     for _ in range(args.num_warmup):
@@ -559,6 +740,7 @@ def _check_correctness(
     a: torch.Tensor,
     b: torch.Tensor,
     expected: torch.Tensor,
+    use_schedule: bool = False,
 ) -> bool:
     """Compile + run once in-process and compare against reference."""
     m = shape_config["M"]
@@ -570,7 +752,9 @@ def _check_correctness(
 
     c = device_zeros((m, n), dtype=torch.float32)
     kernel, symbols = create_gemm_kernel(block_m, block_n, wave_m, wave_n)
-    compile_and_run_kernel(kernel, symbols, shape_config, backend, a, b, c)
+    compile_and_run_kernel(
+        kernel, symbols, shape_config, backend, a, b, c, use_schedule=use_schedule
+    )
     assert_close(c, expected, rtol=_DEFAULT_CHECK_RTOL, atol=_DEFAULT_CHECK_ATOL)
     return True
 
@@ -588,6 +772,9 @@ def _run_backend(
     m = shape_config["M"]
     n = shape_config["N"]
     k = shape_config["K"]
+    # Only apply schedule to ASM backend - LLVM always runs without schedule
+    # for fair comparison (LLVM without schedule is fastest)
+    use_schedule = getattr(args, "use_schedule", False) and backend == "asm"
 
     if args.check_correctness:
         _check_correctness(
@@ -596,6 +783,7 @@ def _run_backend(
             a=a,
             b=b,
             expected=expected,
+            use_schedule=use_schedule,
         )
         logger.info(f"{backend.upper()} correctness: PASSED")
 
@@ -605,10 +793,12 @@ def _run_backend(
         backend=backend,
         num_warmup=args.num_warmup,
         num_iterations=args.num_iterations,
+        use_schedule=use_schedule,
     )
     tflops = compute_tflops(m, n, k, avg_time_ms)
-    logger.info(f"{backend.upper()} time: {avg_time_ms:.4f} ms")
-    logger.info(f"{backend.upper()} throughput: {tflops:.4f} TFLOPs")
+    sched_note = " (with schedule)" if use_schedule else ""
+    logger.info(f"{backend.upper()}{sched_note} time: {avg_time_ms:.4f} ms")
+    logger.info(f"{backend.upper()}{sched_note} throughput: {tflops:.4f} TFLOPs")
     return {"time_ms": avg_time_ms, "tflops": tflops}
 
 

@@ -51,10 +51,13 @@ class _CompilationPasses:
         This:
         1. Emits s_endpgm at the end
         2. Emits SRD prologue (all SRD setup at program start)
-        3. Applies hazard mitigation (inserts s_nop where needed)
-        4. Computes liveness for all virtual registers
-        5. Runs linear scan allocation
-        6. Renders to assembly
+        3. Applies peephole optimizations
+        4. Applies accumulator-init optimization (IR-to-IR)
+        5. Inserts/coalesces waitcnt via ticketing (IR-to-IR)
+        6. Applies hazard mitigation (inserts s_nop where needed)
+        7. Computes liveness for all virtual registers
+        8. Runs linear scan allocation
+        9. Renders to assembly
 
         Returns:
             Tuple of (assembly lines, allocation statistics)
@@ -71,6 +74,10 @@ class _CompilationPasses:
 
         # Apply peephole optimizations (fuse lshl+add, lshl+or, etc.)
         self._apply_peephole_optimizations()
+
+        # Apply accumulator-init optimization (explicit pass; runs before ticketing
+        # so downstream analyses see the final, semantically accurate stream).
+        self._apply_accumulator_init_optimization()
 
         # Optionally insert/coalesce waitcnt using ticketing.
         # Must run before hazard mitigation/regalloc so liveness sees the final stream.
@@ -363,6 +370,153 @@ class _CompilationPasses:
                 else:
                     new_instructions.append(instr)
 
+            self.program.instructions = new_instructions
+
+        # Note: accumulator-init optimization is run as a dedicated pass from finalize().
+
+    def _apply_accumulator_init_optimization(self) -> None:
+        """Apply accumulator-init optimization as a standalone pass."""
+        self._optimize_accumulator_init()
+
+    def _optimize_accumulator_init(self):
+        """
+        Optimize accumulator initialization by using immediate 0 in the first MFMA.
+
+        Pattern:
+        - _init_acc_quad defines a quad (kv0..kv3)
+        - _mfma_acc or _mfma_acc_16x16x32 uses that quad as accumulator
+
+        Optimization:
+        - Delete _init_acc_quad (saves 4 v_mov_b32 instructions)
+        - Replace first _mfma_acc with _mfma_zero_acc (uses immediate 0)
+
+        This optimization is similar to what LLVM does - it uses immediate 0 for
+        the accumulator in the first MFMA instruction instead of explicitly
+        initializing registers to zero.
+
+        IMPORTANT: This optimization is ONLY safe for MFMA instructions that are
+        NOT inside a loop. If an MFMA is inside a loop, it will execute multiple
+        times, and only the first execution should use 0 as accumulator; subsequent
+        executions must use the accumulated result from previous iterations.
+        """
+        instructions = self.program.instructions
+        if not instructions:
+            return
+
+        # First, identify which instruction indices are inside loops using
+        # structured loop markers (avoid parsing label comment strings).
+        in_loop_depth = 0
+        inside_loop: Dict[int, bool] = {}  # instruction_index -> is_inside_loop
+        saw_loop_marker = False
+
+        for i, instr in enumerate(instructions):
+            if instr.name == "_loop_begin":
+                saw_loop_marker = True
+                in_loop_depth += 1
+            elif instr.name == "_loop_end":
+                saw_loop_marker = True
+                if in_loop_depth <= 0:
+                    raise ValueError(
+                        "Malformed loop markers: encountered _loop_end with depth 0"
+                    )
+                in_loop_depth -= 1
+
+            # Mark current instruction
+            inside_loop[i] = in_loop_depth > 0
+
+        if saw_loop_marker and in_loop_depth != 0:
+            raise ValueError(
+                f"Malformed loop markers: finished scan with depth={in_loop_depth} (expected 0)"
+            )
+
+        # Track accumulator quads defined by _init_acc_quad
+        # Maps base_vreg_id -> instruction_index
+        acc_init_map: Dict[int, int] = {}
+
+        # Track first MFMA use of each accumulator (only if NOT inside a loop)
+        # Maps base_vreg_id -> instruction_index
+        first_mfma_use: Dict[int, int] = {}
+
+        # First pass: find _init_acc_quad instructions
+        for i, instr in enumerate(instructions):
+            if instr.name == "_init_acc_quad" and len(instr.defs) >= 1:
+                acc_range = instr.defs[0]
+                if hasattr(acc_range, "base_reg") and isinstance(
+                    acc_range.base_reg, KVReg
+                ):
+                    base_id = acc_range.base_reg.id
+                    acc_init_map[base_id] = i
+
+        if not acc_init_map:
+            return  # No accumulators to optimize
+
+        # Second pass: find first MFMA that uses each accumulator
+        # ONLY optimize if the MFMA is NOT inside a loop!
+        for i, instr in enumerate(instructions):
+            if instr.name in ("_mfma_acc", "_mfma_acc_16x16x32"):
+                if len(instr.uses) >= 1:
+                    acc_range = instr.uses[0]
+                    if hasattr(acc_range, "base_reg") and isinstance(
+                        acc_range.base_reg, KVReg
+                    ):
+                        base_id = acc_range.base_reg.id
+                        is_in_loop = inside_loop.get(i, False)
+                        # Only track if this is an initialized accumulator, first use, AND NOT inside a loop
+                        if (
+                            base_id in acc_init_map
+                            and base_id not in first_mfma_use
+                            and not is_in_loop
+                        ):
+                            first_mfma_use[base_id] = i
+
+        if not first_mfma_use:
+            return  # No MFMA uses found (or all are inside loops)
+
+        # Replace:
+        #   _init_acc_quad (explicit v_mov zeroing) + first _mfma_acc (in-place pseudo)
+        # With:
+        #   first v_mfma_* that DEFINES the accumulator registers and uses KImm(0)
+        #   as the accumulator operand (semantic transparency at IR level).
+        #
+        # We delete the init (removes the v_mov sequence) and replace the first MFMA
+        # pseudo with a real MFMA instruction that defines the accumulator range.
+        to_delete = set()
+        replacements = {}  # index -> new_instr
+
+        for base_id, mfma_idx in first_mfma_use.items():
+            init_idx = acc_init_map[base_id]
+            mfma_instr = instructions[mfma_idx]
+
+            to_delete.add(init_idx)
+
+            if len(mfma_instr.uses) < 3:
+                continue
+
+            acc_range = mfma_instr.uses[0]
+            a_range = mfma_instr.uses[1]
+            b_range = mfma_instr.uses[2]
+
+            if mfma_instr.name == "_mfma_acc":
+                isa_name = "v_mfma_f32_16x16x16_f16"
+            else:
+                isa_name = "v_mfma_f32_16x16x32_f16"
+
+            new_mfma = KInstr(
+                isa_name,
+                (acc_range,),  # define accumulator range here (dominates later uses)
+                (a_range, b_range, KImm(0)),
+                comment="MFMA first use (acc=0, optimized init)",
+            )
+            replacements[mfma_idx] = new_mfma
+
+        # Apply changes
+        if to_delete or replacements:
+            new_instructions = []
+            for i, instr in enumerate(instructions):
+                if i in to_delete:
+                    continue
+                repl = replacements.get(i)
+                new_instructions.append(repl if repl is not None else instr)
             self.program.instructions = new_instructions
 
     def finalize_to_string(self) -> str:

@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .kernel_model import KernelInfo
+    from wave_lang.kernel.wave.constraints import MMAType
 
 # Core IR types
 from .kernel_ir import (
@@ -97,6 +98,9 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     tid_ub_z: int = 1  # Upper bound for tid_z (exclusive)
     subgroup_size: int = 64
     wg_size: Tuple[int, int, int] = (64, 1, 1)
+
+    # MMA type for MFMA instruction selection
+    mma_type: Optional["MMAType"] = None
 
     # Internal state
     program: KernelProgram = field(init=False)

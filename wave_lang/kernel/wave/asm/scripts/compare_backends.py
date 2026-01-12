@@ -30,18 +30,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave as tkw
-
-# Explicit imports from global_symbols (avoid wildcard import)
-from wave_lang.kernel.lang.global_symbols import (
-    SHARED_ADDRESS_SPACE,
-    GLOBAL_ADDRESS_SPACE,
-)
-from wave_lang.kernel.wave.compile import wave_compile, WaveCompileOptions
-from wave_lang.kernel.wave.utils.run_utils import (
-    set_default_run_config,
-    get_default_arch,
+from wave_lang.kernel.wave.compile import wave_compile
+from wave_lang.kernel.wave.utils.run_utils import get_default_arch
+from wave_lang.kernel.wave.perf.benchmark_asm_backend import (
+    create_gemm_kernel,
+    create_compile_options,
+    create_gemm_schedule,
 )
 
 
@@ -142,64 +136,6 @@ def load_benchmark_config(name: str) -> dict:
     raise ValueError(f"Config '{name}' not found. Available: {available}")
 
 
-def create_gemm_kernel(config: dict):
-    """Create a GEMM kernel with the specified configuration."""
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
-
-    block_m = config["block_m"]
-    block_n = config["block_n"]
-    WAVE_M = config["wave_m"]
-    WAVE_N = config["wave_n"]
-    wave_size = 64
-
-    constraints = [
-        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
-        tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, WAVE_M),
-        tkw.WaveConstraint(N, WAVE_N),
-        tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
-        ),
-    ]
-
-    @tkw.wave(constraints)
-    def gemm_kernel(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
-    return gemm_kernel, (
-        M,
-        N,
-        K,
-        BLOCK_M,
-        BLOCK_N,
-        BLOCK_K,
-        ADDRESS_SPACE,
-        ADDRESS_SPACE_0,
-    )
-
-
 def compile_backend(
     kernel,
     symbols,
@@ -207,30 +143,23 @@ def compile_backend(
     backend: str,
     use_global_to_shared: bool = True,
     output_dir: Optional[Path] = None,
+    use_schedule: bool = False,
 ) -> BackendResult:
     """Compile with specified backend and extract artifacts."""
-    M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ADDRESS_SPACE, ADDRESS_SPACE_0 = symbols
-
-    options = WaveCompileOptions(
-        subs={
-            M: config["m"],
-            N: config["n"],
-            K: config["k"],
-            BLOCK_M: config["block_m"],
-            BLOCK_N: config["block_n"],
-            BLOCK_K: config["block_k"],
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-        },
-        canonicalize=True,
-        backend=backend,
-        wave_runtime=True,
+    options = create_compile_options(
+        symbols,
+        config,
+        backend,
         use_global_to_shared=use_global_to_shared,
+        use_schedule=use_schedule,
         dump_intermediates=str(output_dir) if output_dir else None,
     )
-    options = set_default_run_config(options)
 
-    result = wave_compile(options, kernel)
+    if use_schedule:
+        schedule = create_gemm_schedule()
+        result = wave_compile(options, kernel, schedule)
+    else:
+        result = wave_compile(options, kernel)
 
     # Extract raw assembly
     raw_asm = ""
@@ -601,6 +530,7 @@ def generate_report(
     llvm_metrics: InstructionMetrics,
     asm_metrics: InstructionMetrics,
     use_global_to_shared: bool,
+    use_schedule: bool = False,
 ) -> str:
     """Generate a comprehensive comparison report."""
     lines = []
@@ -623,6 +553,8 @@ def generate_report(
     waves_n = config["block_n"] // config["wave_n"]
     lines.append(f"  Waves per WG: {waves_m}x{waves_n} = {waves_m * waves_n}")
     lines.append(f"  global_to_shared: {use_global_to_shared}")
+    lines.append(f"  LLVM schedule: False (always best config)")
+    lines.append(f"  ASM schedule: {use_schedule}")
     lines.append(f"  Architecture: {get_default_arch()}")
     lines.append("")
 
@@ -709,6 +641,7 @@ def main():
         epilog="""
 Examples:
   python compare_backends.py --benchmark gemm-asm-benchmark
+  python compare_backends.py --benchmark gemm-asm-benchmark --use-schedule
   python compare_backends.py --passing --output-dir ./analysis
   python compare_backends.py --no-g2s  # Compare without gather-to-shared
 """,
@@ -736,6 +669,11 @@ Examples:
         "--no-g2s", action="store_true", help="Disable global_to_shared for comparison"
     )
     parser.add_argument(
+        "--use-schedule",
+        action="store_true",
+        help="Use manual scheduling with pipelining and instruction reordering",
+    )
+    parser.add_argument(
         "--show-context", action="store_true", help="Show context around key patterns"
     )
     args = parser.parse_args()
@@ -752,6 +690,7 @@ Examples:
         config_name = "failing"
 
     use_global_to_shared = not args.no_g2s
+    use_schedule = args.use_schedule
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -768,11 +707,15 @@ Examples:
     waves_n = config["block_n"] // config["wave_n"]
     print(f"Waves per WG: {waves_m}x{waves_n} = {waves_m * waves_n}")
     print(f"global_to_shared: {use_global_to_shared}")
+    print(f"LLVM schedule: False (always best config)")
+    print(f"ASM schedule: {use_schedule}")
     print(f"Output directory: {output_dir}")
 
-    # Compile LLVM backend
-    print("\n>>> Compiling LLVM backend...")
-    kernel_llvm, symbols_llvm = create_gemm_kernel(config)
+    # Compile LLVM backend (always without schedule for best performance)
+    print("\n>>> Compiling LLVM backend (no schedule)...")
+    kernel_llvm, symbols_llvm = create_gemm_kernel(
+        config["block_m"], config["block_n"], config["wave_m"], config["wave_n"]
+    )
     llvm_result = compile_backend(
         kernel_llvm,
         symbols_llvm,
@@ -780,6 +723,7 @@ Examples:
         "llvm",
         use_global_to_shared=use_global_to_shared,
         output_dir=output_dir / "llvm_intermediates",
+        use_schedule=False,  # LLVM always runs without schedule for fair comparison
     )
     print(f"  Raw ASM: {len(llvm_result.raw_asm)} chars")
     print(f"  HSACO: {llvm_result.hsaco_path or 'N/A'}")
@@ -788,9 +732,12 @@ Examples:
         f"  Resources: VGPR={llvm_result.vgpr_count}, SGPR={llvm_result.sgpr_count}, LDS={llvm_result.lds_size}"
     )
 
-    # Compile ASM backend
-    print("\n>>> Compiling ASM backend...")
-    kernel_asm, symbols_asm = create_gemm_kernel(config)
+    # Compile ASM backend (with schedule if requested)
+    sched_note = " (with schedule)" if use_schedule else ""
+    print(f"\n>>> Compiling ASM backend{sched_note}...")
+    kernel_asm, symbols_asm = create_gemm_kernel(
+        config["block_m"], config["block_n"], config["wave_m"], config["wave_n"]
+    )
     asm_result = compile_backend(
         kernel_asm,
         symbols_asm,
@@ -798,6 +745,7 @@ Examples:
         "asm",
         use_global_to_shared=use_global_to_shared,
         output_dir=output_dir / "asm_intermediates",
+        use_schedule=use_schedule,  # Only ASM uses schedule when requested
     )
     print(f"  Raw ASM: {len(asm_result.raw_asm)} chars")
     print(f"  HSACO: {asm_result.hsaco_path or 'N/A'}")
@@ -849,6 +797,7 @@ Examples:
         llvm_metrics,
         asm_metrics,
         use_global_to_shared,
+        use_schedule,
     )
     report_path = output_dir / "comparison_report.txt"
     with open(report_path, "w") as f:

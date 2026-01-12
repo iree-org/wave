@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 
 from .kernel_compilation_context import KernelCompilationContext
+
+if TYPE_CHECKING:
+    from wave_lang.kernel.wave.constraints import MMAType
 
 
 @dataclass
@@ -33,6 +36,7 @@ class KernelModuleCompiler:
 
     targetid: str = "gfx942"
     codeobj: str = "5"
+    mma_type: Optional["MMAType"] = None
 
     def compile_mlir_string(self, mlir_text: str) -> str:
         """
@@ -108,6 +112,7 @@ class KernelModuleCompiler:
                     tid_ub_z=wg_size[2] if len(wg_size) > 2 else 1,
                     subgroup_size=subgroup_size,
                     wg_size=wg_size,
+                    mma_type=self.mma_type,
                 )
 
                 # Emit kernarg loading at the start of kernel IR

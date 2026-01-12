@@ -589,6 +589,9 @@ def compile_launchable_to_mlir(
     workgroup_size = launchable.hardware_constraints[0].threads_per_block
     subgroup_size = launchable.hardware_constraints[0].threads_per_wave
 
+    # Set MMA type for ASM backend dispatch
+    options.mma_type = launchable.hardware_constraints[0].mma_type
+
     # Setup LLVM func compilation configs.
     llvm_func_config = {}
     if options.denorm_fp_math_f32:
@@ -1158,7 +1161,7 @@ def _generate_asm_code(mb, options):
     from .asm.kernel_module_compiler import KernelModuleCompiler
 
     return KernelModuleCompiler(
-        targetid=options.target, codeobj=options.codeobj
+        targetid=options.target, codeobj=options.codeobj, mma_type=options.mma_type
     ).compile_mlir_string(mlir_asm)
 
 

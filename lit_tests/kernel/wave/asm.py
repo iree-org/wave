@@ -125,8 +125,9 @@ def test_read_write():
     # CHECK:              v_lshlrev_b32 v{{[0-9]+}}, {{[0-9]+}}, v{{[0-9]+}}
     # CHECK:              buffer_load_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
     # CHECK:              buffer_load_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen offset:16
-    # CHECK:              s_waitcnt vmcnt(0)
+    # CHECK:              s_waitcnt vmcnt({{[0-9]+}})
     # CHECK:              buffer_store_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              s_waitcnt vmcnt({{[0-9]+}})
     # CHECK:              buffer_store_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen offset:16
     # CHECK:              s_endpgm
 
@@ -221,6 +222,103 @@ def test_mma():
     # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
     # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
     # CHECK:              v_mfma_f32_16x16x16_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], 0
+    # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              s_endpgm
+
+
+@run_test
+def test_mma_16x16x32():
+    """
+    Test MMA with 16x16x32 variant (F32_16x16x32_F16).
+
+    This variant uses K=32 instead of K=16, requiring 8 elements per thread
+    for loads (vs 4 for 16x16x16). The MFMA instruction is v_mfma_f32_16x16x32_f16.
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x32_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma_16x16x32(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 16,
+            N: 16,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 8,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+    compile_options.compile_to_asm = True
+    mma_16x16x32 = wave_compile(compile_options, mma_16x16x32)
+    print(mma_16x16x32.asm)
+
+    # CHECK-LABEL:    test_mma_16x16x32
+    # CHECK:          .text
+    # CHECK:          .protected mma_16x16x32
+    # CHECK:          .globl mma_16x16x32
+    # CHECK:          .p2align 8
+    # CHECK:          .type mma_16x16x32,@function
+    # CHECK:          .section .rodata,#alloc
+    # CHECK:          .p2align 6
+    # CHECK:          .amdhsa_kernel mma_16x16x32
+    # CHECK:          .amdhsa_user_sgpr_kernarg_segment_ptr 1
+    # CHECK:          .amdhsa_accum_offset {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_vgpr {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_sgpr {{[0-9]+}}
+    # CHECK:          .amdhsa_group_segment_fixed_size {{[0-9]+}}
+    # CHECK:          .amdhsa_private_segment_fixed_size 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_x {{[01]}}
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_y {{[01]}}
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_z {{[01]}}
+    # CHECK:          .amdhsa_system_vgpr_workitem_id {{[0-9]+}}
+    # CHECK:          .amdhsa_float_denorm_mode_32 3
+    # CHECK:          .amdhsa_float_denorm_mode_16_64 3
+    # CHECK:          .end_amdhsa_kernel
+    # CHECK:          .text
+    # CHECK:          mma_16x16x32:
+    # CHECK:              s_load_dwordx2 s[{{[0-9]+}}:{{[0-9]+}}], s[0:1], {{[0-9x]+}}
+    # CHECK:              s_load_dwordx2 s[{{[0-9]+}}:{{[0-9]+}}], s[0:1], {{[0-9x]+}}
+    # CHECK:              s_load_dwordx2 s[{{[0-9]+}}:{{[0-9]+}}], s[0:1], {{[0-9x]+}}
+    # CHECK:              s_waitcnt lgkmcnt(0)
+    # CHECK:              v_mbcnt_lo_u32_b32 v{{[0-9]+}}, -1
+    # CHECK:              v_mbcnt_hi_u32_b32 v{{[0-9]+}}, -1, v{{[0-9]+}}
+    # CHECK:              buffer_load_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              ds_write_b128 v{{[0-9]+}}, v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:              buffer_load_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
+    # CHECK:              ds_write_b128 v{{[0-9]+}}, v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:              s_barrier
+    # CHECK:              ds_read_b128 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
+    # CHECK:              ds_read_b128 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
+    # CHECK:              v_mfma_f32_16x16x32_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], 0
     # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
     # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen
     # CHECK:              buffer_store_dword v{{.*}}, v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen

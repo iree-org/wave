@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
-import sympy
 import torch
 from torch.testing import assert_close
 
@@ -36,6 +35,21 @@ def _global_to_shared_params():
     if "gfx95" in get_default_arch():
         return [pytest.param(True, id="g2s"), pytest.param(False, id="no_g2s")]
     return [pytest.param(False, id="no_g2s")]
+
+
+def _mma_type_params():
+    """Return MMA type parameters with appropriate skip marks.
+
+    F32_16x16x16_F16: Works on CDNA3 (gfx94*) and CDNA4 (gfx95*)
+    F32_16x16x32_F16: Only works on CDNA4 (gfx95*)
+    """
+    params = [
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, 16, 4, id="16x16x16"),
+    ]
+    # Only add 16x16x32 on gfx95* (CDNA4)
+    if "gfx95" in get_default_arch():
+        params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, 32, 8, id="16x16x32"))
+    return params
 
 
 @require_e2e
@@ -100,9 +114,12 @@ def test_copy_kernel_asm_backend(shape, run_bench):
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.parametrize("shape", [(16, 16, 16)])
-def test_mma_kernel_asm_backend(shape, run_bench):
-    """End-to-end test for the MMA kernel using ASM backend with 16x16x16 shape."""
+@pytest.mark.parametrize("mma_type,k_size,load_elems", _mma_type_params())
+def test_mma_kernel_asm_backend(mma_type, k_size, load_elems, run_bench):
+    """End-to-end test for the MMA kernel using ASM backend.
+
+    Tests both F32_16x16x16_F16 (CDNA3/4) and F32_16x16x32_F16 (CDNA4 only).
+    """
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -123,7 +140,7 @@ def test_mma_kernel_asm_backend(shape, run_bench):
         tkw.WaveConstraint(N, BLOCK_N),
         tkw.HardwareConstraint(
             threads_per_wave=wave_size,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            mma_type=mma_type,
         ),
     ]
 
@@ -140,9 +157,9 @@ def test_mma_kernel_asm_backend(shape, run_bench):
         acc = tkw.mma(a_reg, b_reg, c_reg)
         tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
-    # Create test tensors
+    # Create test tensors - K size depends on MMA type (16 or 32)
     # A is M x K, B is N x K (for B^T in MMA), C is M x N
-    m, n, k = shape
+    m, n, k = 16, 16, k_size
     a = device_randn((m, k), dtype=torch.float16)
     b = device_randn((n, k), dtype=torch.float16)
     c = device_zeros((m, n), dtype=torch.float32)
@@ -152,7 +169,7 @@ def test_mma_kernel_asm_backend(shape, run_bench):
             M: m,
             N: n,
             K: k,
-            LOAD_ELEMS_PER_THREAD: 4,
+            LOAD_ELEMS_PER_THREAD: load_elems,
             STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
@@ -392,6 +409,21 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
     assert_close(c, expected)
 
 
+def _gemm_mma_type_params():
+    """Return MMA type parameters for GEMM tests.
+
+    For GEMM, BLOCK_K must be divisible by K-dimension of the MMA instruction.
+    F32_16x16x16_F16: K=16, works on CDNA3/4
+    F32_16x16x32_F16: K=32, works on CDNA4 only
+    """
+    params = [
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, id="16x16x16"),
+    ]
+    if "gfx95" in get_default_arch():
+        params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, id="16x16x32"))
+    return params
+
+
 @require_e2e
 @require_cdna_3_or_4
 @pytest.mark.parametrize(
@@ -419,12 +451,17 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
-def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_bench):
+@pytest.mark.parametrize("mma_type", _gemm_mma_type_params())
+def test_gemm_asm_backend(
+    shape, block_k, config, use_global_to_shared, mma_type, run_bench
+):
     """End-to-end test for GEMM with K-loop using ASM backend.
 
     Tests both single-wave and multi-wave configurations with varying BLOCK_K values.
     Multi-wave configurations enable testing workgroups with multiple waves per workgroup,
     where each wave operates on a tile (which can be larger than 16x16 MMA intrinsic).
+
+    Also tests both F32_16x16x16_F16 (CDNA3/4) and F32_16x16x32_F16 (CDNA4 only).
     """
     M = tkl.sym.M
     N = tkl.sym.N
@@ -447,6 +484,11 @@ def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_benc
         block_n % WAVE_N == 0
     ), f"BLOCK_N ({block_n}) must be divisible by WAVE_N ({WAVE_N})"
 
+    # For F32_16x16x32_F16, the MFMA K-dimension is 32. If the parametrized
+    # BLOCK_K is smaller, bump it to 32 so the test always runs.
+    if mma_type == tkw.MMAType.F32_16x16x32_F16 and block_k < 32:
+        block_k = 32
+
     # Calculate number of waves per workgroup
     waves_per_wg_m = block_m // WAVE_M
     waves_per_wg_n = block_n // WAVE_N
@@ -460,7 +502,7 @@ def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_benc
         tkw.WaveConstraint(N, WAVE_N),
         tkw.HardwareConstraint(
             threads_per_wave=wave_size,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            mma_type=mma_type,
         ),
     ]
 

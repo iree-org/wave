@@ -55,17 +55,17 @@ The register allocation pipeline follows this flow::
              │
              ▼
     ┌─────────────────────┐
+    │ kernel_passes.py    │  IR-to-IR transforms (peephole, acc-init opt, ticketing, hazards)
+    └────────┬────────────┘
+             │
+             ▼
+    ┌─────────────────────┐
     │ kernel_liveness.py  │  CFG-based backward dataflow liveness analysis
     └────────┬────────────┘
              │
              ▼
     ┌─────────────────────┐
     │ kernel_regalloc.py  │  Linear scan allocation with constraints
-    └────────┬────────────┘
-             │
-             ▼
-    ┌─────────────────────┐
-    │ kernel_passes.py    │  Peephole optimization, hazard mitigation, ticketing
     └────────┬────────────┘
              │
              ▼
@@ -397,6 +397,14 @@ The ``validate_ssa()`` function verifies:
 
 1. Each virtual register is defined exactly once
 2. Each use is dominated by its definition (CFG-dominance aware)
+
+Notes/Exceptions:
+
+- **Loop control SGPRs** are exempt from the “defined exactly once” rule because the
+  loop counter is naturally re-defined in the latch.
+- **MFMA accumulator VGPRs** are treated as **read-modify-write** values (in-place
+  updates). These accumulator ranges are explicitly marked in the IR and are also
+  exempt from the strict “defined exactly once” rule.
 
 Register Allocation (kernel_regalloc.py)
 ========================================

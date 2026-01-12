@@ -11,12 +11,13 @@ The ASM backend transforms Wave kernels through the following pipeline:
 1. **MLIR Generation**: Wave kernels are first compiled to MLIR (Multi-Level Intermediate Representation)
 2. **MLIR Analysis**: The MLIR is analyzed to extract kernel information, memory access patterns, and thread organization
 3. **Kernel IR Generation**: Virtual register instructions are emitted to the Kernel IR program
-4. **Liveness Analysis**: CFG-based backward dataflow analysis computes register live ranges
-5. **Register Allocation**: Linear scan allocator assigns physical registers with constraint handling
-6. **Peephole Optimization**: Instruction fusion and other local optimizations are applied
-7. **Hazard Mitigation**: Architecture-specific hazard detection and s_nop insertion
-8. **Assembly Generation**: AMDGCN assembly is rendered from the allocated program
-9. **Binary Compilation**: The assembly is compiled to HSACO (Heterogeneous System Architecture Code Object) binaries using AMD's toolchain
+4. **IR-to-IR Optimizations**: Whole-program transforms run on Kernel IR (peephole fusion, accumulator-init optimization)
+5. **Waitcnt Placement (Ticketing)**: Coalesced ``s_waitcnt`` insertion based on memory op defs/uses
+6. **Hazard Mitigation**: Architecture-specific hazard detection and s_nop insertion (still on Kernel IR)
+7. **Liveness Analysis**: CFG-based backward dataflow analysis computes register live ranges
+8. **Register Allocation**: Linear scan allocator assigns physical registers with constraint handling
+9. **Assembly Generation**: AMDGCN assembly is rendered from the allocated program
+10. **Binary Compilation**: The assembly is compiled to HSACO (Heterogeneous System Architecture Code Object) binaries using AMD's toolchain
 
 Architecture
 ------------
@@ -84,11 +85,12 @@ Key Components
   - ``kernel_expr_floor_ops.py``: Floor operation handling
 
 **Compilation Passes** (``kernel_passes.py``)
-  Post-allocation optimization and correctness passes:
+  Whole-program IR transforms and correctness passes (run before regalloc):
 
-  - Hazard mitigation (s_nop insertion for VALU hazards)
   - Peephole optimizations (instruction fusion)
+  - Accumulator-init optimization (first MFMA uses implicit zero accumulator where safe)
   - Ticketing-based waitcnt insertion
+  - Hazard mitigation (s_nop insertion for VALU hazards)
 
 **Kernel IR** (``kernel_ir.py``)
   Instruction representation and virtual register types:
@@ -317,7 +319,10 @@ On gfx94x/gfx95x, a VALU instruction writing to a VGPR followed by ``v_readfirst
 Peephole Optimizations
 ~~~~~~~~~~~~~~~~~~~~~~
 
-The backend applies peephole optimizations after hazard mitigation:
+The backend applies peephole optimizations during finalization on Kernel IR
+(before register allocation and assembly rendering). Hazard mitigation is also
+performed during finalization, and the exact ordering is documented in
+``kernel_passes.py``.
 
 **Instruction Fusion**
 
@@ -672,7 +677,7 @@ The MFMA support includes:
 2. **VGPR-Variant MFMA**: Uses MFMA instructions that write directly to VGPRs (not accumulators)
 3. **Accumulator Chaining**: Supports chained MFMAs for K-loops with persistent accumulators
 4. **Loop Integration**: Automatically uses loop ``iter_args`` as MFMA accumulators
-5. **Synchronization**: Inserts ``s_waitcnt lgkmcnt(0)`` before MFMA to ensure LDS reads complete
+5. **Synchronization**: ``s_waitcnt`` is placed/coalesced by the ticketing pass based on LDS/VMEM def-use dependencies (rather than always forcing ``lgkmcnt(0)`` before MFMA)
 6. **Multi-Wave Support**: Correctly handles multiple waves per workgroup with thread ID extraction
 7. **Multi-Workgroup Support**: Automatically detects and allocates workgroup ID system SGPRs as needed
 8. **Dynamic Metadata**: Computes ``vgpr_count``, ``sgpr_count``, and ``lds_size`` dynamically
@@ -1030,7 +1035,7 @@ This can occur due to incorrect register metadata. The backend now computes this
 
 This typically indicates missing synchronization:
 
-- The backend automatically inserts ``s_waitcnt lgkmcnt(0)`` before MFMA
+- The backend relies on ticketing-based ``s_waitcnt`` placement for LDS/VMEM dependencies
 - Ensure LDS staging is configured correctly with SHARED_MEMORY address space
 - Verify that workgroup size and constraints are properly configured
 

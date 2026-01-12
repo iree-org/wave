@@ -715,14 +715,25 @@ def validate_ssa(program: KernelProgram) -> List[str]:
         """Check if register is a loop control register (exempt from SSA)."""
         return isinstance(reg, KSReg) and program.is_loop_control_sreg(reg)
 
+    def is_accumulator(reg: KReg) -> bool:
+        """Check if register is an MFMA accumulator register (exempt from SSA)."""
+        return isinstance(reg, KVReg) and program.is_accumulator_vreg(reg)
+
+    def allow_redefinition(reg: KReg) -> bool:
+        return is_loop_control(reg) or is_accumulator(reg)
+
     for idx, instr in enumerate(program.instructions):
         # Check defs
         for d in instr.defs:
             if isinstance(d, KRegRange):
                 base_reg = d.base_reg
                 if is_virtual(base_reg):
-                    # Allow redefinition for loop control registers
-                    if base_reg in defs and not is_loop_control(base_reg):
+                    # Allow redefinition for loop control regs and accumulators
+                    if (
+                        base_reg in defs
+                        and defs[base_reg] != idx
+                        and not allow_redefinition(base_reg)
+                    ):
                         errors.append(
                             f"SSA violation: {base_reg} defined at {defs[base_reg]} and {idx}"
                         )
@@ -732,12 +743,21 @@ def validate_ssa(program: KernelProgram) -> List[str]:
                     for i in range(d.count):
                         component = reg_class(base_reg.id + i)
                         range_membership[component] = base_reg
+                        # Components follow the same exemption rules as the base.
+                        if (
+                            component in defs
+                            and defs[component] != idx
+                            and not allow_redefinition(component)
+                        ):
+                            errors.append(
+                                f"SSA violation: {component} defined at {defs[component]} and {idx}"
+                            )
                         defs[component] = idx
             else:
                 reg = d
                 if is_virtual(reg):
-                    # Allow redefinition for loop control registers
-                    if reg in defs and not is_loop_control(reg):
+                    # Allow redefinition for loop control regs and accumulators
+                    if reg in defs and defs[reg] != idx and not allow_redefinition(reg):
                         errors.append(
                             f"SSA violation: {reg} defined at {defs[reg]} and {idx}"
                         )

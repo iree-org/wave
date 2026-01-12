@@ -792,6 +792,20 @@ instructions:
     special:
       accumulator: true
 
+  v_mfma_f32_16x16x32_f16:
+    mnemonic: v_mfma_f32_16x16x32_f16
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_quad, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_quad}
+      - {name: b, type: vgpr_quad}
+      - {name: c, type: vgpr_quad}
+    latency: 16
+    special:
+      accumulator: true
+
   v_mfma_f32_32x32x8_f16:
     mnemonic: v_mfma_f32_32x32x8_f16
     category: mfma
@@ -1112,6 +1126,30 @@ instructions:
     latency: 0
 
   _mfma_acc:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _mfma_acc_16x16x32:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _loop_begin:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _loop_end:
     mnemonic: ""
     category: pseudo
     format: pseudo

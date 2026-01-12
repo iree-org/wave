@@ -112,6 +112,11 @@ class _LoopSupport:
 
         # Body label
         self.emit_label(f"loop_{loop_id}_body")
+        # Structured loop marker (used by backend passes; emits no assembly).
+        # Avoid relying on label comment parsing in later transformations.
+        self.program.emit(
+            KInstr("_loop_begin", defs=(), uses=(), comment=f"loop_{loop_id}")
+        )
 
     def emit_loop_latch(self, loop_ctx: dict):
         """Emit loop latch (increment counter and branch back)."""
@@ -143,6 +148,10 @@ class _LoopSupport:
         """End loop and emit exit label."""
         loop_ctx = self._loop_stack.pop()
         loop_id = loop_ctx["loop_id"]
+        # Structured loop marker (used by backend passes; emits no assembly).
+        self.program.emit(
+            KInstr("_loop_end", defs=(), uses=(), comment=f"loop_{loop_id}")
+        )
         self.emit_label(f"loop_{loop_id}_exit")
 
     def alloc_accumulators(self, count: int) -> List[KRegRange]:
@@ -155,6 +164,9 @@ class _LoopSupport:
         for i in range(count):
             quad = self.vreg_quad()
             accumulators.append(quad)
+            # Mark as accumulator regs: MFMA updates these in-place (RMW semantics),
+            # so they are exempt from strict SSA validation.
+            self.program.register_accumulator_vreg_range(quad)
 
             # Initialize to 0 using a pseudo-instruction that defines the whole range
             # This ensures liveness analysis sees the quad with proper alignment

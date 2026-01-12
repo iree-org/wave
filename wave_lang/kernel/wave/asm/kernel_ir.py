@@ -455,6 +455,11 @@ class KernelProgram:
     # still assigns physical registers normally.
     _loop_control_sregs: Set[int] = field(default_factory=set, repr=False)
 
+    # Accumulator VGPRs (MFMA accumulators) are updated in-place by MFMA.
+    # We model this as a read-modify-write at the KernelProgram level, which
+    # requires permitting re-definition of these VGPRs for SSA validation.
+    _accumulator_vregs: Set[int] = field(default_factory=set, repr=False)
+
     def alloc_vreg(self) -> KVReg:
         """Allocate a new virtual VGPR."""
         vreg = KVReg(self._next_vreg_id)
@@ -506,6 +511,28 @@ class KernelProgram:
     def is_loop_control_sreg(self, sreg: KSReg) -> bool:
         """Check if an SGPR is a loop control register."""
         return sreg.id in self._loop_control_sregs
+
+    def register_accumulator_vreg(self, vreg: KVReg) -> None:
+        """
+        Mark a VGPR as an accumulator register (MFMA accumulator).
+
+        Accumulator registers are updated in-place and may be defined multiple
+        times (read-modify-write semantics). They are therefore exempt from the
+        "defined exactly once" SSA validation rule at the KernelProgram level.
+        """
+        self._accumulator_vregs.add(vreg.id)
+
+    def register_accumulator_vreg_range(self, vreg_range: KRegRange) -> None:
+        """Mark a VGPR range as accumulator registers (all components)."""
+        base = vreg_range.base_reg
+        if not isinstance(base, KVReg):
+            return
+        for i in range(vreg_range.count):
+            self._accumulator_vregs.add(base.id + i)
+
+    def is_accumulator_vreg(self, vreg: KVReg) -> bool:
+        """Check if a VGPR is an accumulator register."""
+        return vreg.id in self._accumulator_vregs
 
     def __len__(self) -> int:
         return len(self.instructions)
