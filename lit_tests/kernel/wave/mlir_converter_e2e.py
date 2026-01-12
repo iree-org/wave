@@ -13,6 +13,7 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
@@ -88,26 +89,24 @@ def test_matrix_add_water_e2e():
     trace = compiled_kernel.compiled_graph
     constraints = matrix_add.constraints
 
-    # Emit Wave dialect MLIR
+    # Emit Wave dialect MLIR.
     wave_dialect_mlir, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options_mlir
     )
 
-    # Apply Water PassManager lowering
+    # Apply Water middle-end pipeline.
     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
 
     print(lowered_mlir)
 
-    # Create test tensors
     shape = (128, 128)
     a_tensor = device_randn(*shape, dtype=torch.float16)
     b_tensor = device_randn(*shape, dtype=torch.float16)
     c_tensor = device_zeros(*shape, dtype=torch.float16)
 
-    # Expected result (CPU computation)
     expected = a_tensor + b_tensor
 
-    # Test execution with lowered MLIR
+    # Test execution with lowered MLIR.
     options_e2e = WaveCompileOptions(
         subs=subs,
         canonicalize=True,
@@ -136,96 +135,61 @@ def test_matrix_add_water_e2e():
 # CHECK-NOT:    wave.write
 # CHECK:        vector.maskedstore
 
+
 @run_test
 def test_matmul_water_e2e():
     """Test Water PassManager with matmul kernel and e2e execution."""
+    from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+
     torch.manual_seed(0)
 
-    # Input sizes
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    # Workgroup tile sizes
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    # Address space (for GPU, shared(1) or global(0))
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-    dtype = tkl.f16
-
-    # Define constraints for matmul
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2))]
-    constraints += [tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2))]
-    constraints += [
-        tkw.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_32x32x8_F16)
-    ]
-
-    @tkw.wave(constraints)
-    def matmul(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, dtype],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, dtype],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
+    # Matrix dimensions.
     m = 1024
     n = 5120
     k = 640
-    # Set parameters for compilation
-    subs: dict[str | IndexSymbol, Any] = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        BLOCK_K: 32,
-        M: m,
-        N: n,
-        K: k,
-    }
+
+    # Get GEMM kernel from template.
+    gemm, hyperparams, _ = get_gemm_kernel(
+        shape=(m, n, k),
+        dynamic_dims=False,
+        mfma_variant=MMAType.F32_32x32x8_F16,
+        block_shape=(64, 64, 32),
+        waves_per_block=(2, 2),
+    )
 
     options_mlir = WaveCompileOptions(
-        subs=subs,
+        subs=hyperparams,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
-        print_mlir=True,
     )
     options_mlir = set_default_run_config(options_mlir)
 
-    compiled_kernel = wave_compile(options_mlir, matmul)
+    compiled_kernel = wave_compile(options_mlir, gemm)
     trace = compiled_kernel.compiled_graph
-    constraints = matmul.constraints
+    constraints = gemm.constraints
 
-    # Emit Wave dialect MLIR
-    wave_dialect_mlir, diagnostics, _ = emit_wave_dialect(trace, constraints, options_mlir)
+    # Emit Wave dialect MLIR.
+    wave_dialect_mlir, diagnostics, _ = emit_wave_dialect(
+        trace, constraints, options_mlir
+    )
 
-    # Apply Water PassManager lowering
+    # Apply Water middle-end pipeline.
     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
 
     print(lowered_mlir)
 
-    # Create test tensors
+    # Create test tensors on device.
     a_tensor = device_randn(m, k, dtype=torch.float16)
     b_tensor = device_randn(n, k, dtype=torch.float16)  # Note: transposed in matmul
     c_tensor = device_zeros(m, n, dtype=torch.float32)
 
-    # Expected result (CPU computation)
-    expected = torch.matmul(a_tensor.float(), b_tensor.T.float())
+    # Expected result using PyTorch reference.
+    expected = torch.matmul(a_tensor, b_tensor.T).float()
 
-    # Test execution with lowered MLIR
+    # Test execution with lowered MLIR.
     options_e2e = WaveCompileOptions(
-        subs=subs,
+        subs=hyperparams,
         canonicalize=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
@@ -233,7 +197,7 @@ def test_matmul_water_e2e():
     )
     options_e2e = set_default_run_config(options_e2e)
 
-    compiled_e2e = wave_compile(options_e2e, matmul)
+    compiled_e2e = wave_compile(options_e2e, gemm)
 
     compiled_e2e(a_tensor, b_tensor, c_tensor)
 
