@@ -20,6 +20,7 @@ REPO_ROOT = THIS_DIR
 WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 BUILD_TYPE = os.environ.get("WAVE_BUILD_TYPE", "Release")
 BUILD_WATER = int(os.environ.get("WAVE_BUILD_WATER", "0"))
+WATER_DIR = os.getenv("WAVE_WATER_DIR")
 LLVM_DIR = os.getenv("WAVE_LLVM_DIR")
 LLVM_REPO = os.getenv("WAVE_LLVM_REPO", "https://github.com/llvm/llvm-project.git")
 BUILD_SHARED_LIBS = os.getenv("WAVE_LLVM_BUILD_SHARED_LIBS", "OFF")
@@ -41,16 +42,68 @@ class CMakeExtension(Extension):
         self.cmake_args = cmake_args or []
 
 
-def invoke_cmake(*args, cwd=None):
-    subprocess.check_call(["cmake", *args], cwd=cwd)
+def invoke_cmake(*args, cwd=None, env=None):
+    subprocess.check_call(["cmake", *args], cwd=cwd, env=env)
 
 
 def invoke_git(*args, cwd=None):
     subprocess.check_call(["git", *args], cwd=cwd)
 
 
+def install_water_from_build_dir(build_dir: Path, install_dir: Path):
+    """Install water from an existing CMake build directory using symlinks.
+
+    This allows for a fast development workflow where changes to the C++ source
+    of water are immediately available without rebuilding the wheel.
+
+    Args:
+        build_dir: Path to the CMake build directory containing the built water.
+        install_dir: Path where water should be installed (wave_lang/kernel/wave/water_mlir).
+    """
+    # Validate build directory contains expected artifacts
+    water_opt_path = build_dir / "bin" / "water-opt"
+    if not water_opt_path.exists():
+        raise RuntimeError(
+            f"WAVE_WATER_DIR does not contain water-opt at {water_opt_path}. "
+            "Make sure you have built water with 'ninja' or 'cmake --build .'."
+        )
+
+    python_packages_dir = build_dir / "python_packages" / "water_mlir"
+    if not python_packages_dir.exists():
+        raise RuntimeError(
+            f"WAVE_WATER_DIR does not contain Python packages at {python_packages_dir}. "
+            "Make sure you built water with -DWATER_ENABLE_PYTHON=ON -DMLIR_ENABLE_BINDINGS_PYTHON=ON."
+        )
+
+    print(f"Installing water from external build directory: {build_dir}")
+    print(f"  Install location: {install_dir}")
+    print("  Using CMAKE_INSTALL_MODE=ABS_SYMLINK for symlink-based installation")
+
+    # Ensure install directory exists
+    os.makedirs(install_dir, exist_ok=True)
+
+    # Run cmake --install with CMAKE_INSTALL_MODE=ABS_SYMLINK
+    env = os.environ.copy()
+    env["CMAKE_INSTALL_MODE"] = "ABS_SYMLINK"
+    invoke_cmake("--install", str(build_dir), "--prefix", str(install_dir), env=env)
+
+
 class CMakeBuild(build_ext):
     def run(self):
+        if WATER_DIR and BUILD_WATER:
+            raise RuntimeError(
+                "WAVE_WATER_DIR and WAVE_BUILD_WATER are mutually exclusive"
+            )
+
+        # If WAVE_WATER_DIR is set (and WAVE_BUILD_WATER is not),
+        # install water from the external build directory using symlinks
+        if WATER_DIR and not BUILD_WATER:
+            water_build_path = Path(WATER_DIR).resolve()
+            water_install_dir = (
+                Path.cwd() / "wave_lang" / "kernel" / "wave" / "water_mlir"
+            )
+            install_water_from_build_dir(water_build_path, water_install_dir)
+
         for ext in self.extensions:
             self.build_cmake(ext)
 
