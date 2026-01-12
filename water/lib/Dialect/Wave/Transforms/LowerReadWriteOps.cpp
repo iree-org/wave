@@ -454,6 +454,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   // dictionary inside the array attribute. The IndexExprsSpecified normal form
   // guarantees this attribute is present.
   ArrayAttr indexArr = op.getIndexAttr();
+  assert(indexArr && "IndexExprsSpecified normal form guarantees index attr");
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
          "'index' must be an array with exactly one dictionary");
   DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
