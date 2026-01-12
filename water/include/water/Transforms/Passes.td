@@ -176,14 +176,10 @@ def WaterInsertWaitcnt : Pass<"water-insert-waitcnt"> {
     wait/synchronization instructions to ensure memory operations complete
     before their results are used.
 
-    The pass tracks dependencies between memory operations and register uses,
+    The pass tracks dependencies between async memory operations,
     maintaining scoreboards to determine when waits are necessary. It handles:
     - Read-after-write (RAW) dependencies
-    - Write-after-write (WAW) dependencies
     - Write-after-read (WAR) dependencies
-
-    This is analogous to LLVM's SIInsertWaitcnts pass but operates at the
-    MLIR level for AMDGPU dialect operations.
   }];
   let dependentDialects = [
     "::mlir::amdgpu::AMDGPUDialect",
