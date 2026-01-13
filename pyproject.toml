@@ -58,7 +58,7 @@ docs = [
     "sphinx-rtd-theme~=3.0.2",
     "sphinxcontrib-mermaid~=1.0.0",
     "myst-parser~=4.0.0",
-    "shibuya~=2.0",
+    "shibuya~=2026.1.9",
 ]
 
 [project.urls]
