@@ -697,6 +697,98 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// WaveIndexEntryAttr
+//===----------------------------------------------------------------------===//
+
+// Syntax: @M : [symbols] -> (start, step, stride)
+Attribute WaveIndexEntryAttr::parse(AsmParser &parser, Type type) {
+  // Parse dimension symbol: @M
+  WaveSymbolAttr dimension;
+  if (parser.parseCustomAttributeWithFallback<WaveSymbolAttr>(dimension))
+    return {};
+
+  // Parse colon
+  if (parser.parseColon())
+    return {};
+
+  // Parse the index mapping
+  WaveIndexMappingAttr mapping;
+  if (parser.parseCustomAttributeWithFallback<WaveIndexMappingAttr>(mapping))
+    return {};
+
+  return get(parser.getContext(), dimension, mapping);
+}
+
+void WaveIndexEntryAttr::print(AsmPrinter &printer) const {
+  // Print: @M : [symbols] -> (start, step, stride)
+  printer.printAttributeWithoutType(getDimension());
+  printer << " : ";
+  printer.printAttributeWithoutType(getMapping());
+}
+
+//===----------------------------------------------------------------------===//
+// WaveIndexExprsAttr
+//===----------------------------------------------------------------------===//
+
+// Syntax: index_exprs<[@M : <mapping>, @K : <mapping>, @N : <mapping>]>
+Attribute WaveIndexExprsAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess())
+    return {};
+
+  SmallVector<WaveIndexEntryAttr> entries;
+
+  // Parse '[' entries ']' allowing empty or non-empty lists
+  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
+        WaveIndexEntryAttr entry;
+        if (parser.parseCustomAttributeWithFallback<WaveIndexEntryAttr>(entry))
+          return failure();
+        entries.push_back(entry);
+        return success();
+      }))
+    return {};
+
+  if (parser.parseGreater())
+    return {};
+
+  return get(parser.getContext(), entries);
+}
+
+void WaveIndexExprsAttr::print(AsmPrinter &printer) const {
+  // Print: <[@M : <mapping>, @K : <mapping>]>
+  printer << "<[";
+  llvm::interleaveComma(getEntries(), printer, [&](WaveIndexEntryAttr entry) {
+    printer.printAttributeWithoutType(entry);
+  });
+  printer << "]>";
+}
+
+std::optional<WaveIndexMappingAttr>
+WaveIndexExprsAttr::lookup(WaveSymbolAttr dimension) const {
+  for (WaveIndexEntryAttr entry : getEntries()) {
+    if (entry.getDimension() == dimension)
+      return entry.getMapping();
+  }
+  return std::nullopt;
+}
+
+std::optional<WaveIndexMappingAttr>
+WaveIndexExprsAttr::lookup(StringRef dimensionName) const {
+  for (WaveIndexEntryAttr entry : getEntries()) {
+    if (entry.getDimension().getName() == dimensionName)
+      return entry.getMapping();
+  }
+  return std::nullopt;
+}
+
+SmallVector<WaveSymbolAttr> WaveIndexExprsAttr::getDimensions() const {
+  SmallVector<WaveSymbolAttr> dims;
+  dims.reserve(getEntries().size());
+  for (WaveIndexEntryAttr entry : getEntries())
+    dims.push_back(entry.getDimension());
+  return dims;
+}
+
 void wave::WaveDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST
