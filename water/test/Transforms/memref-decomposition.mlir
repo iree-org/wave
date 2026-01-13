@@ -251,3 +251,33 @@ func.func @scf_for_loop_carried(%arg0: memref<10xf32>, %lb: index, %ub: index, %
 
   return %result : memref<10xf32>
 }
+
+// CHECK-LABEL: func.func @make_dma_base
+// CHECK-SAME: (%[[GLOBAL:.*]]: memref<1024x1024xf16>, %[[LDS:.*]]: memref<256x68xf16, #gpu.address_space<workgroup>>, %[[GLOBAL_I:.*]]: index, %[[GLOBAL_J:.*]]: index, %[[LDS_I:.*]]: index, %[[LDS_J:.*]]: index)
+func.func @make_dma_base(%global: memref<1024x1024xf16>, %lds: memref<256x68xf16, #gpu.address_space<workgroup>>, %global_i: index, %global_j: index, %lds_i: index, %lds_j: index) -> !amdgpu.tdm_base<f16> {
+  // CHECK-DAG: %[[POISON_LDS:.*]] = llvm.mlir.poison : !llvm.struct<(ptr<3>, ptr<3>, i64)>
+  // CHECK-DAG: %[[C0:.*]] = llvm.mlir.constant(0 : index) : i64
+  // CHECK-DAG: %[[POISON_GLOBAL:.*]] = llvm.mlir.poison : !llvm.struct<(ptr, ptr, i64)>
+  // CHECK-DAG: %[[CAST_LDS:.*]] = builtin.unrealized_conversion_cast %[[LDS]]
+  // CHECK-DAG: %[[EXTRACT_LDS:.*]] = llvm.extractvalue %[[CAST_LDS]][1]
+  // CHECK-DAG: %[[CAST_GLOBAL:.*]] = builtin.unrealized_conversion_cast %[[GLOBAL]]
+  // CHECK-DAG: %[[EXTRACT_GLOBAL:.*]] = llvm.extractvalue %[[CAST_GLOBAL]][1]
+  // CHECK: %[[GLOBAL_OFF:.*]] = affine.apply #{{.*}}()[%[[GLOBAL_I]], %[[GLOBAL_J]]]
+  // CHECK: %[[GLOBAL_OFF_CAST:.*]] = arith.index_cast %[[GLOBAL_OFF]]
+  // CHECK: %[[GLOBAL_GEP:.*]] = llvm.getelementptr nusw %[[EXTRACT_GLOBAL]][%[[GLOBAL_OFF_CAST]]]
+  // CHECK: %[[LDS_OFF:.*]] = affine.apply #{{.*}}()[%[[LDS_I]], %[[LDS_J]]]
+  // CHECK: %[[LDS_OFF_CAST:.*]] = arith.index_cast %[[LDS_OFF]]
+  // CHECK: %[[LDS_GEP:.*]] = llvm.getelementptr nusw %[[EXTRACT_LDS]][%[[LDS_OFF_CAST]]]
+  // CHECK: %[[GLOBAL_INS0:.*]] = llvm.insertvalue %[[GLOBAL_GEP]], %[[POISON_GLOBAL]][0]
+  // CHECK: %[[GLOBAL_INS1:.*]] = llvm.insertvalue %[[GLOBAL_GEP]], %[[GLOBAL_INS0]][1]
+  // CHECK: %[[GLOBAL_INS2:.*]] = llvm.insertvalue %[[C0]], %[[GLOBAL_INS1]][2]
+  // CHECK: %[[GLOBAL_0D:.*]] = builtin.unrealized_conversion_cast %[[GLOBAL_INS2]] : !llvm.struct<(ptr, ptr, i64)> to memref<f16>
+  // CHECK: %[[LDS_INS0:.*]] = llvm.insertvalue %[[LDS_GEP]], %[[POISON_LDS]][0]
+  // CHECK: %[[LDS_INS1:.*]] = llvm.insertvalue %[[LDS_GEP]], %[[LDS_INS0]][1]
+  // CHECK: %[[LDS_INS2:.*]] = llvm.insertvalue %[[C0]], %[[LDS_INS1]][2]
+  // CHECK: %[[LDS_0D:.*]] = builtin.unrealized_conversion_cast %[[LDS_INS2]] : !llvm.struct<(ptr<3>, ptr<3>, i64)> to memref<f16, #gpu.address_space<workgroup>>
+  // CHECK: %[[BASE:.*]] = amdgpu.make_dma_base %[[GLOBAL_0D]][], %[[LDS_0D]][] : memref<f16>, memref<f16, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f16>
+  // CHECK: return %[[BASE]]
+  %base = amdgpu.make_dma_base %global[%global_i, %global_j], %lds[%lds_i, %lds_j] : memref<1024x1024xf16>, memref<256x68xf16, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f16>
+  return %base : !amdgpu.tdm_base<f16>
+}

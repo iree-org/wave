@@ -644,6 +644,80 @@ struct DecomposeGatherToLDS
   }
 };
 
+/// Decompose make DMA base operation.
+/// We don't want to lower it into ROCDL op yet, so just convert args to 0D
+/// memrefs.
+struct DecomposeMakeDmaBase
+    : public OpConversionPattern<amdgpu::MakeDmaBaseOp> {
+  using Base::Base;
+
+  LogicalResult
+  matchAndRewrite(amdgpu::MakeDmaBaseOp dmaOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = dmaOp.getLoc();
+    auto globalType = cast<MemRefType>(dmaOp.getGlobal().getType());
+    auto ldsType = cast<MemRefType>(dmaOp.getLds().getType());
+    unsigned globalRank = globalType.getRank();
+    unsigned ldsRank = ldsType.getRank();
+
+    if (globalRank == 0 && ldsRank == 0)
+      return rewriter.notifyMatchFailure(dmaOp, "already 0D memrefs");
+
+    // Decompose global memref.
+    ValueRange globalDecomposed = adaptor.getGlobal();
+    SmallVector<OpFoldResult> globalSizes;
+    SmallVector<OpFoldResult> globalStrides;
+    FailureOr<Value> globalBuffer = unflattenDescriptor(
+        globalDecomposed, globalType, globalSizes, globalStrides);
+    if (failed(globalBuffer))
+      return rewriter.notifyMatchFailure(dmaOp,
+                                         "expected global to be decomposed");
+
+    // Decompose LDS memref.
+    ValueRange ldsDecomposed = adaptor.getLds();
+    SmallVector<OpFoldResult> ldsSizes;
+    SmallVector<OpFoldResult> ldsStrides;
+    FailureOr<Value> ldsBuffer =
+        unflattenDescriptor(ldsDecomposed, ldsType, ldsSizes, ldsStrides);
+    if (failed(ldsBuffer))
+      return rewriter.notifyMatchFailure(dmaOp,
+                                         "expected lds to be decomposed");
+
+    // Get flattened indices.
+    SmallVector<Value> globalIndices = flatten(adaptor.getGlobalIndices());
+    SmallVector<Value> ldsIndices = flatten(adaptor.getLdsIndices());
+
+    // Compute linearized offsets and apply to buffers.
+    unsigned globalTypeBits =
+        globalType.getElementType().getIntOrFloatBitWidth();
+    unsigned ldsTypeBits = ldsType.getElementType().getIntOrFloatBitWidth();
+
+    Type globalElementType = globalType.getElementType();
+    Type ldsElementType = ldsType.getElementType();
+
+    Value globalPtr = getFlattenMemref(
+        rewriter, loc, *globalBuffer, globalElementType, globalSizes,
+        globalTypeBits, globalStrides, globalIndices);
+    Value ldsPtr =
+        getFlattenMemref(rewriter, loc, *ldsBuffer, ldsElementType, ldsSizes,
+                         ldsTypeBits, ldsStrides, ldsIndices);
+
+    // Convert to 0D memrefs.
+    MemRefType global0DType = make0DMemRefType(globalType);
+    MemRefType lds0DType = make0DMemRefType(ldsType);
+
+    Value global0D =
+        create0DMemrefFromPtr(rewriter, loc, global0DType, globalPtr);
+    Value lds0D = create0DMemrefFromPtr(rewriter, loc, lds0DType, ldsPtr);
+
+    // Create the make_dma_base operation with 0D memrefs and no indices.
+    rewriter.replaceOpWithNewOp<amdgpu::MakeDmaBaseOp>(
+        dmaOp, dmaOp.getType(), global0D, ValueRange{}, lds0D, ValueRange{});
+
+    return success();
+  }
+};
+
 class MemrefDecompositionPass
     : public water::impl::WaterMemrefDecompositionPassBase<
           MemrefDecompositionPass> {
@@ -678,12 +752,19 @@ public:
           return srcType.getRank() == 0 && dstType.getRank() == 0;
         });
 
+    target.addDynamicallyLegalOp<amdgpu::MakeDmaBaseOp>(
+        [&](amdgpu::MakeDmaBaseOp op) {
+          auto globalType = cast<MemRefType>(op.getGlobal().getType());
+          auto ldsType = cast<MemRefType>(op.getLds().getType());
+          return globalType.getRank() == 0 && ldsType.getRank() == 0;
+        });
+
     RewritePatternSet patterns(ctx);
     patterns
         .add<DecomposeLoadOp<memref::LoadOp>, DecomposeStoreOp<memref::StoreOp>,
              DecomposeLoadOp<vector::LoadOp>, DecomposeStoreOp<vector::StoreOp>,
              DecomposeReinterpretCast, DecomposeFatRawBufferCast,
-             DecomposeGatherToLDS>(typeConverter, ctx);
+             DecomposeGatherToLDS, DecomposeMakeDmaBase>(typeConverter, ctx);
 
     scf::populateSCFStructuralTypeConversionsAndLegality(typeConverter,
                                                          patterns, target);
