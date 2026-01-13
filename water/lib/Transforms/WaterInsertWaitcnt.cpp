@@ -233,9 +233,10 @@ static SmallVector<Value> isStoreOp(Operation *op) {
   return result;
 }
 
-template <typename T>
-static raw_ostream &print_range(raw_ostream &os, T &&range) {
-  llvm::interleaveComma(range, os, [&](const auto &item) { os << item; });
+static raw_ostream &print_range(raw_ostream &os, ValueRange range) {
+  llvm::interleaveComma(range, os, [&](Value item) {
+    item.print(os, OpPrintingFlags().skipRegions());
+  });
   return os;
 }
 
@@ -747,14 +748,15 @@ public:
 
   LogicalResult visitOperation(Operation *op, const WaitcntState &before,
                                WaitcntState *after) override {
-    LDBG() << "Visiting: " << *op;
+    LDBG() << "Visiting: " << OpWithFlags(op, OpPrintingFlags().skipRegions());
     LDBG() << "  Before: " << before;
 
     // Start with the state before this operation
     WaitcntState newState = before;
 
     if (isBarrier(op)) {
-      LDBG() << "  Barrier: " << *op;
+      LDBG() << "  Barrier: "
+             << OpWithFlags(op, OpPrintingFlags().skipRegions());
       newState.addPendingOp(op);
       LDBG() << "  New state: " << newState;
       propagateIfChanged(after, after->join(newState));
@@ -826,7 +828,8 @@ public:
                                             std::optional<unsigned> regionTo,
                                             const WaitcntState &before,
                                             WaitcntState *after) override {
-    LDBG() << "Visiting region branch control flow transfer: " << *branch;
+    LDBG() << "Visiting region branch control flow transfer: "
+           << OpWithFlags(branch, OpPrintingFlags().skipRegions());
     LDBG() << "  Region from: " << regionFrom;
     LDBG() << "  Region to: " << regionTo;
     LDBG() << "  Before: " << before;
