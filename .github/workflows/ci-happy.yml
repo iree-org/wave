@@ -101,9 +101,11 @@ jobs:
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
               export PATH="$CARGO_HOME/bin:$PATH"
 
-              echo $HSA_MODEL_NUM_THREADS
-              source /usr/local/bin/env.sh >/dev/null 2>&1
+              if [ -z "${HSA_MODEL_NUM_THREADS+x}" ]; then export HSA_MODEL_NUM_THREADS=1; fi
+              echo "HSA_MODEL_NUM_THREADS=${HSA_MODEL_NUM_THREADS:-<unset>}"
 
+              source /usr/local/bin/env.sh >/dev/null 2>&1
+              
               # user owned venv
               python3 -m venv ${USER_VENV}
               source "${USER_VENV}/bin/activate"
@@ -196,7 +198,8 @@ jobs:
               source "${USER_VENV}/bin/activate"
               export PYTHONPATH=${ROOT_VENV}
 
-              echo $HSA_MODEL_NUM_THREADS
+              if [ -z "${HSA_MODEL_NUM_THREADS+x}" ]; then export HSA_MODEL_NUM_THREADS=1; fi
+              echo "HSA_MODEL_NUM_THREADS=${HSA_MODEL_NUM_THREADS:-<unset>}" 
               printenv HSA_MODEL_NUM_THREADS || echo "not set"
 
               export WAVE_CACHE_DIR=$PWD/.wave
