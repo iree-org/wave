@@ -41,6 +41,30 @@ func.func @raw_dependency_vector_load(%global: memref<64x64xf32>, %lds: memref<6
   return
 }
 
+// CHECK-LABEL: func.func @raw_dependency_vector_load_2_barriers
+func.func @raw_dependency_vector_load_2_barriers(%global: memref<64x64xf32>, %lds: memref<64x64xf32, #gpu.address_space<workgroup>>) {
+  %c0 = arith.constant 0 : index
+
+  // Tensor load to LDS (write to LDS).
+  %base = amdgpu.make_dma_base %global[%c0, %c0], %lds[%c0, %c0] : memref<64x64xf32>, memref<64x64xf32, #gpu.address_space<workgroup>> -> !amdgpu.tdm_base<f32>
+  %desc = amdgpu.make_dma_descriptor %base globalSize [64, 64] globalStride [64, 1] sharedSize [64, 64] : !amdgpu.tdm_base<f32> -> !amdgpu.tdm_descriptor
+  amdgpu.tensor_load_to_lds %desc : !amdgpu.tdm_descriptor
+
+  // Barrier.
+  amdgpu.lds_barrier
+  amdgpu.lds_barrier
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  // CHECK: amdgpu.lds_barrier
+
+  // Wait only before last barrier
+  // CHECK: amdgpu.memory_counter_wait tensor(0)
+  // CHECK: amdgpu.lds_barrier
+  %vec = vector.load %lds[%c0, %c0] : memref<64x64xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  return
+}
+
 // CHECK-LABEL: func.func @multiple_pending_ops
 func.func @multiple_pending_ops(%global: memref<64x64xf32>, %lds1: memref<64x64xf32, #gpu.address_space<workgroup>>, %lds2: memref<64x64xf32, #gpu.address_space<workgroup>>) {
   %c0 = arith.constant 0 : index

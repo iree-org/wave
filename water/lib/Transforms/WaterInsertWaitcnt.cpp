@@ -254,8 +254,11 @@ struct PendingOperations {
     if (size() >= 256)
       llvm::report_fatal_error("Pending operations list is too long");
 
-    if (!ops.empty() && isBarrier(op) && isBarrier(ops.back()))
+    // If we have c onsecutive barriers, keep only the later one.
+    if (!ops.empty() && isBarrier(op) && isBarrier(ops.back())) {
+      ops.back() = op;
       return opsTokens.back();
+    }
 
     ops.push_back(op);
     auto &back = opsTokens.emplace_back();
@@ -520,11 +523,17 @@ public:
       SmallVector<Operation *> newPending;
       SmallVector<PendingOperations::TokenContainer> newPendingTokens;
       WaitcntRequirement runningRequirement;
-      for (const auto &[op, tok] : llvm::reverse(pendingOps->opsAndTokens())) {
+      for (const auto &[op, tok] : pendingOps->opsAndTokensReverse()) {
         WaitcntRequirement opReq =
             WaitcntRequirement::getOperationRequirement(op, false);
         runningRequirement = runningRequirement + opReq;
         if (runningRequirement > requirement)
+          continue;
+
+        // If we have consecutive barriers, skip the new one so only the later
+        // one is kept.
+        if (!newPending.empty() && isBarrier(op) &&
+            isBarrier(newPending.back()))
           continue;
 
         newPending.push_back(op);
@@ -778,7 +787,7 @@ public:
       LDBG() << "  No memory dependency";
     }
 
-    if (opRequirement.hasRequirement() && !barriers.empty()) {
+    if (!isBarrier(op) && opRequirement.hasRequirement() && !barriers.empty()) {
       // newState.setRequirement(opRequirement);
       LDBG() << "  Barriers found, requirement: " << opRequirement;
       for (Operation *barrier : barriers) {
