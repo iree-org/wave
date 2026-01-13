@@ -26,9 +26,11 @@ from wave_lang.support.logging import get_logger
 from wave_lang.support.ir_imports import (
     AffineExpr,
     AffineMap,
+    ArrayAttr,
     Attribute,
     DenseElementsAttr,
     DenseI32ArrayAttr,
+    DictAttr,
     F16Type,
     F32Type,
     F64Type,
@@ -300,6 +302,11 @@ class WaveEmitter:
             kernel_func_wrapper = gpu_d.GPUFuncOp(
                 TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
             )
+
+        if self.options.target in ["gfx942", "gfx950"]:
+            assert kernel_func_wrapper.arg_attrs is None, "unexpected arg_attrs"
+            arg_attr = DictAttr.get({"llvm.inreg": UnitAttr.get()})
+            kernel_func_wrapper.arg_attrs = ArrayAttr.get([arg_attr] * len(arg_types))
 
         new_kernel_entry_block = kernel_func_wrapper.body.blocks.append(
             *arg_types,
