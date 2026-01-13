@@ -82,12 +82,14 @@ class LegacyBarrierEmitter(BarrierEmitter):
 
         producer = region.producer
         consumer = region.consumer
+        barrier = is_barrier_between(producer, consumer)
 
         wait_async = is_async_op(producer) or is_async_op(consumer)
-        with consumer.graph.inserting_before(consumer):
-            SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
-                consumer.graph, loc=get_custom(consumer).location
-            )
+        if barrier is None:
+            with consumer.graph.inserting_before(consumer):
+                SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
+                    consumer.graph, loc=get_custom(consumer).location
+                )
 
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
