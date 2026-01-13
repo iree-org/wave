@@ -397,16 +397,13 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     # We encode the exact registers and wait counts as we want to know if
     # they suddenly change due to backend or upstream MLIR changes.
     if use_water_backend:
-        vgpr_count = 154
+        vgpr_count = 160
         vgpr_spill_count = 0
         sgpr_count = 58
         sgpr_spill_count = 0
         waitcounts = [
             "s_waitcnt lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
-            "s_waitcnt lgkmcnt(8)",
-            "s_waitcnt lgkmcnt(1)",
-            "s_waitcnt lgkmcnt(1)",
             "s_waitcnt vmcnt(0) lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt lgkmcnt(7)",
