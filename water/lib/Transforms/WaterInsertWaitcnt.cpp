@@ -359,6 +359,15 @@ struct WaitcntRequirement {
     return changed;
   }
 
+  /// Join with another requirement, taking the maximum of the two.
+  WaitcntRequirement join(const WaitcntRequirement &other) const {
+    WaitcntRequirement result;
+    if (tensor_cnt.has_value() || other.tensor_cnt.has_value())
+      result.tensor_cnt =
+          std::max(tensor_cnt.value_or(0), other.tensor_cnt.value_or(0));
+    return result;
+  }
+
   std::optional<unsigned> getTensorCnt() const { return tensor_cnt; }
 
   bool isSameCounterType(const WaitcntRequirement &other) const {
@@ -582,13 +591,25 @@ public:
 
   void resetRequirement() { requirement = {}; }
 
-  /// Get the required waitcnt values
+  /// Get the required waitcnt values.
   const WaitcntRequirement &getRequirement() const { return requirement; }
 
-  /// Check if there's a waitcnt requirement
+  /// Check if there's a waitcnt requirement.
   bool hasRequirement() const { return requirement.hasRequirement(); }
 
-  /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
+  /// Get all pending ops requirements.
+  WaitcntRequirement getAllPendingOpsRequirements() const {
+    WaitcntRequirement result;
+    for (auto &pendingOps : pendingOpsLists) {
+      for (Operation *op : pendingOps->ops) {
+        result =
+            result.join(WaitcntRequirement::getOperationRequirement(op, false));
+      }
+    }
+    return result;
+  }
+
+  /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait.
   WaitcntRequirement
   checkMemoryDependency(Operation *op,
                         llvm::SmallSetVector<Operation *, 4> &barriers) const {
@@ -921,6 +942,7 @@ public:
 
     // Insert waitcnt operations based on analysis results
     IRRewriter rewriter(&getContext());
+    LDBG() << "Inserting waitcnt operations";
     op->walk([&](Operation *operation) {
       const WaitcntState *state = solver.lookupState<WaitcntState>(
           solver.getProgramPointAfter(operation));
@@ -928,6 +950,8 @@ public:
         return;
 
       const WaitcntRequirement &req = state->getRequirement();
+      LDBG() << "  Operation " << withoutRegions(operation)
+             << " requirement: " << req;
 
       auto getAttr = [&](std::optional<unsigned> cnt) -> IntegerAttr {
         if (!cnt.has_value())
@@ -942,6 +966,34 @@ public:
       amdgpu::MemoryCounterWaitOp::create(rewriter, operation->getLoc(),
                                           nullptr, nullptr, nullptr, nullptr,
                                           getAttr(req.getTensorCnt()));
+    });
+
+    // There may be a redundant requirement which were already added before the
+    // pass or when we merge control flow requiriment conservetively. Run the
+    // analysis again to detect them.
+    solver.eraseAllStates();
+
+    LDBG() << "Running analysis again to detect redundant waitcnts";
+    if (failed(solver.initializeAndRun(op)))
+      return signalPassFailure();
+
+    LDBG() << "Checking redundant waitcnts";
+    op->walk([&](amdgpu::MemoryCounterWaitOp wait) {
+      LDBG() << "  Checking redundant waitcnt: " << withoutRegions(wait);
+      const WaitcntState *state =
+          solver.lookupState<WaitcntState>(solver.getProgramPointBefore(wait));
+      if (!state)
+        return;
+
+      WaitcntRequirement req = state->getAllPendingOpsRequirements();
+      WaitcntRequirement opReq(wait);
+      LDBG() << "    All pending ops requirements: " << req;
+      LDBG() << "    Waitcnt requirement: " << opReq;
+
+      // No requirement means no in flight ops, so it's noop.
+      // If max number if in flight ops is less than the requirement, it's noop.
+      if (!req.hasRequirement() || req < opReq)
+        rewriter.eraseOp(wait);
     });
   }
 };
