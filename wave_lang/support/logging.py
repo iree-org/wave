@@ -41,5 +41,4 @@ def get_logger(name: str):
     return logger
 
 
-aot_logger = get_logger("wave.aot")
 runtime_logger = get_logger("wave.runtime")

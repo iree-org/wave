@@ -32,7 +32,6 @@ dependencies = [
     "dill",
     "iree-base-compiler",
     "iree-base-runtime",
-    "Jinja2",
     "ml_dtypes",
     "numpy",
     "torch",
@@ -66,9 +65,6 @@ docs = [
 Homepage = "https://iree.dev/"
 Repository = "https://github.com/iree-org/wave/"
 Documentation = "https://wave.readthedocs.io/en/latest/"
-
-[project.entry-points."torch_dynamo_backends"]
-# Placeholder for torch dynamo backend registrations
 
 [tool.setuptools.packages.find]
 include = ["wave_lang", "wave_lang.*"]

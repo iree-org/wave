@@ -489,9 +489,6 @@ class LaunchableWave(Launchable):
             )
             self.device_layout.dims[dim] *= safe_subs(constraint.count, idxc.subs)
 
-    def aot_execute(self, args, kwargs):
-        raise NotImplementedError("AOT execution for wave not implemented yet.")
-
     def eager_execute(self, args, kwargs):
         raise NotImplementedError("Eager execution for wave not implemented yet.")
 
