@@ -322,8 +322,8 @@ def _get_splat_input(src: Optional[Value]) -> Optional[Value]:
         return None
 
     op = src.owner.opview
-    if isinstance(op, vector_d.BroadcastOp) and not VectorType.isinstance(
-        op.source.type
+    if isinstance(op, vector_d.BroadcastOp) and not isinstance(
+        op.source.type, VectorType
     ):
         return op.source
 
@@ -422,7 +422,7 @@ def _create_llvm_read_write(
     elem_size_bytes = element_type.width // 8
 
     for idx, stride in zip(start_indices, strides):
-        if not IndexType.isinstance(idx.type):
+        if not isinstance(idx.type, IndexType):
             idx = arith_d.index_cast(IndexType.get(), idx)
         stride_val = arith_d.constant(IndexType.get(), stride * elem_size_bytes)
         stride_offset = arith_d.muli(idx, stride_val)
@@ -1162,8 +1162,8 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     dst_data_type = get_type_or_element_type(dst.ir_value.type)
 
     if not (
-        MemRefType.isinstance(src.ir_value.type)
-        and MemRefType.isinstance(dst.ir_value.type)
+        isinstance(src.ir_value.type, MemRefType)
+        and isinstance(dst.ir_value.type, MemRefType)
     ):
         op = get_custom(node)
         raise ValidationError(

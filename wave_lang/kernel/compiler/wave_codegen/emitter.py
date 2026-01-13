@@ -1163,14 +1163,14 @@ def cast_vector(emitter: WaveEmitter, value, *, element_type: Optional[IrType] =
     proxy_value = cast_py_value(emitter, value)
 
     # Cast scalar types correctly first.
-    if element_type and not ShapedType.isinstance(proxy_value.ir_value.type):
+    if element_type and not isinstance(proxy_value.ir_value.type, ShapedType):
         # Implicit scalar type promotion.
         proxy_value = ScalarBuilder.to_dtype(proxy_value, element_type)
 
     value = proxy_value.ir_value
 
     # After scalar promotion, promote to vector.
-    if VectorType.isinstance(value.type):
+    if isinstance(value.type, VectorType):
         # Already a vector. Coerce or return.
         if element_type is not None:
             value = ScalarBuilder.to_dtype(proxy_value, element_type).ir_value
@@ -1188,7 +1188,7 @@ def cast_scalar(emitter: WaveEmitter, value):
     value = proxy_value.ir_value
 
     # After scalar promotion, promote to vector.
-    if VectorType.isinstance(value.type):
+    if isinstance(value.type, VectorType):
         # Vector -> scalar.
         return vector_d.extract(value, static_position=[0], dynamic_position=[])
     else:
@@ -1259,7 +1259,7 @@ def cast_kernel_buffer(
         except:
             raise CodegenError(f"Could not find type for node {node}")
 
-    if not MemRefType.isinstance(ir_type):
+    if not isinstance(ir_type, MemRefType):
         raise CodegenError(
             f"Expected a KernelBuffer (aka. `memref`) but got `{ir_type}`"
         )

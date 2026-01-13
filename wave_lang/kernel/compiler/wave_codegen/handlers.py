@@ -343,7 +343,7 @@ def handle_apply_expr(emitter: WaveEmitter, node: fx.Node):
 
 def _to_scalar(val: Value) -> Value:
     src_type = val.type
-    if VectorType.isinstance(src_type):
+    if isinstance(src_type, VectorType):
         assert (src_type.rank == 0 and src_type.shape == []) or (
             src_type.rank == 1 and src_type.shape[0] == 1
         ), f"Only size 0 or 1 vectors are supported: got {src_type}"
@@ -536,7 +536,7 @@ def handle_atomic_op(op):
             lhs_data_type = get_type_or_element_type(lhs.ir_value.type)
             rhs_data_type = get_type_or_element_type(rhs.ir_value.type)
 
-            if not MemRefType.isinstance(rhs.ir_value.type):
+            if not isinstance(rhs.ir_value.type, MemRefType):
                 op = get_custom(node)
                 raise ValidationError(
                     f"Expected rhs to be Memref type for\n"
@@ -1417,8 +1417,8 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
         condition = _to_scalar(condition)
 
     cond_type = condition.type
-    assert IntegerType.isinstance(
-        cond_type
+    assert isinstance(
+        cond_type, IntegerType
     ), f"Condition must be integer, got {cond_type}"
 
     zero = arith_d.constant(cond_type, 0)
@@ -1899,7 +1899,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
     vector_src = cast_vector(emitter, register)
     vector_type = vector_src.type
     # Only support broadcasting vector<1xdtype> for now.
-    if not VectorType.isinstance(vector_type):
+    if not isinstance(vector_type, VectorType):
         raise NotImplementedError("Scalar src is not implemented yet for shuffleOp.")
     assert (
         vector_type.rank == 0 or vector_type.rank == 1
