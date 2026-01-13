@@ -3501,7 +3501,7 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-             "v_readfirstlane_b32 s5, v1",
+            "v_readfirstlane_b32 s5, v1",
             "v_readfirstlane_b32 s36, v8",
             "v_readfirstlane_b32 s37, v9",
             "v_readfirstlane_b32 s38, v10",
