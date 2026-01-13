@@ -58,6 +58,33 @@ def tweak_index(graph: fx.Graph):
             write_dependency.index[key].start = value.start + 1
 
 
+def count_barriers(graph: fx.Graph) -> int:
+    """Count the number of SharedMemoryBarrier nodes in the graph."""
+    count = 0
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, SharedMemoryBarrier):
+            count += 1
+    return count
+
+
+def insert_barrier_before_first_shared_read(graph: fx.Graph):
+    """
+    Find the first read from shared memory and insert a barrier before it.
+    This simulates a pre-existing barrier in the graph.
+    """
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, Read) and custom.write_dependency is not None:
+            # This is a read from shared memory (has write dependency)
+            with graph.inserting_before(node):
+                SharedMemoryBarrier(wait_async_ops=False).add_to_graph(
+                    graph, loc=custom.location
+                )
+            return True
+    return False
+
+
 # Input sizes
 M = tkl.sym.M
 N = tkl.sym.N
@@ -254,6 +281,87 @@ def test_minimum_placement_strategy():
 
     # CHECK-LABEL: test_minimum_placement_strategy
     # CHECK-COUNT-5: amdgpu.lds_barrier
+
+
+@tkw.wave_trace_only()
+def read_write_same_size(
+    a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+):
+    a_reg = tkw.read(a, elements_per_thread=4)
+    tkw.write(a_reg, c, elements_per_thread=4)
+
+
+@run_test
+def test_existing_barrier_not_duplicated():
+    """
+    Test that when a barrier already exists between producer and consumer,
+    the barrier placement pass does not insert a duplicate.
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(1, 1, 1), vector_shapes={M: 16, N: 16}
+        )
+    ]
+
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        add_get_results(trace)
+        infer_types(trace)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        tweak_index(graph)
+
+        # Manually insert a barrier before calling add_shared_memory_barriers
+        # This barrier will be between the write_shared and read_shared operations
+        inserted = insert_barrier_before_first_shared_read(graph)
+        assert inserted, "Failed to insert pre-existing barrier"
+
+        # Count barriers before
+        barriers_before = count_barriers(graph)
+
+        # Now run barrier placement - it should detect the existing barrier
+        # and NOT insert duplicates
+        add_shared_memory_barriers(trace)
+
+        # Count barriers after
+        barriers_after = count_barriers(graph)
+
+        print_trace(trace, False)
+
+        # Print summary for test verification
+        print(f"Barriers before: {barriers_before}")
+        print(f"Barriers after: {barriers_after}")
+
+    # The graph should have barriers between writes and reads
+    # But since we pre-inserted one, we should have only 1 barrier (not duplicated)
+    # CHECK: %allocate
+    # CHECK: %write_1_shared_M:0_N:0
+    # CHECK: %write_1_shared_M:0_N:1
+    # CHECK: %write_1_shared_M:1_N:0
+    # CHECK: %write_1_shared_M:1_N:1
+    # CHECK: %shared_memory_barrier
+    # CHECK-NEXT: %read_1_shared_M:0_N:0
+    # CHECK: %read_1_shared_M:0_N:1
+    # CHECK: %read_1_shared_M:1_N:0
+    # CHECK: %read_1_shared_M:1_N:1
+
+    # Verify only one barrier exists (the pre-existing one, no duplicate added)
+    # CHECK: Barriers before: 1
+    # CHECK: Barriers after: 1
 
 
 if __name__ == "__main__":
