@@ -736,6 +736,10 @@ static RegionSuccessor getRegionResults(ArrayRef<RegionSuccessor> successors,
   llvm_unreachable("Region not found, malformed SCF op?");
 }
 
+static OpWithFlags withoutRegions(Operation *op) {
+  return OpWithFlags(op, OpPrintingFlags().skipRegions());
+}
+
 /// Dense forward dataflow analysis for waitcnt insertion
 class WaitcntAnalysis : public DenseForwardDataFlowAnalysis<WaitcntState> {
 public:
@@ -748,15 +752,14 @@ public:
 
   LogicalResult visitOperation(Operation *op, const WaitcntState &before,
                                WaitcntState *after) override {
-    LDBG() << "Visiting: " << OpWithFlags(op, OpPrintingFlags().skipRegions());
+    LDBG() << "Visiting: " << withoutRegions(op);
     LDBG() << "  Before: " << before;
 
     // Start with the state before this operation
     WaitcntState newState = before;
 
     if (isBarrier(op)) {
-      LDBG() << "  Barrier: "
-             << OpWithFlags(op, OpPrintingFlags().skipRegions());
+      LDBG() << "  Barrier: " << withoutRegions(op);
       newState.addPendingOp(op);
       LDBG() << "  New state: " << newState;
       propagateIfChanged(after, after->join(newState));
@@ -779,7 +782,7 @@ public:
       // newState.setRequirement(opRequirement);
       LDBG() << "  Barriers found, requirement: " << opRequirement;
       for (Operation *barrier : barriers) {
-        LDBG() << "    " << *barrier;
+        LDBG() << "    " << withoutRegions(barrier);
         WaitcntState *beforeState =
             getOrCreate<WaitcntState>(getProgramPointBefore(barrier));
         WaitcntState *afterState =
@@ -793,7 +796,7 @@ public:
 
     // Check if this is an existing memory_counter_wait operation
     if (auto waitOp = dyn_cast<amdgpu::MemoryCounterWaitOp>(op)) {
-      LDBG() << "  Existing waitcnt operation: " << *waitOp;
+      LDBG() << "  Existing waitcnt operation: " << withoutRegions(waitOp);
       opRequirement.merge(WaitcntRequirement(waitOp));
     }
 
@@ -809,7 +812,7 @@ public:
     // Check if this is an async memory operation
     if (trackOp(op)) {
       // Add this operation to the pending list
-      LDBG() << "  Adding pending operation: " << *op;
+      LDBG() << "  Adding pending operation: " << withoutRegions(op);
       newState.addPendingOp(op);
     }
 
@@ -829,7 +832,7 @@ public:
                                             const WaitcntState &before,
                                             WaitcntState *after) override {
     LDBG() << "Visiting region branch control flow transfer: "
-           << OpWithFlags(branch, OpPrintingFlags().skipRegions());
+           << withoutRegions(branch);
     LDBG() << "  Region from: " << regionFrom;
     LDBG() << "  Region to: " << regionTo;
     LDBG() << "  Before: " << before;
