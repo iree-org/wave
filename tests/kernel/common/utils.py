@@ -103,6 +103,7 @@ class KernelMetadata:
     sgpr_count: int | None = None
     sgpr_spill_count: int | None = None
     waitcnt_ops: list[str] = field(default_factory=list)
+    readfirstlane_ops: list[str] = field(default_factory=list)
 
 
 def extract_kernel_metadata(asm_text: str) -> KernelMetadata:
@@ -147,10 +148,14 @@ def extract_kernel_metadata(asm_text: str) -> KernelMetadata:
     if sgpr_spill_match:
         metadata.sgpr_spill_count = int(sgpr_spill_match.group(1))
 
-    # Extract all waitcnt operations
-    # Pattern: s_waitcnt followed by any arguments
-    # Examples: s_waitcnt lgkmcnt(0), s_waitcnt vmcnt(0), etc.
-    waitcnt_pattern = re.compile(r"s_waitcnt\s+[^\n]+")
+    # Extract all wait instruction operations
+    # Pattern: s_waitcnt or s_wait_ followed by any arguments
+    # Examples: s_waitcnt lgkmcnt(0), s_wait_tensorcnt 0x0, etc
+    waitcnt_pattern = re.compile(r"s_wait(?:cnt|_\w*)\s*[^\n]*")
     metadata.waitcnt_ops = waitcnt_pattern.findall(asm_text)
+
+    # Extract all readfirstlane operations
+    readfirstlane_pattern = re.compile(r"v_readfirstlane\s*[^\n]*")
+    metadata.readfirstlane_ops = readfirstlane_pattern.findall(asm_text)
 
     return metadata

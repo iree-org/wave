@@ -26,6 +26,7 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.classes import CoalescingType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
+    extract_kernel_metadata,
     glob_asm_files,
     param_bool,
     perf_test,
@@ -3447,3 +3448,258 @@ def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
 
     torch_ref = torch.matmul(a.cpu(), b.cpu().t())
     assert_close(c.cpu(), torch_ref.to(torch.float32), atol=1e-2, rtol=1e-2)
+
+
+@use_water_backend_bool("use_water_backend")
+def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
+    shape = (1024, 1024, 1024)
+    mfma_variant = MMAType.GFX1250_F32_16x16x32_F16
+    gemm, options = get_tagged_BxA_T_gemm(
+        shape=shape,
+        block_shape=(256, 256, 64),
+        mfma_variant=mfma_variant,
+        threads_per_wave=32,
+        use_global_to_shared=True,
+        compile_to_mlir=False,
+    )
+
+    schedule = get_gfx1250_tbuf_gemm_schedule()
+    options.target = "gfx1250"
+    options.dump_intermediates = tmp_path
+    options.use_water_backend = use_water_backend
+    wave_compile(options, gemm, schedule)
+    asm_files = glob_asm_files(tmp_path)
+
+    assert len(asm_files) == 1, "Expected 1 ASM file"
+    text = asm_files[0].read_text()
+
+    metadata = extract_kernel_metadata(text)
+    if use_water_backend:
+        vgpr_count = 512
+        vgpr_spill_count = 10
+        sgpr_count = 50
+        sgpr_spill_count = 0
+        waitcounts = [
+            "s_wait_kmcnt 0x0",
+            "s_wait_xcnt 0x1",
+            "s_wait_xcnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_dscnt 0x10",
+            "s_wait_loadcnt 0x0",
+            "s_wait_dscnt 0x1",
+            "s_wait_dscnt 0x0",
+            "s_wait_loadcnt 0x0",
+            "s_wait_xcnt 0x0",
+            "s_wait_loadcnt_dscnt 0x10",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x4",
+            "s_wait_dscnt 0x0",
+        ]
+        readfirstlane_ops = [
+            "v_readfirstlane_b32 s5, v1",
+            "v_readfirstlane_b32 s20, v8",
+            "v_readfirstlane_b32 s21, v9",
+            "v_readfirstlane_b32 s22, v10",
+            "v_readfirstlane_b32 s23, v11",
+            "v_readfirstlane_b32 s36, v0",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s19, v0",
+            "v_readfirstlane_b32 s20, v8",
+            "v_readfirstlane_b32 s21, v9",
+            "v_readfirstlane_b32 s22, v10",
+            "v_readfirstlane_b32 s36, v0",
+            "v_readfirstlane_b32 s23, v11",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s20, v8",
+            "v_readfirstlane_b32 s21, v9",
+            "v_readfirstlane_b32 s22, v10",
+            "v_readfirstlane_b32 s23, v11",
+            "v_readfirstlane_b32 s36, v0",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s20, v8",
+            "v_readfirstlane_b32 s21, v9",
+            "v_readfirstlane_b32 s22, v10",
+            "v_readfirstlane_b32 s23, v11",
+            "v_readfirstlane_b32 s36, v0",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s39, v209 /*v465*/",
+            "v_readfirstlane_b32 s36, v206 /*v462*/",
+            "v_readfirstlane_b32 s37, v207 /*v463*/",
+            "v_readfirstlane_b32 s38, v208 /*v464*/",
+            "v_readfirstlane_b32 s40, v210 /*v466*/",
+            "v_readfirstlane_b32 s41, v211 /*v467*/",
+            "v_readfirstlane_b32 s42, v212 /*v468*/",
+            "v_readfirstlane_b32 s43, v213 /*v469*/",
+            "v_readfirstlane_b32 s44, v214 /*v470*/",
+            "v_readfirstlane_b32 s45, v5 /*v261*/",
+            "v_readfirstlane_b32 s46, v4 /*v260*/",
+            "v_readfirstlane_b32 s47, v215 /*v471*/",
+            "v_readfirstlane_b32 s36, v206 /*v462*/",
+            "v_readfirstlane_b32 s37, v207 /*v463*/",
+            "v_readfirstlane_b32 s38, v208 /*v464*/",
+            "v_readfirstlane_b32 s39, v209 /*v465*/",
+            "v_readfirstlane_b32 s40, v210 /*v466*/",
+            "v_readfirstlane_b32 s41, v211 /*v467*/",
+            "v_readfirstlane_b32 s42, v212 /*v468*/",
+            "v_readfirstlane_b32 s43, v213 /*v469*/",
+            "v_readfirstlane_b32 s44, v214 /*v470*/",
+            "v_readfirstlane_b32 s45, v5 /*v261*/",
+            "v_readfirstlane_b32 s46, v4 /*v260*/",
+            "v_readfirstlane_b32 s47, v215 /*v471*/",
+        ]
+    else:
+        vgpr_count = 512
+        vgpr_spill_count = 9
+        sgpr_count = 46
+        sgpr_spill_count = 0
+        waitcounts = [
+            "s_wait_kmcnt 0x0",
+            "s_wait_xcnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_dscnt 0x12",
+            "s_wait_dscnt 0x2",
+            "s_wait_xcnt 0x0",
+            "s_wait_loadcnt 0x0",
+            "s_wait_kmcnt 0x0",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x2",
+            "s_wait_dscnt 0x0",
+            "s_wait_loadcnt 0x0",
+            "s_wait_dscnt 0x12",
+            "s_wait_dscnt 0x10",
+            "s_wait_dscnt 0xe",
+            "s_wait_dscnt 0xc",
+            "s_wait_dscnt 0xa",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x4",
+            "s_wait_dscnt 0x2",
+            "s_wait_dscnt 0x0",
+        ]
+        readfirstlane_ops = [
+            "v_readfirstlane_b32 s4, v1",
+            "v_readfirstlane_b32 s28, v10",
+            "v_readfirstlane_b32 s30, v12",
+            "v_readfirstlane_b32 s31, v11",
+            "v_readfirstlane_b32 s20, v2",
+            "v_readfirstlane_b32 s21, v3",
+            "v_readfirstlane_b32 s29, v1",
+            "v_readfirstlane_b32 s22, v4",
+            "v_readfirstlane_b32 s23, v5",
+            "v_readfirstlane_b32 s24, v6",
+            "v_readfirstlane_b32 s25, v7",
+            "v_readfirstlane_b32 s26, v8",
+            "v_readfirstlane_b32 s27, v9",
+            "v_readfirstlane_b32 s36, v10",
+            "v_readfirstlane_b32 s2, v1",
+            "v_readfirstlane_b32 s38, v12",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s24, v2",
+            "v_readfirstlane_b32 s25, v3",
+            "v_readfirstlane_b32 s39, v11",
+            "v_readfirstlane_b32 s26, v4",
+            "v_readfirstlane_b32 s27, v5",
+            "v_readfirstlane_b32 s28, v6",
+            "v_readfirstlane_b32 s29, v7",
+            "v_readfirstlane_b32 s30, v8",
+            "v_readfirstlane_b32 s31, v9",
+            "v_readfirstlane_b32 s36, v10",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s38, v12",
+            "v_readfirstlane_b32 s39, v11",
+            "v_readfirstlane_b32 s24, v2",
+            "v_readfirstlane_b32 s25, v3",
+            "v_readfirstlane_b32 s26, v4",
+            "v_readfirstlane_b32 s27, v5",
+            "v_readfirstlane_b32 s28, v6",
+            "v_readfirstlane_b32 s29, v7",
+            "v_readfirstlane_b32 s30, v8",
+            "v_readfirstlane_b32 s31, v9",
+            "v_readfirstlane_b32 s36, v10",
+            "v_readfirstlane_b32 s37, v1",
+            "v_readfirstlane_b32 s38, v12",
+            "v_readfirstlane_b32 s39, v11",
+            "v_readfirstlane_b32 s24, v2",
+            "v_readfirstlane_b32 s25, v3",
+            "v_readfirstlane_b32 s26, v4",
+            "v_readfirstlane_b32 s27, v5",
+            "v_readfirstlane_b32 s28, v6",
+            "v_readfirstlane_b32 s29, v7",
+            "v_readfirstlane_b32 s30, v8",
+            "v_readfirstlane_b32 s31, v9",
+            "v_readfirstlane_b32 s36, v210 /*v466*/",
+            "v_readfirstlane_b32 s37, v211 /*v467*/",
+            "v_readfirstlane_b32 s38, v212 /*v468*/",
+            "v_readfirstlane_b32 s39, v213 /*v469*/",
+            "v_readfirstlane_b32 s40, v214 /*v470*/",
+            "v_readfirstlane_b32 s41, v215 /*v471*/",
+            "v_readfirstlane_b32 s42, v216 /*v472*/",
+            "v_readfirstlane_b32 s43, v217 /*v473*/",
+            "v_readfirstlane_b32 s28, v4 /*v260*/",
+            "v_readfirstlane_b32 s29, v5 /*v261*/",
+            "v_readfirstlane_b32 s30, v6 /*v262*/",
+            "v_readfirstlane_b32 s31, v7 /*v263*/",
+            "v_readfirstlane_b32 s36, v210 /*v466*/",
+            "v_readfirstlane_b32 s37, v211 /*v467*/",
+            "v_readfirstlane_b32 s38, v212 /*v468*/",
+            "v_readfirstlane_b32 s39, v213 /*v469*/",
+            "v_readfirstlane_b32 s40, v214 /*v470*/",
+            "v_readfirstlane_b32 s41, v215 /*v471*/",
+            "v_readfirstlane_b32 s42, v216 /*v472*/",
+            "v_readfirstlane_b32 s43, v217 /*v473*/",
+            "v_readfirstlane_b32 s28, v4 /*v260*/",
+            "v_readfirstlane_b32 s29, v5 /*v261*/",
+            "v_readfirstlane_b32 s30, v6 /*v262*/",
+            "v_readfirstlane_b32 s31, v7 /*v263*/",
+        ]
+
+    assert (
+        metadata.vgpr_count == vgpr_count
+    ), f"Expected {vgpr_count} VGPRs, got {metadata.vgpr_count}"
+    assert (
+        metadata.vgpr_spill_count == vgpr_spill_count
+    ), f"Expected {vgpr_spill_count} VGPR spills, got {metadata.vgpr_spill_count}"
+    assert (
+        metadata.sgpr_count == sgpr_count
+    ), f"Expected {sgpr_count} SGPRs, got {metadata.sgpr_count}"
+    assert (
+        metadata.sgpr_spill_count == sgpr_spill_count
+    ), f"Expected {sgpr_spill_count} SGPR spills, got {metadata.sgpr_spill_count}"
+    assert (
+        metadata.waitcnt_ops == waitcounts
+    ), f"Expected {waitcounts} waitcnt operations, got {metadata.waitcnt_ops}"
+    assert (
+        metadata.readfirstlane_ops == readfirstlane_ops
+    ), f"Expected {readfirstlane_ops} readfirstlane operations, got {metadata.readfirstlane_ops}"
