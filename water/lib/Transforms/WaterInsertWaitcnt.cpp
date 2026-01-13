@@ -514,6 +514,7 @@ public:
   /// Set the required waitcnt values
   void setRequirement(const WaitcntRequirement &req) {
     requirement = req;
+    cow();
     for (auto &pendingOps : pendingOpsLists) {
       SmallVector<Operation *> newPending;
       SmallVector<PendingOperations::TokenContainer> newPendingTokens;
@@ -564,6 +565,7 @@ public:
 
   void updateTokens(
       llvm::function_ref<void(Value, SmallVectorImpl<Value> &)> updateFunc) {
+    cow();
     for (auto &pendingOps : pendingOpsLists)
       pendingOps->updateTokens(updateFunc);
   }
@@ -668,7 +670,9 @@ private:
   mutable llvm::SmallDenseSet<Operation *> pendingOpsSet;
   mutable llvm::SmallDenseSet<Value> pendingOpsTokens;
 
-  /// Copy on write for pending operations lists.
+  /// List of pending ops are shared between multiple states to reduce memory
+  /// footprint. Call this before modifying the pending operations lists to
+  /// deduplicate them if necessary.
   void cow() {
     for (auto &pendingOps : pendingOpsLists) {
       if (pendingOps.use_count() > 1) {
@@ -803,6 +807,7 @@ public:
     // Check if this is an async memory operation
     if (trackOp(op)) {
       // Add this operation to the pending list
+      LDBG() << "  Adding pending operation: " << *op;
       newState.addPendingOp(op);
     }
 
@@ -872,7 +877,7 @@ public:
 
       // Add token propagated through region control flow.
       if (Value mappedValue = valuesMapping.lookup(value))
-        if (newTokens.empty() || newTokens.back() != mappedValue)
+        if (!llvm::is_contained(newTokens, mappedValue))
           newTokens.push_back(mappedValue);
     };
     newState.updateTokens(tokenUpdateFunc);
