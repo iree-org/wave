@@ -221,7 +221,8 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       "initializeIndexExprsBackward",
       (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
            "const ::wave::IndexExprsAnalysisInit &":$initObject,
-           "::wave::EmitErrorFn":$emitError),
+           "::wave::EmitErrorFn":$emitError,
+           "::wave::EmitDelayedErrorFn &":$delayedErrorEmitter),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
         return ::llvm::success();
@@ -235,6 +236,13 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       handling, e.g., operations with regions that may also want to capture
       index expressions of their block arguments or certain operations like MMA
       that also expect operand index expressions for legacy reasons.
+
+      The trailing arguments provide a mechanism for emitting errors. `emitError`
+      should be used to emit irrecoverable errors and stop the inference process
+      by returning `failure` from this method. `emitDelayedError` should be used
+      to emit errors that may be benign and will only be reported later if the
+      analysis could not converge to a specific index expression for this
+      operation.
       }],
       "::llvm::LogicalResult",
       "setIndexFromLattices",

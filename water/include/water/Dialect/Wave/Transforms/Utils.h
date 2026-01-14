@@ -11,6 +11,19 @@
 
 namespace wave {
 
+// Callback to generate a delayed diagnostic. The diagnostic message should be
+// attached to the argument. It may or may not be emitted.
+using EmitDelayedErrorFn = std::function<void(mlir::InFlightDiagnostic &)>;
+
+// Information to emit delayed errors.
+struct DelayedErrorEmitterInfo {
+  // Returns the delayed error for the given operation.
+  std::function<EmitDelayedErrorFn(mlir::Operation *)> getDelayedError;
+
+  // Returns true if there are any delayed errors.
+  std::function<bool()> hasDelayedErrors;
+};
+
 /// Get the hyperparameters from an ancestor operation.
 /// Returns nullptr if no hyperparameters are found.
 WaveHyperparameterAttr getHyperparameters(mlir::Operation *op);

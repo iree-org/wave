@@ -471,8 +471,6 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-// There is no inference source here so we can't infer.
-
 module attributes { wave.normal_form = #wave.normal_form<full_types> } {
   func.func @failed_to_infer_write(%src: !wave.tensor<[@M, @N] of f32>, %dst: !wave.tensor<[@M, @N] of f32, <global>>)
     attributes { wave.constraints = [
@@ -480,6 +478,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     ]} {
 
     // expected-error @below {{failed to infer index expressions for value to store}}
+    // expected-error @below {{the error above may be caused by the following: couldn't find vector shapes in the contiguity check}}
     wave.write %src, %dst : !wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32, <global>>
 
     return

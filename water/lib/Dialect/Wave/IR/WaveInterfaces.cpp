@@ -482,11 +482,11 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 //-----------------------------------------------------------------------------
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
-    : value(nullptr, kUninitializedState) {}
+    : value(nullptr, kUninitializedState), priority(kLowestPriority) {}
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    DictionaryAttr concreteValue)
-    : value(concreteValue, kSpecificTypeState) {}
+    DictionaryAttr concreteValue, int32_t priority)
+    : value(concreteValue, kSpecificTypeState), priority(priority) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
@@ -692,8 +692,8 @@ static bool isIndexExprMapFunctionOf(AffineMap map,
 // MMA) without creating the expression immediately.
 static FailureOr<AffineMap> getIndexExprStartJoinedMap(
     AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
-    ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols,
-    ArrayRef<Attribute> commonSymbols) {
+    ArrayRef<Attribute> rhsSymbols, int32_t lhsPriority, int32_t rhsPriority,
+    ArrayRef<Attribute> allSymbols, ArrayRef<Attribute> commonSymbols) {
   if (!lhs)
     return rhs;
   if (!rhs)
@@ -705,14 +705,24 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
   if (lhs == rhs)
     return lhs;
 
+  if (lhsPriority > rhsPriority) {
+    return lhs;
+  } else if (rhsPriority > lhsPriority) {
+    return rhs;
+  }
+
   AffineMap difference = simplifyAffineMap(subtractMaps(lhs, rhs));
+
+  // the thread-like part of the difference may exist if they have different
+  // priorities, at which point the part with higher priority prevails.
 
   MLIRContext *ctx = rhs.getContext();
   SmallVector<unsigned> threadLikePositions =
       getPositionsOfSymbols(getThreadLikeIndexSymbols(ctx), allSymbols);
   SmallVector<unsigned> nonThreadLikePositions =
       getPositionsOfSymbols(getNonThreadLikeIndexSymbols(ctx), allSymbols);
-  if (isIndexExprMapFunctionOf(difference, threadLikePositions) &&
+  if (lhsPriority == rhsPriority &&
+      isIndexExprMapFunctionOf(difference, threadLikePositions) &&
       isIndexExprMapFunctionOf(lhs, threadLikePositions) &&
       isIndexExprMapFunctionOf(rhs, threadLikePositions)) {
     return failure();
@@ -757,6 +767,30 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
       return failure();
   }
 
+  // if one has higher priority than another, take the thread-dependent part of
+  // the higher-priority one, handle the rest; otherwise handle everything
+  SmallVector<AffineExpr> localReplacements = symReplacements;
+  for (unsigned position : threadLikePositions)
+    localReplacements[position] = zeroExpr;
+  SmallVector<Attribute> lhsSymbolsFiltered = llvm::to_vector(lhsSymbols);
+  if (lhsPriority > rhsPriority) {
+    // nullify thread-like part of RHS
+    rhs = rhs.replaceDimsAndSymbols(/*dimReplacements=*/{}, localReplacements,
+                                    /*numResultDims=*/0,
+                                    /*numResultSyms=*/rhs.getNumSymbols());
+  } else if (rhsPriority > lhsPriority) {
+    // nullify thread-like part of LHS
+    lhs = lhs.replaceDimsAndSymbols(/*dimReplacements=*/{}, localReplacements,
+                                    /*numResultDims=*/0,
+                                    /*numResultSyms=*/lhs.getNumSymbols());
+    lhsSymbolsFiltered =
+        llvm::filter_to_vector(lhsSymbolsFiltered, [&](Attribute symbol) {
+          return !llvm::is_contained(
+              threadLikeIndexSymbols,
+              llvm::cast<wave::WaveIndexSymbolAttr>(symbol).getValue());
+        });
+  }
+
   // Obtain a part of the RHS map that is only a function of RHS-specific
   // symbols. For this, we replace all symbols appearing in the LHS map with
   // zero. Symbol replacements contain zeros at this point. Reuse that but set
@@ -765,7 +799,7 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
   // we don't duplicate it. At this point, we expect the caller to have removed
   // unused symbols from the symbol list.
   SmallVector<unsigned> lhsSymbolPositions =
-      getPositionsOfSymbols(lhsSymbols, allSymbols);
+      getPositionsOfSymbols(lhsSymbolsFiltered, allSymbols);
   for (unsigned i = 0, e = symReplacements.size(); i < e; ++i) {
     if (llvm::is_contained(lhsSymbolPositions, i))
       continue;
@@ -781,12 +815,19 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
 // point the join is the other map, or if they are equal. All other combinations
 // join to lattice top.
 static FailureOr<AffineMap> getIndexExprStepStrideJoinedMap(
-    AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
-    ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols) {
+    AffineMap lhs, AffineMap rhs, int32_t lhsPriority, int32_t rhsPriority,
+    ArrayRef<Attribute> lhsSymbols, ArrayRef<Attribute> rhsSymbols,
+    ArrayRef<Attribute> allSymbols) {
   if (!lhs)
     return rhs;
   if (!rhs)
     return lhs;
+
+  if (lhsPriority > rhsPriority) {
+    return lhs;
+  } else if (rhsPriority > lhsPriority) {
+    return rhs;
+  }
 
   lhs = wave::alignMapSymbols(lhs, lhsSymbols, allSymbols);
   rhs = wave::alignMapSymbols(rhs, rhsSymbols, allSymbols);
@@ -816,8 +857,8 @@ static FailureOr<AffineMap> getIndexExprStepStrideJoinedMap(
 // getIndexExprStepStrideJoinedMap for more details.
 static wave::WaveIndexMappingAttr
 getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
-                          wave::WaveIndexMappingAttr rhs) {
-
+                          wave::WaveIndexMappingAttr rhs, int32_t lhsPriority,
+                          int32_t rhsPriority) {
   // Collect all unique symbol names from both index mappings in order.
   llvm::SmallVector<Attribute> allSymbols;
   llvm::SetVector<Attribute> lhsSymbols(llvm::from_range, lhs.getSymbols());
@@ -828,17 +869,18 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
 
   FailureOr<AffineMap> joinedStart = getIndexExprStartJoinedMap(
       lhs.getStart(), rhs.getStart(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, commonSymbols.getArrayRef());
+      rhsSymbols.getArrayRef(), lhsPriority, rhsPriority, allSymbols,
+      commonSymbols.getArrayRef());
   if (failed(joinedStart))
     return nullptr;
   FailureOr<AffineMap> joinedStep = getIndexExprStepStrideJoinedMap(
-      lhs.getStep(), rhs.getStep(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols);
+      lhs.getStep(), rhs.getStep(), lhsPriority, rhsPriority,
+      lhsSymbols.getArrayRef(), rhsSymbols.getArrayRef(), allSymbols);
   if (failed(joinedStep))
     return nullptr;
   FailureOr<AffineMap> joinedStride = getIndexExprStepStrideJoinedMap(
-      lhs.getStride(), rhs.getStride(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols);
+      lhs.getStride(), rhs.getStride(), lhsPriority, rhsPriority,
+      lhsSymbols.getArrayRef(), rhsSymbols.getArrayRef(), allSymbols);
   if (failed(joinedStride))
     return nullptr;
 
@@ -876,7 +918,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
               namedAttr.getName().getValue());
         });
     return IndexExprsLatticeStorage(
-        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered));
+        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered),
+        rhs.getPriority());
   }
 
   if (rhs.isBottom())
@@ -909,17 +952,21 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     if (lhsValue == rhsValue)
       continue;
 
-    wave::WaveIndexMappingAttr joinedMapping =
-        getIndexExprsJoinMappings(lhsValue, rhsValue);
+    wave::WaveIndexMappingAttr joinedMapping = getIndexExprsJoinMappings(
+        lhsValue, rhsValue, lhs.getPriority(), rhs.getPriority());
     if (!joinedMapping)
       return IndexExprsLatticeStorage::top();
 
     result[namedAttr.getName()] = joinedMapping;
   }
   return IndexExprsLatticeStorage(
-      DictionaryAttr::get(ctx, llvm::map_to_vector(result, [](auto &&pair) {
-                            return NamedAttribute(pair.first, pair.second);
-                          })));
+      DictionaryAttr::get(ctx, llvm::map_to_vector(result,
+                                                   [](auto &&pair) {
+                                                     return NamedAttribute(
+                                                         pair.first,
+                                                         pair.second);
+                                                   })),
+      std::max(lhs.getPriority(), rhs.getPriority()));
 }
 
 wave::IndexExprsLatticeStorage
@@ -951,7 +998,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
     return bottom();
 
   return IndexExprsLatticeStorage(
-      DictionaryAttr::get(getConcreteValue().getContext(), filtered));
+      DictionaryAttr::get(getConcreteValue().getContext(), filtered),
+      getPriority());
 }
 
 wave::IndexExprsLatticeStorage
@@ -971,7 +1019,8 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         }
         return NamedAttribute(attr.getName(), value);
       });
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated));
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated),
+                                  getPriority());
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
@@ -980,7 +1029,7 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   } else if (isTop()) {
     os << "<top>";
   } else {
-    os << getConcreteValue();
+    os << "[pri: " << getPriority() << "] " << getConcreteValue();
   }
 }
 

@@ -37,21 +37,25 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr);
+        setIndexForValue(value, nullptr,
+                         wave::IndexExprsLatticeStorage::kHighestPriority);
         continue;
       }
 
-      auto dict = llvm::dyn_cast<DictionaryAttr>(attr);
-      if (!dict || llvm::any_of(dict.getValue(), [](NamedAttribute attr) {
-            return !llvm::isa<wave::WaveIndexMappingAttr>(attr.getValue());
-          })) {
-        return op->emitError()
-               << "expected " << attributeName
-               << " to be an array of "
-                  "dictionaries with WaveIndexMappingAttr or UnitAttr values";
+      auto array = llvm::dyn_cast<ArrayAttr>(attr);
+      auto priority = (array && !array.empty())
+                          ? llvm::dyn_cast<IntegerAttr>(array.getValue()[0])
+                          : IntegerAttr();
+      auto dict = (array && array.size() > 1)
+                      ? llvm::dyn_cast<DictionaryAttr>(array.getValue()[1])
+                      : DictionaryAttr();
+      if (!priority || !dict) {
+        return op->emitError() << "expected " << attributeName
+                               << " to be an array containing an integer "
+                                  "priority and a dictionary mapping";
       }
 
-      setIndexForValue(value, dict);
+      setIndexForValue(value, dict, priority.getInt());
     }
     return success();
   };
@@ -99,7 +103,8 @@ public:
     options.disableForward = getOperation()->getAttrOfType<UnitAttr>(
                                  "wave_test.disable_forward") != nullptr;
     options.overrideInitialization = overrideInitialization;
-    addWaveIndexExprsAnalyses(solver, symbolTable, options);
+    wave::DelayedErrorEmitterInfo delayedErrorInfo =
+        wave::addWaveIndexExprsAnalyses(solver, symbolTable, options);
 
     IRRewriter rewriter(&getContext());
     getOperation()->walk(
@@ -108,7 +113,8 @@ public:
     if (failed(wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
-    if (failed(setWaveIndexExprAnalysisResults(getOperation(), solver)))
+    if (failed(setWaveIndexExprAnalysisResults(getOperation(), solver,
+                                               delayedErrorInfo)))
       return signalPassFailure();
 
     getOperation()->walk([&](wave::IterateOp iterateOp) {

@@ -18,7 +18,7 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialec
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.logging import get_logger
 
-from ..._support.indexing import IndexSequence, IndexSymbol
+from ..._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
@@ -322,18 +322,72 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
         if isinstance(custom, GetResult):
             continue
 
+        # Assumptions on symbols may be insufficiently tight, in particular for
+        # non-counting symbols we can assume strict positivity, which allows us
+        # to get rid of Max(1, ...) expressions that otherwise appear on the
+        # python side.
+        def ensure_symbols_positive(
+            seqs: dict[IndexSymbol, IndexSequence],
+        ) -> dict[IndexSymbol, IndexSequence]:
+            all_symbols = set()
+            for _, seq in seqs.items():
+                if isinstance(seq.start, sympy.Expr):
+                    all_symbols.update(seq.start.free_symbols)
+                if isinstance(seq.size, sympy.Expr):
+                    all_symbols.update(seq.size.free_symbols)
+                if isinstance(seq.stride, sympy.Expr):
+                    all_symbols.update(seq.stride.free_symbols)
+
+            symbol_remapping = {
+                symbol: (
+                    sympy.Symbol(symbol.name, nonnegative=True, integer=True)
+                    if symbol.name.startswith("$")
+                    else sympy.Symbol(symbol.name, positive=True, integer=True)
+                )
+                for symbol in all_symbols
+            }
+            return {
+                dim: IndexSequence(
+                    start=(
+                        sympy.simplify(
+                            seq.start.subs(symbol_remapping, simultaneous=True)
+                        )
+                        if isinstance(seq.start, IndexExpr)
+                        else seq.start
+                    ),
+                    size=(
+                        sympy.simplify(
+                            seq.size.subs(symbol_remapping, simultaneous=True)
+                        )
+                        if isinstance(seq.size, IndexExpr)
+                        else seq.size
+                    ),
+                    stride=(
+                        sympy.simplify(
+                            seq.stride.subs(symbol_remapping, simultaneous=True)
+                        )
+                        if isinstance(seq.stride, IndexExpr)
+                        else seq.stride
+                    ),
+                )
+                for dim, seq in node.index.items()
+            }
+
+        node_index = ensure_symbols_positive(node.index)
+        inferred_index = ensure_symbols_positive(inferred_index)
+
         # Check that that indices match, raise an error if they don't. Start by
         # a trivial direct comparison, fall back to computing and simplifying
         # the difference. The latter can raise with additional information,
         # which this wants to preserve.
         try:
-            if node.index != inferred_index and not _check_index_difference_is_zero(
-                node.index, inferred_index
+            if node_index != inferred_index and not _check_index_difference_is_zero(
+                node_index, inferred_index
             ):
                 raise ValueError("mismatching indices")
         except ValueError as e:
             raise RuntimeError(
-                f"Index for node {get_custom(node)}, {get_custom(node).index} does not match inferred index {inferred_index}."
+                f"Index for node {get_custom(node)}, {node_index} does not match inferred index {inferred_index}."
             ) from e
 
 

@@ -18,9 +18,9 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    %lhs_override = wave.read %lhs { wave_test.override_result_index = [{
+    %lhs_override = wave.read %lhs { wave_test.override_result_index = [[3, {
         N = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    }]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     // expected-error @below {{conflict when propagating forward to the result lattice in MmaOp}}
     // expected-note @below {{Result lattice}}
     // expected-note @below {{LHS lattice}}
@@ -49,9 +49,9 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-note @below {{LHS lattice}}
     // expected-note @below {{result lattice}}
     %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
-      wave_test.override_result_index = [
+      wave_test.override_result_index = [[3,
         {K = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}
-      ]
+      ]]
     }
          : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
          -> !wave.tensor<[@M, @N] of f32>
@@ -77,7 +77,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
       wave_test.override_operand_index = [
         unit,
-        {N = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}
+        [3, {N = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}]
       ]
     }
          : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
@@ -105,7 +105,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       wave_test.override_operand_index = [
         unit,
         unit,
-        {M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}
+        [3, {M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}]
       ]
     }
          : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
@@ -126,18 +126,18 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    %add = wave.add %a, %b {wave_test.override_result_index = [{
+    %add = wave.add %a, %b {wave_test.override_result_index = [[1,{
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
 
     // expected-error @below {{conflict when propagating index expressions from result to operand #0}}
     // expected-note @below {{original operand lattice}}
     // expected-note @below {{result #0 lattice}}
-    %mul = wave.mul %add, %c {wave_test.override_result_index = [{
+    %mul = wave.mul %add, %c {wave_test.override_result_index = [[1, {
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     return %mul : !wave.tensor<[@M, @K] of f16>
   }
 }
@@ -154,19 +154,19 @@ module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    %add = wave.add %a, %b {wave_test.override_result_index = [{
+    %add = wave.add %a, %b {wave_test.override_result_index = [[1, {
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
 
     // expected-error @below {{conflict when propagating index expressions from operand to result #0}}
     // expected-note @below {{original result lattice}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %mul = wave.mul %add, %c {wave_test.override_result_index = [{
+    %mul = wave.mul %add, %c {wave_test.override_result_index = [[1, {
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     return %mul : !wave.tensor<[@M, @K] of f16>
   }
 }
@@ -186,13 +186,13 @@ module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %add = wave.add %a, %b {wave_test.override_operand_index = [{
+    %add = wave.add %a, %b {wave_test.override_operand_index = [[1, {
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }, {
+    }], [1, {
       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 44, 1, 1)>,
       K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    }]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
 
     return %add : !wave.tensor<[@M, @K] of f16>
   }
@@ -236,11 +236,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -263,11 +263,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (<NULL>, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -290,9 +290,9 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    },
+    }],
        unit  // will default-initialize to bottom.
     ]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
@@ -317,11 +317,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (0, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -343,11 +343,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 1, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -369,11 +369,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 2, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 1, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -396,11 +396,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1,{
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 3, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 2, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -422,11 +422,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 3)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -448,11 +448,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -474,11 +474,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, T0, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, T0, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -500,11 +500,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0, T0, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0, WG0, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -528,11 +528,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 40, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -555,11 +555,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<WG1>] -> (WG0, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<WG1>] -> (WG1, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -583,11 +583,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -610,11 +610,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0 + 2, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 + 2 , 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -637,11 +637,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)
-    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
-    }, {
+    }], [1, {
        M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0, 1, 1)>
-    }]}
+    }]]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
   }
@@ -667,11 +667,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       // CHECK: wave.add
       // CHECK-SAME: index
       // CHECK-SAME: M : [#wave.index_symbol<WG0>, #wave.iter<"K">] -> (WG0 + _Iter_K, 1, 1)
-      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
-      }, {
+      }], [1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K, 1, 1)>
-      }]}
+      }]]}
       : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
 
       wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
@@ -699,11 +699,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       // CHECK: wave.add
       // CHECK-SAME: index
       // CHECK-SAME: M : [#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)
-      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
-      }, {
+      }], [1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
-      }]}
+      }]]}
       : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
 
       wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
@@ -741,11 +741,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
         // CHECK: wave.add
         // CHECK-SAME: index
         // CHECK-SAME: M : [#wave.iter<"K">, #wave.iter<"M">] -> (_Iter_K + _Iter_M, 1, 1)
-        %partial_result = wave.add %a_arg, %b_arg {wave_test.override_operand_index = [{
+        %partial_result = wave.add %a_arg, %b_arg {wave_test.override_operand_index = [[1, {
           M = #wave<index_mapping[#wave.iter<"M">] -> (_Iter_M, 1, 1)>
-        }, {
+        }], [1, {
           M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K, 1, 1)>
-        }]}
+        }]]}
         : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
 
         wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
@@ -776,11 +776,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       // expected-error @below {{incompatible operand lattices when propagating from those to result}}
       // expected-note @below {{operand #0 lattice}}
       // expected-note @below {{operand #1 lattice}}
-      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
-      }, {
+      }], [1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K * 2, 1, 1)>
-      }]}
+      }]]}
       : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
 
       wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
@@ -808,11 +808,11 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     %b_reg = wave.read %b : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
     %result = wave.iterate @K iter_args(%a) {
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
-      %partial_result = wave.add %a_arg, %b_reg {wave_test.override_operand_index = [{
+      %partial_result = wave.add %a_arg, %b_reg {wave_test.override_operand_index = [[1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
-      }, {
+      }], [1, {
         M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
-      }]}
+      }]]}
       : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
 
       wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
@@ -839,13 +839,13 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: index
     // CHECK: M : [] -> (42, 1, <NULL>)
     wave.write %a, %b {wave_test.override_operand_index = [
-      unit, {
+      unit, [1, {
       M = #wave<index_mapping[#wave.iter<"K">] -> (<NULL>, 1, <NULL>)>
-    }]
+    }]]
     } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
-    %c_reg = wave.read %c {wave_test.override_result_index = [{
+    %c_reg = wave.read %c {wave_test.override_result_index = [[1, {
       M = #wave<index_mapping[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
-    }]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     wave.write %c_reg, %b : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
     return
   }
@@ -871,16 +871,16 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: index
     // CHECK: M : [] -> (1, <NULL>, <NULL>)
     wave.write %a, %b {wave_test.override_operand_index = [
-      unit, {
+      unit, [1, {
       M = #wave<index_mapping[#wave.iter<"K">] -> (1, <NULL>, <NULL>)>
-    }]
+    }]]
     } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
     // CHECK: wave.read
     // CHECK: index
     // CHECK: M : [] -> (42, <NULL>, <NULL>)
-    %c_reg = wave.read %c {wave_test.override_result_index = [{
+    %c_reg = wave.read %c {wave_test.override_result_index = [[1, {
       M = #wave<index_mapping[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
-    }]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     wave.write %c_reg, %b : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
     return
   }

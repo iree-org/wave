@@ -360,7 +360,8 @@ def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
-    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+                              ["initializeIndexExprsBackward"]>,
     RequiresIndexExprsSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{

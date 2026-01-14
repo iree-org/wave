@@ -25,12 +25,14 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/raw_ostream.h"
 #include <type_traits>
 
 using namespace mlir;
 
 #define DEBUG_TYPE "wave-infer-types"
 
+using namespace mlir;
 using wave::ElementsPerThreadLatticeValue;
 using wave::IndexExprsLatticeStorage;
 
@@ -1192,7 +1194,10 @@ public:
                     wave::applyConstraint(tilingConstraint)}});
               LDBG() << "setting iterate block argument lattice " << capture
                      << " from " << PrintNoRegions(iterateOp) << " to " << dict;
-              unsafeSet(getLatticeElement(capture), dict);
+              unsafeSet(
+                  getLatticeElement(capture),
+                  wave::IndexExprsLatticeStorage(
+                      dict, wave::IndexExprsLatticeStorage::kLowestPriority));
             }
           }
         }
@@ -1204,11 +1209,12 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value),
+                          wave::IndexExprsLatticeStorage(dict, priority));
               })))
         return llvm::failure();
     }
@@ -1406,9 +1412,18 @@ public:
     }
   }
 
+  // Return true if there are pending error reports.
+  bool hasDelayedErrors() const { return !delayedErrors.empty(); }
+
+  // Return the emitter of a pending error report for the given operation.
+  wave::EmitDelayedErrorFn getDelayedError(Operation *op) const {
+    return delayedErrors.lookup_or(op, wave::EmitDelayedErrorFn());
+  }
+
 private:
   bool initialized = false;
   wave::OverrideInitializationFn overrideInitialization;
+  llvm::SmallDenseMap<Operation *, wave::EmitDelayedErrorFn> delayedErrors;
 };
 
 class IndexExprsBackwardAnalysis
@@ -1463,9 +1478,14 @@ public:
 
           LDBG() << "initializing index expressions backward for "
                  << PrintNoRegions(op);
+          wave::EmitDelayedErrorFn delayedErrorEmitter = nullptr;
           if (llvm::failed(iface.initializeIndexExprsBackward(
-                  operandExprs, *initObject, emitError)))
+                  operandExprs, *initObject, emitError, delayedErrorEmitter)))
             return WalkResult::interrupt();
+          if (delayedErrorEmitter) {
+            LDBG() << "delayed error recorded\n";
+            delayedErrors[op] = delayedErrorEmitter;
+          }
           for (auto &&[i, operand, lattice] :
                llvm::enumerate(op->getOperands(), operandExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(operand);
@@ -1491,11 +1511,12 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value),
+                          wave::IndexExprsLatticeStorage(dict, priority));
               })))
         return llvm::failure();
     }
@@ -1670,9 +1691,18 @@ public:
     // by the forward analysis.
   }
 
+  // Returns true if there are any delayed errors.
+  bool hasDelayedErrors() const { return !delayedErrors.empty(); }
+
+  // Returns the delayed error emitter for the given operation.
+  wave::EmitDelayedErrorFn getDelayedError(Operation *op) const {
+    return delayedErrors.lookup_or(op, wave::EmitDelayedErrorFn());
+  }
+
 private:
   bool initialized = false;
   wave::OverrideInitializationFn overrideInitialization;
+  llvm::SmallDenseMap<Operation *, wave::EmitDelayedErrorFn, 4> delayedErrors;
 };
 
 namespace {
@@ -1696,16 +1726,17 @@ public:
     config.setInterprocedural(false);
     DataFlowSolver solver(config);
 
-    solver.load<dataflow::DeadCodeAnalysis>();
-    solver.load<dataflow::SparseConstantPropagation>();
-    wave::addWaveIndexExprsAnalyses(solver, symbolTable);
+    solver.load<mlir::dataflow::DeadCodeAnalysis>();
+    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    wave::DelayedErrorEmitterInfo delayedErrorInfo =
+        wave::addWaveIndexExprsAnalyses(solver, symbolTable);
 
     if (llvm::failed(
             wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
-    if (llvm::failed(
-            wave::setWaveIndexExprAnalysisResults(getOperation(), solver)))
+    if (llvm::failed(wave::setWaveIndexExprAnalysisResults(
+            getOperation(), solver, delayedErrorInfo)))
       return signalPassFailure();
 
     getOperation()->walk([&](wave::IterateOp iterateOp) {
@@ -1719,21 +1750,46 @@ public:
 };
 } // namespace
 
-void wave::addWaveIndexExprsAnalyses(
-    DataFlowSolver &solver, SymbolTableCollection &symbolTable,
-    wave::WaveIndexExprsAnalysisOptions options) {
+wave::DelayedErrorEmitterInfo
+wave::addWaveIndexExprsAnalyses(DataFlowSolver &solver,
+                                SymbolTableCollection &symbolTable,
+                                wave::WaveIndexExprsAnalysisOptions options) {
+  IndexExprsForwardAnalysis *forward = nullptr;
   if (!options.disableForward) {
-    solver.load<IndexExprsForwardAnalysis>(options.overrideInitialization);
+    forward =
+        solver.load<IndexExprsForwardAnalysis>(options.overrideInitialization);
   }
+  IndexExprsBackwardAnalysis *backward = nullptr;
   if (!options.disableBackward) {
-    solver.load<IndexExprsBackwardAnalysis>(symbolTable,
-                                            options.overrideInitialization);
+    backward = solver.load<IndexExprsBackwardAnalysis>(
+        symbolTable, options.overrideInitialization);
   }
+
+  // Note that these lambdas are stored and used later so they must not capture
+  // anything that has a function-level lifetime.
+  wave::DelayedErrorEmitterInfo delayedErrorEmitterInfo;
+  delayedErrorEmitterInfo.getDelayedError =
+      [forward, backward](Operation *op) -> wave::EmitDelayedErrorFn {
+    if (forward) {
+      if (wave::EmitDelayedErrorFn delayedError = forward->getDelayedError(op))
+        return delayedError;
+    }
+    if (backward) {
+      return backward->getDelayedError(op);
+    }
+    return nullptr;
+  };
+  delayedErrorEmitterInfo.hasDelayedErrors = [forward, backward]() {
+    return (forward && forward->hasDelayedErrors()) ||
+           (backward && backward->hasDelayedErrors());
+  };
+  return delayedErrorEmitterInfo;
 }
 
-LogicalResult
-wave::setWaveIndexExprAnalysisResults(Operation *top,
-                                      const DataFlowSolver &solver) {
+LogicalResult wave::setWaveIndexExprAnalysisResults(
+    Operation *top, const DataFlowSolver &solver,
+    const DelayedErrorEmitterInfo &delayedErrorInfo) {
+  bool hadFailures = false;
   WalkResult walkResult =
       top->walk([&](wave::WaveInferIndexExprsOpInterface iface) {
         auto getLatticeValue = [&](Value value) {
@@ -1746,10 +1802,20 @@ wave::setWaveIndexExprAnalysisResults(Operation *top,
         llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
             llvm::map_to_vector(iface->getResults(), getLatticeValue);
 
-        if (llvm::failed(iface.setIndexFromLattices(operandExprs, resultExprs)))
-          return WalkResult::interrupt();
-
+        // Don't stop on the first reported error. We may have some delayed
+        // errors that would be useful to report here, but we need to wait and
+        // see if the operation they are attached to actually has had inference
+        // issues as some errors may be corrected.
+        if (failed(iface.setIndexFromLattices(operandExprs, resultExprs))) {
+          hadFailures = true;
+          if (auto delayedError = delayedErrorInfo.getDelayedError(iface)) {
+            InFlightDiagnostic diag =
+                iface->emitError()
+                << "the error above may be caused by the following: ";
+            delayedError(diag);
+          }
+        }
         return WalkResult::advance();
       });
-  return llvm::failure(walkResult.wasInterrupted());
+  return llvm::failure(hadFailures || walkResult.wasInterrupted());
 }
