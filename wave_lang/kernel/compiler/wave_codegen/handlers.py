@@ -1708,12 +1708,6 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if tensor_wait:
-        rocdl_d.s_wait_tensorcnt(0)
-
-    if barId != CLUSTER_BARRIER_ID:
-        rocdl_d.s_wait_dscnt(0)
-
     # For cluster barriers (barId == -3), only wave 0 should signal
     if barId == CLUSTER_BARRIER_ID:
         hw_constraint = emitter.hardware_constraint

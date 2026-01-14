@@ -169,4 +169,21 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterInsertWaitcnt : Pass<"water-insert-waitcnt"> {
+  let summary = "Insert wait instructions for asynchronous memory operations";
+  let description = [{
+    This pass analyzes asynchronous memory operations and inserts appropriate
+    wait/synchronization instructions to ensure memory operations complete
+    before their results are used.
+
+    The pass tracks dependencies between async memory operations,
+    maintaining scoreboards to determine when waits are necessary. It handles:
+    - Read-after-write (RAW) dependencies
+    - Write-after-read (WAR) dependencies
+  }];
+  let dependentDialects = [
+    "::mlir::amdgpu::AMDGPUDialect",
+  ];
+}
+
 #endif // WATER_PASSES
