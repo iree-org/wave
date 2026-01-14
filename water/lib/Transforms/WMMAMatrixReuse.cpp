@@ -24,73 +24,48 @@ namespace mlir::water {
 
 namespace {
 
+// clang-format off
+/// List of all ROCDL WMMA operations that support reuseA/reuseB flags.
+#define ROCDL_WMMA_OPS_WITH_REUSE                                              \
+    ROCDL::wmma_f32_16x16x4_f32,                                               \
+    ROCDL::wmma_f32_16x16x32_bf16,                                             \
+    ROCDL::wmma_f32_16x16x32_f16,                                              \
+    ROCDL::wmma_f16_16x16x32_f16,                                              \
+    ROCDL::wmma_bf16_16x16x32_bf16,                                            \
+    ROCDL::wmma_bf16f32_16x16x32_bf16,                                         \
+    ROCDL::wmma_f32_16x16x64_fp8_fp8,                                          \
+    ROCDL::wmma_f32_16x16x64_fp8_bf8,                                          \
+    ROCDL::wmma_f32_16x16x64_bf8_fp8,                                          \
+    ROCDL::wmma_f32_16x16x64_bf8_bf8,                                          \
+    ROCDL::wmma_f16_16x16x64_fp8_fp8,                                          \
+    ROCDL::wmma_f16_16x16x64_fp8_bf8,                                          \
+    ROCDL::wmma_f16_16x16x64_bf8_fp8,                                          \
+    ROCDL::wmma_f16_16x16x64_bf8_bf8,                                          \
+    ROCDL::wmma_f32_16x16x128_fp8_fp8,                                         \
+    ROCDL::wmma_f32_16x16x128_fp8_bf8,                                         \
+    ROCDL::wmma_f32_16x16x128_bf8_fp8,                                         \
+    ROCDL::wmma_f32_16x16x128_bf8_bf8,                                         \
+    ROCDL::wmma_f16_16x16x128_fp8_fp8,                                         \
+    ROCDL::wmma_f16_16x16x128_fp8_bf8,                                         \
+    ROCDL::wmma_f16_16x16x128_bf8_fp8,                                         \
+    ROCDL::wmma_f16_16x16x128_bf8_bf8,                                         \
+    ROCDL::wmma_i32_16x16x64_iu8,                                              \
+    ROCDL::wmma_scale_f32_16x16x128_f8f6f4,                                    \
+    ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,                                  \
+    ROCDL::wmma_scale_f32_32x16x128_f4,                                        \
+    ROCDL::wmma_scale16_f32_32x16x128_f4
+// clang-format on
+
 /// Returns true if the operation is a ROCDL WMMA operation that supports
 /// reuseA/reuseB flags (gfx1250 variants).
 static bool isWMMAWithReuse(Operation *op) {
-  // clang-format off
-  return isa<
-      // ModsAll_Reuse ops (signA, signB, modC, reuseA, reuseB).
-      ROCDL::wmma_f32_16x16x4_f32,
-      ROCDL::wmma_f32_16x16x32_bf16,
-      ROCDL::wmma_f32_16x16x32_f16,
-      ROCDL::wmma_f16_16x16x32_f16,
-      ROCDL::wmma_bf16_16x16x32_bf16,
-      // ModsAll_Diff op.
-      ROCDL::wmma_bf16f32_16x16x32_bf16,
-      // ModsC ops (modC, reuseA, reuseB).
-      ROCDL::wmma_f32_16x16x64_fp8_fp8,
-      ROCDL::wmma_f32_16x16x64_fp8_bf8,
-      ROCDL::wmma_f32_16x16x64_bf8_fp8,
-      ROCDL::wmma_f32_16x16x64_bf8_bf8,
-      ROCDL::wmma_f16_16x16x64_fp8_fp8,
-      ROCDL::wmma_f16_16x16x64_fp8_bf8,
-      ROCDL::wmma_f16_16x16x64_bf8_fp8,
-      ROCDL::wmma_f16_16x16x64_bf8_bf8,
-      ROCDL::wmma_f32_16x16x128_fp8_fp8,
-      ROCDL::wmma_f32_16x16x128_fp8_bf8,
-      ROCDL::wmma_f32_16x16x128_bf8_fp8,
-      ROCDL::wmma_f32_16x16x128_bf8_bf8,
-      ROCDL::wmma_f16_16x16x128_fp8_fp8,
-      ROCDL::wmma_f16_16x16x128_fp8_bf8,
-      ROCDL::wmma_f16_16x16x128_bf8_fp8,
-      ROCDL::wmma_f16_16x16x128_bf8_bf8,
-      // ModsABClamp op.
-      ROCDL::wmma_i32_16x16x64_iu8,
-      // Scale ops.
-      ROCDL::wmma_scale_f32_16x16x128_f8f6f4,
-      ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,
-      ROCDL::wmma_scale_f32_32x16x128_f4,
-      ROCDL::wmma_scale16_f32_32x16x128_f4
-      >(op);
-  // clang-format on
+  return isa<ROCDL_WMMA_OPS_WITH_REUSE>(op);
 }
 
 /// Helper to get matrix A operand from any WMMA op with reuse support.
-/// Returns the A matrix Value, or nullptr if not found.
 static Value getMatrixA(Operation *op) {
-  // Use TypeSwitch to handle different WMMA op signatures.
-  // ModsAll_Reuse/ModsAll_Diff: operands are (a, b, c).
-  // ModsC: operands are (a, b, c).
-  // ModsABClamp: operands are (a, b, c).
-  // Scale: operands are (a, b, c, scaleA, scaleB).
-  // In all cases, A is the first operand.
   return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<
-          ROCDL::wmma_f32_16x16x4_f32, ROCDL::wmma_f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x32_f16, ROCDL::wmma_f16_16x16x32_f16,
-          ROCDL::wmma_bf16_16x16x32_bf16, ROCDL::wmma_bf16f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x64_fp8_fp8, ROCDL::wmma_f32_16x16x64_fp8_bf8,
-          ROCDL::wmma_f32_16x16x64_bf8_fp8, ROCDL::wmma_f32_16x16x64_bf8_bf8,
-          ROCDL::wmma_f16_16x16x64_fp8_fp8, ROCDL::wmma_f16_16x16x64_fp8_bf8,
-          ROCDL::wmma_f16_16x16x64_bf8_fp8, ROCDL::wmma_f16_16x16x64_bf8_bf8,
-          ROCDL::wmma_f32_16x16x128_fp8_fp8, ROCDL::wmma_f32_16x16x128_fp8_bf8,
-          ROCDL::wmma_f32_16x16x128_bf8_fp8, ROCDL::wmma_f32_16x16x128_bf8_bf8,
-          ROCDL::wmma_f16_16x16x128_fp8_fp8, ROCDL::wmma_f16_16x16x128_fp8_bf8,
-          ROCDL::wmma_f16_16x16x128_bf8_fp8, ROCDL::wmma_f16_16x16x128_bf8_bf8,
-          ROCDL::wmma_i32_16x16x64_iu8, ROCDL::wmma_scale_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale_f32_32x16x128_f4,
-          ROCDL::wmma_scale16_f32_32x16x128_f4>(
+      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
           [](auto wmmaOp) { return wmmaOp.getA(); })
       .Default([](Operation *) { return Value(); });
 }
@@ -98,68 +73,21 @@ static Value getMatrixA(Operation *op) {
 /// Helper to get matrix B operand from any WMMA op with reuse support.
 static Value getMatrixB(Operation *op) {
   return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<
-          ROCDL::wmma_f32_16x16x4_f32, ROCDL::wmma_f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x32_f16, ROCDL::wmma_f16_16x16x32_f16,
-          ROCDL::wmma_bf16_16x16x32_bf16, ROCDL::wmma_bf16f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x64_fp8_fp8, ROCDL::wmma_f32_16x16x64_fp8_bf8,
-          ROCDL::wmma_f32_16x16x64_bf8_fp8, ROCDL::wmma_f32_16x16x64_bf8_bf8,
-          ROCDL::wmma_f16_16x16x64_fp8_fp8, ROCDL::wmma_f16_16x16x64_fp8_bf8,
-          ROCDL::wmma_f16_16x16x64_bf8_fp8, ROCDL::wmma_f16_16x16x64_bf8_bf8,
-          ROCDL::wmma_f32_16x16x128_fp8_fp8, ROCDL::wmma_f32_16x16x128_fp8_bf8,
-          ROCDL::wmma_f32_16x16x128_bf8_fp8, ROCDL::wmma_f32_16x16x128_bf8_bf8,
-          ROCDL::wmma_f16_16x16x128_fp8_fp8, ROCDL::wmma_f16_16x16x128_fp8_bf8,
-          ROCDL::wmma_f16_16x16x128_bf8_fp8, ROCDL::wmma_f16_16x16x128_bf8_bf8,
-          ROCDL::wmma_i32_16x16x64_iu8, ROCDL::wmma_scale_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale_f32_32x16x128_f4,
-          ROCDL::wmma_scale16_f32_32x16x128_f4>(
+      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
           [](auto wmmaOp) { return wmmaOp.getB(); })
       .Default([](Operation *) { return Value(); });
 }
 
 /// Sets the reuseA flag on a WMMA operation.
 static void setReuseA(Operation *op, bool reuse) {
-  llvm::TypeSwitch<Operation *>(op)
-      .Case<
-          ROCDL::wmma_f32_16x16x4_f32, ROCDL::wmma_f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x32_f16, ROCDL::wmma_f16_16x16x32_f16,
-          ROCDL::wmma_bf16_16x16x32_bf16, ROCDL::wmma_bf16f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x64_fp8_fp8, ROCDL::wmma_f32_16x16x64_fp8_bf8,
-          ROCDL::wmma_f32_16x16x64_bf8_fp8, ROCDL::wmma_f32_16x16x64_bf8_bf8,
-          ROCDL::wmma_f16_16x16x64_fp8_fp8, ROCDL::wmma_f16_16x16x64_fp8_bf8,
-          ROCDL::wmma_f16_16x16x64_bf8_fp8, ROCDL::wmma_f16_16x16x64_bf8_bf8,
-          ROCDL::wmma_f32_16x16x128_fp8_fp8, ROCDL::wmma_f32_16x16x128_fp8_bf8,
-          ROCDL::wmma_f32_16x16x128_bf8_fp8, ROCDL::wmma_f32_16x16x128_bf8_bf8,
-          ROCDL::wmma_f16_16x16x128_fp8_fp8, ROCDL::wmma_f16_16x16x128_fp8_bf8,
-          ROCDL::wmma_f16_16x16x128_bf8_fp8, ROCDL::wmma_f16_16x16x128_bf8_bf8,
-          ROCDL::wmma_i32_16x16x64_iu8, ROCDL::wmma_scale_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale_f32_32x16x128_f4,
-          ROCDL::wmma_scale16_f32_32x16x128_f4>(
-          [reuse](auto wmmaOp) { wmmaOp.setReuseA(reuse); });
+  llvm::TypeSwitch<Operation *>(op).Case<ROCDL_WMMA_OPS_WITH_REUSE>(
+      [reuse](auto wmmaOp) { wmmaOp.setReuseA(reuse); });
 }
 
 /// Sets the reuseB flag on a WMMA operation.
 static void setReuseB(Operation *op, bool reuse) {
-  llvm::TypeSwitch<Operation *>(op)
-      .Case<
-          ROCDL::wmma_f32_16x16x4_f32, ROCDL::wmma_f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x32_f16, ROCDL::wmma_f16_16x16x32_f16,
-          ROCDL::wmma_bf16_16x16x32_bf16, ROCDL::wmma_bf16f32_16x16x32_bf16,
-          ROCDL::wmma_f32_16x16x64_fp8_fp8, ROCDL::wmma_f32_16x16x64_fp8_bf8,
-          ROCDL::wmma_f32_16x16x64_bf8_fp8, ROCDL::wmma_f32_16x16x64_bf8_bf8,
-          ROCDL::wmma_f16_16x16x64_fp8_fp8, ROCDL::wmma_f16_16x16x64_fp8_bf8,
-          ROCDL::wmma_f16_16x16x64_bf8_fp8, ROCDL::wmma_f16_16x16x64_bf8_bf8,
-          ROCDL::wmma_f32_16x16x128_fp8_fp8, ROCDL::wmma_f32_16x16x128_fp8_bf8,
-          ROCDL::wmma_f32_16x16x128_bf8_fp8, ROCDL::wmma_f32_16x16x128_bf8_bf8,
-          ROCDL::wmma_f16_16x16x128_fp8_fp8, ROCDL::wmma_f16_16x16x128_fp8_bf8,
-          ROCDL::wmma_f16_16x16x128_bf8_fp8, ROCDL::wmma_f16_16x16x128_bf8_bf8,
-          ROCDL::wmma_i32_16x16x64_iu8, ROCDL::wmma_scale_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale16_f32_16x16x128_f8f6f4,
-          ROCDL::wmma_scale_f32_32x16x128_f4,
-          ROCDL::wmma_scale16_f32_32x16x128_f4>(
-          [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
+  llvm::TypeSwitch<Operation *>(op).Case<ROCDL_WMMA_OPS_WITH_REUSE>(
+      [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
 }
 
 /// Checks if op1 must execute before op2 due to data dependencies.
