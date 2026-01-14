@@ -23,7 +23,6 @@ from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
 from ..wave.utils.symbol_utils import is_literal, subs_idxc
-from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 
 logger = logging.getLogger(__name__)
 
@@ -341,10 +340,6 @@ def fuse_tensor_loads(
             f"Skipping tensor load fusion: Specialization option is set. "
             "Specialization with fused-tensor loads are not supported yet."
         )
-        return
-
-    if options.schedule != SchedulingType.NONE:
-        logger.info("Skipping tensor load fusion: Scheduling is not supported yet.")
         return
 
     # Check if we have an even number of waves (required for fusion)
