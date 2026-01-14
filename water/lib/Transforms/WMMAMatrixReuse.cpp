@@ -111,7 +111,7 @@ private:
   void processBlock(Block *block) {
     SmallVector<Operation *> currentSequence;
 
-    for (Operation &op : *block) {
+    for (Operation &op : llvm::make_early_inc_range(*block)) {
       if (isWMMAWithReuse(&op)) {
         currentSequence.push_back(&op);
       } else if (!currentSequence.empty()) {
