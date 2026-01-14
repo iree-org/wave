@@ -246,7 +246,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
     - Double buffering (NUM_BUFFERS=2)
     - F32_16x16x32_F16 MMA (32 elements in K)
     """
-    shape: tuple[int, int, int] = (1024, 1024, 1024)
+    shape: tuple[int, int, int] = (2048, 1024, 1024)
     mfma_variant: tkw.MMAType = tkw.MMAType.GFX1250_F32_16x16x32_F16
 
     # Symbol definitions
@@ -350,28 +350,67 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         global_to_shared_fused = tkw.filter_nodes(
             global_to_shared_fused, subgraph=pipeline_loop.KERNEL
         )
-        shared_load_a = tkw.filter_nodes(shared_load_a, subgraph=pipeline_loop.KERNEL)
-        shared_load_b = tkw.filter_nodes(shared_load_b, subgraph=pipeline_loop.KERNEL)
-        mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
+        loop_shared_load_a = tkw.filter_nodes(
+            shared_load_a, subgraph=pipeline_loop.KERNEL
+        )
+        loop_shared_load_b = tkw.filter_nodes(
+            shared_load_b, subgraph=pipeline_loop.KERNEL
+        )
+        loop_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
 
         # Create cluster ordering with async operations
         clusters = [
             tkw.cluster(
                 [
-                    shared_load_a,
-                    shared_load_b,
-                    tkw.SchedulingBarrier([]),
+                    loop_shared_load_a,
+                    loop_shared_load_b,
                 ],
             ),
             tkw.cluster(
                 [
                     global_to_shared_fused,
-                    tkw.SchedulingBarrier([]),
-                    mma,
+                    loop_mma,
                     tkw.SchedulingBarrier([]),
                 ],
             ),
         ]
+
+        epilogue_shared_load_a = tkw.filter_nodes(
+            shared_load_a, subgraph=pipeline_loop.EPILOGUE
+        )
+        epilogue_shared_load_b = tkw.filter_nodes(
+            shared_load_b, subgraph=pipeline_loop.EPILOGUE
+        )
+        epilogue_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.EPILOGUE)
+
+        # divide them into 4 chunks
+        epilogue_shared_load_a_chunks = [epilogue_shared_load_a[i::4] for i in range(4)]
+        epilogue_shared_load_b_chunks = [epilogue_shared_load_b[i::4] for i in range(4)]
+        epilogue_mma_chunks = [epilogue_mma[i::4] for i in range(4)]
+
+        epilogue_clusters = [
+            tkw.cluster(
+                [
+                    epilogue_shared_load_a_chunks[0],
+                    epilogue_shared_load_b_chunks[0],
+                    epilogue_shared_load_a_chunks[1],
+                    epilogue_shared_load_b_chunks[1],
+                    tkw.WorkgroupBarrier(),
+                    epilogue_mma_chunks[0],
+                    epilogue_mma_chunks[1],
+                    tkw.WorkgroupBarrier(),
+                    epilogue_shared_load_a_chunks[2],
+                    epilogue_shared_load_b_chunks[2],
+                    epilogue_shared_load_a_chunks[3],
+                    epilogue_shared_load_b_chunks[3],
+                    tkw.WorkgroupBarrier(),
+                    epilogue_mma_chunks[2],
+                    epilogue_mma_chunks[3],
+                ],
+            )
+        ]
+        clusters.extend(epilogue_clusters)
+
         # Apply the cluster-based reordering to the KERNEL stage
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
         tkw.stagger(pipeline_loop.KERNEL)
@@ -405,6 +444,8 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         schedule=SchedulingType.MANUAL,
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
+        dump_binaries="./",
+        dump_intermediates="./",
     )
 
     # Set runtime configuration for execution
@@ -415,9 +456,8 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         options, gemm_gfx1250_optim, gfx1250_optim_tbuf_gemm_schedule
     )
 
-    if is_debug:
-        with open("gemm_gfx1250_optim_tbuf.asm", "w") as f:
-            f.write(gemm_gfx1250_optim.asm)
+    with open("gemm_gfx1250_optim_tbuf_32cu.mlir", "w") as f:
+        f.write(gemm_gfx1250_optim.asm)
 
     # Create test data
     datatype = torch.float16
