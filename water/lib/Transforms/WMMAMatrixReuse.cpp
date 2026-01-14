@@ -7,11 +7,7 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -90,18 +86,6 @@ static void setReuseB(Operation *op, bool reuse) {
       [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
 }
 
-/// Checks if op1 must execute before op2 due to data dependencies.
-static bool hasDependency(Operation *op1, Operation *op2) {
-  // Check if any result of op1 is used by op2.
-  for (Value result : op1->getResults()) {
-    for (Operation *user : result.getUsers()) {
-      if (user == op2)
-        return true;
-    }
-  }
-  return false;
-}
-
 class WMMAMatrixReusePass
     : public water::impl::WaterWMMAMatrixReusePassBase<WMMAMatrixReusePass> {
 public:
@@ -113,44 +97,29 @@ public:
   }
 
 private:
-  /// Process a single basic block to reorder WMMA operations.
+  /// Process a single basic block to find consecutive WMMA op sequences.
   void processBlock(Block *block) {
-    // Collect all WMMA operations with reuse support in this block.
-    SmallVector<Operation *> wmmaOps;
+    SmallVector<Operation *> currentSequence;
+
     for (Operation &op : *block) {
-      if (isWMMAWithReuse(&op))
-        wmmaOps.push_back(&op);
-    }
-
-    if (wmmaOps.size() < 2)
-      return;
-
-    // Build dependency graph between WMMA operations.
-    llvm::DenseMap<Operation *, llvm::SmallVector<Operation *>> successors;
-    llvm::DenseMap<Operation *, unsigned> inDegree;
-    for (Operation *op : wmmaOps) {
-      successors[op] = {};
-      inDegree[op] = 0;
-    }
-
-    for (size_t i = 0; i < wmmaOps.size(); ++i) {
-      for (size_t j = i + 1; j < wmmaOps.size(); ++j) {
-        if (hasDependency(wmmaOps[i], wmmaOps[j])) {
-          successors[wmmaOps[i]].push_back(wmmaOps[j]);
-          inDegree[wmmaOps[j]]++;
-        }
+      if (isWMMAWithReuse(&op)) {
+        currentSequence.push_back(&op);
+      } else if (!currentSequence.empty()) {
+        // Non-WMMA op encountered, process the current sequence.
+        processConsecutiveWMMAOps(currentSequence);
+        currentSequence.clear();
       }
     }
 
-    // Group operations by their A and B operands.
-    llvm::DenseMap<Value, SmallVector<Operation *>> opsByMatrixA;
-    llvm::DenseMap<Value, SmallVector<Operation *>> opsByMatrixB;
-    for (Operation *op : wmmaOps) {
-      if (Value a = getMatrixA(op))
-        opsByMatrixA[a].push_back(op);
-      if (Value b = getMatrixB(op))
-        opsByMatrixB[b].push_back(op);
-    }
+    // Process any remaining sequence at the end of the block.
+    if (!currentSequence.empty())
+      processConsecutiveWMMAOps(currentSequence);
+  }
+
+  /// Process a sequence of consecutive WMMA operations.
+  void processConsecutiveWMMAOps(ArrayRef<Operation *> wmmaOps) {
+    if (wmmaOps.size() < 2)
+      return;
 
     // TODO: Implement reordering algorithm using topological sort with
     // preference for grouping operations that share A or B operands.
