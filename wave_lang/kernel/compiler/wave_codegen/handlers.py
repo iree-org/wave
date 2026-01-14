@@ -74,6 +74,7 @@ from ...ops.wave_ops import (
     maximum,
     memory_counter_wait,
     memory_counter_wait_barrier,
+    tensor_counter_wait,
     minimum,
     mma,
     ne,
@@ -1741,13 +1742,14 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     try:
         barId = node.args[0]
         tensor_wait = node.args[1]
+        ds_wait = node.args[2] if len(node.args) > 2 else True
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
     if tensor_wait:
         rocdl_d.s_wait_tensorcnt(0)
 
-    if barId != CLUSTER_BARRIER_ID:
+    if ds_wait and barId != CLUSTER_BARRIER_ID:
         rocdl_d.s_wait_dscnt(0)
 
     # For cluster barriers (barId == -3), only wave 0 should signal
@@ -1861,6 +1863,16 @@ def handle_memory_counter_wait_barrier(emitter: WaveEmitter, node: fx.Node):
 
     # Emit workgroup barrier
     rocdl_d.s_barrier()
+
+
+@handle_op(tensor_counter_wait)
+def handle_tensor_counter_wait(emitter: WaveEmitter, node: fx.Node):
+    try:
+        count = node.args[0]
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    rocdl_d.s_wait_tensorcnt(count)
 
 
 @handle_op(workgroup_barrier)

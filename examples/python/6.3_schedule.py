@@ -345,8 +345,49 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                 ],
             )
 
-        # Now apply advanced scheduling to the KERNEL stage
-        # Filter nodes to only include those in the KERNEL stage
+        # Filter nodes for PROLOGUE stage (before the loop)
+        prologue_global_to_shared_fused = tkw.filter_nodes(
+            tkw.get_node_by_tag("read_a,read_b"), subgraph=pipeline_loop.PROLOGUE
+        )
+        if len(prologue_global_to_shared_fused) == 0:
+            prologue_global_to_shared_fused = tkw.filter_nodes(
+                tkw.get_node_by_tag("read_a"), node_type=tkw.TensorLoadToLDS
+            )
+            prologue_global_to_shared_fused.extend(
+                tkw.filter_nodes(
+                    tkw.get_node_by_tag("read_b"), node_type=tkw.TensorLoadToLDS
+                )
+            )
+            prologue_global_to_shared_fused = tkw.filter_nodes(
+                prologue_global_to_shared_fused, subgraph=pipeline_loop.PROLOGUE
+            )
+
+        # Prologue cluster: tensor_load_to_lds + wait.tensorcnt(1) + barrier.signal + barrier.wait
+        # The conditional barrier for hi waves is handled by stagger
+        # Then SetWavePrio(1) before entering the loop
+        prologue_clusters = [
+            tkw.cluster(
+                [
+                    prologue_global_to_shared_fused,
+                    tkw.TensorCounterWait(1),  # rocdl.s.wait.tensorcnt 1
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SharedMemoryBarrierWait(-1),
+                    # Conditional barrier for hi waves is placed by stagger
+                    # SetWavePrio(1) before entering the loop
+                    tkw.SetWavePrio(1),
+                ],
+            )
+        ]
+
+        # Create cluster ordering with async operations
+        # Manual pattern inside the loop:
+        # 1. shared loads (A and B)
+        # 2. SetWavePrio(0) + wait.tensorcnt(1) + wait.dscnt(0) + barrier.signal + sched.barrier + barrier.wait
+        # 3. tensor_load_to_lds (global to shared)
+        # 4. MMAs
+        # 5. SetWavePrio(1) + barrier.signal + barrier.wait
+
+        # Filter nodes for KERNEL stage
         global_to_shared_fused = tkw.filter_nodes(
             global_to_shared_fused, subgraph=pipeline_loop.KERNEL
         )
@@ -358,19 +399,28 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         )
         loop_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
 
-        # Create cluster ordering with async operations
         clusters = [
             tkw.cluster(
                 [
+                    # Shared memory loads
                     loop_shared_load_a,
                     loop_shared_load_b,
-                ],
-            ),
-            tkw.cluster(
-                [
+                    # Barrier pattern after shared loads
+                    tkw.SetWavePrio(0),
+                    tkw.TensorCounterWait(1),  # rocdl.s.wait.tensorcnt 1
+                    tkw.SharedMemoryBarrierSignal(
+                        -1, ds_wait=True
+                    ),  # includes wait.dscnt(0)
+                    tkw.SchedulingBarrier([]),  # rocdl.sched.barrier 0
+                    tkw.SharedMemoryBarrierWait(-1),
+                    # Global to shared (tensor_load_to_lds)
                     global_to_shared_fused,
+                    # MMAs
                     loop_mma,
-                    tkw.SchedulingBarrier([]),
+                    # End of loop barrier pattern
+                    tkw.SetWavePrio(1),
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SharedMemoryBarrierWait(-1),
                 ],
             ),
         ]
@@ -383,37 +433,79 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         )
         epilogue_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.EPILOGUE)
 
-        # divide them into 4 chunks
-        epilogue_shared_load_a_chunks = [epilogue_shared_load_a[i::4] for i in range(4)]
-        epilogue_shared_load_b_chunks = [epilogue_shared_load_b[i::4] for i in range(4)]
-        epilogue_mma_chunks = [epilogue_mma[i::4] for i in range(4)]
+        # divide them into 2 chunks to match the manual pattern
+        epilogue_shared_load_a_chunks = [epilogue_shared_load_a[i::2] for i in range(2)]
+        epilogue_shared_load_b_chunks = [epilogue_shared_load_b[i::2] for i in range(2)]
+        epilogue_mma_chunks = [epilogue_mma[i::2] for i in range(2)]
 
+        # Epilogue pattern matching manual MLIR:
+        # 1. First set of loads (both A and B)
+        # 2. SetWavePrio(0) + barrier.signal(-1) + sched.barrier + barrier.wait(-1)
+        # 3. First set of MMAs
+        # 4. SetWavePrio(1) + wait.tensorcnt(0) + barrier.signal(-1) + sched.barrier + barrier.wait(-1)
+        # 5. Second set of loads (both A and B)
+        # 6. SetWavePrio(0) + barrier.signal(-1) + sched.barrier + barrier.wait(-1)
+        # 7. Second set of MMAs
+        # 8. SetWavePrio(1)
+        # 9. Conditional barrier (placed by stagger for late waves) - handled separately
+        # 10. barrier.signal(-1) + barrier.wait(-1)
         epilogue_clusters = [
             tkw.cluster(
                 [
-                    epilogue_shared_load_a_chunks[0],
+                    # First set of loads (B and A together)
                     epilogue_shared_load_b_chunks[0],
-                    epilogue_shared_load_a_chunks[1],
-                    epilogue_shared_load_b_chunks[1],
-                    tkw.WorkgroupBarrier(),
+                    epilogue_shared_load_a_chunks[0],
+                    # Stagger barrier before first MMAs (no ds_wait)
+                    tkw.SetWavePrio(0),
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SchedulingBarrier([]),
+                    tkw.SharedMemoryBarrierWait(-1),
+                    # First set of MMAs
                     epilogue_mma_chunks[0],
+                    # Stagger barrier before second loads
+                    tkw.SetWavePrio(1),
+                    tkw.TensorCounterWait(0),  # rocdl.s.wait.tensorcnt 0
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SchedulingBarrier([]),
+                    tkw.SharedMemoryBarrierWait(-1),
+                    # Second set of loads (B and A together)
+                    epilogue_shared_load_b_chunks[1],
+                    epilogue_shared_load_a_chunks[1],
+                    # Stagger barrier before second MMAs (no ds_wait)
+                    tkw.SetWavePrio(0),
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SchedulingBarrier([]),
+                    tkw.SharedMemoryBarrierWait(-1),
+                    # Second set of MMAs
                     epilogue_mma_chunks[1],
-                    tkw.WorkgroupBarrier(),
-                    epilogue_shared_load_a_chunks[2],
-                    epilogue_shared_load_b_chunks[2],
-                    epilogue_shared_load_a_chunks[3],
-                    epilogue_shared_load_b_chunks[3],
-                    tkw.WorkgroupBarrier(),
-                    epilogue_mma_chunks[2],
-                    epilogue_mma_chunks[3],
+                    # Final signal/wait (after conditional barrier)
+                    # Note: SetWavePrio(1) will be inserted after calling stagger
+                    # No ds_wait for final barrier
+                    tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
+                    tkw.SharedMemoryBarrierWait(-1),
                 ],
             )
         ]
-        clusters.extend(epilogue_clusters)
+
+        # Prepend prologue clusters
+        all_clusters = prologue_clusters + clusters + epilogue_clusters
 
         # Apply the cluster-based reordering to the KERNEL stage
-        tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
-        tkw.stagger(pipeline_loop.KERNEL)
+        tkw.reorder_graph(pipeline_loop.KERNEL, all_clusters)
+
+        # Get reference to last epilogue MMA for conditional barrier placement
+        # The last MMA in epilogue_mma_chunks[1] is the target after which
+        # the conditional barrier will be placed
+        last_epilogue_mma = epilogue_mma_chunks[1][-1]
+
+        # Apply stagger with custom placement for post-loop conditional barrier
+        # This places the conditional barrier after the last epilogue MMA
+        tkw.stagger(pipeline_loop.KERNEL, post_barrier_target=last_epilogue_mma)
+
+        # Insert SetWavePrio(1) between last MMA and conditional barrier
+        # Due to graph insertion semantics, this will be placed between
+        # the last MMA and the conditional barrier
+        tkw.insert_after(last_epilogue_mma, tkw.SetWavePrio(1))
 
     # Define compile options
     M_val, N_val, K_val = shape

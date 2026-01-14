@@ -164,7 +164,9 @@ def set_wave_prio(priority: int): ...
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
-def shared_memory_barrier_signal(barId: int = 0, tensor_wait: bool = False): ...
+def shared_memory_barrier_signal(
+    barId: int = 0, tensor_wait: bool = False, ds_wait: bool = True
+): ...
 
 
 def shared_memory_barrier_wait(barId: int = 0): ...
@@ -174,6 +176,9 @@ def memory_counter_wait(load=None, store=None, ds=None, exp=None): ...
 
 
 def memory_counter_wait_barrier(load=None, store=None, ds=None, exp=None): ...
+
+
+def tensor_counter_wait(count: int = 0): ...
 
 
 def workgroup_barrier(): ...
@@ -1605,10 +1610,16 @@ class SharedMemoryBarrierSignal(CustomOp):
     -1:     works as s_barrier
     -2:     trap barrier
     -3:     cluster barrier
+
+    Parameters:
+        barId: The barrier ID to signal
+        tensor_wait: If True, emit s_wait_tensorcnt(0) before signaling
+        ds_wait: If True, emit s_wait_dscnt(0) before signaling (for non-cluster barriers)
     """
 
     barId: int = 0
     tensor_wait: bool = False
+    ds_wait: bool = True
 
     @property
     def has_side_effects(self) -> bool:
@@ -1732,6 +1743,21 @@ class MemoryCounterWaitBarrier(CustomOp):
     store: Optional[int] = None
     ds: Optional[int] = None
     exp: Optional[int] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("tensor_counter_wait")
+@dataclass
+class TensorCounterWait(CustomOp):
+    """
+    Wait for the tensor counter to reach the specified value.
+    Generates rocdl.s.wait.tensorcnt instruction.
+    """
+
+    count: int = 0
 
     @property
     def has_side_effects(self) -> bool:
