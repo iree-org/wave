@@ -239,10 +239,10 @@ private:
       Operation *prev = wmmaOps[i - 1];
 
       if (getMatrixA(curr) == getMatrixA(prev))
-        setReuseA(curr, true);
+        setReuseA(prev, true);
 
       if (getMatrixB(curr) == getMatrixB(prev))
-        setReuseB(curr, true);
+        setReuseB(prev, true);
     }
   }
 };

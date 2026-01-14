@@ -8,13 +8,13 @@ func.func @reorder_for_reuse(
     %b0: vector<16xf16>, %b1: vector<16xf16>,
     %c: vector<32xf32>) -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>) {
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B0]], %[[C]]
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B0]], %[[C]] {reuseB = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B0]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B0]], %[[C]] {reuseA = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B1]], %[[C]] {reuseA = true}
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B1]], %[[C]] {reuseB = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B1]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B1]], %[[C]]
   // CHECK: rocdl.sched.barrier 0
   %0 = rocdl.wmma.f32.16x16x32.f16 %a0, %b0, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   %1 = rocdl.wmma.f32.16x16x32.f16 %a1, %b0, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
@@ -30,9 +30,9 @@ func.func @reuse_b_flag(
     %a0: vector<16xf16>, %a1: vector<16xf16>,
     %b: vector<16xf16>, %c: vector<32xf32>) -> (vector<32xf32>, vector<32xf32>) {
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B]], %[[C]]
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B]], %[[C]] {reuseB = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B]], %[[C]]
   // CHECK: rocdl.sched.barrier 0
   %0 = rocdl.wmma.f32.16x16x32.f16 %a0, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   %1 = rocdl.wmma.f32.16x16x32.f16 %a1, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
@@ -45,9 +45,9 @@ func.func @reuse_b_flag(
 func.func @chained_accumulator(
     %a: vector<16xf16>, %b: vector<16xf16>, %c: vector<32xf32>) -> vector<32xf32> {
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: %[[R0:.*]] = rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: %[[R0:.*]] = rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[R0]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[R0]]
   // CHECK: rocdl.sched.barrier 0
   %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %0 {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
@@ -73,15 +73,15 @@ func.func @non_consecutive_wmma(
     %x: f32) -> (vector<32xf32>, vector<32xf32>, f32) {
   // Two separate sequences separated by arith.addf.
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
-  // CHECK: rocdl.sched.barrier 0
   // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
   // CHECK: rocdl.sched.barrier 0
   // CHECK: arith.addf
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
-  // CHECK: rocdl.sched.barrier 0
   // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
   // CHECK: rocdl.sched.barrier 0
   %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
