@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -74,6 +75,14 @@ static Value getMatrixB(Operation *op) {
       .Default([](Operation *) { return Value(); });
 }
 
+/// Helper to get matrix C (accumulator) operand from any WMMA op.
+static Value getMatrixC(Operation *op) {
+  return llvm::TypeSwitch<Operation *, Value>(op)
+      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
+          [](auto wmmaOp) { return wmmaOp.getC(); })
+      .Default([](Operation *) { return Value(); });
+}
+
 /// Sets the reuseA flag on a WMMA operation.
 static void setReuseA(Operation *op, bool reuse) {
   llvm::TypeSwitch<Operation *>(op).Case<ROCDL_WMMA_OPS_WITH_REUSE>(
@@ -116,39 +125,101 @@ private:
       processConsecutiveWMMAOps(currentSequence);
   }
 
+  /// Check if candidate can be scheduled given already scheduled ops.
+  /// Returns true if all operands of candidate that are defined by ops
+  /// in the sequence have already been scheduled.
+  static bool
+  canSchedule(Operation *candidate,
+              const llvm::SmallSetVector<Operation *, 16> &scheduled,
+              const llvm::SmallDenseSet<Operation *> &opsInSequence) {
+    for (Value operand : candidate->getOperands()) {
+      Operation *defOp = operand.getDefiningOp();
+      if (defOp && opsInSequence.contains(defOp) && !scheduled.contains(defOp))
+        return false;
+    }
+    return true;
+  }
+
   /// Process a sequence of consecutive WMMA operations.
-  void processConsecutiveWMMAOps(ArrayRef<Operation *> wmmaOps) {
+  static void processConsecutiveWMMAOps(MutableArrayRef<Operation *> wmmaOps) {
     if (wmmaOps.size() < 2)
       return;
 
-    // TODO: Implement reordering algorithm using topological sort with
-    // preference for grouping operations that share A or B operands.
-    // For now, just set reuse flags based on current ordering.
-    setReuseFlagsForCurrentOrder(wmmaOps);
-  }
+    llvm::SmallDenseSet<Operation *> opsInSequence(wmmaOps.begin(),
+                                                   wmmaOps.end());
+    llvm::SmallSetVector<Operation *, 16> scheduled;
 
-  /// Sets reuse flags based on the current operation ordering.
-  void setReuseFlagsForCurrentOrder(ArrayRef<Operation *> wmmaOps) {
-    for (size_t i = 0; i < wmmaOps.size(); ++i) {
-      Operation *curr = wmmaOps[i];
-      bool reuseA = false;
-      bool reuseB = false;
+    // First op stays in place.
+    scheduled.insert(wmmaOps[0]);
 
-      if (i > 0) {
-        Operation *prev = wmmaOps[i - 1];
-        Value currA = getMatrixA(curr);
-        Value prevA = getMatrixA(prev);
-        Value currB = getMatrixB(curr);
-        Value prevB = getMatrixB(prev);
+    // Greedily select ops that maximize reuse while respecting dependencies.
+    for ([[maybe_unused]] auto i : llvm::seq<size_t>(1, wmmaOps.size())) {
+      Operation *prev = scheduled.back();
+      Value prevA = getMatrixA(prev);
+      Value prevB = getMatrixB(prev);
 
-        if (currA && prevA && currA == prevA)
-          reuseA = true;
-        if (currB && prevB && currB == prevB)
-          reuseB = true;
+      Operation *bestCandidate = nullptr;
+      int bestScore = -1;
+
+      for (Operation *candidate : wmmaOps) {
+        if (scheduled.contains(candidate))
+          continue;
+        if (!canSchedule(candidate, scheduled, opsInSequence))
+          continue;
+
+        // Score: +2 for matching A, +2 for matching B, +1 for chaining C.
+        int score = 0;
+        if (getMatrixA(candidate) == prevA)
+          score += 2;
+        if (getMatrixB(candidate) == prevB)
+          score += 2;
+        // Smaller bonus if candidate uses prev's result as its accumulator.
+        if (getMatrixC(candidate) == prev->getResult(0))
+          score += 1;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = candidate;
+        }
       }
 
-      setReuseA(curr, reuseA);
-      setReuseB(curr, reuseB);
+      // Fallback if no best found (pick first available).
+      if (!bestCandidate) {
+        for (Operation *candidate : wmmaOps) {
+          if (!scheduled.contains(candidate) &&
+              canSchedule(candidate, scheduled, opsInSequence)) {
+            bestCandidate = candidate;
+            break;
+          }
+        }
+      }
+
+      scheduled.insert(bestCandidate);
+    }
+
+    // Reorder operations in the IR.
+    Operation *insertPoint = wmmaOps[0];
+    for (Operation *op : scheduled) {
+      if (op != insertPoint)
+        op->moveAfter(insertPoint);
+      insertPoint = op;
+    }
+
+    // Set reuse flags based on new order.
+    setReuseFlagsForOrder(scheduled.getArrayRef());
+  }
+
+  /// Sets reuse flags based on the operation ordering.
+  static void setReuseFlagsForOrder(ArrayRef<Operation *> wmmaOps) {
+    for (auto i : llvm::seq<size_t>(1, wmmaOps.size())) {
+      Operation *curr = wmmaOps[i];
+      Operation *prev = wmmaOps[i - 1];
+
+      if (getMatrixA(curr) == getMatrixA(prev))
+        setReuseA(curr, true);
+
+      if (getMatrixB(curr) == getMatrixB(prev))
+        setReuseB(curr, true);
     }
   }
 };
