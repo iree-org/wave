@@ -143,18 +143,18 @@ def _convert_index_mapping_attr_to_sympy(
     return IndexSequence(start, step, stride)
 
 
-def _convert_index_mapping_dict_to_sympy(
-    dict_attr: ir.DictAttr,
+def _convert_index_exprs_to_sympy(
+    index_exprs_attr: wave.WaveIndexExprsAttr,
 ) -> dict[IndexSymbol, IndexSequence]:
-    """Convert a dictionary attribute containing WaveIndexMappingAttr to a dictionary of Wave IndexSequences."""
+    """Convert a WaveIndexExprsAttr to a dictionary of Wave IndexSequences."""
     result = {}
-    for named_attr in dict_attr:
-        key = named_attr.name
-        value = named_attr.attr
+    for entry in index_exprs_attr.entries:
+        key = entry.dimension.name
+        mapping = entry.mapping
         assert isinstance(
-            value, wave.WaveIndexMappingAttr
-        ), f"Unsupported index mapping attribute: {value}"
-        result[index_symbol(key)] = _convert_index_mapping_attr_to_sympy(value)
+            mapping, wave.WaveIndexMappingAttr
+        ), f"Unsupported index mapping attribute: {mapping}"
+        result[index_symbol(key)] = _convert_index_mapping_attr_to_sympy(mapping)
     return result
 
 
@@ -190,15 +190,15 @@ def convert_index_mapping_array_to_sympy(
         assert (
             len(array_attr) == 1
         ), f"Expected exactly one index mapping attribute for non-MMA op: {op}"
-        return _convert_index_mapping_dict_to_sympy(array_attr[0])
+        return _convert_index_exprs_to_sympy(array_attr[0])
 
     assert (
         len(array_attr) == 4
     ), f"Expected exactly four index mapping attributes for MMA op: {op}"
-    lhs_index = _convert_index_mapping_dict_to_sympy(array_attr[0])
-    rhs_index = _convert_index_mapping_dict_to_sympy(array_attr[1])
-    acc_index = _convert_index_mapping_dict_to_sympy(array_attr[2])
-    result_index = _convert_index_mapping_dict_to_sympy(array_attr[3])
+    lhs_index = _convert_index_exprs_to_sympy(array_attr[0])
+    rhs_index = _convert_index_exprs_to_sympy(array_attr[1])
+    acc_index = _convert_index_exprs_to_sympy(array_attr[2])
+    result_index = _convert_index_exprs_to_sympy(array_attr[3])
     mk_symbols = set(lhs_index.keys())
     nk_symbols = set(rhs_index.keys())
     m_symbol = (mk_symbols - nk_symbols).pop()

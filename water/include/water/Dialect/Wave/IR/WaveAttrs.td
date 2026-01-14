@@ -589,4 +589,13 @@ def WaveIndexExprsAttr : AttrDef<WaveDialect, "WaveIndexExprs"> {
   }];
 }
 
+//-----------------------------------------------------------------------------
+// Typed array attributes
+//-----------------------------------------------------------------------------
+
+def WaveIndexExprsArrayAttr : TypedArrayAttrBase<WaveIndexExprsAttr,
+  "array of WaveIndexExprsAttr"> {
+  let constBuilderCall = "$_builder.getArrayAttr($0)";
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEATTRS

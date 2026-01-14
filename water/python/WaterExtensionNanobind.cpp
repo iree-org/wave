@@ -200,6 +200,91 @@ struct PyWaveIndexMappingAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveIndexEntryAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveIndexEntryAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveIndexEntryAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveIndexEntryAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveIndexEntryAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveIndexEntryAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](MlirAttribute dimension, MlirAttribute mapping,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveIndexEntryAttr(
+              context->getRef(),
+              mlirWaveIndexEntryAttrGet(context->get(), dimension, mapping));
+        },
+        nb::arg("dimension"), nb::arg("mapping"),
+        nb::arg("context") = nb::none(),
+        "Gets a wave.WaveIndexEntryAttr from a dimension symbol and mapping.");
+    c.def_prop_ro("dimension", [](MlirAttribute self) {
+      return mlirWaveIndexEntryAttrGetDimension(self);
+    });
+    c.def_prop_ro("mapping", [](MlirAttribute self) {
+      return mlirWaveIndexEntryAttrGetMapping(self);
+    });
+  }
+};
+
+//===---------------------------------------------------------------------===//
+// WaveIndexExprsAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveIndexExprsAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveIndexExprsAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveIndexExprsAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveIndexExprsAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveIndexExprsAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](std::vector<MlirAttribute> &entries,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveIndexExprsAttr(
+              context->getRef(),
+              mlirWaveIndexExprsAttrGet(context->get(), entries.size(),
+                                        entries.data()));
+        },
+        nb::arg("entries"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveIndexExprsAttr from a list of entry attributes.");
+    c.def_prop_ro("entries", [](MlirAttribute self) {
+      std::vector<MlirAttribute> entries;
+      intptr_t numEntries = mlirWaveIndexExprsAttrGetNumEntries(self);
+      entries.reserve(numEntries);
+      for (intptr_t i = 0; i < numEntries; i++) {
+        entries.push_back(mlirWaveIndexExprsAttrGetEntry(self, i));
+      }
+      return entries;
+    });
+    c.def("__len__", [](MlirAttribute self) {
+      return mlirWaveIndexExprsAttrGetNumEntries(self);
+    });
+    c.def("__getitem__", [](MlirAttribute self, intptr_t index) {
+      intptr_t numEntries = mlirWaveIndexExprsAttrGetNumEntries(self);
+      if (index < 0 || index >= numEntries) {
+        throw nb::index_error("index out of range");
+      }
+      return mlirWaveIndexExprsAttrGetEntry(self, index);
+    });
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveHyperparameterAttr
 //===---------------------------------------------------------------------===//
 
@@ -847,6 +932,8 @@ NB_MODULE(_waterDialects, m) {
   PyWaveIterSymbolAttr::bind(d);
   PyWaveIndexSymbolAttr::bind(d);
   PyWaveIndexMappingAttr::bind(d);
+  PyWaveIndexEntryAttr::bind(d);
+  PyWaveIndexExprsAttr::bind(d);
   PyWaveHyperparameterAttr::bind(d);
   PyWaveNormalFormAttr::bind(d);
   PyWaveWorkgroupDimAttr::bind(d);

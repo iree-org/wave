@@ -14,6 +14,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallString.h"
@@ -36,25 +37,20 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
-    return op->emitError("'index' attribute must be an array of dictionaries");
-  SmallVector<DictionaryAttr> dicts;
-  dicts.reserve(arr.size());
+    return op->emitError(
+        "'index' attribute must be an array of WaveIndexExprsAttr");
+  SmallVector<wave::WaveIndexExprsAttr> indexExprs;
+  indexExprs.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
-    auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
-    if (!dict)
-      return op->emitError("'index' array elements must be dictionaries");
-    dicts.push_back(dict);
+    auto indexExpr = dyn_cast<wave::WaveIndexExprsAttr>(nestedAttr);
+    if (!indexExpr)
+      return op->emitError("'index' array elements must be WaveIndexExprsAttr");
+    indexExprs.push_back(indexExpr);
   }
 
-  for (DictionaryAttr dictAttr : dicts) {
-    for (auto named : dictAttr) {
-      auto val = named.getValue();
-      if (!isa<wave::WaveIndexMappingAttr>(val))
-        return op->emitError("'index' attribute value for key ")
-               << named.getName() << " must be WaveIndexMappingAttr, got "
-               << val;
-
-      auto mapping = cast<wave::WaveIndexMappingAttr>(val);
+  for (wave::WaveIndexExprsAttr indexExprAttr : indexExprs) {
+    for (wave::WaveIndexEntryAttr entry : indexExprAttr.getEntries()) {
+      wave::WaveIndexMappingAttr mapping = entry.getMapping();
       for (auto symbol : mapping.getSymbols()) {
         auto iterSymbol = dyn_cast<wave::WaveIterSymbolAttr>(symbol);
         if (!iterSymbol)
@@ -85,71 +81,6 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
     }
   }
   return success();
-}
-
-//-----------------------------------------------------------------------------
-// Custom printing/parsing components
-//-----------------------------------------------------------------------------
-
-// ODS custom directive: parseWaveIndexDict/printWaveIndexDict
-ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
-  auto parseSingleDict = [&](DictionaryAttr &out) -> ParseResult {
-    SmallVector<NamedAttribute, 4> entries;
-    if (parser.parseLBrace())
-      return failure();
-    auto parseEntry = [&]() -> ParseResult {
-      StringRef symbolName;
-      if (parser.parseKeyword(&symbolName) || parser.parseColon())
-        return failure();
-      Attribute mapping = wave::WaveIndexMappingAttr::parse(parser, Type{});
-      if (!mapping)
-        return failure();
-      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
-                           mapping);
-      return success();
-    };
-    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
-      return failure();
-    out = parser.getBuilder().getDictionaryAttr(entries);
-    return success();
-  };
-
-  SmallVector<Attribute> dicts;
-  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
-                                     [&]() -> ParseResult {
-                                       DictionaryAttr dict;
-                                       if (failed(parseSingleDict(dict)))
-                                         return failure();
-                                       dicts.push_back(dict);
-                                       return success();
-                                     }))
-    return failure();
-  out = parser.getBuilder().getArrayAttr(dicts);
-  return success();
-}
-
-void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
-                              ArrayAttr arr) {
-  auto printOne = [&](DictionaryAttr dict) {
-    printer.getStream() << "{";
-    llvm::interleaveComma(
-        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
-          printer.getStream() << namedAttr.getName().getValue() << " : ";
-          if (auto mappingAttr = llvm::dyn_cast<wave::WaveIndexMappingAttr>(
-                  namedAttr.getValue())) {
-            mappingAttr.print(printer);
-          } else {
-            printer.printAttribute(namedAttr.getValue());
-          }
-        });
-    printer.getStream() << "}";
-  };
-  // Always print as an array to match the parser syntax.
-  printer.getStream() << "[";
-  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
-    printOne(llvm::cast<DictionaryAttr>(a));
-  });
-  printer.getStream() << "]";
 }
 
 //-----------------------------------------------------------------------------
@@ -485,7 +416,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
     : value(nullptr, kUninitializedState) {}
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    DictionaryAttr concreteValue)
+    wave::WaveIndexExprsAttr concreteValue)
     : value(concreteValue, kSpecificTypeState) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
@@ -506,10 +437,11 @@ bool wave::IndexExprsLatticeStorage::isTop() const {
   return value.getInt() == kUndecidableState;
 }
 
-DictionaryAttr wave::IndexExprsLatticeStorage::getConcreteValue() const {
+wave::WaveIndexExprsAttr
+wave::IndexExprsLatticeStorage::getConcreteValue() const {
   if (value.getInt() != kSpecificTypeState)
     return nullptr;
-  return llvm::cast<DictionaryAttr>(value.getPointer());
+  return llvm::cast<wave::WaveIndexExprsAttr>(value.getPointer());
 }
 
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
@@ -870,56 +802,64 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     if (ignoredRhsSymbols.empty() || rhs.isBottom())
       return rhs;
 
-    llvm::SmallVector<NamedAttribute> filtered = llvm::filter_to_vector(
-        rhs.getConcreteValue(), [&](NamedAttribute namedAttr) {
-          return !ignoredRhsSymbolNames.contains(
-              namedAttr.getName().getValue());
-        });
-    return IndexExprsLatticeStorage(
-        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered));
+    llvm::SmallVector<wave::WaveIndexEntryAttr> filtered =
+        llvm::filter_to_vector(rhs.getConcreteValue().getEntries(),
+                               [&](wave::WaveIndexEntryAttr entry) {
+                                 return !ignoredRhsSymbolNames.contains(
+                                     entry.getDimension().getName());
+                               });
+    return IndexExprsLatticeStorage(wave::WaveIndexExprsAttr::get(
+        rhs.getConcreteValue().getContext(), filtered));
   }
 
   if (rhs.isBottom())
     return lhs;
 
   MLIRContext *ctx = lhs.getConcreteValue().getContext();
-  DictionaryAttr lhsValue = lhs.getConcreteValue();
-  DictionaryAttr rhsValue = rhs.getConcreteValue();
+  wave::WaveIndexExprsAttr lhsValue = lhs.getConcreteValue();
+  wave::WaveIndexExprsAttr rhsValue = rhs.getConcreteValue();
 
-  // Join specific values per symbol.
-  llvm::DenseMap<StringAttr, Attribute> result;
-  for (NamedAttribute namedAttr : lhsValue) {
-    result[namedAttr.getName()] = namedAttr.getValue();
+  // Join specific values per symbol, using MapVector to preserve insertion
+  // order. LHS entries come first (in LHS order), then new RHS entries (in RHS
+  // order). This intermediate MapVector is internal to join() - its ordering
+  // only matters when converted to the final WaveIndexExprsAttr. The ordering
+  // policy (LHS-first, then RHS-only entries) ensures deterministic output.
+  llvm::MapVector<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr> result;
+  for (wave::WaveIndexEntryAttr entry : lhsValue.getEntries()) {
+    result[entry.getDimension()] = entry.getMapping();
   }
-  for (NamedAttribute namedAttr : rhsValue) {
-    if (ignoredRhsSymbolNames.contains(namedAttr.getName().getValue()))
+  for (wave::WaveIndexEntryAttr entry : rhsValue.getEntries()) {
+    if (ignoredRhsSymbolNames.contains(entry.getDimension().getName()))
       continue;
 
     // If the mapping for the symbol doesn't exist in the result yet, just take
     // it from the RHS.
     auto [it, inserted] =
-        result.try_emplace(namedAttr.getName(), namedAttr.getValue());
+        result.try_emplace(entry.getDimension(), entry.getMapping());
     if (inserted)
       continue;
 
     // The symbol has a mapping on both LHS and RHS, join them.
-    auto lhsValue = llvm::cast<wave::WaveIndexMappingAttr>(it->getSecond());
-    auto rhsValue =
-        llvm::cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
-    if (lhsValue == rhsValue)
+    wave::WaveIndexMappingAttr lhsMapping = it->second;
+    wave::WaveIndexMappingAttr rhsMapping = entry.getMapping();
+    if (lhsMapping == rhsMapping)
       continue;
 
     wave::WaveIndexMappingAttr joinedMapping =
-        getIndexExprsJoinMappings(lhsValue, rhsValue);
+        getIndexExprsJoinMappings(lhsMapping, rhsMapping);
     if (!joinedMapping)
       return IndexExprsLatticeStorage::top();
 
-    result[namedAttr.getName()] = joinedMapping;
+    it->second = joinedMapping;
   }
-  return IndexExprsLatticeStorage(
-      DictionaryAttr::get(ctx, llvm::map_to_vector(result, [](auto &&pair) {
-                            return NamedAttribute(pair.first, pair.second);
-                          })));
+
+  // Convert MapVector to WaveIndexExprsAttr.
+  llvm::SmallVector<wave::WaveIndexEntryAttr> entries;
+  entries.reserve(result.size());
+  for (auto &[dimension, mapping] : result) {
+    entries.push_back(wave::WaveIndexEntryAttr::get(ctx, dimension, mapping));
+  }
+  return IndexExprsLatticeStorage(wave::WaveIndexExprsAttr::get(ctx, entries));
 }
 
 wave::IndexExprsLatticeStorage
@@ -942,16 +882,16 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
   for (wave::WaveSymbolAttr symbol : symbols)
     symbolNames.insert(symbol.getName());
 
-  llvm::SmallVector<NamedAttribute> filtered =
-      llvm::filter_to_vector(getConcreteValue(), [&](NamedAttribute attr) {
-        return symbolNames.contains(attr.getName().getValue());
+  llvm::SmallVector<wave::WaveIndexEntryAttr> filtered = llvm::filter_to_vector(
+      getConcreteValue().getEntries(), [&](wave::WaveIndexEntryAttr entry) {
+        return symbolNames.contains(entry.getDimension().getName());
       });
 
   if (filtered.empty())
     return bottom();
 
   return IndexExprsLatticeStorage(
-      DictionaryAttr::get(getConcreteValue().getContext(), filtered));
+      wave::WaveIndexExprsAttr::get(getConcreteValue().getContext(), filtered));
 }
 
 wave::IndexExprsLatticeStorage
@@ -961,17 +901,18 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
     return *this;
 
   MLIRContext *ctx = getConcreteValue().getContext();
-  llvm::SmallVector<NamedAttribute> updated =
-      llvm::map_to_vector(getConcreteValue(), [&](NamedAttribute attr) {
-        auto value = llvm::cast<wave::WaveIndexMappingAttr>(attr.getValue());
+  llvm::SmallVector<wave::WaveIndexEntryAttr> updated = llvm::map_to_vector(
+      getConcreteValue().getEntries(), [&](wave::WaveIndexEntryAttr entry) {
+        wave::WaveIndexMappingAttr mapping = entry.getMapping();
         for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
           auto actualIterSymbol =
               wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
-          value = value.removeInput(actualIterSymbol);
+          mapping = mapping.removeInput(actualIterSymbol);
         }
-        return NamedAttribute(attr.getName(), value);
+        return wave::WaveIndexEntryAttr::get(ctx, entry.getDimension(),
+                                             mapping);
       });
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated));
+  return IndexExprsLatticeStorage(wave::WaveIndexExprsAttr::get(ctx, updated));
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {

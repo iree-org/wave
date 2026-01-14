@@ -722,9 +722,12 @@ Attribute WaveIndexEntryAttr::parse(AsmParser &parser, Type type) {
 
 void WaveIndexEntryAttr::print(AsmPrinter &printer) const {
   // Print: @M : [symbols] -> (start, step, stride)
-  printer.printAttributeWithoutType(getDimension());
+  // Use printStrippedAttrOrType to avoid the #wave.symbol<...> prefix in
+  // generic mode, so we get just <"M"> instead of #wave.symbol<"M">.
+  printer << " ";
+  printer.printStrippedAttrOrType(getDimension());
   printer << " : ";
-  printer.printAttributeWithoutType(getMapping());
+  printer.printStrippedAttrOrType(getMapping());
 }
 
 //===----------------------------------------------------------------------===//
@@ -756,9 +759,10 @@ Attribute WaveIndexExprsAttr::parse(AsmParser &parser, Type type) {
 
 void WaveIndexExprsAttr::print(AsmPrinter &printer) const {
   // Print: <[@M : <mapping>, @K : <mapping>]>
+  // Use printStrippedAttrOrType to avoid #wave<index_entry ...> prefix.
   printer << "<[";
   llvm::interleaveComma(getEntries(), printer, [&](WaveIndexEntryAttr entry) {
-    printer.printAttributeWithoutType(entry);
+    printer.printStrippedAttrOrType(entry);
   });
   printer << "]>";
 }

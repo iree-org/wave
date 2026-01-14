@@ -42,17 +42,14 @@ overrideInitialization(Operation *top,
         continue;
       }
 
-      auto dict = llvm::dyn_cast<DictionaryAttr>(attr);
-      if (!dict || llvm::any_of(dict.getValue(), [](NamedAttribute attr) {
-            return !llvm::isa<wave::WaveIndexMappingAttr>(attr.getValue());
-          })) {
+      auto indexExprs = llvm::dyn_cast<wave::WaveIndexExprsAttr>(attr);
+      if (!indexExprs) {
         return op->emitError()
                << "expected " << attributeName
-               << " to be an array of "
-                  "dictionaries with WaveIndexMappingAttr or UnitAttr values";
+               << " to be an array of WaveIndexExprsAttr or UnitAttr values";
       }
 
-      setIndexForValue(value, dict);
+      setIndexForValue(value, indexExprs);
     }
     return success();
   };
