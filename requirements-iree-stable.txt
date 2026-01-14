@@ -1,4 +1,0 @@
-# Stable release versions of IREE dependencies.
-
-iree-base-compiler==3.9.0
-iree-base-runtime==3.9.0

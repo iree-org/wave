@@ -18,7 +18,6 @@ from setuptools.command.build_ext import build_ext
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 REPO_ROOT = THIS_DIR
-WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 BUILD_TYPE = os.environ.get("WAVE_BUILD_TYPE", "Release")
 BUILD_WATER = int(os.environ.get("WAVE_BUILD_WATER", "0"))
 WATER_DIR = os.getenv("WAVE_WATER_DIR")

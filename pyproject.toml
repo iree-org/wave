@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wave-lang"
-version = "3.9.1"
+version = "3.10.0"
 description = "Wave Language for Machine Learning"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -30,11 +30,12 @@ classifiers = [
 
 dependencies = [
     "dill",
-    "iree-base-compiler",
-    "iree-base-runtime",
+    "iree-base-compiler~=3.10.0rc",
+    "iree-base-runtime~=3.10.0rc",
     "ml_dtypes",
     "numpy",
-    "torch",
+    "sympy",
+    "torch>=2.6,<2.9",
     "typing_extensions",
 ]
 
