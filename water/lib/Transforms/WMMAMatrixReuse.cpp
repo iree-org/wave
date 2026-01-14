@@ -1,4 +1,4 @@
-// Copyright 2025 The Wave Authors
+// Copyright 2026 The Wave Authors
 //
 // Licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,6 +7,7 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -207,6 +208,28 @@ private:
 
     // Set reuse flags based on new order.
     setReuseFlagsForOrder(scheduled.getArrayRef());
+
+    // Insert sched.barrier ops to prevent LLVM from reordering.
+    insertSchedBarriers(scheduled.getArrayRef());
+  }
+
+  /// Insert rocdl.sched.barrier ops before, between, and after WMMA ops.
+  static void insertSchedBarriers(ArrayRef<Operation *> wmmaOps) {
+    if (wmmaOps.empty())
+      return;
+
+    OpBuilder builder(wmmaOps.front()->getContext());
+
+    // Insert barrier before the first op.
+    builder.setInsertionPoint(wmmaOps.front());
+    ROCDL::SchedBarrier::create(builder, wmmaOps.front()->getLoc(),
+                                /*mask=*/0);
+
+    // Insert barrier after each op (covers between ops and after last).
+    for (Operation *op : wmmaOps) {
+      builder.setInsertionPointAfter(op);
+      ROCDL::SchedBarrier::create(builder, op->getLoc(), /*mask=*/0);
+    }
   }
 
   /// Sets reuse flags based on the operation ordering.
