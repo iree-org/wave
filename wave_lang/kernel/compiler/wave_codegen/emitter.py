@@ -303,10 +303,10 @@ class WaveEmitter:
                 TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
             )
 
-        # Enable argumant preload on supported architectures.
+        # Enable arguments preloading on supported architectures.
         if self.options.target in ["gfx942", "gfx950"]:
             assert kernel_func_wrapper.arg_attrs is None, "unexpected arg_attrs"
-            # Copying IREE logic by setting inreg for all kernel argumants.
+            # Copying IREE logic by setting inreg for all kernel arguments.
             arg_attr = DictAttr.get({"llvm.inreg": UnitAttr.get()})
             kernel_func_wrapper.arg_attrs = ArrayAttr.get([arg_attr] * len(arg_types))
 
