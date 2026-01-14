@@ -68,7 +68,7 @@ def getitem(obj: Any, index: int): ...
 
 
 @define_schedule_op
-def stagger(loop: Any): ...
+def stagger(loop: Any, post_barrier_target: Any = None): ...
 
 
 @define_schedule_op
@@ -112,16 +112,19 @@ def extract_nodes(item):
 
 def get_nodes_from_ref(ref):
     """
-    Get the actual nodes from a reference (PipelineStageRef or list).
+    Get the actual nodes from a reference (PipelineStageRef, list, or fx.Node).
     """
     if isinstance(ref, PipelineStageRef):
         # For PipelineStageRef, return the pipelined iterate node directly
         return [ref.pipelined_iterate_node]
+    elif isinstance(ref, fx.Node):
+        # Direct fx.Node - wrap in list
+        return [ref]
     elif isinstance(ref, (list, tuple)):
         # Direct list of nodes
         return list(ref)
     else:
-        raise ValueError(f"Expected PipelineStageRef or list, got {type(ref)}")
+        raise ValueError(f"Expected PipelineStageRef, fx.Node or list, got {type(ref)}")
 
 
 @dataclass
@@ -830,6 +833,7 @@ class Stagger(CustomScheduleOp):
         kernel_trace,
         constraints: list[Constraint],
         loop: Any,
+        post_barrier_target: Any = None,
     ):
         """
         Implements stagger scheduling by adding conditional barriers around a loop that blocks waves such that
@@ -847,6 +851,12 @@ class Stagger(CustomScheduleOp):
            wave 1 runs cluster 1
 
         This pattern continues, allowing N waves to execute clusters in parallel with a stagger offset.
+
+        Args:
+            loop: The loop reference (PipelineStageRef or list)
+            post_barrier_target: Optional target node after which to place the post-loop conditional barrier.
+                                 If None, the barrier is placed immediately after the loop.
+                                 If provided, the barrier is placed after this target node.
         """
         from ..wave.schedule_reordering import add_conditional_barriers_to_loop
         from ..wave.utils.general_utils import get_hardware_constraint
@@ -864,8 +874,17 @@ class Stagger(CustomScheduleOp):
         if hardware_constraint is None:
             raise ValueError("Stagger requires HardwareConstraint")
 
+        # Get the target node for post-loop barrier placement
+        post_barrier_node = None
+        if post_barrier_target is not None:
+            # get_nodes_from_ref now handles fx.Node, PipelineStageRef, and list
+            post_barrier_nodes = get_nodes_from_ref(post_barrier_target)
+            if post_barrier_nodes and len(post_barrier_nodes) > 0:
+                # Use the last node in the list as the placement target
+                post_barrier_node = post_barrier_nodes[-1]
+
         add_conditional_barriers_to_loop(
-            custom_iterate, kernel_trace, hardware_constraint
+            custom_iterate, kernel_trace, hardware_constraint, post_barrier_node
         )
 
         logger.info(f"Applied 2-way stagger scheduling to loop")

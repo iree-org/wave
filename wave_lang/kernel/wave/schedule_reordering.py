@@ -459,12 +459,21 @@ def insert_cond_barrier(cond_reg, trace, graph, location: Optional[CapturedLocat
     return cond_barrier
 
 
-def add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint):
+def add_conditional_barriers_to_loop(
+    custom_iterate, trace, hardware_constraint, post_barrier_target=None
+):
     """
     This function wraps loop with two cond barriers. First, hold half of the wave
     (waveHi) in a block before the loop so the barriers in the loop synchronize
     waves at the different point per the warp groups. After the loop, hold
     proceeding waves (waveLo) by calling cond_barrier on them.
+
+    Args:
+        custom_iterate: The iterate node for the loop
+        trace: The kernel trace
+        hardware_constraint: Hardware constraints for wave computation
+        post_barrier_target: Optional target node after which to place the post-loop
+                             conditional barrier. If None, places immediately after the loop.
     """
     graph = custom_iterate.graph
     # Compute midwave, where if wave_id > mid_wave => wave_high.
@@ -493,8 +502,14 @@ def add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
     # Generating and inserting cond_barriers to correct place in graph.
     with graph.inserting_before(custom_iterate.fx_node):
         insert_cond_barrier(is_wave_hi, trace, graph, custom_iterate.location)
-    with graph.inserting_after(custom_iterate.fx_node):
-        insert_cond_barrier(is_wave_lo, trace, graph, custom_iterate.location)
+
+    # Place post-loop barrier after the target node if specified, otherwise after the loop
+    if post_barrier_target is not None:
+        with graph.inserting_after(post_barrier_target):
+            insert_cond_barrier(is_wave_lo, trace, graph, custom_iterate.location)
+    else:
+        with graph.inserting_after(custom_iterate.fx_node):
+            insert_cond_barrier(is_wave_lo, trace, graph, custom_iterate.location)
     return
 
 
