@@ -828,10 +828,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
-    original_type = value.type
-    idx = arith_d.index_cast(element_type, value)
-    res = gpu_d.subgroup_broadcast(idx, gpu_d.BroadcastType.first_active_lane)
-    res = arith_d.index_cast(original_type, res)
+    res = gpu_d.subgroup_broadcast(value, gpu_d.BroadcastType.first_active_lane)
     return res
 
 
@@ -892,6 +889,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             bounds[s] - global_tile_index_current[s].start for s in symbolic_shape
         ]
         local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
+        local_bounds = [assume_index_subgroup_uniform(b, i32) for b in local_bounds]
 
         strides = strides_from_symbolic_shape(
             IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
@@ -899,9 +897,13 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         # Descriptor assumes rightmost stride 1 and expect last stride as full data size
         strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
         strides = [gen_sympy_index(subs, s) for s in strides]
+        strides = [assume_index_subgroup_uniform(s, i32) for s in strides]
 
         distributed_shape_vals = [
             gen_sympy_index(subs, distributed_shape[s]) for s in symbolic_shape
+        ]
+        distributed_shape_vals = [
+            assume_index_subgroup_uniform(v, i32) for v in distributed_shape_vals
         ]
 
         d0 = vector_d.broadcast(vec_type_4, c0)
@@ -977,6 +979,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
         # Calculate shared memory offset from tile indices
         shared_index, _, _ = _build_start_indices(emitter, linearized_index)
+        shared_index = [assume_index_subgroup_uniform(idx, i32) for idx in shared_index]
 
         shared_index_offset = arith_d.muli(shared_index[0], element_byte_index)
         shared_byte_offset = arith_d.index_cast(i32, shared_index_offset)
