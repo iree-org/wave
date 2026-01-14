@@ -1,0 +1,92 @@
+// RUN: water-opt %s --water-wmma-matrix-reuse | FileCheck %s
+
+// Test: Consecutive ops with same B get reuseB, then same A gets reuseA.
+// CHECK-LABEL: func.func @reorder_for_reuse
+// CHECK-SAME:    (%[[A0:.*]]: vector<16xf16>, %[[A1:.*]]: vector<16xf16>, %[[B0:.*]]: vector<16xf16>, %[[B1:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>)
+func.func @reorder_for_reuse(
+    %a0: vector<16xf16>, %a1: vector<16xf16>,
+    %b0: vector<16xf16>, %b1: vector<16xf16>,
+    %c: vector<32xf32>) -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>) {
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B0]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B0]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B1]], %[[C]] {reuseA = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B1]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a0, %b0, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a1, %b0, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %2 = rocdl.wmma.f32.16x16x32.f16 %a0, %b1, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %3 = rocdl.wmma.f32.16x16x32.f16 %a1, %b1, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %0, %1, %2, %3 : vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>
+}
+
+// Test: Ops sharing B should get reuseB flag.
+// CHECK-LABEL: func.func @reuse_b_flag
+// CHECK-SAME:    (%[[A0:.*]]: vector<16xf16>, %[[A1:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>)
+func.func @reuse_b_flag(
+    %a0: vector<16xf16>, %a1: vector<16xf16>,
+    %b: vector<16xf16>, %c: vector<32xf32>) -> (vector<32xf32>, vector<32xf32>) {
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A0]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A1]], %[[B]], %[[C]] {reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a0, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a1, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %0, %1 : vector<32xf32>, vector<32xf32>
+}
+
+// Test: Chained accumulator ops preserve dependency order and get both reuse flags.
+// CHECK-LABEL: func.func @chained_accumulator
+// CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>)
+func.func @chained_accumulator(
+    %a: vector<16xf16>, %b: vector<16xf16>, %c: vector<32xf32>) -> vector<32xf32> {
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: %[[R0:.*]] = rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[R0]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %0 {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %1 : vector<32xf32>
+}
+
+// Test: Single WMMA op - no reordering, no barriers (sequence too small).
+// CHECK-LABEL: func.func @single_wmma
+func.func @single_wmma(
+    %a: vector<16xf16>, %b: vector<16xf16>, %c: vector<32xf32>) -> vector<32xf32> {
+  // CHECK-NOT: rocdl.sched.barrier
+  // CHECK: rocdl.wmma.f32.16x16x32.f16
+  // CHECK-NOT: rocdl.sched.barrier
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %0 : vector<32xf32>
+}
+
+// Test: Non-consecutive WMMA ops are processed as separate sequences.
+// CHECK-LABEL: func.func @non_consecutive_wmma
+// CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>, %[[X:.*]]: f32)
+func.func @non_consecutive_wmma(
+    %a: vector<16xf16>, %b: vector<16xf16>, %c: vector<32xf32>,
+    %x: f32) -> (vector<32xf32>, vector<32xf32>, f32) {
+  // Two separate sequences separated by arith.addf.
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: arith.addf
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %y = arith.addf %x, %x : f32
+  %2 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %3 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %0, %2, %y : vector<32xf32>, vector<32xf32>, f32
+}
