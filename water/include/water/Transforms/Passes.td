@@ -176,19 +176,8 @@ def WaterWMMAMatrixReusePass : Pass<"water-wmma-matrix-reuse"> {
   let description = [{
     This pass reorders ROCDL WMMA intrinsics within basic blocks to maximize
     the use of reuseA and reuseB flags. When consecutive WMMA operations share
-    the same A or B matrix operand, the hardware can keep that operand in
-    registers, avoiding redundant loads.
-
-    The pass performs the following:
-    1. Collects WMMA operations within each basic block.
-    2. Builds a dependency graph to determine valid reorderings.
-    3. Reorders operations to group those sharing A or B operands together.
-    4. Sets reuseA/reuseB flags on operations where the preceding operation
-       uses the same A/B operand.
-
-    This optimization is particularly beneficial for tiled matrix
-    multiplications where the same A or B tiles are reused across multiple
-    WMMA operations.
+    the same A or B matrix operand, the hardware can reuse this operand from
+    previous instruction.
   }];
   let dependentDialects = [
     "::mlir::ROCDL::ROCDLDialect",
