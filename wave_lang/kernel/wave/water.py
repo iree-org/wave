@@ -439,6 +439,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
+        ("water-wmma-matrix-reuse", {}, "gpu.module"),
         ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "convert-vector-to-llvm",
