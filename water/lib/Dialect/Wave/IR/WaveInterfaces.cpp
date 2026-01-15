@@ -181,6 +181,8 @@ llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
 llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
     wave::WaveTensorType from, wave::WaveTensorType &to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  if (!from || !from.getFullySpecified())
+    return ChangeResult::NoChange;
   llvm::FailureOr<ChangeResult> res =
       checkPropagateShapeConflict(from, to, fromName, toName, errs);
   if (failed(res) || *res == ChangeResult::NoChange)
@@ -222,6 +224,79 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     changeResult |= *res;
   }
   return changeResult;
+}
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
+                                         FailureOr<ChangeResult> rhs) {
+  if (failed(lhs) || failed(rhs))
+    return failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
+
+// Propagate type information from the reduction input type by removing the
+// reduction axis from it to the given type. Report errors to `errs` using
+// `toName` do identify the target type.
+static FailureOr<ChangeResult>
+propagateFromReductionInput(wave::WaveTensorType inputType,
+                            wave::WaveSymbolAttr axis, wave::WaveTensorType &to,
+                            StringRef toName, raw_ostream &errs) {
+  if (!inputType || !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  SmallVector<wave::WaveSymbolAttr> filteredShape = llvm::filter_to_vector(
+      inputType.getShape(),
+      [&](wave::WaveSymbolAttr dim) { return dim != axis; });
+  auto inferredType = wave::WaveTensorType::get(
+      inputType.getContext(), filteredShape, /*fully_specified=*/true,
+      inputType.getElementType(), inputType.getAddressSpace());
+
+  return wave::detail::propagateShapeInformation(inferredType, to, "input",
+                                                 toName, errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesForward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum, llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  // If init is present, we can propagate from it directly,
+  // otherwise propagate from input after removing the axis.
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          operandTypes[initOperandNum], resultTypes[0], "init", "result", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  return maybeChangeResult |
+         propagateFromReductionInput(inputType, axis, resultTypes[0], "result",
+                                     errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum,
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          resultTypes[0], operandTypes[initOperandNum], "result", "init", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  // Propagate "sideways" from input to init operand.
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  return maybeChangeResult |
+         propagateFromReductionInput(
+             inputType, axis, operandTypes[initOperandNum], "result", errs);
+
+  // TODO: we cannot propagate to input here because we don't know at which
+  // position the reduction axis should be. We may consider a form where we
+  // always reduce trailing dimensions and require a reshape before.
 }
 
 //-----------------------------------------------------------------------------
@@ -274,6 +349,48 @@ wave::detail::checkAndPropagateElementsPerThreadFromConstant(
     }
   }
   return changeResult;
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadForward(
+    wave::WaveSymbolAttr axis,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: not sure about that, it feels more like one element in general, not
+    // per thread.
+    wave::ElementsPerThreadLatticeValue expectedResult(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedResult, {}, resultElements,
+        "reduction along thread X dimension", "", "result", errs);
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      operandElements, resultElements, "operands", "results", errs);
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadBackward(
+    wave::WaveSymbolAttr axis, unsigned int initOperandNum,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: same as above.
+    wave::ElementsPerThreadLatticeValue expectedOperand(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedOperand, {}, operandElements.slice(initOperandNum, 1),
+        "reduction along thread X dimension", "", "operands", errs);
+
+    // TODO: do we need to have elements per thread attribute here so we can set
+    // it as lattice value for input?
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "operands", "results", errs);
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(

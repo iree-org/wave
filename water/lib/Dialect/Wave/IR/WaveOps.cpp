@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -22,7 +24,9 @@
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -449,17 +453,6 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   lattice = newLattice;
   return ChangeResult::Change;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                  FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Update index expressions of the result of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
@@ -1277,7 +1270,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
       computeElementsPerThreadForOperand(
           getAccumulatorMutable().getOperandNumber());
@@ -1296,7 +1289,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // For MMA, the accumulator should have the same elements per thread as the
   // result. The LHS and RHS operands may have different constraints based on
   // their dimensions.
@@ -1581,7 +1574,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // ReadOp only propagates elements_per_thread attribute to result (register).
   // Memory operand is ignored for propagation - you can read any number of
   // elements from memory regardless of how many were written.
@@ -1599,7 +1592,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &) {
+    llvm::raw_ostream &, const wave::ElementsPerThreadInit &) {
   // ReadOp doesn't propagate backward to memory operand.
   // Memory is decoupled from register dataflow for elements_per_thread.
   return mlir::ChangeResult::NoChange;
@@ -1694,7 +1687,7 @@ LogicalResult WriteOp::verify() {
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only validates that elements_per_thread attribute matches register
   // operand. Memory operand is ignored for propagation - you can write to
   // memory with any layout.
@@ -1716,7 +1709,7 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only propagates backward to register operand (value_to_store).
   // Memory operand is ignored - you can write any layout to memory.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
@@ -1852,4 +1845,85 @@ LogicalResult wave::ReciprocalOp::verify() {
     return emitOpError("requires float element type, but got ") << elementType;
 
   return success();
+}
+
+//-----------------------------------------------------------------------------
+// Reductions
+//-----------------------------------------------------------------------------
+
+// Common verification logic for types of reduction operations. We expect the
+// input type to have one more dimension that precisely matches the reduction
+// axis.
+template <typename OpTy>
+static LogicalResult verifyReductionOperationTypes(OpTy op) {
+  auto inputType = dyn_cast<WaveTensorType>(op.getInput().getType());
+  auto initType = dyn_cast<WaveTensorType>(op.getInit().getType());
+  auto resultType = dyn_cast<WaveTensorType>(op.getResult().getType());
+
+  if (inputType && inputType.getFullySpecified()) {
+    auto it = llvm::find(inputType.getShape(), op.getAxis());
+    if (it == inputType.getShape().end()) {
+      return op.emitOpError()
+             << "reduction along a non-existing dimension " << op.getAxis();
+    }
+    size_t axisIndex = std::distance(inputType.getShape().begin(), it);
+
+    SmallVector<int> remainingDimensions;
+    remainingDimensions.reserve(inputType.getRank() - 1);
+    llvm::append_range(remainingDimensions, llvm::seq<int>(0, axisIndex));
+    llvm::append_range(remainingDimensions,
+                       llvm::seq<int>(axisIndex + 1, inputType.getRank()));
+
+    if (initType && initType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != initType.getRank()) {
+        return op.emitOpError() << "init tensor rank (" << initType.getRank()
+                                << ") must be one less than input tensor rank ("
+                                << inputType.getRank() << ")";
+      }
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op.getLoc(), "input", inputType, remainingDimensions, "init",
+              initType, llvm::to_vector(llvm::seq<int>(initType.getRank()))))) {
+        return failure();
+      }
+    }
+
+    if (resultType && resultType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != resultType.getRank()) {
+        return op.emitOpError()
+               << "result tensor rank (" << resultType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op.getLoc(), "input", inputType, remainingDimensions, "result",
+              resultType,
+              llvm::to_vector(llvm::seq<int>(resultType.getRank()))))) {
+        return failure();
+      }
+    }
+  }
+
+  if (failed(wave::detail::verifyTypesCompatible(
+          initType, resultType,
+          /*includeAddressSpace=*/true, op.getLoc(), "init", "result"))) {
+    return failure();
+  }
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// SumOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::SumOp::verify() {
+  return verifyReductionOperationTypes(*this);
+}
+
+//-----------------------------------------------------------------------------
+// MaxElementOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::MaxElementOp::verify() {
+  return verifyReductionOperationTypes(*this);
 }

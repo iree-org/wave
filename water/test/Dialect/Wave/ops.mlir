@@ -503,4 +503,18 @@ func.func @shuffle_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
   // CHECK: wave.shuffle xor
   %0 = wave.shuffle xor %arg0, 16, 64 : (vector<4xf32>) -> vector<4xf32>
   return %0 : vector<4xf32>
+  }
+
+// -----
+
+func.func @sum(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @max(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  %result = wave.max_element %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
 }
