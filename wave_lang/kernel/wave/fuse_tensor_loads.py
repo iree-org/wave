@@ -335,13 +335,6 @@ def fuse_tensor_loads(
     waves_per_block = hardware_constraint.waves_per_block
     wave_count = subs_idxc(math.prod(waves_per_block))
 
-    if options.specialize:
-        logger.info(
-            f"Skipping tensor load fusion: Specialization option is set. "
-            "Specialization with fused-tensor loads are not supported yet."
-        )
-        return
-
     # Check if we have an even number of waves (required for fusion)
     if (
         not is_literal(wave_count)
