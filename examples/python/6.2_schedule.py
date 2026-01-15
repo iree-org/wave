@@ -691,8 +691,8 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
     M_val, N_val, K_val = shape
     Block_M, Block_N, Block_K = 64, 32, 64
     unroll_factor = (
-        K_val // Block_K - 2
-    )  ## get unroll factor to fully unroll the loop, substract by 2 for the prefetch
+        8  ## Unrolling by 8 should be enough for the backend to infer aliasing metadata
+    )
     options = WaveCompileOptions(
         subs={
             M: M_val,
