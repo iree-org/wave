@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 from .kernel_pipeline_shared import KReg, KVReg, KRegRange, KInstr, KImm
+from .instruction_registry import Instruction
 
 
 class _MFMASupport:
@@ -70,7 +71,7 @@ class _MFMASupport:
             # MFMA with zero accumulator: v_mfma dst, a, b, 0
             self.program.emit(
                 KInstr(
-                    "v_mfma_f32_16x16x16_f16",
+                    Instruction.V_MFMA_F32_16X16X16_F16,
                     (result_range,),
                     (a_range, b_range, KImm(0)),
                     comment="MFMA with zero accumulator",
@@ -130,7 +131,7 @@ class _MFMASupport:
             # MFMA with zero accumulator: v_mfma dst, a, b, 0
             self.program.emit(
                 KInstr(
-                    "v_mfma_f32_16x16x32_f16",
+                    Instruction.V_MFMA_F32_16X16X32_F16,
                     (result_range,),
                     (a_range, b_range, KImm(0)),
                     comment="MFMA 16x16x32 with zero accumulator",

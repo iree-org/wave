@@ -37,6 +37,7 @@ from .kernel_ir import (
     KOperand,
 )
 from .instruction_formatter import get_formatter
+from .instruction_registry import Instruction
 
 
 @dataclass
@@ -429,7 +430,7 @@ class KernelGenerator:
             a = self._resolve_operand(instr.uses[1])
             b = self._resolve_operand(instr.uses[2])
             return self._formatter.format(
-                "v_mfma_f32_16x16x16_f16",
+                Instruction.V_MFMA_F32_16X16X16_F16,
                 defs=[acc],
                 uses=[a, b, acc],
                 comment=instr.comment,
@@ -443,7 +444,7 @@ class KernelGenerator:
             a = self._resolve_operand(instr.uses[1])
             b = self._resolve_operand(instr.uses[2])
             return self._formatter.format(
-                "v_mfma_f32_16x16x32_f16",
+                Instruction.V_MFMA_F32_16X16X32_F16,
                 defs=[acc],
                 uses=[a, b, acc],
                 comment=instr.comment,

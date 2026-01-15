@@ -77,7 +77,7 @@ class _CompilationPasses:
 
         # Apply accumulator-init optimization (explicit pass; runs before ticketing
         # so downstream analyses see the final, semantically accurate stream).
-        self._apply_accumulator_init_optimization()
+        self._optimize_accumulator_init()
 
         # Optionally insert/coalesce waitcnt using ticketing.
         # Must run before hazard mitigation/regalloc so liveness sees the final stream.
@@ -374,10 +374,6 @@ class _CompilationPasses:
 
         # Note: accumulator-init optimization is run as a dedicated pass from finalize().
 
-    def _apply_accumulator_init_optimization(self) -> None:
-        """Apply accumulator-init optimization as a standalone pass."""
-        self._optimize_accumulator_init()
-
     def _optimize_accumulator_init(self):
         """
         Optimize accumulator initialization by using immediate 0 in the first MFMA.
@@ -490,16 +486,18 @@ class _CompilationPasses:
             to_delete.add(init_idx)
 
             if len(mfma_instr.uses) < 3:
-                continue
+                raise ValueError(
+                    f"Malformed MFMA instruction: expected 3 uses, got {len(mfma_instr.uses)}"
+                )
 
             acc_range = mfma_instr.uses[0]
             a_range = mfma_instr.uses[1]
             b_range = mfma_instr.uses[2]
 
             if mfma_instr.name == "_mfma_acc":
-                isa_name = "v_mfma_f32_16x16x16_f16"
+                isa_name = Instruction.V_MFMA_F32_16X16X16_F16
             else:
-                isa_name = "v_mfma_f32_16x16x32_f16"
+                isa_name = Instruction.V_MFMA_F32_16X16X32_F16
 
             new_mfma = KInstr(
                 isa_name,
