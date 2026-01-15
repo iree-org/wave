@@ -203,7 +203,7 @@ def schedule_reduction(
     )
 
 
-def construct_conditional_pipelined_loop(
+def build_guarded_pipeline_with_remainder(
     trace: CapturedTrace,
     reduction: Iterate,
     reduction_graph: fx.Graph,
@@ -435,7 +435,7 @@ def construct_conditional_pipelined_loop(
     return pipelined_node, node_mapping
 
 
-def construct_pipelined_loop_with_conditional(
+def construct_pipelined_loop_adaptive(
     trace: CapturedTrace,
     reduction: Iterate,
     reduction_graph: fx.Graph,
@@ -492,7 +492,7 @@ def construct_pipelined_loop_with_conditional(
 
     # For dynamic shapes, emit conditional + pipelined loop + remainder loop
     # Call helper function to build the conditional structure
-    return construct_conditional_pipelined_loop(
+    return build_guarded_pipeline_with_remainder(
         trace,
         reduction,
         reduction_graph,
@@ -543,7 +543,7 @@ def apply_pipelined_schedule(
     # For static shapes, the same structure is emitted and later compiler
     # passes will optimize away the conditional or remainder loop as needed.
 
-    return construct_pipelined_loop_with_conditional(
+    return construct_pipelined_loop_adaptive(
         trace,
         reduction,
         reduction_graph,
