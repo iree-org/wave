@@ -122,6 +122,41 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         else:
             self._current_scope[key] = reg
 
+    def _handle_wgid(self, name: str, cache_key: tuple) -> KVReg:
+        """Handle workgroup ID symbol emission.
+
+        Args:
+            name: The symbol name ('wgid_x', 'wgid_y', or 'wgid_z').
+            cache_key: The cache key for CSE.
+
+        Returns:
+            A VGPR containing the workgroup ID.
+
+        Raises:
+            RuntimeError: If the workgroup ID is not enabled in ABI.
+        """
+        axis = name[-1]  # 'x', 'y', or 'z'
+        sreg_map = {
+            "wgid_x": self.ctx.program.abi.workgroup_id_x_sreg,
+            "wgid_y": self.ctx.program.abi.workgroup_id_y_sreg,
+            "wgid_z": self.ctx.program.abi.workgroup_id_z_sreg,
+        }
+        sreg = sreg_map[name]
+        if sreg is None:
+            raise RuntimeError(f"{name} requested but not enabled in ABI")
+
+        result = self.ctx.vreg()
+        self.ctx.program.emit(
+            KInstr(
+                "v_mov_b32",
+                (result,),
+                (sreg,),
+                comment=f"{name} from s{sreg.index}",
+            )
+        )
+        self._insert_cache(cache_key, result, global_scope=True)
+        return result
+
     def _get_or_materialize_const(self, value: int) -> KVReg:
         """
         Get or materialize a large constant, using cache to avoid duplicates.
@@ -585,44 +620,10 @@ class KernelIRExprEmitter(_FloorExpressionOps):
                 self._insert_cache(cache_key, result, global_scope=True)
                 return result
 
-            # Handle workgroup ID symbols - also cache in global scope
-            if name == "wgid_x":
-                result = self.ctx.vreg()
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_mov_b32",
-                        (result,),
-                        (KPhysSReg(2),),
-                        comment="wgid_x from s2",
-                    )
-                )
-                self._insert_cache(cache_key, result, global_scope=True)
-                return result
-
-            if name == "wgid_y":
-                result = self.ctx.vreg()
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_mov_b32",
-                        (result,),
-                        (KPhysSReg(3),),
-                        comment="wgid_y from s3",
-                    )
-                )
-                self._insert_cache(cache_key, result, global_scope=True)
-                return result
-
-            if name == "wgid_z":
-                result = self.ctx.vreg()
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_mov_b32",
-                        (result,),
-                        (KPhysSReg(4),),
-                        comment="wgid_z from s4",
-                    )
-                )
-                self._insert_cache(cache_key, result, global_scope=True)
+            # Handle workgroup ID symbols - use ABI-defined SGPR locations
+            # Also cache in global scope since they're loop-invariant
+            if name in ("wgid_x", "wgid_y", "wgid_z"):
+                result = self._handle_wgid(name, cache_key)
                 return result
 
             # Handle SGPR references (like loop counters: s8, s9, etc.)

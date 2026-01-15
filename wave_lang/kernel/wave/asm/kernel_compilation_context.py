@@ -56,6 +56,10 @@ from .kernel_loops import _LoopSupport
 from .kernel_mfma import _MFMASupport
 from .kernel_passes import _CompilationPasses
 
+# ABI Constants
+# Number of SGPRs used for kernarg segment pointer (s[0:1])
+KERNARG_PTR_SGPRS = 2
+
 
 @dataclass
 class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
@@ -150,20 +154,44 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     _kernarg_pairs: Dict[int, KRegRange] = field(default_factory=dict, init=False)
     _kernargs_emitted: bool = field(default=False, init=False)
 
+    # Kernel argument preloading: if True, use preloaded SGPRs instead of s_load
+    # When enabled, hardware preloads args into s[2:3], s[4:5], etc. at kernel start
+    use_kernarg_preloading: bool = False
+
+    # Number of kernel arguments (needed for preloading SGPR reservation)
+    num_kernargs: int = 0
+
+    # Kernel name (used for generating unique labels)
+    kernel_name: str = "kernel"
+
     # Statistics
     _cse_hits: int = field(default=0, init=False)
 
+    # Precolored SGPRs: virtual SGPR -> physical SGPR index
+    # Used to force kernarg SGPRs to their hardware-preloaded locations
+    _precolored_sregs: Dict[KSReg, int] = field(default_factory=dict, init=False)
+
     def __post_init__(self):
+        # Calculate preload SGPR count (2 SGPRs per 64-bit pointer arg)
+        preload_sgpr_count = self.num_kernargs * 2 if self.use_kernarg_preloading else 0
+
+        # Workgroup IDs come after preloaded args (if any)
+        # Layout: s[0:1]=kernarg_ptr, s[2:2+preload-1]=preloaded args, then wgid
+        wgid_start = KERNARG_PTR_SGPRS + preload_sgpr_count
+
         # Initialize ABI
         abi = KernelABI()
         if self.use_flat_tid:
             abi.flat_tid_vreg = KPhysVReg(0)
         if self.use_workgroup_ids[0]:
-            abi.workgroup_id_x_sreg = KPhysSReg(2)
+            abi.workgroup_id_x_sreg = KPhysSReg(wgid_start)
         if self.use_workgroup_ids[1]:
-            abi.workgroup_id_y_sreg = KPhysSReg(3)
+            abi.workgroup_id_y_sreg = KPhysSReg(wgid_start + 1)
         if self.use_workgroup_ids[2]:
-            abi.workgroup_id_z_sreg = KPhysSReg(4)
+            abi.workgroup_id_z_sreg = KPhysSReg(wgid_start + 2)
+
+        # Set preload count in ABI for reservation
+        abi.preload_sgpr_count = preload_sgpr_count
 
         # Create program
         self.program = KernelProgram(
@@ -252,8 +280,17 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         """
         Emit kernel argument loading code at the start of the kernel.
 
-        This emits s_load_dwordx2 instructions for each kernel argument,
-        loading the pointer from the kernarg segment.
+        IMPORTANT: We ALWAYS emit s_load_dwordx2 instructions, even when
+        hardware preloading is enabled. This follows LLVM's pattern where:
+        1. The preloading metadata tells hardware to preload args into SGPRs
+        2. The code still issues s_load instructions for compatibility
+        3. If hardware preloading worked, the loads complete instantly (or are skipped)
+        4. If preloading didn't work (unsupported/disabled), loads still work
+
+        When preloading is enabled, we also "precolor" the allocated SGPRs to
+        match the hardware preload locations (s[2:3], s[4:5], etc.). This ensures
+        the s_load targets the same registers where hardware preloads, making the
+        s_load idempotent (if preloading worked) or functional (if it didn't).
 
         Args:
             num_args: Number of kernel arguments
@@ -262,14 +299,30 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
             return
 
         # Kernarg pointer is always at s[0:1] (user SGPR)
-        kernarg_ptr = KRegRange(KPhysSReg(0), 2)
+        kernarg_ptr = KRegRange(KPhysSReg(0), KERNARG_PTR_SGPRS)
 
         for i in range(num_args):
             # Allocate SGPR pair for this kernel argument
             pair = self.program.alloc_sreg_range(2, alignment=2)
             self._kernarg_pairs[i] = pair
 
-            # Emit s_load_dwordx2 to load the pointer
+            # If preloading is enabled, pin this virtual SGPR pair to the
+            # hardware-preloaded physical location: s[2+i*2 : 3+i*2]
+            # This ensures our s_load targets the same regs hardware uses.
+            if self.use_kernarg_preloading:
+                phys_base = KERNARG_PTR_SGPRS + (i * 2)  # s[2:3], s[4:5], s[6:7], ...
+                # Precolor both SGPRs in the pair
+                base_sreg = pair.base_reg
+                if isinstance(base_sreg, KSReg):
+                    self._precolored_sregs[base_sreg] = phys_base
+                    # For the second SGPR in the pair
+                    second_sreg = KSReg(base_sreg.id + 1)
+                    self._precolored_sregs[second_sreg] = phys_base + 1
+                # NOTE: We still emit s_load below for compatibility!
+                # If preloading works, the s_load completes instantly.
+                # If preloading doesn't work, the s_load ensures correctness.
+
+            # ALWAYS emit s_load_dwordx2 to load the pointer (for compatibility)
             offset = i * 8
             self.program.emit(
                 KInstr(
@@ -280,10 +333,8 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
                 )
             )
 
-        # Emit s_waitcnt to wait for all kernarg loads
+        # ALWAYS emit s_waitcnt to wait for all kernarg loads
         if num_args > 0:
-            # Encode lgkmcnt(0) as immediate: lgkmcnt is bits [11:8]
-            # lgkmcnt(0) = 0 in bits [11:8]
             self.program.emit(
                 KInstr(
                     "s_waitcnt",
@@ -293,10 +344,8 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
                 )
             )
 
-            # Emit empty line for readability
-            self.program.emit(
-                KInstr(Instruction._COMMENT, defs=(), uses=(), comment="")
-            )
+        # Emit empty line for readability
+        self.program.emit(KInstr(Instruction._COMMENT, defs=(), uses=(), comment=""))
 
         self._kernargs_emitted = True
 
@@ -717,12 +766,16 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         self.program.emit(KInstr(Instruction.S_MOV_B32, (M0,), (src,), comment=comment))
 
     def s_cbranch_scc1(self, label: str, comment: str = None):
-        """Emit s_cbranch_scc1 (label stored in comment)."""
-        self.program.emit(KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment=label))
+        """Emit s_cbranch_scc1 with explicit branch target."""
+        self.program.emit(
+            KInstr(Instruction.S_CBRANCH_SCC1, (), (), target=label, comment=comment)
+        )
 
     def s_branch(self, label: str, comment: str = None):
-        """Emit s_branch (label stored in comment)."""
-        self.program.emit(KInstr(Instruction.S_BRANCH, (), (), comment=label))
+        """Emit s_branch with explicit branch target."""
+        self.program.emit(
+            KInstr(Instruction.S_BRANCH, (), (), target=label, comment=comment)
+        )
 
     # =========================================================================
     # SRD Management (for kernel IR path)
@@ -834,58 +887,61 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
 
         return result
 
-    def ensure_wgid_x(self) -> KVReg:
-        """Get a VGPR containing wgid_x, defined in the prologue."""
-        if self._prologue_wgid_x is not None:
-            return self._prologue_wgid_x
+    def _emit_wgid_prologue(self, sreg: Optional[KPhysSReg], axis: str) -> KVReg:
+        """Helper to emit workgroup ID prologue for a given axis.
+
+        Args:
+            sreg: The ABI-defined SGPR for this workgroup ID, or None if not enabled.
+            axis: The axis name ('x', 'y', or 'z') for error messages and comments.
+
+        Returns:
+            A VGPR containing the workgroup ID.
+
+        Raises:
+            RuntimeError: If the workgroup ID is not enabled in ABI.
+        """
+        if sreg is None:
+            raise RuntimeError(f"wgid_{axis} requested but not enabled in ABI")
 
         result = self.vreg()
-        self._prologue_wgid_x = result
         self._pending_abi_prologue.append(
             KInstr(
                 Instruction.V_MOV_B32,
                 (result,),
-                (KPhysSReg(2),),
-                comment="wgid_x from s2",
+                (sreg,),
+                comment=f"wgid_{axis} from s{sreg.index}",
             )
         )
         return result
+
+    def ensure_wgid_x(self) -> KVReg:
+        """Get a VGPR containing wgid_x, defined in the prologue."""
+        if self._prologue_wgid_x is not None:
+            return self._prologue_wgid_x
+        self._prologue_wgid_x = self._emit_wgid_prologue(
+            self.program.abi.workgroup_id_x_sreg, "x"
+        )
+        return self._prologue_wgid_x
 
     def ensure_wgid_y(self) -> KVReg:
         """Get a VGPR containing wgid_y, defined in the prologue."""
         if self._prologue_wgid_y is not None:
             return self._prologue_wgid_y
-
-        result = self.vreg()
-        self._prologue_wgid_y = result
-        self._pending_abi_prologue.append(
-            KInstr(
-                Instruction.V_MOV_B32,
-                (result,),
-                (KPhysSReg(3),),
-                comment="wgid_y from s3",
-            )
+        self._prologue_wgid_y = self._emit_wgid_prologue(
+            self.program.abi.workgroup_id_y_sreg, "y"
         )
-        return result
+        return self._prologue_wgid_y
 
     def ensure_wgid_z(self) -> KVReg:
         """Get a VGPR containing wgid_z, defined in the prologue."""
         if self._prologue_wgid_z is not None:
             return self._prologue_wgid_z
-
-        result = self.vreg()
-        self._prologue_wgid_z = result
-        self._pending_abi_prologue.append(
-            KInstr(
-                Instruction.V_MOV_B32,
-                (result,),
-                (KPhysSReg(4),),
-                comment="wgid_z from s4",
-            )
+        self._prologue_wgid_z = self._emit_wgid_prologue(
+            self.program.abi.workgroup_id_z_sreg, "z"
         )
-        return result
+        return self._prologue_wgid_z
 
-    def _emit_srd_prologue(self):
+    def _emit_srd_prologue(self) -> None:
         """
         Emit all queued SRD setup and ABI prologue instructions at the start of the program.
 
@@ -902,39 +958,134 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
 
         # Then, emit SRD setup if any
         if self._pending_srd_setups:
-            kernarg_pair = KRegRange(self.program.abi.kernarg_ptr_sreg_lo, 2)  # s[0:1]
+            kernarg_pair = KRegRange(
+                self.program.abi.kernarg_ptr_sreg_lo, KERNARG_PTR_SGPRS
+            )  # s[0:1]
 
-            for srd_range, arg_idx, limit_bytes in self._pending_srd_setups:
-                kernarg_offset = arg_idx * 8  # Each pointer is 8 bytes
+            if self.use_kernarg_preloading:
+                # With preloading enabled, follow LLVM's pattern:
+                # 1. Load args into PRELOAD LOCATIONS (s[2:3], s[4:5], etc.)
+                # 2. s_waitcnt
+                # 3. s_branch + alignment
+                # 4. Copy from preload locations to SRD ranges + fill SRD
 
-                # Define the full SRD range (ensures 4-alignment for allocation)
+                # First, emit s_load into preload locations (before branch)
+                for srd_range, arg_idx, limit_bytes in self._pending_srd_setups:
+                    preloaded_base = KERNARG_PTR_SGPRS + (
+                        arg_idx * 2
+                    )  # s[2:3], s[4:5], etc.
+                    preloaded_pair = KRegRange(KPhysSReg(preloaded_base), 2)
+                    kernarg_offset = arg_idx * 8
+
+                    # Load into preload location (matches LLVM pattern)
+                    prologue_instrs.append(
+                        KInstr(
+                            "s_load_dwordx2",
+                            defs=(preloaded_pair,),
+                            uses=(kernarg_pair, KImm(kernarg_offset)),
+                            comment=f"Load arg{arg_idx} into preload location",
+                        )
+                    )
+
+                # Wait for all preload-location loads
                 prologue_instrs.append(
                     KInstr(
-                        "_srd_define",  # Pseudo: defines the range for allocation purposes
-                        (srd_range,),
+                        "s_waitcnt",
                         (),
-                        comment=f"Define SRD range for arg{arg_idx}",
+                        ("lgkmcnt(0)",),
+                        comment="wait for preload loads",
                     )
                 )
 
-                # Load base address into first 2 regs of the range
+                # Branch to aligned entry + padding
+                # Use kernel-specific label name for uniqueness when multiple kernels
+                # are emitted into a single assembly file
+                preload_label = f".L_{self.kernel_name}_main"
+
+                # Use target field for branch destination (cleaner than comment)
                 prologue_instrs.append(
                     KInstr(
-                        "_srd_load_base",  # Pseudo: renders as s_load_dwordx2
+                        "_preload_branch",
                         (),
-                        (srd_range, kernarg_pair, KImm(kernarg_offset)),
-                        comment=f"Load base addr for arg{arg_idx}",
+                        (),
+                        target=preload_label,  # Explicit branch target field
+                    )
+                )
+                # Use _raw_asm for alignment directive (not control flow)
+                prologue_instrs.append(
+                    KInstr(
+                        Instruction._RAW_ASM,
+                        (),
+                        (),
+                        comment=".p2align 8",  # 256-byte alignment
+                    )
+                )
+                # Use standard _label so CFG recognizes it via is_label
+                prologue_instrs.append(
+                    KInstr(
+                        Instruction._LABEL,
+                        (),
+                        (),
+                        comment=preload_label,  # Label name in comment
                     )
                 )
 
-            # Wait for all SRD loads
-            prologue_instrs.append(
-                KInstr(
-                    "s_waitcnt", (), ("lgkmcnt(0)",), comment="wait for all SRD loads"
-                )
-            )
+                # Now copy from preload locations to SRD ranges
+                for srd_range, arg_idx, limit_bytes in self._pending_srd_setups:
+                    preloaded_base = KERNARG_PTR_SGPRS + (arg_idx * 2)
+                    preloaded_pair = KRegRange(
+                        KPhysSReg(preloaded_base), KERNARG_PTR_SGPRS
+                    )
 
-            # Fill SRD[2] and SRD[3] for each
+                    # Copy from preload location to SRD base
+                    # defs=(srd_range,) because we WRITE to SRD base registers
+                    # uses=(preloaded_pair,) because we READ from preload locations
+                    # Note: _srd_copy_base now defines the SRD range, so no separate
+                    # _srd_define is needed (that would cause SSA violation)
+                    prologue_instrs.append(
+                        KInstr(
+                            "_srd_copy_base",
+                            defs=(srd_range,),
+                            uses=(preloaded_pair,),
+                            comment=f"Copy arg{arg_idx} to SRD base",
+                        )
+                    )
+            else:
+                # Without preloading, load directly into SRD ranges
+                for srd_range, arg_idx, limit_bytes in self._pending_srd_setups:
+                    kernarg_offset = arg_idx * 8
+
+                    # Define the full SRD range
+                    prologue_instrs.append(
+                        KInstr(
+                            "_srd_define",
+                            (srd_range,),
+                            (),
+                            comment=f"Define SRD range for arg{arg_idx}",
+                        )
+                    )
+
+                    # Load base address into first 2 regs of the range
+                    prologue_instrs.append(
+                        KInstr(
+                            "_srd_load_base",
+                            (),
+                            (srd_range, kernarg_pair, KImm(kernarg_offset)),
+                            comment=f"Load base addr for arg{arg_idx}",
+                        )
+                    )
+
+                # Wait for all SRD loads
+                prologue_instrs.append(
+                    KInstr(
+                        "s_waitcnt",
+                        (),
+                        ("lgkmcnt(0)",),
+                        comment="wait for all SRD loads",
+                    )
+                )
+
+            # Fill SRD[2] and SRD[3] for each (same for both preload and non-preload)
             for srd_range, arg_idx, limit_bytes in self._pending_srd_setups:
                 prologue_instrs.append(
                     KInstr(

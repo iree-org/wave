@@ -289,6 +289,7 @@ class KInstr:
     - uses: Operands read by this instruction
     - constraints: Allocation constraints
     - comment: Optional comment for debugging
+    - target: Branch target label (for branch instructions)
 
     Note: Instructions are identified by name strings rather than enum opcodes.
     This allows the YAML instruction registry to be the single source of truth.
@@ -299,6 +300,7 @@ class KInstr:
     uses: Tuple[KOperand, ...]  # Used operands
     constraints: KInstrConstraints = field(default_factory=KInstrConstraints)
     comment: Optional[str] = None
+    target: Optional[str] = None  # Branch target label (cleaner than using comment)
 
     def get_virtual_defs(self) -> List[KVirtualReg]:
         """Get all virtual registers defined by this instruction."""
@@ -374,6 +376,14 @@ class KInstr:
     @property
     def is_branch(self) -> bool:
         """Check if this is a branch instruction."""
+        # _preload_branch is a pseudo that renders as s_branch - treat as branch
+        # so CFG builder correctly handles control flow. The branch target is
+        # stored in instr.comment to enable CFG edge resolution.
+        if self.name == "_preload_branch":
+            return True
+        if self.name.startswith("_"):
+            # Other pseudo-instructions are not branches
+            return False
         from .instruction_registry import is_branch_instruction
 
         return is_branch_instruction(self.name)
@@ -381,6 +391,9 @@ class KInstr:
     @property
     def is_conditional_branch(self) -> bool:
         """Check if this is a conditional branch."""
+        # Handle pseudo-instructions - they are not conditional branches
+        if self.name.startswith("_"):
+            return False
         from .instruction_registry import is_conditional_branch
 
         return is_conditional_branch(self.name)
@@ -412,6 +425,10 @@ class KernelABI:
     workgroup_id_y_sreg: Optional[KPhysSReg] = None
     workgroup_id_z_sreg: Optional[KPhysSReg] = None
 
+    # Number of SGPRs preloaded by hardware (for kernel argument preloading)
+    # When > 0, s[2:2+preload_count-1] are reserved for preloaded args
+    preload_sgpr_count: int = 0
+
     def get_reserved_vgprs(self) -> Set[int]:
         """Get set of reserved VGPR indices."""
         return {self.flat_tid_vreg.index}
@@ -425,6 +442,11 @@ class KernelABI:
             reserved.add(self.workgroup_id_y_sreg.index)
         if self.workgroup_id_z_sreg:
             reserved.add(self.workgroup_id_z_sreg.index)
+        # Reserve SGPRs for hardware-preloaded kernel arguments
+        # Preloaded args start at s[2] (after kernarg_ptr at s[0:1])
+        if self.preload_sgpr_count > 0:
+            for i in range(self.preload_sgpr_count):
+                reserved.add(2 + i)
         return reserved
 
 

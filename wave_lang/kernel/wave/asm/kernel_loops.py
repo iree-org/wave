@@ -102,12 +102,12 @@ class _LoopSupport:
 
         # Branch to body if SCC=1
         self.program.emit(
-            KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment=f"loop_{loop_id}_body")
+            KInstr(Instruction.S_CBRANCH_SCC1, (), (), target=f"loop_{loop_id}_body")
         )
 
         # Branch to exit if not taken
         self.program.emit(
-            KInstr(Instruction.S_BRANCH, (), (), comment=f"loop_{loop_id}_exit")
+            KInstr(Instruction.S_BRANCH, (), (), target=f"loop_{loop_id}_exit")
         )
 
         # Body label
@@ -141,7 +141,7 @@ class _LoopSupport:
 
         # Branch back to header
         self.program.emit(
-            KInstr(Instruction.S_BRANCH, (), (), comment=f"loop_{loop_id}_header")
+            KInstr(Instruction.S_BRANCH, (), (), target=f"loop_{loop_id}_header")
         )
 
     def end_loop(self):

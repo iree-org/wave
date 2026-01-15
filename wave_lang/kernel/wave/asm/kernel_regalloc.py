@@ -209,8 +209,18 @@ class KernelRegAlloc:
     _stats: AllocationStats = field(default_factory=AllocationStats, init=False)
 
     def __post_init__(self):
-        self._vgpr_pool = RegPool(RegClass.VGPR, self.max_vgprs, self.reserved_vgprs)
-        self._sgpr_pool = RegPool(RegClass.SGPR, self.max_sgprs, self.reserved_sgprs)
+        # Include precolored physical registers in the reserved sets
+        # This prevents the allocator from using them for other variables
+        vgpr_reserved = set(self.reserved_vgprs)
+        for vreg, phys in self.precolored_vregs.items():
+            vgpr_reserved.add(phys)
+
+        sgpr_reserved = set(self.reserved_sgprs)
+        for sreg, phys in self.precolored_sregs.items():
+            sgpr_reserved.add(phys)
+
+        self._vgpr_pool = RegPool(RegClass.VGPR, self.max_vgprs, vgpr_reserved)
+        self._sgpr_pool = RegPool(RegClass.SGPR, self.max_sgprs, sgpr_reserved)
 
     def reserve_vgpr(self, reg: int) -> None:
         """Reserve a physical VGPR (prevents allocation)."""

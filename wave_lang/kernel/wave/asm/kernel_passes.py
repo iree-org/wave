@@ -100,6 +100,7 @@ class _CompilationPasses:
             self.program,
             reserved_vgprs=reserved_vgprs,
             reserved_sgprs=reserved_sgprs,
+            precolored_sregs=self._precolored_sregs if self._precolored_sregs else None,
         )
 
         # Render

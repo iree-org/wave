@@ -768,6 +768,82 @@ For K-loops with MFMA operations, the backend automatically:
 - **Unique Labels**: Each loop gets unique labels (loop_N_header, loop_N_body, etc.)
 - **CFG-Based Liveness**: Live ranges correctly extended across loop iterations
 
+Kernel Argument Preloading (gfx950/MI350X)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On gfx950 (MI350X) with Code Object v5+, the ASM backend supports kernel argument
+preloading, a hardware feature that loads kernel arguments into SGPRs before kernel
+execution, eliminating ~100 cycle ``s_load`` latency at kernel startup.
+
+**How It Works**
+
+Without preloading, kernel arguments must be loaded from memory at kernel start::
+
+    # Without preloading - must wait for memory
+    s_load_dwordx2 s[8:9], s[0:1], 0x0   # Load arg0 from kernarg segment
+    s_load_dwordx2 s[12:13], s[0:1], 0x8 # Load arg1
+    s_load_dwordx2 s[16:17], s[0:1], 0x10 # Load arg2
+    s_waitcnt lgkmcnt(0)                  # Wait ~100 cycles!
+    # ... now can use args
+
+With preloading, the hardware pre-populates SGPRs before the kernel starts::
+
+    # With preloading - args already in s[2:3], s[4:5], s[6:7]
+    # Kernel can immediately copy to SRD locations and continue
+    s_mov_b64 s[8:9], s[2:3]    # Copy preloaded arg0 to SRD
+    # ... no waiting needed
+
+**SGPR Layout with Preloading**
+
+When preloading is enabled, the SGPR layout changes::
+
+    Without preloading:        With preloading (3 args):
+    s[0:1]  kernarg_ptr        s[0:1]  kernarg_ptr
+    s2      wgid_x             s[2:3]  preloaded arg0
+    s3      wgid_y             s[4:5]  preloaded arg1
+    s4      wgid_z             s[6:7]  preloaded arg2
+    s[8:11] SRD for arg0       s8      wgid_x
+    ...                        s9      wgid_y
+                               s10     wgid_z
+                               s[12:15] SRD for arg0
+                               ...
+
+**Implementation Pattern**
+
+The ASM backend follows LLVM's compatibility pattern:
+
+1. Emit ``s_load`` into preload locations (s[2:3], s[4:5], etc.) before branch
+2. ``s_waitcnt lgkmcnt(0)`` to wait for loads
+3. ``s_branch`` to 256-byte aligned entry point
+4. ``.p2align 8`` for alignment
+5. Copy from preload locations to SRD ranges using ``s_mov_b64``
+
+This ensures compatibility: if hardware preloading works, the ``s_load`` is idempotent
+(values already there); if preloading fails, the ``s_load`` provides the values.
+
+**Metadata Directives**
+
+Preloading requires specific AMDHSA metadata::
+
+    .amdhsa_user_sgpr_kernarg_preload_length 6  # 3 args × 2 SGPRs
+    .amdhsa_user_sgpr_kernarg_preload_offset 0
+    .amdhsa_user_sgpr_count 8                   # 2 (kernarg_ptr) + 6 (preloaded)
+
+**Performance Impact**
+
+For GEMM kernels with 3 pointer arguments, preloading provides approximately
+12-25% speedup by eliminating the ~100 cycle memory latency at kernel startup.
+The benefit is most significant for small kernels where startup overhead is
+a larger fraction of total execution time.
+
+**Configuration**
+
+Preloading is automatically enabled when:
+
+- Target is gfx950 or later (``targetid.startswith("gfx95")``)
+- Code object version is 5 or higher
+- Kernel arguments fit within hardware limit (max 16 SGPRs = 8 pointer args)
+
 Multi-Wave and Multi-Workgroup Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -798,7 +874,7 @@ When a kernel is dispatched across multiple workgroups (e.g., ``grid = [16, 16, 
    - ``.amdhsa_system_sgpr_workgroup_id_y 1`` if ``gpu.block_id y`` is used
    - ``.amdhsa_system_sgpr_workgroup_id_z 1`` if ``gpu.block_id z`` is used
 
-3. **Allocates SGPRs**: Places workgroup IDs at ``s2``, ``s3``, ``s4`` (after kernarg pointer)
+3. **Allocates SGPRs**: Places workgroup IDs after kernarg pointer and preloaded args (if any). Without preloading: ``s2``, ``s3``, ``s4``; with preloading (3 args): ``s8``, ``s9``, ``s10``
 4. **Uses in Addressing**: Workgroup IDs scale memory access for workgroup-local tiles
 
 **Example**: 256x256 MMA with 4 workgroups (2x2 grid), single wave per workgroup:

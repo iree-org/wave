@@ -78,6 +78,11 @@ class KernelMetadata:
     # Kernel arguments
     num_args: int = 0
 
+    # Kernel argument preloading (Code Object v5+)
+    # Number of dwords (SGPRs) to preload from kernarg segment
+    # For GEMM with 3 pointers (A, B, C): 3 * 2 = 6 SGPRs
+    kernarg_preload_length: int = 0
+
     # SRD upper word constant
     SRD127_96: int = 0x20000
 
@@ -116,10 +121,32 @@ class MetadataEmitter:
         lines.append(".section .rodata,#alloc")
         lines.append(".p2align 6")
         lines.append(f".amdhsa_kernel {m.name}")
-        lines.append("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
 
-        # User SGPR count
-        lines.append("  .amdhsa_user_sgpr_count 2")
+        # User SGPR count (2 for kernarg ptr + preloaded args)
+        user_sgpr_count = 2 + m.kernarg_preload_length
+        lines.append(f"  .amdhsa_user_sgpr_count {user_sgpr_count}")
+
+        # User SGPR configuration (following LLVM's order)
+        lines.append("  .amdhsa_user_sgpr_dispatch_ptr 0")
+        lines.append("  .amdhsa_user_sgpr_queue_ptr 0")
+        lines.append("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
+        lines.append("  .amdhsa_user_sgpr_dispatch_id 0")
+
+        # Kernel argument preloading (Code Object v5+)
+        # Preloads kernel args directly into SGPRs, saving ~100 cycles at kernel start
+        # Only emit these directives when:
+        # 1. Preload length is > 0 (preloading is enabled)
+        # 2. Code object version >= 5 (preloading is supported)
+        codeobj_version = int(m.codeobj) if m.codeobj.isdigit() else 0
+        if m.kernarg_preload_length > 0 and codeobj_version >= 5:
+            lines.append(
+                f"  .amdhsa_user_sgpr_kernarg_preload_length {m.kernarg_preload_length}"
+            )
+            lines.append("  .amdhsa_user_sgpr_kernarg_preload_offset 0")
+
+        lines.append("  .amdhsa_user_sgpr_private_segment_size 0")
+        lines.append("  .amdhsa_uses_dynamic_stack 0")
+        lines.append("  .amdhsa_enable_private_segment 0")
 
         # Resource usage (placeholders to be patched later)
         lines.append("  .amdhsa_accum_offset 0")  # patched later
@@ -291,8 +318,15 @@ def create_metadata(
     subgroup_size: int = 64,
     needs_wgid: Tuple[bool, bool, bool] = (False, False, False),
     num_args: int = 0,
+    kernarg_preload_length: int = 0,
 ) -> KernelMetadata:
-    """Create kernel metadata from parameters."""
+    """Create kernel metadata from parameters.
+
+    Args:
+        kernarg_preload_length: Number of SGPRs to preload from kernarg segment.
+            For pointer args, use 2 SGPRs per pointer (8 bytes each).
+            E.g., GEMM with 3 pointers (A, B, C) = 6 SGPRs.
+    """
     return KernelMetadata(
         name=name,
         targetid=targetid,
@@ -303,4 +337,5 @@ def create_metadata(
         needs_wgid_y=needs_wgid[1],
         needs_wgid_z=needs_wgid[2],
         num_args=num_args,
+        kernarg_preload_length=kernarg_preload_length,
     )

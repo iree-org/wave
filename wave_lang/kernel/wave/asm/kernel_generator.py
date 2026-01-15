@@ -234,6 +234,7 @@ class KernelGenerator:
             "_srd_copy_define": self._handle_srd_copy_define,
             "_g2s_srd_copy": self._handle_g2s_srd_copy,
             "_srd_load_base": self._handle_srd_load_base,
+            "_srd_copy_base": self._handle_srd_copy_base,
             "_srd_fill_size": self._handle_srd_fill_size,
             "_srd_fill_stride": self._handle_srd_fill_stride,
             "_label": self._handle_label,
@@ -248,6 +249,9 @@ class KernelGenerator:
             "buffer_load_dword_lds": self._handle_buffer_load_lds,
             "buffer_load_dwordx4_lds": self._handle_buffer_load_lds,
             "_init_acc_quad": self._handle_init_acc_quad,
+            # Preload entry point pattern: s_branch to aligned kernel entry
+            # Uses standard _label (handled by _handle_label) and _raw_asm for alignment
+            "_preload_branch": self._handle_preload_branch,
         }
         return handlers.get(name)
 
@@ -324,7 +328,7 @@ class KernelGenerator:
         return lines
 
     def _handle_srd_load_base(self, instr: KInstr) -> str:
-        """Load base address into SRD[0:1]."""
+        """Load base address into SRD[0:1] from kernarg segment."""
         srd_range = instr.uses[0]
         kernarg_pair = instr.uses[1]
         offset_imm = instr.uses[2]
@@ -344,6 +348,33 @@ class KernelGenerator:
             "s_load_dwordx2",
             defs=[f"s[{base}:{base+1}]"],
             uses=[kernarg_phys, offset],
+            comment=instr.comment,
+        )
+
+    def _handle_srd_copy_base(self, instr: KInstr) -> str:
+        """Copy preloaded base address into SRD[0:1] using s_mov_b64.
+
+        Used with kernel argument preloading where args are already in SGPRs.
+
+        Instruction format:
+            defs=(srd_range,)  - SRD range being written to
+            uses=(preloaded_pair,) - Preloaded arg registers being read from
+        """
+        # SRD range is in defs (we're writing to it)
+        srd_range = instr.defs[0]
+        # Preloaded pair is in uses (we're reading from it)
+        preloaded_pair = instr.uses[0]
+
+        srd_phys = self._resolve_reg_range(srd_range)
+        preloaded_phys = self._resolve_reg_range(preloaded_pair)
+
+        # Extract base from "s[N:M]" format
+        srd_base = int(srd_phys.split("[")[1].split(":")[0])
+
+        return self._formatter.format(
+            "s_mov_b64",
+            defs=[f"s[{srd_base}:{srd_base+1}]"],
+            uses=[preloaded_phys],
             comment=instr.comment,
         )
 
@@ -381,15 +412,22 @@ class KernelGenerator:
             comment=instr.comment,
         )
 
+    def _handle_preload_branch(self, instr: KInstr) -> str:
+        """Emit s_branch to aligned kernel entry point (for preloading)."""
+        if not instr.target:
+            raise ValueError("_preload_branch requires target field")
+        return self._formatter.format("s_branch", uses=[instr.target])
+
     def _handle_label(self, instr: KInstr) -> str:
         """Handle label pseudo-instruction."""
         label = instr.comment if instr.comment else "label"
         return self._formatter.format_label(label)
 
     def _handle_branch(self, instr: KInstr) -> str:
-        """Handle branch instructions (label is in comment)."""
-        label = instr.comment if instr.comment else "target"
-        return self._formatter.format(instr.name, uses=[label])
+        """Handle branch instructions."""
+        if not instr.target:
+            raise ValueError(f"{instr.name} requires target field")
+        return self._formatter.format(instr.name, uses=[instr.target])
 
     def _handle_compare(self, instr: KInstr) -> str:
         """Handle comparison instruction."""

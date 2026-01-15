@@ -74,7 +74,7 @@ class TestCFGConstruction:
 
         # v0 = 1; branch target; v0 = 2; target: v0 = 3
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
-        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="target"))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), target="target"))
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))
         program.emit(KInstr(Instruction._LABEL, (), (), comment="target"))
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(3),)))
@@ -92,7 +92,7 @@ class TestCFGConstruction:
         v0 = program.alloc_vreg()
 
         # cbranch target; v0 = 1; target: v0 = 2
-        program.emit(KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment="target"))
+        program.emit(KInstr(Instruction.S_CBRANCH_SCC1, (), (), target="target"))
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
         program.emit(KInstr(Instruction._LABEL, (), (), comment="target"))
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))
@@ -110,7 +110,7 @@ class TestCFGConstruction:
         # loop_header: v0 = 1; branch loop_header
         program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_header"))
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
-        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), target="loop_header"))
 
         cfg = build_cfg(program)
 
@@ -191,7 +191,7 @@ class TestCFGLiveness:
         # Block 0: v0 = 1; branch block1
         # Block 1: v1 = v0 + 1
         program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
-        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="block1"))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), target="block1"))
         program.emit(KInstr(Instruction._LABEL, (), (), comment="block1"))
         program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
@@ -219,7 +219,7 @@ class TestCFGLiveness:
         program.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v0, v1)))
 
         # Loop latch: branch back
-        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), target="loop_header"))
 
         cfg = build_cfg(program)
         compute_cfg_liveness(cfg, program.instructions)
@@ -271,7 +271,7 @@ class TestLiveRangeExtension:
 
         # branch loop_header (back-edge)
         program.emit(
-            KInstr(Instruction.S_BRANCH, (), (), comment="loop_header")
+            KInstr(Instruction.S_BRANCH, (), (), target="loop_header")
         )  # idx 3
 
         info = compute_liveness(program, use_cfg=True)
@@ -298,7 +298,7 @@ class TestLiveRangeExtension:
         program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))  # idx 2
 
         # branch loop
-        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop"))  # idx 3
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), target="loop"))  # idx 3
 
         # Compare CFG-based vs linear liveness
         info_cfg = compute_liveness(program, use_cfg=True)
@@ -335,7 +335,7 @@ class TestIntegration:
         # Compare and conditional branch
         program.emit(KInstr(Instruction.S_CMP_LT_U32, (), (counter, bound)))  # idx 4
         program.emit(
-            KInstr(Instruction.S_CBRANCH_SCC0, (), (), comment="loop_exit")
+            KInstr(Instruction.S_CBRANCH_SCC0, (), (), target="loop_exit")
         )  # idx 5
 
         # Loop body: use tid (loop-invariant)
@@ -349,7 +349,7 @@ class TestIntegration:
 
         # Branch back
         program.emit(
-            KInstr(Instruction.S_BRANCH, (), (), comment="loop_header")
+            KInstr(Instruction.S_BRANCH, (), (), target="loop_header")
         )  # idx 8
 
         # loop_exit:

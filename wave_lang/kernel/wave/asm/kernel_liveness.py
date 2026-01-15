@@ -207,7 +207,7 @@ def _is_conditional_branch(instr: KInstr) -> bool:
 def _get_branch_target(instr: KInstr) -> Optional[str]:
     """Get the target label of a branch instruction."""
     if _is_branch_instruction(instr):
-        return instr.comment  # Branch target is stored in comment
+        return instr.target
     return None
 
 

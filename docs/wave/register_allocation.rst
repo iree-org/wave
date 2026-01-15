@@ -256,10 +256,33 @@ The ``KernelABI`` class defines precolored registers mandated by the GPU ABI:
 
 - ``v0``: Contains packed flat thread ID (tid_x, tid_y, tid_z)
 - ``s[0:1]``: Kernarg pointer (64-bit address)
-- ``s2, s3, s4``: Workgroup IDs (optional, depends on kernel)
+- ``s[2:2+N*2-1]``: Preloaded kernel arguments (if preloading enabled, N = num_args)
+- ``s[2+N*2], s[2+N*2+1], s[2+N*2+2]``: Workgroup IDs (optional, depends on kernel)
 - ``s24+``: Reserved for loop counter SGPRs
 
+**SGPR Layout Examples**::
+
+    Without preloading:              With preloading (3 args):
+    s[0:1]  kernarg_ptr              s[0:1]  kernarg_ptr
+    s2      wgid_x                   s[2:3]  preloaded arg0
+    s3      wgid_y                   s[4:5]  preloaded arg1
+    s4      wgid_z                   s[6:7]  preloaded arg2
+    s5+     allocatable              s8      wgid_x
+                                     s9      wgid_y
+                                     s10     wgid_z
+                                     s11+    allocatable
+
 These registers cannot be allocated to other values.
+
+**Precoloring for Kernel Argument Preloading**
+
+When kernel argument preloading is enabled (gfx950+, COv5+), the allocator supports
+precoloring of virtual SGPRs to match hardware preload locations. This is achieved
+through the ``precolored_sregs`` parameter to ``allocate_kernel()``::
+
+    # Example: precolor virtual ks0,ks1 to physical s2,s3 for arg0
+    precolored_sregs = {KSReg(0): 2, KSReg(1): 3}
+    mapping = allocate_kernel(program, precolored_sregs=precolored_sregs)
 
 Kernel Builder
 --------------
@@ -455,8 +478,13 @@ The allocator respects several types of constraints:
 1. **Register class**: VGPRs and SGPRs are allocated from separate pools
 2. **Alignment**: Some instructions require aligned register bases
 3. **Size**: Range allocations need contiguous blocks
-4. **Precoloring**: ABI registers must use specific physical registers
-5. **Reserved**: Some registers cannot be allocated (v0, s0-s1, s24+)
+4. **Precoloring**: ABI registers must use specific physical registers. This includes:
+
+   - ``v0`` for flat thread ID
+   - ``s[0:1]`` for kernarg pointer
+   - ``s[2:2+N*2-1]`` for preloaded kernel arguments (when preloading enabled)
+
+5. **Reserved**: Some registers cannot be allocated (v0, s0-s1, preloaded arg SGPRs, s24+)
 
 Loop SGPR Reservation
 ---------------------
