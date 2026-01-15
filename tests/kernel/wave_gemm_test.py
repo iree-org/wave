@@ -2602,22 +2602,28 @@ def test_gemm_prefetch_reorder_manual_schedule(
 @pytest.mark.parametrize("shape", [(256, 256, 512)])
 @pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
 @pytest.mark.parametrize("unroll_factor", [2, 4])
+@pytest.mark.parametrize("use_global_to_shared", [False, True])
 @require_e2e
 @require_cdna_3_or_4
 def test_gemm_unroll_schedule(
-    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    unroll_factor: int,
+    use_global_to_shared: bool,
 ):
     """
     Test GEMM with unroll-only schedule.
 
     This test validates that the tkw.unroll schedule operation correctly
     unrolls the iterate loop and produces correct numerical results.
+    Tests both standard read path and GatherToLDS (global_to_shared) path.
     """
     gemm_unroll, unroll_schedule, options = get_gemm_unroll_kernel_and_schedule(
         shape=shape,
         mfma_variant=mfma_variant,
         unroll_factor=unroll_factor,
         compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
     )
 
     options = set_default_run_config(options)
@@ -2637,10 +2643,14 @@ def test_gemm_unroll_schedule(
 @pytest.mark.parametrize("shape", [(256, 256, 512)])
 @pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
 @pytest.mark.parametrize("unroll_factor", [2])
+@pytest.mark.parametrize("use_global_to_shared", [False, True])
 @require_e2e
 @require_cdna_3_or_4
 def test_gemm_unroll_with_iteration_access_schedule(
-    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    unroll_factor: int,
+    use_global_to_shared: bool,
 ):
     """
     Test GEMM with unroll schedule using get_node_by_tag_and_iteration API.
@@ -2650,6 +2660,7 @@ def test_gemm_unroll_with_iteration_access_schedule(
        from specific unrolled iterations
     2. Operations from different iterations can be accessed and reordered independently
     3. The resulting kernel produces correct numerical results
+    Tests both standard read path and GatherToLDS (global_to_shared) path.
     """
     (
         gemm_unroll_iter_access,
@@ -2660,6 +2671,7 @@ def test_gemm_unroll_with_iteration_access_schedule(
         mfma_variant=mfma_variant,
         unroll_factor=unroll_factor,
         compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
 
@@ -2681,16 +2693,21 @@ def test_gemm_unroll_with_iteration_access_schedule(
 @pytest.mark.parametrize("shape", [(256, 256, 544)])
 @pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
 @pytest.mark.parametrize("unroll_factor", [2])
+@pytest.mark.parametrize("use_global_to_shared", [False, True])
 @require_e2e
 @require_cdna_3_or_4
 def test_gemm_pipeline_then_unroll_schedule(
-    shape: tuple[int], mfma_variant: MMAType, unroll_factor: int
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    unroll_factor: int,
+    use_global_to_shared: bool,
 ):
     """
     Test GEMM with pipeline-then-unroll schedule.
 
     This test validates that pipelining first, then unrolling the KERNEL stage
     produces correct numerical results.
+    Tests both standard read path and GatherToLDS (global_to_shared) path.
 
     Note: K=544, BLOCK_K=32 => count=17, after 2-stage pipeline => count=16
     which is divisible by unroll_factor=2.
@@ -2704,6 +2721,7 @@ def test_gemm_pipeline_then_unroll_schedule(
         mfma_variant=mfma_variant,
         unroll_factor=unroll_factor,
         compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
     )
 
     options = set_default_run_config(options)

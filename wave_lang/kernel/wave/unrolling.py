@@ -9,7 +9,13 @@ from torch import fx
 
 from wave_lang.kernel._support.tracing import CapturedTrace
 
-from ..ops.wave_ops import Iterate, Output, Placeholder, get_custom
+from ..ops.wave_ops import (
+    Iterate,
+    Output,
+    Placeholder,
+    GatherToLDS,
+    get_custom,
+)
 from .constraints import Constraint
 from .utils.general_utils import get_tiling_constraint
 from .utils.symbol_utils import subs_idxc, get_induction_symbol
@@ -24,6 +30,21 @@ def remap_iter_args(
     """
     for iter_arg, return_val in zip(iter_args, output.return_vals[0]):
         value_use_map[iter_arg] = return_val
+
+
+def update_index_for_unroll(index: dict, induction_var, unroll_offset: int) -> dict:
+    """
+    Update an index dict by substituting the induction variable with
+    induction_var + unroll_offset.
+
+    This is used to update indexing for unrolled iterations.
+    """
+    if index is None:
+        return None
+    updated_index = {}
+    for key, dim in index.items():
+        updated_index[key] = dim.subs({induction_var: induction_var + unroll_offset})
+    return updated_index
 
 
 def unroll(
@@ -120,13 +141,27 @@ def unroll(
             copy.unroll_iteration = unroll_idx + 1
 
             # update nodes using the induction_var for indexing
-            if copy.index:
-                updated_index = {}
-                for key, dim in copy.index.items():
-                    updated_index[key] = dim.subs(
-                        {induction_var: induction_var + unroll_idx + 1}
+            unroll_offset = unroll_idx + 1
+
+            # Handle GatherToLDS which has separate src_index/dst_index
+            # Use update_arg to properly update both the dataclass field AND the fx.Node args
+            if isinstance(copy, GatherToLDS):
+                if copy.src_index:
+                    updated_src = update_index_for_unroll(
+                        copy.src_index, induction_var, unroll_offset
                     )
-                copy.index = updated_index
+                    copy.update_arg("src_index", updated_src)
+                if copy.dst_index:
+                    updated_dst = update_index_for_unroll(
+                        copy.dst_index, induction_var, unroll_offset
+                    )
+                    copy.update_arg("dst_index", updated_dst)
+
+            # Standard index update for other operations
+            if copy.index:
+                copy.index = update_index_for_unroll(
+                    copy.index, induction_var, unroll_offset
+                )
             value_use_map[original.fx_node] = copy.fx_node
 
             if isinstance(copy, Output):

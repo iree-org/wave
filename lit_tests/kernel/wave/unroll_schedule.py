@@ -695,3 +695,218 @@ def test_pipeline_then_unroll():
     # CHECK: amdgpu.mfma
     #
     # CHECK: scf.yield
+
+
+@run_test
+def test_unroll_with_gather_to_lds():
+    """
+    Test unrolling with GatherToLDS (use_global_to_shared=True).
+
+    When use_global_to_shared=True, the compiler generates GatherToLDS operations
+    which combine global load + shared write into a single async operation.
+    This test verifies that tkw.unroll correctly updates the src_index and dst_index
+    fields of GatherToLDS operations for each unrolled iteration.
+
+    The kernel has K=256 and BLOCK_K=16, so the iterate count is 16.
+    Unrolling by factor 2 should result in:
+    - count = 16, step = 2
+    - Each iteration processes 2x the original work
+    - GatherToLDS operations should have correctly updated indices for each iteration
+    """
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    @tkw.wave(constraints)
+    def gemm_unroll_g2s(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    @wave_schedule.wave_schedule()
+    def unroll_g2s_schedule():
+        k_loop = tkw.get_node_by_tag("k_loop")
+        tkw.unroll(k_loop, 2)
+
+    # Compile with use_global_to_shared=True to generate GatherToLDS operations
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 256,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        compile_to_mlir=True,
+        use_global_to_shared=True,  # Enable GatherToLDS
+    )
+
+    gemm_unroll_g2s = wave_compile(options, gemm_unroll_g2s, unroll_g2s_schedule)
+    print(gemm_unroll_g2s.asm)
+
+    # CHECK-LABEL: func.func @gemm_unroll_g2s
+    #
+    # Verify that the loop has been unrolled with step 2
+    # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG: %[[C2:.*]] = arith.constant 2 : index
+    # CHECK-DAG: %[[C16:.*]] = arith.constant 16 : index
+    #
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C16]] step %[[C2]]
+    #
+    # With GatherToLDS + unroll by 2, the operations are interleaved:
+    # Iteration 0: gather_to_lds (A), gather_to_lds (B), mfma
+    # Iteration 1: gather_to_lds (A), gather_to_lds (B), mfma
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.mfma
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.mfma
+    #
+    # CHECK: scf.yield
+
+
+@run_test
+def test_unroll_and_reorder_with_gather_to_lds():
+    """
+    Test unrolling and reordering with GatherToLDS (use_global_to_shared=True).
+
+    This test combines unroll + reorder with GatherToLDS operations.
+    After unrolling, the get_node_by_tag_and_iteration API should correctly
+    return both GatherToLDS and Read nodes, which can then be reordered.
+    """
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    @tkw.wave(constraints)
+    def gemm_unroll_reorder_g2s(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    @wave_schedule.wave_schedule()
+    def unroll_reorder_g2s_schedule():
+        # First, unroll the loop by 2
+        k_loop = tkw.get_node_by_tag("k_loop")
+        tkw.unroll(k_loop, 2)
+
+        # Access operations from specific iterations
+        # With g2s, "read_a" tag includes both GatherToLDS and Read nodes
+        reads_a_iter0 = tkw.get_node_by_tag_and_iteration("read_a", iteration=0)
+        reads_b_iter0 = tkw.get_node_by_tag_and_iteration("read_b", iteration=0)
+        mma_iter0 = tkw.get_node_by_tag_and_iteration("mma", iteration=0)
+
+        reads_a_iter1 = tkw.get_node_by_tag_and_iteration("read_a", iteration=1)
+        reads_b_iter1 = tkw.get_node_by_tag_and_iteration("read_b", iteration=1)
+        mma_iter1 = tkw.get_node_by_tag_and_iteration("mma", iteration=1)
+
+        # Reorder: all reads from both iterations first, barrier, then all MMAs
+        clusters = [
+            tkw.cluster(
+                [
+                    reads_a_iter0,
+                    reads_b_iter0,
+                    reads_a_iter1,
+                    reads_b_iter1,
+                    tkw.SchedulingBarrier([]),
+                    mma_iter0,
+                    mma_iter1,
+                ],
+            ),
+        ]
+
+        tkw.reorder_graph(k_loop, clusters)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 256,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        compile_to_mlir=True,
+        use_global_to_shared=True,  # Enable GatherToLDS
+    )
+
+    gemm_unroll_reorder_g2s = wave_compile(
+        options, gemm_unroll_reorder_g2s, unroll_reorder_g2s_schedule
+    )
+    print(gemm_unroll_reorder_g2s.asm)
+
+    # CHECK-LABEL: func.func @gemm_unroll_reorder_g2s
+    #
+    # Verify loop structure (unrolled by 2)
+    # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG: %[[C2:.*]] = arith.constant 2 : index
+    # CHECK-DAG: %[[C16:.*]] = arith.constant 16 : index
+    #
+    # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C16]] step %[[C2]]
+    #
+    # With GatherToLDS + unroll, we should see gather_to_lds for both iterations
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.gather_to_lds
+    # CHECK: amdgpu.gather_to_lds
+    #
+    # Scheduling barrier between reads and MMAs
+    # CHECK: rocdl.sched.barrier
+    #
+    # Then all MMAs (2 after unroll by 2)
+    # CHECK: amdgpu.mfma
+    # CHECK: amdgpu.mfma
+    #
+    # CHECK: scf.yield

@@ -271,6 +271,7 @@ def get_gemm_unroll_kernel_and_schedule(
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
     unroll_factor: int = 2,
     compile_to_mlir: bool = True,
+    use_global_to_shared: bool = False,
 ):
     """
     Returns a GEMM kernel with unroll-only schedule.
@@ -280,6 +281,7 @@ def get_gemm_unroll_kernel_and_schedule(
         mfma_variant: The MMA type to use for hardware constraint
         unroll_factor: Factor to unroll the K loop by
         compile_to_mlir: Whether to compile to MLIR IR
+        use_global_to_shared: Whether to use async GatherToLDS operations
 
     Returns:
         tuple: (kernel_function, schedule_function, compile_options)
@@ -345,6 +347,7 @@ def get_gemm_unroll_kernel_and_schedule(
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         compile_to_mlir=compile_to_mlir,
+        use_global_to_shared=use_global_to_shared,
     )
 
     return gemm_unroll, unroll_schedule, options
@@ -355,6 +358,7 @@ def get_gemm_unroll_with_iteration_access_kernel_and_schedule(
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
     unroll_factor: int = 2,
     compile_to_mlir: bool = True,
+    use_global_to_shared: bool = False,
 ):
     """
     Returns a GEMM kernel with unroll schedule that accesses ops by iteration.
@@ -367,6 +371,7 @@ def get_gemm_unroll_with_iteration_access_kernel_and_schedule(
         mfma_variant: The MMA type to use for hardware constraint
         unroll_factor: Factor to unroll the loop by
         compile_to_mlir: Whether to compile to MLIR IR
+        use_global_to_shared: Whether to use async GatherToLDS operations
 
     Returns:
         tuple: (kernel_function, schedule_function, compile_options)
@@ -419,6 +424,8 @@ def get_gemm_unroll_with_iteration_access_kernel_and_schedule(
         tkw.unroll(k_loop, unroll_factor)
 
         # Access operations from specific iterations
+        # get_node_by_tag_and_iteration returns all nodes with the tag,
+        # which works for both standard reads and GatherToLDS operations.
         # iteration=0: Original operations
         reads_a_iter0 = tkw.get_node_by_tag_and_iteration("read_a", iteration=0)
         reads_b_iter0 = tkw.get_node_by_tag_and_iteration("read_b", iteration=0)
@@ -461,6 +468,7 @@ def get_gemm_unroll_with_iteration_access_kernel_and_schedule(
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         compile_to_mlir=compile_to_mlir,
+        use_global_to_shared=use_global_to_shared,
     )
 
     return gemm_unroll_iter_access, unroll_iter_access_schedule, options
@@ -471,6 +479,7 @@ def get_gemm_pipeline_then_unroll_kernel_and_schedule(
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
     unroll_factor: int = 2,
     compile_to_mlir: bool = True,
+    use_global_to_shared: bool = False,
 ):
     """
     Returns a GEMM kernel with pipeline-then-unroll schedule.
@@ -483,6 +492,7 @@ def get_gemm_pipeline_then_unroll_kernel_and_schedule(
         mfma_variant: The MMA type to use for hardware constraint
         unroll_factor: Factor to unroll the KERNEL stage by
         compile_to_mlir: Whether to compile to MLIR IR
+        use_global_to_shared: Whether to use async GatherToLDS operations
 
     Returns:
         tuple: (kernel_function, schedule_function, compile_options)
@@ -564,6 +574,55 @@ def get_gemm_pipeline_then_unroll_kernel_and_schedule(
         # Step 2: Unroll the KERNEL stage after pipelining
         tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
+    @wave_schedule.wave_schedule()
+    def pipeline_then_unroll_schedule_g2s():
+        """GatherToLDS-aware version of pipeline_then_unroll_schedule.
+
+        When use_global_to_shared=True, GatherToLDS combines global load + shared write
+        into a single async operation. This schedule uses filter_nodes instead of
+        partition_by_address_space.
+        """
+        k_loop = tkw.get_node_by_tag("k_loop")
+
+        # Get all nodes with tag "read_a" - includes both Read and GatherToLDS
+        all_read_a = tkw.get_node_by_tag("read_a")
+        gather_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
+        shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
+
+        # Get all nodes with tag "read_b" - includes both Read and GatherToLDS
+        all_read_b = tkw.get_node_by_tag("read_b")
+        gather_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
+        shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
+
+        mma = tkw.get_node_by_tag("mma")
+
+        # Step 1: Pipeline with GatherToLDS in stage 0
+        # GatherToLDS replaces both global_load and shared_write
+        pipeline_loop = tkw.pipeline(k_loop)
+        with pipeline_loop as pipelined_loop:
+            pipelined_loop.set_stage(
+                [
+                    (gather_a, gather_b),
+                    (),  # No separate shared write - GatherToLDS does both
+                ],
+            )
+            pipelined_loop.set_stage(
+                [
+                    (shared_load_a, shared_load_b),
+                    (mma,),
+                ],
+            )
+
+        # Step 2: Unroll the KERNEL stage after pipelining
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
+
+    # Select the appropriate schedule based on use_global_to_shared
+    schedule = (
+        pipeline_then_unroll_schedule_g2s
+        if use_global_to_shared
+        else pipeline_then_unroll_schedule
+    )
+
     M_val, N_val, K_val = shape
     # K=544, BLOCK_K=32 => count=17, after 2-stage pipeline => count=16 (divisible by 2)
     options = WaveCompileOptions(
@@ -580,6 +639,7 @@ def get_gemm_pipeline_then_unroll_kernel_and_schedule(
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         compile_to_mlir=compile_to_mlir,
+        use_global_to_shared=use_global_to_shared,
     )
 
-    return gemm_pipeline_then_unroll, pipeline_then_unroll_schedule, options
+    return gemm_pipeline_then_unroll, schedule, options
