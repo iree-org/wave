@@ -202,11 +202,14 @@ def test_gemm_dynamic_pipelined_trace():
     #
     # Inside the pipelined conditional, we should have:
     # - Initial reads (prologue)
-    # - A pipelined loop (scf.for)
-    # - Final MMAs (epilogue)
+    # CHECK: vector.maskedload
+    # CHECK: vector.maskedload
+    # - A pipelined loop
     # CHECK: scf.for
     # CHECK: amdgpu.mfma
     # CHECK: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
+    # - Final MMAs (epilogue)
+    # CHECK: amdgpu.mfma
     # CHECK: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
     # CHECK-NEXT: else
     # CHECK-NEXT: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
