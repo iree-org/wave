@@ -12,6 +12,8 @@ build:
 python:
   install:
     - requirements: pytorch-cpu-requirements.txt
+    - method: pip
+      path: .
       extra_requirements:
         - docs
 
