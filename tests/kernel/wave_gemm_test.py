@@ -122,7 +122,7 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
     ],
 )
 def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
-    shape = (64, 64, 64)
+    shape = (128, 128, 128)
     perf_filename_tk = tmp_path / "wave_gemm_bench.txt"
     perf_filename_iree = tmp_path / "iree_gemm_bench.txt"
     enable_scheduling = SchedulingType.NONE
