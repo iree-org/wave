@@ -327,13 +327,6 @@ def fuse_tensor_loads(
         trace: The captured trace to transform
         constraints: List of constraints for the kernel
     """
-    logger.info("Running fuse_tensor_loads pass")
-
-    # Get hardware constraints for wave calculation
-    hardware_constraint = get_hardware_constraint(constraints)
-    threads_per_wave = hardware_constraint.threads_per_wave
-    waves_per_block = hardware_constraint.waves_per_block
-    wave_count = subs_idxc(math.prod(waves_per_block))
 
     if options.specialize:
         logger.info(
@@ -341,6 +334,14 @@ def fuse_tensor_loads(
             "Specialization with fused-tensor loads are not supported yet."
         )
         return
+
+    logger.info("Running fuse_tensor_loads pass")
+
+    # Get hardware constraints for wave calculation
+    hardware_constraint = get_hardware_constraint(constraints)
+    threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_block = hardware_constraint.waves_per_block
+    wave_count = subs_idxc(math.prod(waves_per_block))
 
     # Check if we have an even number of waves (required for fusion)
     if (
