@@ -1,14 +1,21 @@
+import math
 from dataclasses import dataclass
-from typing import Any, Sequence, TYPE_CHECKING
+from typing import Any, Optional, Sequence, TYPE_CHECKING
 import torch.fx as fx
+import wave_lang.kernel.lang as tkl
 from ..ops.wave_ops import (
     get_custom,
+    Conditional,
+    Ge,
+    Lt,
+    NewScalar,
     Read,
     Write,
     Placeholder,
     Iterate,
+    WorkgroupBarrier,
 )
-from ..wave.constraints import Constraint
+from ..wave.constraints import Constraint, HardwareConstraint
 from .base import define_schedule_op
 import logging
 
@@ -16,6 +23,201 @@ if TYPE_CHECKING:
     from .._support.tracing import CapturedTrace
 
 logger = logging.getLogger(__name__)
+
+
+##############################################################
+# Condition types for conditional barriers
+##############################################################
+
+
+class WaveCondition:
+    """Base class for wave-based conditions."""
+
+    def create_condition_node(
+        self,
+        graph: fx.Graph,
+        hardware_constraint: "HardwareConstraint",
+        location=None,
+    ) -> fx.Node:
+        """Create the condition node in the graph. Must be overridden."""
+        raise NotImplementedError
+
+
+class WaveHi(WaveCondition):
+    """
+    Condition that is True for high waves (wave_id >= mid_wave).
+
+    In a 2-way stagger with 8 waves, this is True for waves 4-7.
+    Used to block high waves so low waves start first.
+
+    Usage:
+        tkw.insert_conditional_barrier_before(tkw.WaveHi(), loop)
+    """
+
+    def create_condition_node(
+        self,
+        graph: fx.Graph,
+        hardware_constraint: "HardwareConstraint",
+        location=None,
+    ) -> fx.Node:
+        flat_wave_count = math.prod(hardware_constraint.waves_per_block)
+        assert flat_wave_count % 2 == 0, f"Wave count {flat_wave_count} must be even"
+        mid_wave = flat_wave_count // 2
+
+        flat_id = hardware_constraint.linearized_thread_id
+        wave_id = flat_id // hardware_constraint.threads_per_wave
+
+        # Create nodes using _get_graph_node (same pattern as schedule_reordering.py)
+        mid_wave_reg = _get_graph_node(NewScalar(mid_wave, tkl.i32), graph, location)
+        wave_id_reg = _get_graph_node(NewScalar(wave_id, tkl.i32), graph, location)
+        is_wave_hi = _get_graph_node(Ge(wave_id_reg, mid_wave_reg), graph, location)
+
+        return is_wave_hi
+
+
+class WaveLo(WaveCondition):
+    """
+    Condition that is True for low waves (wave_id < mid_wave).
+
+    In a 2-way stagger with 8 waves, this is True for waves 0-3.
+    Used to block low waves so high waves can catch up.
+
+    Usage:
+        tkw.insert_conditional_barrier_after(tkw.WaveLo(), loop)
+    """
+
+    def create_condition_node(
+        self,
+        graph: fx.Graph,
+        hardware_constraint: "HardwareConstraint",
+        location=None,
+    ) -> fx.Node:
+        flat_wave_count = math.prod(hardware_constraint.waves_per_block)
+        assert flat_wave_count % 2 == 0, f"Wave count {flat_wave_count} must be even"
+        mid_wave = flat_wave_count // 2
+
+        flat_id = hardware_constraint.linearized_thread_id
+        wave_id = flat_id // hardware_constraint.threads_per_wave
+
+        # Create nodes using _get_graph_node (same pattern as schedule_reordering.py)
+        mid_wave_reg = _get_graph_node(NewScalar(mid_wave, tkl.i32), graph, location)
+        wave_id_reg = _get_graph_node(NewScalar(wave_id, tkl.i32), graph, location)
+        is_wave_lo = _get_graph_node(Lt(wave_id_reg, mid_wave_reg), graph, location)
+
+        return is_wave_lo
+
+
+##############################################################
+# Helper functions
+##############################################################
+
+
+def _get_graph_node(custom, graph: fx.Graph, location=None) -> fx.Node:
+    """Add a CustomOp to a graph and return its fx_node."""
+    custom.add_to_graph(graph)
+    custom.location = location
+    return custom.fx_node
+
+
+def _get_hardware_constraint(
+    constraints: list[Constraint],
+) -> Optional[HardwareConstraint]:
+    """Get the HardwareConstraint from the constraints list."""
+    for c in constraints:
+        if isinstance(c, HardwareConstraint):
+            return c
+    return None
+
+
+def _insert_conditional_barrier_at(
+    condition: "WaveCondition",
+    target: Any,
+    kernel_trace: "CapturedTrace",
+    constraints: list[Constraint],
+    insert_after: bool = False,
+) -> None:
+    """
+    Insert a conditional barrier before or after a target node.
+
+    Args:
+        condition: A WaveCondition instance (e.g., WaveHi(), WaveLo())
+        target: The target node (PipelineStageRef, fx.Node, or list)
+        kernel_trace: The kernel trace for adding subgraphs
+        constraints: The constraints list
+        insert_after: If True, insert barrier after target; otherwise before
+    """
+    # Get the target nodes
+    target_nodes = get_nodes_from_ref(target)
+    assert (
+        target_nodes is not None and len(target_nodes) > 0
+    ), "Target must have at least one node"
+
+    # Use first node for 'before', last node for 'after'
+    target_node = target_nodes[-1] if insert_after else target_nodes[0]
+    custom = get_custom(target_node)
+    graph = custom.graph
+    location = custom.location
+
+    # Get hardware constraints
+    hardware_constraint = _get_hardware_constraint(constraints)
+    if hardware_constraint is None:
+        raise ValueError("Conditional barrier requires HardwareConstraint")
+
+    if insert_after:
+        # For insert_after: condition BEFORE target, barrier AFTER target
+        # This ensures the condition is emitted before the barrier uses it
+        with graph.inserting_before(target_node):
+            cond_node = condition.create_condition_node(
+                graph, hardware_constraint, location
+            )
+        with graph.inserting_after(target_node):
+            _insert_conditional_barrier(cond_node, kernel_trace, graph, location)
+    else:
+        # For insert_before: both condition and barrier BEFORE target
+        with graph.inserting_before(target_node):
+            cond_node = condition.create_condition_node(
+                graph, hardware_constraint, location
+            )
+            _insert_conditional_barrier(cond_node, kernel_trace, graph, location)
+
+
+def _insert_conditional_barrier(
+    cond_reg: fx.Node,
+    trace: "CapturedTrace",
+    graph: fx.Graph,
+    location=None,
+) -> fx.Node:
+    """
+    Insert a conditional workgroup barrier.
+
+    Args:
+        cond_reg: The condition register (fx.Node) that controls barrier execution
+        trace: The kernel trace for adding subgraphs
+        graph: The graph to insert the conditional into
+        location: Optional location for debugging
+
+    Returns:
+        The conditional barrier node
+    """
+    barrier_graph = fx.Graph()
+    barrier_graph_name = f"barrier_graph_{cond_reg.name}"
+
+    # Add barrier inside the conditional subgraph
+    barrier_node = WorkgroupBarrier().add_to_graph(barrier_graph)
+    barrier_node.location = location
+
+    # Create the conditional that wraps the barrier
+    cond_barrier = Conditional(
+        cond_reg,
+        subgraph_name=barrier_graph_name,
+        implicit_captures=[],
+    ).add_to_graph(graph)
+    cond_barrier.location = location
+
+    barrier_graph.parent_op = cond_barrier
+    trace.add_subgraph(barrier_graph_name, barrier_graph)
+
+    return cond_barrier
 
 
 # Stubs to enable type checking of the custom schedule ops - decorated with @define_op for dispatch
@@ -68,7 +270,15 @@ def getitem(obj: Any, index: int): ...
 
 
 @define_schedule_op
-def stagger(loop: Any, post_barrier_target: Any = None): ...
+def stagger(loop: Any): ...
+
+
+@define_schedule_op
+def insert_conditional_barrier_before(condition: Any, target: Any): ...
+
+
+@define_schedule_op
+def insert_conditional_barrier_after(condition: Any, target: Any): ...
 
 
 @define_schedule_op
@@ -824,7 +1034,42 @@ class Pipeline(CustomScheduleOp):
 
 @dataclass
 class Stagger(CustomScheduleOp):
+    """
+    Simple stagger scheduling that inserts wave barriers around a loop.
+
+    This places:
+    - wave_hi barrier BEFORE the loop (blocks high waves so low waves start first)
+    - wave_lo barrier AFTER the loop (blocks low waves so high waves catch up)
+
+    For finer control, use insert_conditional_barrier_before/after directly.
+    """
+
     schedule_op_name = "stagger"
+
+    @classmethod
+    def handle(
+        cls, region_graph, kernel_trace, constraints: list[Constraint], loop: Any
+    ):
+        _insert_conditional_barrier_at(
+            WaveHi(), loop, kernel_trace, constraints, insert_after=False
+        )
+        _insert_conditional_barrier_at(
+            WaveLo(), loop, kernel_trace, constraints, insert_after=True
+        )
+        logger.info("Applied 2-way stagger scheduling to loop")
+        return None
+
+
+@dataclass
+class InsertConditionalBarrierBefore(CustomScheduleOp):
+    """
+    Insert a conditional barrier before a target node.
+
+    Usage:
+        tkw.insert_conditional_barrier_before(tkw.WaveHi(), loop)
+    """
+
+    schedule_op_name = "insert_conditional_barrier_before"
 
     @classmethod
     def handle(
@@ -832,63 +1077,46 @@ class Stagger(CustomScheduleOp):
         region_graph,
         kernel_trace,
         constraints: list[Constraint],
-        loop: Any,
-        post_barrier_target: Any = None,
+        condition: Any,
+        target: Any,
     ):
-        """
-        Implements stagger scheduling by adding conditional barriers around a loop that blocks waves such that
-        waves execute clusters in a staggered manner for better overlap of computation and memory access.
-
-        For 2 waves (default):
-        at T0:
-           wave 0 runs cluster 0
-           wave 1 blocked
-        at T1:
-           wave 0 runs cluster 1
-           wave 1 runs cluster 0
-        at T2:
-           wave 0 runs cluster 2
-           wave 1 runs cluster 1
-
-        This pattern continues, allowing N waves to execute clusters in parallel with a stagger offset.
-
-        Args:
-            loop: The loop reference (PipelineStageRef or list)
-            post_barrier_target: Optional target node after which to place the post-loop conditional barrier.
-                                 If None, the barrier is placed immediately after the loop.
-                                 If provided, the barrier is placed after this target node.
-        """
-        from ..wave.schedule_reordering import add_conditional_barriers_to_loop
-        from ..wave.utils.general_utils import get_hardware_constraint
-
-        # Get the iterate node from the reference (PipelineStageRef or list)
-        loop_result = get_nodes_from_ref(loop)
-        assert loop_result is not None, "Loop must have a result"
-        assert len(loop_result) > 0, "Loop must have at least one element"
-
-        iterate_node = loop_result[0]
-        custom_iterate = get_custom(iterate_node)
-
-        # Get hardware constraints
-        hardware_constraint = get_hardware_constraint(constraints)
-        if hardware_constraint is None:
-            raise ValueError("Stagger requires HardwareConstraint")
-
-        # Get the target node for post-loop barrier placement
-        post_barrier_node = None
-        if post_barrier_target is not None:
-            # get_nodes_from_ref now handles fx.Node, PipelineStageRef, and list
-            post_barrier_nodes = get_nodes_from_ref(post_barrier_target)
-            if post_barrier_nodes and len(post_barrier_nodes) > 0:
-                # Use the last node in the list as the placement target
-                post_barrier_node = post_barrier_nodes[-1]
-
-        add_conditional_barriers_to_loop(
-            custom_iterate, kernel_trace, hardware_constraint, post_barrier_node
+        if not isinstance(condition, WaveCondition):
+            raise ValueError(
+                f"condition must be a WaveCondition, got {type(condition).__name__}"
+            )
+        _insert_conditional_barrier_at(
+            condition, target, kernel_trace, constraints, insert_after=False
         )
+        return None
 
-        logger.info(f"Applied 2-way stagger scheduling to loop")
 
+@dataclass
+class InsertConditionalBarrierAfter(CustomScheduleOp):
+    """
+    Insert a conditional barrier after a target node.
+
+    Usage:
+        tkw.insert_conditional_barrier_after(tkw.WaveLo(), loop)
+    """
+
+    schedule_op_name = "insert_conditional_barrier_after"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        condition: Any,
+        target: Any,
+    ):
+        if not isinstance(condition, WaveCondition):
+            raise ValueError(
+                f"condition must be a WaveCondition, got {type(condition).__name__}"
+            )
+        _insert_conditional_barrier_at(
+            condition, target, kernel_trace, constraints, insert_after=True
+        )
         return None
 
 
