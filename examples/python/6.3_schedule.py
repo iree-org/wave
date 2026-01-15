@@ -363,7 +363,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
             )
 
         # Prologue cluster: tensor_load_to_lds + wait.tensorcnt(1) + barrier.signal + barrier.wait
-        # The conditional barrier for hi waves is handled by stagger
+        # The conditional barrier for hi waves is handled by insert_conditional_barrier_before
         # Then SetWavePrio(1) before entering the loop
         prologue_clusters = [
             tkw.cluster(
@@ -372,12 +372,15 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                     tkw.TensorCounterWait(1),  # rocdl.s.wait.tensorcnt 1
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SharedMemoryBarrierWait(-1),
-                    # Conditional barrier for hi waves is placed by stagger
+                    # Conditional barrier for hi waves is placed by insert_conditional_barrier_before
                     # SetWavePrio(1) before entering the loop
-                    tkw.SetWavePrio(1),
                 ],
             )
         ]
+
+        tkw.insert_conditional_barrier_before(tkw.WaveHi(), pipeline_loop.KERNEL)
+        # Insert SetWavePrio(1) right before the loop
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.SetWavePrio(1))
 
         # Create cluster ordering with async operations
         # Manual pattern inside the loop:
@@ -447,12 +450,13 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         # 6. SetWavePrio(0) + barrier.signal(-1) + sched.barrier + barrier.wait(-1)
         # 7. Second set of MMAs
         # 8. SetWavePrio(1)
-        # 9. Conditional barrier (placed by stagger for late waves) - handled separately
+        # 9. Conditional barrier (placed by insert_conditional_barrier_after) - handled separately
         # 10. barrier.signal(-1) + barrier.wait(-1)
         epilogue_clusters = [
             tkw.cluster(
                 [
                     # First set of loads (B and A together)
+                    tkw.TensorCounterWait(1),
                     epilogue_shared_load_b_chunks[0],
                     epilogue_shared_load_a_chunks[0],
                     # Stagger barrier before first MMAs (no ds_wait)
@@ -479,7 +483,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                     # Second set of MMAs
                     epilogue_mma_chunks[1],
                     # Final signal/wait (after conditional barrier)
-                    # Note: SetWavePrio(1) will be inserted after calling stagger
+                    # Note: SetWavePrio(1) inserted after insert_conditional_barrier_after
                     # No ds_wait for final barrier
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SharedMemoryBarrierWait(-1),
@@ -497,14 +501,9 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         # The last MMA in epilogue_mma_chunks[1] is the target after which
         # the conditional barrier will be placed
         last_epilogue_mma = epilogue_mma_chunks[1][-1]
-
         # Apply stagger with custom placement for post-loop conditional barrier
         # This places the conditional barrier after the last epilogue MMA
-        tkw.stagger(pipeline_loop.KERNEL, post_barrier_target=last_epilogue_mma)
-
-        # Insert SetWavePrio(1) between last MMA and conditional barrier
-        # Due to graph insertion semantics, this will be placed between
-        # the last MMA and the conditional barrier
+        tkw.insert_conditional_barrier_after(tkw.WaveLo(), last_epilogue_mma)
         tkw.insert_after(last_epilogue_mma, tkw.SetWavePrio(1))
 
     # Define compile options
@@ -538,6 +537,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         use_global_to_shared=True,
         dump_binaries="./",
         dump_intermediates="./",
+        specialize=True,
     )
 
     # Set runtime configuration for execution
