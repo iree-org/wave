@@ -21,14 +21,16 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
+    MemoryCounterWait,
     NestedRegionOp,
     Output,
     Placeholder,
     SharedMemoryBarrier,
-    TopkOp,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
+    TopkOp,
     Write,
+    WorkgroupBarrier,
     get_custom,
 )
 from .symbol_utils import subs_idxc
@@ -480,6 +482,10 @@ def is_barrier_between_same_graph(
         if isinstance(custom_next_node, SharedMemoryBarrierWait):
             if custom_next_node.barId == barId and barId in barrier_check:
                 return next_node
+        if isinstance(custom_next_node, MemoryCounterWait) and isinstance(
+            get_custom(next_node.next), WorkgroupBarrier
+        ):
+            return next_node
         next_node = next_node.next
 
     return None
