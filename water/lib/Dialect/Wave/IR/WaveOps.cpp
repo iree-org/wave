@@ -733,8 +733,8 @@ struct MmaSingleIndexExprBuilder {
   MmaSingleIndexExprBuilder &n();
   MmaSingleIndexExprBuilder &k();
 
-  // Populate the attributes with all index expressions.
-  void populate(llvm::SmallVectorImpl<NamedAttribute> &attributes) const;
+  // Populate the entries with all index expressions.
+  void populate(llvm::SmallVectorImpl<wave::WaveIndexEntryAttr> &entries) const;
 
   MmaIndexingExprBuilder &parent;
   AffineExpr offsetExpr, sizeExpr, strideExpr;
@@ -757,7 +757,7 @@ struct MmaSingleIndexExprBuilder {
 //   builder.m().offset(offset_m).size(size_m).stride(stride_m)
 //          .n().offset(offset_n).size(size_n).stride(stride_n)
 //          .k().offset(offset_k).size(size_k).stride(stride_k)
-//          .populate(attributes);
+//          .populate(entries);
 // ```
 struct MmaIndexingExprBuilder {
   MmaIndexingExprBuilder(llvm::ArrayRef<Attribute> symbols,
@@ -781,8 +781,9 @@ struct MmaIndexingExprBuilder {
   MmaSingleIndexExprBuilder &n() { return nBuilder; }
   MmaSingleIndexExprBuilder &k() { return kBuilder; }
 
-  // Populate the attributes with all index expressions.
-  void populate(llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
+  // Populate the entries with all index expressions.
+  void
+  populate(llvm::SmallVectorImpl<wave::WaveIndexEntryAttr> &entries) const {
     MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
     auto buildMap = [&](AffineExpr expr) {
@@ -798,11 +799,14 @@ struct MmaIndexingExprBuilder {
     };
 
     if (mSymbol)
-      attributes.emplace_back(mSymbol.getName(), buildOne(mBuilder));
+      entries.push_back(
+          wave::WaveIndexEntryAttr::get(ctx, mSymbol, buildOne(mBuilder)));
     if (nSymbol)
-      attributes.emplace_back(nSymbol.getName(), buildOne(nBuilder));
+      entries.push_back(
+          wave::WaveIndexEntryAttr::get(ctx, nSymbol, buildOne(nBuilder)));
     if (kSymbol)
-      attributes.emplace_back(kSymbol.getName(), buildOne(kBuilder));
+      entries.push_back(
+          wave::WaveIndexEntryAttr::get(ctx, kSymbol, buildOne(kBuilder)));
   }
 
   llvm::ArrayRef<Attribute> symbols;
@@ -838,8 +842,8 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
 MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
 MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
 void MmaSingleIndexExprBuilder::populate(
-    llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
-  parent.populate(attributes);
+    llvm::SmallVectorImpl<wave::WaveIndexEntryAttr> &entries) const {
+  parent.populate(entries);
 }
 } // namespace
 
@@ -850,13 +854,12 @@ void MmaSingleIndexExprBuilder::populate(
 // be provided. If `isAccumulator` is set, the index expressions are created for
 // the accumulator/result of an MMA, which may affect the expression for the M
 // dimension.
-static llvm::LogicalResult
-populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
-                        llvm::ArrayRef<unsigned> wavesPerWorkgroup,
-                        int64_t threadsPerWave, wave::WaveSymbolAttr mSymbol,
-                        wave::WaveSymbolAttr nSymbol,
-                        wave::WaveSymbolAttr kSymbol,
-                        llvm::SmallVectorImpl<NamedAttribute> &attributes) {
+static llvm::LogicalResult populateMmaIndexingExpr(
+    wave::WaveMmaKind kind, bool isAccumulator,
+    llvm::ArrayRef<unsigned> wavesPerWorkgroup, int64_t threadsPerWave,
+    wave::WaveSymbolAttr mSymbol, wave::WaveSymbolAttr nSymbol,
+    wave::WaveSymbolAttr kSymbol,
+    llvm::SmallVectorImpl<wave::WaveIndexEntryAttr> &entries) {
   MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
   llvm::SmallVector<Attribute> symbolNames = {
@@ -889,7 +892,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .offset(4 * laneId.floorDiv(16))
         .size(4)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
 
   case wave::WaveMmaKind::F32_32x32x8_F16:
@@ -908,7 +911,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .offset(4 * laneId.floorDiv(32))
         .size(4)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
 
   case wave::WaveMmaKind::F32_16x16x32_F8:
@@ -928,7 +931,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .offset(8 * laneId.floorDiv(16))
         .size(8)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_16x16x32_K4_F8:
     builder.m()
@@ -944,7 +947,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
                 (gprNum % 4))
         .size(8)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_32x32x16_F8:
   case wave::WaveMmaKind::F32_32x32x16_BF16:
@@ -965,7 +968,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .offset(8 * laneId.floorDiv(32))
         .size(8)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_32x32x16_K4_F8:
     builder.m()
@@ -982,7 +985,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .offset(8 * gprNum.floorDiv(4) + 4 * laneId.floorDiv(32) + (gprNum % 4))
         .size(8)
         .stride(1)
-        .populate(attributes);
+        .populate(entries);
     return llvm::success();
   default:
     return llvm::failure();
@@ -990,7 +993,7 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
 }
 
 /// Create per-symbol thread-independent index expressions for `indexingSymbols`
-/// given constraints on them and put them into `symbolMappings` as named pairs
+/// given constraints on them and put them into `entries` as entry pairs
 /// (symbol, index mapping attribute). Thread-independent means affected by
 /// workgroup, tiling and device constraints, and NOT affected by wave
 /// constraints or MMA shapes. The first argument indicates for which operation
@@ -1000,19 +1003,18 @@ static void mixInThreadIndependentConstraints(
     Operation *where, llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
-    llvm::SmallVector<NamedAttribute> &symbolMappings) {
+    llvm::SmallVector<wave::WaveIndexEntryAttr> &entries) {
+  MLIRContext *ctx = where->getContext();
   for (wave::WaveSymbolAttr symbol : indexingSymbols) {
     auto it = symbolConstraints.find(symbol);
     if (it == symbolConstraints.end())
       continue;
 
-    auto mappingIt = llvm::find_if(symbolMappings, [&](NamedAttribute attr) {
-      return attr.getName() == symbol.getName();
+    auto entryIt = llvm::find_if(entries, [&](wave::WaveIndexEntryAttr entry) {
+      return entry.getDimension() == symbol;
     });
     wave::WaveIndexMappingAttr mapping =
-        mappingIt != symbolMappings.end()
-            ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
-            : nullptr;
+        entryIt != entries.end() ? entryIt->getMapping() : nullptr;
     for (Attribute constraint : it->second) {
       // Tiling constraints should only be applied inside the corresponding
       // parent iterate op.
@@ -1034,10 +1036,11 @@ static void mixInThreadIndependentConstraints(
         }
       }
     }
-    if (mappingIt != symbolMappings.end())
-      mappingIt->setValue(mapping);
-    else if (mapping)
-      symbolMappings.emplace_back(symbol.getName(), mapping);
+    if (entryIt != entries.end()) {
+      *entryIt = wave::WaveIndexEntryAttr::get(ctx, symbol, mapping);
+    } else if (mapping) {
+      entries.push_back(wave::WaveIndexEntryAttr::get(ctx, symbol, mapping));
+    }
   }
 }
 
@@ -1050,8 +1053,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
   ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
       cast<wave::WaveTensorType>(getResult().getType()).getShape();
-  SmallVector<NamedAttribute> symbolMappings;
-  symbolMappings.reserve(indexingSymbols.size());
+  SmallVector<wave::WaveIndexEntryAttr> entries;
+  entries.reserve(indexingSymbols.size());
 
   assert(indexingSymbols.size() == 2 &&
          "only 2 indexing symbols are currently supported for MMA result");
@@ -1065,13 +1068,14 @@ LogicalResult MmaOp::initializeIndexExprsForward(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          /*kSymbol=*/nullptr, symbolMappings))) {
+          /*kSymbol=*/nullptr, entries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  mixInThreadIndependentConstraints(
-      *this, indexingSymbols, initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
+  mixInThreadIndependentConstraints(*this, indexingSymbols,
+                                    initObject.symbolConstraints, entries);
+  resultExprs[0].unsafeSet(
+      wave::WaveIndexExprsAttr::get(getContext(), entries));
 
   return llvm::success();
 }
@@ -1096,50 +1100,52 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
 
-  llvm::SmallVector<NamedAttribute> operandSymbolMappings;
+  llvm::SmallVector<wave::WaveIndexEntryAttr> operandEntries;
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          kSymbol, operandSymbolMappings))) {
+          kSymbol, operandEntries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  llvm::SmallVector<NamedAttribute> accumulatorSymbolMappings;
+  llvm::SmallVector<wave::WaveIndexEntryAttr> accumulatorEntries;
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          nullptr, accumulatorSymbolMappings))) {
+          nullptr, accumulatorEntries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
   mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol, kSymbol},
                                     initObject.symbolConstraints,
-                                    operandSymbolMappings);
+                                    operandEntries);
   mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol},
                                     initObject.symbolConstraints,
-                                    accumulatorSymbolMappings);
+                                    accumulatorEntries);
 
-  // Create the LHS and RHS mappings that are not using symbols
+  // Create the LHS and RHS entries that are not using symbols
   // irrelevant for them.
-  llvm::SmallVector<NamedAttribute> lhsSymbolMappings =
-      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
-        return attr.getName() != nSymbol.getName();
-      });
-  llvm::SmallVector<NamedAttribute> rhsSymbolMappings =
-      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
-        return attr.getName() != mSymbol.getName();
-      });
+  llvm::SmallVector<wave::WaveIndexEntryAttr> lhsEntries =
+      llvm::filter_to_vector(operandEntries,
+                             [&](wave::WaveIndexEntryAttr entry) {
+                               return entry.getDimension() != nSymbol;
+                             });
+  llvm::SmallVector<wave::WaveIndexEntryAttr> rhsEntries =
+      llvm::filter_to_vector(operandEntries,
+                             [&](wave::WaveIndexEntryAttr entry) {
+                               return entry.getDimension() != mSymbol;
+                             });
 
   operandExprs[getLhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), lhsSymbolMappings));
+          wave::WaveIndexExprsAttr::get(getContext(), lhsEntries));
   operandExprs[getRhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), rhsSymbolMappings));
+          wave::WaveIndexExprsAttr::get(getContext(), rhsEntries));
   operandExprs[getAccumulatorMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
+          wave::WaveIndexExprsAttr::get(getContext(), accumulatorEntries));
   return llvm::success();
 }
 
@@ -1398,16 +1404,17 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
 
   // The 'index' attribute is optional. For non-MMA ops (read/write), we only
   // use a single index expression, which is stored as the first (and only)
-  // dictionary inside the array attribute.
+  // WaveIndexExprsAttr inside the array attribute.
   ArrayAttr arr = dyn_cast_or_null<ArrayAttr>(indexAttr);
   if (!arr)
     return success();
   if (!llvm::hasSingleElement(arr.getValue()))
     return op->emitError() << "'index' attribute must contain exactly one "
-                              "dictionary for this op, got "
+                              "WaveIndexExprsAttr for this op, got "
                            << arr.size();
-  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(arr[0]);
-  if (!indexDict)
+  wave::WaveIndexExprsAttr indexExprs =
+      dyn_cast<wave::WaveIndexExprsAttr>(arr[0]);
+  if (!indexExprs)
     return success();
 
   wave::WaveHyperparameterAttr hyper = wave::WaveHyperparameterAttr();
@@ -1423,7 +1430,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
         op->getContext(), DictionaryAttr::get(op->getContext()));
 
   SmallVector<int64_t> shape =
-      getUncollapsedVectorShape(tensorType.getShape(), indexDict, hyper);
+      getUncollapsedVectorShape(tensorType.getShape(), indexExprs, hyper);
   int64_t nonUnit = 1;
   bool hadDynamic = false;
   for (auto [i, size] : llvm::enumerate(shape)) {

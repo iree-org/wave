@@ -1186,13 +1186,15 @@ public:
             for (Value capture : iterateOp.getCaptureBlockArgs()) {
               if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
                 continue;
-              auto dict = DictionaryAttr::get(
+              auto indexExprs = wave::WaveIndexExprsAttr::get(
                   iterSymbolAttr.getContext(),
-                  {{iterSymbolAttr.getName(),
-                    wave::applyConstraint(tilingConstraint)}});
+                  {wave::WaveIndexEntryAttr::get(
+                      iterSymbolAttr.getContext(), iterSymbolAttr,
+                      wave::applyConstraint(tilingConstraint))});
               LDBG() << "setting iterate block argument lattice " << capture
-                     << " from " << PrintNoRegions(iterateOp) << " to " << dict;
-              unsafeSet(getLatticeElement(capture), dict);
+                     << " from " << PrintNoRegions(iterateOp) << " to "
+                     << indexExprs;
+              unsafeSet(getLatticeElement(capture), indexExprs);
             }
           }
         }
@@ -1204,11 +1206,11 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict) {
-                if (!dict)
+              top, [&](Value value, wave::WaveIndexExprsAttr indexExprs) {
+                if (!indexExprs)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value), indexExprs);
               })))
         return llvm::failure();
     }
@@ -1491,11 +1493,11 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict) {
-                if (!dict)
+              top, [&](Value value, wave::WaveIndexExprsAttr indexExprs) {
+                if (!indexExprs)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value), indexExprs);
               })))
         return llvm::failure();
     }

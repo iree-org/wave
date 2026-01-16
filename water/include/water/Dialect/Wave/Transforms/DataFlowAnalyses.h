@@ -18,12 +18,13 @@ class DataFlowSolver;
 class SymbolTableCollection;
 class Operation;
 class Value;
-class DictionaryAttr;
 } // namespace mlir
 
 namespace wave {
+class WaveIndexExprsAttr;
+
 using SetIndexLatticeFn =
-    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr)>;
+    llvm::function_ref<void(mlir::Value, wave::WaveIndexExprsAttr)>;
 using OverrideInitializationFn = llvm::function_ref<llvm::LogicalResult(
     mlir::Operation *, SetIndexLatticeFn)>;
 

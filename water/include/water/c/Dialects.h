@@ -132,6 +132,51 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr, intptr_t index);
 
 //===---------------------------------------------------------------------===//
+// WaveIndexEntryAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveIndexEntryAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIndexEntryAttr(MlirAttribute attr);
+
+/// Creates a new WaveIndexEntryAttr with the given dimension symbol and
+/// mapping.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexEntryAttrGet(
+    MlirContext mlirCtx, MlirAttribute dimension, MlirAttribute mapping);
+
+/// Returns the typeID of a WaveIndexEntryAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexEntryAttrGetTypeID();
+
+/// Gets the dimension symbol from a WaveIndexEntryAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIndexEntryAttrGetDimension(MlirAttribute attr);
+
+/// Gets the mapping from a WaveIndexEntryAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIndexEntryAttrGetMapping(MlirAttribute attr);
+
+//===---------------------------------------------------------------------===//
+// WaveIndexExprsAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveIndexExprsAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIndexExprsAttr(MlirAttribute attr);
+
+/// Creates a new WaveIndexExprsAttr with the given list of entries.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexExprsAttrGet(
+    MlirContext mlirCtx, intptr_t numEntries, MlirAttribute *entries);
+
+/// Returns the typeID of a WaveIndexExprsAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexExprsAttrGetTypeID();
+
+/// Gets the number of entries in a WaveIndexExprsAttr.
+MLIR_CAPI_EXPORTED intptr_t
+mlirWaveIndexExprsAttrGetNumEntries(MlirAttribute attr);
+
+/// Gets the entry at the given index from a WaveIndexExprsAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIndexExprsAttrGetEntry(MlirAttribute attr, intptr_t index);
+
+//===---------------------------------------------------------------------===//
 // WaveHyperparameterAttr
 //===---------------------------------------------------------------------===//
 

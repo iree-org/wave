@@ -183,24 +183,23 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
 }
 
 /// Build per-dimension start indices in the order specified by `orderedSyms`
-/// (the Wave tensor’s dim order). For each symbol name in `orderedSyms`, this
-/// looks up a WaveIndexMappingAttr in `indexDict`, materializes its `start`
+/// (the Wave tensor's dim order). For each symbol name in `orderedSyms`, this
+/// looks up a WaveIndexMappingAttr in `indexExprs`, materializes its `start`
 /// map and returns one index-typed Value per dimension.
 static FailureOr<SmallVector<Value>>
-buildStartIndices(Location loc, DictionaryAttr indexDict,
+buildStartIndices(Location loc, wave::WaveIndexExprsAttr indexExprs,
                   ArrayRef<wave::WaveSymbolAttr> orderedSyms,
                   PatternRewriter &rewriter,
                   wave::WaveHyperparameterAttr hyper) {
   SmallVector<Value> indices;
   indices.reserve(orderedSyms.size());
   for (wave::WaveSymbolAttr symAttr : orderedSyms) {
-    StringRef name = symAttr.getName();
-    Attribute a = indexDict.get(name);
-    assert(a && "index dict missing entry for dimension symbol");
-    auto mapAttr = cast<wave::WaveIndexMappingAttr>(a);
+    std::optional<wave::WaveIndexMappingAttr> mapAttr =
+        indexExprs.lookup(symAttr);
+    assert(mapAttr && "index exprs missing entry for dimension symbol");
 
     FailureOr<SmallVector<Value>> startFo = materializeAffine(
-        loc, mapAttr.getSymbols(), mapAttr.getStart(), rewriter, hyper);
+        loc, mapAttr->getSymbols(), mapAttr->getStart(), rewriter, hyper);
     if (failed(startFo))
       return failure();
     SmallVector<Value> start = std::move(*startFo);
@@ -221,8 +220,9 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 static FailureOr<Value>
 buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
           ArrayRef<wave::WaveSymbolAttr> orderedSyms, PatternRewriter &rewriter,
-          DictionaryAttr indexDict, wave::WaveHyperparameterAttr hyper,
-          ArrayRef<Value> startIdx, int64_t elementsPerThread) {
+          wave::WaveIndexExprsAttr indexExprs,
+          wave::WaveHyperparameterAttr hyper, ArrayRef<Value> startIdx,
+          int64_t elementsPerThread) {
   if (!boundsDict)
     return Value();
 
@@ -444,38 +444,34 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   // with non-unit extent is considered to be vectorized.
 
   // Read/Write ops only carry a single index expression: the first (and only)
-  // dictionary inside the array attribute. The IndexExprsSpecified normal form
-  // guarantees this attribute is present.
+  // WaveIndexExprsAttr inside the array attribute. The IndexExprsSpecified
+  // normal form guarantees this attribute is present.
   ArrayAttr indexArr = op.getIndexAttr();
   assert(indexArr && "IndexExprsSpecified normal form guarantees index attr");
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
-         "'index' must be an array with exactly one dictionary");
-  DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+         "'index' must be an array with exactly one WaveIndexExprsAttr");
+  wave::WaveIndexExprsAttr indexExprs =
+      cast<wave::WaveIndexExprsAttr>(indexArr[0]);
 
-  // Get ordered symbols from the index dictionary keys.
-  // DictAttr is internally an ArrayRef<NamedAttribute>, so keys are ordered.
-  SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
-  orderedSymsStorage.reserve(indexDict.size());
-  for (NamedAttribute namedAttr : indexDict)
-    orderedSymsStorage.push_back(wave::WaveSymbolAttr::get(
-        op.getContext(), namedAttr.getName().strref()));
-  ArrayRef<wave::WaveSymbolAttr> orderedSyms = orderedSymsStorage;
+  // Get ordered symbols from the index expressions - order is preserved.
+  llvm::SmallVector<wave::WaveSymbolAttr> orderedSyms =
+      indexExprs.getDimensions();
   std::optional<int64_t> vectorizedDim =
-      wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
+      wave::getPositionOfVectorizedDim(orderedSyms, indexExprs, hyper);
 
   if (!vectorizedDim.has_value()) {
     return rewriter.notifyMatchFailure(
         op, "failed to identify vectorized dimension");
   }
   FailureOr<SmallVector<Value>> maybeStartIndices =
-      buildStartIndices(op->getLoc(), indexDict, orderedSyms, rewriter, hyper);
+      buildStartIndices(op->getLoc(), indexExprs, orderedSyms, rewriter, hyper);
   if (failed(maybeStartIndices))
     return rewriter.notifyMatchFailure(
         op, "failed to convert start indices to affine");
   SmallVector<Value> startIndices = std::move(*maybeStartIndices);
 
   FailureOr<Value> mask =
-      buildMask(op->getLoc(), boundsDict, orderedSyms, rewriter, indexDict,
+      buildMask(op->getLoc(), boundsDict, orderedSyms, rewriter, indexExprs,
                 hyper, startIndices, elementsPerThread);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");

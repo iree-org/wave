@@ -34,10 +34,10 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // WriteOpLoweringPattern requires valid stride expressions (not NULL)
     // expected-error @+1 {{failed to legalize operation 'wave.write' that was explicitly marked illegal}}
     wave.write %reg, %mem
-      index [{
-        M : [#wave.index_symbol<T0>] -> (T0, <NULL>, 1),
-        N : [#wave.index_symbol<T1>] -> (T1, 1, 1)
-      }]
+      {index = [#wave.index_exprs<[
+        <"M"> : [#wave.index_symbol<T0>] -> (T0, <NULL>, 1),
+        <"N"> : [#wave.index_symbol<T1>] -> (T1, 1, 1)
+      ]>]}
       : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
     return
   }
@@ -52,9 +52,9 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
   func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>} {
     // expected-error @below {{failed to legalize}}
-    %0 = wave.read %mem index [{
-      M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , <NULL>, 64),
-      N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
+    %0 = wave.read %mem {index = [#wave.index_exprs<[
+      <"M"> : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , <NULL>, 64),
+      <"N"> : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)]>]}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
     return
   }

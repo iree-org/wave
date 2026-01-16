@@ -42,11 +42,6 @@ public:
   }
 };
 
-mlir::ParseResult parseWaveIndexDict(mlir::OpAsmParser &parser,
-                                     mlir::ArrayAttr &out);
-void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
-                        mlir::ArrayAttr arr);
-
 //-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------
@@ -380,7 +375,10 @@ public:
 
 // Lattice for propagating index expressions across wave dialect operations.
 // In addition to the bottom and top states, it can represent a concrete state
-// manifested as a dictionary attribute mapping symbol names to index mappings.
+// manifested as a WaveIndexExprsAttr mapping dimension symbols to index
+// mappings. The entries preserve order, corresponding to the tensor type's
+// dimension order.
+//
 // The JOIN function is defined similarly to other lattices with special
 // handling for combining thread-dependent and thread-independent index
 // expressions.
@@ -388,7 +386,7 @@ class IndexExprsLatticeStorage {
 public:
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue);
+  IndexExprsLatticeStorage(wave::WaveIndexExprsAttr concreteValue);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
@@ -404,7 +402,7 @@ public:
 
   // Returns the concrete value stored in the lattice instance, be it fully
   // specified or not, or null if the lattice instance is a top or a bottom.
-  mlir::DictionaryAttr getConcreteValue() const;
+  wave::WaveIndexExprsAttr getConcreteValue() const;
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -412,7 +410,30 @@ public:
   // Return the bottom lattice instance.
   static IndexExprsLatticeStorage bottom();
 
-  // Join two lattice instances and return the result.
+  /// Join two lattice instances and return the result.
+  ///
+  /// Ordering semantics:
+  /// - LHS entries come first (in LHS order), then RHS-only entries (in RHS
+  ///   order).
+  /// - Entries with the same dimension have their mappings merged.
+  ///
+  /// Valid usage scenarios:
+  /// 1. **Same dimensions, same order**: Both LHS and RHS have matching
+  ///    dimension order (e.g., both have {M, K}). The result preserves this
+  ///    order. This is the common case for elementwise ops like wave.add.
+  ///
+  /// 2. **MMA ops**: LHS has {M, K}, RHS has {N, K}, accumulator/result has
+  ///    {M, N}. The `ignoredRhsSymbols` parameter filters dimensions that
+  ///    don't apply (e.g., ignore M when propagating from LHS to result).
+  ///    Joins are done incrementally: start with bottom, join LHS (filtered),
+  ///    then join RHS, then join accumulator.
+  ///
+  /// 3. **Iterate ops**: Block arguments are joined with iter_args, and
+  ///    terminator operands with results. Both should have matching tensor
+  ///    types and thus matching dimension order.
+  ///
+  /// If LHS and RHS have conflicting mappings for the same dimension (i.e.,
+  /// mappings that cannot be merged), the result is `top` (conflict).
   static IndexExprsLatticeStorage
   join(const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
        llvm::ArrayRef<mlir::Attribute> ignoredRhsSymbols = {});
@@ -432,13 +453,14 @@ public:
   // state.
   void unsafeSet(const IndexExprsLatticeStorage &value);
 
-  // Return a new lattice instance with only the provided symbols present.
+  // Return a new lattice instance with only the provided symbols present,
+  // preserving the current order (filtering only, no reordering).
   IndexExprsLatticeStorage
   keepOnlySymbols(llvm::ArrayRef<wave::WaveSymbolAttr> symbols) const;
 
   // Return a new lattice instance where all expressions no longer have
   // references to the provided iterator symbols. Note that this doesn't remove
-  // elements from the mapping dictionary but updates the mapped expressions.
+  // elements from the mapping but updates the mapped expressions.
   IndexExprsLatticeStorage
   withoutIterSymbols(llvm::ArrayRef<wave::WaveSymbolAttr> iterSymbols) const;
 
@@ -447,8 +469,8 @@ public:
   LLVM_DUMP_METHOD void dump() const;
 
 private:
-  // The internal storage is either a dictionary attribute with one entry per
-  // symbol indexing the value or one of the top/bottom flags.
+  // The internal storage is either a WaveIndexExprsAttr with ordered entries
+  // per dimension symbol, or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
   // State flags.
@@ -458,6 +480,7 @@ private:
 };
 
 void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value);
+
 } // namespace wave
 
 namespace llvm {

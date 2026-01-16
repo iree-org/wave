@@ -165,6 +165,71 @@ MlirAttribute mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr,
 }
 
 //===---------------------------------------------------------------------===//
+// WaveIndexEntryAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveIndexEntryAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveIndexEntryAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveIndexEntryAttrGet(MlirContext mlirCtx,
+                                        MlirAttribute dimension,
+                                        MlirAttribute mapping) {
+  MLIRContext *ctx = unwrap(mlirCtx);
+  auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dimension));
+  auto mapAttr = llvm::cast<wave::WaveIndexMappingAttr>(unwrap(mapping));
+  return wrap(wave::WaveIndexEntryAttr::get(ctx, dimAttr, mapAttr));
+}
+
+MlirTypeID mlirWaveIndexEntryAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveIndexEntryAttr>());
+}
+
+MlirAttribute mlirWaveIndexEntryAttrGetDimension(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::WaveIndexEntryAttr>(unwrap(attr)).getDimension());
+}
+
+MlirAttribute mlirWaveIndexEntryAttrGetMapping(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveIndexEntryAttr>(unwrap(attr)).getMapping());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveIndexExprsAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveIndexExprsAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveIndexExprsAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveIndexExprsAttrGet(MlirContext mlirCtx,
+                                        intptr_t numEntries,
+                                        MlirAttribute *entries) {
+  MLIRContext *ctx = unwrap(mlirCtx);
+  llvm::SmallVector<wave::WaveIndexEntryAttr> entryAttrs;
+  entryAttrs.reserve(numEntries);
+  for (intptr_t i = 0; i < numEntries; ++i) {
+    entryAttrs.push_back(
+        llvm::cast<wave::WaveIndexEntryAttr>(unwrap(entries[i])));
+  }
+  return wrap(wave::WaveIndexExprsAttr::get(ctx, entryAttrs));
+}
+
+MlirTypeID mlirWaveIndexExprsAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveIndexExprsAttr>());
+}
+
+intptr_t mlirWaveIndexExprsAttrGetNumEntries(MlirAttribute attr) {
+  return llvm::cast<wave::WaveIndexExprsAttr>(unwrap(attr)).getEntries().size();
+}
+
+MlirAttribute mlirWaveIndexExprsAttrGetEntry(MlirAttribute attr,
+                                             intptr_t index) {
+  return wrap(
+      llvm::cast<wave::WaveIndexExprsAttr>(unwrap(attr)).getEntries()[index]);
+}
+
+//===---------------------------------------------------------------------===//
 // WaveHyperparameterAttr
 //===---------------------------------------------------------------------===//
 
