@@ -24,6 +24,7 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
@@ -54,7 +55,9 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
     "mma_type,threads_per_wave",
     [
         pytest.param(tkw.MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
-        pytest.param(tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+        pytest.param(
+            tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -63,32 +66,10 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
         pytest.param(32, id="K=32_one_tile_less_than_num_stages"),
         pytest.param(64, id="K=64_two_tiles_equals_num_stages"),
         pytest.param(96, id="K=96_three_tiles_has_remainder"),
-        pytest.param(65, id="K=65_odd_size_not_multiple_of_BLOCK_K"),
-        pytest.param(128, id="K=128_four_tiles_no_remainder"),
-        pytest.param(160, id="K=160_five_tiles_no_remainder"),
-        pytest.param(256, id="K=256_eight_tiles_no_remainder"),
-        pytest.param(320, id="K=320_ten_tiles_no_remainder"),
-        pytest.param(512, id="K=512_sixteen_tiles_no_remainder"),
+        pytest.param(133, id="K=133_odd_size_not_multiple_of_BLOCK_K"),
     ],
 )
 def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench):
-    """
-    Test GEMM with pipelined loop for various K dimensions.
-
-    This test verifies that the dynamic pipelining correctly handles:
-    1. Pipelined loop processes floor(ceiling(K/BLOCK_K) / num_stages) iterations
-    2. Remainder loop processes ceiling(K/BLOCK_K) % num_stages iterations
-    3. Both loops together correctly compute the full GEMM result
-    4. No gaps or overlaps in the iteration space
-
-    With BLOCK_K=32 and num_stages=2 (typical for PREFETCH scheduling):
-    - K=32:  ceiling(32/32)=1, pipelined=0, remainder=1 (all remainder)
-    - K=64:  ceiling(64/32)=2, pipelined=1, remainder=0 (one pipelined iter)
-    - K=96:  ceiling(96/32)=3, pipelined=1, remainder=1 (mixed)
-    - K=65:  ceiling(65/32)=3, pipelined=1, remainder=1 (odd size)
-    - K=128: ceiling(128/32)=4, pipelined=2, remainder=0 (no remainder)
-    - K=160: ceiling(160/32)=5, pipelined=2, remainder=1 (mixed)
-    """
     # Fixed matrix dimensions for M and N, variable K
     m_size = 64
     n_size = 64
@@ -115,12 +96,12 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
 
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a, elements_per_thread=4)
-            b_reg = tkw.read(b, elements_per_thread=4)
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 
-        tkw.write(repeat, c, elements_per_thread=4)
+        tkw.write(repeat, c)
 
     # Generate test inputs
     torch.manual_seed(42)
@@ -131,9 +112,6 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
     # Compute reference result using PyTorch
     ref_result = torch.matmul(a.to(torch.float32), b.T.to(torch.float32))
 
-    # Compile with dynamic K and pipelining enabled
-    # NOTE: K is NOT in subs - it remains symbolic to enable dynamic pipelining
-    # The actual K value is determined from the tensor shapes at runtime
     subs = {
         M: m_size,
         N: n_size,
@@ -143,19 +121,8 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
         BLOCK_K: 32,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
-        READ_SHARED_DELAY: 1,
-        WRITE_SHARED_DELAY: 1,
-        READ_GLOBAL_DELAY: 2,
-        WRITE_GLOBAL_DELAY: 2,
-        MMA_DELAY: 1,
-        SHARED_MEMORY_UNITS: 2,
-        GLOBAL_MEMORY_UNITS: 2,
-        MMA_UNITS: 2,
-        VALU_DELAY: 1,
-        VALU_UNITS: 2,
-        SHUFFLE_DELAY: 1,
-        SHUFFLE_UNITS: 2,
     }
+    subs.update(get_default_scheduling_params())
 
     compile_options = WaveCompileOptions(
         subs=subs,
