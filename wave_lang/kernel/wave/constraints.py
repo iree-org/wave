@@ -453,6 +453,7 @@ class HardwareConstraint(Constraint):
                     32 * floor(lane / 32),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
+                # K offset: data vectors split by half-wave, scales cover full K range.
                 offset = [
                     Piecewise(
                         (lane % 16, ~MMA_ACC),
@@ -460,19 +461,13 @@ class HardwareConstraint(Constraint):
                     ),  # M
                     lane % 16,  # N
                     Piecewise(
-                        (
-                            64 * floor(GPR_NUM / 16)
-                            + 32 * floor(lane / 16)
-                            + (GPR_NUM % 16),
-                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
-                        ),
-                        (
-                            64 * floor(lane / 16),
-                            (MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
-                        ),
+                        (64 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
+                        (0, (MMA_LHS_SCALE | MMA_RHS_SCALE)),
                     ),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_32x16x128_F4:
+                # For 32x16x128: sourceA has 128 elements, sourceB has 64 elements.
+                # K offset: data vectors split by half-wave, scales cover full K range.
                 offset = [
                     Piecewise(
                         (lane, ~MMA_ACC),
@@ -480,16 +475,8 @@ class HardwareConstraint(Constraint):
                     ),  # M
                     lane % 16,  # N
                     Piecewise(
-                        (
-                            64 * floor(GPR_NUM / 16)
-                            + 32 * floor(lane / 16)
-                            + (GPR_NUM % 16),
-                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
-                        ),
-                        (
-                            64 * floor(lane / 16),
-                            (MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
-                        ),
+                        (64 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
+                        (0, (MMA_LHS_SCALE | MMA_RHS_SCALE)),
                     ),  # K
                 ]
             case _:
