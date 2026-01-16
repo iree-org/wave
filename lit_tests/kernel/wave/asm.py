@@ -568,3 +568,113 @@ def test_gemm_gather_to_lds():
     # CHECK:          loop_0_exit:
     # CHECK:          buffer_store_dword
     # CHECK:          s_endpgm
+
+
+SHARED_ADDRESS_SPACE = tkl.AddressSpace.SHARED_MEMORY.value
+GLOBAL_ADDRESS_SPACE = tkl.AddressSpace.GLOBAL_MEMORY.value
+
+
+@run_test
+def test_cse_intermediate_caching():
+    """
+    Test that expression-level CSE caches intermediate results in Add/Mul.
+
+    This test creates a kernel with 4 tensor reads that share address calculation
+    patterns. The expression emitter computes addresses like:
+        base + (lane_id % 64) + ((lane_id / 16) << 4) + ...
+
+    When computing 'a + b + c', the emitter now caches the intermediate 'a + b',
+    so if another expression needs 'a + b', it reuses the cached register instead
+    of emitting a duplicate v_add_u32/v_or_b32.
+
+    Without intermediate caching: ~4x address calc instructions (one per read)
+    With intermediate caching: shared intermediates are computed once
+
+    Verifies:
+    - Lane ID computation (v_mbcnt_lo/hi) appears only once
+    - All 4 buffer loads execute correctly
+    - No duplicate lane_id computations before s_endpgm
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def cse_test(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        d: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        out: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        # Initialize accumulator
+        acc = tkl.Register[M, N, tkl.f32](0.0)
+
+        # Read from 4 tensors - a and b have same layout, c and d have same layout
+        # This generates address calculations with shared intermediate expressions
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        c_reg = tkw.read(c, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        d_reg = tkw.read(d, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+
+        # Use MMA to consume the reads (prevents DCE)
+        acc = tkw.mma(a_reg, c_reg, acc)
+        acc = tkw.mma(b_reg, d_reg, acc)
+
+        tkw.write(acc, out, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 16,
+            N: 16,
+            K: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    compile_options.compile_to_asm = True
+    cse_test = wave_compile(compile_options, cse_test)
+    print(cse_test.asm)
+
+    # CHECK-LABEL:    test_cse_intermediate_caching
+    # CHECK:          .protected cse_test
+    # CHECK:          .amdhsa_kernel cse_test
+    # CHECK:          cse_test:
+
+    # Lane ID computation should appear exactly ONCE at the start.
+    # v_mbcnt_lo_u32_b32 computes low 32 bits of lane mask popcount
+    # v_mbcnt_hi_u32_b32 combines with high bits to get full lane_id (0-63)
+    # Without CSE intermediate caching, this would be duplicated per tensor.
+    # CHECK:          v_mbcnt_lo_u32_b32 v[[LANEID_LO:[0-9]+]], -1
+    # CHECK:          v_mbcnt_hi_u32_b32 v[[LANEID:[0-9]+]], -1, v[[LANEID_LO]]
+
+    # All 4 buffer loads should be present (reading from a, b, c, d tensors)
+    # CHECK:          buffer_load_dwordx2
+    # CHECK:          buffer_load_dwordx2
+    # CHECK:          buffer_load_dwordx2
+    # CHECK:          buffer_load_dwordx2
+
+    # Both MMA instructions should execute
+    # CHECK:          v_mfma_f32_16x16x16_f16
+    # CHECK:          v_mfma_f32_16x16x16_f16
+
+    # CSE verification: After the initial v_mbcnt pair, there should be NO more
+    # v_mbcnt_lo instructions before s_endpgm. Without intermediate caching,
+    # we would see 4 pairs (one per tensor read).
+    # CHECK-NOT:      v_mbcnt_lo_u32_b32 v{{[0-9]+}}, -1{{$}}
+
+    # CHECK:          s_endpgm

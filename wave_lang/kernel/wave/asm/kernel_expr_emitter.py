@@ -148,7 +148,7 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         result = self.ctx.vreg()
         self.ctx.program.emit(
             KInstr(
-                "v_mov_b32",
+                Instruction.V_MOV_B32,
                 (result,),
                 (sreg,),
                 comment=f"{name} from s{sreg.index}",
@@ -188,7 +188,10 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         result = self.ctx.vreg()
         self.ctx.program.emit(
             KInstr(
-                "v_mov_b32", (result,), (KImm(value),), comment=f"materialize {value}"
+                Instruction.V_MOV_B32,
+                (result,),
+                (KImm(value),),
+                comment=f"materialize {value}",
             )
         )
         self._const_cache[value] = result
@@ -491,491 +494,514 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         from sympy import Symbol, Mul, Add, Integer, floor, Mod
 
         # Algebraic simplification (disabled by default)
-        # Enable via WAVE_KERNEL_IR_SIMPLIFY=1 or _ENABLE_KERNEL_IR_SIMPLIFY=True
-        # IMPORTANT: Only simplify at top-level (depth=1), not during recursive calls.
-        # This prevents the O(n^2) behavior where each sub-expression is simplified.
         if _ENABLE_KERNEL_IR_SIMPLIFY and self._emit_depth == 1:
             from .expr_simplify import simplify_for_emission
 
             bounds = self._get_symbol_bounds()
             expr = simplify_for_emission(expr, bounds)
 
-        # Check cache for ALL expressions (after simplification)
-        # This avoids re-emitting the same expression multiple times
+        # Check cache first
         cache_key = self._expr_key(expr)
         cached = self._lookup_cache(cache_key)
         if cached is not None:
             return cached
 
-        # Determine if this expression is loop-invariant (for global caching)
         is_invariant = self._is_loop_invariant(expr)
 
-        # Handle immediate integers
+        # Dispatch to type-specific handlers
         if isinstance(expr, (int, Integer)):
-            val = int(expr)
-            # For large constants, use the constant cache for better reuse
-            if val < -16 or val > 64:
-                result = self._get_or_materialize_const(val)
-            else:
+            return self._emit_integer(expr, cache_key, is_invariant)
+
+        if isinstance(expr, Symbol):
+            return self._emit_symbol(expr, cache_key, is_invariant)
+
+        if isinstance(expr, Mul):
+            return self._emit_mul(expr, cache_key, is_invariant)
+
+        if isinstance(expr, Add):
+            return self._emit_add(expr, cache_key, is_invariant)
+
+        if isinstance(expr, floor):
+            result = self._emit_floor(expr)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
+            return result
+
+        if isinstance(expr, Mod):
+            return self._emit_mod(expr, cache_key, is_invariant)
+
+        if isinstance(expr, sympy.Rational) and not isinstance(expr, Integer):
+            return self._emit_rational(expr)
+
+        raise NotImplementedError(
+            f"Expression type not supported: {type(expr).__name__}: {expr}"
+        )
+
+    # =========================================================================
+    # Intermediate caching helpers
+    # =========================================================================
+
+    def _lookup_intermediate(
+        self, accumulated_terms: list, expr_constructor
+    ) -> Tuple[Optional[KVReg], Any]:
+        """
+        Look up an intermediate expression in the cache.
+
+        Args:
+            accumulated_terms: List of terms accumulated so far
+            expr_constructor: Mul or Add to construct intermediate expression
+
+        Returns:
+            Tuple of (cached_result or None, intermediate_expr)
+        """
+        intermediate_expr = expr_constructor(*accumulated_terms)
+        cache_key = self._expr_key(intermediate_expr)
+        cached = self._lookup_cache(cache_key)
+        return cached, intermediate_expr
+
+    def _cache_intermediate_result(self, intermediate_expr, result: KVReg) -> None:
+        """
+        Cache an intermediate computation result.
+
+        Args:
+            intermediate_expr: The sympy expression representing the intermediate
+            result: The register containing the computed result
+        """
+        cache_key = self._expr_key(intermediate_expr)
+        is_invariant = self._is_loop_invariant(intermediate_expr)
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+
+    # =========================================================================
+    # Type-specific emission methods
+    # =========================================================================
+
+    def _emit_integer(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit code for an immediate integer value."""
+        val = int(expr)
+        if val < -16 or val > 64:
+            result = self._get_or_materialize_const(val)
+        else:
+            result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MOV_B32,
+                    (result,),
+                    (KImm(val),),
+                    comment=f"imm = {val}",
+                )
+            )
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
+
+    def _emit_symbol(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit code for a symbolic variable."""
+        name = str(expr)
+
+        # Check bindings first
+        if name in self._bindings:
+            reg = self._bindings[name]
+            if isinstance(reg, KVReg):
+                return reg
+            if isinstance(reg, str) and reg.startswith("v"):
+                phys_idx = int(reg[1:])
                 result = self.ctx.vreg()
                 self.ctx.program.emit(
                     KInstr(
                         Instruction.V_MOV_B32,
                         (result,),
-                        (KImm(val),),
-                        comment=f"imm = {val}",
+                        (KPhysVReg(phys_idx),),
+                        comment=f"copy {name} from {reg}",
                     )
                 )
-            self._insert_cache(cache_key, result, global_scope=is_invariant)
-            return result
-
-        # Handle symbols
-        if isinstance(expr, Symbol):
-            name = str(expr)
-
-            # Check bindings first
-            if name in self._bindings:
-                reg = self._bindings[name]
-                if isinstance(reg, KVReg):
-                    return reg
-                # String like "v0" - need to copy to virtual reg
-                if isinstance(reg, str) and reg.startswith("v"):
-                    phys_idx = int(reg[1:])
-                    result = self.ctx.vreg()
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mov_b32",
-                            (result,),
-                            (KPhysVReg(phys_idx),),
-                            comment=f"copy {name} from {reg}",
-                        )
-                    )
-                    self._insert_cache(cache_key, result, global_scope=is_invariant)
-                    return result
-
-            # Common thread ID symbols - emit inline on first use, cache in GLOBAL scope
-            # (Cache check already done at top of function)
-            if name == "tid_x":
-                if self.ctx.use_flat_tid:
-                    # Multi-wave: extract tid_x from flat_tid (v0[0:9])
-                    result = self.ctx.vreg()
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_bfe_u32",
-                            (result,),
-                            (KPhysVReg(0), KImm(0), KImm(10)),
-                            comment="extract tid_x from flat_tid",
-                        )
-                    )
-                else:
-                    # Single-wave: compute lane_id using v_mbcnt
-                    lo_result = self.ctx.vreg()
-                    result = self.ctx.vreg()
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mbcnt_lo_u32_b32",
-                            (lo_result,),
-                            (KImm(-1), KImm(0)),
-                            comment="lane_id low",
-                        )
-                    )
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mbcnt_hi_u32_b32",
-                            (result,),
-                            (KImm(-1), lo_result),
-                            comment="lane_id = tid_x for single-wave",
-                        )
-                    )
-
-                # Cache in GLOBAL scope so it survives clear_cache()
-                self._insert_cache(cache_key, result, global_scope=True)
-                return result
-
-            if name == "tid_y":
-                if self.ctx.use_flat_tid:
-                    # Multi-wave: extract tid_y from flat_tid (v0[10:19])
-                    result = self.ctx.vreg()
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_bfe_u32",
-                            (result,),
-                            (KPhysVReg(0), KImm(10), KImm(10)),
-                            comment="extract tid_y from flat_tid",
-                        )
-                    )
-                else:
-                    # Single-wave: tid_y is 0
-                    result = self.ctx.vreg()
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mov_b32",
-                            (result,),
-                            (KImm(0),),
-                            comment="tid_y = 0 for single-wave",
-                        )
-                    )
-
-                # Cache in GLOBAL scope (loop-invariant)
-                self._insert_cache(cache_key, result, global_scope=True)
-                return result
-
-            # Handle workgroup ID symbols - use ABI-defined SGPR locations
-            # Also cache in global scope since they're loop-invariant
-            if name in ("wgid_x", "wgid_y", "wgid_z"):
-                result = self._handle_wgid(name, cache_key)
-                return result
-
-            # Handle SGPR references (like loop counters: s8, s9, etc.)
-            # NEVER cache these - loop counters change each iteration
-            if name.startswith("s") and name[1:].isdigit():
-                sgpr_idx = int(name[1:])
-                result = self.ctx.vreg()
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_mov_b32",
-                        (result,),
-                        (KPhysSReg(sgpr_idx),),
-                        comment=f"broadcast {name} to VGPR",
-                    )
-                )
-                return result
-
-            # Handle virtual SGPR references (like loop counters: ks5, ks6, etc.)
-            # These are virtual registers that will be allocated to physical SGPRs.
-            # NEVER cache these - loop counters change each iteration.
-            if name.startswith("ks") and name[2:].isdigit():
-                from .kernel_ir import KSReg
-
-                sreg_id = int(name[2:])
-                sreg = KSReg(sreg_id)
-                result = self.ctx.vreg()
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_mov_b32",
-                        (result,),
-                        (sreg,),
-                        comment=f"broadcast loop counter {name} to VGPR",
-                    )
-                )
-                return result
-
-            raise ValueError(f"Unknown symbol: {name}")
-
-        # Handle multiplication
-        if isinstance(expr, Mul):
-            # Separate constant, rational, and variable parts
-            const_part = 1
-            divisor = 1  # For handling rational coefficients like 1/2
-            var_parts = []
-            for arg in expr.args:
-                if isinstance(arg, Integer):
-                    const_part *= int(arg)
-                elif isinstance(arg, sympy.Rational) and not isinstance(arg, Integer):
-                    # Handle rational like 1/2, 1/4, etc.
-                    const_part *= int(arg.p)  # numerator
-                    divisor *= int(arg.q)  # denominator
-                elif arg.is_number and isinstance(arg, (int, float)):
-                    const_part *= int(arg)
-                else:
-                    var_parts.append(arg)
-
-            if len(var_parts) == 0:
-                # Pure constant (possibly with division)
-                if divisor > 1:
-                    return self.get_or_emit(Integer(const_part // divisor))
-                return self.get_or_emit(Integer(const_part))
-
-            if len(var_parts) == 1:
-                # const * var / divisor - common case
-                var_reg = self.get_or_emit(var_parts[0])
-
-                # Handle divisor first if present (represents rational coefficient)
-                if divisor > 1:
-                    # This is a division like var/2 -> shift right
-                    if divisor > 0 and (divisor & (divisor - 1)) == 0:
-                        shift = divisor.bit_length() - 1
-                        div_result = self.ctx.vreg()
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_lshrrev_b32",
-                                (div_result,),
-                                (KImm(shift), var_reg),
-                                comment=f"{var_parts[0]} >> {shift} (div by {divisor})",
-                            )
-                        )
-                        var_reg = div_result
-                    else:
-                        raise NotImplementedError(
-                            f"Non-power-of-2 divisor in Mul: {divisor}"
-                        )
-
-                if const_part == 1:
-                    # No multiplication needed, just return the (possibly divided) result
-                    if divisor > 1:
-                        self._insert_cache(
-                            cache_key, var_reg, global_scope=is_invariant
-                        )
-                    return var_reg
-
-                result = self.ctx.vreg()
-                abs_const = abs(const_part)
-                is_negative = const_part < 0
-
-                # Check if |const| is power of 2 for shift optimization
-                if abs_const > 0 and (abs_const & (abs_const - 1)) == 0:
-                    shift = abs_const.bit_length() - 1
-                    if is_negative:
-                        # Negative power of 2: shift then negate
-                        # var * -2^n = -(var << n) = 0 - (var << n)
-                        shifted = self.ctx.vreg()
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_lshlrev_b32",
-                                (shifted,),
-                                (KImm(shift), var_reg),
-                                comment=f"{var_parts[0]} << {shift}",
-                            )
-                        )
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_sub_u32",
-                                (result,),
-                                (KImm(0), shifted),
-                                comment=f"negate (multiply by {const_part})",
-                            )
-                        )
-                    else:
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_lshlrev_b32",
-                                (result,),
-                                (KImm(shift), var_reg),
-                                comment=f"{var_parts[0]} << {shift}",
-                            )
-                        )
-                elif -16 <= const_part <= 64:
-                    # Inline constant range - can use immediate
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mul_lo_u32",
-                            (result,),
-                            (var_reg, KImm(const_part)),
-                            comment=f"{var_parts[0]} * {const_part}",
-                        )
-                    )
-                else:
-                    # Large constant - use cached materialization
-                    const_reg = self._get_or_materialize_const(const_part)
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mul_lo_u32",
-                            (result,),
-                            (var_reg, const_reg),
-                            comment=f"{var_parts[0]} * {const_part}",
-                        )
-                    )
-
-                # Cache result (global scope if loop-invariant)
                 self._insert_cache(cache_key, result, global_scope=is_invariant)
                 return result
 
-            # Multiple variable parts - emit sequentially
-            result = self.get_or_emit(var_parts[0])
-            for v in var_parts[1:]:
-                v_reg = self.get_or_emit(v)
+        # Thread ID symbols
+        if name == "tid_x":
+            return self._emit_tid_x(cache_key)
+        if name == "tid_y":
+            return self._emit_tid_y(cache_key)
+
+        # Workgroup ID symbols
+        if name in ("wgid_x", "wgid_y", "wgid_z"):
+            return self._handle_wgid(name, cache_key)
+
+        # Physical SGPR references (loop counters)
+        if name.startswith("s") and name[1:].isdigit():
+            return self._emit_physical_sgpr(name)
+
+        # Virtual SGPR references (loop counters)
+        if name.startswith("ks") and name[2:].isdigit():
+            return self._emit_virtual_sgpr(name)
+
+        raise ValueError(f"Unknown symbol: {name}")
+
+    def _emit_tid_x(self, cache_key: tuple) -> KVReg:
+        """Emit code for tid_x (thread ID in x dimension)."""
+        if self.ctx.use_flat_tid:
+            result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_BFE_U32,
+                    (result,),
+                    (KPhysVReg(0), KImm(0), KImm(10)),
+                    comment="extract tid_x from flat_tid",
+                )
+            )
+        else:
+            lo_result = self.ctx.vreg()
+            result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MBCNT_LO_U32_B32,
+                    (lo_result,),
+                    (KImm(-1), KImm(0)),
+                    comment="lane_id low",
+                )
+            )
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MBCNT_HI_U32_B32,
+                    (result,),
+                    (KImm(-1), lo_result),
+                    comment="lane_id = tid_x for single-wave",
+                )
+            )
+        self._insert_cache(cache_key, result, global_scope=True)
+        return result
+
+    def _emit_tid_y(self, cache_key: tuple) -> KVReg:
+        """Emit code for tid_y (thread ID in y dimension)."""
+        if self.ctx.use_flat_tid:
+            result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_BFE_U32,
+                    (result,),
+                    (KPhysVReg(0), KImm(10), KImm(10)),
+                    comment="extract tid_y from flat_tid",
+                )
+            )
+        else:
+            result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MOV_B32,
+                    (result,),
+                    (KImm(0),),
+                    comment="tid_y = 0 for single-wave",
+                )
+            )
+        self._insert_cache(cache_key, result, global_scope=True)
+        return result
+
+    def _emit_physical_sgpr(self, name: str) -> KVReg:
+        """Emit code for physical SGPR reference (loop counter)."""
+        sgpr_idx = int(name[1:])
+        result = self.ctx.vreg()
+        self.ctx.program.emit(
+            KInstr(
+                Instruction.V_MOV_B32,
+                (result,),
+                (KPhysSReg(sgpr_idx),),
+                comment=f"broadcast {name} to VGPR",
+            )
+        )
+        return result  # Never cache - loop counters change each iteration
+
+    def _emit_virtual_sgpr(self, name: str) -> KVReg:
+        """Emit code for virtual SGPR reference (loop counter)."""
+        from .kernel_ir import KSReg
+
+        sreg_id = int(name[2:])
+        sreg = KSReg(sreg_id)
+        result = self.ctx.vreg()
+        self.ctx.program.emit(
+            KInstr(
+                Instruction.V_MOV_B32,
+                (result,),
+                (sreg,),
+                comment=f"broadcast loop counter {name} to VGPR",
+            )
+        )
+        return result  # Never cache - loop counters change each iteration
+
+    def _emit_mul(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit code for multiplication expression."""
+        import sympy
+        from sympy import Integer
+
+        # Separate constant, rational, and variable parts
+        const_part = 1
+        divisor = 1
+        var_parts = []
+        for arg in expr.args:
+            if isinstance(arg, Integer):
+                const_part *= int(arg)
+            elif isinstance(arg, sympy.Rational) and not isinstance(arg, Integer):
+                const_part *= int(arg.p)
+                divisor *= int(arg.q)
+            elif arg.is_number and isinstance(arg, (int, float)):
+                const_part *= int(arg)
+            else:
+                var_parts.append(arg)
+
+        # Pure constant
+        if len(var_parts) == 0:
+            if divisor > 1:
+                return self.get_or_emit(Integer(const_part // divisor))
+            return self.get_or_emit(Integer(const_part))
+
+        # Single variable case
+        if len(var_parts) == 1:
+            return self._emit_mul_single_var(
+                var_parts[0], const_part, divisor, cache_key, is_invariant
+            )
+
+        # Multiple variables
+        return self._emit_mul_multi_var(var_parts, const_part, cache_key, is_invariant)
+
+    def _emit_mul_single_var(
+        self,
+        var_expr,
+        const_part: int,
+        divisor: int,
+        cache_key: tuple,
+        is_invariant: bool,
+    ) -> KVReg:
+        """Emit multiplication with single variable: const * var / divisor."""
+        var_reg = self.get_or_emit(var_expr)
+
+        # Handle divisor (right shift)
+        if divisor > 1:
+            if divisor > 0 and (divisor & (divisor - 1)) == 0:
+                shift = divisor.bit_length() - 1
+                div_result = self.ctx.vreg()
+                self.ctx.program.emit(
+                    KInstr(
+                        Instruction.V_LSHRREV_B32,
+                        (div_result,),
+                        (KImm(shift), var_reg),
+                        comment=f"{var_expr} >> {shift} (div by {divisor})",
+                    )
+                )
+                var_reg = div_result
+            else:
+                raise NotImplementedError(f"Non-power-of-2 divisor: {divisor}")
+
+        if const_part == 1:
+            if divisor > 1:
+                self._insert_cache(cache_key, var_reg, global_scope=is_invariant)
+            return var_reg
+
+        result = self._emit_const_multiply(var_reg, const_part, str(var_expr))
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
+
+    def _emit_const_multiply(self, var_reg: KVReg, const: int, var_name: str) -> KVReg:
+        """Emit multiplication by constant, using shifts when possible."""
+        result = self.ctx.vreg()
+        abs_const = abs(const)
+        is_negative = const < 0
+
+        if abs_const > 0 and (abs_const & (abs_const - 1)) == 0:
+            shift = abs_const.bit_length() - 1
+            if is_negative:
+                shifted = self.ctx.vreg()
+                self.ctx.program.emit(
+                    KInstr(
+                        Instruction.V_LSHLREV_B32,
+                        (shifted,),
+                        (KImm(shift), var_reg),
+                        comment=f"{var_name} << {shift}",
+                    )
+                )
+                self.ctx.program.emit(
+                    KInstr(
+                        Instruction.V_SUB_U32,
+                        (result,),
+                        (KImm(0), shifted),
+                        comment=f"negate (multiply by {const})",
+                    )
+                )
+            else:
+                self.ctx.program.emit(
+                    KInstr(
+                        Instruction.V_LSHLREV_B32,
+                        (result,),
+                        (KImm(shift), var_reg),
+                        comment=f"{var_name} << {shift}",
+                    )
+                )
+        elif -16 <= const <= 64:
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MUL_LO_U32,
+                    (result,),
+                    (var_reg, KImm(const)),
+                    comment=f"{var_name} * {const}",
+                )
+            )
+        else:
+            const_reg = self._get_or_materialize_const(const)
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_MUL_LO_U32,
+                    (result,),
+                    (var_reg, const_reg),
+                    comment=f"{var_name} * {const}",
+                )
+            )
+        return result
+
+    def _emit_mul_multi_var(
+        self, var_parts: list, const_part: int, cache_key: tuple, is_invariant: bool
+    ) -> KVReg:
+        """Emit multiplication with multiple variables."""
+        from sympy import Mul
+
+        result = self.get_or_emit(var_parts[0])
+
+        # Track accumulated factors for intermediate caching
+        accumulated_factors = [var_parts[0]]
+
+        for v in var_parts[1:]:
+            v_reg = self.get_or_emit(v)
+            accumulated_factors.append(v)
+
+            # Check if intermediate is already cached
+            cached, intermediate_expr = self._lookup_intermediate(
+                accumulated_factors, Mul
+            )
+            if cached is not None:
+                result = cached
+            else:
                 new_result = self.ctx.vreg()
                 self.ctx.program.emit(
                     KInstr(
-                        "v_mul_lo_u32", (new_result,), (result, v_reg), comment="mul"
+                        Instruction.V_MUL_LO_U32,
+                        (new_result,),
+                        (result, v_reg),
+                        comment="mul",
                     )
                 )
                 result = new_result
+                self._cache_intermediate_result(intermediate_expr, result)
 
-            if const_part != 1:
-                final = self.ctx.vreg()
-                abs_const = abs(const_part)
-                is_negative = const_part < 0
+        if const_part != 1:
+            result = self._emit_const_multiply(result, const_part, "<accumulated>")
 
-                # Check if |const| is power of 2 for shift optimization
-                if abs_const > 0 and (abs_const & (abs_const - 1)) == 0:
-                    shift = abs_const.bit_length() - 1
-                    if is_negative:
-                        # Negative power of 2: shift then negate
-                        shifted = self.ctx.vreg()
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_lshlrev_b32",
-                                (shifted,),
-                                (KImm(shift), result),
-                                comment=f"<< {shift}",
-                            )
-                        )
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_sub_u32",
-                                (final,),
-                                (KImm(0), shifted),
-                                comment=f"negate (multiply by {const_part})",
-                            )
-                        )
-                    else:
-                        self.ctx.program.emit(
-                            KInstr(
-                                "v_lshlrev_b32",
-                                (final,),
-                                (KImm(shift), result),
-                                comment=f"<< {shift}",
-                            )
-                        )
-                elif -16 <= const_part <= 64:
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mul_lo_u32",
-                            (final,),
-                            (result, KImm(const_part)),
-                            comment=f"* {const_part}",
-                        )
-                    )
-                else:
-                    # Large constant - use cached materialization
-                    const_reg = self._get_or_materialize_const(const_part)
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_mul_lo_u32",
-                            (final,),
-                            (result, const_reg),
-                            comment=f"* {const_part}",
-                        )
-                    )
-                result = final
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
 
-            # Cache result (global scope if loop-invariant)
-            self._insert_cache(cache_key, result, global_scope=is_invariant)
-            return result
+    def _emit_add(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit code for addition expression."""
+        from sympy import Integer, Add
 
-        # Handle addition
-        if isinstance(expr, Add):
-            # Separate constant and non-constant terms
-            const_sum = 0
-            var_args = []
-            for arg in expr.args:
-                if isinstance(arg, (int, Integer)):
-                    const_sum += int(arg)
-                else:
-                    var_args.append(arg)
+        # Separate constant and variable terms
+        const_sum = 0
+        var_args = []
+        for arg in expr.args:
+            if isinstance(arg, (int, Integer)):
+                const_sum += int(arg)
+            else:
+                var_args.append(arg)
 
-            # Handle pure constant case
-            if not var_args:
-                return self.get_or_emit(Integer(const_sum))
+        if not var_args:
+            return self.get_or_emit(Integer(const_sum))
 
-            # Emit first variable term
-            result = self.get_or_emit(var_args[0])
-            result_range = self._get_bit_range(var_args[0])
+        result = self.get_or_emit(var_args[0])
+        result_range = self._get_bit_range(var_args[0])
 
-            # Add remaining variable terms based on bit overlap
-            for arg in var_args[1:]:
-                arg_reg = self.get_or_emit(arg)
-                arg_range = self._get_bit_range(arg)
+        # Track accumulated terms for intermediate caching
+        accumulated_terms = [var_args[0]]
+
+        for arg in var_args[1:]:
+            arg_reg = self.get_or_emit(arg)
+            arg_range = self._get_bit_range(arg)
+            accumulated_terms.append(arg)
+
+            # Check if intermediate is already cached
+            cached, intermediate_expr = self._lookup_intermediate(
+                accumulated_terms, Add
+            )
+            if cached is not None:
+                result = cached
+                result_range = self._get_bit_range(intermediate_expr)
+            else:
                 new_result = self.ctx.vreg()
 
-                # Check if we can use OR instead of ADD
-                # OR is valid when bit ranges don't overlap
                 if not self._bits_overlap(result_range, arg_range):
                     self.ctx.program.emit(
                         KInstr(
-                            "v_or_b32",
+                            Instruction.V_OR_B32,
                             (new_result,),
                             (result, arg_reg),
                             comment=f"or (bits {result_range[0]}-{result_range[1]} + {arg_range[0]}-{arg_range[1]})",
                         )
                     )
-                else:
-                    self.ctx.program.emit(
-                        KInstr(
-                            "v_add_u32", (new_result,), (result, arg_reg), comment="add"
-                        )
-                    )
-
-                result = new_result
-                # Update result range (conservative: union of ranges for OR, expanded for ADD)
-                if not self._bits_overlap(result_range, arg_range):
                     result_range = (
                         min(result_range[0], arg_range[0]),
                         max(result_range[1], arg_range[1]),
                     )
                 else:
+                    self.ctx.program.emit(
+                        KInstr(
+                            Instruction.V_ADD_U32,
+                            (new_result,),
+                            (result, arg_reg),
+                            comment="add",
+                        )
+                    )
                     result_range = (
                         min(result_range[0], arg_range[0]),
                         max(result_range[1], arg_range[1]) + 1,
                     )
-
-            # Add the constant sum if non-zero, using inline literal
-            if const_sum != 0:
-                new_result = self.ctx.vreg()
-                # Use inline literal for the constant (v_add_u32 supports 32-bit literals)
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_add_u32",
-                        (new_result,),
-                        (KImm(const_sum), result),
-                        comment=f"+ {const_sum} (inline literal)",
-                    )
-                )
                 result = new_result
+                self._cache_intermediate_result(intermediate_expr, result)
 
-            # Cache result (global scope if loop-invariant)
-            self._insert_cache(cache_key, result, global_scope=is_invariant)
-            return result
-
-        # Handle floor expressions
-        if isinstance(expr, floor):
-            result = self._emit_floor(expr)
-
-            # Cache result (global scope if loop-invariant)
-            self._insert_cache(cache_key, result, global_scope=is_invariant)
-            return result
-
-        # Handle modulo
-        if isinstance(expr, Mod):
-            x, n = expr.args
-            x_reg = self.get_or_emit(x)
-            n_val = int(n)
-
-            result = self.ctx.vreg()
-
-            # Check if n is power of 2 for AND
-            if n_val > 0 and (n_val & (n_val - 1)) == 0:
-                mask = n_val - 1
-                self.ctx.program.emit(
-                    KInstr(
-                        "v_and_b32",
-                        (result,),
-                        (KImm(mask), x_reg),
-                        comment=f"mod {n_val} (and)",
-                    )
+        if const_sum != 0:
+            new_result = self.ctx.vreg()
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_ADD_U32,
+                    (new_result,),
+                    (KImm(const_sum), result),
+                    comment=f"+ {const_sum} (inline literal)",
                 )
-            else:
-                # TODO: Implement general modulo
-                raise NotImplementedError(f"modulo by {n_val} not yet implemented")
+            )
+            result = new_result
 
-            # Cache result (global scope if loop-invariant)
-            self._insert_cache(cache_key, result, global_scope=is_invariant)
-            return result
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
 
-        # Handle rational numbers (like Half = 1/2)
-        # These can appear when simplification extracts common factors from expressions
-        # In our integer-only arithmetic, rationals are handled via floor semantics:
-        # - Standalone rational like 1/2: floor(1/2) = 0
-        # - Multiplication like tid_y * 1/2: handled in Mul case as tid_y >> 1
-        if isinstance(expr, sympy.Rational) and not isinstance(expr, Integer):
-            if expr.q == 1:  # Integer in disguise (like 3/1)
-                return self.get_or_emit(Integer(expr.p))
-            # Pure fractional rational: use floor semantics
-            # This is correct because all our intermediate values are integers
-            floor_val = int(expr.p) // int(expr.q)
-            return self.get_or_emit(Integer(floor_val))
+    def _emit_mod(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit code for modulo expression."""
+        x, n = expr.args
+        x_reg = self.get_or_emit(x)
+        n_val = int(n)
 
-        raise NotImplementedError(
-            f"Expression type not supported: {type(expr).__name__}: {expr}"
-        )
+        result = self.ctx.vreg()
+        if n_val > 0 and (n_val & (n_val - 1)) == 0:
+            mask = n_val - 1
+            self.ctx.program.emit(
+                KInstr(
+                    Instruction.V_AND_B32,
+                    (result,),
+                    (KImm(mask), x_reg),
+                    comment=f"mod {n_val} (and)",
+                )
+            )
+        else:
+            raise NotImplementedError(f"modulo by {n_val} not yet implemented")
+
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
+
+    def _emit_rational(self, expr) -> KVReg:
+        """Emit code for rational number."""
+        from sympy import Integer
+
+        if expr.q == 1:
+            return self.get_or_emit(Integer(expr.p))
+        floor_val = int(expr.p) // int(expr.q)
+        return self.get_or_emit(Integer(floor_val))
