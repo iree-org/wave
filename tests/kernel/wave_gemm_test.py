@@ -2759,7 +2759,10 @@ def test_gemm_two_async_cluster_triple_buffering(
         compile_to_mlir=False,
         use_global_to_shared=True,
     )
-    options.minimize_shared_allocs = False
+    options.minimize_shared_allocs = (
+        False  # This is needed such that the backend can infer aliasing metadata
+    )
+    options.specialize = True  # This is needed to get rid of an lds_barrier being inserted at the top of the loop
     schedule = get_async_two_cluster_triple_buffer()
 
     # Set runtime configuration for execution
