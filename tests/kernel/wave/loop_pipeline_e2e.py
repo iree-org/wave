@@ -27,7 +27,11 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from .common.utils import require_e2e
+from .common.utils import (
+    require_e2e,
+    require_cdna_3_or_4,
+    require_rdna4,
+)
 
 
 # Input sizes
@@ -47,6 +51,13 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
 
 @require_e2e
 @pytest.mark.parametrize(
+    "mma_type,threads_per_wave",
+    [
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+@pytest.mark.parametrize(
     "K_value",
     [
         pytest.param(32, id="K=32_one_tile_less_than_num_stages"),
@@ -60,7 +71,7 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
         pytest.param(512, id="K=512_sixteen_tiles_no_remainder"),
     ],
 )
-def test_gemm_pipelined_dynamic_K(K_value, run_bench):
+def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench):
     """
     Test GEMM with pipelined loop for various K dimensions.
 
@@ -89,8 +100,8 @@ def test_gemm_pipelined_dynamic_K(K_value, run_bench):
         tkw.WaveConstraint(M, BLOCK_M / 2),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
-            threads_per_wave=64,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            threads_per_wave=threads_per_wave,
+            mma_type=mma_type,
         ),
     ]
 
