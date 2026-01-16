@@ -521,22 +521,50 @@ def is_barrier_between(
 
         # Case 1:
         if hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
-            assert (
-                src.graph.parent_op.graph == dst.graph.parent_op.graph
-            ), "src and dst parent ops must be in the same graph"
-            # Check if there is a barrier in the src graph between src and output.
-            src_check = is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId, barriers
-            )
-            # Check if there is a barrier in the graph above between src root and dst root.
-            root_check = is_barrier_between_same_graph(
-                src.graph.parent_op, dst.graph.parent_op, barId, barriers
-            )
-            # Check if there is a barrier in the dst graph between the root and dst.
-            dst_check = is_barrier_between_same_graph(
-                list(dst.graph.nodes)[0], dst, barId, barriers
-            )
-            return src_check or root_check or dst_check
+            # Case 1a: Both parent_ops are in the same graph (same nesting level)
+            if src.graph.parent_op.graph == dst.graph.parent_op.graph:
+                # Check if there is a barrier in the src graph between src and output.
+                src_check = is_barrier_between_same_graph(
+                    src, list(src.graph.nodes)[-1], barId, barriers
+                )
+                # Check if there is a barrier in the graph above between src root and dst root.
+                root_check = is_barrier_between_same_graph(
+                    src.graph.parent_op, dst.graph.parent_op, barId, barriers
+                )
+                # Check if there is a barrier in the dst graph between the root and dst.
+                dst_check = is_barrier_between_same_graph(
+                    list(dst.graph.nodes)[0], dst, barId, barriers
+                )
+                return src_check or root_check or dst_check
+            # Case 1b: src is at the same level as dst's parent_op (src is one level above dst)
+            elif src.graph == dst.graph.parent_op.graph:
+                # Check if there is a barrier between src and dst's parent_op in their shared graph.
+                root_check = is_barrier_between_same_graph(
+                    src, dst.graph.parent_op, barId, barriers
+                )
+                # Check if there is a barrier in the dst graph between the root and dst.
+                dst_check = is_barrier_between_same_graph(
+                    list(dst.graph.nodes)[0], dst, barId, barriers
+                )
+                return root_check or dst_check
+            # Case 1c: dst is at the same level as src's parent_op (dst is one level above src)
+            elif dst.graph == src.graph.parent_op.graph:
+                # Check if there is a barrier in the src graph between src and output.
+                src_check = is_barrier_between_same_graph(
+                    src, list(src.graph.nodes)[-1], barId, barriers
+                )
+                # Check if there is a barrier between src's parent_op and dst in their shared graph.
+                root_check = is_barrier_between_same_graph(
+                    src.graph.parent_op, dst, barId, barriers
+                )
+                return src_check or root_check
+            else:
+                assert False, (
+                    f"src and dst parent ops must be in the same graph or have a direct parent-child relationship. "
+                    f"src.graph.parent_op.graph={src.graph.parent_op.graph}, "
+                    f"dst.graph.parent_op.graph={dst.graph.parent_op.graph}, "
+                    f"src.graph={src.graph}, dst.graph={dst.graph}"
+                )
 
         # Case 2:
         if hasattr(src.graph, "parent_op") and not hasattr(dst.graph, "parent_op"):
