@@ -448,3 +448,17 @@ func.func @empty_yield() {
   } : () -> ()
   return
 }
+
+// -----
+
+func.func @sum(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @max(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  %result = wave.max_element %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
