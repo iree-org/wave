@@ -498,8 +498,8 @@ def testGemmGlobalToLDS(
     asm = gemm.asm
 
     assert (
-        "amdgpu.gather_to_lds" in asm or "tensor.load.to.lds" in asm
-    ), "gather_to_lds / tensor.load.to.lds not found in asm"
+        "amdgpu.gather_to_lds" in asm or "amdgpu.tensor_load_to_lds" in asm
+    ), "gather_to_lds / tensor_load_to_lds not found in asm"
 
     validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
