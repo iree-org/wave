@@ -1516,11 +1516,33 @@ static LogicalResult verifyReadWriteBounds(Location loc,
 static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        std::optional<int64_t> elementsPerThread,
                                        Type memoryType, Type valueType,
-                                       WaveReadWriteBoundsAttr bounds) {
+                                       WaveReadWriteBoundsAttr bounds,
+                                       ArrayAttr orderedSyms) {
   // Skip verification if memory is already resolved to MemRefType.
   auto tensorType = dyn_cast<WaveTensorType>(memoryType);
   if (!tensorType)
     return success();
+
+  // When tensor type is present, verify ordered_syms matches if specified.
+  if (orderedSyms) {
+    ArrayRef<WaveSymbolAttr> shape = tensorType.getShape();
+    if (orderedSyms.size() != shape.size()) {
+      return op->emitOpError()
+             << "'ordered_syms' size (" << orderedSyms.size()
+             << ") does not match memory tensor rank (" << shape.size() << ")";
+    }
+    for (auto [i, pair] : llvm::enumerate(llvm::zip(orderedSyms, shape))) {
+      auto orderedSym = cast<WaveSymbolAttr>(std::get<0>(pair));
+      WaveSymbolAttr shapeSym = std::get<1>(pair);
+      if (orderedSym.getName() != shapeSym.getName()) {
+        return op->emitOpError()
+               << "'ordered_syms' symbol at index " << i << " ('"
+               << orderedSym.getName()
+               << "') does not match memory tensor shape symbol ('"
+               << shapeSym.getName() << "')";
+      }
+    }
+  }
 
   if (failed(verifyIndexElementsPerThread(op, indexAttr, elementsPerThread,
                                           tensorType, valueType)))
@@ -1535,7 +1557,7 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
 LogicalResult ReadOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getResult().getType(),
-                           getBoundsAttr());
+                           getBoundsAttr(), getOrderedSymsAttr());
 }
 
 llvm::FailureOr<mlir::ChangeResult>
@@ -1635,7 +1657,7 @@ LogicalResult ExtractSliceOp::verify() {
 LogicalResult WriteOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getValueToStore().getType(),
-                           getBoundsAttr());
+                           getBoundsAttr(), getOrderedSymsAttr());
 }
 
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(

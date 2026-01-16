@@ -330,7 +330,7 @@ def ReadOp : WaveOp<"read", [
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
-    Arg<OptionalAttr<ArrayAttr>,
+    Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms
   ), commonArguments);
 
@@ -341,6 +341,14 @@ def ReadOp : WaveOp<"read", [
   let assemblyFormat = "$memory " # commonArgumentsSyntax # "attr-dict `:` "
                        "functional-type(operands, results)";
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Set ordered_syms from an ArrayRef of WaveSymbolAttr.
+    void setOrderedSyms(llvm::ArrayRef<::wave::WaveSymbolAttr> syms) {
+      llvm::SmallVector<::mlir::Attribute> attrs(syms.begin(), syms.end());
+      setOrderedSymsAttr(::mlir::ArrayAttr::get(getContext(), attrs));
+    }
+  }];
 }
 
 def RegisterOp : WaveOp<"register", [
@@ -388,7 +396,7 @@ def WriteOp : WaveOp<"write", [
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
-    Arg<OptionalAttr<ArrayAttr>,
+    Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms
   ), commonArguments);
 
@@ -396,7 +404,15 @@ def WriteOp : WaveOp<"write", [
     "$value_to_store `,` $memory " # commonArgumentsSyntax # "attr-dict `:`"
     "qualified(type($value_to_store)) `,` qualified(type($memory))";
 
-   let hasVerifier = 1;
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Set ordered_syms from an ArrayRef of WaveSymbolAttr.
+    void setOrderedSyms(llvm::ArrayRef<::wave::WaveSymbolAttr> syms) {
+      llvm::SmallVector<::mlir::Attribute> attrs(syms.begin(), syms.end());
+      setOrderedSymsAttr(::mlir::ArrayAttr::get(getContext(), attrs));
+    }
+  }];
 }
 
 //-----------------------------------------------------------------------------

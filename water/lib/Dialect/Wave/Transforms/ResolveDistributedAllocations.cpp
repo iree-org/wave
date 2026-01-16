@@ -33,7 +33,6 @@ struct ResolveDistributedAllocations
   /// memory operand's WaveTensorType shape.
   void setOrderedSymsOnReadWriteOps(Operation *root) {
     root->walk([&](ReadOp readOp) {
-      // Skip if already set
       if (readOp.getOrderedSymsAttr())
         return;
 
@@ -41,17 +40,10 @@ struct ResolveDistributedAllocations
       if (!tensorType)
         return;
 
-      // Convert shape symbols to ArrayAttr
-      SmallVector<Attribute> symbolAttrs;
-      for (WaveSymbolAttr sym : tensorType.getShape())
-        symbolAttrs.push_back(sym);
-
-      readOp.setOrderedSymsAttr(
-          ArrayAttr::get(root->getContext(), symbolAttrs));
+      readOp.setOrderedSyms(tensorType.getShape());
     });
 
     root->walk([&](WriteOp writeOp) {
-      // Skip if already set
       if (writeOp.getOrderedSymsAttr())
         return;
 
@@ -59,13 +51,7 @@ struct ResolveDistributedAllocations
       if (!tensorType)
         return;
 
-      // Convert shape symbols to ArrayAttr
-      SmallVector<Attribute> symbolAttrs;
-      for (WaveSymbolAttr sym : tensorType.getShape())
-        symbolAttrs.push_back(sym);
-
-      writeOp.setOrderedSymsAttr(
-          ArrayAttr::get(root->getContext(), symbolAttrs));
+      writeOp.setOrderedSyms(tensorType.getShape());
     });
   }
 

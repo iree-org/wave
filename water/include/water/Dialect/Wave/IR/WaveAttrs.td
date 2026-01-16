@@ -376,6 +376,10 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
   }];
 }
 
+// Array of WaveSymbol attributes, used for ordered dimension symbols.
+def WaveSymbolArrayAttr : TypedArrayAttrBase<WaveSymbolAttr,
+    "array of wave symbol attributes">;
+
 def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
   let mnemonic = "iter";
   let description = [{
