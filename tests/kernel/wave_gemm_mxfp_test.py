@@ -14,6 +14,8 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_randint,
     device_tensor,
     device_zeros,
+    override_default_gpu_device,
+    to_default_device,
 )
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.templates.test_kernels import (
@@ -849,11 +851,20 @@ def testGFX1250ScaledGemmMXFP4(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
-    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    # Generate inputs and compute reference on CPU to avoid potential
+    # torch compatibility issues on GFX1250.
+    with override_default_gpu_device(-1):
+        x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+        torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    # Move inputs to GPU.
+    x = to_default_device(x)
+    w = to_default_device(w)
+    x_scales = to_default_device(x_scales)
+    w_scales = to_default_device(w_scales)
     out = device_zeros(x.shape[0], w.shape[1], dtype=torch.float32)
 
     w_t = w.T.contiguous()
     gemm(x, x_scales, w_t, w_scales, out)
-    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
-    torch.testing.assert_close(torch_out, out, check_dtype=False)
+    torch.testing.assert_close(torch_out, out.cpu(), check_dtype=False)

@@ -3,6 +3,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from contextlib import contextmanager
+
 import torch
 
 DEFAULT_GPU_DEVICE = None
@@ -13,6 +15,27 @@ def get_default_gpu_device_name() -> str:
         return "cuda"
 
     return f"cuda:{DEFAULT_GPU_DEVICE}"
+
+
+@contextmanager
+def override_default_gpu_device(device: int | None):
+    """Context manager to temporarily override the default GPU device.
+
+    Args:
+        device: The GPU device index to use, or None for default "cuda".
+
+    Example:
+        with override_default_gpu_device(1):
+            # All device_* functions will use cuda:1
+            tensor = device_zeros(10, 10)
+    """
+    global DEFAULT_GPU_DEVICE
+    old_device = DEFAULT_GPU_DEVICE
+    DEFAULT_GPU_DEVICE = device
+    try:
+        yield
+    finally:
+        DEFAULT_GPU_DEVICE = old_device
 
 
 def get_default_device() -> str:
