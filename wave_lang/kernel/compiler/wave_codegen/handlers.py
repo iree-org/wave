@@ -107,7 +107,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.cluster_barriers import CLUSTER_BARRIER_ID
 from ...wave.compile_options import WaveCompileOptions
-from ...wave.constraints import GenericDot, HardwareConstraint, MMAType
+from ...wave.constraints import GenericDot, HardwareConstraint, MMAType, ScaledMMAType
 from ...wave.scheduling.resources import get_scheduling_mask
 from ...wave.utils.classes import ShuffleMode
 from ...wave.utils.general_utils import (
@@ -123,7 +123,6 @@ from .emitter import (
     add_emitter_subs,
     cast_py_literal,
     cast_py_value,
-    cast_scalar,
     cast_vector,
     gen_sympy_index,
     get_constant_attr,
@@ -458,13 +457,37 @@ def emit_mfma_scaled(
     return result
 
 
+def emit_wmma_scaled(
+    m: int, n: int, k: int, acc: Value, values: list[Value], scales: list[Value]
+) -> Value:
+    m = get_constant_attr(m, IntegerType.get_signless(32))
+    n = get_constant_attr(n, IntegerType.get_signless(32))
+    k = get_constant_attr(k, IntegerType.get_signless(32))
+    first_scale_lane_a = get_constant_attr(0, IntegerType.get_signless(32))
+    first_scale_lane_b = get_constant_attr(0, IntegerType.get_signless(32))
+
+    result = amdgpu_d.scaled_wmma(
+        m=m,
+        n=n,
+        k=k,
+        source_a=values[0],
+        source_b=values[1],
+        dest_c=acc,
+        scale_a=scales[0],
+        a_first_scale_lane=first_scale_lane_a,
+        scale_b=scales[1],
+        b_first_scale_lane=first_scale_lane_b,
+    )
+    return result
+
+
 @handle_op(scaled_mma)
 def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     try:
         lhs, lhs_scale, rhs, rhs_scale, acc, mma_type = node.args
         acc = cast_vector(emitter, acc)
         values = [cast_vector(emitter, val) for val in [lhs, rhs]]
-        scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
+        scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -480,7 +503,17 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         mma_type = hardware_constraints[0].mma_type
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
-    result = emit_mfma_scaled(m, n, k, acc, values, scales)
+
+    # GFX1250 scaled WMMA uses vector scales, CDNA scaled MFMA uses scalar scales.
+    is_gfx1250_scaled = mma_type in [
+        ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4,
+        ScaledMMAType.GFX1250_F32_32x16x128_F4,
+    ]
+    if is_gfx1250_scaled:
+        result = emit_wmma_scaled(m, n, k, acc, values, scales)
+    else:
+        result = emit_mfma_scaled(m, n, k, acc, values, scales)
+
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 
