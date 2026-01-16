@@ -39,7 +39,11 @@ def override_default_gpu_device(device: int | None):
 
 
 def get_default_device() -> str:
-    return get_default_gpu_device_name() if torch.cuda.is_available() else "cpu"
+    return (
+        get_default_gpu_device_name()
+        if DEFAULT_GPU_DEVICE != -1 and torch.cuda.is_available()
+        else "cpu"
+    )
 
 
 def to_default_device(tensor: torch.Tensor) -> torch.Tensor:
