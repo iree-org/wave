@@ -463,9 +463,8 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   ArrayRef<wave::WaveSymbolAttr> orderedSyms;
 
   if (ArrayAttr orderedSymsAttr = op.getOrderedSymsAttr()) {
-    orderedSymsStorage.reserve(orderedSymsAttr.size());
-    for (Attribute attr : orderedSymsAttr)
-      orderedSymsStorage.push_back(cast<wave::WaveSymbolAttr>(attr));
+    orderedSymsStorage =
+        llvm::to_vector(orderedSymsAttr.getAsRange<wave::WaveSymbolAttr>());
     orderedSyms = orderedSymsStorage;
   } else if (auto waveTensorType =
                  dyn_cast<wave::WaveTensorType>(memoryTypeArg)) {
