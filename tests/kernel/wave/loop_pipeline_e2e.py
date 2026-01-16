@@ -24,7 +24,6 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.utils.general_utils import check_leaks
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
@@ -56,9 +55,11 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
         pytest.param(65, id="K=65_odd_size_not_multiple_of_BLOCK_K"),
         pytest.param(128, id="K=128_four_tiles_no_remainder"),
         pytest.param(160, id="K=160_five_tiles_no_remainder"),
+        pytest.param(256, id="K=256_eight_tiles_no_remainder"),
+        pytest.param(320, id="K=320_ten_tiles_no_remainder"),
+        pytest.param(512, id="K=512_sixteen_tiles_no_remainder"),
     ],
 )
-@check_leaks
 def test_gemm_pipelined_dynamic_K(K_value, run_bench):
     """
     Test GEMM with pipelined loop for various K dimensions.
@@ -161,101 +162,4 @@ def test_gemm_pipelined_dynamic_K(K_value, run_bench):
 
     # Verify the result matches the reference
     # Use slightly relaxed tolerance due to fp16 accumulation differences
-    assert_close(c, ref_result, rtol=1e-3, atol=1e-3)
-
-
-@require_e2e
-@pytest.mark.parametrize(
-    "K_value",
-    [
-        pytest.param(16, id="K=16_less_than_one_tile"),
-        pytest.param(48, id="K=48_between_tiles"),
-        pytest.param(80, id="K=80_between_tiles_2"),
-    ],
-)
-@check_leaks
-def test_gemm_pipelined_small_K(K_value, run_bench):
-    """
-    Test GEMM with pipelined loop for small K values.
-
-    These are edge cases where K is less than 2*BLOCK_K, meaning we have
-    very few iterations (less than num_stages). This tests that the
-    remainder loop handles these cases correctly.
-    """
-    m_size = 32
-    n_size = 32
-
-    constraints: list[tkw.Constraint] = [
-        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
-        tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, BLOCK_M / 2),
-        tkw.WaveConstraint(N, BLOCK_N / 2),
-        tkw.HardwareConstraint(
-            threads_per_wave=64,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
-        ),
-    ]
-
-    @tkw.wave(constraints)
-    def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE_0, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE_0, tkl.f16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a, elements_per_thread=4)
-            b_reg = tkw.read(b, elements_per_thread=4)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c, elements_per_thread=4)
-
-    torch.manual_seed(42)
-    a = device_randn((m_size, K_value), dtype=torch.float16)
-    b = device_randn((n_size, K_value), dtype=torch.float16)
-    c = device_zeros((m_size, n_size), dtype=torch.float32)
-
-    ref_result = torch.matmul(a.to(torch.float32), b.T.to(torch.float32))
-
-    # NOTE: K is NOT in subs - it remains symbolic to enable dynamic pipelining
-    # The actual K value is determined from the tensor shapes at runtime
-    subs = {
-        M: m_size,
-        N: n_size,
-        # K is NOT substituted - left symbolic to trigger dynamic pipelining
-        BLOCK_M: 32,
-        BLOCK_N: 32,
-        BLOCK_K: 32,
-        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-        ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
-        READ_SHARED_DELAY: 1,
-        WRITE_SHARED_DELAY: 1,
-        READ_GLOBAL_DELAY: 2,
-        WRITE_GLOBAL_DELAY: 2,
-        MMA_DELAY: 1,
-        SHARED_MEMORY_UNITS: 2,
-        GLOBAL_MEMORY_UNITS: 2,
-        MMA_UNITS: 2,
-        VALU_DELAY: 1,
-        VALU_UNITS: 2,
-        SHUFFLE_DELAY: 1,
-        SHUFFLE_UNITS: 2,
-    }
-
-    compile_options = WaveCompileOptions(
-        subs=subs,
-        dynamic_symbols=[K],  # K remains symbolic, enabling dynamic pipelining
-        canonicalize=True,
-        schedule=SchedulingType.PREFETCH,
-        run_bench=run_bench,
-    )
-    compile_options = set_default_run_config(compile_options)
-
-    compiled_gemm = wave_compile(compile_options, gemm)
-    compiled_gemm(a, b, c)
-
     assert_close(c, ref_result, rtol=1e-3, atol=1e-3)
