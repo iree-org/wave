@@ -27,7 +27,7 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from .common.utils import (
+from ..common.utils import (
     require_e2e,
     require_cdna_3_or_4,
     require_rdna4,
