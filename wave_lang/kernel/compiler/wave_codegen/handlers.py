@@ -123,6 +123,7 @@ from .emitter import (
     add_emitter_subs,
     cast_py_literal,
     cast_py_value,
+    cast_scalar,
     cast_vector,
     gen_sympy_index,
     get_constant_attr,
@@ -487,7 +488,6 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         lhs, lhs_scale, rhs, rhs_scale, acc, mma_type = node.args
         acc = cast_vector(emitter, acc)
         values = [cast_vector(emitter, val) for val in [lhs, rhs]]
-        scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -510,8 +510,10 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         ScaledMMAType.GFX1250_F32_32x16x128_F4,
     ]
     if is_gfx1250_scaled:
+        scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
         result = emit_wmma_scaled(m, n, k, acc, values, scales)
     else:
+        scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
         result = emit_mfma_scaled(m, n, k, acc, values, scales)
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
