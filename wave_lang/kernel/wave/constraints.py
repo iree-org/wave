@@ -453,7 +453,10 @@ class HardwareConstraint(Constraint):
                     32 * floor(lane / 32),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
-                # K offset: data vectors split by half-wave, scales cover full K range.
+                # K offset for data: WMMA v3 uses interleaved K pattern.
+                # Lane bit 4 (floor(lane/16)) adds 16 to K offset.
+                # Register bits handle the rest: K = (R % 16) + 16*floor(L/16) + 32*floor(R/16)
+                # K offset for scales: all scales from first half-wave (offset=0).
                 offset = [
                     Piecewise(
                         (lane % 16, ~MMA_ACC),
@@ -461,13 +464,14 @@ class HardwareConstraint(Constraint):
                     ),  # M
                     lane % 16,  # N
                     Piecewise(
-                        (64 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
+                        (16 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
                         (0, (MMA_LHS_SCALE | MMA_RHS_SCALE)),
                     ),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_32x16x128_F4:
                 # For 32x16x128: sourceA has 128 elements, sourceB has 64 elements.
-                # K offset: data vectors split by half-wave, scales cover full K range.
+                # K offset for data: WMMA v3 uses interleaved K pattern.
+                # K offset for scales: all scales from first half-wave (offset=0).
                 offset = [
                     Piecewise(
                         (lane, ~MMA_ACC),
@@ -475,7 +479,7 @@ class HardwareConstraint(Constraint):
                     ),  # M
                     lane % 16,  # N
                     Piecewise(
-                        (64 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
+                        (16 * floor(lane / 16), ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
                         (0, (MMA_LHS_SCALE | MMA_RHS_SCALE)),
                     ),  # K
                 ]
