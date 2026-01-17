@@ -29,6 +29,32 @@ struct ResolveDistributedAllocations
     : public wave::impl::WaterWaveResolveDistributedAllocationsPassBase<
           ResolveDistributedAllocations> {
 
+  /// Set the ordered_syms attribute on ReadOp and WriteOp based on their
+  /// memory operand's WaveTensorType shape.
+  void setOrderedSymsOnReadWriteOps(Operation *root) {
+    root->walk([&](ReadOp readOp) {
+      if (readOp.getOrderedSymsAttr())
+        return;
+
+      auto tensorType = dyn_cast<WaveTensorType>(readOp.getMemory().getType());
+      if (!tensorType)
+        return;
+
+      readOp.setOrderedSyms(tensorType.getShape());
+    });
+
+    root->walk([&](WriteOp writeOp) {
+      if (writeOp.getOrderedSymsAttr())
+        return;
+
+      auto tensorType = dyn_cast<WaveTensorType>(writeOp.getMemory().getType());
+      if (!tensorType)
+        return;
+
+      writeOp.setOrderedSyms(tensorType.getShape());
+    });
+  }
+
   /// Resolve all allocate operations within the given operation using the
   /// provided type converter. Returns failure if any allocation fails to
   /// resolve.
@@ -77,7 +103,11 @@ struct ResolveDistributedAllocations
           if (!hyperparam)
             return WalkResult::advance();
 
-          // Found hyperparameters, resolve all allocations in this subtree.
+          // Found hyperparameters, set ordered_syms on read/write ops before
+          // type conversion loses the dimension ordering information.
+          setOrderedSymsOnReadWriteOps(op);
+
+          // Resolve all allocations in this subtree.
           WaveTypeConverter typeConverter(hyperparam);
           if (failed(resolveAllocations(op, typeConverter)))
             return WalkResult::interrupt();
@@ -90,7 +120,9 @@ struct ResolveDistributedAllocations
       return signalPassFailure();
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::ResolvedAllocations, getOperation())))
+            wave::WaveNormalForm::ResolvedAllocations |
+                wave::WaveNormalForm::OrderedSymsSpecified,
+            getOperation())))
       return signalPassFailure();
   }
 };

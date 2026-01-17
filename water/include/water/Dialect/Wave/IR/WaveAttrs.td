@@ -101,6 +101,8 @@ def NORMAL_FORM_MEMORY_ONLY_TYPES : I32BitEnumAttrCaseBit<
     "MemoryOnlyTypes",           3, "memory_only_types">;
 def NORMAL_FORM_RESOLVED_ALLOCATIONS : I32BitEnumAttrCaseBit<
     "ResolvedAllocations",       4, "resolved_allocations">;
+def NORMAL_FORM_ORDERED_SYMS : I32BitEnumAttrCaseBit<
+    "OrderedSymsSpecified",      5, "ordered_syms">;
 
 def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
     "AllTypesSpecified", [
@@ -116,6 +118,7 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   NORMAL_FORM_INDEX_EXPRS,
   NORMAL_FORM_MEMORY_ONLY_TYPES,
   NORMAL_FORM_RESOLVED_ALLOCATIONS,
+  NORMAL_FORM_ORDERED_SYMS,
 
   // Group aliases.
   NORMAL_FORM_FULL_TYPES
@@ -372,6 +375,10 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
     }
   }];
 }
+
+// Array of WaveSymbol attributes, used for ordered dimension symbols.
+def WaveSymbolArrayAttr : TypedArrayAttrBase<WaveSymbolAttr,
+    "array of wave symbol attributes">;
 
 def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
   let mnemonic = "iter";

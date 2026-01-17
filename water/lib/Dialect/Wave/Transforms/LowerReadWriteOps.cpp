@@ -452,14 +452,27 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
          "'index' must be an array with exactly one dictionary");
   DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
 
-  // Get ordered symbols from the index dictionary keys.
-  // DictAttr is internally an ArrayRef<NamedAttribute>, so keys are ordered.
+  // Get ordered symbols for dimension ordering.
+  // DictionaryAttr stores entries sorted alphabetically by key, which doesn't
+  // match the semantic dimension ordering. We need to get the correct order
+  // from either:
+  // 1. The ordered_syms attribute (set by ResolveDistributedAllocations for
+  //    ops with MemRefType memory operands).
+  // 2. The WaveTensorType shape (for ops that still have WaveTensorType).
   SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
-  orderedSymsStorage.reserve(indexDict.size());
-  for (NamedAttribute namedAttr : indexDict)
-    orderedSymsStorage.push_back(wave::WaveSymbolAttr::get(
-        op.getContext(), namedAttr.getName().strref()));
-  ArrayRef<wave::WaveSymbolAttr> orderedSyms = orderedSymsStorage;
+  ArrayRef<wave::WaveSymbolAttr> orderedSyms;
+
+  if (ArrayAttr orderedSymsAttr = op.getOrderedSymsAttr()) {
+    orderedSymsStorage =
+        llvm::to_vector(orderedSymsAttr.getAsRange<wave::WaveSymbolAttr>());
+    orderedSyms = orderedSymsStorage;
+  } else if (auto waveTensorType =
+                 dyn_cast<wave::WaveTensorType>(memoryTypeArg)) {
+    orderedSyms = waveTensorType.getShape();
+  } else {
+    return rewriter.notifyMatchFailure(
+        op, "MemRefType memory operand requires ordered_syms attribute");
+  }
   std::optional<int64_t> vectorizedDim =
       wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
 
