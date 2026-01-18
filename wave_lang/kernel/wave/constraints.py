@@ -455,7 +455,7 @@ class HardwareConstraint(Constraint):
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
                 # K offset for data: WMMA v3 uses interleaved K pattern with kWidth=16.
                 # K = 32*floor(GPR/16) + 16*floor(lane/16) + (GPR%16) for F8 data.
-                # For FP4 data: 32*floor(lane/16) (interleaved access).
+                # For FP4 data: 64*floor(lane/16) to cover K[0:64) and K[64:128) per half-wave.
                 # For scales: offset=0 since all lanes need access to all 4 scales.
                 # MMA_SCALE_FP4 is set when both LHS and RHS are f4e2m1fn.
                 offset = [
@@ -475,13 +475,16 @@ class HardwareConstraint(Constraint):
                             0,
                             MMA_LHS_SCALE | MMA_RHS_SCALE,
                         ),  # Scales: all lanes read all scales
-                        (32 * floor(lane / 16), MMA_SCALE_FP4),  # FP4 data
+                        (
+                            64 * floor(lane / 16),
+                            MMA_SCALE_FP4,
+                        ),  # FP4 data: K[0:64) and K[64:128)
                     ),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_32x16x128_F4:
                 # For 32x16x128: sourceA has 128 elements, sourceB has 64 elements.
                 # This variant is F4-only, so always uses FP4 patterns.
-                # For FP4 data: 32*floor(lane/16) (interleaved access).
+                # For FP4 data: 64*floor(lane/16) to cover K[0:64) and K[64:128) per half-wave.
                 # For scales: offset=0 since all lanes need access to all 4 scales.
                 offset = [
                     Piecewise(
@@ -494,7 +497,10 @@ class HardwareConstraint(Constraint):
                             0,
                             MMA_LHS_SCALE | MMA_RHS_SCALE,
                         ),  # Scales: all lanes read all scales
-                        (32 * floor(lane / 16), True),  # FP4 data
+                        (
+                            64 * floor(lane / 16),
+                            True,
+                        ),  # FP4 data: K[0:64) and K[64:128)
                     ),  # K
                 ]
             case _:
