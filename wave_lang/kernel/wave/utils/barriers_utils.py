@@ -12,7 +12,7 @@ from functools import partial
 
 import torch.fx as fx
 
-from .graph_utils import propagate_loop_carried_vars
+from .graph_utils import propagate_loop_carried_vars, is_barrier_between
 
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
@@ -32,12 +32,14 @@ from ...ops.wave_ops import (
 
 @dataclass
 class TargetConfig:
-    target: str
+    target: Optional[str]
     has_split_barriers: bool = False
     has_named_barriers: bool = False
     max_named_barriers: int = 0
 
     def __post_init__(self):
+        self.target = self.target or ""
+
         if "gfx12" in self.target:
             self.has_split_barriers = True
 
@@ -176,9 +178,16 @@ def add_sync_regions(
     results: List[SyncRegion],
     resource: fx.Node,
     window: ResourceAccessWindow,
+    check_existing_barriers: bool = False,
 ) -> None:
     """
     Add a SyncRegion to the results list.
+
+    Args:
+        results: List to append sync regions to
+        resource: The shared memory resource
+        window: Access window containing producers and consumers
+        check_existing_barriers: If True, check if manual barriers already exist
     """
     cross_iter = False
     last_prod = window.producers[-1]
@@ -186,6 +195,11 @@ def add_sync_regions(
 
     if resource is not None and not need_barrier(last_prod, first_con):
         return
+
+    # Check if manual barriers already protect this hazard (if requested)
+    if check_existing_barriers:
+        if is_barrier_between(last_prod, first_con, barId=-1) is not None:
+            return
 
     last_prod_loc = last_prod._topo_location
     first_con_loc = first_con._topo_location
@@ -211,12 +225,15 @@ def add_sync_regions(
 
 
 def add_hazard_if_window_valid(
-    results: List[SyncRegion], resource: fx.Node, window: ResourceAccessWindow
+    results: List[SyncRegion],
+    resource: fx.Node,
+    window: ResourceAccessWindow,
+    check_existing_barriers: bool = False,
 ) -> None:
     """Add a SyncRegion if producers and consumers are present in current hazard window."""
     if not (window.producers and window.consumers):
         return
-    add_sync_regions(results, resource, window)
+    add_sync_regions(results, resource, window, check_existing_barriers)
     window.reset()
 
 
@@ -228,6 +245,7 @@ def handle_hazard(
     consumer_kinds: MemoryAccessType,
     graph_info: List[fx.Node] = None,
     depth: int = 0,
+    check_existing_barriers: bool = False,
 ) -> None:
     """
     Process a single shared-memory node and update hazard tracking state for barrier analysis.
@@ -292,7 +310,9 @@ def handle_hazard(
         is_cons = access_kind & consumer_kinds
 
         if is_prod:
-            add_hazard_if_window_valid(results, resource, hazard_window)
+            add_hazard_if_window_valid(
+                results, resource, hazard_window, check_existing_barriers
+            )
             hazard_window.producers.append(node)
 
         # Consumers only count after at least one producer for this resource.
@@ -303,20 +323,27 @@ def handle_hazard(
 def get_hazard_handle(
     producer_kinds: MemoryAccessType,
     consumer_kinds: MemoryAccessType,
+    check_existing_barriers: bool = False,
 ):
     return partial(
-        handle_hazard, producer_kinds=producer_kinds, consumer_kinds=consumer_kinds
+        handle_hazard,
+        producer_kinds=producer_kinds,
+        consumer_kinds=consumer_kinds,
+        check_existing_barriers=check_existing_barriers,
     )
 
 
 def get_barriers_analysis(
-    trace: CapturedTrace, target_arch: TargetConfig
+    trace: CapturedTrace,
+    target_arch: TargetConfig,
+    check_existing_barriers: bool = False,
 ) -> List[SyncRegion]:
     """
     Analyzes the given computational graph to determine synchronization (barrier) regions for shared memory accesses, based on the target architecture.
     Args:
         - trace: The traced representation of the computation, expected to provide graph traversal methods such as `preorder_walk` and `walk_graph`.
         - target_arch: The target architecture identifier (e.g., string) used to determine architecture-specific barrier handling.
+        - check_existing_barriers: If True, check for existing manual barriers and skip creating sync regions for protected hazards.
     Returns: List[SyncRegion]: A list of synchronization regions (barriers) needed to ensure correct ordering of shared memory accesses in the graph.
     """
     all_nodes = trace.preorder_walk()
@@ -397,20 +424,26 @@ def get_barriers_analysis(
                 walk_nodes(subgraph_nodes, handle)
 
         for resource, window in windows.items():
-            add_hazard_if_window_valid(results, resource, window)
+            add_hazard_if_window_valid(
+                results, resource, window, check_existing_barriers
+            )
 
     nodes = trace.get_root_graph().nodes
     # handle WAR
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     handle = get_hazard_handle(
-        MemoryAccessType.READ, MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE
+        MemoryAccessType.READ,
+        MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE,
+        check_existing_barriers=check_existing_barriers,
     )
     walk_nodes(nodes, handle)
 
     # handle RAW
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     handle = get_hazard_handle(
-        MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE, MemoryAccessType.READ
+        MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE,
+        MemoryAccessType.READ,
+        check_existing_barriers=check_existing_barriers,
     )
     walk_nodes(nodes, handle)
 
@@ -473,6 +506,10 @@ def minimize_placement_strategy(
     # If neither contains a point, place a new one at `end`.
     for region in regions:
         if not region.cross_iter:
+            continue
+
+        # Skip regions with incomplete graph info (can happen during specialization)
+        if region.graph_start is None or region.graph_end is None:
             continue
 
         start, end = get_location(region)

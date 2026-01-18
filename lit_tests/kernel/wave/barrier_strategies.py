@@ -13,11 +13,24 @@ from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_post_expansion_indices,
 )
 from wave_lang.kernel.wave.barriers import add_shared_memory_barriers
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.expansion.expansion import add_get_results, expand_graph
 from wave_lang.kernel.wave.hoisting import hoist_loop_invariant_ops
 from wave_lang.kernel.wave.promotion import promote_node
+from wave_lang.kernel.wave.schedule_reordering import schedule_reordering
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType, schedule_graph
+from wave_lang.kernel.wave.templates.attention_common import (
+    AttentionShape,
+)
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_bshd_attention_kernel,
+)
 from wave_lang.kernel.wave.type_inference import infer_types
+from wave_lang.kernel.wave.utils.barriers_utils import (
+    get_barriers_analysis,
+)
 from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
     run_test,
 )
 from wave_lang.kernel.wave.utils.graph_utils import (
@@ -26,20 +39,8 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
-from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.schedule_reordering import schedule_reordering
-from wave_lang.kernel.wave.scheduling.schedule import schedule_graph
 
-from wave_lang.kernel.wave.utils.general_utils import (
-    get_default_scheduling_params,
-)
-from wave_lang.kernel.wave.templates.attention_common import (
-    AttentionShape,
-)
-from wave_lang.kernel.wave.templates.vanilla_attention import (
-    get_bshd_attention_kernel,
-)
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+logger = logging.getLogger(__name__)
 
 
 def get_read_nodes(graph: fx.Graph) -> list[CustomOp]:
@@ -362,6 +363,115 @@ def test_existing_barrier_not_duplicated():
     # Verify only one barrier exists (the pre-existing one, no duplicate added)
     # CHECK: Barriers before: 1
     # CHECK: Barriers after: 1
+
+
+@run_test
+def test_manual_barriers_prevent_sync_regions():
+    """
+    Test that manual barriers prevent creation of sync regions.
+    """
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={M: 16, N: 16},
+        )
+    ]
+
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        add_get_results(trace)
+        infer_types(trace, constraints)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints, subs)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+
+        # force a hazard
+        logger.debug("Tweaking indices to create hazard")
+        for node in graph.nodes:
+            custom = get_custom(node)
+            if isinstance(custom, Read) and custom.write_dependency is not None:
+                write_dep = custom.write_dependency[0]
+                for key, value in write_dep.index.items():
+                    write_dep.index[key].start = value.start + 1
+
+        target_arch = None
+
+        # get sync regions without manual barriers
+        logger.debug("Getting sync regions without manual barriers")
+        sync_regions_no_barriers = get_barriers_analysis(trace, target_arch)
+
+        num_expected_barriers = len(sync_regions_no_barriers)
+        logger.info(
+            f"Detected {num_expected_barriers} sync regions without manual barriers"
+        )
+        assert (
+            num_expected_barriers > 0
+        ), "Expected at least one sync region (hazard detected)"
+
+        # Manually insert barriers at the exact locations where they are needed
+        logger.debug("Inserting manual barriers")
+        for node in graph.nodes:
+            custom = get_custom(node)
+            if isinstance(custom, Read) and custom.write_dependency is not None:
+                with graph.inserting_before(node):
+                    SharedMemoryBarrierSignal(barId=-1).add_to_graph(
+                        graph, loc=custom.location
+                    )
+                    SharedMemoryBarrierWait(barId=-1).add_to_graph(
+                        graph, loc=custom.location
+                    )
+                break
+
+        # Get sync regions with manual barriers
+        logger.debug("Getting sync regions with manual barriers")
+        sync_regions = get_barriers_analysis(
+            trace, target_arch, check_existing_barriers=True
+        )
+
+        # Assertion: should have fewer sync regions (0) because manual barriers are detected
+        logger.info(
+            f"Sync regions without barrier vs with barrier: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
+        )
+
+        print(f"Sync regions without manual barriers: {len(sync_regions_no_barriers)}")
+        print("Manual barriers inserted: 1 signal + 1 wait")
+        print(f"Sync regions with manual barriers: {len(sync_regions)}")
+
+        if len(sync_regions) < len(sync_regions_no_barriers):
+            print(f"VALIDATION SUCCESS: Manual barriers prevented sync region creation")
+        else:
+            print(
+                f"VALIDATION FAIL - Manual barriers did NOT prevent sync region creation"
+            )
+            print(
+                f"Expected fewer sync regions, but got: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
+            )
+            assert False, (
+                f"Manual barriers were NOT respected! "
+                f"Sync regions should be 0 with manual barriers, but got {len(sync_regions)}. "
+            )
+
+    # CHECK-LABEL: test_manual_barriers_prevent_sync_regions
+    # CHECK: Sync regions without manual barriers: {{[1-9]}}
+    # CHECK: Manual barriers inserted: 1 signal + 1 wait
+    # CHECK: Sync regions with manual barriers: {{[0-9]}}
+    # CHECK: VALIDATION SUCCESS: Manual barriers prevented sync region creation
+    # CHECK-NOT: VALIDATION FAIL
 
 
 if __name__ == "__main__":

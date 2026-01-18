@@ -591,7 +591,6 @@ def compile_launchable_to_mlir(
 
     # Set MMA type for ASM backend dispatch
     options.mma_type = launchable.hardware_constraints[0].mma_type
-
     # Setup LLVM func compilation configs.
     llvm_func_config = {}
     if options.denorm_fp_math_f32:

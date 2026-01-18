@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Sequence
+from typing import Optional, Sequence
 from collections import defaultdict
 
 from .._support.tracing import CapturedTrace
@@ -158,19 +158,35 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
 
 def add_shared_memory_barriers(
     trace: CapturedTrace,
-    target: str = "",
+    target: Optional[str] = None,
     is_specialized: bool = False,
-):
+) -> None:
+    """
+    Insert shared-memory barriers into a captured trace based on hazard analysis.
+
+    This function performs the following steps:
+    * perform full analysis
+    * check for shared memory hazards (RAW, WAR)
+    * check for existing manual barriers (only when not specialized)
+    * respects manual barriers and place barriers where needed
+    * Verifies all barriers are correctly placed and paired
+
+    Args:
+        trace: The traced computation graph
+        target: Target architecture string
+        is_specialized: If True, skip barrier insertion (specialization handles its own barriers)
+    """
     if is_specialized:
-        """
-        TODO(megan.kuo)
-        currently respect barriers inserted by specializations
-        """
+        # When specialized, the specialization pass inserts its own barriers
+        # We skip automatic barrier insertion to avoid conflicts
         return
 
     target_arch = TargetConfig(target)
 
-    sync_regions = get_barriers_analysis(trace, target_arch)
+    # Check for existing manual barriers to avoid duplicates
+    sync_regions = get_barriers_analysis(
+        trace, target_arch, check_existing_barriers=True
+    )
 
     emitter = BarrierEmitter(target_arch)
     emitter.emit(sync_regions)
