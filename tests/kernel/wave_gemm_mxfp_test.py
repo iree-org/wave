@@ -849,6 +849,7 @@ def testGFX1250ScaledGemmMXFP4(
         schedule=enable_scheduling,
     )
     options = set_default_run_config(options)
+    options.wave_runtime = True
     gemm = wave_compile(options, gemm)
 
     # Generate inputs and compute reference on CPU to avoid potential
