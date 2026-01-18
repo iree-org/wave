@@ -72,6 +72,10 @@ def check_water_install(build_dir: Path):
 
 
 class CMakeBuild(build_ext):
+    def run(self) -> None:
+        for ext in self.extensions:
+            self.build_extension(ext)
+
     def build_extension(self, ext: CMakeExtension) -> None:
         # Get extension directory
         if ext.install_dir:
