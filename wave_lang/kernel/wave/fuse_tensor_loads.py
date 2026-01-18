@@ -23,7 +23,6 @@ from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
 from ..wave.utils.symbol_utils import is_literal, subs_idxc
-from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 
 logger = logging.getLogger(__name__)
 
@@ -328,13 +327,6 @@ def fuse_tensor_loads(
         trace: The captured trace to transform
         constraints: List of constraints for the kernel
     """
-    logger.info("Running fuse_tensor_loads pass")
-
-    # Get hardware constraints for wave calculation
-    hardware_constraint = get_hardware_constraint(constraints)
-    threads_per_wave = hardware_constraint.threads_per_wave
-    waves_per_block = hardware_constraint.waves_per_block
-    wave_count = subs_idxc(math.prod(waves_per_block))
 
     if options.specialize:
         logger.info(
@@ -343,9 +335,13 @@ def fuse_tensor_loads(
         )
         return
 
-    if options.schedule != SchedulingType.NONE:
-        logger.info("Skipping tensor load fusion: Scheduling is not supported yet.")
-        return
+    logger.info("Running fuse_tensor_loads pass")
+
+    # Get hardware constraints for wave calculation
+    hardware_constraint = get_hardware_constraint(constraints)
+    threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_block = hardware_constraint.waves_per_block
+    wave_count = subs_idxc(math.prod(waves_per_block))
 
     # Check if we have an even number of waves (required for fusion)
     if (
