@@ -537,7 +537,6 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         use_global_to_shared=True,
         dump_binaries="./",
         dump_intermediates="./",
-        specialize=True,
     )
 
     # Set runtime configuration for execution
