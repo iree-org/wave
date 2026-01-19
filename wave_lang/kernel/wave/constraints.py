@@ -450,32 +450,22 @@ class HardwareConstraint(Constraint):
                     32 * floor(lane / 32),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
-                # K offset for data: WMMA v3 uses interleaved K pattern with kWidth=16.
-                # For F8 (8-bit): K = 32*floor(GPR/16) + 16*floor(lane/16) + (GPR%16).
-                # For FP4 (4-bit): Cannot use GPR_NUM formula because:
-                # 1. Original formula produces odd values -> Rationals after K/2 scaling
-                # 2. Even-only formula produces non-uniform strides -> partitioning fails
-                # Use simple contiguous formula instead. Hardware may accept any K pattern
-                # since reduction is associative.
-                # For scales: offset=0 since all lanes need access to all 4 scales.
-                # Scale M/N offsets: LHS scale uses M (lane%16), RHS scale uses N (lane%16).
-                # Each scale only contributes to its relevant dimension.
                 offset = [
                     Piecewise(
-                        (lane % 16, ~MMA_ACC),  # LHS/data: lane-based M.
-                        (8 * floor(lane / 16), MMA_ACC),  # ACC: interleaved M.
+                        (lane % 16, ~MMA_ACC),
+                        (8 * floor(lane / 16), MMA_ACC),
                     ),  # M
                     lane % 16,  # N
                     Piecewise(
                         (
                             64 * floor(GPR_NUM / 16)
-                            + 16 * floor(lane / 16)
-                            + (GPR_NUM % 16),
-                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
+                            + (GPR_NUM % 16) * 2
+                            + 32 * floor(lane / 16),
+                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE),
                         ),
                         (
-                            64 * floor(lane / 16),
-                            (MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
+                            0,
+                            (MMA_LHS_SCALE | MMA_RHS_SCALE),
                         ),
                     ),  # K
                 ]
