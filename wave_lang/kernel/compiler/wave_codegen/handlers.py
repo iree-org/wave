@@ -465,10 +465,12 @@ def bitswap(value: Value) -> Value:
 
     i32 = llvm_d.bitcast(IntegerType.get_signless(32), value)
     res = arith_d.constant(IntegerType.get_signless(32), 0)
-    mask = arith_d.constant(IntegerType.get_signless(32), 0xF)
-    for i in range(0, 32, 4):
+    step = 4
+    mask = arith_d.constant(IntegerType.get_signless(32), (1 << step) - 1)
+    for i in range(0, 32, step):
+        print(i, 32 - i - step)
         l = arith_d.constant(IntegerType.get_signless(32), i)
-        r = arith_d.constant(IntegerType.get_signless(32), 32 - i - 4)
+        r = arith_d.constant(IntegerType.get_signless(32), 32 - i - step)
         val = arith_d.shrui(i32, l)
         val = arith_d.andi(val, mask)
         val = arith_d.shli(val, r)
@@ -531,7 +533,7 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     ]
     if is_gfx1250_scaled:
         scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
-        scales = [bitswap(scale) for scale in scales]
+        # scales = [bitswap(scale) for scale in scales]
         result = emit_wmma_scaled(m, n, k, acc, values, scales)
     else:
         scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
