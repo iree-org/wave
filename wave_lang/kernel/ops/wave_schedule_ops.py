@@ -51,7 +51,7 @@ class WaveHi(WaveCondition):
     Used to block high waves so low waves start first.
 
     Usage:
-        tkw.insert_conditional_barrier_before(tkw.WaveHi(), loop)
+        tkw.insert_cond_barrier_before(tkw.WaveHi(), loop)
     """
 
     def create_condition_node(
@@ -83,7 +83,7 @@ class WaveLo(WaveCondition):
     Used to block low waves so high waves can catch up.
 
     Usage:
-        tkw.insert_conditional_barrier_after(tkw.WaveLo(), loop)
+        tkw.insert_cond_barrier_after(tkw.WaveLo(), loop)
     """
 
     def create_condition_node(
@@ -129,7 +129,7 @@ def _get_hardware_constraint(
     return None
 
 
-def _insert_conditional_barrier_at(
+def _insert_cond_barrier_at(
     condition: "WaveCondition",
     target: Any,
     kernel_trace: "CapturedTrace",
@@ -171,17 +171,17 @@ def _insert_conditional_barrier_at(
                 graph, hardware_constraint, location
             )
         with graph.inserting_after(target_node):
-            _insert_conditional_barrier(cond_node, kernel_trace, graph, location)
+            _insert_cond_barrier(cond_node, kernel_trace, graph, location)
     else:
         # For insert_before: both condition and barrier BEFORE target
         with graph.inserting_before(target_node):
             cond_node = condition.create_condition_node(
                 graph, hardware_constraint, location
             )
-            _insert_conditional_barrier(cond_node, kernel_trace, graph, location)
+            _insert_cond_barrier(cond_node, kernel_trace, graph, location)
 
 
-def _insert_conditional_barrier(
+def _insert_cond_barrier(
     cond_reg: fx.Node,
     trace: "CapturedTrace",
     graph: fx.Graph,
@@ -274,11 +274,11 @@ def stagger(loop: Any): ...
 
 
 @define_schedule_op
-def insert_conditional_barrier_before(condition: Any, target: Any): ...
+def insert_cond_barrier_before(condition: Any, target: Any): ...
 
 
 @define_schedule_op
-def insert_conditional_barrier_after(condition: Any, target: Any): ...
+def insert_cond_barrier_after(condition: Any, target: Any): ...
 
 
 @define_schedule_op
@@ -1041,7 +1041,7 @@ class Stagger(CustomScheduleOp):
     - wave_hi barrier BEFORE the loop (blocks high waves so low waves start first)
     - wave_lo barrier AFTER the loop (blocks low waves so high waves catch up)
 
-    For finer control, use insert_conditional_barrier_before/after directly.
+    For finer control, use insert_cond_barrier_before/after directly.
     """
 
     schedule_op_name = "stagger"
@@ -1050,10 +1050,10 @@ class Stagger(CustomScheduleOp):
     def handle(
         cls, region_graph, kernel_trace, constraints: list[Constraint], loop: Any
     ):
-        _insert_conditional_barrier_at(
+        _insert_cond_barrier_at(
             WaveHi(), loop, kernel_trace, constraints, insert_after=False
         )
-        _insert_conditional_barrier_at(
+        _insert_cond_barrier_at(
             WaveLo(), loop, kernel_trace, constraints, insert_after=True
         )
         logger.info("Applied 2-way stagger scheduling to loop")
@@ -1066,10 +1066,10 @@ class InsertConditionalBarrierBefore(CustomScheduleOp):
     Insert a conditional barrier before a target node.
 
     Usage:
-        tkw.insert_conditional_barrier_before(tkw.WaveHi(), loop)
+        tkw.insert_cond_barrier_before(tkw.WaveHi(), loop)
     """
 
-    schedule_op_name = "insert_conditional_barrier_before"
+    schedule_op_name = "insert_cond_barrier_before"
 
     @classmethod
     def handle(
@@ -1084,7 +1084,7 @@ class InsertConditionalBarrierBefore(CustomScheduleOp):
             raise ValueError(
                 f"condition must be a WaveCondition, got {type(condition).__name__}"
             )
-        _insert_conditional_barrier_at(
+        _insert_cond_barrier_at(
             condition, target, kernel_trace, constraints, insert_after=False
         )
         return None
@@ -1096,10 +1096,10 @@ class InsertConditionalBarrierAfter(CustomScheduleOp):
     Insert a conditional barrier after a target node.
 
     Usage:
-        tkw.insert_conditional_barrier_after(tkw.WaveLo(), loop)
+        tkw.insert_cond_barrier_after(tkw.WaveLo(), loop)
     """
 
-    schedule_op_name = "insert_conditional_barrier_after"
+    schedule_op_name = "insert_cond_barrier_after"
 
     @classmethod
     def handle(
@@ -1114,7 +1114,7 @@ class InsertConditionalBarrierAfter(CustomScheduleOp):
             raise ValueError(
                 f"condition must be a WaveCondition, got {type(condition).__name__}"
             )
-        _insert_conditional_barrier_at(
+        _insert_cond_barrier_at(
             condition, target, kernel_trace, constraints, insert_after=True
         )
         return None
