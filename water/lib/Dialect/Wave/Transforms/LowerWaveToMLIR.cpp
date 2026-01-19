@@ -78,8 +78,8 @@ struct LowerWaveToMLIRPass
         >();
     target.addIllegalOp<wave::AddOp, wave::SubOp, wave::AllocateOp,
                         wave::CastOp, wave::DivOp, wave::ReciprocalOp,
-                        wave::Exp2Op, wave::ExtractSliceOp, wave::IterateOp,
-                        wave::MmaOp, wave::MulOp, wave::ReadOp,
+                        wave::Exp2Op, wave::ExtractOp, wave::ExtractSliceOp,
+                        wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
                         wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
 
     // Mark functions as illegal if they have Wave tensor types in their

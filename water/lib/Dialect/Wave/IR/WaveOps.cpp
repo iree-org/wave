@@ -1612,6 +1612,20 @@ LogicalResult wave::RegisterOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ExtractOp
+//-----------------------------------------------------------------------------
+
+LogicalResult ExtractOp::verify() {
+  wave::WaveExprListAttr position = getPosition();
+  if (position.getRank() != 1) {
+    return emitOpError() << "position must contain exactly one expression, but "
+                            "got "
+                         << position.getRank();
+  }
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // ExtractSliceOp
 //-----------------------------------------------------------------------------
 

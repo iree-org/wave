@@ -68,6 +68,14 @@ void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
 void populateWaveUnaryFPOpLoweringPatterns(WaveTypeConverter &typeConverter,
                                            mlir::RewritePatternSet &patterns);
 
+/// Materialize affine.apply for expressions inside a `map` with `symbols`.
+/// Each symbol is either a GPU id (thread/block), a constant from `hyper`,
+/// or an iteration symbol resolved from a parent scf.for loop.
+mlir::FailureOr<llvm::SmallVector<mlir::Value>>
+materializeAffine(mlir::Location loc, llvm::ArrayRef<mlir::Attribute> symbols,
+                  mlir::AffineMap map, mlir::PatternRewriter &rewriter,
+                  WaveHyperparameterAttr hyper);
+
 } // namespace wave
 
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_TRANSFORMS_H

@@ -21,6 +21,21 @@ func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor
   return %0 : !wave.tensor<[@A, @B] of f16>
 }
 
+// CHECK-LABEL: @extract_static
+func.func @extract_static(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+  // CHECK: wave.extract
+  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  return %0 : !wave.tensor<[@A] of f32>
+}
+
+// CHECK-LABEL: @extract_dynamic
+func.func @extract_dynamic(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+  // CHECK: wave.extract
+  // CHECK-SAME: #wave.index_symbol<T0>
+  %0 = wave.extract %source[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  return %0 : !wave.tensor<[@A] of f32>
+}
+
 // CHECK-LABEL: @unary
 func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.exp2

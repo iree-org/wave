@@ -692,6 +692,44 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_extract_static
+  func.func @lower_extract_static() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
+    %cst = arith.constant 1.0 : f32
+    %input = wave.register %cst : vector<8xf32>
+
+    // CHECK-NOT: wave.extract
+    // CHECK:     %[[POS:.*]] = affine.apply affine_map<() -> (2)>()
+    // CHECK:     %[[ELEM:.*]] = vector.extract %[[INPUT]][%[[POS]]] : f32 from vector<8xf32>
+    // CHECK:     vector.broadcast %[[ELEM]] : f32 to vector<1xf32>
+    %result = wave.extract %input[#wave.expr_list<[] -> (2)>] : (vector<8xf32>) -> vector<1xf32>
+
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_extract_dynamic
+  func.func @lower_extract_dynamic() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-DAG: %[[INPUT:.*]] = arith.constant dense<2.000000e+00> : vector<8xf32>
+    %cst = arith.constant 2.0 : f32
+    %input = wave.register %cst : vector<8xf32>
+
+    // CHECK-DAG: %[[TIDX:.*]] = gpu.thread_id x
+    // CHECK:     %[[POS:.*]] = affine.apply affine_map<()[s0] -> (s0 mod 4)>()[%[[TIDX]]]
+    // CHECK:     %[[ELEM:.*]] = vector.extract %[[INPUT]][%[[POS]]] : f32 from vector<8xf32>
+    // CHECK:     vector.broadcast %[[ELEM]] : f32 to vector<1xf32>
+    %result = wave.extract %input[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (vector<8xf32>) -> vector<1xf32>
+
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @lower_extract_slice_constants
   func.func @lower_extract_slice_constants() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK:     %[[INPUT:.*]] = arith.constant dense<0.000000e+00> : vector<16xf32>

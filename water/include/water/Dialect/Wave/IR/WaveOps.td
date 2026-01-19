@@ -290,6 +290,26 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
+def ExtractOp : WaveOp<"extract", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
+  let summary = "Extracts a single element from a vector at the given index";
+  let description = [{
+    Extracts a single element from a 1-D vector at the specified index position,
+    producing a 1-element vector.
+  }];
+
+  let arguments = (ins
+    Arg<WaveTensorInRegister, "Vector to extract from">:$source,
+    Arg<WaveExprListAttr, "Index position to extract">:$position
+  );
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Extracted 1-element vector">:$result
+  );
+
+  let assemblyFormat = "$source `[` $position `]` attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
   let summary = "Extracts a subvector from an n-D tensor";
   let description = [{
