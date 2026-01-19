@@ -22,7 +22,7 @@ def override_default_gpu_device(device: int | None):
     """Context manager to temporarily override the default GPU device.
 
     Args:
-        device: The GPU device index to use, or None for default "cuda".
+        device: The GPU device index to use, -1 to force CPU usage, or None for default "cuda".
 
     Example:
         with override_default_gpu_device(1):
