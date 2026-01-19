@@ -461,24 +461,30 @@ class HardwareConstraint(Constraint):
                 # Use simple contiguous formula instead. Hardware may accept any K pattern
                 # since reduction is associative.
                 # For scales: offset=0 since all lanes need access to all 4 scales.
+                # Scale M/N offsets: LHS scale uses M (lane%16), RHS scale uses N (lane%16).
+                # Each scale only contributes to its relevant dimension.
                 offset = [
                     Piecewise(
-                        (lane % 16, ~MMA_ACC),
-                        (8 * floor(lane / 16), MMA_ACC),
+                        (0, MMA_RHS_SCALE),  # RHS scale: no M contribution.
+                        (lane % 16, ~MMA_ACC),  # LHS/data: lane-based M.
+                        (8 * floor(lane / 16), MMA_ACC),  # ACC: interleaved M.
                     ),  # M
-                    lane % 16,  # N
+                    Piecewise(
+                        (0, MMA_LHS_SCALE),  # LHS scale: no N contribution.
+                        (lane % 16, True),  # RHS/data/ACC: lane-based N.
+                    ),  # N
                     Piecewise(
                         (
                             0,
                             MMA_LHS_SCALE | MMA_RHS_SCALE,
-                        ),  # Scales: all lanes read all
-                        (64 * floor(lane / 16), MMA_SCALE_FP4),  # FP4: contiguous K
+                        ),  # Scales: all lanes read all.
+                        (64 * floor(lane / 16), MMA_SCALE_FP4),  # FP4: contiguous K.
                         (
                             32 * floor(GPR_NUM / 16)
                             + 16 * floor(lane / 16)
                             + (GPR_NUM % 16),
                             True,
-                        ),  # F8 data: interleaved element pattern
+                        ),  # F8 data: interleaved element pattern.
                     ),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_32x16x128_F4:
@@ -486,18 +492,23 @@ class HardwareConstraint(Constraint):
                 # This variant is F4-only. Cannot use GPR_NUM formula (see above).
                 # Use simple contiguous formula.
                 # For scales: offset=0 since all lanes need access to all 4 scales.
+                # Scale M/N offsets: LHS scale uses M (lane), RHS scale uses N (lane%16).
                 offset = [
                     Piecewise(
-                        (lane, ~MMA_ACC),
-                        (8 * floor(lane / 16) + (lane % 8), MMA_ACC),
+                        (0, MMA_RHS_SCALE),  # RHS scale: no M contribution.
+                        (lane, ~MMA_ACC),  # LHS/data: lane-based M.
+                        (8 * floor(lane / 16) + (lane % 8), MMA_ACC),  # ACC pattern.
                     ),  # M
-                    lane % 16,  # N
+                    Piecewise(
+                        (0, MMA_LHS_SCALE),  # LHS scale: no N contribution.
+                        (lane % 16, True),  # RHS/data/ACC: lane-based N.
+                    ),  # N
                     Piecewise(
                         (
                             0,
                             MMA_LHS_SCALE | MMA_RHS_SCALE,
-                        ),  # Scales: all lanes read all
-                        (64 * floor(lane / 16), True),  # FP4: contiguous K
+                        ),  # Scales: all lanes read all.
+                        (64 * floor(lane / 16), True),  # FP4: contiguous K.
                     ),  # K
                 ]
             case _:
