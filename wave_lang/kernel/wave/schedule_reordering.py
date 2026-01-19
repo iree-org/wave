@@ -493,11 +493,8 @@ def add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
     # Generating and inserting cond_barriers to correct place in graph.
     with graph.inserting_before(custom_iterate.fx_node):
         insert_cond_barrier(is_wave_hi, trace, graph, custom_iterate.location)
-
-    # Place post-loop barrier after the target node if specified, otherwise after the loop
     with graph.inserting_after(custom_iterate.fx_node):
         insert_cond_barrier(is_wave_lo, trace, graph, custom_iterate.location)
-
     return
 
 
