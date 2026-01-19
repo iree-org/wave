@@ -1004,6 +1004,74 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
         N : [#wave.index_symbol<T2>] -> (T2 * 4, 8, 1)
       }] {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">, #wave.symbol<"N">]}
       : (memref<64x32x128xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
+      return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_shuffle_xor
+  func.func @lower_shuffle_xor() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 1.0 : f16
+    // CHECK: %[[REG:.*]] = arith.constant dense<1.000000e+00> : vector<1xf16>
+    %0 = wave.register %cst : vector<1xf16>
+    // CHECK-NOT: wave.shuffle
+    // CHECK: %[[OFFSET:.*]] = arith.constant 1 : i32
+    // CHECK: %[[WIDTH:.*]] = arith.constant 64 : i32
+    // CHECK: %[[RESULT:.*]], %{{.*}} = gpu.shuffle xor %[[REG]], %[[OFFSET]], %[[WIDTH]] : vector<1xf16>
+    %1 = wave.shuffle xor %0, 1, 64 : (vector<1xf16>) -> vector<1xf16>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_shuffle_down
+  func.func @lower_shuffle_down() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 0.0 : f32
+    // CHECK: %[[REG:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    %0 = wave.register %cst : vector<4xf32>
+    // CHECK-NOT: wave.shuffle
+    // CHECK: %[[OFFSET:.*]] = arith.constant 4 : i32
+    // CHECK: %[[WIDTH:.*]] = arith.constant 32 : i32
+    // CHECK: %[[RESULT:.*]], %{{.*}} = gpu.shuffle down %[[REG]], %[[OFFSET]], %[[WIDTH]] : vector<4xf32>
+    %1 = wave.shuffle down %0, 4, 32 : (vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_shuffle_up
+  func.func @lower_shuffle_up() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 2.0 : bf16
+    // CHECK: %[[REG:.*]] = arith.constant dense<2.000000e+00> : vector<1xbf16>
+    %0 = wave.register %cst : vector<1xbf16>
+    // CHECK-NOT: wave.shuffle
+    // CHECK: %[[OFFSET:.*]] = arith.constant 2 : i32
+    // CHECK: %[[WIDTH:.*]] = arith.constant 64 : i32
+    // CHECK: %[[RESULT:.*]], %{{.*}} = gpu.shuffle up %[[REG]], %[[OFFSET]], %[[WIDTH]] : vector<1xbf16>
+    %1 = wave.shuffle up %0, 2, 64 : (vector<1xbf16>) -> vector<1xbf16>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_shuffle_idx
+  func.func @lower_shuffle_idx() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 42 : i32
+    // CHECK: %[[REG:.*]] = arith.constant dense<42> : vector<1xi32>
+    %0 = wave.register %cst : vector<1xi32>
+    // CHECK-NOT: wave.shuffle
+    // CHECK: %[[OFFSET:.*]] = arith.constant 8 : i32
+    // CHECK: %[[WIDTH:.*]] = arith.constant 64 : i32
+    // CHECK: %[[RESULT:.*]], %{{.*}} = gpu.shuffle idx %[[REG]], %[[OFFSET]], %[[WIDTH]] : vector<1xi32>
+    %1 = wave.shuffle idx %0, 8, 64 : (vector<1xi32>) -> vector<1xi32>
     return
   }
 }

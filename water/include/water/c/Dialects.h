@@ -203,6 +203,30 @@ mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveShuffleModeAttr
+//===---------------------------------------------------------------------===//
+
+enum WaveShuffleMode {
+  WaveShuffleModeXOR = 0,
+  WaveShuffleModeDOWN = 1,
+  WaveShuffleModeUP = 2,
+  WaveShuffleModeIDX = 3,
+};
+
+/// Checks whether the given MLIR attribute is a WaveShuffleModeAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveShuffleModeAttr(MlirAttribute attr);
+
+/// Creates a new WaveShuffleModeAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveShuffleModeAttrGet(MlirContext mlirCtx,
+                                                            uint32_t value);
+
+/// Get the value from a WaveShuffleModeAttr.
+MLIR_CAPI_EXPORTED uint32_t mlirWaveShuffleModeAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveShuffleModeAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveShuffleModeAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 

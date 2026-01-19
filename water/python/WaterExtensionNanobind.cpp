@@ -376,6 +376,43 @@ struct PyWaveAddressSpaceAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveShuffleModeAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveShuffleModeAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveShuffleModeAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveShuffleModeAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveShuffleModeAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveShuffleModeAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](WaveShuffleMode value,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveShuffleModeAttr(
+              context->getRef(),
+              mlirWaveShuffleModeAttrGet(context->get(),
+                                         static_cast<uint32_t>(value)));
+        },
+        nb::arg("value"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveShuffleModeAttr from a shuffle mode enum value.");
+    c.def_prop_ro(
+        "value",
+        [](MlirAttribute self) {
+          return static_cast<WaveShuffleMode>(
+              mlirWaveShuffleModeAttrGetValue(self));
+        },
+        "Shuffle mode enum value.");
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 
@@ -820,6 +857,12 @@ NB_MODULE(_waterDialects, m) {
       .value("Shared", WaveAddressSpaceShared)
       .value("Register", WaveAddressSpaceRegister);
 
+  nb::enum_<WaveShuffleMode>(d, "WaveShuffleMode")
+      .value("XOR", WaveShuffleModeXOR)
+      .value("DOWN", WaveShuffleModeDOWN)
+      .value("UP", WaveShuffleModeUP)
+      .value("IDX", WaveShuffleModeIDX);
+
   nb::enum_<WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
       .value("F32_16x16x16_F16", WaveMmaKind_F32_16x16x16_F16)
@@ -851,6 +894,7 @@ NB_MODULE(_waterDialects, m) {
   PyWaveNormalFormAttr::bind(d);
   PyWaveWorkgroupDimAttr::bind(d);
   PyWaveAddressSpaceAttr::bind(d);
+  PyWaveShuffleModeAttr::bind(d);
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
   PyWaveReadWriteBoundsAttr::bind(d);

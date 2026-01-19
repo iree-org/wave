@@ -241,6 +241,28 @@ MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveShuffleModeAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveShuffleModeAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveShuffleModeAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveShuffleModeAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveShuffleModeAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveShuffleMode>(value)));
+}
+
+uint32_t mlirWaveShuffleModeAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveShuffleModeAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveShuffleModeAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveShuffleModeAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 

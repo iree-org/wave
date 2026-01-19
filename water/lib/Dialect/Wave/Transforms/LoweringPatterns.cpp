@@ -699,11 +699,69 @@ public:
 
 } // namespace
 
+//===----------------------------------------------------------------------===//
+// ShuffleOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Convert WaveShuffleMode to gpu::ShuffleMode.
+static gpu::ShuffleMode convertShuffleMode(wave::WaveShuffleMode mode) {
+  switch (mode) {
+  case wave::WaveShuffleMode::XOR:
+    return gpu::ShuffleMode::XOR;
+  case wave::WaveShuffleMode::DOWN:
+    return gpu::ShuffleMode::DOWN;
+  case wave::WaveShuffleMode::UP:
+    return gpu::ShuffleMode::UP;
+  case wave::WaveShuffleMode::IDX:
+    return gpu::ShuffleMode::IDX;
+  }
+  llvm_unreachable("unknown shuffle mode");
+}
+
+class ShuffleOpLoweringPattern : public OpConversionPattern<wave::ShuffleOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ShuffleOp op, wave::ShuffleOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op,
+                                         "WaveTensorType conversion failed");
+
+    Value input = adaptor.getValue();
+    int32_t offset = op.getOffset();
+    int32_t width = op.getWidth();
+    wave::WaveShuffleMode mode = op.getMode();
+
+    Value offsetValue =
+        arith::ConstantIntOp::create(rewriter, loc, offset, /*width=*/32);
+    Value widthValue =
+        arith::ConstantIntOp::create(rewriter, loc, width, /*width=*/32);
+
+    gpu::ShuffleMode gpuMode = convertShuffleMode(mode);
+
+    auto shuffleOp = gpu::ShuffleOp::create(rewriter, loc, input, offsetValue,
+                                            widthValue, gpuMode);
+
+    rewriter.replaceOp(op, shuffleOp.getShuffleResult());
+    return success();
+  }
+};
+
+} // namespace
+
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<CastOpLoweringPattern, ExtractOpLoweringPattern,
                ExtractSliceOpLoweringPattern, IterateOpLoweringPattern,
-               RegisterOpLoweringPattern>(typeConverter, patterns.getContext());
+               RegisterOpLoweringPattern,         ShuffleOpLoweringPattern>(typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

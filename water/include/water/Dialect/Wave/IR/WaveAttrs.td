@@ -318,6 +318,27 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
 
 
 //-----------------------------------------------------------------------------
+// Shuffle mode enum and attribute
+//-----------------------------------------------------------------------------
+
+def WaveShuffleModeEnum
+    : I32EnumAttr<"WaveShuffleMode", "GPU shuffle mode", [
+  I32EnumAttrCase<"XOR", 0, "xor">,
+  I32EnumAttrCase<"DOWN", 1, "down">,
+  I32EnumAttrCase<"UP", 2, "up">,
+  I32EnumAttrCase<"IDX", 3, "idx">,
+]> {
+  let cppNamespace = "::wave";
+  let genSpecializedAttr = 0;
+}
+
+def WaveShuffleModeAttr
+    : EnumAttr<WaveDialect, WaveShuffleModeEnum, "shuffle_mode"> {
+  // Use bare keyword format for cleaner syntax in wave.shuffle.
+  let assemblyFormat = "$value";
+}
+
+//-----------------------------------------------------------------------------
 // Other attributes
 //-----------------------------------------------------------------------------
 

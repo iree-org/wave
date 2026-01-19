@@ -467,3 +467,40 @@ func.func @empty_yield() {
   } : () -> ()
   return
 }
+
+// -----
+
+// CHECK-LABEL: @shuffle_xor
+func.func @shuffle_xor(%arg0: !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>> {
+  // CHECK: wave.shuffle xor
+  %0 = wave.shuffle xor %arg0, 1, 64 : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+  return %0 : !wave.tensor<[@M] of f16, <register>>
+}
+
+// CHECK-LABEL: @shuffle_down
+func.func @shuffle_down(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>> {
+  // CHECK: wave.shuffle down
+  %0 = wave.shuffle down %arg0, 4, 32 : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
+  return %0 : !wave.tensor<[@M] of f32, <register>>
+}
+
+// CHECK-LABEL: @shuffle_up
+func.func @shuffle_up(%arg0: !wave.tensor<[@M] of bf16, <register>>) -> !wave.tensor<[@M] of bf16, <register>> {
+  // CHECK: wave.shuffle up
+  %0 = wave.shuffle up %arg0, 2, 64 : (!wave.tensor<[@M] of bf16, <register>>) -> !wave.tensor<[@M] of bf16, <register>>
+  return %0 : !wave.tensor<[@M] of bf16, <register>>
+}
+
+// CHECK-LABEL: @shuffle_idx
+func.func @shuffle_idx(%arg0: !wave.tensor<[@M] of i32, <register>>) -> !wave.tensor<[@M] of i32, <register>> {
+  // CHECK: wave.shuffle idx
+  %0 = wave.shuffle idx %arg0, 8, 64 : (!wave.tensor<[@M] of i32, <register>>) -> !wave.tensor<[@M] of i32, <register>>
+  return %0 : !wave.tensor<[@M] of i32, <register>>
+}
+
+// CHECK-LABEL: @shuffle_vector
+func.func @shuffle_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
+  // CHECK: wave.shuffle xor
+  %0 = wave.shuffle xor %arg0, 16, 64 : (vector<4xf32>) -> vector<4xf32>
+  return %0 : vector<4xf32>
+}
