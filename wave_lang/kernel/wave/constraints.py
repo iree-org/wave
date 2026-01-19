@@ -83,7 +83,6 @@ class ScaledMMAType(Enum):
 
     # Intrinsics introduced in GFX1250
     GFX1250_F32_16x16x128_F8F6F4 = 0x1940
-    GFX1250_F32_32x16x128_F4 = 0x1941
 
 
 class MMAOperand(Enum):
@@ -297,8 +296,6 @@ class HardwareConstraint(Constraint):
                 return (32, 32, 64)
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
                 return (16, 16, 128)
-            case ScaledMMAType.GFX1250_F32_32x16x128_F4:
-                return (32, 16, 128)
             case _:
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
@@ -480,30 +477,6 @@ class HardwareConstraint(Constraint):
                             64 * floor(lane / 16),
                             (MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
                         ),
-                    ),  # K
-                ]
-            case ScaledMMAType.GFX1250_F32_32x16x128_F4:
-                # For 32x16x128: sourceA has 128 elements, sourceB has 64 elements.
-                # This variant is F4-only. Cannot use GPR_NUM formula (see above).
-                # Use simple contiguous formula.
-                # For scales: offset=0 since all lanes need access to all 4 scales.
-                # Scale M/N offsets: LHS scale uses M (lane), RHS scale uses N (lane%16).
-                offset = [
-                    Piecewise(
-                        (0, MMA_RHS_SCALE),  # RHS scale: no M contribution.
-                        (lane, ~MMA_ACC),  # LHS/data: lane-based M.
-                        (8 * floor(lane / 16) + (lane % 8), MMA_ACC),  # ACC pattern.
-                    ),  # M
-                    Piecewise(
-                        (0, MMA_LHS_SCALE),  # LHS scale: no N contribution.
-                        (lane % 16, True),  # RHS/data/ACC: lane-based N.
-                    ),  # N
-                    Piecewise(
-                        (
-                            0,
-                            MMA_LHS_SCALE | MMA_RHS_SCALE,
-                        ),  # Scales: all lanes read all.
-                        (64 * floor(lane / 16), True),  # FP4: contiguous K.
                     ),  # K
                 ]
             case _:
@@ -702,21 +675,6 @@ class HardwareConstraint(Constraint):
                 ]
                 stride = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                    1,  # N
-                    1,  # K
-                ]
-            case ScaledMMAType.GFX1250_F32_32x16x128_F4:
-                size = [
-                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                    1,  # N
-                    # K size: 64 for data vectors, 128 for scales (K/32 memory = 4 elements).
-                    Piecewise(
-                        (64, ~(MMA_LHS_SCALE | MMA_RHS_SCALE)),
-                        (128, (MMA_LHS_SCALE | MMA_RHS_SCALE)),
-                    ),  # K
-                ]
-                stride = [
-                    Piecewise((1, ~MMA_ACC), (32, MMA_ACC)),  # M
                     1,  # N
                     1,  # K
                 ]

@@ -507,7 +507,6 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     # GFX1250 scaled WMMA uses vector scales, CDNA scaled MFMA uses scalar scales.
     is_gfx1250_scaled = mma_type in [
         ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4,
-        ScaledMMAType.GFX1250_F32_32x16x128_F4,
     ]
     if is_gfx1250_scaled:
         scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
