@@ -109,6 +109,11 @@ def AddOp : BinaryWaveOp<"add"> {
   let description = baseDescription;
 }
 
+def SubOp : BinaryWaveOp<"sub"> {
+  let summary = "Subtract two values";
+  let description = baseDescription;
+}
+
 def MulOp : BinaryWaveOp<"mul"> {
   let summary = "Multiply two values";
   let description = baseDescription;

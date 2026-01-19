@@ -36,7 +36,9 @@ func.func @binary(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<any o
   %1 = wave.mul %0, %rhs : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<any of bf16>) -> !wave.tensor<[@A, @B] of bf16>
   // CHECK: wave.div
   %2 = wave.div %1, %lhs : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
-  return %2 : !wave.tensor<[@A, @B] of bf16>
+  // CHECK: wave.sub
+  %3 = wave.sub %2, %rhs : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<any of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %3 : !wave.tensor<[@A, @B] of bf16>
 }
 
 // CHECK-LABEL: @memory

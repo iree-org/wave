@@ -84,6 +84,7 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
+        SubOp,
         AllocateOp,
         CastOp,
         DivOp,
@@ -121,6 +122,7 @@ except Exception as e:
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
+    "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
     "extract_slice": ExtractSliceOp,
