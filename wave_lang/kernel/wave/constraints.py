@@ -465,26 +465,21 @@ class HardwareConstraint(Constraint):
                 # Each scale only contributes to its relevant dimension.
                 offset = [
                     Piecewise(
-                        (0, MMA_RHS_SCALE),  # RHS scale: no M contribution.
                         (lane % 16, ~MMA_ACC),  # LHS/data: lane-based M.
                         (8 * floor(lane / 16), MMA_ACC),  # ACC: interleaved M.
                     ),  # M
-                    Piecewise(
-                        (0, MMA_LHS_SCALE),  # LHS scale: no N contribution.
-                        (lane % 16, True),  # RHS/data/ACC: lane-based N.
-                    ),  # N
+                    lane % 16,  # N
                     Piecewise(
                         (
-                            0,
-                            MMA_LHS_SCALE | MMA_RHS_SCALE,
-                        ),  # Scales: all lanes read all.
-                        (64 * floor(lane / 16), MMA_SCALE_FP4),  # FP4: contiguous K.
-                        (
-                            32 * floor(GPR_NUM / 16)
+                            64 * floor(GPR_NUM / 16)
                             + 16 * floor(lane / 16)
                             + (GPR_NUM % 16),
-                            True,
-                        ),  # F8 data: interleaved element pattern.
+                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
+                        ),
+                        (
+                            64 * floor(lane / 16),
+                            (MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
+                        ),
                     ),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_32x16x128_F4:
