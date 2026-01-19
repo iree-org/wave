@@ -464,7 +464,7 @@ class HardwareConstraint(Constraint):
                             ~(MMA_LHS_SCALE | MMA_RHS_SCALE),
                         ),
                         (
-                            0,
+                            0,  #  Each thread loads 4xi8 where each i8 element directly corrsponds to K[X..X + 31] block
                             (MMA_LHS_SCALE | MMA_RHS_SCALE),
                         ),
                     ),  # K
