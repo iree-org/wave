@@ -28,6 +28,23 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>] {
+  // CHECK-LABEL: func.func @lower_reciprocal
+  func.func @lower_reciprocal() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.reciprocal
+    // CHECK:     %[[CST:.*]] = arith.constant 2.000000e+00 : f32
+    // CHECK:     %[[REG:.*]] = arith.constant dense<2.000000e+00> : vector<4xf32>
+    // CHECK:     %[[ONE:.*]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK:     arith.divf %[[ONE]], %[[REG]] : vector<4xf32>
+    %cst = arith.constant 2.0 : f32
+    %0 = wave.register %cst : vector<4xf32>
+    %1 = wave.reciprocal %0 : (vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>] {
   // CHECK-LABEL: func.func @lower_mma_f16_f32
   func.func @lower_mma_f16_f32() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     %cst_f16 = arith.constant 0.0 : f16

@@ -129,6 +129,12 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
   let description = baseDescription;
 }
 
+def ReciprocalOp : UnaryWaveOp<"reciprocal"> {
+  let summary = "Compute the reciprocal (1/x) of the argument";
+  let description = baseDescription;
+  let hasVerifier = 1;
+}
+
 def MmaOp : WaveOp<"mma",
     [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
      DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,

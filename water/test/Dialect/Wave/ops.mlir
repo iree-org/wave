@@ -25,7 +25,9 @@ func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor
 func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.exp2
   %0 = wave.exp2 %value : (!wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
-  return %0 : !wave.tensor<[@A, @B] of bf16>
+  // CHECK: wave.reciprocal
+  %1 = wave.reciprocal %0 : (!wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %1 : !wave.tensor<[@A, @B] of bf16>
 }
 
 // CHECK-LABEL: @binary

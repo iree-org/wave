@@ -1782,3 +1782,21 @@ LogicalResult wave::CastOp::verify() {
 
   return success();
 }
+
+//-----------------------------------------------------------------------------
+// ReciprocalOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::ReciprocalOp::verify() {
+  Type argType = getArgument().getType();
+  Type elementType =
+      llvm::TypeSwitch<Type, Type>(argType)
+          .Case<WaveTensorType, VectorType>(
+              [](auto containerType) { return containerType.getElementType(); })
+          .Default([](Type type) { return type; });
+
+  if (!isa<FloatType>(elementType))
+    return emitOpError("requires float element type, but got ") << elementType;
+
+  return success();
+}

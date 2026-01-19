@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Value.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
@@ -154,12 +156,43 @@ public:
   }
 };
 
+/// Lowers ReciprocalOp to 1.0 / x using arith.divf.
+class ReciprocalOpLoweringPattern
+    : public OpConversionPattern<wave::ReciprocalOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ReciprocalOp op, wave::ReciprocalOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(
+          op, "type conversion failed for reciprocal op result");
+
+    auto vectorType = cast<VectorType>(convertedType);
+
+    Location loc = op.getLoc();
+    Type elemType = vectorType.getElementType();
+
+    FloatAttr oneAttr = rewriter.getFloatAttr(elemType, 1.0);
+    DenseElementsAttr splatAttr = SplatElementsAttr::get(vectorType, oneAttr);
+
+    Value one = arith::ConstantOp::create(rewriter, loc, vectorType, splatAttr);
+    rewriter.replaceOpWithNewOp<arith::DivFOp>(op, vectorType, one,
+                                               adaptor.getArgument());
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveUnaryFPOpLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, math::Exp2Op>>(
-      typeConverter, patterns.getContext());
+  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, math::Exp2Op>,
+               ReciprocalOpLoweringPattern>(typeConverter,
+                                            patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
