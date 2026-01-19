@@ -98,10 +98,10 @@ def get_conversion_op(src_elem_type, dst_elem_type, fastmath=None):
             )
 
             # Broadcast to vector if the destination is a vector
-            if isinstance(dst_type, VectorType):
+            if VectorType.isinstance(dst_type):
                 one = vector_d.broadcast(dst_type, one_const)
                 zero = vector_d.broadcast(dst_type, zero_const)
-            elif isinstance(dst_type, RankedTensorType):
+            elif RankedTensorType.isinstance(dst_type):
                 raise NotImplementedError(
                     "RankedTensorType broadcasting is not implemented for casting bool to float."
                 )
