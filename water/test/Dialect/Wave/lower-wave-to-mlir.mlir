@@ -271,6 +271,34 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>] {
+  // CHECK-LABEL: func.func @lower_sub
+  func.func @lower_sub() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.sub
+    // CHECK:     %[[LHS:.*]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK:     %[[RHS:.*]] = arith.constant dense<2.000000e+00> : vector<4xf32>
+    // CHECK:     arith.subf %[[LHS]], %[[RHS]] : vector<4xf32>
+    %cst = arith.constant 1.0 : f32
+    %lhs = wave.register %cst : vector<4xf32>
+    %cst1 = arith.constant 2.0 : f32
+    %rhs = wave.register %cst1 : vector<4xf32>
+    %subf = wave.sub %lhs, %rhs : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+
+    // CHECK:     %[[LHSI:.*]] = arith.constant dense<5> : vector<2xi32>
+    // CHECK:     %[[RHSI:.*]] = arith.constant dense<3> : vector<2xi32>
+    // CHECK:     arith.subi %[[LHSI]], %[[RHSI]] : vector<2xi32>
+    %cst2 = arith.constant 5 : i32
+    %lhsi = wave.register %cst2 : vector<2xi32>
+    %cst3 = arith.constant 3 : i32
+    %rhsi = wave.register %cst3 : vector<2xi32>
+    %subi = wave.sub %lhsi, %rhsi : (vector<2xi32>, vector<2xi32>) -> vector<2xi32>
+
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>] {
   // CHECK-LABEL: func.func @lower_mul
   func.func @lower_mul() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.mul
