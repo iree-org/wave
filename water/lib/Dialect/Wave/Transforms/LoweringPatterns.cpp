@@ -543,6 +543,29 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
+// PermuteOp
+//===----------------------------------------------------------------------===//
+
+/// Lowers `wave.permute` by replacing it with its operand.
+/// The permute operation is a semantic marker that affects index expression
+/// transformation during compilation. At lowering time, the underlying data
+/// representation remains unchanged.
+class PermuteOpLoweringPattern : public OpConversionPattern<wave::PermuteOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::PermuteOp op, wave::PermuteOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Permute is a pass-through operation at lowering time.
+    // The index expression transformation is handled separately during
+    // the index inference pass.
+    rewriter.replaceOp(op, adaptor.getValue());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // IterateOp
 //===----------------------------------------------------------------------===//
 
@@ -761,8 +784,8 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<CastOpLoweringPattern, ExtractOpLoweringPattern,
                ExtractSliceOpLoweringPattern, IterateOpLoweringPattern,
-               RegisterOpLoweringPattern, ShuffleOpLoweringPattern>(
-      typeConverter, patterns.getContext());
+               PermuteOpLoweringPattern, RegisterOpLoweringPattern,
+               ShuffleOpLoweringPattern>(typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

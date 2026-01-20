@@ -109,6 +109,24 @@ def WaveTensorInRegister : TypeConstraint<
   "::mlir::Type"
 >;
 
+def WaveTensorFullySpecifiedPred
+  : CPred<"::llvm::cast<::wave::WaveTensorType>($_self).getFullySpecified()">;
+
+// Type must be either a fully-specified wave
+// tensor in register (or unspecified address space which defaults to register),
+// or a 1D vector (for post-lowering phase).
+def WaveTensorFullySpecifiedInRegister : TypeConstraint<
+  Or<[And<[WaveTensorType.predicate,
+           WaveTensorAddressSpaceRegister,
+           WaveTensorFullySpecifiedPred]>,
+      And<[WaveTensorType.predicate,
+           WaveTensorAddressSpaceUnspecified,
+           WaveTensorFullySpecifiedPred]>,
+      IsFixedVectorOfRankPred<[1]>]>,
+  "fully-specified wave tensor in register or a 1D vector",
+  "::mlir::Type"
+>;
+
 def WaveTensorInMemory : TypeConstraint<
   And<[WaveTensorType.predicate,
        Or<[WaveTensorAddressSpaceUnspecified,
