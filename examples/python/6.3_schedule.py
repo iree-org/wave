@@ -165,8 +165,6 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                     tkw.TensorCounterWait(1),  # rocdl.s.wait.tensorcnt 1
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SharedMemoryBarrierWait(-1),
-                    # Conditional barrier for hi waves is placed by insert_conditional_barrier_before
-                    # SetWavePrio(1) before entering the loop
                 ],
             )
         ]
@@ -177,7 +175,6 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         wave_hi = hw.wave_id >= mid_wave
 
         tkw.insert_cond_barrier_before(wave_hi, pipeline_loop.KERNEL)
-        # Insert SetWavePrio(1) right before the loop
         tkw.insert_before(pipeline_loop.KERNEL, tkw.SetWavePrio(1))
 
         # Create cluster ordering with async operations
@@ -234,7 +231,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         )
         epilogue_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.EPILOGUE)
 
-        # divide them into 2 chunks to match the manual pattern
+        # divide them into 2 chunks to stagger the loads and MMAs
         epilogue_shared_load_a_chunks = [epilogue_shared_load_a[i::2] for i in range(2)]
         epilogue_shared_load_b_chunks = [epilogue_shared_load_b[i::2] for i in range(2)]
         epilogue_mma_chunks = [epilogue_mma[i::2] for i in range(2)]
@@ -281,7 +278,6 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                     # Second set of MMAs
                     epilogue_mma_chunks[1],
                     # Final signal/wait (after conditional barrier)
-                    # Note: SetWavePrio(1) inserted after insert_cond_barrier_after
                     # No ds_wait for final barrier
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SharedMemoryBarrierWait(-1),
