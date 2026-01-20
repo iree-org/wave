@@ -10,11 +10,10 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
-    device_randn,
     device_randint,
-    device_tensor,
+    device_randn,
     device_zeros,
-    override_default_gpu_device,
+    get_default_device,
     to_default_device,
 )
 from wave_lang.kernel.lang.global_symbols import *
@@ -42,20 +41,26 @@ from .common.utils import (
 SCALE_GROUP_SIZE = 32
 
 
-def generate_gemm_afp4wfp4_inputs(shape):
+def generate_gemm_afp4wfp4_inputs(
+    shape: tuple[int, int, int], device: torch.device = get_default_device()
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     M, N, K = shape
     torch.manual_seed(5)
     # 34 is two packed e2m1 values 0010 which is 1.0.
-    x_low = device_randint(0, 16, (M, K // 2), dtype=torch.uint8)
-    x_high = device_randint(0, 16, (M, K // 2), dtype=torch.uint8)
+    x_low = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8, device=device)
+    x_high = torch.randint(0, 16, (M, K // 2), dtype=torch.uint8, device=device)
     x = x_low | x_high << 4
-    w_low = device_randint(0, 16, (N, K // 2), dtype=torch.uint8)
-    w_high = device_randint(0, 16, (N, K // 2), dtype=torch.uint8)
+    w_low = torch.randint(0, 16, (N, K // 2), dtype=torch.uint8, device=device)
+    w_high = torch.randint(0, 16, (N, K // 2), dtype=torch.uint8, device=device)
     w = w_low | w_high << 4
     w = w.T
     # Scale of 1.0 in e8m0, bias 127.
-    x_scales = device_randint(124, 128, (K // SCALE_GROUP_SIZE, M), dtype=torch.uint8)
-    w_scales = device_randint(124, 128, (K // SCALE_GROUP_SIZE, N), dtype=torch.uint8)
+    x_scales = torch.randint(
+        124, 128, (K // SCALE_GROUP_SIZE, M), dtype=torch.uint8, device=device
+    )
+    w_scales = torch.randint(
+        124, 128, (K // SCALE_GROUP_SIZE, N), dtype=torch.uint8, device=device
+    )
     x_scales = x_scales.T.contiguous()
     w_scales = w_scales.T.contiguous()
 
@@ -78,7 +83,7 @@ def generate_gemm_afp8wfp8_inputs(shape):
     return x, w, x_scales, w_scales
 
 
-def mxfp4_to_f32(x):
+def mxfp4_to_f32(x: torch.Tensor) -> torch.Tensor:
     # 2 because we pack fp4 in uint8.
     x = x.repeat_interleave(2, dim=1)
     x[:, ::2] = x[:, ::2] & 0xF
@@ -101,17 +106,19 @@ def mxfp4_to_f32(x):
         -4.0,
         -6.0,
     ]
-    mxfp4_in_f32 = device_tensor(mxfp4_list, dtype=torch.float32)
+    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device=x.device)
     return mxfp4_in_f32[x.long()]
 
 
-def e8m0_to_f32(x):
+def e8m0_to_f32(x: torch.Tensor) -> torch.Tensor:
     x_f32 = 2 ** ((x - 127).to(torch.float32))
     x_f32[x_f32 == 128] = float("nan")
     return x_f32
 
 
-def torchScaledGemmMXFP4(x, w, x_scales, w_scales):
+def torchScaledGemmMXFP4(
+    x: torch.Tensor, w: torch.Tensor, x_scales: torch.Tensor, w_scales: torch.Tensor
+) -> torch.Tensor:
     # First convert the x and w inputs to f32.
     x_f32 = mxfp4_to_f32(x)
     w_f32 = mxfp4_to_f32(w.T)
@@ -804,9 +811,10 @@ def testGFX1250ScaledGemmMXFP4(
     gemm = wave_compile(options, gemm)
 
     # Generate inputs and compute reference on CPU.
-    with override_default_gpu_device(-1):
-        x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
-        torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     # Move inputs to GPU.
     x = to_default_device(x)
