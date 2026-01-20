@@ -22,21 +22,22 @@ using namespace mlir;
 
 SmallVector<int64_t>
 wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                                DictionaryAttr indexDict,
+                                wave::WaveIndexExprsAttr indexExprs,
                                 wave::WaveHyperparameterAttr hyper) {
   return llvm::map_to_vector(shape, [&](wave::WaveSymbolAttr symbol) {
-    Attribute entry = indexDict.get(symbol.getName());
+    // Look up the mapping for this symbol in the index expressions.
+    std::optional<wave::WaveIndexMappingAttr> mapAttr =
+        indexExprs ? indexExprs.lookup(symbol) : std::nullopt;
     // The entry may be missing from the index and we shouldn't crash. Just
     // treat it as dynamic meaning we cannot statically evaluate it to a
     // constant.
-    if (!entry)
+    if (!mapAttr)
       return ShapedType::kDynamic;
-    auto mapAttr = cast<wave::WaveIndexMappingAttr>(entry);
-    if (!mapAttr.getStep())
+    if (!mapAttr->getStep())
       return ShapedType::kDynamic;
     std::optional<SmallVector<int64_t>> folded =
-        wave::evaluateMapWithHyperparams(mapAttr.getStep(),
-                                         mapAttr.getSymbols(), hyper);
+        wave::evaluateMapWithHyperparams(mapAttr->getStep(),
+                                         mapAttr->getSymbols(), hyper);
     if (!folded)
       return ShapedType::kDynamic;
     assert(folded->size() == 1 && "expected single-result map");
@@ -46,12 +47,12 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 
 std::optional<uint64_t>
 wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                                 DictionaryAttr indexDict,
+                                 wave::WaveIndexExprsAttr indexExprs,
                                  wave::WaveHyperparameterAttr hyper) {
   uint64_t bestIdx = static_cast<uint64_t>(-1);
   std::optional<int64_t> bestSize; // largest constant size seen so far
   for (auto [i, size] :
-       llvm::enumerate(getUncollapsedVectorShape(shape, indexDict, hyper))) {
+       llvm::enumerate(getUncollapsedVectorShape(shape, indexExprs, hyper))) {
     if (ShapedType::isDynamic(size))
       return std::nullopt;
     if (!bestSize || size >= *bestSize) {

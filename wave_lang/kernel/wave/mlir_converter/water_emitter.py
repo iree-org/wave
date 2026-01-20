@@ -325,22 +325,21 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
         return wave.WaveSymbolAttr.get(name)
 
 
-def _build_index_mapping_dict(
+def _build_index_exprs_attr(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
-) -> ir.DictAttr:
+) -> wave.WaveIndexExprsAttr:
     """
-    Convert a Wave index dictionary into a DictionaryAttr of
-    WaveIndexMappingAttr.
+    Convert a Wave index dictionary into a WaveIndexExprsAttr.
 
-    For MMA, multiple DictAttr objects are assembled into an ArrayAttr (one per
-    operand). For all other nodes a single-element ArrayAttr is used.
+    For MMA, multiple WaveIndexExprsAttr objects are assembled into an ArrayAttr
+    (one per operand). For all other nodes a single-element ArrayAttr is used.
 
     The `allowed_induction_symbols` argument lists induction variable-related
     symbols that are allowed to be present in the expressions. Other symbols
     will be removed and a warning will be generated if it is the case.
     """
 
-    index_mappings: dict[str, ir.Attribute] = {}
+    entries: list[wave.WaveIndexEntryAttr] = []
     for dim, exprs in index.items():
         all_symbols_set = set().union(
             *[
@@ -376,17 +375,17 @@ def _build_index_mapping_dict(
         symbol_attrs = [
             _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
         ]
-        index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
-            symbol_attrs, start, size, stride
-        )
-    return ir.DictAttr.get(index_mappings)
+        mapping = wave.WaveIndexMappingAttr.get(symbol_attrs, start, size, stride)
+        dim_attr = wave.WaveSymbolAttr.get(dim.name)
+        entries.append(wave.WaveIndexEntryAttr.get(dim_attr, mapping))
+    return wave.WaveIndexExprsAttr.get(entries)
 
 
 def _attach_attributes(
     node: CustomOp, op: ir.Operation, known_ids: set[str] | None = None
 ):
     if getattr(node, "index", None) and isinstance(node.index, dict):
-        dict_attrs: list[ir.DictAttr] = []
+        index_exprs_attrs: list[wave.WaveIndexExprsAttr] = []
 
         # XXX: Collect induction-related symbols that make sense in the current
         # context; the frontend is buggy and may have these symbols outside of
@@ -400,25 +399,25 @@ def _attach_attributes(
                 allowed_induction_symbols.add(induction_symbol)
 
         if isinstance(node, MMA):
-            # Build one index mapping dict per operand for MMA nodes
+            # Build one index exprs attr per operand for MMA nodes
             if lhs_index := getattr(node, "lhs_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
+                index_exprs_attrs.append(
+                    _build_index_exprs_attr(lhs_index, allowed_induction_symbols)
                 )
             if rhs_index := getattr(node, "rhs_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
+                index_exprs_attrs.append(
+                    _build_index_exprs_attr(rhs_index, allowed_induction_symbols)
                 )
             if acc_index := getattr(node, "acc_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                index_exprs_attrs.append(
+                    _build_index_exprs_attr(acc_index, allowed_induction_symbols)
                 )
         else:
-            dict_attrs.append(
-                _build_index_mapping_dict(node.index, allowed_induction_symbols)
+            index_exprs_attrs.append(
+                _build_index_exprs_attr(node.index, allowed_induction_symbols)
             )
 
-        op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
+        op.attributes["index"] = ir.ArrayAttr.get(index_exprs_attrs)
 
     if getattr(node, "elements_per_thread", None):
         op.attributes["elements_per_thread"] = ir.IntegerAttr.get(

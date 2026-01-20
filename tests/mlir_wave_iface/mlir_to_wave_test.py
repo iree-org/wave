@@ -46,7 +46,7 @@ if is_water_available():
     from mlir_converter.mlir_to_wave import (
         _convert_affine_expr_to_sympy_expr,
         _convert_index_mapping_attr_to_sympy,
-        _convert_index_mapping_dict_to_sympy,
+        _convert_index_exprs_to_sympy,
         convert_index_mapping_array_to_sympy,
         _make_piecewise_sequence,
         ITER_SYMBOL_NAME_WAVE_PREFIX,
@@ -308,11 +308,11 @@ class TestConvertIndexMappingAttrToSympy:
         assert result.stride is None
 
 
-class TestConvertIndexMappingDictToSympy:
-    """Tests for _convert_index_mapping_dict_to_sympy function."""
+class TestConvertIndexExprsToSympy:
+    """Tests for _convert_index_exprs_to_sympy function."""
 
     def test_single_mapping(self):
-        """Test conversion of dict with single index mapping."""
+        """Test conversion of WaveIndexExprsAttr with single entry."""
         # Create a simple index mapping
         symbols = [wave.WaveSymbolAttr.get("M")]
         s0 = ir.AffineSymbolExpr.get(0)
@@ -323,10 +323,12 @@ class TestConvertIndexMappingDictToSympy:
             symbols, start_map, step_map, stride_map
         )
 
-        # Create dict attribute
-        dict_attr = ir.DictAttr.get({"dim0": mapping_attr})
+        # Create WaveIndexExprsAttr with a single entry
+        dim_attr = wave.WaveSymbolAttr.get("dim0")
+        entry = wave.WaveIndexEntryAttr.get(dim_attr, mapping_attr)
+        index_exprs_attr = wave.WaveIndexExprsAttr.get([entry])
 
-        result = _convert_index_mapping_dict_to_sympy(dict_attr)
+        result = _convert_index_exprs_to_sympy(index_exprs_attr)
 
         assert isinstance(result, dict)
         assert index_symbol("dim0") in result
@@ -335,7 +337,7 @@ class TestConvertIndexMappingDictToSympy:
         assert result[index_symbol("dim0")].size == 16
 
     def test_multiple_mappings(self):
-        """Test conversion of dict with multiple index mappings."""
+        """Test conversion of WaveIndexExprsAttr with multiple entries."""
         # Create first mapping
         symbols1 = [wave.WaveSymbolAttr.get("M")]
         s0 = ir.AffineSymbolExpr.get(0)
@@ -355,8 +357,14 @@ class TestConvertIndexMappingDictToSympy:
             ir.AffineMap.get(0, 1, [ir.AffineConstantExpr.get(2)]),
         )
 
-        dict_attr = ir.DictAttr.get({"m": mapping1, "n": mapping2})
-        result = _convert_index_mapping_dict_to_sympy(dict_attr)
+        # Create WaveIndexExprsAttr with multiple entries
+        dim_m = wave.WaveSymbolAttr.get("m")
+        dim_n = wave.WaveSymbolAttr.get("n")
+        entry1 = wave.WaveIndexEntryAttr.get(dim_m, mapping1)
+        entry2 = wave.WaveIndexEntryAttr.get(dim_n, mapping2)
+        index_exprs_attr = wave.WaveIndexExprsAttr.get([entry1, entry2])
+
+        result = _convert_index_exprs_to_sympy(index_exprs_attr)
 
         assert len(result) == 2
         assert index_symbol("m") in result
@@ -414,8 +422,11 @@ class TestConvertIndexMappingArrayToSympy:
             ir.AffineMap.get(0, 1, [ir.AffineConstantExpr.get(1)]),
         )
 
-        dict_attr = ir.DictAttr.get({"dim": mapping})
-        array_attr = ir.ArrayAttr.get([dict_attr])
+        # Create WaveIndexExprsAttr
+        dim_attr = wave.WaveSymbolAttr.get("dim")
+        entry = wave.WaveIndexEntryAttr.get(dim_attr, mapping)
+        index_exprs_attr = wave.WaveIndexExprsAttr.get([entry])
+        array_attr = ir.ArrayAttr.get([index_exprs_attr])
 
         # We don't need anything from the operation except its name, so use an empty module.
         dummy_op = ir.Operation.create("builtin.module", loc=ir.Location.unknown())
@@ -477,13 +488,36 @@ class TestConvertIndexMappingArrayToSympy:
             ir.AffineMap.get(0, 1, [c1]),
         )
 
-        # Note that result mapping is the same as the accumulator mapping.
-        lhs_dict = ir.DictAttr.get({"M": lhs_m_mapping, "K": lhs_k_mapping})
-        rhs_dict = ir.DictAttr.get({"N": rhs_n_mapping, "K": rhs_k_mapping})
-        acc_dict = ir.DictAttr.get({"M": acc_m_mapping, "N": acc_n_mapping})
-        result_dict = ir.DictAttr.get({"M": acc_m_mapping, "N": acc_n_mapping})
+        # Create WaveIndexExprsAttr for each operand
+        m_dim = wave.WaveSymbolAttr.get("M")
+        n_dim = wave.WaveSymbolAttr.get("N")
+        k_dim = wave.WaveSymbolAttr.get("K")
 
-        array_attr = ir.ArrayAttr.get([lhs_dict, rhs_dict, acc_dict, result_dict])
+        lhs_entries = [
+            wave.WaveIndexEntryAttr.get(m_dim, lhs_m_mapping),
+            wave.WaveIndexEntryAttr.get(k_dim, lhs_k_mapping),
+        ]
+        rhs_entries = [
+            wave.WaveIndexEntryAttr.get(n_dim, rhs_n_mapping),
+            wave.WaveIndexEntryAttr.get(k_dim, rhs_k_mapping),
+        ]
+        acc_entries = [
+            wave.WaveIndexEntryAttr.get(m_dim, acc_m_mapping),
+            wave.WaveIndexEntryAttr.get(n_dim, acc_n_mapping),
+        ]
+        result_entries = [
+            wave.WaveIndexEntryAttr.get(m_dim, acc_m_mapping),
+            wave.WaveIndexEntryAttr.get(n_dim, acc_n_mapping),
+        ]
+
+        lhs_index_exprs = wave.WaveIndexExprsAttr.get(lhs_entries)
+        rhs_index_exprs = wave.WaveIndexExprsAttr.get(rhs_entries)
+        acc_index_exprs = wave.WaveIndexExprsAttr.get(acc_entries)
+        result_index_exprs = wave.WaveIndexExprsAttr.get(result_entries)
+
+        array_attr = ir.ArrayAttr.get(
+            [lhs_index_exprs, rhs_index_exprs, acc_index_exprs, result_index_exprs]
+        )
 
         # Create a mock MMA operation, we only need the name, it doesn't even need to verify correctly.
         dummy_mma_op = ir.Operation.create("wave.mma", loc=ir.Location.unknown())

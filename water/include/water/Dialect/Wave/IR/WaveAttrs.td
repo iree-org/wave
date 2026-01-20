@@ -519,4 +519,83 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   }];
 }
 
+//-----------------------------------------------------------------------------
+// Index expression attributes (ordered)
+//-----------------------------------------------------------------------------
+
+def WaveIndexEntryAttr : AttrDef<WaveDialect, "WaveIndexEntry"> {
+  let mnemonic = "index_entry";
+  let description = [{
+    A single entry mapping a tensor dimension symbol to its index mapping.
+
+    This is a component of WaveIndexExprsAttr, representing one dimension's
+    index expression. The dimension is a WaveSymbolAttr (e.g., @M, @K, @N)
+    and the mapping is a WaveIndexMappingAttr specifying start/step/stride.
+
+    Syntax: @M : [symbols] -> (start, step, stride)
+    Example: @M : [#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, BLOCK_M)
+  }];
+
+  let parameters = (ins
+    "::wave::WaveSymbolAttr":$dimension,
+    "::wave::WaveIndexMappingAttr":$mapping
+  );
+
+  let hasCustomAssemblyFormat = 1;
+}
+
+def WaveIndexExprsAttr : AttrDef<WaveDialect, "WaveIndexExprs"> {
+  let mnemonic = "index_exprs";
+  let description = [{
+    An ordered collection of dimension index mappings for Wave tensors.
+
+    Unlike DictionaryAttr which sorts entries alphabetically, this attribute
+    preserves the order of entries as specified. The order corresponds to
+    the dimension order in the associated WaveTensorType's shape.
+
+    Syntax: index_exprs<[@M : <mapping>, @K : <mapping>, @N : <mapping>]>
+
+    The entries are stored in an array, maintaining insertion order.
+    This is critical for lowering where dimension order must match
+    the tensor type's shape, even after the tensor type has been converted
+    to memref.
+  }];
+
+  let parameters = (ins
+    ArrayRefParameter<"::wave::WaveIndexEntryAttr">:$entries
+  );
+
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    /// Look up the index mapping for a given dimension symbol.
+    /// Returns std::nullopt if the dimension is not found.
+    /// Complexity: O(n) where n is the number of dimensions (typically 2-4).
+    std::optional<::wave::WaveIndexMappingAttr>
+    lookup(::wave::WaveSymbolAttr dimension) const;
+
+    /// Look up by dimension name string.
+    std::optional<::wave::WaveIndexMappingAttr>
+    lookup(::llvm::StringRef dimensionName) const;
+
+    /// Get the ordered list of dimension symbols.
+    ::llvm::SmallVector<::wave::WaveSymbolAttr> getDimensions() const;
+
+    /// Get the number of entries.
+    size_t size() const { return getEntries().size(); }
+
+    /// Check if empty.
+    bool empty() const { return getEntries().empty(); }
+  }];
+}
+
+//-----------------------------------------------------------------------------
+// Typed array attributes
+//-----------------------------------------------------------------------------
+
+def WaveIndexExprsArrayAttr : TypedArrayAttrBase<WaveIndexExprsAttr,
+  "array of WaveIndexExprsAttr"> {
+  let constBuilderCall = "$_builder.getArrayAttr($0)";
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEATTRS
