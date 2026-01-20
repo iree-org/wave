@@ -90,3 +90,49 @@ func.func @non_consecutive_wmma(
   %3 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   return %0, %2, %y : vector<32xf32>, vector<32xf32>, f32
 }
+
+// Test: MFMA ops are reordered for operand locality (no reuse flags for MFMA).
+// CHECK-LABEL: func.func @mfma_reorder
+// CHECK-SAME:    (%[[A0:.*]]: vector<4xf16>, %[[A1:.*]]: vector<4xf16>, %[[B0:.*]]: vector<4xf16>, %[[B1:.*]]: vector<4xf16>, %[[C:.*]]: vector<4xf32>)
+func.func @mfma_reorder(
+    %a0: vector<4xf16>, %a1: vector<4xf16>,
+    %b0: vector<4xf16>, %b1: vector<4xf16>,
+    %c: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  // Ops should be reordered to maximize operand sharing.
+  // Note: MFMA does not have reuse flags, so none should appear.
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A0]], %[[B0]], %[[C]]
+  // CHECK-NOT: reuse
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A1]], %[[B0]], %[[C]]
+  // CHECK-NOT: reuse
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A1]], %[[B1]], %[[C]]
+  // CHECK-NOT: reuse
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A0]], %[[B1]], %[[C]]
+  // CHECK-NOT: reuse
+  // CHECK: rocdl.sched.barrier 0
+  %zero = arith.constant 0 : i32
+  %0 = rocdl.mfma.f32.16x16x16f16 %a0, %b0, %c, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  %1 = rocdl.mfma.f32.16x16x16f16 %a1, %b0, %c, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  %2 = rocdl.mfma.f32.16x16x16f16 %a0, %b1, %c, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  %3 = rocdl.mfma.f32.16x16x16f16 %a1, %b1, %c, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  return %0, %1, %2, %3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+// Test: Chained MFMA accumulator ops preserve dependency order.
+// CHECK-LABEL: func.func @mfma_chained
+// CHECK-SAME:    (%[[A:.*]]: vector<4xf16>, %[[B:.*]]: vector<4xf16>, %[[C:.*]]: vector<4xf32>)
+func.func @mfma_chained(
+    %a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>) -> vector<4xf32> {
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: %[[R0:.*]] = rocdl.mfma.f32.16x16x16f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A]], %[[B]], %[[R0]]
+  // CHECK: rocdl.sched.barrier 0
+  %zero = arith.constant 0 : i32
+  %0 = rocdl.mfma.f32.16x16x16f16 %a, %b, %c, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  %1 = rocdl.mfma.f32.16x16x16f16 %a, %b, %0, %zero, %zero, %zero : (vector<4xf16>, vector<4xf16>, vector<4xf32>, i32, i32, i32) -> vector<4xf32>
+  return %1 : vector<4xf32>
+}
