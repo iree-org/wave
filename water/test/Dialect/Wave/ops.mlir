@@ -432,6 +432,25 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
   return %0 : !wave.tensor<any of bf16>
 }
 
+// CHECK-LABEL: @permute
+func.func @permute(%arg0: !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @B] of f32, <register>> {
+  // CHECK: wave.permute
+  // CHECK-SAME: !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  %0 = wave.permute %arg0 : !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  return %0 : !wave.tensor<[@M, @N, @B] of f32, <register>>
+}
+
+// CHECK-LABEL: @permute_with_index
+func.func @permute_with_index(%arg0: !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@N, @M] of f16, <register>> {
+  // CHECK: wave.permute
+  // CHECK-SAME: index
+  %0 = wave.permute %arg0 index [{
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)>
+  }] : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  return %0 : !wave.tensor<[@N, @M] of f16, <register>>
+}
+
 // -----
 // Test wave.iterate and wave.yield with vector types
 

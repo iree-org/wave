@@ -765,3 +765,49 @@ normalform.module [#wave.normal_form<full_types>] {
     return
   }
 }
+
+// -----
+
+// Test permute forward propagation: index expressions flow from MMA result
+// through permute to write. The permute swaps M and N dimensions, which should
+// swap their strides.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @permute_propagation
+  func.func @permute_propagation(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %dst: !wave.tensor<[@N, @M] of f32, <global>>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // MMA produces index expressions with:
+    //   M: (((T0 mod 64) floordiv 16) * 4, 4, 16)  - stride 16
+    //   N: (T0 mod 16, 1, 1)                        - stride 1
+    // CHECK: wave.mma
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma_result = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+      -> !wave.tensor<[@M, @N] of f32>
+
+    // After permute from [M, N] to [N, M], strides should be swapped:
+    //   M: (((T0 mod 64) floordiv 16) * 4, 4, 1)   - stride becomes 1 (was N's stride)
+    //   N: (T0 mod 16, 1, 16)                       - stride becomes 16 (was M's stride)
+    // CHECK: wave.permute
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
+    %permuted = wave.permute %mma_result
+      : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@N, @M] of f32>
+
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
+    wave.write %permuted, %dst : !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32, <global>>
+
+    return
+  }
+}

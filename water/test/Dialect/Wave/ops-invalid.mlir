@@ -820,3 +820,66 @@ func.func @broadcast_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, 
   wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
   return
 }
+
+// -----
+
+// Test that permute result shape must not be empty
+func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (0)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute input and result element types must match
+func.func @permute_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{expected input and result elemental types to match, got 'f32', 'f16'}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape dimensions must exist in input shape
+func.func @permute_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@P, @Q] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape with one unknown dimension fails
+func.func @permute_partial_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @B] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape with extra dimension not in input fails
+func.func @permute_extra_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (3)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape rank must match input shape rank
+func.func @permute_result_rank_mismatch(%arg0: !wave.tensor<[@M, @N, @K] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (3) does not match target shape rank (2)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N, @K] of f32, <register>> to !wave.tensor<[@N, @M] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape must be a permutation of input shape
+func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @K] of f32, <register>>
+  return
+}

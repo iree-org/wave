@@ -104,6 +104,7 @@ try:
         SumOp,
         WriteOp,
         YieldOp,
+        PermuteOp,
         DeviceConstraintAttr,
         HardwareConstraintAttr,
         TilingConstraintAttr,
@@ -145,6 +146,7 @@ WAVE_OP_CONSTRUCTORS = {
     "iterate": IterateOp,
     "output": YieldOp,
     "write": WriteOp,
+    "permute": PermuteOp,
     "max_element": MaxElementOp,
     "sum": SumOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
