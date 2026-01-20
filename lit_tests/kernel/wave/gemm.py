@@ -1411,11 +1411,11 @@ def test_gemm_four_stage_global_to_lds():
     print(gemm_four_stage_global_to_lds.asm)
     # CHECK-LABEL: test_gemm_four_stage_global_to_lds
     # Test multibuffering: verify shared memory views are correctly allocated
-    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<266240xi8
-    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<266240xi8
-    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c66560][] : memref<266240xi8
-    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c133120][] : memref<266240xi8
-    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c199680][] : memref<266240xi8
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<270336xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<270336xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c67584][] : memref<270336xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c135168][] : memref<270336xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c202752][] : memref<270336xi8
 
     # Prologue
     # Verify prologue stores to shared memory

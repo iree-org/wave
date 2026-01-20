@@ -654,9 +654,9 @@ def test_wmma_with_tensor_load():
 
     ### shared memory alloc
     #   Make sure the shared memory allocation is padded
-    # CHECK:        %[[SMEM:.*]] = memref.alloc() : memref<4608xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW0:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW1:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
+    # CHECK:        %[[SMEM:.*]] = memref.alloc() : memref<5120xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VIEW0:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<5120xi8, #gpu.address_space<workgroup>> to memref<32x40xf16, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VIEW1:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<5120xi8, #gpu.address_space<workgroup>> to memref<32x40xf16, #gpu.address_space<workgroup>>
 
     ### get global buffer pointer
     # CHECK:        %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
