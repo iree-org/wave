@@ -3494,37 +3494,27 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     metadata = extract_kernel_metadata(text)
     # print(",\n".join(f'            "{i}"' for i in metadata.readfirstlane_ops))
     if use_water_backend:
-        vgpr_count = 512
-        vgpr_spill_count = 9
-        sgpr_count = 46
+        vgpr_count = 456
+        vgpr_spill_count = 0
+        sgpr_count = 50
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
             "s_wait_kmcnt 0x0",
-            "s_wait_xcnt 0x0",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_dscnt 0xe",
-            "s_wait_loadcnt 0x0",
-            "s_wait_dscnt 0x6",
-            "s_wait_dscnt 0x0",
-            "s_wait_xcnt 0x0",
-            "s_wait_dscnt 0x2",
-            "s_wait_dscnt 0x0",
-            "s_wait_dscnt 0x16",
-            "s_wait_dscnt 0x14",
-            "s_wait_dscnt 0x12",
-            "s_wait_dscnt 0x10",
-            "s_wait_dscnt 0xe",
-            "s_wait_dscnt 0xc",
             "s_wait_dscnt 0xa",
             "s_wait_dscnt 0x6",
-            "s_wait_dscnt 0x4",
             "s_wait_dscnt 0x2",
-            "s_wait_loadcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_dscnt 0xe",
+            "s_wait_dscnt 0xa",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
@@ -3532,7 +3522,7 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "v_readfirstlane_b32 s1, v3",
             "v_readfirstlane_b32 s0, v4",
             "v_readfirstlane_b32 s0, v2",
-            "v_readfirstlane_b32 s0, v0",
+            "v_readfirstlane_b32 s20, v0",
         ]
     else:
         vgpr_count = 512
