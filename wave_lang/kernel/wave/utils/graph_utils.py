@@ -474,8 +474,7 @@ def is_barrier_between_same_graph(
     if barrier_check is None:
         barrier_check = set()
 
-    # Track what barrier types we've seen (for WorkgroupBarrier + MemoryCounterWait pair)
-    seen_workgroup_barrier = False
+    # Track what barrier types we've seen (for MemoryCounterWait and WorkgroupBarrier pair)
     seen_memory_counter_wait = False
 
     while next_node != dst and next_node.next.op != "root":
@@ -492,18 +491,17 @@ def is_barrier_between_same_graph(
             if custom_next_node.barId == barId and barId in barrier_check:
                 return next_node
 
-        # Track WorkgroupBarrier (rocdl.s.barrier)
-        if isinstance(custom_next_node, WorkgroupBarrier):
-            seen_workgroup_barrier = True
-
-        # Track MemoryCounterWait with load counter (amdgpu.memory_counter_wait load(N))
+        # First, must see MemoryCounterWait
         if isinstance(custom_next_node, MemoryCounterWait):
             if custom_next_node.load is not None:
                 seen_memory_counter_wait = True
 
-        # If we've seen BOTH types, we have a valid barrier pair
-        if seen_workgroup_barrier and seen_memory_counter_wait:
-            return next_node
+        # If we've seen memory_counter_wait and now see workgroup_barrier,
+        # we have the required pair in order
+        if isinstance(custom_next_node, WorkgroupBarrier):
+            if seen_memory_counter_wait:
+                return next_node
+            # If we see workgroup_barrier first, keep looking
 
         next_node = next_node.next
 
