@@ -461,11 +461,12 @@ def emit_mfma_scaled(
 def emit_wmma_scaled(
     m: int, n: int, k: int, acc: Value, values: list[Value], scales: list[Value]
 ) -> Value:
-    m = get_constant_attr(m, IntegerType.get_signless(32))
-    n = get_constant_attr(n, IntegerType.get_signless(32))
-    k = get_constant_attr(k, IntegerType.get_signless(32))
-    first_scale_lane_a = get_constant_attr(0, IntegerType.get_signless(32))
-    first_scale_lane_b = get_constant_attr(0, IntegerType.get_signless(32))
+    i32 = IntegerType.get_signless(32)
+    m = get_constant_attr(m, i32)
+    n = get_constant_attr(n, i32)
+    k = get_constant_attr(k, i32)
+    first_scale_lane_a = get_constant_attr(0, i32)
+    first_scale_lane_b = get_constant_attr(0, i32)
 
     result = amdgpu_d.scaled_wmma(
         m=m,
