@@ -12,7 +12,11 @@ from ..ops.wave_ops import (
     Placeholder,
     Iterate,
     WorkgroupBarrier,
+    NewScalar,
+    Ge,
+    Lt,
 )
+import wave_lang.kernel.lang as tkl
 from ..wave.constraints import Constraint, HardwareConstraint
 from .base import define_schedule_op
 import logging
@@ -36,6 +40,13 @@ def _get_hardware_constraint(
         if isinstance(c, HardwareConstraint):
             return c
     return None
+
+
+def _get_graph_node(custom, graph: fx.Graph, location) -> fx.Node:
+    """Add a CustomOp to the graph and return its fx.Node."""
+    custom.add_to_graph(graph)
+    custom.location = location
+    return custom.fx_node
 
 
 def _insert_cond_barrier_at(
@@ -983,11 +994,40 @@ class Stagger(CustomScheduleOp):
         mid_wave = flat_wave_count // 2
 
         # Create conditions using sympy expressions (just like kernel code!)
-        wave_hi = sympy.Ge(hw.wave_id, mid_wave)
-        wave_lo = sympy.Lt(hw.wave_id, mid_wave)
 
-        _insert_cond_barrier_at(wave_hi, loop, kernel_trace, insert_after=False)
-        _insert_cond_barrier_at(wave_lo, loop, kernel_trace, insert_after=True)
+        # Compute wave_id from hardware constraint
+        flat_id = hw.linearized_thread_id
+        wave_id = flat_id // hw.threads_per_wave
+
+        # Get the target node to access graph and location
+        target_nodes = get_nodes_from_ref(loop)
+        assert target_nodes is not None and len(target_nodes) > 0
+        target_node = target_nodes[0]
+        custom = get_custom(target_node)
+        graph = custom.graph
+        location = custom.location
+
+        # Create typed scalar nodes for i32 comparison
+        with graph.inserting_before(target_node):
+            mid_wave_reg = _get_graph_node(
+                NewScalar(mid_wave, tkl.i32), graph, location
+            )
+            wave_id_reg = _get_graph_node(
+                NewScalar(wave_id, tkl.i32), graph, location
+            )
+            is_wave_hi = _get_graph_node(
+                Ge(wave_id_reg, mid_wave_reg), graph, location
+            )
+            is_wave_lo = _get_graph_node(
+                Lt(wave_id_reg, mid_wave_reg), graph, location
+            )
+
+        # Insert conditional barriers using the typed fx.Node conditions
+        with graph.inserting_before(target_node):
+            _insert_cond_barrier(is_wave_hi, kernel_trace, graph, location)
+        with graph.inserting_after(target_nodes[-1]):
+            _insert_cond_barrier(is_wave_lo, kernel_trace, graph, location)
+
         logger.info("Applied 2-way stagger scheduling to loop")
         return None
 
