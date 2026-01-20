@@ -161,7 +161,7 @@ def shared_memory_barrier_signal(barId: int = 0, tensor_wait: bool = False): ...
 def shared_memory_barrier_wait(barId: int = 0): ...
 
 
-def memory_counter_wait(load=None, store=None, ds=None, exp=None): ...
+def memory_counter_wait_barrier(load=None, store=None, ds=None, exp=None): ...
 
 
 def workgroup_barrier(): ...
@@ -1648,12 +1648,16 @@ class SchedulingGroupBarrier(CustomOp):
     sync_id: int
 
 
-@define_op("memory_counter_wait")
+@define_op("memory_counter_wait_barrier")
 @dataclass
-class MemoryCounterWait(CustomOp):
+class MemoryCounterWaitBarrier(CustomOp):
     """
     Wait for the specified counters to be less-than or equal-to
-    the provided values before continuing.
+    the provided values before continuing, then perform a workgroup barrier.
+
+    Emits:
+    - amdgpu.memory_counter_wait with specified counters
+    - rocdl.s.barrier for workgroup synchronization
     """
 
     load: Optional[int] = None

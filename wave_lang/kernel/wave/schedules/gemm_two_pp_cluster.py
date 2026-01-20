@@ -408,7 +408,7 @@ def get_async_two_pp_clusters():
             shared_load_b, dim=K, num_partitions=2
         )
 
-        # Calculate the number of independent global_to_shared operations for MemoryCounterWait
+        # Calculate the number of independent global_to_shared operations for MemoryCounterWaitBarrier
         independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
 
         # Create cluster ordering with async operations
@@ -431,8 +431,7 @@ def get_async_two_pp_clusters():
                     mma_0,
                     tkw.SetWavePrio(0),
                     tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWait(load=independent_global_count),
-                    tkw.WorkgroupBarrier(),
+                    tkw.MemoryCounterWaitBarrier(load=independent_global_count),
                     tkw.SchedulingBarrier([]),
                 ],
             ),
@@ -441,8 +440,7 @@ def get_async_two_pp_clusters():
                     shared_load_a_1,
                     shared_load_b_1,
                     tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWait(load=0),
-                    tkw.WorkgroupBarrier(),
+                    tkw.MemoryCounterWaitBarrier(load=0),
                     tkw.SchedulingBarrier([]),
                 ],
             ),

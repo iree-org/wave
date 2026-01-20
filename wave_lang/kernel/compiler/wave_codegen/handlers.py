@@ -72,7 +72,7 @@ from ...ops.wave_ops import (
     log10,
     lt,
     maximum,
-    memory_counter_wait,
+    memory_counter_wait_barrier,
     minimum,
     mma,
     ne,
@@ -1783,8 +1783,8 @@ def handle_scheduling_group_barrier(emitter: WaveEmitter, node: fx.Node):
         rocdl_d.sched_group_barrier(mask, counts, sync_id)
 
 
-@handle_op(memory_counter_wait)
-def handle_memory_counter_wait(emitter: WaveEmitter, node: fx.Node):
+@handle_op(memory_counter_wait_barrier)
+def handle_memory_counter_wait_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
         load, store, ds, exp = node.args
     except ValueError as e:
@@ -1795,12 +1795,16 @@ def handle_memory_counter_wait(emitter: WaveEmitter, node: fx.Node):
     def to_attr(v):
         return None if v is None else get_constant_attr(v, i32)
 
+    # Emit memory counter wait
     amdgpu_d.memory_counter_wait(
         load=to_attr(load),
         store=to_attr(store),
         ds=to_attr(ds),
         exp=to_attr(exp),
     )
+
+    # Emit workgroup barrier
+    rocdl_d.s_barrier()
 
 
 @handle_op(workgroup_barrier)
