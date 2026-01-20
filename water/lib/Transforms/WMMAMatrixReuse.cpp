@@ -230,13 +230,23 @@ private:
   /// sequences.
   void processBlock(Block *block) {
     SmallVector<Operation *> currentSequence;
+    llvm::SmallDenseSet<Value> producedValues;
 
     for (Operation &op : llvm::make_early_inc_range(*block)) {
       if (isMatrixMultiplyOp(&op)) {
+        for (Value result : op.getResults())
+          producedValues.insert(result);
+
         currentSequence.push_back(&op);
+      } else if (isPure(&op) && !llvm::any_of(op.getOperands(), [&](Value arg) {
+                   return producedValues.contains(arg);
+                 })) {
+        // Allow mmas to move around the pure ops.
+        continue;
       } else if (!currentSequence.empty()) {
         // Non-matmul op encountered, process the current sequence.
         processConsecutiveMatmulOps(currentSequence);
+        producedValues.clear();
         currentSequence.clear();
       }
     }
@@ -319,6 +329,7 @@ private:
 
     // Reorder operations in the IR.
     Operation *insertPoint = ops[0];
+    insertPoint->moveAfter(ops.back());
     for (Operation *op : scheduled) {
       if (op != insertPoint)
         op->moveAfter(insertPoint);
