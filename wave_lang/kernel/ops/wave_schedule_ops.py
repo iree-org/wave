@@ -1012,15 +1012,9 @@ class Stagger(CustomScheduleOp):
             mid_wave_reg = _get_graph_node(
                 NewScalar(mid_wave, tkl.i32), graph, location
             )
-            wave_id_reg = _get_graph_node(
-                NewScalar(wave_id, tkl.i32), graph, location
-            )
-            is_wave_hi = _get_graph_node(
-                Ge(wave_id_reg, mid_wave_reg), graph, location
-            )
-            is_wave_lo = _get_graph_node(
-                Lt(wave_id_reg, mid_wave_reg), graph, location
-            )
+            wave_id_reg = _get_graph_node(NewScalar(wave_id, tkl.i32), graph, location)
+            is_wave_hi = _get_graph_node(Ge(wave_id_reg, mid_wave_reg), graph, location)
+            is_wave_lo = _get_graph_node(Lt(wave_id_reg, mid_wave_reg), graph, location)
 
         # Insert conditional barriers using the typed fx.Node conditions
         with graph.inserting_before(target_node):
