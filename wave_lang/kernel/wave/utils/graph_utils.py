@@ -232,11 +232,13 @@ def get_users(
     return users, region
 
 
-def propagate_placeholders(n: fx.Node | tuple) -> fx.Node | tuple:
+def propagate_placeholders(n: fx.Node | tuple | None) -> fx.Node | tuple | None:
     """
     Returns the captured node of a placeholder if it exists.
     Handles tuples by recursively propagating each element.
     """
+    if n is None:
+        return None
     if isinstance(n, (tuple, list)):
         return type(n)(propagate_placeholders(elem) for elem in n)
     c = get_custom(n)
@@ -354,12 +356,12 @@ def get_inputs(
             inputs.append(input)
 
     inputs = [propagate_placeholders(i) for i in inputs if i is not None]
-    # Flatten any tuples/lists in inputs
+    # Flatten any tuples/lists in inputs and filter out None values
     flattened_inputs = []
     for inp in inputs:
         if isinstance(inp, (tuple, list)):
-            flattened_inputs.extend(inp)
-        else:
+            flattened_inputs.extend(x for x in inp if x is not None)
+        elif inp is not None:
             flattened_inputs.append(inp)
     return flattened_inputs, region
 
