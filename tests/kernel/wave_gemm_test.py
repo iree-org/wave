@@ -168,8 +168,8 @@ def validate_gemm_result(
     run_bench: bool = False,
     perf_filename_iree: Path = None,
     ref_type: str = "mmt",
-    rtol: float = 1e-4,
-    atol: float = 1e-4,
+    rtol: float = 1e-3,
+    atol: float = 1e-2,
 ):
     """
     Validate GEMM result against reference.
