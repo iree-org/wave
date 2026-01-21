@@ -625,9 +625,7 @@ def testGemmSmallTiles(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    validate_gemm_result(
-        a, b, c, options, run_bench, perf_filename_iree, atol=2e-4, rtol=1e-5
-    )
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
