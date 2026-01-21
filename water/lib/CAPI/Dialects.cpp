@@ -73,18 +73,15 @@ MlirType mlirWaveTensorTypeGet(MlirContext mlirCtx, MlirAttribute *shapeSymbols,
   MLIRContext *ctx = unwrap(mlirCtx);
   assert((numShapeSymbols == 0 || shapeSymbols) &&
          "expected non-null shapeSymbols when numShapeSymbols > 0");
-  llvm::ArrayRef<MlirAttribute> symbols(shapeSymbols, numShapeSymbols);
-  llvm::SmallVector<Attribute> shapeAttrs = llvm::map_to_vector(
-      symbols, [](MlirAttribute attr) { return unwrap(attr); });
+  llvm::SmallVector<Attribute> shapeAttrs;
+  shapeAttrs.reserve(numShapeSymbols);
+  unwrapList(numShapeSymbols, shapeSymbols, shapeAttrs);
   assert(llvm::all_of(shapeAttrs, llvm::IsaPred<wave::WaveSymbolAttr>) &&
          "expected shapeSymbols to contain only WaveSymbolAttr values");
   assert(llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(addressSpace)) &&
          "expected addressSpace to be a WaveAddressSpaceAttr");
-  llvm::SmallVector<wave::WaveSymbolAttr> shape;
-  shape.reserve(symbols.size());
-  for (MlirAttribute attr : symbols) {
-    shape.push_back(llvm::cast<wave::WaveSymbolAttr>(unwrap(attr)));
-  }
+  SmallVector<wave::WaveSymbolAttr> shape =
+      llvm::map_to_vector(shapeAttrs, llvm::CastTo<wave::WaveSymbolAttr>);
   auto addrAttr = llvm::cast<wave::WaveAddressSpaceAttr>(unwrap(addressSpace));
   return wrap(wave::WaveTensorType::get(ctx, shape, fullySpecified,
                                         unwrap(elementType), addrAttr));
