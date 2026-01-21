@@ -53,6 +53,17 @@ FIXED_PARAMS = {
 # ============================================================================
 # These parameters vary across benchmark runs.
 
+# Attention variants to test
+# Options: "fp16" (vanilla FP16), "fp8" (quantized FP8)
+ATTENTION_VARIANTS = ["fp16", "fp8"]
+
+# FP8 quantization scaling factors (used when variant="fp8")
+FP8_SCALE_PARAMS = {
+    "q_scale": 1.0,
+    "k_scale": 1.0,
+    "v_scale": 1.0,
+}
+
 # Causal mask configurations to test
 CAUSAL_VALUES = [0, 1]  # 0 = non-causal, 1 = causal
 
@@ -107,6 +118,7 @@ def benchmark_attention(
     seq_len_k: int,
     head_dim: int,
     is_causal: bool,
+    variant: str,
     num_warmup: int,
     num_iterations: int,
     dtype: torch.dtype,
@@ -114,6 +126,9 @@ def benchmark_attention(
 ) -> Dict[str, Any]:
     """
     Benchmark Wave attention with given parameters.
+
+    Args:
+        variant: "fp16" for vanilla FP16 attention, "fp8" for quantized FP8 attention
 
     Returns:
         Dictionary containing benchmark results including timing information.
@@ -123,9 +138,27 @@ def benchmark_attention(
         batch_size, num_heads, seq_len_q, seq_len_k, head_dim, dtype, device
     )
 
+    # Select the appropriate attention function based on variant
+    if variant == "fp16":
+        attention_func = lambda q, k, v: wave_nn.functional.wave_sdpa(
+            q, k, v, is_causal=is_causal
+        )
+    elif variant == "fp8":
+        attention_func = lambda q, k, v: wave_nn.functional.wave_sdpa_fp8(
+            q,
+            k,
+            v,
+            q_scale=FP8_SCALE_PARAMS["q_scale"],
+            k_scale=FP8_SCALE_PARAMS["k_scale"],
+            v_scale=FP8_SCALE_PARAMS["v_scale"],
+            is_causal=is_causal,
+        )
+    else:
+        raise ValueError(f"Unknown variant: {variant}")
+
     # Warmup phase
     for _ in range(num_warmup):
-        _ = wave_nn.functional.wave_sdpa(query, key, value, is_causal=is_causal)
+        _ = attention_func(query, key, value)
     torch.cuda.synchronize()
 
     # Benchmark phase
@@ -134,7 +167,7 @@ def benchmark_attention(
 
     for i in range(num_iterations):
         start_events[i].record()
-        _ = wave_nn.functional.wave_sdpa(query, key, value, is_causal=is_causal)
+        _ = attention_func(query, key, value)
         end_events[i].record()
 
     torch.cuda.synchronize()
@@ -153,6 +186,7 @@ def benchmark_attention(
     throughput_tflops = flops / (avg_time_ms / 1000) / 1e12
 
     return {
+        "variant": variant,
         "batch_size": batch_size,
         "num_heads": num_heads,
         "seq_len_q": seq_len_q,
@@ -183,40 +217,46 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     print(f"  Warmup Iterations: {DEFAULT_PARAMS['num_warmup']}")
     print(f"  Benchmark Iterations: {DEFAULT_PARAMS['num_iterations']}")
     print(f"  Device: {DEFAULT_PARAMS['device']}")
+    print(f"\nVariants to Test: {', '.join(ATTENTION_VARIANTS)}")
+    if "fp8" in ATTENTION_VARIANTS:
+        print(f"  FP8 Scales: q={FP8_SCALE_PARAMS['q_scale']}, "
+              f"k={FP8_SCALE_PARAMS['k_scale']}, v={FP8_SCALE_PARAMS['v_scale']}")
     print("\n" + "=" * 80)
 
-    total_configs = len(CAUSAL_VALUES) * len(BATCH_SEQLEN_PAIRS)
+    total_configs = len(ATTENTION_VARIANTS) * len(CAUSAL_VALUES) * len(BATCH_SEQLEN_PAIRS)
     current_config = 0
 
-    for is_causal in CAUSAL_VALUES:
-        for batch_size, seq_len in BATCH_SEQLEN_PAIRS:
-            current_config += 1
-            print(
-                f"\n[{current_config}/{total_configs}] Running: "
-                f"B={batch_size}, N_CTX={seq_len}, causal={is_causal}"
-            )
-
-            try:
-                result = benchmark_attention(
-                    batch_size=batch_size,
-                    num_heads=FIXED_PARAMS["num_heads"],
-                    seq_len_q=seq_len,
-                    seq_len_k=seq_len,
-                    head_dim=FIXED_PARAMS["head_dim"],
-                    is_causal=bool(is_causal),
-                    num_warmup=DEFAULT_PARAMS["num_warmup"],
-                    num_iterations=DEFAULT_PARAMS["num_iterations"],
-                    dtype=DEFAULT_PARAMS["dtype"],
-                    device=DEFAULT_PARAMS["device"],
-                )
-                results.append(result)
+    for variant in ATTENTION_VARIANTS:
+        for is_causal in CAUSAL_VALUES:
+            for batch_size, seq_len in BATCH_SEQLEN_PAIRS:
+                current_config += 1
                 print(
-                    f"  ✓ Avg Time: {result['avg_time_ms']:.3f} ms, "
-                    f"Throughput: {result['throughput_tflops']:.2f} TFLOPs"
+                    f"\n[{current_config}/{total_configs}] Running: "
+                    f"variant={variant}, B={batch_size}, N_CTX={seq_len}, causal={is_causal}"
                 )
-            except Exception as e:
-                print(f"  ✗ Error: {e}")
-                # Continue with other configurations even if one fails
+
+                try:
+                    result = benchmark_attention(
+                        batch_size=batch_size,
+                        num_heads=FIXED_PARAMS["num_heads"],
+                        seq_len_q=seq_len,
+                        seq_len_k=seq_len,
+                        head_dim=FIXED_PARAMS["head_dim"],
+                        is_causal=bool(is_causal),
+                        variant=variant,
+                        num_warmup=DEFAULT_PARAMS["num_warmup"],
+                        num_iterations=DEFAULT_PARAMS["num_iterations"],
+                        dtype=DEFAULT_PARAMS["dtype"],
+                        device=DEFAULT_PARAMS["device"],
+                    )
+                    results.append(result)
+                    print(
+                        f"  ✓ Avg Time: {result['avg_time_ms']:.3f} ms, "
+                        f"Throughput: {result['throughput_tflops']:.2f} TFLOPs"
+                    )
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
+                    # Continue with other configurations even if one fails
 
     return results
 
@@ -246,6 +286,7 @@ def save_results_csv(results: List[Dict[str, Any]], filename: str):
         return
 
     fieldnames = [
+        "variant",
         "batch_size",
         "num_heads",
         "seq_len_q",
@@ -273,21 +314,22 @@ def print_results_table(results: List[Dict[str, Any]]):
         print("\nNo results to display")
         return
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 90)
     print("BENCHMARK RESULTS")
-    print("=" * 80)
+    print("=" * 90)
 
     # Header
     header = (
-        f"{'Batch':>6} {'SeqLen':>7} {'Causal':>7} "
+        f"{'Variant':>8} {'Batch':>6} {'SeqLen':>7} {'Causal':>7} "
         f"{'Avg(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} {'TFLOPs':>10}"
     )
     print(header)
-    print("-" * 80)
+    print("-" * 90)
 
     # Results
     for result in results:
         row = (
+            f"{result['variant']:>8} "
             f"{result['batch_size']:>6} "
             f"{result['seq_len_q']:>7} "
             f"{result['is_causal']:>7} "
@@ -298,7 +340,7 @@ def print_results_table(results: List[Dict[str, Any]]):
         )
         print(row)
 
-    print("=" * 80)
+    print("=" * 90)
 
 
 def main():
