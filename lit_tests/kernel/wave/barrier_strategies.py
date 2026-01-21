@@ -86,6 +86,33 @@ def insert_barrier_before_first_shared_read(graph: fx.Graph):
     return False
 
 
+def insert_memory_counter_wait_barrier_before_first_shared_read(graph: fx.Graph):
+    """
+    Find the first read from shared memory and insert a MemoryCounterWaitBarrier before it.
+    This simulates a pre-existing combined barrier in the graph.
+    """
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, Read) and custom.write_dependency is not None:
+            # This is a read from shared memory (has write dependency)
+            with graph.inserting_before(node):
+                MemoryCounterWaitBarrier(load=0).add_to_graph(
+                    graph, loc=custom.location
+                )
+            return True
+    return False
+
+
+def count_memory_counter_wait_barriers(graph: fx.Graph) -> int:
+    """Count the number of MemoryCounterWaitBarrier nodes in the graph."""
+    count = 0
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, MemoryCounterWaitBarrier):
+            count += 1
+    return count
+
+
 # Input sizes
 M = tkl.sym.M
 N = tkl.sym.N
@@ -472,6 +499,88 @@ def test_manual_barriers_prevent_sync_regions():
     # CHECK: Sync regions with manual barriers: {{[0-9]}}
     # CHECK: VALIDATION SUCCESS: Manual barriers prevented sync region creation
     # CHECK-NOT: VALIDATION FAIL
+
+
+@run_test
+def test_memory_counter_wait_barrier_prevents_redundant_barrier():
+    """
+    Test that when a MemoryCounterWaitBarrier already exists between producer and consumer,
+    the barrier placement pass does not insert an additional SharedMemoryBarrier.
+    This tests that MemoryCounterWaitBarrier (which emits amdgpu.memory_counter_wait + rocdl.s.barrier)
+    is correctly recognized as providing sufficient synchronization, preventing redundant barrier insertion.
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(1, 1, 1), vector_shapes={M: 16, N: 16}
+        )
+    ]
+
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        add_get_results(trace)
+        infer_types(trace)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        tweak_index(graph)
+
+        # Manually insert a MemoryCounterWaitBarrier before calling add_shared_memory_barriers
+        # This should be recognized and prevent duplicate barrier insertion
+        inserted = insert_memory_counter_wait_barrier_before_first_shared_read(graph)
+        assert inserted, "Failed to insert pre-existing MemoryCounterWaitBarrier"
+
+        # Count MemoryCounterWaitBarriers and SharedMemoryBarriers before
+        mcw_barriers_before = count_memory_counter_wait_barriers(graph)
+        shared_barriers_before = count_barriers(graph)
+
+        # Now run barrier placement - it should detect the existing MemoryCounterWaitBarrier
+        # and NOT insert an additional SharedMemoryBarrier (since synchronization is already provided)
+        add_shared_memory_barriers(trace)
+
+        # Count barriers after
+        mcw_barriers_after = count_memory_counter_wait_barriers(graph)
+        shared_barriers_after = count_barriers(graph)
+
+        print_trace(trace, False)
+
+        print(f"MemoryCounterWaitBarriers before: {mcw_barriers_before}")
+        print(f"MemoryCounterWaitBarriers after: {mcw_barriers_after}")
+        print(f"SharedMemoryBarriers before: {shared_barriers_before}")
+        print(f"SharedMemoryBarriers after: {shared_barriers_after}")
+
+    # The graph should have the manual MemoryCounterWaitBarrier
+    # and NO additional SharedMemoryBarrier (amdgpu.lds_barrier) should be added
+    # since the MemoryCounterWaitBarrier already provides synchronization
+    # CHECK-LABEL: test_memory_counter_wait_barrier_prevents_redundant_barrier
+    # CHECK: %allocate
+    # CHECK: %write_1_shared_M:0_N:0
+    # CHECK: %write_1_shared_M:0_N:1
+    # CHECK: %write_1_shared_M:1_N:0
+    # CHECK: %write_1_shared_M:1_N:1
+    # CHECK: %memory_counter_wait_barrier
+    # CHECK-NEXT: %read_1_shared_M:0_N:0
+    # CHECK: %read_1_shared_M:0_N:1
+    # CHECK: %read_1_shared_M:1_N:0
+    # CHECK: %read_1_shared_M:1_N:1
+
+    # Verify the MemoryCounterWaitBarrier remains (count: 1 before and after)
+    # and no redundant SharedMemoryBarrier was added (count: 0 before and after)
+    # CHECK: MemoryCounterWaitBarriers before: 1
+    # CHECK: MemoryCounterWaitBarriers after: 1
+    # CHECK: SharedMemoryBarriers before: 0
+    # CHECK: SharedMemoryBarriers after: 0
 
 
 if __name__ == "__main__":

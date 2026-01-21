@@ -487,7 +487,7 @@ def is_barrier_between_same_graph(
             if custom_next_node.barId == barId and barId in barrier_check:
                 return next_node
 
-        # Check for MemoryCounterWaitBarrier
+        # Check for MemoryCounterWaitBarrier (amdgpu.memory_counter_wait + rocdl.s.barrier)
         if isinstance(custom_next_node, MemoryCounterWaitBarrier):
             return next_node
 
