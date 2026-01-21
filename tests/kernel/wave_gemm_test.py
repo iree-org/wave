@@ -180,16 +180,20 @@ def validate_gemm_result(
     Args:
         ref_type: IREE reference type ("mmt", "bmmt", "mmt_f8")
     """
+    out_dtype = c.dtype
+
     if is_gfx1250():
         # Use torch reference for GFX1250
+        # Use float32 for computation, then cast to output dtype
         torch_ref = a.cpu().to(torch.float32) @ b.cpu().T.to(torch.float32)
+        torch_ref = torch_ref.to(out_dtype)
         assert_close(c.cpu(), torch_ref, rtol=rtol, atol=atol)
     else:
         # Use IREE reference for other architectures
         if run_bench and perf_filename_iree is not None:
             options.benchmark_results_file = perf_filename_iree
 
-        iree_ref = device_zeros(c.shape[0], c.shape[1], dtype=torch.float32)
+        iree_ref = device_zeros(c.shape[0], c.shape[1], dtype=out_dtype)
         generate_iree_ref(ref_type, [a, b], [iree_ref], options)
         assert_close(c, iree_ref, check_device=False, rtol=rtol, atol=atol)
 
@@ -622,7 +626,7 @@ def testGemmSmallTiles(
     gemm(a, b, c)
 
     validate_gemm_result(
-        c, a, b, options, run_bench, perf_filename_iree, atol=2e-4, rtol=1e-5
+        a, b, c, options, run_bench, perf_filename_iree, atol=2e-4, rtol=1e-5
     )
 
 
