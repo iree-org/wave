@@ -761,7 +761,8 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<CastOpLoweringPattern, ExtractOpLoweringPattern,
                ExtractSliceOpLoweringPattern, IterateOpLoweringPattern,
-               RegisterOpLoweringPattern,         ShuffleOpLoweringPattern>(typeConverter, patterns.getContext());
+               RegisterOpLoweringPattern, ShuffleOpLoweringPattern>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
