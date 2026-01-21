@@ -623,11 +623,30 @@ def _emit_ops_from_graph(
                     )
                     mlir_op = op_builder(result_type, *mlir_operands, kind=mma_kind)
                 elif isinstance(node, Allocate):
+                    # Get parent value from value_map if it exists.
+                    parent_value = None
+                    offset_attr = None
+                    if node.parent is not None:
+                        parent_value = value_map.get(node.parent)
+                        if parent_value is None:
+                            raise RuntimeError(
+                                f"Parent node {node.parent} not found in value_map for Allocate op"
+                            )
+                        # Offset must be present when parent is present.
+                        if node.offset is None:
+                            raise RuntimeError(
+                                "Allocate op has parent but missing offset"
+                            )
+                        offset_attr = ir.IntegerAttr.get(
+                            ir.IntegerType.get_signless(64), int(node.offset)
+                        )
                     mlir_op = op_builder(
                         result_type,
+                        parent=parent_value,
                         distributed_shape=_convert_to_wave_expr_list_tuple(
                             node.distributed_shape
                         ),
+                        offset=offset_attr,
                     )
                 elif isinstance(node, ExtractSlice):
                     size = _convert_to_wave_expr_list_tuple(node.size)

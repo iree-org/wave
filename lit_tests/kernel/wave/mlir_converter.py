@@ -359,6 +359,7 @@ def mlir_converter_matmul():
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
+        minimize_shared_allocs=True,  # Test allocate with parent/offset.
     )
     options = set_default_run_config(options)
 
@@ -416,19 +417,33 @@ def mlir_converter_matmul():
     # CHECK-SAME: #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 2)>>
     # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_32x32x8_f16>>
     # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 32 : i64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, K = 640 : i64, M = 1024 : i64, N = 5120 : i64}>
+    #
+    # With minimize_shared_allocs enabled, the first allocate is the parent (combined buffer)
+    # and subsequent allocates reference it with "in %parent" and an offset attribute.
+    #
     # CHECK-NEXT: %[[ALLOCATE:.*]] = wave.allocate
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-NEXT: %[[CST_0:.*]] = arith.constant 0.000000e+00 : f32
     # CHECK-NEXT: %[[REG:.*]] = wave.register %[[CST_0]]
-    # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate
     #
+    # Child allocation with parent reference and offset.
     # Symbols related to induction variables must be dropped from the mapping. This is a bug in the
     # Python propagation algorithm that is immediately caught by the verifier on construction.
     #
-    # CHECK-SAME:   index =
-    # CHECK-SAME:     K = #wave<index_mapping
-    # CHECK-NOT:      ARGK
+    # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: index =
+    # CHECK-SAME: K = #wave<index_mapping
+    # CHECK-NOT:  ARGK
+    # CHECK-SAME: offset =
     #
-    # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate
+    # Another child allocation with parent reference and offset.
+    #
+    # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: index =
+    # CHECK-SAME: offset =
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]
