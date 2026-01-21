@@ -27,6 +27,38 @@ MLIR_CAPI_EXPORTED void mlirWaveDialectRegisterPasses();
 MLIR_CAPI_EXPORTED extern const char *const mlirWaveDialectConstraintsAttrName;
 
 //===---------------------------------------------------------------------===//
+// WaveTensorType
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR type is a WaveTensorType.
+MLIR_CAPI_EXPORTED bool mlirTypeIsAWaveTensorType(MlirType type);
+
+/// Returns the typeID of a WaveTensorType.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveTensorTypeGetTypeID();
+
+/// Returns true if the WaveTensorType is fully specified.
+MLIR_CAPI_EXPORTED bool mlirWaveTensorTypeGetFullySpecified(MlirType type);
+
+/// Returns the number of symbols in the WaveTensorType shape.
+MLIR_CAPI_EXPORTED intptr_t mlirWaveTensorTypeGetShapeSize(MlirType type);
+
+/// Returns the symbol at the given index in the WaveTensorType shape.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveTensorTypeGetShapeSymbol(MlirType type, intptr_t index);
+
+/// Returns the element type of the WaveTensorType.
+MLIR_CAPI_EXPORTED MlirType mlirWaveTensorTypeGetElementType(MlirType type);
+
+/// Returns the address space attribute of the WaveTensorType.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveTensorTypeGetAddressSpace(MlirType type);
+
+/// Creates a WaveTensorType from shape symbols and element/address space.
+MLIR_CAPI_EXPORTED MlirType mlirWaveTensorTypeGet(
+    MlirContext mlirCtx, MlirAttribute *shapeSymbols, intptr_t numShapeSymbols,
+    bool fullySpecified, MlirType elementType, MlirAttribute addressSpace);
+
+//===---------------------------------------------------------------------===//
 // WaveSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -315,6 +347,10 @@ mlirAttributeIsAWaveReadWriteBoundsAttr(MlirAttribute attr);
 /// dimensions to their bound expressions.
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping);
+
+/// Gets the underlying dictionary mapping from a WaveReadWriteBoundsAttr.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveReadWriteBoundsAttrGetMapping(MlirAttribute attr);
 
 /// Returns the typeID of a WaveReadWriteBoundsAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID();

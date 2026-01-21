@@ -19,6 +19,57 @@
 namespace nb = nanobind;
 
 //===---------------------------------------------------------------------===//
+// WaveTensorType
+//===---------------------------------------------------------------------===//
+
+struct PyWaveTensorType
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteType<
+          PyWaveTensorType> {
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAWaveTensorType;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveTensorTypeGetTypeID;
+  static constexpr const char *pyClassName = "WaveTensorType";
+  using PyConcreteType::PyConcreteType;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](std::vector<MlirAttribute> &shapeSymbols, bool fullySpecified,
+           MlirType elementType, MlirAttribute addressSpace,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveTensorType(
+              context->getRef(),
+              mlirWaveTensorTypeGet(context->get(), shapeSymbols.data(),
+                                    shapeSymbols.size(), fullySpecified,
+                                    elementType, addressSpace));
+        },
+        nb::arg("shape_symbols"), nb::arg("fully_specified"),
+        nb::arg("element_type"), nb::arg("address_space"),
+        nb::arg("context") = nb::none(),
+        "Gets a wave.WaveTensorType from parameters.");
+    c.def_prop_ro("fully_specified", [](MlirType self) {
+      return mlirWaveTensorTypeGetFullySpecified(self);
+    });
+    c.def_prop_ro("shape", [](MlirType self) {
+      std::vector<MlirAttribute> symbols;
+      intptr_t size = mlirWaveTensorTypeGetShapeSize(self);
+      symbols.reserve(size);
+      for (intptr_t i = 0; i < size; ++i) {
+        symbols.push_back(mlirWaveTensorTypeGetShapeSymbol(self, i));
+      }
+      return symbols;
+    });
+    c.def_prop_ro("element_type", [](MlirType self) {
+      return mlirWaveTensorTypeGetElementType(self);
+    });
+    c.def_prop_ro("address_space", [](MlirType self) {
+      return mlirWaveTensorTypeGetAddressSpace(self);
+    });
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -526,6 +577,9 @@ struct PyWaveReadWriteBoundsAttr
         },
         nb::arg("sym_dim_dict"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveReadWriteBoundsAttr from parameters.");
+    c.def_prop_ro("mapping", [](MlirAttribute self) {
+      return mlirWaveReadWriteBoundsAttrGetMapping(self);
+    });
   }
 };
 
@@ -854,6 +908,7 @@ NB_MODULE(_waterDialects, m) {
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
   PyWaveReadWriteBoundsAttr::bind(d);
+  PyWaveTensorType::bind(d);
   PyHardwareConstraintAttr::bind(d);
   PyDeviceConstraintAttr::bind(d);
   PyWorkgroupConstraintAttr::bind(d);

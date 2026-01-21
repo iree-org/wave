@@ -12,6 +12,7 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/c/Dialects.h"
 
@@ -31,6 +32,63 @@ void mlirWaveDialectRegisterPasses() { wave::registerPasses(); }
 
 const char *const mlirWaveDialectConstraintsAttrName =
     wave::WaveDialect::kWaveConstraintsAttrName.data();
+
+//===---------------------------------------------------------------------===//
+// WaveTensorType
+//===---------------------------------------------------------------------===//
+
+bool mlirTypeIsAWaveTensorType(MlirType type) {
+  return llvm::isa<wave::WaveTensorType>(unwrap(type));
+}
+
+MlirTypeID mlirWaveTensorTypeGetTypeID() {
+  return wrap(TypeID::get<wave::WaveTensorType>());
+}
+
+bool mlirWaveTensorTypeGetFullySpecified(MlirType type) {
+  return llvm::cast<wave::WaveTensorType>(unwrap(type)).getFullySpecified();
+}
+
+intptr_t mlirWaveTensorTypeGetShapeSize(MlirType type) {
+  return llvm::cast<wave::WaveTensorType>(unwrap(type)).getShape().size();
+}
+
+MlirAttribute mlirWaveTensorTypeGetShapeSymbol(MlirType type, intptr_t index) {
+  auto tensorType = llvm::cast<wave::WaveTensorType>(unwrap(type));
+  return wrap(tensorType.getShape()[index]);
+}
+
+MlirType mlirWaveTensorTypeGetElementType(MlirType type) {
+  return wrap(llvm::cast<wave::WaveTensorType>(unwrap(type)).getElementType());
+}
+
+MlirAttribute mlirWaveTensorTypeGetAddressSpace(MlirType type) {
+  return wrap(llvm::cast<wave::WaveTensorType>(unwrap(type)).getAddressSpace());
+}
+
+MlirType mlirWaveTensorTypeGet(MlirContext mlirCtx, MlirAttribute *shapeSymbols,
+                               intptr_t numShapeSymbols, bool fullySpecified,
+                               MlirType elementType,
+                               MlirAttribute addressSpace) {
+  MLIRContext *ctx = unwrap(mlirCtx);
+  assert((numShapeSymbols == 0 || shapeSymbols) &&
+         "expected non-null shapeSymbols when numShapeSymbols > 0");
+  llvm::ArrayRef<MlirAttribute> symbols(shapeSymbols, numShapeSymbols);
+  llvm::SmallVector<Attribute> shapeAttrs = llvm::map_to_vector(
+      symbols, [](MlirAttribute attr) { return unwrap(attr); });
+  assert(llvm::all_of(shapeAttrs, llvm::IsaPred<wave::WaveSymbolAttr>) &&
+         "expected shapeSymbols to contain only WaveSymbolAttr values");
+  assert(llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(addressSpace)) &&
+         "expected addressSpace to be a WaveAddressSpaceAttr");
+  llvm::SmallVector<wave::WaveSymbolAttr> shape;
+  shape.reserve(symbols.size());
+  for (MlirAttribute attr : symbols) {
+    shape.push_back(llvm::cast<wave::WaveSymbolAttr>(unwrap(attr)));
+  }
+  auto addrAttr = llvm::cast<wave::WaveAddressSpaceAttr>(unwrap(addressSpace));
+  return wrap(wave::WaveTensorType::get(ctx, shape, fullySpecified,
+                                        unwrap(elementType), addrAttr));
+}
 
 //===---------------------------------------------------------------------===//
 // WaveSymbolAttr
@@ -327,6 +385,11 @@ MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
          "expected mapping to contain only WaveExprListAttr values");
 
   return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
+}
+
+MlirAttribute mlirWaveReadWriteBoundsAttrGetMapping(MlirAttribute attr) {
+  return wrap(
+      llvm::cast<wave::WaveReadWriteBoundsAttr>(unwrap(attr)).getMapping());
 }
 
 MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID() {
