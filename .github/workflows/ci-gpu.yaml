@@ -36,14 +36,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        version: [3.11]
         runs-on: [linux-mi325-1gpu-ossci-iree-org]
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 240 # Building LLVM can take multiple hours on public GH runners
     steps:
       - name: Checkout repo
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-        with:
-          fetch-depth: 0
 
       - name: Setup Cache Vars
         run: |
@@ -59,9 +58,15 @@ jobs:
       - name: Setup env
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
         run: |
-          sudo apt update
-          sudo apt install -y ninja-build cmake clang lld dwarfdump
-          pip install -r water/requirements-dev.txt
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld dwarfdump
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: ${{matrix.version}}
+          pip-install: -r water/requirements-dev.txt
 
       - name: Checkout LLVM
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
@@ -252,6 +257,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        version: [3.11]
         name: [linux-mi325-1gpu-ossci-iree-org]
         shared_libs: ["ON", "OFF"]
     runs-on: ${{ matrix.name }}
@@ -266,9 +272,15 @@ jobs:
 
       - name: Setup env
         run: |
-          sudo apt update
-          sudo apt install -y ninja-build cmake clang lld
-          pip install -r water/requirements-dev.txt
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: ${{matrix.version}}
+          pip-install: -r water/requirements-dev.txt
 
       - name: Setup Cache Vars
         run: |
