@@ -107,7 +107,8 @@ func.func @iterate_iter_args_block_iter_args_mismatch(%arg0: !wave.tensor<any of
 // -----
 
 func.func @iterate_iter_arg_block_arg_element_type_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{expected iter arg #0 and block iter arg #0 elemental types to match, got 'f32', 'bf16'}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A] of bf16>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A] of bf16>):
     wave.yield %arg1 : !wave.tensor<[@A] of bf16>
@@ -117,7 +118,8 @@ func.func @iterate_iter_arg_block_arg_element_type_mismatch(%arg0: !wave.tensor<
 // -----
 
 func.func @iterate_iter_arg_block_arg_rank_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{rank mismatch between iter arg #0 and block iter arg #0}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A, @B] of f32>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A, @B] of f32>):
     wave.yield %arg1 : !wave.tensor<[@A, @B] of f32>
@@ -137,7 +139,8 @@ func.func @iterate_iter_arg_block_arg_shape_mismatch(%arg0: !wave.tensor<[@A] of
 // -----
 
 func.func @iterate_iter_arg_block_arg_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <register>>) {
-  // expected-error @below {{address space mismatch between iter arg #0 and block iter arg #0}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32, <register>>' should match successor input type #0 '!wave.tensor<[@A] of f32, <shared>>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A] of f32, <shared>>):
     wave.yield %arg1 : !wave.tensor<[@A] of f32, <shared>>
@@ -147,7 +150,8 @@ func.func @iterate_iter_arg_block_arg_address_space_mismatch(%arg0: !wave.tensor
 // -----
 
 func.func @iterate_iter_arg_result_element_type_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{expected result #0 and terminator operand #0 elemental types to match, got 'bf16', 'f32'}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A] of bf16>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A] of f32>):
     wave.yield %arg1 : !wave.tensor<[@A] of f32>
@@ -157,7 +161,8 @@ func.func @iterate_iter_arg_result_element_type_mismatch(%arg0: !wave.tensor<[@A
 // -----
 
 func.func @iterate_iter_arg_result_rank_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{rank mismatch between result #0 and terminator operand #0}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A, @B] of f32>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A] of f32>):
     wave.yield %arg1 : !wave.tensor<[@A] of f32>
@@ -177,7 +182,8 @@ func.func @iterate_iter_arg_result_shape_mismatch(%arg0: !wave.tensor<[@A] of f3
 // -----
 
 func.func @iterate_iter_arg_result_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <register>>) {
-  // expected-error @below {{address space mismatch between result #0 and terminator operand #0}}
+  // expected-error @below {{along control flow edge from parent to parent: successor operand type #0 '!wave.tensor<[@A] of f32, <register>>' should match successor input type #0 '!wave.tensor<[@A] of f32, <shared>>'}}
+  // expected-note @below {{region branch point}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg1: !wave.tensor<[@A] of f32, <register>>):
     wave.yield %arg1 : !wave.tensor<[@A] of f32, <register>>
@@ -197,9 +203,10 @@ func.func @iterate_capture_type_mismatch(%arg0: !wave.tensor<[@A] of f32>, %capt
 // -----
 
 func.func @iterate_results_terminator_operands_mismatch(%arg0: !wave.tensor<any of f32>, %arg1: !wave.tensor<any of f32>) {
-  // expected-error @below {{expects the same number of results (1) and terminator operands (2)}}
+  // expected-error @below {{along control flow edge from Operation wave.yield to parent: region branch point has 2 operands, but region successor needs 1 inputs}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg2: !wave.tensor<any of f32>):
+    // expected-note @below {{region branch point}}
     wave.yield %arg2, %arg1 : !wave.tensor<any of f32>, !wave.tensor<any of f32>
   } : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
 }
@@ -207,9 +214,10 @@ func.func @iterate_results_terminator_operands_mismatch(%arg0: !wave.tensor<any 
 // -----
 
 func.func @iterate_result_terminator_element_type_mismatch(%arg0: !wave.tensor<[@A] of bf16>, %arg1: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{expected result #0 and terminator operand #0 elemental types to match, got 'bf16', 'f32'}}
+  // expected-error @below {{along control flow edge from Operation wave.yield to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A] of bf16>'}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg2: !wave.tensor<[@A] of bf16>):
+    // expected-note @below {{region branch point}}
     wave.yield %arg1 : !wave.tensor<[@A] of f32>
   } : (!wave.tensor<[@A] of bf16>) -> !wave.tensor<[@A] of bf16>
 }
@@ -217,9 +225,10 @@ func.func @iterate_result_terminator_element_type_mismatch(%arg0: !wave.tensor<[
 // -----
 
 func.func @iterate_result_terminator_rank_mismatch(%arg0: !wave.tensor<[@A, @B] of f32>, %arg1: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{rank mismatch between result #0 and terminator operand #0}}
+  // expected-error @below {{along control flow edge from Operation wave.yield to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@A, @B] of f32>'}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg2: !wave.tensor<[@A, @B] of f32>):
+    // expected-note @below {{region branch point}}
     wave.yield %arg1 : !wave.tensor<[@A] of f32>
   } : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A, @B] of f32>
 }
@@ -227,9 +236,10 @@ func.func @iterate_result_terminator_rank_mismatch(%arg0: !wave.tensor<[@A, @B] 
 // -----
 
 func.func @iterate_result_terminator_shape_mismatch(%arg0: !wave.tensor<[@B] of f32>, %arg1: !wave.tensor<[@A] of f32>) {
-  // expected-error @below {{expected result #0 dimension #0 (#wave.symbol<"B">) to match terminator operand #0 dimension #0 (#wave.symbol<"A">)}}
+  // expected-error @below {{along control flow edge from Operation wave.yield to parent: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@B] of f32>'}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg2: !wave.tensor<[@B] of f32>):
+    // expected-note @below {{region branch point}}
     wave.yield %arg1 : !wave.tensor<[@A] of f32>
   } : (!wave.tensor<[@B] of f32>) -> !wave.tensor<[@B] of f32>
 }
@@ -237,9 +247,10 @@ func.func @iterate_result_terminator_shape_mismatch(%arg0: !wave.tensor<[@B] of 
 // -----
 
 func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <shared>>, %arg1: !wave.tensor<[@A] of f32, <register>>) {
-  // expected-error @below {{address space mismatch between result #0 and terminator operand #0}}
+  // expected-error @below {{along control flow edge from Operation wave.yield to parent: successor operand type #0 '!wave.tensor<[@A] of f32, <register>>' should match successor input type #0 '!wave.tensor<[@A] of f32, <shared>>'}}
   wave.iterate @I iter_args(%arg0) {
   ^bb0(%arg2: !wave.tensor<[@A] of f32, <shared>>):
+    // expected-note @below {{region branch point}}
     wave.yield %arg1 : !wave.tensor<[@A] of f32, <register>>
   } : (!wave.tensor<[@A] of f32, <shared>>) -> !wave.tensor<[@A] of f32, <shared>>
 }

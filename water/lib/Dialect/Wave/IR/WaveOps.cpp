@@ -219,18 +219,22 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
 }
 
 OperandRange wave::IterateOp::getEntrySuccessorOperands(RegionSuccessor) {
-  return getOperands().drop_back(getNumOperands());
+  // Return iter_args as the entry operands (values that flow into the region).
+  return getIterArgs();
 }
 
 void wave::IterateOp::getSuccessorRegions(
     RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
+  // Exit to parent with loop results.
+  regions.emplace_back(RegionSuccessor::parent(getResults()));
+  // Branch into the loop body with iter_args mapped to block arguments.
+  // Note: captures are also block arguments but come after iter_args.
+  auto bodyArgs = getLoopBody()->getArguments();
+  auto iterArgCount = getIterArgs().size();
   regions.emplace_back(
-      RegionSuccessor(getOperation(), getResults().drop_back(getNumResults())));
-  regions.emplace_back(
-      RegionSuccessor(&getBody(), getLoopBody()->getArguments().drop_back(
-                                      getLoopBody()->getNumArguments())));
+      RegionSuccessor(&getBody(), bodyArgs.take_front(iterArgCount)));
 }
 
 llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsForward(
