@@ -8,9 +8,9 @@ import warnings
 from functools import lru_cache
 from packaging.version import Version
 import torch
-
 from wave_lang.runtime.launch import Launchable
 from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
+from wave_lang.compile_options import WaveCompileOptions
 from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
 from .utils.compile_utils import compile_to_vmfb
@@ -228,10 +228,6 @@ def dtype_str(dtype: torch.dtype) -> str:
     return dtype_str
 
 
-def get_type_str(shape: tuple[int], dtype: torch.dtype) -> str:
-    return "x".join([str(x) for x in shape] + [dtype_str(dtype)])
-
-
 @lru_cache(maxsize=128)
 def _cached_build_iree_ref(
     kernel_type: str,
@@ -253,7 +249,6 @@ def _cached_build_iree_ref(
     Caches based on kernel type, tensor shapes/dtypes, and compile options.
     Skips both ASM generation and compilation on cache hit.
     """
-    from .compile_options import WaveCompileOptions
 
     # Reconstruct type strings from specs
     def spec_to_type_str(spec):
@@ -319,16 +314,11 @@ def _cached_build_iree_ref(
     return vmfb, func_name
 
 
-def clear_iree_ref_cache():
-    """Clear the IREE reference kernel cache."""
-    _cached_build_iree_ref.cache_clear()
-
-
 def generate_iree_ref(
     kernel_type: str,
     kernel_inputs: list[torch.Tensor],
     kernel_outputs: list[torch.Tensor],
-    options: "WaveCompileOptions",
+    options: WaveCompileOptions,
     **kwargs,
 ):
     """
