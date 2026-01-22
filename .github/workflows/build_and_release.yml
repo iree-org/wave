@@ -45,11 +45,6 @@ jobs:
       IREE_CHANNEL: ${{ github.event.inputs.channel != '' && github.event.inputs.channel
                       || (github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && 'stable' || 'nightly') }}
 
-      IREE_REQ: ${{ (
-                      (github.event.inputs.channel != '' && github.event.inputs.channel == 'stable')
-                      || (github.event.inputs.channel == '' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
-                    ) && 'requirements-iree-stable.txt' || 'requirements-iree-pinned.txt' }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -100,20 +95,13 @@ jobs:
             channel="${{ github.event.inputs.channel }}"
           elif [ "${{ github.ref_type }}" = "tag" ] && [[ "${{ github.ref_name }}" == v* ]]; then
             channel="stable"
+            is_stable=1
           else
             channel="nightly"
-          fi
-
-          if [ "$channel" = "stable" ]; then
-            is_stable=1
-            req_file="requirements-iree-stable.txt"
-          else
             is_stable=0
-            req_file="requirements-iree-pinned.txt"
           fi
 
           echo "channel=$channel"   >> "$GITHUB_OUTPUT"
-          echo "req_file=$req_file" >> "$GITHUB_OUTPUT"
           echo "is_stable=$is_stable" >> "$GITHUB_OUTPUT"
 
       - name: Print channel selection
@@ -121,7 +109,6 @@ jobs:
           echo "ref_type=${{ github.ref_type }}"
           echo "ref_name=${{ github.ref_name }}"
           echo "IREE_CHANNEL=${{ steps.decide.outputs.channel }}"
-          echo "IREE_REQ=${{ steps.decide.outputs.req_file }}"
           echo "WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}"
 
       - name: Build wheels
@@ -130,29 +117,27 @@ jobs:
           CIBW_BUILD: ${{ matrix.python-version }}-${{ matrix.platform }}
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
 
-          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
-          CIBW_ENVIRONMENT: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
-          CIBW_ENVIRONMENT_WINDOWS: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH IREE_CHANNEL=${{ steps.decide.outputs.channel }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+          CIBW_ENVIRONMENT: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+          CIBW_ENVIRONMENT_WINDOWS: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
 
           # Install the right IREE deps *inside each isolated build env* before building.
           CIBW_BEFORE_BUILD: |
             set -euxo pipefail
             echo "IREE_CHANNEL=${IREE_CHANNEL}"
-            echo "IREE_REQ=${IREE_REQ}"
             echo "WAVE_IS_STABLE_REL=${WAVE_IS_STABLE_REL}"
-            [ -n "${IREE_REQ:-}" ] || { echo "IREE_REQ is empty"; exit 2; }
-            [ -f "${IREE_REQ}" ] || { echo "Missing ${IREE_REQ}"; pwd; ls -la; exit 3; }
             python -m pip install -U pip
-            python -m pip install -r "${IREE_REQ}"
+            if [ "${WAVE_IS_STABLE_REL}" -eq 0 ]; then
+              python -m pip install -r requirements-iree-pinned.txt
+            fi
 
           CIBW_BEFORE_BUILD_WINDOWS: |
             echo IREE_CHANNEL=%IREE_CHANNEL%
-            echo IREE_REQ=%IREE_REQ%
             echo WAVE_IS_STABLE_REL=%WAVE_IS_STABLE_REL%
-            if not defined IREE_REQ ( echo IREE_REQ is empty & exit /b 2 )
-            if not exist "%IREE_REQ%" ( dir & echo Missing %IREE_REQ% & exit /b 3 )
             python -m pip install -U pip
-            python -m pip install -r "%IREE_REQ%"
+            if "%WAVE_IS_STABLE_REL%"=="0" (
+              python -m pip install -r requirements-iree-pinned.txt
+            )
 
       - name: Upload python wheels
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
