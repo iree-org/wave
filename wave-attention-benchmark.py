@@ -33,7 +33,6 @@ import math
 import torch
 
 import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave.nn as wave_nn
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
@@ -84,7 +83,7 @@ FIXED_PARAMS = {
 # Options: "fp16" (vanilla FP16), "fp8" (quantized FP8)
 ATTENTION_VARIANTS = [
     "fp16",
-    #"fp8",
+    # "fp8",
 ]
 
 # FP8 quantization scaling factors (used when variant="fp8")
@@ -135,9 +134,9 @@ BATCH_SEQLEN_PAIRS = [
 #   - SchedulingType.PREFETCH: Prefetch scheduling
 #   - SchedulingType.PREFETCH_ATTENTION: Attention-specific prefetch scheduling
 SCHEDULING_STRATEGIES = [
-    #SchedulingType.NONE,
-    #SchedulingType.MODULO,
-    #SchedulingType.PREFETCH,
+    # SchedulingType.NONE,
+    # SchedulingType.MODULO,
+    # SchedulingType.PREFETCH,
     SchedulingType.PREFETCH_ATTENTION,
 ]
 
@@ -158,7 +157,7 @@ USE_SCHEDULING_BARRIERS_VALUES = [
 
 # MMA (Matrix Multiply-Accumulate) instruction variants to test
 # Different MMA types can have different performance characteristics
-# 
+#
 # The attention kernel uses two separate MMA operations:
 #   1. QK^T MMA: Computes attention scores (K × Q^T)
 #   2. Att×V MMA: Computes final output (attention_weights × V)
@@ -183,53 +182,52 @@ USE_SCHEDULING_BARRIERS_VALUES = [
 #   - RDNA4_WAVE32_F32_16x16x32_F8: RDNA4/CDNA4 16x16x32 FP8 (wave32)
 MMA_TYPES_FP16 = [
     MMAType.F32_16x16x16_F16,
-    #MMAType.F32_32x32x8_F16,
-    #MMAType.F32_16x16x32_F16,
-    #MMAType.F32_32x32x16_K8_F16,
-    #MMAType.I32_16x16x16_I8,
-    #MMAType.I32_32x32x8_I8,
+    # MMAType.F32_32x32x8_F16,
+    # MMAType.F32_16x16x32_F16,
+    # MMAType.F32_32x32x16_K8_F16,
+    # MMAType.I32_16x16x16_I8,
+    # MMAType.I32_32x32x8_I8,
     # Intrinsics introduced in CDNA3
-    #MMAType.F32_16x16x32_F8,
-    #MMAType.F32_32x32x16_F8,
-    #MMAType.F32_16x16x32_K4_F8,
-    #MMAType.F32_32x32x16_K4_F8,
-    #MMAType.I32_16x16x32_I8,
-    #MMAType.I32_32x32x16_I8,
+    # MMAType.F32_16x16x32_F8,
+    # MMAType.F32_32x32x16_F8,
+    # MMAType.F32_16x16x32_K4_F8,
+    # MMAType.F32_32x32x16_K4_F8,
+    # MMAType.I32_16x16x32_I8,
+    # MMAType.I32_32x32x16_I8,
     # Intrinsics introduced in CDNA4
     MMAType.F32_16x16x32_F16,
-    #MMAType.F32_32x32x16_F16,
-    #MMAType.F32_16x16x32_BF16,
-    #MMAType.F32_32x32x16_BF16,
+    # MMAType.F32_32x32x16_F16,
+    # MMAType.F32_16x16x32_BF16,
+    # MMAType.F32_32x32x16_BF16,
     # Intrinsics introduced in RDNA4
-    #MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+    # MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
     # Intrinsics introduced in gfx1250
-    #MMAType.GFX1250_F32_16x16x32_F16,
+    # MMAType.GFX1250_F32_16x16x32_F16,
 ]
 
 MMA_TYPES_FP8 = [
-    #MMAType.F32_16x16x16_F16,
-    #MMAType.F32_32x32x8_F16,
-    #MMAType.F32_16x16x32_F16,
-    #MMAType.F32_32x32x16_K8_F16,
-    #MMAType.I32_16x16x16_I8,
-    #MMAType.I32_32x32x8_I8,
+    # MMAType.F32_16x16x16_F16,
+    # MMAType.F32_32x32x8_F16,
+    # MMAType.F32_16x16x32_F16,
+    # MMAType.F32_32x32x16_K8_F16,
+    # MMAType.I32_16x16x16_I8,
+    # MMAType.I32_32x32x8_I8,
     # Intrinsics introduced in CDNA3
     MMAType.F32_16x16x32_F8,
-    #MMAType.F32_32x32x16_F8,
-    #MMAType.F32_16x16x32_K4_F8,
-    #MMAType.F32_32x32x16_K4_F8,
-    #MMAType.I32_16x16x32_I8,
-    #MMAType.I32_32x32x16_I8,
+    # MMAType.F32_32x32x16_F8,
+    # MMAType.F32_16x16x32_K4_F8,
+    # MMAType.F32_32x32x16_K4_F8,
+    # MMAType.I32_16x16x32_I8,
+    # MMAType.I32_32x32x16_I8,
     # Intrinsics introduced in CDNA4
-    #MMAType.F32_16x16x32_F16,
-    #MMAType.F32_32x32x16_F16,
-    #MMAType.F32_16x16x32_BF16,
-    #MMAType.F32_32x32x16_BF16,
+    # MMAType.F32_16x16x32_F16,
+    # MMAType.F32_32x32x16_F16,
+    # MMAType.F32_16x16x32_BF16,
+    # MMAType.F32_32x32x16_BF16,
     # Intrinsics introduced in RDNA4
-    #MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+    # MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
     # Intrinsics introduced in gfx1250
-    #MMAType.GFX1250_F32_16x16x32_F16,
-
+    # MMAType.GFX1250_F32_16x16x32_F16,
 ]
 
 # Tile size hyperparameters
@@ -316,7 +314,7 @@ def get_custom_wave_kernel(
 ):
     """
     Compile a Wave attention kernel with custom tuning parameters.
-    
+
     Args:
         shape: Attention shape configuration
         variant: "fp16" or "fp8"
@@ -331,13 +329,13 @@ def get_custom_wave_kernel(
         use_scheduling_barriers: Whether to use scheduling barriers
         use_buffer_ops: Whether to use buffer operations
         canonicalize: Whether to canonicalize IR
-    
+
     Returns:
         Compiled Wave kernel
     """
     # Combine MMA types into tuple for kernel API
     mfma_variant = (qk_t_mma, att_v_mma)
-    
+
     if variant == "fp16":
         (
             attention_kernel,
@@ -350,7 +348,7 @@ def get_custom_wave_kernel(
             is_causal=is_causal,
         )
         hyperparams.update(get_default_scheduling_params())
-        
+
         # Override tile sizes if different from defaults
         if block_m != 128:
             hyperparams[tkl.sym.BLOCK_M] = block_m
@@ -358,13 +356,13 @@ def get_custom_wave_kernel(
             hyperparams[tkl.sym.BLOCK_N] = block_n
         if block_k2 != 64:
             hyperparams[tkl.sym.BLOCK_K2] = block_k2
-        
+
         del hyperparams[tkl.sym.B]
         del hyperparams[tkl.sym.M]
         del hyperparams[tkl.sym.N]
         del hyperparams[tkl.sym.K2]
         dynamic_symbols = [tkl.sym.B, tkl.sym.M, tkl.sym.N, tkl.sym.K2]
-        
+
     elif variant == "fp8":
         (
             attention_kernel,
@@ -381,7 +379,7 @@ def get_custom_wave_kernel(
             f8_dtype=torch.float8_e4m3fnuz,
         )
         hyperparams.update(get_default_scheduling_params())
-        
+
         # Override tile sizes if different from defaults
         if block_m != 128:
             hyperparams[tkl.sym.BLOCK_M] = block_m
@@ -389,14 +387,14 @@ def get_custom_wave_kernel(
             hyperparams[tkl.sym.BLOCK_N] = block_n
         if block_k2 != 64:
             hyperparams[tkl.sym.BLOCK_K2] = block_k2
-        
+
         del hyperparams[tkl.sym.B]
         del hyperparams[tkl.sym.N_Q]
         del hyperparams[tkl.sym.N_KV]
         dynamic_symbols = [tkl.sym.B, tkl.sym.N_Q, tkl.sym.N_KV]
     else:
         raise ValueError(f"Unknown variant: {variant}")
-    
+
     # Create compile options with custom tuning parameters
     options = WaveCompileOptions(
         subs=hyperparams,
@@ -466,7 +464,7 @@ def benchmark_attention(
     flat_q_shape = [flattened_batch_size, query.shape[-2], query.shape[-1]]
     flat_kv_shape = [flattened_batch_size, key.shape[-2], key.shape[-1]]
     flat_o_shape = [flattened_batch_size, query.shape[-2], key.shape[-1]]
-    
+
     shape = AttentionShape(
         num_query_heads=flattened_batch_size,
         num_kv_heads=flattened_batch_size,
@@ -475,7 +473,7 @@ def benchmark_attention(
         head_size=query.shape[-1],
         kv_seq_len=key.shape[-2],
     )
-    
+
     # Get compiled kernel with custom tuning parameters
     attention_kernel = get_custom_wave_kernel(
         shape=shape,
@@ -492,10 +490,10 @@ def benchmark_attention(
         use_buffer_ops=use_buffer_ops,
         canonicalize=canonicalize,
     )
-    
+
     # Create output tensor
     output = torch.empty(flat_o_shape, dtype=torch.float32, device=device)
-    
+
     # Create attention function
     def attention_func(q, k, v):
         attention_kernel(
@@ -540,14 +538,16 @@ def benchmark_attention(
         if seq_len_q > seq_len_k:
             valid_out_elements = (seq_len_k * seq_len_k + seq_len_k) / 2
         else:
-            valid_out_elements = seq_len_q * seq_len_k - (seq_len_q * seq_len_q - seq_len_q) / 2
+            valid_out_elements = (
+                seq_len_q * seq_len_k - (seq_len_q * seq_len_q - seq_len_q) / 2
+            )
         flops = valid_out_elements * batch_size * num_heads * head_dim * 2
     else:
         # Non-causal: full computation
         flops = 2.0 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim
-    
+
     throughput_tflops = flops / (avg_time_ms / 1000) / 1e12
-    
+
     return {
         "variant": variant,
         "batch_size": batch_size,
@@ -592,8 +592,10 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     print(f"  Device: {DEFAULT_PARAMS['device']}")
     print(f"\nVariants to Test: {', '.join(ATTENTION_VARIANTS)}")
     if "fp8" in ATTENTION_VARIANTS:
-        print(f"  FP8 Scales: q={FP8_SCALE_PARAMS['q_scale']}, "
-              f"k={FP8_SCALE_PARAMS['k_scale']}, v={FP8_SCALE_PARAMS['v_scale']}")
+        print(
+            f"  FP8 Scales: q={FP8_SCALE_PARAMS['q_scale']}, "
+            f"k={FP8_SCALE_PARAMS['k_scale']}, v={FP8_SCALE_PARAMS['v_scale']}"
+        )
     print(f"\nWave-Specific Tuning Parameters:")
     print(f"  Scheduling Strategies: {[s.name for s in SCHEDULING_STRATEGIES]}")
     print(f"  Waves Per EU: {WAVES_PER_EU_VALUES}")
@@ -611,7 +613,7 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     for variant in ATTENTION_VARIANTS:
         mma_types = MMA_TYPES_FP16 if variant == "fp16" else MMA_TYPES_FP8
         total_configs += (
-            len(CAUSAL_VALUES) 
+            len(CAUSAL_VALUES)
             * len(BATCH_SEQLEN_PAIRS)
             * len(mma_types)
             * len(BLOCK_M_VALUES)
@@ -623,13 +625,13 @@ def run_benchmarks() -> List[Dict[str, Any]]:
             * len(USE_BUFFER_OPS_VALUES)
             * len(CANONICALIZE_VALUES)
         )
-    
+
     current_config = 0
 
     for variant in ATTENTION_VARIANTS:
         # Select appropriate MMA types for this attention variant
         mma_types = MMA_TYPES_FP16 if variant == "fp16" else MMA_TYPES_FP8
-        
+
         for is_causal in CAUSAL_VALUES:
             for batch_size, seq_len in BATCH_SEQLEN_PAIRS:
                 for mma_type in mma_types:
@@ -638,15 +640,19 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                             for block_k2 in BLOCK_K2_VALUES:
                                 for schedule in SCHEDULING_STRATEGIES:
                                     for waves_per_eu in WAVES_PER_EU_VALUES:
-                                        for use_barriers in USE_SCHEDULING_BARRIERS_VALUES:
+                                        for (
+                                            use_barriers
+                                        ) in USE_SCHEDULING_BARRIERS_VALUES:
                                             for use_buffer_ops in USE_BUFFER_OPS_VALUES:
                                                 for canonicalize in CANONICALIZE_VALUES:
                                                     current_config += 1
                                                     # For now, use same MMA type for both QK^T and Att×V
                                                     qk_t_mma = mma_type
                                                     att_v_mma = mma_type
-                                                    
-                                                    mma_short = f"{mma_type.name.split('_')[1]}"
+
+                                                    mma_short = (
+                                                        f"{mma_type.name.split('_')[1]}"
+                                                    )
                                                     print(
                                                         f"\n[{current_config}/{total_configs}] Running: "
                                                         f"variant={variant}, B={batch_size}, N_CTX={seq_len}, "
@@ -658,10 +664,14 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                                                     try:
                                                         result = benchmark_attention(
                                                             batch_size=batch_size,
-                                                            num_heads=FIXED_PARAMS["num_heads"],
+                                                            num_heads=FIXED_PARAMS[
+                                                                "num_heads"
+                                                            ],
                                                             seq_len_q=seq_len,
                                                             seq_len_k=seq_len,
-                                                            head_dim=FIXED_PARAMS["head_dim"],
+                                                            head_dim=FIXED_PARAMS[
+                                                                "head_dim"
+                                                            ],
                                                             is_causal=bool(is_causal),
                                                             variant=variant,
                                                             qk_t_mma=qk_t_mma,
@@ -674,10 +684,18 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                                                             use_scheduling_barriers=use_barriers,
                                                             use_buffer_ops=use_buffer_ops,
                                                             canonicalize=canonicalize,
-                                                            num_warmup=DEFAULT_PARAMS["num_warmup"],
-                                                            num_iterations=DEFAULT_PARAMS["num_iterations"],
-                                                            dtype=DEFAULT_PARAMS["dtype"],
-                                                            device=DEFAULT_PARAMS["device"],
+                                                            num_warmup=DEFAULT_PARAMS[
+                                                                "num_warmup"
+                                                            ],
+                                                            num_iterations=DEFAULT_PARAMS[
+                                                                "num_iterations"
+                                                            ],
+                                                            dtype=DEFAULT_PARAMS[
+                                                                "dtype"
+                                                            ],
+                                                            device=DEFAULT_PARAMS[
+                                                                "device"
+                                                            ],
                                                         )
                                                         results.append(result)
                                                         print(
@@ -779,7 +797,7 @@ def print_results_table(results: List[Dict[str, Any]]):
     for key, header in columns:
         # Start with header length
         max_width = len(header)
-        
+
         # Check all result values
         for result in results:
             value = result[key]
@@ -792,13 +810,15 @@ def print_results_table(results: List[Dict[str, Any]]):
                 value_str = str(value)
             else:
                 value_str = str(value)
-            
+
             max_width = max(max_width, len(value_str))
-        
+
         col_widths[key] = max_width
 
     # Calculate total table width
-    total_width = sum(col_widths.values()) + len(columns) - 1  # Add spaces between columns
+    total_width = (
+        sum(col_widths.values()) + len(columns) - 1
+    )  # Add spaces between columns
 
     print("\n" + "=" * total_width)
     print("BENCHMARK RESULTS - ALL TUNING PARAMETERS")
@@ -818,7 +838,7 @@ def print_results_table(results: List[Dict[str, Any]]):
         for key, _ in columns:
             value = result[key]
             width = col_widths[key]
-            
+
             # Format value based on type
             if key == "avg_time_ms":
                 value_str = f"{value:>{width}.3f}"
@@ -828,7 +848,7 @@ def print_results_table(results: List[Dict[str, Any]]):
                 value_str = f"{str(value):>{width}}"
             else:
                 value_str = f"{str(value):>{width}}"
-            
+
             row_parts.append(value_str)
         print(" ".join(row_parts))
 
