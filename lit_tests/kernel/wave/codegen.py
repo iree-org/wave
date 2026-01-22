@@ -1138,7 +1138,7 @@ def test_scheduling_ops():
         tkw.set_wave_prio(1)
         tkw.read(a)
         tkw.memory_counter_wait_barrier(load=3, store=2)
-        tkw.memory_counter_wait_barrier(ds=1, exp=0)
+        tkw.memory_counter_wait(ds=1, exp=0)
         tkw.set_wave_prio(0)
         tkw.workgroup_barrier()
 
@@ -1150,9 +1150,8 @@ def test_scheduling_ops():
     # CHECK:            rocdl.s.setprio 1
     # CHECK:            vector.load
     # CHECK:            amdgpu.memory_counter_wait load(3) store(2)
-    # CHECK:            rocdl.s.barrier
+    # CHECK-NEXT:            rocdl.s.barrier
     # CHECK:            amdgpu.memory_counter_wait ds(1) exp(0)
-    # CHECK:            rocdl.s.barrier
     # CHECK:            rocdl.s.setprio 0
     # CHECK:            rocdl.s.barrier
 
