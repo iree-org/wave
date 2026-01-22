@@ -161,6 +161,20 @@ module @resolved_allocations_satisfied_module {
 
 // -----
 
+// Parent allocations (no operands) don't require index expressions.
+// CHECK-LABEL: module @parent_allocation_no_index_exprs_module
+// CHECK: normalform.module
+// CHECK-SAME: #wave.normal_form<index_exprs>
+module @parent_allocation_no_index_exprs_module {
+  func.func @parent_allocation_no_index_exprs() {
+    %parent = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+      : !wave.tensor<[@M] of i8, <shared>>
+    return
+  }
+}
+
+// -----
+
 // wave.allocate returns WaveTensorType, so resolved_allocations is NOT satisfied.
 // CHECK-LABEL: module @resolved_allocations_not_satisfied_module
 // CHECK: normalform.module
