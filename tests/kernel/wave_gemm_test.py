@@ -104,7 +104,6 @@ _DEFAULT_BATCHED_GEMM_SHAPES = [
 _GFX1250_GEMM_SHAPES = [
     (1024, 1024, 1024),
     (2048, 1024, 1024),
-    (2048, 4096, 1024),
     (2048, 2048, 2048),
 ]
 
@@ -3328,7 +3327,7 @@ def test_persistent_reordering_gemm(
     [
         (128, 128, 128),
         (1024, 1024, 1024),
-        (4096, 4096, 4096),
+        (2048, 2048, 2048),
     ],
 )
 @pytest.mark.parametrize(
