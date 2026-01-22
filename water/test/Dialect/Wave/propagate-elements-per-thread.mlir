@@ -417,7 +417,7 @@ normalform.module [#wave.normal_form<full_types>] {
     // CHECK: wave.read {{.*}} -> vector<8xf32>
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     %c0 = arith.constant 0.0 : f32
-    // CHECK: wave.register {{.*}} : vector<8xf32>
+    // CHECK: wave.register {{.*}} : vector<1xf32>
     %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
