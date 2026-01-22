@@ -144,6 +144,22 @@ def erase_graph(graph: fx.Graph):
         graph.erase_node(node)
 
 
+def _placeholder_captures(placeholder_node: fx.Node, target: fx.Node) -> bool:
+    """
+    Recursively check if a placeholder (or chain of placeholders) captures the target node.
+    """
+    custom = get_custom(placeholder_node)
+    if not isinstance(custom, Placeholder):
+        return placeholder_node == target
+
+    captured = custom.get_captured_fx_node()
+    if captured is None:
+        return False
+    # Recursively check if what this placeholder captures is itself
+    # a placeholder that captures target
+    return _placeholder_captures(captured, target)
+
+
 def get_users(
     node: fx.Node, region: fx.Node = None
 ) -> tuple[list[fx.Node], Optional[fx.Node]]:
@@ -169,20 +185,14 @@ def get_users(
                         users.append(outside_node)
                         break
             else:
-                # Check if any placeholder in implicit_captures captures this node
-                found = False
+                # Check if any placeholder in implicit_captures captures this node (recursively)
                 for capture in custom.implicit_captures:
-                    capture_custom = get_custom(capture)
-                    if isinstance(capture_custom, Placeholder):
-                        captured_node = capture_custom.get_captured_fx_node()
-                        if captured_node == node:
-                            for outside_node in graph.nodes:
-                                if outside_node.meta.get("lifted", None) == capture:
-                                    users.append(outside_node)
-                                    found = True
-                                    break
-                            if found:
+                    if _placeholder_captures(capture, node):
+                        for outside_node in graph.nodes:
+                            if outside_node.meta.get("lifted", None) == capture:
+                                users.append(outside_node)
                                 break
+                        break
             continue
         if isinstance(custom, Output):
             # Map output to get result
@@ -239,8 +249,8 @@ def propagate_placeholders(n: fx.Node | tuple | None) -> fx.Node | tuple | None:
     """
     if n is None:
         return None
-    if isinstance(n, (tuple, list)):
-        return type(n)(propagate_placeholders(elem) for elem in n)
+    if isinstance(n, tuple):
+        return (propagate_placeholders(elem) for elem in n)
     c = get_custom(n)
     if isinstance(c, Placeholder):
         p = c.get_captured_fx_node()
@@ -356,10 +366,10 @@ def get_inputs(
             inputs.append(input)
 
     inputs = [propagate_placeholders(i) for i in inputs if i is not None]
-    # Flatten any tuples/lists in inputs and filter out None values
+    # Flatten any sequences in inputs and filter out None values
     flattened_inputs = []
     for inp in inputs:
-        if isinstance(inp, (tuple, list)):
+        if isinstance(inp, Sequence):
             flattened_inputs.extend(x for x in inp if x is not None)
         elif inp is not None:
             flattened_inputs.append(inp)
