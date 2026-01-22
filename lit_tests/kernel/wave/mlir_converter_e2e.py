@@ -136,8 +136,7 @@ def test_matrix_add_water_e2e():
 # CHECK:        vector.maskedstore
 
 
-@run_test
-def test_matmul_water_e2e():
+def run_matmul_water_e2e(minimize_shared_allocs: bool):
     """Test Water PassManager with matmul kernel and e2e execution."""
     from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 
@@ -162,6 +161,7 @@ def test_matmul_water_e2e():
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
+        minimize_shared_allocs=minimize_shared_allocs,
     )
     options_mlir = set_default_run_config(options_mlir)
 
@@ -194,6 +194,7 @@ def test_matmul_water_e2e():
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
         override_mlir=lowered_mlir,
+        minimize_shared_allocs=minimize_shared_allocs,
     )
     options_e2e = set_default_run_config(options_e2e)
 
@@ -202,6 +203,18 @@ def test_matmul_water_e2e():
     compiled_e2e(a_tensor, b_tensor, c_tensor)
 
     assert_close(c_tensor, expected, rtol=1e-3, atol=1e-3)
+
+
+@run_test
+def test_matmul_water_e2e():
+    """Test matmul with separate shared memory allocations."""
+    run_matmul_water_e2e(minimize_shared_allocs=False)
+
+
+@run_test
+def test_matmul_water_e2e_minimize_shared_allocs():
+    """Test matmul with minimized shared memory allocations (parent allocations)."""
+    run_matmul_water_e2e(minimize_shared_allocs=True)
 
 
 # CHECK-LABEL:  test_matmul_water_e2e
@@ -249,3 +262,11 @@ def test_matmul_water_e2e():
 # CHECK:        vector.extract_strided_slice %{{.*}} {offsets = [0], sizes = [1], strides = [1]} : vector<16xf32> to vector<1xf32>
 # CHECK-NOT:    wave.write
 # CHECK:        vector.store %{{.*}}, %arg2[%{{.*}}, %{{.*}}] : memref<1024x5120xf32, #gpu.address_space<global>>, vector<1xf32>
+
+# CHECK-LABEL:  test_matmul_water_e2e_minimize_shared_allocs
+# CHECK:        module {
+# CHECK:        func.func @kernel(
+# CHECK:        memref.alloc() : memref<9216xi8, #gpu.address_space<workgroup>>
+# CHECK:        memref.view
+# CHECK:        scf.for
+# CHECK:        amdgpu.mfma 32x32x8
