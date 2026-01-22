@@ -453,7 +453,7 @@ public:
       llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
       llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    wave::detail::propagateReductionElementsPerThreadBackward(
+    return wave::detail::propagateReductionElementsPerThreadBackward(
         concrete.getAxis(), concrete.getInitMutable().getOperandNumber(),
         operandTypes, resultTypes, errs, init);
   }
