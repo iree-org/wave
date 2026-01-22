@@ -53,6 +53,7 @@ def get_vanilla_attention_kernel(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
+    # CDNA1/2/3 MMA types
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
@@ -61,7 +62,30 @@ def get_vanilla_attention_kernel(
         Mvec = 32
         Nvec = 32
         TPW = 64
+    # CDNA4 MMA types
+    if mfma_variant[1] == MMAType.F32_16x16x32_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_F16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_16x16x32_BF16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_BF16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    # RDNA4 MMA types
     if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
+    # GFX1250 MMA types
+    if mfma_variant[1] == MMAType.GFX1250_F32_16x16x32_F16:
         Mvec = 16
         Nvec = 16
         TPW = 32
@@ -232,6 +256,7 @@ def get_bshd_attention_kernel(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / num_waves)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
+    # CDNA1/2/3 MMA types
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
@@ -240,7 +265,30 @@ def get_bshd_attention_kernel(
         Mvec = 32
         Nvec = 32
         TPW = 64
+    # CDNA4 MMA types
+    if mfma_variant[1] == MMAType.F32_16x16x32_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_F16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_16x16x32_BF16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_BF16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    # RDNA4 MMA types
     if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
+    # GFX1250 MMA types
+    if mfma_variant[1] == MMAType.GFX1250_F32_16x16x32_F16:
         Mvec = 16
         Nvec = 16
         TPW = 32
@@ -485,6 +533,7 @@ def get_bhsd_attention_kernel(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
+    # CDNA1/2/3 MMA types
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
@@ -493,7 +542,30 @@ def get_bhsd_attention_kernel(
         Mvec = 32
         Nvec = 32
         TPW = 64
+    # CDNA4 MMA types
+    if mfma_variant[1] == MMAType.F32_16x16x32_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_F16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_16x16x32_BF16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 64
+    if mfma_variant[1] == MMAType.F32_32x32x16_BF16:
+        Mvec = 32
+        Nvec = 32
+        TPW = 64
+    # RDNA4 MMA types
     if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
+    # GFX1250 MMA types
+    if mfma_variant[1] == MMAType.GFX1250_F32_16x16x32_F16:
         Mvec = 16
         Nvec = 16
         TPW = 32
