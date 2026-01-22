@@ -135,8 +135,8 @@ BATCH_SEQLEN_PAIRS = [
 #   - SchedulingType.PREFETCH: Prefetch scheduling
 #   - SchedulingType.PREFETCH_ATTENTION: Attention-specific prefetch scheduling
 SCHEDULING_STRATEGIES = [
-    SchedulingType.NONE,
-    SchedulingType.MODULO,
+    #SchedulingType.NONE,
+    #SchedulingType.MODULO,
     #SchedulingType.PREFETCH,
     SchedulingType.PREFETCH_ATTENTION,
 ]
@@ -158,24 +158,78 @@ USE_SCHEDULING_BARRIERS_VALUES = [
 
 # MMA (Matrix Multiply-Accumulate) instruction variants to test
 # Different MMA types can have different performance characteristics
-# For FP16:
-#   - F32_16x16x16_F16: Standard 16x16x16 MMA (default)
+# 
+# The attention kernel uses two separate MMA operations:
+#   1. QK^T MMA: Computes attention scores (K × Q^T)
+#   2. Att×V MMA: Computes final output (attention_weights × V)
+#
+# For now, we use the same MMA type for both operations (sourced from a single list)
+# but they are tracked separately to allow future independent tuning.
+#
+# CDNA3 FP16 MMA types:
+#   - F32_16x16x16_F16: Standard 16x16x16 MMA
 #   - F32_32x32x8_F16: Larger 32x32x8 MMA
-#   - F32_16x16x32_K8_F16: 16x16x32 with K=8 (CDNA3+)
-#   - F32_32x32x16_K8_F16: 32x32x16 with K=8 (CDNA3+)
-# For FP8:
-#   - F32_16x16x32_F8: Standard 16x16x32 FP8 MMA (default)
+#   - F32_16x16x32_K8_F16: 16x16x32 with K=8
+#   - F32_32x32x16_K8_F16: 32x32x16 with K=8
+# CDNA4 FP16 MMA types:
+#   - RDNA4_WAVE32_F32_16x16x16_F16: RDNA4/CDNA4 16x16x16 (wave32)
+#
+# CDNA3 FP8 MMA types:
+#   - F32_16x16x32_F8: Standard 16x16x32 FP8 MMA
 #   - F32_32x32x16_F8: Larger 32x32x16 FP8 MMA
-MMA_VARIANTS_FP16 = [
-    (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-    # (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
-    # (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
-    # (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+#   - F32_16x16x32_K4_F8: 16x16x32 with K=4
+#   - F32_32x32x16_K4_F8: 32x32x16 with K=4
+# CDNA4 FP8 MMA types:
+#   - RDNA4_WAVE32_F32_16x16x32_F8: RDNA4/CDNA4 16x16x32 FP8 (wave32)
+MMA_TYPES_FP16 = [
+    MMAType.F32_16x16x16_F16,
+    #MMAType.F32_32x32x8_F16,
+    #MMAType.F32_16x16x32_F16,
+    #MMAType.F32_32x32x16_K8_F16,
+    #MMAType.I32_16x16x16_I8,
+    #MMAType.I32_32x32x8_I8,
+    # Intrinsics introduced in CDNA3
+    #MMAType.F32_16x16x32_F8,
+    #MMAType.F32_32x32x16_F8,
+    #MMAType.F32_16x16x32_K4_F8,
+    #MMAType.F32_32x32x16_K4_F8,
+    #MMAType.I32_16x16x32_I8,
+    #MMAType.I32_32x32x16_I8,
+    # Intrinsics introduced in CDNA4
+    MMAType.F32_16x16x32_F16,
+    #MMAType.F32_32x32x16_F16,
+    #MMAType.F32_16x16x32_BF16,
+    #MMAType.F32_32x32x16_BF16,
+    # Intrinsics introduced in RDNA4
+    #MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+    # Intrinsics introduced in gfx1250
+    #MMAType.GFX1250_F32_16x16x32_F16,
 ]
 
-MMA_VARIANTS_FP8 = [
-    (MMAType.F32_16x16x32_F8, MMAType.F32_16x16x32_K4_F8),
-    # (MMAType.F32_32x32x16_F8, MMAType.F32_32x32x16_K4_F8),
+MMA_TYPES_FP8 = [
+    #MMAType.F32_16x16x16_F16,
+    #MMAType.F32_32x32x8_F16,
+    #MMAType.F32_16x16x32_F16,
+    #MMAType.F32_32x32x16_K8_F16,
+    #MMAType.I32_16x16x16_I8,
+    #MMAType.I32_32x32x8_I8,
+    # Intrinsics introduced in CDNA3
+    MMAType.F32_16x16x32_F8,
+    #MMAType.F32_32x32x16_F8,
+    #MMAType.F32_16x16x32_K4_F8,
+    #MMAType.F32_32x32x16_K4_F8,
+    #MMAType.I32_16x16x32_I8,
+    #MMAType.I32_32x32x16_I8,
+    # Intrinsics introduced in CDNA4
+    #MMAType.F32_16x16x32_F16,
+    #MMAType.F32_32x32x16_F16,
+    #MMAType.F32_16x16x32_BF16,
+    #MMAType.F32_32x32x16_BF16,
+    # Intrinsics introduced in RDNA4
+    #MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+    # Intrinsics introduced in gfx1250
+    #MMAType.GFX1250_F32_16x16x32_F16,
+
 ]
 
 # Tile size hyperparameters
@@ -249,7 +303,8 @@ def get_custom_wave_kernel(
     shape: AttentionShape,
     variant: str,
     is_causal: bool,
-    mfma_variant: tuple,
+    qk_t_mma: MMAType,
+    att_v_mma: MMAType,
     block_m: int,
     block_n: int,
     block_k2: int,
@@ -266,7 +321,8 @@ def get_custom_wave_kernel(
         shape: Attention shape configuration
         variant: "fp16" or "fp8"
         is_causal: Whether to use causal masking
-        mfma_variant: MMA instruction type tuple
+        qk_t_mma: MMA instruction type for QK^T computation
+        att_v_mma: MMA instruction type for Attention×V computation
         block_m: Query sequence tile size
         block_n: Head dimension tile size
         block_k2: KV sequence tile size
@@ -279,6 +335,9 @@ def get_custom_wave_kernel(
     Returns:
         Compiled Wave kernel
     """
+    # Combine MMA types into tuple for kernel API
+    mfma_variant = (qk_t_mma, att_v_mma)
+    
     if variant == "fp16":
         (
             attention_kernel,
@@ -362,7 +421,8 @@ def benchmark_attention(
     head_dim: int,
     is_causal: bool,
     variant: str,
-    mfma_variant: tuple,
+    qk_t_mma: MMAType,
+    att_v_mma: MMAType,
     block_m: int,
     block_n: int,
     block_k2: int,
@@ -381,7 +441,8 @@ def benchmark_attention(
 
     Args:
         variant: "fp16" for vanilla FP16 attention, "fp8" for quantized FP8 attention
-        mfma_variant: MMA instruction type tuple
+        qk_t_mma: MMA instruction type for QK^T computation
+        att_v_mma: MMA instruction type for Attention×V computation
         block_m: Query sequence tile size
         block_n: Head dimension tile size
         block_k2: KV sequence tile size
@@ -420,7 +481,8 @@ def benchmark_attention(
         shape=shape,
         variant=variant,
         is_causal=is_causal,
-        mfma_variant=mfma_variant,
+        qk_t_mma=qk_t_mma,
+        att_v_mma=att_v_mma,
         block_m=block_m,
         block_n=block_n,
         block_k2=block_k2,
@@ -472,9 +534,6 @@ def benchmark_attention(
     # For attention: 4 * B * H * Q * K * D operations
     flops = 4 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim
     throughput_tflops = flops / (avg_time_ms / 1000) / 1e12
-
-    # Format MMA variant for output
-    mma_str = f"{mfma_variant[0].name}+{mfma_variant[1].name}"
     
     return {
         "variant": variant,
@@ -484,7 +543,8 @@ def benchmark_attention(
         "seq_len_k": seq_len_k,
         "head_dim": head_dim,
         "is_causal": is_causal,
-        "mfma_variant": mma_str,
+        "qk_t_mma": qk_t_mma.name,
+        "att_v_mma": att_v_mma.name,
         "block_m": block_m,
         "block_n": block_n,
         "block_k2": block_k2,
@@ -525,8 +585,8 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     print(f"  Scheduling Strategies: {[s.name for s in SCHEDULING_STRATEGIES]}")
     print(f"  Waves Per EU: {WAVES_PER_EU_VALUES}")
     print(f"  Scheduling Barriers: {USE_SCHEDULING_BARRIERS_VALUES}")
-    print(f"  MMA Variants (FP16): {len(MMA_VARIANTS_FP16)}")
-    print(f"  MMA Variants (FP8): {len(MMA_VARIANTS_FP8)}")
+    print(f"  MMA Types (FP16): {len(MMA_TYPES_FP16)}")
+    print(f"  MMA Types (FP8): {len(MMA_TYPES_FP8)}")
     print(f"  BLOCK_M values: {BLOCK_M_VALUES}")
     print(f"  BLOCK_N values: {BLOCK_N_VALUES}")
     print(f"  BLOCK_K2 values: {BLOCK_K2_VALUES}")
@@ -536,11 +596,11 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     # Calculate total configs dynamically based on variant
     total_configs = 0
     for variant in ATTENTION_VARIANTS:
-        mma_variants = MMA_VARIANTS_FP16 if variant == "fp16" else MMA_VARIANTS_FP8
+        mma_types = MMA_TYPES_FP16 if variant == "fp16" else MMA_TYPES_FP8
         total_configs += (
             len(CAUSAL_VALUES) 
             * len(BATCH_SEQLEN_PAIRS)
-            * len(mma_variants)
+            * len(mma_types)
             * len(BLOCK_M_VALUES)
             * len(BLOCK_N_VALUES)
             * len(BLOCK_K2_VALUES)
@@ -554,12 +614,12 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     current_config = 0
 
     for variant in ATTENTION_VARIANTS:
-        # Select appropriate MMA variants for this attention variant
-        mma_variants = MMA_VARIANTS_FP16 if variant == "fp16" else MMA_VARIANTS_FP8
+        # Select appropriate MMA types for this attention variant
+        mma_types = MMA_TYPES_FP16 if variant == "fp16" else MMA_TYPES_FP8
         
         for is_causal in CAUSAL_VALUES:
             for batch_size, seq_len in BATCH_SEQLEN_PAIRS:
-                for mfma_variant in mma_variants:
+                for mma_type in mma_types:
                     for block_m in BLOCK_M_VALUES:
                         for block_n in BLOCK_N_VALUES:
                             for block_k2 in BLOCK_K2_VALUES:
@@ -569,7 +629,11 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                                             for use_buffer_ops in USE_BUFFER_OPS_VALUES:
                                                 for canonicalize in CANONICALIZE_VALUES:
                                                     current_config += 1
-                                                    mma_short = f"{mfma_variant[0].name.split('_')[1]}"
+                                                    # For now, use same MMA type for both QK^T and Att×V
+                                                    qk_t_mma = mma_type
+                                                    att_v_mma = mma_type
+                                                    
+                                                    mma_short = f"{mma_type.name.split('_')[1]}"
                                                     print(
                                                         f"\n[{current_config}/{total_configs}] Running: "
                                                         f"variant={variant}, B={batch_size}, N_CTX={seq_len}, "
@@ -587,7 +651,8 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                                                             head_dim=FIXED_PARAMS["head_dim"],
                                                             is_causal=bool(is_causal),
                                                             variant=variant,
-                                                            mfma_variant=mfma_variant,
+                                                            qk_t_mma=qk_t_mma,
+                                                            att_v_mma=att_v_mma,
                                                             block_m=block_m,
                                                             block_n=block_n,
                                                             block_k2=block_k2,
@@ -645,7 +710,8 @@ def save_results_csv(results: List[Dict[str, Any]], filename: str):
         "seq_len_k",
         "head_dim",
         "is_causal",
-        "mfma_variant",
+        "qk_t_mma",
+        "att_v_mma",
         "block_m",
         "block_n",
         "block_k2",
@@ -681,7 +747,8 @@ def print_results_table(results: List[Dict[str, Any]]):
         ("batch_size", "B"),
         ("seq_len_q", "N_CTX"),
         ("is_causal", "Caus"),
-        ("mfma_variant", "MMA"),
+        ("qk_t_mma", "QK_T_MMA"),
+        ("att_v_mma", "Att_V_MMA"),
         ("block_m", "BLK_M"),
         ("block_n", "BLK_N"),
         ("block_k2", "BLK_K2"),
