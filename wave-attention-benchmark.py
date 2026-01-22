@@ -670,41 +670,89 @@ def save_results_csv(results: List[Dict[str, Any]], filename: str):
 
 
 def print_results_table(results: List[Dict[str, Any]]):
-    """Print benchmark results as a formatted table (summary only - see CSV for full details)."""
+    """Print benchmark results as a formatted table with all tuning parameters."""
     if not results:
         print("\nNo results to display")
         return
 
-    print("\n" + "=" * 120)
-    print("BENCHMARK RESULTS SUMMARY (see CSV for full details)")
-    print("=" * 120)
+    # Define columns to display
+    columns = [
+        ("variant", "Var"),
+        ("batch_size", "B"),
+        ("seq_len_q", "N_CTX"),
+        ("is_causal", "Caus"),
+        ("mfma_variant", "MMA"),
+        ("block_m", "BLK_M"),
+        ("block_n", "BLK_N"),
+        ("block_k2", "BLK_K2"),
+        ("schedule", "Schedule"),
+        ("waves_per_eu", "Waves"),
+        ("use_scheduling_barriers", "Barriers"),
+        ("use_buffer_ops", "BufOps"),
+        ("canonicalize", "Canon"),
+        ("avg_time_ms", "Avg(ms)"),
+        ("throughput_tflops", "TFLOPs"),
+    ]
 
-    # Header - simplified to show key metrics
-    header = (
-        f"{'Var':>4} {'B':>4} {'N_CTX':>6} {'Caus':>4} {'Tiles':>11} "
-        f"{'Sched':>12} {'W':>2} {'Avg(ms)':>9} {'TFLOPs':>8}"
-    )
-    print(header)
-    print("-" * 120)
+    # Calculate column widths based on longest value in each column
+    col_widths = {}
+    for key, header in columns:
+        # Start with header length
+        max_width = len(header)
+        
+        # Check all result values
+        for result in results:
+            value = result[key]
+            # Format the value as it will appear in the table
+            if key == "avg_time_ms":
+                value_str = f"{value:.3f}"
+            elif key == "throughput_tflops":
+                value_str = f"{value:.2f}"
+            elif isinstance(value, bool):
+                value_str = str(value)
+            else:
+                value_str = str(value)
+            
+            max_width = max(max_width, len(value_str))
+        
+        col_widths[key] = max_width
 
-    # Results - simplified
+    # Calculate total table width
+    total_width = sum(col_widths.values()) + len(columns) - 1  # Add spaces between columns
+
+    print("\n" + "=" * total_width)
+    print("BENCHMARK RESULTS - ALL TUNING PARAMETERS")
+    print("=" * total_width)
+
+    # Print header
+    header_parts = []
+    for key, header in columns:
+        width = col_widths[key]
+        header_parts.append(f"{header:>{width}}")
+    print(" ".join(header_parts))
+    print("-" * total_width)
+
+    # Print results
     for result in results:
-        tiles = f"{result['block_m']}x{result['block_n']}x{result['block_k2']}"
-        row = (
-            f"{result['variant']:>4} "
-            f"{result['batch_size']:>4} "
-            f"{result['seq_len_q']:>6} "
-            f"{result['is_causal']:>4} "
-            f"{tiles:>11} "
-            f"{result['schedule']:>12} "
-            f"{result['waves_per_eu']:>2} "
-            f"{result['avg_time_ms']:>9.3f} "
-            f"{result['throughput_tflops']:>8.2f}"
-        )
-        print(row)
+        row_parts = []
+        for key, _ in columns:
+            value = result[key]
+            width = col_widths[key]
+            
+            # Format value based on type
+            if key == "avg_time_ms":
+                value_str = f"{value:>{width}.3f}"
+            elif key == "throughput_tflops":
+                value_str = f"{value:>{width}.2f}"
+            elif isinstance(value, bool):
+                value_str = f"{str(value):>{width}}"
+            else:
+                value_str = f"{str(value):>{width}}"
+            
+            row_parts.append(value_str)
+        print(" ".join(row_parts))
 
-    print("=" * 120)
-    print("\nNote: Full results including MMA variants, barriers, buffer_ops, etc. are in the CSV file.")
+    print("=" * total_width)
 
 
 def main():
