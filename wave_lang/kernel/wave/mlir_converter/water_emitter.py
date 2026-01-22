@@ -482,6 +482,11 @@ def _convert_to_wave_expr_list_tuple(
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
 
 
+def _get_fx_node(cap) -> fx.Node:
+    """Normalize a capture to fx.Node (can be fx.Proxy or fx.Node)."""
+    return cap.fx_node if hasattr(cap, "fx_node") else cap
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -546,7 +551,12 @@ def _emit_ops_from_graph(
                 # additional handling for this op is not needed, skip rest
                 continue
 
-            result_type = _type_to_wave_mlir(ctx, node.type)
+            # Iterate nodes have multiple result types handled specially below.
+            result_type = (
+                None
+                if isinstance(node, Iterate)
+                else _type_to_wave_mlir(ctx, node.type)
+            )
 
             mlir_op = None
             if node.tkw_op_name in WAVE_OP_CONSTRUCTORS:
@@ -589,7 +599,14 @@ def _emit_ops_from_graph(
                             else ir.Location.current
                         )
 
-                    mlir_op = op_builder(result_types, axis, carried_values, [])
+                    # Normalize implicit captures to fx.Node.
+                    capture_nodes = [
+                        _get_fx_node(cap) for cap in node.implicit_captures
+                    ]
+
+                    # Get MLIR values for implicit captures.
+                    captures = [value_map[cap_node] for cap_node in capture_nodes]
+                    mlir_op = op_builder(result_types, axis, carried_values, captures)
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
@@ -600,6 +617,19 @@ def _emit_ops_from_graph(
                     # add mapping for iter args
                     for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
                         value_map[wave_arg] = mlir_arg
+
+                    # Add mapping for implicit capture placeholders in the subgraph.
+                    subgraph = trace.get_subgraph(node.subgraph_name)
+                    for cap_node, cap_mlir in zip(capture_nodes, captures):
+                        # Find the placeholder node in the subgraph that corresponds
+                        # to this capture.
+                        for subgraph_node in subgraph.nodes:
+                            if (
+                                subgraph_node.op == "placeholder"
+                                and subgraph_node.name == cap_node.name
+                            ):
+                                value_map[subgraph_node] = cap_mlir
+                                break
 
                     # Emit subgraph of the iterate node
                     with ir.InsertionPoint(body):
@@ -841,6 +871,15 @@ def _create_kernel_module(
         for i, fx_node in enumerate(top_level_placeholders):
             value_map[fx_node] = entry_block.arguments[i]
 
+        # Collect names of implicit captures from all Iterate nodes.
+        # These will be handled during iterate emission, not here.
+        implicit_capture_names = set()
+        for fx_node in trace.walk():
+            custom = get_custom(fx_node)
+            if isinstance(custom, Iterate):
+                for cap in custom.implicit_captures:
+                    implicit_capture_names.add(_get_fx_node(cap).name)
+
         # Subgraphs duplicate the placeholders of surrounding graphs so there
         # are multiple placeholders representing the same values.
         # Add mapping for these repeated placeholders as well
@@ -849,9 +888,13 @@ def _create_kernel_module(
                 continue
             if isinstance(get_custom(nested_placeholder), IterArg):
                 continue
+            # Skip implicit capture placeholders - they are handled during
+            # iterate emission.
+            if nested_placeholder.name in implicit_capture_names:
+                continue
             # With top-level placeholders and iterargs filtered out the remaining
             # placeholders are duplicates. Find the original one by name
-            if not nested_placeholder.name in top_level_names:
+            if nested_placeholder.name not in top_level_names:
                 raise RuntimeError(
                     f"Incorrectly structured placeholders in trace: "
                     f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
