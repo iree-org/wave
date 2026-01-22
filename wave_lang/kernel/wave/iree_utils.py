@@ -10,7 +10,7 @@ from packaging.version import Version
 import torch
 from wave_lang.runtime.launch import Launchable
 from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
-from wave_lang.compile_options import WaveCompileOptions
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
 from .utils.compile_utils import compile_to_vmfb
