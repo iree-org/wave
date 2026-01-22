@@ -531,8 +531,21 @@ def benchmark_attention(
     max_time_ms = max(times_ms)
 
     # Calculate throughput (FLOPs)
-    # For attention: 4 * B * H * Q * K * D operations
-    flops = 4 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim
+    # For attention: 2 GEMMs (QK^T and Att×V)
+    # Reference calculation from Triton benchmark
+    if is_causal:
+        # For causal masking, only count valid (non-masked) elements
+        # If seq_len_q > seq_len_k: valid elements form lower triangle with seq_len_k rows
+        # If seq_len_q <= seq_len_k: valid elements = total - upper triangle zeros
+        if seq_len_q > seq_len_k:
+            valid_out_elements = (seq_len_k * seq_len_k + seq_len_k) / 2
+        else:
+            valid_out_elements = seq_len_q * seq_len_k - (seq_len_q * seq_len_q - seq_len_q) / 2
+        flops = valid_out_elements * batch_size * num_heads * head_dim * 2
+    else:
+        # Non-causal: full computation
+        flops = 2.0 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim
+    
     throughput_tflops = flops / (avg_time_ms / 1000) / 1e12
     
     return {
