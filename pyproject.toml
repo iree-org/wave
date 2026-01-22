@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools~=75.8.2",
+    "setuptools-scm~=9.2.2",
     "wheel~=0.45.1",
     "cmake~=3.31.6",
     "ninja~=1.11.1",
@@ -11,7 +12,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wave-lang"
-version = "3.10.0"
 description = "Wave Language for Machine Learning"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -38,6 +38,8 @@ dependencies = [
     "torch>=2.6,<2.9",
     "typing_extensions",
 ]
+
+dynamic = ["version"]
 
 [project.optional-dependencies]
 testing = [
