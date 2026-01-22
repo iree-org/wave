@@ -19,6 +19,7 @@ from wave_lang.kernel.wave.constraints import Constraint, MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.kernel.wave.water import apply_water_middle_end_passes
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
@@ -231,8 +232,12 @@ def mlir_converter_matrix_add():
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
-    # Print to stdout for FileCheck
+    # Print to stdout for FileCheck.
     print(mlir_output)
+
+    # Apply Water middle-end pipeline.
+    lowered_mlir = apply_water_middle_end_passes(mlir_output)
+    print(lowered_mlir)
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
@@ -293,6 +298,17 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
 
     # CHECK: return
+
+    # Water lowered output.
+    # CHECK: module {
+    # CHECK: func.func @kernel(
+    # CHECK-NOT: wave.read
+    # CHECK: vector.maskedload
+    # CHECK: vector.maskedload
+    # CHECK-NOT: wave.add
+    # CHECK: arith.addf
+    # CHECK-NOT: wave.write
+    # CHECK: vector.maskedstore
 
 
 @run_test
@@ -396,7 +412,7 @@ def mlir_converter_matmul():
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
-    # Print to stdout for FileCheck
+    # Print to stdout for FileCheck.
     # CHECK-LABEL: mlir_converter_matmul
     print(pipeline_asm)
     # CHECK: module
@@ -511,6 +527,20 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[SLICE_15:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (15)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_15]], %[[ARG2]]
     # CHECK-NEXT: return
+
+    # Apply Water middle-end pipeline.
+    lowered_mlir = apply_water_middle_end_passes(mlir_output)
+    print(lowered_mlir)
+
+    # Water lowered output.
+    # CHECK: module {
+    # CHECK: func.func @kernel(
+    # CHECK: memref.alloc() : memref<9216xi8, #gpu.address_space<workgroup>>
+    # CHECK: memref.view
+    # CHECK-NOT: wave.iterate
+    # CHECK: scf.for
+    # CHECK-NOT: wave.mma
+    # CHECK: amdgpu.mfma 32x32x8
 
 
 @run_test

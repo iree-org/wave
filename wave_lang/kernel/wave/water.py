@@ -503,7 +503,12 @@ def apply_water_middle_end_passes(mlir_text: str) -> str:
     pass_pipeline = (
         "--pass-pipeline=builtin.module("
         "water-wave-detect-normal-forms,"
-        "normalform.module(water-wave-propagate-elements-per-thread,water-wave-resolve-distributed-allocations,water-wave-detect-normal-forms,lower-wave-to-mlir),"
+        "normalform.module("
+        "water-wave-propagate-elements-per-thread,"
+        "water-wave-resolve-distributed-allocations,"
+        "water-wave-detect-normal-forms,"
+        "lower-wave-to-mlir"
+        "),"
         "lower-normalform-module,"
         "canonicalize,"
         "cse"
