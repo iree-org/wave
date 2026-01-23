@@ -1788,8 +1788,8 @@ llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
 
 MutableOperandRange
 wave::YieldOp::getMutableSuccessorOperands(RegionSuccessor) {
-  // Create an empty mutable operand range (it has no default constructor).
-  return getValuesMutable().slice(/*subStart=*/0, /*subLen=*/0);
+  // Return all yielded values - these flow back to the parent IterateOp.
+  return getValuesMutable();
 }
 
 //-----------------------------------------------------------------------------
