@@ -359,9 +359,9 @@ def _get_constant_value(candidate: Value):
     """
     returns constantOp's value if candidate is arith.constantOp. Else, returns None.
     """
-    if not isinstance(candidate.owner, arith_d.ConstantOp):
+    if not isinstance(candidate.owner.opview, arith_d.ConstantOp):
         return None
-    return candidate.owner.value.value
+    return candidate.owner.opview.value.value
 
 
 def _cast_buffer_and_encode_stride(
