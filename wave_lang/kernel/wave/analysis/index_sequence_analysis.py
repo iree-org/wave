@@ -51,6 +51,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..utils.tag_utils import propagate_tag
 from ..constraints import (
     Constraint,
     DistributionConstraint,
@@ -1105,6 +1106,7 @@ def create_broadcast(
             to_broadcast.fx_node, target_node.type.symbolic_shape
         ).add_to_graph(op.graph, loc=op.location)
         broadcasted.location = op.location
+        propagate_tag(op.fx_node, broadcasted)
         custom = get_custom(broadcasted)
         custom.vector_shapes = op.vector_shapes
         custom.index = deepcopy(target_node.index)

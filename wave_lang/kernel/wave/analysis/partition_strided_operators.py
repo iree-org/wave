@@ -26,9 +26,8 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
-from ..constraints import (
-    Constraint,
-)
+from ..constraints import Constraint
+from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
     get_fastest_index,
@@ -383,6 +382,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 )
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
+                propagate_tag(custom.fx_node, reshape)
 
                 # Save the original index on the reshape op so later we can
                 # detect if op was part of `gpr_offset` partition.
@@ -500,6 +500,7 @@ def partition_gather_like_ops(
                 )
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
+                propagate_tag(custom.fx_node, reshape)
 
                 reshape.index = index
                 custom.replace_all_uses_with(reshape)

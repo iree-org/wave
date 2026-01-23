@@ -99,7 +99,16 @@ def read_meets_hw_transpose_requirements(
     if read.has_identity_mapping():
         return False
 
-    if len(list(read.index.keys())) != 2:
+    # Check effective dimensions (those with vector_shape > 0)
+    # This allows 4D attention tensors where B and H have vector_shape=0
+    # If vector_shapes is None, fall back to checking all index dimensions
+    if read.vector_shapes is not None:
+        effective_dims = [
+            dim for dim in read.index.keys() if read.vector_shapes.get(dim, 0) > 0
+        ]
+    else:
+        effective_dims = list(read.index.keys())
+    if len(effective_dims) != 2:
         return False
 
     bitwidth = read.type.dtype.bitwidth()
@@ -597,6 +606,42 @@ def get_custom(node: fx.Node) -> "CustomOp":
     if node.op == "output":
         return Output.from_fx_node(node)
     return Unknown.from_fx_node(node)
+
+
+def tag(expr: fx.Proxy, tag_name: str) -> fx.Proxy:
+    """
+    Assign a tag to the result of a Python expression (e.g., arithmetic operators).
+
+    This function allows tagging operations that don't natively support the tag= keyword,
+    such as Python arithmetic operators (*, -, +, /).
+
+    Usage:
+        # Instead of:
+        result = a * b  # Cannot tag this directly
+
+        # Use:
+        result = tkw.tag(a * b, "multiply_ab")
+
+        # The tag can then be used in wave_schedule:
+        multiply_ops = tkw.get_node_by_tag("multiply_ab")
+
+    Args:
+        expr: The fx.Proxy result of an expression (e.g., a * b, x - y)
+        tag_name: The tag string to assign to the operation
+
+    Returns:
+        The same fx.Proxy, allowing chained expressions
+    """
+    if isinstance(expr, fx.Proxy):
+        expr.node.tag = tag_name
+    elif isinstance(expr, fx.Node):
+        expr.tag = tag_name
+    else:
+        raise ValueError(
+            f"tkw.tag expects an fx.Proxy or fx.Node, got {type(expr)}. "
+            "Make sure you're tagging the result of a traced operation."
+        )
+    return expr
 
 
 def has_same_custom_type(lhs_type: Memory, rhs_type: Memory) -> bool:

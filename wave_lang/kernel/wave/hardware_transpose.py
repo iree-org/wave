@@ -10,6 +10,7 @@ import sympy
 
 from .utils.general_utils import get_hardware_constraint, make_index_uniform_per_wave
 from .utils.symbol_utils import safe_subs
+from .utils.tag_utils import propagate_tag
 
 from .global_to_shared_gathers import update_read_mapping_dynamic_values
 from .._support.tracing import CapturedTrace
@@ -105,7 +106,12 @@ def fetch_delinearized_indices(shape, dtype_width, thread_id, threads_per_wave):
 
 
 def modify_index(
-    index, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+    index,
+    elems_per_thread,
+    delinearized,
+    threads_per_wave,
+    waves_per_block,
+    effective_dims=None,
 ):
     """
     The hardware transpose instruction requires a specific, structured offset
@@ -124,18 +130,32 @@ def modify_index(
     new_index = make_index_uniform_per_wave(index, threads_per_wave, waves_per_block)
 
     # Apply delinearized offset and set size/stride
-    for i, key in enumerate(index.keys()):
-        new_index[key].start += delinearized[i]
-        # Set the size and stride. Only the inner-most loop (the last key)
-        # gets the full number of elements per thread. Others have a size of 1.
-        new_index[key].size = elems_per_thread if i == len(index.keys()) - 1 else 1
-        new_index[key].stride = 1
+    # Only modify effective dimensions if specified
+    if effective_dims is None:
+        effective_dims = list(index.keys())
+
+    effective_idx = 0
+    for key in index.keys():
+        if key in effective_dims:
+            new_index[key].start += delinearized[effective_idx]
+            # Set the size and stride. Only the last effective dim gets full elements
+            is_last_effective = effective_idx == len(effective_dims) - 1
+            new_index[key].size = elems_per_thread if is_last_effective else 1
+            new_index[key].stride = 1
+            effective_idx += 1
+        # Non-effective dimensions keep their original size/stride
 
     return new_index
 
 
 def rewrite_node(
-    read, custom_node, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+    read,
+    custom_node,
+    elems_per_thread,
+    delinearized,
+    threads_per_wave,
+    waves_per_block,
+    effective_dims=None,
 ):
     bits = custom_node.elements_per_thread * custom_node.type.dtype.bitwidth()
 
@@ -147,6 +167,7 @@ def rewrite_node(
             delinearized,
             threads_per_wave,
             waves_per_block,
+            effective_dims,
         )
         return
 
@@ -184,12 +205,18 @@ def rewrite_node(
         if custom_node.mapping_dynamic_vals:
             update_read_mapping_dynamic_values(custom_op)
         custom_op.index = modify_index(
-            op.index, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+            op.index,
+            elems_per_thread,
+            delinearized,
+            threads_per_wave,
+            waves_per_block,
+            effective_dims,
         )
 
     concat = Reshape(read_ops, read.vector_shapes).add_to_graph(
         custom_node.graph, loc=custom_node.location
     )
+    propagate_tag(custom_node, concat)
     custom_node.replace_all_uses_with(concat)
 
 
@@ -224,7 +251,22 @@ def mark_hardware_transpose_candidates(
 
         mem_type = custom_node.memory_type
         width = mem_type.dtype.bitwidth()
-        concrete_shape = tuple(map(sub, custom_node.memory_type.symbolic_shape))
+
+        # Get effective dimensions (those with vector_shape > 0)
+        # This allows 4D attention tensors where B and H have vector_shape=0
+        effective_dims = [
+            dim
+            for dim in custom_node.memory_type.symbolic_shape
+            if custom_node.vector_shapes.get(dim, 0) > 0
+        ]
+
+        # Use only effective dimensions for the transpose shape computation
+        sub_eff = lambda x: safe_subs(x, custom_node.vector_shapes)
+        if len(effective_dims) == 2:
+            concrete_shape = tuple(map(sub_eff, effective_dims))
+        else:
+            concrete_shape = tuple(map(sub, custom_node.memory_type.symbolic_shape))
+
         maybe_indices = fetch_delinearized_indices(
             concrete_shape, width, thread_id, hardware_constraint.threads_per_wave
         )
@@ -242,4 +284,5 @@ def mark_hardware_transpose_candidates(
                 maybe_indices,
                 threads_per_wave,
                 waves_per_block,
+                effective_dims,
             )

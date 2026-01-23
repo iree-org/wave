@@ -45,6 +45,7 @@ from .utils.graph_utils import (
     finish_conditional_subgraph,
 )
 from .utils.symbol_utils import safe_subs, subs_idxc
+from .utils.tag_utils import set_tag as _set_node_tag
 
 TKW_COMBINER = {"sum": Add, "max": Maximum, "min": Minimum}
 IDENTITY = {"add": 0.0, "maximum": -1e6, "minimum": 1e6}
@@ -100,6 +101,7 @@ def emit_sources_reduction(
     src: list[fx.Node],
     graph: fx.Graph,
     location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ) -> fx.Node:
     """
     Does reduction over a list of fx.Node variables by applying binary_fn on them.
@@ -107,6 +109,7 @@ def emit_sources_reduction(
     init = src[0]
     for i in range(1, len(src)):
         init = get_graph_node(binary_fn(init, src[i]), graph, location)
+        _set_node_tag(init, tag)
     init.index = src[0].index
     return init
 
@@ -117,14 +120,18 @@ def emit_variable_reduction(
     graph: fx.Graph,
     local_reduction_size: int,
     location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ) -> fx.Node:
     """
     Does reduction over a singular fx.Node variable.
     """
     init = get_graph_node(Extract(src, [0]), graph, location)
+    _set_node_tag(init, tag)
     for i in range(1, local_reduction_size):
         cur_slice = get_graph_node(Extract(src, [i]), graph, location)
+        _set_node_tag(cur_slice, tag)
         init = get_graph_node(binary_fn(init, cur_slice), graph, location)
+        _set_node_tag(init, tag)
     return init
 
 
@@ -134,15 +141,18 @@ def emit_local_reduction(
     graph: fx.Graph,
     local_reduction_size,
     location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ) -> fx.Node:
     """
     Does reduction over all the element carried along by ReductionOp at local
     thread/SIMT level. This is done by reducing expanded sources combining them
     into single variable, and then reducing that variable into a scalar.
     """
-    src_reduction = emit_sources_reduction(binary_fn, reduction_src, graph, location)
+    src_reduction = emit_sources_reduction(
+        binary_fn, reduction_src, graph, location, tag
+    )
     local_reduction = emit_variable_reduction(
-        binary_fn, src_reduction, graph, local_reduction_size, location
+        binary_fn, src_reduction, graph, local_reduction_size, location, tag
     )
     return local_reduction
 
@@ -153,6 +163,7 @@ def emit_scalarized_local_reduction(
     graph: fx.Graph,
     local_reduction_size,
     location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ) -> fx.Node:
     """
     Special case of local reduction wher we try to scalarize/get rid of most vector ops.
@@ -171,11 +182,13 @@ def emit_scalarized_local_reduction(
     %local_src_reduce = arith.maximumf %local_lhs_reduce, %local_rhs_reduce : f32
     """
     locally_reduced_sources = [
-        emit_variable_reduction(binary_fn, arg, graph, local_reduction_size, location)
+        emit_variable_reduction(
+            binary_fn, arg, graph, local_reduction_size, location, tag
+        )
         for arg in reduction_src
     ]
     local_reduction = emit_sources_reduction(
-        binary_fn, locally_reduced_sources, graph, location
+        binary_fn, locally_reduced_sources, graph, location, tag
     )
     return local_reduction
 
@@ -188,6 +201,7 @@ def emit_intrawave_reduction(
     cluster_size: int,
     cluster_stride: int,
     location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ) -> fx.Node:
     """
     Reduce data across threads in a warp by doing butterfly shuffle.
@@ -197,7 +211,9 @@ def emit_intrawave_reduction(
     for _ in range(num_steps):
         shuffle_val = ShuffleOp(init, cluster_stride, subgroup_size, ShuffleMode.XOR)
         shuffle_node = get_graph_node(shuffle_val, graph, location)
+        _set_node_tag(shuffle_node, tag)
         init = get_graph_node(binary_fn(init, shuffle_node), graph, location)
+        _set_node_tag(init, tag)
         cluster_stride <<= 1
     return init
 
@@ -212,6 +228,7 @@ def emit_interwave_reduction(
     wg_constraint_map,
     hardware_constraint,
     original_op_location: Optional[CapturedLocation],
+    tag: Optional[str] = None,
 ):
     """
     Reduces partial reduced data from individual wave across the block.
@@ -242,6 +259,7 @@ def emit_interwave_reduction(
         SHARED_ADDRESS_SPACE,
     ).add_to_graph(graph)
     allocate_node.location = original_op_location
+    _set_node_tag(allocate_node, tag)
 
     # Write individual wave result into shared_memory[wave_id]
     subgraph_name = f"execute_on_lane0_{src.name}"
@@ -259,13 +277,17 @@ def emit_interwave_reduction(
     )
     write.location = original_op_location
     write.index = {reduction_dim: IndexSequence(reduction_wave_id, 1, 1)}
+    _set_node_tag(write, tag)
 
     # 3. Create condition and finish subgraph
     lane_id_reg = get_graph_node(
         NewScalar(lane_id, tkl.i32), graph, original_op_location
     )
+    _set_node_tag(lane_id_reg, tag)
     zero_reg = get_graph_node(NewScalar(0, tkl.i32), graph, original_op_location)
+    _set_node_tag(zero_reg, tag)
     condition = get_graph_node(Eq(lane_id_reg, zero_reg), graph, original_op_location)
+    _set_node_tag(condition, tag)
     execute_on_lane0 = finish_conditional_subgraph(
         trace,
         graph,
@@ -274,6 +296,7 @@ def emit_interwave_reduction(
         implicit_captures,
         original_op_location,
     )
+    _set_node_tag(execute_on_lane0, tag)
 
     # Read shared_memory[:num_waves] and locally reduce.
     # write_dependency on both execute_on_lane0 and write to prevent DCE.
@@ -283,8 +306,9 @@ def emit_interwave_reduction(
         _write_dependency=[execute_on_lane0, write],
     ).add_to_graph(graph, loc=original_op_location)
     read.index = {reduction_dim: IndexSequence(0, 1, 1)}
+    _set_node_tag(read, tag)
     interwave_reduction = emit_variable_reduction(
-        binary_fn, read, graph, num_reduction_waves, original_op_location
+        binary_fn, read, graph, num_reduction_waves, original_op_location, tag
     )
     return interwave_reduction
 
@@ -325,6 +349,8 @@ def decompose_reduce_ops(
     subgroup_size = hardware_constraint.threads_per_wave
     for node in reduce_nodes:
         custom = get_custom(node)
+        # Get tag from the original ReduceOp node to propagate to decomposed nodes
+        tag = getattr(node, "tag", None)
         with custom.graph.inserting_before(custom.fx_node):
             reduction_src, reduction_acc, reduction_dim, reduce_block = node.args
             binary_fn = TKW_COMBINER[custom.tkw_op_name]
@@ -377,6 +403,7 @@ def decompose_reduce_ops(
                     custom.graph,
                     local_reduce_sizes[0],
                     custom.location,
+                    tag,
                 )
             else:
                 local_reduction = emit_local_reduction(
@@ -385,6 +412,7 @@ def decompose_reduce_ops(
                     custom.graph,
                     local_reduce_sizes[0],
                     custom.location,
+                    tag,
                 )
 
             if (
@@ -416,6 +444,7 @@ def decompose_reduce_ops(
                 cluster_size,
                 cluster_stride,
                 custom.location,
+                tag,
             )
 
             # Local Accumulator Reduce
@@ -426,6 +455,7 @@ def decompose_reduce_ops(
                     custom.graph,
                     custom.location,
                 )
+                _set_node_tag(final_reduction, tag)
 
             if reduce_block:
                 # compute num_warps to reduce across
@@ -451,6 +481,7 @@ def decompose_reduce_ops(
                     workgroup_constraint_map,
                     hardware_constraint,
                     custom.location,
+                    tag,
                 )
 
             # Replace all uses with global reduction

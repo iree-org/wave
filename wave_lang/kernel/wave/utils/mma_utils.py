@@ -26,6 +26,7 @@ from ..constraints import (
 )
 from .graph_utils import capture_backward_slice
 from .symbol_utils import subs_idxc
+from .tag_utils import propagate_tag
 
 
 def is_reshape_needed(
@@ -163,6 +164,7 @@ def get_mma_dimensional_mapping(
                 )
                 custom_reshape = get_custom(reshape)
                 custom_reshape.vector_shapes = mma.vector_shapes
+                propagate_tag(mma.fx_node, reshape)
                 mma.update_arg(arg_index, reshape)
 
     def find_mma_in_slice(node: CustomOp) -> Optional[MMABase]:
