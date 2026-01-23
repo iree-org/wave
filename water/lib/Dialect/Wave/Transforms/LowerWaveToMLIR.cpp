@@ -79,8 +79,9 @@ struct LowerWaveToMLIRPass
     target.addIllegalOp<
         wave::AddOp, wave::SubOp, wave::AllocateOp, wave::CastOp, wave::DivOp,
         wave::ReciprocalOp, wave::Exp2Op, wave::ExtractOp, wave::ExtractSliceOp,
-        wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
-        wave::RegisterOp, wave::ShuffleOp, wave::WriteOp, wave::YieldOp>();
+        wave::IterateOp, wave::MaxElementOp, wave::MmaOp, wave::MulOp,
+        wave::ReadOp, wave::RegisterOp, wave::ShuffleOp, wave::SumOp,
+        wave::WriteOp, wave::YieldOp>();
 
     // Mark functions as illegal if they have Wave tensor types in their
     // signature.
@@ -124,6 +125,8 @@ struct LowerWaveToMLIRPass
           wave::populateWaveMmaLoweringPatterns(typeConverter, patterns);
           wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
           wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveReductionOpLoweringPatterns(typeConverter,
+                                                        patterns);
 
           if (failed(applyPartialConversion(op, target, std::move(patterns),
                                             config))) {
