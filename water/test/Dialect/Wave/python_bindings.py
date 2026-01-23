@@ -165,6 +165,35 @@ with ir.Context() as ctx:
     # CHECK: WaveAddressSpace.Shared
     print(addr_attr.value)
 
+    # CHECK: !wave.tensor<[@M, @N] of f32, <global>>
+    wave_tensor = ir.Type.parse("!wave.tensor<[@M, @N] of f32, <global>>")
+    print(wave_tensor)
+    # CHECK: True
+    print(isinstance(wave_tensor, wave.WaveTensorType))
+    # CHECK: True
+    print(wave_tensor.fully_specified)
+    # CHECK: 2
+    print(len(wave_tensor.shape))
+    # CHECK: #wave.symbol<"M">
+    print(wave_tensor.shape[0])
+    # CHECK: #wave.symbol<"N">
+    print(wave_tensor.shape[1])
+    # CHECK: f32
+    print(wave_tensor.element_type)
+    # CHECK: #wave.address_space<global>
+    print(wave_tensor.address_space)
+
+    # CHECK: !wave.tensor<[@M, @N] of f32, <global>>
+    M = wave.WaveSymbolAttr.get("M")
+    N = wave.WaveSymbolAttr.get("N")
+    constructed_tensor_type = wave.WaveTensorType.get(
+        [M, N],
+        True,
+        ir.F32Type.get(),
+        wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Global),
+    )
+    print(constructed_tensor_type)
+
     try:
         wave.WaveAddressSpaceAttr.get(5)
     except TypeError as e:

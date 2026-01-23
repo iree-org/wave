@@ -19,6 +19,57 @@
 namespace nb = nanobind;
 
 //===---------------------------------------------------------------------===//
+// WaveTensorType
+//===---------------------------------------------------------------------===//
+
+struct PyWaveTensorType
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteType<
+          PyWaveTensorType> {
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAWaveTensorType;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveTensorTypeGetTypeID;
+  static constexpr const char *pyClassName = "WaveTensorType";
+  using PyConcreteType::PyConcreteType;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](std::vector<MlirAttribute> &shapeSymbols, bool fullySpecified,
+           MlirType elementType, MlirAttribute addressSpace,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveTensorType(
+              context->getRef(),
+              mlirWaveTensorTypeGet(context->get(), shapeSymbols.data(),
+                                    shapeSymbols.size(), fullySpecified,
+                                    elementType, addressSpace));
+        },
+        nb::arg("shape_symbols"), nb::arg("fully_specified"),
+        nb::arg("element_type"), nb::arg("address_space"),
+        nb::arg("context") = nb::none(),
+        "Gets a wave.WaveTensorType from parameters.");
+    c.def_prop_ro("fully_specified", [](MlirType self) {
+      return mlirWaveTensorTypeGetFullySpecified(self);
+    });
+    c.def_prop_ro("shape", [](MlirType self) {
+      std::vector<MlirAttribute> symbols;
+      intptr_t size = mlirWaveTensorTypeGetShapeSize(self);
+      symbols.reserve(size);
+      for (intptr_t i = 0; i < size; ++i) {
+        symbols.push_back(mlirWaveTensorTypeGetShapeSymbol(self, i));
+      }
+      return symbols;
+    });
+    c.def_prop_ro("element_type", [](MlirType self) {
+      return mlirWaveTensorTypeGetElementType(self);
+    });
+    c.def_prop_ro("address_space", [](MlirType self) {
+      return mlirWaveTensorTypeGetAddressSpace(self);
+    });
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -376,6 +427,43 @@ struct PyWaveAddressSpaceAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveShuffleModeAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveShuffleModeAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveShuffleModeAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveShuffleModeAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveShuffleModeAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveShuffleModeAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](WaveShuffleMode value,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveShuffleModeAttr(
+              context->getRef(),
+              mlirWaveShuffleModeAttrGet(context->get(),
+                                         static_cast<uint32_t>(value)));
+        },
+        nb::arg("value"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveShuffleModeAttr from a shuffle mode enum value.");
+    c.def_prop_ro(
+        "value",
+        [](MlirAttribute self) {
+          return static_cast<WaveShuffleMode>(
+              mlirWaveShuffleModeAttrGetValue(self));
+        },
+        "Shuffle mode enum value.");
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 
@@ -526,6 +614,9 @@ struct PyWaveReadWriteBoundsAttr
         },
         nb::arg("sym_dim_dict"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveReadWriteBoundsAttr from parameters.");
+    c.def_prop_ro("mapping", [](MlirAttribute self) {
+      return mlirWaveReadWriteBoundsAttrGetMapping(self);
+    });
   }
 };
 
@@ -820,6 +911,12 @@ NB_MODULE(_waterDialects, m) {
       .value("Shared", WaveAddressSpaceShared)
       .value("Register", WaveAddressSpaceRegister);
 
+  nb::enum_<WaveShuffleMode>(d, "WaveShuffleMode")
+      .value("XOR", WaveShuffleModeXOR)
+      .value("DOWN", WaveShuffleModeDOWN)
+      .value("UP", WaveShuffleModeUP)
+      .value("IDX", WaveShuffleModeIDX);
+
   nb::enum_<WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
       .value("F32_16x16x16_F16", WaveMmaKind_F32_16x16x16_F16)
@@ -851,9 +948,11 @@ NB_MODULE(_waterDialects, m) {
   PyWaveNormalFormAttr::bind(d);
   PyWaveWorkgroupDimAttr::bind(d);
   PyWaveAddressSpaceAttr::bind(d);
+  PyWaveShuffleModeAttr::bind(d);
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
   PyWaveReadWriteBoundsAttr::bind(d);
+  PyWaveTensorType::bind(d);
   PyHardwareConstraintAttr::bind(d);
   PyDeviceConstraintAttr::bind(d);
   PyWorkgroupConstraintAttr::bind(d);

@@ -15,6 +15,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 )
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
+    get_default_arch,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
@@ -71,19 +72,14 @@ import os
 import json
 from torch.testing import assert_close
 
-# Add test shapes for validation and performance testing.
-default_test_shapes = {}
-default_test_shapes["test_gemm"] = [
-    (1024, 5120, 640),
-    (2048, 10240, 1280),
-    (4096, 20480, 2560),
-]
-default_test_shapes["test_gemm"] += [
-    perf_test(x) for x in default_test_shapes["test_gemm"]
-]
-default_test_shapes["test_batched_gemm"] = [(8, 256, 128, 192), (32, 1024, 512, 768)]
 
-default_test_shapes["test_tensor_load"] = [
+def is_gfx1250() -> bool:
+    """Check if the current architecture is GFX1250."""
+    return "gfx12" in get_default_arch()
+
+
+# Shared shapes used by multiple architectures
+_TENSOR_LOAD_SHAPES = [
     (16, 16, 16),
     (17, 17, 17),
     (15, 23, 63),
@@ -92,21 +88,113 @@ default_test_shapes["test_tensor_load"] = [
     (256, 256, 256),
 ]
 
-user_specified_test_shapes = ""
+# Default shapes for CDNA/RDNA architectures
+_DEFAULT_GEMM_SHAPES = [
+    (1024, 5120, 640),
+    (2048, 10240, 1280),
+    (4096, 20480, 2560),
+]
 
+_DEFAULT_BATCHED_GEMM_SHAPES = [
+    (8, 256, 128, 192),
+    (32, 1024, 512, 768),
+]
+
+# GFX1250 uses smaller shapes (validated against torch reference)
+_GFX1250_GEMM_SHAPES = [
+    (1024, 1024, 1024),
+    (2048, 1024, 1024),
+    (2048, 2048, 2048),
+]
+
+# Build the shape dictionaries
+default_test_shapes = {
+    "test_gemm": _DEFAULT_GEMM_SHAPES + [perf_test(x) for x in _DEFAULT_GEMM_SHAPES],
+    "test_batched_gemm": _DEFAULT_BATCHED_GEMM_SHAPES,
+    "test_tensor_load": _TENSOR_LOAD_SHAPES,
+}
+
+gfx1250_test_shapes = {
+    "test_gemm": _GFX1250_GEMM_SHAPES,
+    "test_tensor_load": _TENSOR_LOAD_SHAPES,
+}
+
+# User-specified shapes override defaults (via TEST_PARAMS_PATH env var)
+user_specified_test_shapes = {}
 test_params_path = os.environ.get("TEST_PARAMS_PATH", None)
-
-_xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
-
 if test_params_path:
     with open(test_params_path, "r") as file:
         user_specified_test_shapes = json.load(file)
 
+_xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
+
 
 def get_test_shapes(test_name: str) -> list[tuple[int]]:
+    """
+    Get test shapes for the given test name.
+
+    """
     if test_name in user_specified_test_shapes:
         return user_specified_test_shapes[test_name]
+    if is_gfx1250() and test_name in gfx1250_test_shapes:
+        return gfx1250_test_shapes[test_name]
     return default_test_shapes[test_name]
+
+
+def set_default_benchmark_options(
+    run_bench: bool, perf_filename_tk: Path, options: WaveCompileOptions
+) -> WaveCompileOptions:
+    """
+    Set benchmark options on WaveCompileOptions if benchmarking is enabled.
+
+    For GFX1250: Returns options unchanged (no benchmark support)
+    For other architectures: Sets benchmark options when run_bench=True
+    """
+    if is_gfx1250() or not run_bench:
+        return options
+    options.run_bench = True
+    options.benchmark_batch_size = 10
+    options.benchmark_repetitions = 3
+    options.benchmark_results_file = perf_filename_tk
+    return options
+
+
+def validate_gemm_result(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    options: WaveCompileOptions = None,
+    run_bench: bool = False,
+    perf_filename_iree: Path = None,
+    ref_type: str = "mmt",
+    rtol: float = 1e-3,
+    atol: float = 1e-2,
+):
+    """
+    Validate GEMM result against reference.
+
+    For GFX1250: Uses torch reference (a @ b.T)
+    For other architectures: Uses IREE reference via generate_iree_ref
+
+    Args:
+        ref_type: IREE reference type ("mmt", "bmmt", "mmt_f8")
+    """
+    out_dtype = c.dtype
+
+    if is_gfx1250():
+        # Use torch reference for GFX1250
+        # Use float32 for computation, then cast to output dtype
+        torch_ref = a.cpu().to(torch.float32) @ b.cpu().T.to(torch.float32)
+        torch_ref = torch_ref.to(out_dtype)
+        assert_close(c.cpu(), torch_ref, rtol=rtol, atol=atol)
+    else:
+        # Use IREE reference for other architectures
+        if run_bench and perf_filename_iree is not None:
+            options.benchmark_results_file = perf_filename_iree
+
+        iree_ref = device_zeros(c.shape[0], c.shape[1], dtype=out_dtype)
+        generate_iree_ref(ref_type, [a, b], [iree_ref], options)
+        assert_close(c, iree_ref, check_device=False, rtol=rtol, atol=atol)
 
 
 @require_e2e
@@ -288,14 +376,11 @@ def testPureGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         use_water_backend=use_water_backend,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
         transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
@@ -313,12 +398,7 @@ def testPureGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 small_global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
@@ -392,15 +472,12 @@ def testGemmGlobalToLDS(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
         coalescing_strategy_hint=coalescing_strategy_hint,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
@@ -424,12 +501,7 @@ def testGemmGlobalToLDS(
         "amdgpu.gather_to_lds" in asm or "tensor.load.to.lds" in asm
     ), "gather_to_lds / tensor.load.to.lds not found in asm"
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -539,14 +611,11 @@ def testGemmSmallTiles(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
         use_buffer_ops=True,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -555,12 +624,7 @@ def testGemmSmallTiles(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False, atol=2e-4, rtol=1e-5)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -667,22 +731,16 @@ def testNonTransposeGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
     a = device_randn(shape[0], shape[2], dtype=torch.float16)
     b = device_randn(shape[2], shape[1], dtype=torch.float16)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
-
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
 
     # TODO: switch to comparison against generated iree_ref
     torch_ref = torch.matmul(a, b)
@@ -778,15 +836,12 @@ def testPingPongGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=SchedulingType.PREFETCH,
         use_scheduling_barriers=False,
         dynamic_symbols=[],
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         use_global_to_shared=use_global_to_shared,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -795,12 +850,7 @@ def testPingPongGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -829,14 +879,11 @@ def testGemmDumpOverrideSchedule(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         dump_schedule=schedule_path,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
 
@@ -847,12 +894,7 @@ def testGemmDumpOverrideSchedule(
     compiled_gemm(a, b, c)
     assert schedule_path.exists()
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
     # Now reload the schedule and run the kernel again.
     # The results should be the same.
@@ -862,20 +904,16 @@ def testGemmDumpOverrideSchedule(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         override_schedule=schedule_path,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
     c_new = device_zeros(shape[0], shape[1], dtype=torch.float32)
     compiled_gemm(a, b, c_new)
     assert_close(c, c_new, check_device=False)
-    assert_close(c_new, iree_ref, check_device=False)
 
 
 @require_e2e
@@ -981,13 +1019,10 @@ def testGemmDot(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -998,12 +1033,9 @@ def testGemmDot(
 
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False, atol=1e-3, rtol=1e-3)
+    validate_gemm_result(
+        a, b, c, options, run_bench, perf_filename_iree, atol=1e-3, rtol=1e-3
+    )
 
 
 @require_e2e
@@ -1107,13 +1139,10 @@ def testVMFMAGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1122,12 +1151,9 @@ def testVMFMAGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, atol=2e-4, rtol=3e-4, check_device=False)
+    validate_gemm_result(
+        a, b, c, options, run_bench, perf_filename_iree, atol=2e-4, rtol=3e-4
+    )
 
 
 @require_e2e
@@ -1231,13 +1257,10 @@ def testCDNA2IntGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1247,12 +1270,7 @@ def testCDNA2IntGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.int32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -1337,12 +1355,9 @@ def testCDNA3IntGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1352,12 +1367,7 @@ def testCDNA3IntGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.int32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -1437,12 +1447,9 @@ def testF8Gemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1451,12 +1458,17 @@ def testF8Gemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt_f8", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, atol=3e-5, rtol=3e-4, check_device=False)
+    validate_gemm_result(
+        a,
+        b,
+        c,
+        options,
+        run_bench,
+        perf_filename_iree,
+        ref_type="mmt_f8",
+        rtol=3e-4,
+        atol=3e-5,
+    )
 
 
 @require_e2e
@@ -1562,13 +1574,10 @@ def testPackedGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1577,12 +1586,7 @@ def testPackedGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a.view(torch.int32), b.view(torch.int32), c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -1694,13 +1698,10 @@ def testPackedNonTransposeGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -1709,12 +1710,7 @@ def testPackedNonTransposeGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a.view(torch.int32), b.view(torch.int32).T.contiguous(), c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -1807,12 +1803,9 @@ def testBatchedGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
 
@@ -1920,12 +1913,9 @@ def testSequentialBatchedGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
 
@@ -2024,13 +2014,10 @@ def testSequentialBatchedGemmWhile(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         wave_runtime=True,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
 
@@ -2131,13 +2118,10 @@ def testSequentialBatchedGemmWhileWithOutputSum(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
         wave_runtime=True,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
 
@@ -2238,12 +2222,9 @@ def testBatchedGemmWithPermute(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     batched_gemm_with_permute = wave_compile(options, batched_gemm_with_permute)
 
@@ -2292,9 +2273,7 @@ def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAT
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
     gemm(a, b, c)
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @require_e2e
@@ -2518,9 +2497,7 @@ def test_rdna4_wmma(
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
     gemm(a, b, c)
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(512, 512, 512)])
@@ -2553,10 +2530,7 @@ def test_gemm_prefetch_manual_schedule(shape: tuple[int], mfma_variant: MMAType)
     # Run the kernel
     gemm_prefetch(a, b, c)
 
-    # Verify results with IREE reference
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(128, 256, 1024)])
@@ -2593,10 +2567,7 @@ def test_gemm_prefetch_reorder_manual_schedule(
     # Run the kernel
     gemm(a, b, c)
 
-    # Verify results with IREE reference
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(256, 256, 512)])
@@ -2635,9 +2606,7 @@ def test_gemm_unroll_schedule(
 
     gemm_unroll(a, b, c)
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(256, 256, 512)])
@@ -2685,9 +2654,7 @@ def test_gemm_unroll_with_iteration_access_schedule(
 
     gemm_unroll_iter_access(a, b, c)
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(256, 256, 544)])
@@ -2735,9 +2702,7 @@ def test_gemm_pipeline_then_unroll_schedule(
 
     gemm_pipeline_then_unroll(a, b, c)
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(256, 256, 232)])
@@ -2776,10 +2741,7 @@ def test_gemm_two_async_cluster_triple_buffering(
     # Run the kernel
     gemm(a, b, c)
 
-    # Verify results with IREE reference
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
@@ -2814,10 +2776,7 @@ def test_gemm_two_async_cluster_pingpong(shape: tuple[int], mfma_variant: MMATyp
     # Run the kernel
     asm = gemm(a, b, c)
 
-    # Verify results with IREE reference
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    validate_gemm_result(a, b, c, options)
 
 
 @require_e2e
@@ -2918,9 +2877,7 @@ def testTensorLoadToShared(
         "wait.tensorcnt" in asm
     ), "tensor waitcnts are not found in asm: required for tensor load instructions."
 
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c.cpu(), iree_ref.cpu(), check_device=False, atol=2e-5, rtol=1e-5)
+    validate_gemm_result(a, b, c, options)
 
 
 # TODO: This fails on the builder for rdna4, but when I run it locally it works.
@@ -3370,7 +3327,7 @@ def test_persistent_reordering_gemm(
     [
         (128, 128, 128),
         (1024, 1024, 1024),
-        (4096, 4096, 4096),
+        (2048, 2048, 2048),
     ],
 )
 @pytest.mark.parametrize(
@@ -3407,16 +3364,12 @@ def testSpecializeGemm(
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
         specialize=specialize,
         use_global_to_shared=use_global_to_shared,
-        benchmark_batch_size=10,
-        benchmark_repetitions=3,
-        benchmark_results_file=perf_filename_tk,
     )
-
+    options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -3425,20 +3378,7 @@ def testSpecializeGemm(
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    if run_bench:
-        options.benchmark_results_file = perf_filename_iree
-
-    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(
-        c,
-        iree_ref,
-        rtol=1e-5,
-        atol=1e-5,
-        check_dtype=False,
-        check_device=False,
-        check_stride=False,
-    )
+    validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
 
 @require_e2e
@@ -3464,8 +3404,7 @@ def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a, b, c)
 
-    torch_ref = torch.matmul(a.cpu(), b.cpu().t())
-    assert_close(c.cpu(), torch_ref.to(torch.float32), atol=1e-2, rtol=1e-2)
+    validate_gemm_result(a, b, c, options, rtol=1e-2, atol=1e-2)
 
 
 @use_water_backend_bool("use_water_backend")

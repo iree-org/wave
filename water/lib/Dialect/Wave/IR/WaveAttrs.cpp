@@ -909,7 +909,14 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
                                         llvm::IsaPred<wave::WaveTensorType>);
       bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
 
-      if (!hasWaveTensor && !isMemoryAccessOp)
+      // Parent allocations (byte buffers for combined shared memory) don't
+      // need index expressions. They are never accessed directly by read/write
+      // operations - only child AllocateOps reference them as a parent buffer.
+      // A parent allocation has no operands (no parent buffer to view into).
+      bool isParentAllocation =
+          llvm::isa<wave::AllocateOp>(op) && op->getNumOperands() == 0;
+
+      if ((!hasWaveTensor && !isMemoryAccessOp) || isParentAllocation)
         return llvm::success();
 
       if (isMemoryAccessOp)

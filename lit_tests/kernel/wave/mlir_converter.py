@@ -19,6 +19,7 @@ from wave_lang.kernel.wave.constraints import Constraint, MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.kernel.wave.water import apply_water_middle_end_passes
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
@@ -231,8 +232,12 @@ def mlir_converter_matrix_add():
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
-    # Print to stdout for FileCheck
+    # Print to stdout for FileCheck.
     print(mlir_output)
+
+    # Apply Water middle-end pipeline.
+    lowered_mlir = apply_water_middle_end_passes(mlir_output)
+    print(lowered_mlir)
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
@@ -293,6 +298,17 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
 
     # CHECK: return
+
+    # Water lowered output.
+    # CHECK: module {
+    # CHECK: func.func @kernel(
+    # CHECK-NOT: wave.read
+    # CHECK: vector.maskedload
+    # CHECK: vector.maskedload
+    # CHECK-NOT: wave.add
+    # CHECK: arith.addf
+    # CHECK-NOT: wave.write
+    # CHECK: vector.maskedstore
 
 
 @run_test
@@ -359,6 +375,7 @@ def mlir_converter_matmul():
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
+        minimize_shared_allocs=True,  # Test allocate with parent/offset.
     )
     options = set_default_run_config(options)
 
@@ -395,7 +412,7 @@ def mlir_converter_matmul():
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
-    # Print to stdout for FileCheck
+    # Print to stdout for FileCheck.
     # CHECK-LABEL: mlir_converter_matmul
     print(pipeline_asm)
     # CHECK: module
@@ -416,19 +433,33 @@ def mlir_converter_matmul():
     # CHECK-SAME: #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 2)>>
     # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_32x32x8_f16>>
     # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 32 : i64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, K = 640 : i64, M = 1024 : i64, N = 5120 : i64}>
+    #
+    # With minimize_shared_allocs enabled, the first allocate is the parent (combined buffer)
+    # and subsequent allocates reference it with "in %parent" and an offset attribute.
+    #
     # CHECK-NEXT: %[[ALLOCATE:.*]] = wave.allocate
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-NEXT: %[[CST_0:.*]] = arith.constant 0.000000e+00 : f32
     # CHECK-NEXT: %[[REG:.*]] = wave.register %[[CST_0]]
-    # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate
     #
+    # Child allocation with parent reference and offset.
     # Symbols related to induction variables must be dropped from the mapping. This is a bug in the
     # Python propagation algorithm that is immediately caught by the verifier on construction.
     #
-    # CHECK-SAME:   index =
-    # CHECK-SAME:     K = #wave<index_mapping
-    # CHECK-NOT:      ARGK
+    # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: index =
+    # CHECK-SAME: K = #wave<index_mapping
+    # CHECK-NOT:  ARGK
+    # CHECK-SAME: offset =
     #
-    # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate
+    # Another child allocation with parent reference and offset.
+    #
+    # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-SAME: distributed_shape
+    # CHECK-SAME: index =
+    # CHECK-SAME: offset =
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]
@@ -496,6 +527,20 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[SLICE_15:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (15)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_15]], %[[ARG2]]
     # CHECK-NEXT: return
+
+    # Apply Water middle-end pipeline.
+    lowered_mlir = apply_water_middle_end_passes(mlir_output)
+    print(lowered_mlir)
+
+    # Water lowered output.
+    # CHECK: module {
+    # CHECK: func.func @kernel(
+    # CHECK: memref.alloc() : memref<9216xi8, #gpu.address_space<workgroup>>
+    # CHECK: memref.view
+    # CHECK-NOT: wave.iterate
+    # CHECK: scf.for
+    # CHECK-NOT: wave.mma
+    # CHECK: amdgpu.mfma 32x32x8
 
 
 @run_test

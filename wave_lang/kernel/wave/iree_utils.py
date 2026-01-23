@@ -5,11 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import warnings
+from functools import lru_cache
 from packaging.version import Version
 import torch
-
 from wave_lang.runtime.launch import Launchable
 from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
 from .utils.compile_utils import compile_to_vmfb
@@ -227,26 +228,38 @@ def dtype_str(dtype: torch.dtype) -> str:
     return dtype_str
 
 
-def get_type_str(shape: tuple[int], dtype: torch.dtype) -> str:
-    return "x".join([str(x) for x in shape] + [dtype_str(dtype)])
-
-
-def generate_iree_ref(
+@lru_cache(maxsize=128)
+def _cached_build_iree_ref(
     kernel_type: str,
-    kernel_inputs: list[torch.Tensor],
-    kernel_outputs: list[torch.Tensor],
-    options: "WaveCompileOptions",
-):
+    input_specs: tuple[tuple[tuple[int, ...], torch.dtype], ...],
+    output_specs: tuple[tuple[tuple[int, ...], torch.dtype], ...],
+    device: str,
+    target: str,
+    drop_debug_info_before_mlir: bool,
+    scalarize_packed_math: bool,
+    iree_preprocessing_pass_pipeline: str,
+    run_bench: bool,
+    benchmark_batch_size: int,
+    num_devices: int,
+    conv_stride: int = None,
+) -> tuple[bytes, str]:
     """
-    Generate a reference output for the given kernel type and arguments.
+    Cached function that generates ASM and compiles to VMFB.
+
+    Caches based on kernel type, tensor shapes/dtypes, and compile options.
+    Skips both ASM generation and compilation on cache hit.
     """
 
-    asm = None
-    conv_str = "conv_"
+    # Reconstruct type strings from specs
+    def spec_to_type_str(spec):
+        shape, dtype = spec
+        return "x".join([str(x) for x in shape] + [dtype_str(dtype)])
+
+    # Generate ASM based on kernel type
     if kernel_type == "mmt" or kernel_type == "mmt_f8":
-        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        lhs_type = spec_to_type_str(input_specs[0])
+        rhs_type = spec_to_type_str(input_specs[1])
+        acc_type = spec_to_type_str(output_specs[0])
         asm, func_name = get_mmt_asm(
             lhs_type,
             rhs_type,
@@ -255,38 +268,83 @@ def generate_iree_ref(
             cast_fp8=kernel_type == "mmt_f8",
         )
     elif kernel_type == "bmmt":
-        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        lhs_type = spec_to_type_str(input_specs[0])
+        rhs_type = spec_to_type_str(input_specs[1])
+        acc_type = spec_to_type_str(output_specs[0])
         asm, func_name = get_mmt_asm(lhs_type, rhs_type, acc_type, batch=True)
     elif kernel_type == "chain_mmt":
-        query_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        key_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        value_type = get_type_str(kernel_inputs[2].shape, kernel_inputs[2].dtype)
-        output_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        query_type = spec_to_type_str(input_specs[0])
+        key_type = spec_to_type_str(input_specs[1])
+        value_type = spec_to_type_str(input_specs[2])
+        output_type = spec_to_type_str(output_specs[0])
         asm, func_name = get_chain_mmt_asm(
             query_type, key_type, value_type, output_type
         )
     elif kernel_type == "chain_mmt_f8":
-        query_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        key_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        value_type = get_type_str(kernel_inputs[2].shape, kernel_inputs[2].dtype)
-        output_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        query_type = spec_to_type_str(input_specs[0])
+        key_type = spec_to_type_str(input_specs[1])
+        value_type = spec_to_type_str(input_specs[2])
+        output_type = spec_to_type_str(output_specs[0])
         asm, func_name = get_chain_mmt_f8_asm(
             query_type, key_type, value_type, output_type
         )
-    elif kernel_type.startswith(conv_str):
-        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
-        conv_type = kernel_type[len(conv_str) :]
+    elif kernel_type.startswith("conv_"):
+        lhs_type = spec_to_type_str(input_specs[0])
+        rhs_type = spec_to_type_str(input_specs[1])
+        acc_type = spec_to_type_str(output_specs[0])
+        conv_type = kernel_type[5:]  # len("conv_")
         asm, func_name = get_conv_asm(
-            conv_type, lhs_type, rhs_type, acc_type, int(kwargs["stride"])
+            conv_type, lhs_type, rhs_type, acc_type, conv_stride
         )
     else:
         raise ValueError(f"Unknown kernel type: {kernel_type}")
 
+    # Compile
+    options = WaveCompileOptions(
+        device=device,
+        target=target,
+        drop_debug_info_before_mlir=drop_debug_info_before_mlir,
+        scalarize_packed_math=scalarize_packed_math,
+        iree_preprocessing_pass_pipeline=iree_preprocessing_pass_pipeline,
+        run_bench=run_bench,
+        benchmark_batch_size=benchmark_batch_size,
+        num_devices=num_devices,
+    )
     vmfb = compile_to_vmfb(asm, options)
+    return vmfb, func_name
+
+
+def generate_iree_ref(
+    kernel_type: str,
+    kernel_inputs: list[torch.Tensor],
+    kernel_outputs: list[torch.Tensor],
+    options: WaveCompileOptions,
+    **kwargs,
+):
+    """
+    Generate a reference output for the given kernel type and arguments.
+
+    Caches compiled kernels based on shapes, dtypes, and compile options.
+    """
+    # Build hashable specs from tensors
+    input_specs = tuple((tuple(t.shape), t.dtype) for t in kernel_inputs)
+    output_specs = tuple((tuple(t.shape), t.dtype) for t in kernel_outputs)
+
+    # Get cached or build new
+    vmfb, func_name = _cached_build_iree_ref(
+        kernel_type,
+        input_specs,
+        output_specs,
+        options.device,
+        options.target,
+        options.drop_debug_info_before_mlir,
+        options.scalarize_packed_math,
+        options.iree_preprocessing_pass_pipeline,
+        options.run_bench,
+        options.benchmark_batch_size,
+        options.num_devices,
+        conv_stride=int(kwargs["stride"]) if kernel_type.startswith("conv_") else None,
+    )
 
     def loader(device):
         vm_instance = device.vm_instance

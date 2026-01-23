@@ -290,6 +290,26 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
+def ExtractOp : WaveOp<"extract", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
+  let summary = "Extracts a single element from a vector at the given index";
+  let description = [{
+    Extracts a single element from a 1-D vector at the specified index position,
+    producing a 1-element vector.
+  }];
+
+  let arguments = (ins
+    Arg<WaveTensorInRegister, "Vector to extract from">:$source,
+    Arg<WaveExprListAttr, "Index position to extract">:$position
+  );
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Extracted 1-element vector">:$result
+  );
+
+  let assemblyFormat = "$source `[` $position `]` attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
   let summary = "Extracts a subvector from an n-D tensor";
   let description = [{
@@ -413,6 +433,48 @@ def WriteOp : WaveOp<"write", [
       setOrderedSymsAttr(::mlir::ArrayAttr::get(getContext(), attrs));
     }
   }];
+}
+
+//-----------------------------------------------------------------------------
+// Shuffle operation
+//-----------------------------------------------------------------------------
+
+def ShuffleOp : WaveOp<"shuffle", [
+    WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Shuffle data between threads in a wave/warp";
+  let description = [{
+    Performs a GPU shuffle operation to exchange data between threads in a
+    wave/warp. The shuffle mode determines how the data is exchanged:
+    - `xor`: Exchange with thread whose lane ID differs by XOR of offset.
+    - `down`: Get value from thread with higher lane ID (by offset).
+    - `up`: Get value from thread with lower lane ID (by offset).
+    - `idx`: Get value from thread with absolute lane ID given by offset.
+
+    The `offset` specifies the lane offset or target lane depending on mode.
+    The `width` specifies the logical warp width for the shuffle operation.
+
+    Example:
+    ```mlir
+    %result = wave.shuffle xor %value, 1, 64 : (vector<1xf16>) -> vector<1xf16>
+    ```
+  }];
+
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to shuffle">:$value,
+    Arg<I32Attr, "Shuffle offset">:$offset,
+    Arg<I32Attr, "Logical warp width">:$width,
+    Arg<WaveShuffleModeAttr, "Shuffle mode">:$mode
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Shuffled result">:$result
+  );
+
+  let assemblyFormat =
+    "$mode $value `,` $offset `,` $width " # commonArgumentsSyntax # "attr-dict `:`"
+    "functional-type(operands, results)";
 }
 
 //-----------------------------------------------------------------------------

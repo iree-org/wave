@@ -6,23 +6,17 @@
 
 #include "mlir/IR/Attributes.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
-#include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/LogicalResult.h"
 
 #define DEBUG_TYPE "wave-lowering"
 #define LDBG() llvm::dbgs() << "[" DEBUG_TYPE "] "
@@ -59,128 +53,9 @@ make1DTransferCommonAttrs(MemRefType memrefType, int64_t vectorizedDim,
   return TransferOpCommonAttrs{permAttr, inTrue, inFalse};
 }
 
-/// Find parent operation of type OpTy starting from the given block.
-template <typename OpTy> static OpTy findParentOfType(Block *currentBlock) {
-  auto parentOp = currentBlock->getParentOp();
-  if (auto op = dyn_cast<OpTy>(parentOp)) {
-    return op;
-  }
-  return parentOp->getParentOfType<OpTy>();
-}
+} // namespace
 
-/// Materialize affine.apply for expressions inside a `map` with `symbols`.
-/// Each symbol is either a GPU id (thread/block) or a constant from `hyper`.
-static FailureOr<SmallVector<Value>>
-materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
-                  PatternRewriter &rewriter,
-                  wave::WaveHyperparameterAttr hyper) {
-  // NOTE: This helper assumes 0 dims in `map`. If you add dims, prepend
-  // the dim operands before the symbol operands below.
-  assert(map.getNumDims() == 0 && "expected 0 dims");
-
-  auto threadId = [&](gpu::Dimension d) -> Value {
-    return gpu::ThreadIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
-  };
-  auto blockId = [&](gpu::Dimension d) -> Value {
-    return gpu::BlockIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
-  };
-
-  SmallVector<Value> baseSymVals;
-  baseSymVals.reserve(map.getNumSymbols());
-  for (Attribute attr : symbols) {
-    if (auto symbol = dyn_cast<wave::WaveSymbolAttr>(attr)) {
-      StringRef name = symbol.getName();
-      std::optional<int64_t> value = hyper.getSymbolValue(name);
-#ifndef NDEBUG
-      if (!value) {
-        llvm::errs() << "symbol: " << name << "\n";
-        assert(false && "unknown symbol, should have been caught by verifiers");
-      }
-#endif
-      baseSymVals.emplace_back(
-          arith::ConstantIndexOp::create(rewriter, loc, *value));
-      continue;
-    }
-
-    if (auto indexSymbol = dyn_cast<wave::WaveIndexSymbolAttr>(attr)) {
-      switch (indexSymbol.getValue()) {
-      case wave::WaveIndexSymbol::THREAD_0:
-        baseSymVals.emplace_back(threadId(gpu::Dimension::x));
-        break;
-      case wave::WaveIndexSymbol::THREAD_1:
-        baseSymVals.emplace_back(threadId(gpu::Dimension::y));
-        break;
-      case wave::WaveIndexSymbol::THREAD_2:
-        baseSymVals.emplace_back(threadId(gpu::Dimension::z));
-        break;
-      case wave::WaveIndexSymbol::WORKGROUP_0:
-        baseSymVals.emplace_back(blockId(gpu::Dimension::x));
-        break;
-      case wave::WaveIndexSymbol::WORKGROUP_1:
-        baseSymVals.emplace_back(blockId(gpu::Dimension::y));
-        break;
-      case wave::WaveIndexSymbol::WORKGROUP_2:
-        baseSymVals.emplace_back(blockId(gpu::Dimension::z));
-        break;
-      case wave::WaveIndexSymbol::DEVICE_DIM_0:
-      case wave::WaveIndexSymbol::DEVICE_DIM_1:
-      case wave::WaveIndexSymbol::DEVICE_DIM_2:
-        return rewriter.notifyMatchFailure(
-            loc, "materialization of affine expressions containing device "
-                 "dimension symbols is not implemented.");
-      case wave::WaveIndexSymbol::GPR_NUMBER:
-        return rewriter.notifyMatchFailure(
-            loc, "materialization of affine expressions containing gpr number "
-                 "symbols is not implemented.");
-      }
-      continue;
-    }
-
-    if (auto iterSymbol = dyn_cast<wave::WaveIterSymbolAttr>(attr)) {
-      // Check if we're inside an scf.for loop that corresponds to this
-      // iteration symbol.
-      Block *currentBlock = rewriter.getInsertionBlock();
-
-      if (findParentOfType<wave::IterateOp>(currentBlock)) {
-        return rewriter.notifyMatchFailure(
-            loc, "iteration symbol found inside wave.iterate - "
-                 "please run lower-wave-control-flow pass first");
-      }
-
-      scf::ForOp parentFor = findParentOfType<scf::ForOp>(currentBlock);
-      assert(parentFor &&
-             "iteration symbol found but no iteration context available");
-
-      // Get the induction variable from the scf.for loop.
-      Value inductionVar = parentFor.getInductionVar();
-
-      // Pass the induction variable directly to the affine map. The index
-      // expressions are designed as affine maps that already incorporate tile
-      // size scaling. Pre-multiplying here would cause double multiplication
-      // when the affine map applies its own scaling.  For example, if the map
-      // is (s0 * 32), it expects s0 = iteration, not s0 = iteration *
-      // tile_size.
-      baseSymVals.push_back(inductionVar);
-      continue;
-    }
-  }
-
-  // In case map contains multiple results, create one apply per result.
-  SmallVector<Value> results;
-  results.reserve(map.getNumResults());
-  for (AffineExpr expr : map.getResults()) {
-    AffineMap submap =
-        AffineMap::get(map.getNumDims(), map.getNumSymbols(), expr);
-    SmallVector<Value> symVals = baseSymVals;
-
-    affine::canonicalizeMapAndOperands(&submap, &symVals);
-
-    Value apply = affine::AffineApplyOp::create(rewriter, loc, submap, symVals);
-    results.push_back(apply);
-  }
-
-  return results;
-}
+namespace {
 
 /// Build per-dimension start indices in the order specified by `orderedSyms`
 /// (the Wave tensor’s dim order). For each symbol name in `orderedSyms`, this
@@ -199,7 +74,7 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
     assert(a && "index dict missing entry for dimension symbol");
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(a);
 
-    FailureOr<SmallVector<Value>> startFo = materializeAffine(
+    FailureOr<SmallVector<Value>> startFo = wave::materializeAffine(
         loc, mapAttr.getSymbols(), mapAttr.getStart(), rewriter, hyper);
     if (failed(startFo))
       return failure();
@@ -240,7 +115,7 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
     assert(a && "bounds dict missing entry for dimension symbol");
     auto boundAttr = cast<wave::WaveExprListAttr>(a);
     // Materialize bounds.
-    FailureOr<SmallVector<Value>> boundValsFo = materializeAffine(
+    FailureOr<SmallVector<Value>> boundValsFo = wave::materializeAffine(
         loc, boundAttr.getSymbols(), boundAttr.getMap(), rewriter, hyper);
     if (failed(boundValsFo))
       return failure();
