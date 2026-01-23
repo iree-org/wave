@@ -228,13 +228,20 @@ void wave::IterateOp::getSuccessorRegions(
     ::llvm::SmallVectorImpl<::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
   // Exit to parent with loop results.
-  regions.emplace_back(RegionSuccessor::parent(getResults()));
+  regions.emplace_back(RegionSuccessor::parent());
   // Branch into the loop body with iter_args mapped to block arguments.
   // Note: captures are also block arguments but come after iter_args.
-  auto bodyArgs = getLoopBody()->getArguments();
-  auto iterArgCount = getIterArgs().size();
-  regions.emplace_back(
-      RegionSuccessor(&getBody(), bodyArgs.take_front(iterArgCount)));
+  regions.emplace_back(RegionSuccessor(&getBody()));
+}
+
+ValueRange wave::IterateOp::getSuccessorInputs(RegionSuccessor successor) {
+  // When branching to the parent (exiting the loop), the successor inputs are
+  // the op results.
+  if (successor.isParent())
+    return getResults();
+  // When branching to the region, the successor inputs are the block arguments
+  // corresponding to iter_args (not captures).
+  return getLoopBody()->getArguments().drop_back(getCaptures().size());
 }
 
 llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsForward(

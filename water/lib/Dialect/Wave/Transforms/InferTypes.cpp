@@ -298,6 +298,7 @@ public:
 
   void visitNonControlFlowArguments(Operation *op,
                                     const RegionSuccessor &successor,
+                                    ValueRange successorInputs,
                                     llvm::ArrayRef<InferTypeLattice *> lattices,
                                     unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
@@ -790,6 +791,7 @@ public:
 
   void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor &successor,
+      ValueRange successorInputs,
       llvm::ArrayRef<ElementsPerThreadLattice *> lattices,
       unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
@@ -1319,6 +1321,7 @@ public:
 
   void
   visitNonControlFlowArguments(Operation *op, const RegionSuccessor &successor,
+                               ValueRange successorInputs,
                                llvm::ArrayRef<IndexExprsLattice *> lattices,
                                unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
