@@ -3479,6 +3479,7 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
         sgpr_count = 46
         sgpr_spill_count = 0
         waitcounts = [
+            "s_wait_xcnt 0x0",
             "s_wait_kmcnt 0x0",
             "s_wait_xcnt 0x0",
             "s_wait_tensorcnt 0x0",
@@ -3489,7 +3490,6 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0xe",
             "s_wait_loadcnt 0x0",
             "s_wait_dscnt 0xc",
-            "s_wait_kmcnt 0x0",
             "s_wait_dscnt 0x8",
             "s_wait_dscnt 0x8",
             "s_wait_dscnt 0x0",
@@ -3508,10 +3508,10 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-            "v_readfirstlane_b32 s2, v4",
-            "v_readfirstlane_b32 s4, v3",
-            "v_readfirstlane_b32 s2, v4",
-            "v_readfirstlane_b32 s2, v2",
+            "v_readfirstlane_b32 s0, v4",
+            "v_readfirstlane_b32 s1, v3",
+            "v_readfirstlane_b32 s0, v4",
+            "v_readfirstlane_b32 s0, v2",
             "v_readfirstlane_b32 s20, v3",
         ]
 
