@@ -627,20 +627,23 @@ def gather_to_shared_swizzling(
         col_dim = infer_dim(shape[-1])
         row_dim = infer_dim(shape[-2])
 
-        max_phase = 8
+        # Compute max_phase based on the number of column chunks.
+        # The XOR swizzle `xor(row % max_phase, col_chunk)` can produce values
+        # from 0 to max_phase-1. We need to ensure these values are valid column
+        # chunk indices, otherwise we get out-of-bounds access.
+        mem_custom = get_custom(mem)
+        distributed_shape = mem_custom.distributed_shape
+        col_size = subs_idxc(distributed_shape[-1])
+        num_col_chunks = col_size // elements_per_thread
+        max_phase = min(8, num_col_chunks)
+        logger.info(
+            f"distributed_shape={distributed_shape}, col_size={col_size}, "
+            f"num_col_chunks={num_col_chunks}, max_phase={max_phase}"
+        )
 
-        # Check row phase inconsistency between reads and gathers.
-        gather_local_index = remove_global_indexing(gather.src_index, constraints)
-        read_local_index = remove_global_indexing(read.index, constraints)
-        gather_row_expr = sympy.simplify(
-            subs_idxc(gather_local_index[row_dim].start) % max_phase
-        )
-        read_row_expr = sympy.simplify(
-            subs_idxc(read_local_index[row_dim].start) % max_phase
-        )
-        if gather_row_expr != read_row_expr:
+        if max_phase < 2:
             logger.info(
-                f"row phase inconsistency between reads and gathers: {gather_row_expr} != {read_row_expr}. Skipping swizzling as it is not supported."
+                f"max_phase={max_phase} is too small for effective swizzling, skipping"
             )
             continue
 
