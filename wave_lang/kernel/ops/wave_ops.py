@@ -1686,6 +1686,10 @@ class AtomicOp(BinaryOpBase):
     def memory_type(self) -> "Memory":
         return get_custom(self.rhs).type
 
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
 
 @define_op("atomic_add")
 @dataclass
@@ -2500,6 +2504,10 @@ class Write(CustomOp):
     def register_index(self) -> dict[IndexSymbol, IndexSequence]:
         custom = get_custom(self.register_)
         return custom.index
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
