@@ -23,6 +23,7 @@
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -98,33 +99,15 @@ static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
 static ParseResult parseSymbolArray(OpAsmParser &parser,
                                     ArrayAttr &symbolArrayAttr) {
   SmallVector<Attribute> symbols;
-  if (parser.parseLSquare())
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square, [&]() {
+        StringAttr strAttr;
+        if (failed(parser.parseSymbolName(strAttr)))
+          return failure();
+        symbols.push_back(
+            wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
+        return success();
+      }))
     return failure();
-
-  // Handle empty array.
-  if (succeeded(parser.parseOptionalRSquare())) {
-    symbolArrayAttr = parser.getBuilder().getArrayAttr(symbols);
-    return success();
-  }
-
-  // Parse first symbol.
-  StringAttr strAttr;
-  if (failed(parser.parseSymbolName(strAttr)))
-    return failure();
-  symbols.push_back(
-      wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
-
-  // Parse remaining symbols.
-  while (succeeded(parser.parseOptionalComma())) {
-    if (failed(parser.parseSymbolName(strAttr)))
-      return failure();
-    symbols.push_back(
-        wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
-  }
-
-  if (parser.parseRSquare())
-    return failure();
-
   symbolArrayAttr = parser.getBuilder().getArrayAttr(symbols);
   return success();
 }
@@ -1985,30 +1968,35 @@ LogicalResult wave::BroadcastOp::verify() {
            << getBroadcastDims().size() << ")";
 
   // Collect source shape symbols into a set.
-  llvm::StringSet<> sourceSymbols;
+  llvm::DenseSet<WaveSymbolAttr> sourceSymbols;
   for (WaveSymbolAttr sym : sourceType.getShape())
-    sourceSymbols.insert(sym.getName());
+    sourceSymbols.insert(sym);
 
-  // Collect broadcast dims into a set and check they don't exist in source.
-  llvm::StringSet<> broadcastSymbols;
+  // Collect broadcast dims into a set, check uniqueness, and check they don't
+  // exist in source.
+  llvm::DenseSet<WaveSymbolAttr> broadcastSymbols;
   for (Attribute attr : getBroadcastDims()) {
     auto sym = llvm::cast<WaveSymbolAttr>(attr);
-    broadcastSymbols.insert(sym.getName());
+
+    // Check broadcast dims are unique.
+    if (!broadcastSymbols.insert(sym).second)
+      return emitOpError("broadcast dimension '")
+             << sym.getName() << "' appears more than once";
 
     // Broadcast dims should not be in source shape.
-    if (sourceSymbols.contains(sym.getName()))
+    if (sourceSymbols.contains(sym))
       return emitOpError("broadcast dimension '")
              << sym.getName() << "' already exists in source shape";
   }
 
   // Verify result shape = source shape + broadcast dims (as sets).
-  llvm::StringSet<> resultSymbols;
+  llvm::DenseSet<WaveSymbolAttr> resultSymbols;
   for (WaveSymbolAttr sym : resultType.getShape())
-    resultSymbols.insert(sym.getName());
+    resultSymbols.insert(sym);
 
   // Check all source symbols are in result.
   for (WaveSymbolAttr sym : sourceType.getShape()) {
-    if (!resultSymbols.contains(sym.getName()))
+    if (!resultSymbols.contains(sym))
       return emitOpError("source dimension '")
              << sym.getName() << "' not found in result shape";
   }
@@ -2016,7 +2004,7 @@ LogicalResult wave::BroadcastOp::verify() {
   // Check all broadcast dims are in result.
   for (Attribute attr : getBroadcastDims()) {
     auto sym = llvm::cast<WaveSymbolAttr>(attr);
-    if (!resultSymbols.contains(sym.getName()))
+    if (!resultSymbols.contains(sym))
       return emitOpError("broadcast dimension '")
              << sym.getName() << "' not found in result shape";
   }
@@ -2038,8 +2026,10 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
     llvm::MutableArrayRef<WaveTensorType> operandTypes,
     llvm::ArrayRef<WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
   // Backward propagation: infer source shape = result shape - broadcast_dims.
-  WaveTensorType sourceType = operandTypes[0];
-  WaveTensorType resultType = resultTypes[0];
+  unsigned sourceIdx = getSourceMutable().getOperandNumber();
+  unsigned resultIdx = getResult().getResultNumber();
+  WaveTensorType sourceType = operandTypes[sourceIdx];
+  WaveTensorType resultType = resultTypes[resultIdx];
 
   // If result is not fully specified, we can't infer source.
   if (!resultType || !resultType.getFullySpecified())
@@ -2050,16 +2040,14 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
     return ChangeResult::NoChange;
 
   // Collect broadcast dims into a set.
-  llvm::StringSet<> broadcastSymbols;
-  for (Attribute attr : getBroadcastDims()) {
-    auto sym = llvm::cast<WaveSymbolAttr>(attr);
-    broadcastSymbols.insert(sym.getName());
-  }
+  llvm::DenseSet<WaveSymbolAttr> broadcastSymbols;
+  for (Attribute attr : getBroadcastDims())
+    broadcastSymbols.insert(llvm::cast<WaveSymbolAttr>(attr));
 
   // Compute source shape = result shape - broadcast dims.
   llvm::SmallVector<WaveSymbolAttr> sourceShape;
   for (WaveSymbolAttr sym : resultType.getShape()) {
-    if (!broadcastSymbols.contains(sym.getName()))
+    if (!broadcastSymbols.contains(sym))
       sourceShape.push_back(sym);
   }
 
@@ -2068,6 +2056,32 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
       getContext(), sourceShape, /*fullySpecified=*/true,
       resultType.getElementType(), resultType.getAddressSpace());
 
-  operandTypes[0] = inferredSourceType;
+  operandTypes[sourceIdx] = inferredSourceType;
   return ChangeResult::Change;
+}
+
+llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const ElementsPerThreadInit &init) {
+  for (Attribute attr : getBroadcastDims()) {
+    if (llvm::cast<WaveSymbolAttr>(attr) == init.threadXDimension)
+      return ChangeResult::NoChange;
+  }
+  return detail::identityElementsPerThreadPropagate(operandElements,
+                                                    resultElements, "operands",
+                                                    "results", errs);
+}
+
+llvm::FailureOr<ChangeResult>
+wave::BroadcastOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const ElementsPerThreadInit &init) {
+  for (Attribute attr : getBroadcastDims()) {
+    if (llvm::cast<WaveSymbolAttr>(attr) == init.threadXDimension)
+      return ChangeResult::NoChange;
+  }
+  return detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "results", "operands", errs);
 }

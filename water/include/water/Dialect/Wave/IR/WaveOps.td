@@ -549,7 +549,7 @@ def CastOp : WaveOp<"cast", [
 
 def BroadcastOp : WaveOp<"broadcast", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
-    WaveElementsPerThreadOpInterface, BroadcastElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Broadcast a tensor to a larger shape by replicating values";
   let description = [{

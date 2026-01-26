@@ -98,11 +98,6 @@ def ReductionElementsPerThreadOpTrait
   let cppNamespace = "::wave";
 }
 
-def BroadcastElementsPerThreadOpTrait
-    : NativeOpTrait<"BroadcastElementsPerThreadOpTrait"> {
-  let cppNamespace = "::wave";
-}
-
 //-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------
