@@ -239,7 +239,7 @@ static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
 
 // Propagate type information from the reduction input type by removing the
 // reduction axis from it to the given type. Report errors to `errs` using
-// `toName` do identify the target type.
+// `toName` to identify the target type.
 static FailureOr<ChangeResult>
 propagateFromReductionInput(wave::WaveTensorType inputType,
                             wave::WaveSymbolAttr axis, wave::WaveTensorType &to,
@@ -250,6 +250,8 @@ propagateFromReductionInput(wave::WaveTensorType inputType,
   SmallVector<wave::WaveSymbolAttr> filteredShape = llvm::filter_to_vector(
       inputType.getShape(),
       [&](wave::WaveSymbolAttr dim) { return dim != axis; });
+  assert(inputType.getRank() - 1 == filteredShape.size() &&
+         "expected rank to be reduced by 1 in reduction");
   auto inferredType = wave::WaveTensorType::get(
       inputType.getContext(), filteredShape, /*fully_specified=*/true,
       inputType.getElementType(), inputType.getAddressSpace());
@@ -292,11 +294,13 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
   wave::WaveTensorType inputType = operandTypes[inputOperandNum];
   return maybeChangeResult |
          propagateFromReductionInput(
-             inputType, axis, operandTypes[initOperandNum], "result", errs);
+             inputType, axis, operandTypes[initOperandNum], "init", errs);
 
   // TODO: we cannot propagate to input here because we don't know at which
   // position the reduction axis should be. We may consider a form where we
-  // always reduce trailing dimensions and require a reshape before.
+  // always reduce trailing dimensions and require a reshape before. We could
+  // introduce an additional attribute indicating the position of the reduction
+  // axis as long as we ensure its consistency with the type in the verifier.
 }
 
 //-----------------------------------------------------------------------------
