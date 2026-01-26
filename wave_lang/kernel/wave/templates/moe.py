@@ -757,52 +757,64 @@ def get_silu_and_mul_kernel(
 
 
 def get_moe_reduce_sum_kernel(
-    b: int,
-    k: int,
-    d: int,
+    b_size: int,
+    k_size: int,
+    d_size: int,
     datatype: DataType,
 ):
     # Input sizes
     B = tkl.sym.B
     K = tkl.sym.K
     D = tkl.sym.D
+    # Iterator symbols for source/target transpose
+    b = tkl.sym.b
+    k = tkl.sym.k
+    d = tkl.sym.d
     wave_size = 64
     BLOCK_B = 1
     BLOCK_K = sympy.ceiling(K / wave_size) * wave_size
     BLOCK_D = 1
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
+    # Register layout is [B, D, K] so K is the fast dimension for reduction
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=64,
-            vector_shapes={B: BLOCK_B, K: BLOCK_K, D: BLOCK_D},
+            vector_shapes={B: BLOCK_B, D: BLOCK_D, K: BLOCK_K},
         )
     ]
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
-    constraints += [tkw.WorkgroupConstraint(K, BLOCK_K, 0)]
     constraints += [tkw.WorkgroupConstraint(D, BLOCK_D, 1)]
+    constraints += [tkw.WorkgroupConstraint(K, BLOCK_K, 0)]
     constraints += [tkw.WaveConstraint(B, BLOCK_B)]
-    constraints += [tkw.WaveConstraint(K, BLOCK_K)]
     constraints += [tkw.WaveConstraint(D, BLOCK_D)]
+    constraints += [tkw.WaveConstraint(K, BLOCK_K)]
+    # Iterator bindings for source/target transpose
+    constraints += [tkw.IteratorBindings({b: B, k: K, d: D})]
 
     @tkw.wave(constraints)
     def moe_reduce_sum(
         a: tkl.Memory[B, K, D, ADDRESS_SPACE, datatype],
-        b: tkl.Memory[B, K, ADDRESS_SPACE, datatype],
+        weights: tkl.Memory[B, K, ADDRESS_SPACE, datatype],
         c: tkl.Memory[B, D, ADDRESS_SPACE, datatype],
     ):
-        gemm2_out = tkw.read(a)
-        topk_weights = tkw.read(b)
-        topk_weights_broadcasted = tkw.broadcast(topk_weights, [B, K, D])
+        # Read from [B, K, D] and transpose to [B, D, K] so K is fast
+        gemm2_out = tkw.read(a, source=(b, k, d), target=(b, d, k))
+        # Read weights [B, K]
+        topk_weights = tkw.read(weights, source=(b, k), target=(b, k))
+        # Broadcast to [B, D, K] (transposed layout with K as fast dim)
+        topk_weights_broadcasted = tkw.broadcast(topk_weights, [B, D, K])
         res = gemm2_out * topk_weights_broadcasted
+        # Reduce over K (now the fast/innermost dimension)
         res = tkw.sum(res, dim=K)
-        tkw.write(res, c)
+        # Write result [B, D] - D is the fast dimension in output
+        tkw.write(res, c, source=(b, d), target=(b, d))
 
     hyperparams = {
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-        B: b,
-        K: k,
-        D: d,
+        B: b_size,
+        K: k_size,
+        D: d_size,
     }
 
     return moe_reduce_sum, hyperparams
