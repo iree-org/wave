@@ -89,10 +89,12 @@ def get_async_two_cluster_triple_buffer():
             shared_load_b, dim=K, num_partitions=2
         )
 
-        # Create cluster ordering with async operations
+        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
+
         clusters = [
             tkw.cluster(
                 [
+                    tkw.MemoryCounterWaitBarrier(load=independent_global_count),
                     tkw.WorkgroupBarrier(),
                     shared_load_a_0,
                     shared_load_b_0,
@@ -132,11 +134,19 @@ def get_async_two_cluster_triple_buffer():
                 ],
             ),
         ]
+
         # Apply the cluster-based reordering to the KERNEL stage
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
 
         # Apply staggering waves scheduling to allow two waves to execute clusters in parallel with a stagger offset
         tkw.stagger(pipeline_loop.KERNEL)
+
+        # Unroll factor requires per-GEMM tuning:
+        # Over-unrolling leads to bloated code and instruction cache pressure.
+        # Under-unrolling prevents the backend from resolving memory aliasing
+        # metadata
+        unroll_factor = 2
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
     return async_two_cluster_three_stage_schedule
 

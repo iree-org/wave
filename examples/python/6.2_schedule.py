@@ -512,7 +512,7 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
     from different iterations. It also uses a 3 stage pipeline to triple buffer the shared memory which allows for 2 memory prefetches before the loop starts.
     """
     shape: tuple[int, int, int] = (128, 256, 1024)
-    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
+    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x32_F16
 
     # Symbol definitions
     M = tkl.sym.M
@@ -627,9 +627,12 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
             shared_load_b, dim=K, num_partitions=2
         )
 
+        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
+
         clusters = [
             tkw.cluster(
                 [
+                    tkw.MemoryCounterWaitBarrier(load=independent_global_count),
                     tkw.WorkgroupBarrier(),
                     shared_load_a_0,
                     shared_load_b_0,
@@ -676,16 +679,24 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
         # Apply staggering waves scheduling to allow two waves to execute clusters in parallel with a stagger offset
         tkw.stagger(pipeline_loop.KERNEL)
 
+        # Unroll factor requires per-GEMM tuning:
+        # Over-unrolling leads to bloated code and instruction cache pressure.
+        # Under-unrolling prevents the backend from resolving memory aliasing
+        # metadata
+        unroll_factor = 2
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
+
     # Define compile options
     M_val, N_val, K_val = shape
+    Block_M, Block_N, Block_K = 64, 32, 64
     options = WaveCompileOptions(
         subs={
             M: M_val,
             N: N_val,
             K: K_val,
-            BLOCK_M: 128,
-            BLOCK_N: 256,
-            BLOCK_K: 64,
+            BLOCK_M: Block_M,
+            BLOCK_N: Block_N,
+            BLOCK_K: Block_K,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -693,7 +704,7 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
         schedule=SchedulingType.MANUAL,
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
-        minimize_shared_allocs=False,
+        minimize_shared_allocs=False,  # This is needed such that the backend can infer aliasing metadata
     )
 
     # Set runtime configuration for execution
