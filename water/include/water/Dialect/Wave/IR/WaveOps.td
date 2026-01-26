@@ -549,4 +549,41 @@ def CastOp : WaveOp<"cast", [
   let hasVerifier = 1;
 }
 
+def BroadcastOp : WaveOp<"broadcast", [
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+    WaveElementsPerThreadOpInterface, BroadcastElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Broadcast a tensor to a larger shape by replicating values";
+  let description = [{
+    Broadcasts the source tensor to the result shape by replicating values
+    along the broadcast dimensions. The source shape symbols must be a subset
+    of the result shape symbols.
+
+    The `broadcast_dims` attribute specifies which dimensions are being added
+    to the source shape to produce the result shape.
+
+    Example:
+    ```mlir
+    // Broadcast from [@M] to [@M, @N] by adding dimension @N
+    %result = wave.broadcast %src dims [@N] :
+        !wave.tensor<[@M] of f32, <register>> -> !wave.tensor<[@M, @N] of f32, <register>>
+    ```
+  }];
+
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source,
+    Arg<WaveSymbolArrayAttr, "Dimensions being broadcast (added)">:$broadcast_dims
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Broadcasted result">:$result
+  );
+
+  let assemblyFormat =
+    "$source `dims` custom<SymbolArray>($broadcast_dims) " # commonArgumentsSyntax # "attr-dict `:`"
+    "functional-type(operands, results)";
+
+  let hasVerifier = 1;
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEOPS

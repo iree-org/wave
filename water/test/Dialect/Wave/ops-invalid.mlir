@@ -697,7 +697,7 @@ func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.ten
 
 // -----
 
-func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
+func.func @rank_mismatch_result(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
   // expected-error @below {{result tensor rank (2) must be one less than input tensor rank (2)}}
   %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32>
   return %result : !wave.tensor<[@N, @M] of f32>
@@ -710,3 +710,38 @@ func.func @symbol_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.t
   %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32>
   return %result : !wave.tensor<[@M] of f32>
 }
+
+// -----
+
+func.func @broadcast_dim_already_in_source(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{broadcast dimension 'N' already exists in source shape}}
+  wave.broadcast %arg0 dims [@N] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_source_dim_not_in_result(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // Source has [@M, @N], broadcast adds [@K], result should have [@M, @N, @K].
+  // But result has [@M, @P, @K] - N is missing (replaced by P).
+  // expected-error @below {{source dimension 'N' not found in result shape}}
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @P, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_dim_not_in_result(%arg0: !wave.tensor<[@M] of f32, <register>>) {
+  // expected-error @below {{broadcast dimension 'K' not found in result shape}}
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_result_size_mismatch(%arg0: !wave.tensor<[@M] of f32, <register>>) {
+  // expected-error @below {{result shape size (2) does not match source shape size (1) plus broadcast dims size (2)}}
+  wave.broadcast %arg0 dims [@N, @K] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
