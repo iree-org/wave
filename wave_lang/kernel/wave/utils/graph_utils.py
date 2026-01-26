@@ -181,8 +181,7 @@ def get_users(
                 init_arg_idx = custom.init_args.index(node)
                 users.append(custom.iter_args(graph)[init_arg_idx])
             elif node == custom.start:
-                # don't know what to do
-                continue
+                users.append(user)
             else:
                 # Check if any placeholder in implicit_captures captures this node (recursively)
                 for capture in custom.implicit_captures:
