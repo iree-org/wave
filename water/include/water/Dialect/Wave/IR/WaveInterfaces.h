@@ -128,25 +128,25 @@ public:
   }
 };
 
-// Verify that element types of Wave tensors match between LHS and RHS. Emit
-// diagnostic errors and return a failure when it is not the case.
+// Verify that element types of Wave tensors or vectors match between LHS and
+// RHS. Emit diagnostic errors and return a failure when it is not the case.
 namespace detail {
 llvm::LogicalResult verifyElementTypesMatch(std::optional<mlir::Location> loc,
                                             llvm::StringRef lhsName,
-                                            wave::WaveTensorType lhs,
+                                            mlir::Type lhs,
                                             llvm::StringRef rhsName,
-                                            wave::WaveTensorType rhs);
+                                            mlir::Type rhs);
 
-// Verify if two types are compatible:
-//   - their symbolic shapes are either equal or at least one of them is
+// Verify if two Wave tensor or vector types are compatible:
+//   - their element types are equal;
+//   - tensor symbolic shapes are either equal or at least one of them is
 //     underspecified;
-//   - their address spaces are either equal or at least one of them is
-//     underspecified.
+//   - tensor address spaces are either equal or at least one of them is
+//     underspecified;
 // When it is not the case, return failure and optionally report an error if a
 // location is provided.
 llvm::LogicalResult verifyTypesCompatible(
-    wave::WaveTensorType lhs, wave::WaveTensorType rhs,
-    bool includeAddressSpace,
+    mlir::Type lhs, mlir::Type rhs, bool includeAddressSpace,
     std::optional<mlir::Location> errorLocation = std::nullopt,
     llvm::StringRef lhsName = "", llvm::StringRef rhsName = "");
 

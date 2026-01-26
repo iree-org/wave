@@ -1529,7 +1529,13 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        Type memoryType, Type valueType,
                                        WaveReadWriteBoundsAttr bounds,
                                        ArrayAttr orderedSyms) {
-  // Skip verification if memory is already resolved to MemRefType.
+
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "memory", memoryType, "register", valueType)))
+    return failure();
+
+  // Skip the rest of the verification if memory is already resolved to
+  // MemRefType.
   auto tensorType = dyn_cast<WaveTensorType>(memoryType);
   if (!tensorType)
     return success();

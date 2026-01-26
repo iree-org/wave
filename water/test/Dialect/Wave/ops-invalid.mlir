@@ -318,6 +318,13 @@ func.func @mismatch_shape_binary(%lhs: !wave.tensor<[@A, @B] of f32>, %rhs: !wav
 
 // -----
 
+func.func @mismatch_element_type_tensor_vector(%lhs: !wave.tensor<[@A, @B] of f32>, %rhs: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{expected result #0 and operand #0 elemental types to match, got 'f64', 'f32'}}
+  wave.add %lhs, %rhs : (!wave.tensor<[@A, @B] of f32>, !wave.tensor<[@A, @B] of f32>) -> vector<4xf64>
+}
+
+// -----
+
 func.func @mismatch_shape_unary(%lhs: !wave.tensor<[@A, @B] of f32>) {
   // expected-error @below {{expected result #0 dimension #0 (#wave.symbol<"B">) to match operand #0 dimension #0 (#wave.symbol<"A">)}}
   wave.exp2 %lhs : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@B, @C] of f32>
@@ -421,6 +428,14 @@ normalform.module [#wave.normal_form<full_types>] {
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
+}
+
+// -----
+
+func.func @read_element_type_mismatch(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>) {
+  // expected-error @below {{expected result #0 and operand #0 elemental types to match, got 'f32', 'f16'}}
+  %0 = wave.read %mem : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf32>
+  return
 }
 
 // -----

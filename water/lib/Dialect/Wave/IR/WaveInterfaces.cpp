@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include <cstdint>
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
@@ -358,25 +358,34 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
   return success();
 }
 
-llvm::LogicalResult wave::detail::verifyElementTypesMatch(
-    std::optional<Location> loc, llvm::StringRef lhsName,
-    wave::WaveTensorType lhs, llvm::StringRef rhsName,
-    wave::WaveTensorType rhs) {
-  if (lhs.getElementType() == rhs.getElementType())
+// Return the element type of a Wave tensor or builtin shaped type, or nullptr
+// for other types.
+static Type getElementType(Type type) {
+  return llvm::TypeSwitch<Type, Type>(type)
+      .Case<wave::WaveTensorType, ShapedType>(
+          [](auto containerType) { return containerType.getElementType(); })
+      .DefaultUnreachable("expected Wave tensor or vector type");
+}
+
+llvm::LogicalResult
+wave::detail::verifyElementTypesMatch(std::optional<Location> loc,
+                                      llvm::StringRef lhsName, Type lhs,
+                                      llvm::StringRef rhsName, Type rhs) {
+  if (getElementType(lhs) == getElementType(rhs))
     return success();
 
   if (loc) {
     emitError(*loc) << "expected " << lhsName << " and " << rhsName
-                    << " elemental types to match, got " << lhs.getElementType()
-                    << ", " << rhs.getElementType();
+                    << " elemental types to match, got " << getElementType(lhs)
+                    << ", " << getElementType(rhs);
   }
   return failure();
 }
 
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
-    wave::WaveTensorType lhs, wave::WaveTensorType rhs,
-    bool includeAddressSpace, std::optional<Location> errorLocation,
-    llvm::StringRef lhsName, llvm::StringRef rhsName) {
+    Type lhs, Type rhs, bool includeAddressSpace,
+    std::optional<Location> errorLocation, llvm::StringRef lhsName,
+    llvm::StringRef rhsName) {
   // Fast and cheap path.
   if (lhs == rhs)
     return success();
@@ -386,10 +395,21 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
            "expected names when location is provided");
   }
 
+  if (failed(
+          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
+    return failure();
+
+  auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
+  auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
+  if (!lhsTensor || !rhsTensor)
+    return success();
+
   if (includeAddressSpace) {
-    if (lhs.getAddressSpaceValue() != rhs.getAddressSpaceValue() &&
-        lhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified &&
-        rhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified) {
+    if (lhsTensor.getAddressSpaceValue() != rhsTensor.getAddressSpaceValue() &&
+        lhsTensor.getAddressSpaceValue() !=
+            wave::WaveAddressSpace::Unspecified &&
+        rhsTensor.getAddressSpaceValue() !=
+            wave::WaveAddressSpace::Unspecified) {
       if (errorLocation) {
         emitError(*errorLocation) << "address space mismatch between "
                                   << lhsName << " and " << rhsName;
@@ -398,14 +418,10 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
     }
   }
 
-  if (failed(
-          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
-    return failure();
-
-  if (!lhs.getFullySpecified() || !rhs.getFullySpecified())
+  if (!lhsTensor.getFullySpecified() || !rhsTensor.getFullySpecified())
     return success();
 
-  if (lhs.getRank() != rhs.getRank()) {
+  if (lhsTensor.getRank() != rhsTensor.getRank()) {
     if (errorLocation) {
       emitError(*errorLocation)
           << "rank mismatch between " << lhsName << " and " << rhsName;
@@ -413,29 +429,25 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
     return failure();
   }
 
-  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhs.getRank(),
+  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhsTensor.getRank(),
                                                        /*Inclusive=*/false));
-  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhs, allDims,
-                                       rhsName, rhs, allDims);
+  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhsTensor,
+                                       allDims, rhsName, rhsTensor, allDims);
 }
 
 static llvm::LogicalResult
-verifyTypeRange(Location loc, TypeRange range,
-                wave::WaveTensorType referenceType, bool includeAddressSpace,
+verifyTypeRange(Location loc, TypeRange range, Type referenceType,
+                bool includeAddressSpace,
                 llvm::StringRef rangeDescriptionPrefix,
                 llvm::StringRef referenceDescription) {
   llvm::SmallString<16> rangeDescription(rangeDescriptionPrefix);
   for (auto &&[i, type] : llvm::enumerate(range)) {
-    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
-    if (!tensorType)
-      continue;
-
     rangeDescription.resize(rangeDescriptionPrefix.size());
     llvm::raw_svector_ostream os(rangeDescription);
     os << i;
 
     if (failed(wave::detail::verifyTypesCompatible(
-            tensorType, referenceType, includeAddressSpace, loc, os.str(),
+            type, referenceType, includeAddressSpace, loc, os.str(),
             referenceDescription))) {
       return llvm::failure();
     }
@@ -449,24 +461,27 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
   const llvm::StringLiteral kResultNamePrefix = "result #";
   std::string referenceDescription;
   llvm::raw_string_ostream os(referenceDescription);
-  wave::WaveTensorType referenceType;
+  Type referenceType;
   auto it =
       llvm::find_if(op->getOperandTypes(), llvm::IsaPred<wave::WaveTensorType>);
+  auto it2 =
+      llvm::find_if(op->getResultTypes(), llvm::IsaPred<wave::WaveTensorType>);
   if (it != op->getOperandTypes().end()) {
-    referenceType = llvm::cast<wave::WaveTensorType>(*it);
+    referenceType = *it;
     os << kOperandNamePrefix
        << std::distance(op->getOperandTypes().begin(), it);
-  } else {
-    auto it2 = llvm::find_if(op->getResultTypes(),
-                             llvm::IsaPred<wave::WaveTensorType>);
-    // No tensor-typed operands or results, nothing to verify.
-    if (it2 == op->getResultTypes().end())
-      return llvm::success();
-
-    referenceType = llvm::cast<wave::WaveTensorType>(*it2);
+  } else if (it2 != op->getResultTypes().end()) {
+    referenceType = *it2;
     os << kResultNamePrefix << std::distance(op->getResultTypes().begin(), it2);
+  } else if (op->getNumOperands() > 0) {
+    referenceType = op->getOperandTypes()[0];
+    os << kOperandNamePrefix << 0;
+  } else if (op->getNumResults() > 0) {
+    referenceType = op->getResultTypes()[0];
+    os << kResultNamePrefix << 0;
+  } else {
+    return llvm::success();
   }
-  assert(referenceType);
 
   if (llvm::failed(verifyTypeRange(op->getLoc(), op->getOperandTypes(),
                                    referenceType, includeAddressSpace,
