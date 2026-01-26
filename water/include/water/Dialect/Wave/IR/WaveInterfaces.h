@@ -431,6 +431,24 @@ checkAndPropagateElementsPerThreadFromConstant(
     llvm::StringRef fromName, llvm::StringRef immutableName,
     llvm::StringRef mutableName, llvm::raw_ostream &errs);
 
+// Propagate elements per thread lattice values for broadcast operations from
+// operands to results. When broadcasting along the thread X dimension, set
+// the elements per threads of both source and result to 1.
+llvm::FailureOr<mlir::ChangeResult> propagateBroadcastElementsPerThreadForward(
+    mlir::ArrayAttr broadcastDims,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init);
+
+// Propagate elements per thread lattice values for broadcast operations from
+// results to operands. When broadcasting along the thread X dimension, set
+// the elements per threads of both source and result to 1.
+llvm::FailureOr<mlir::ChangeResult> propagateBroadcastElementsPerThreadBackward(
+    mlir::ArrayAttr broadcastDims,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init);
+
 } // namespace detail
 
 // Trait implementing the methods of the WaveElementsPerThreadOpInterface with
@@ -494,6 +512,38 @@ public:
         concrete.getReducedSymbol(),
         concrete.getInitMutable().getOperandNumber(), operandTypes, resultTypes,
         errs, init);
+  }
+};
+
+// Trait for elements-per-thread propagation for broadcast operations. Treats
+// operands and results as identity, except when broadcasting along the thread
+// X dimension. When broadcasting adds the thread X dimension, both source and
+// result must have EPT = 1. Expects the operation to have:
+//   - an attribute 'broadcast_dims' of type ArrayAttr containing
+//   WaveSymbolAttrs
+//     indicating the dimensions being added by the broadcast.
+template <typename OpTy>
+class BroadcastElementsPerThreadOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, BroadcastElementsPerThreadOpTrait> {
+public:
+  // Propagate from operands to results.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+    return wave::detail::propagateBroadcastElementsPerThreadForward(
+        llvm::cast<OpTy>(this->getOperation()).getBroadcastDims(), operandTypes,
+        resultTypes, errs, init);
+  }
+
+  // Propagate from results to operands.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+    return wave::detail::propagateBroadcastElementsPerThreadBackward(
+        llvm::cast<OpTy>(this->getOperation()).getBroadcastDims(), operandTypes,
+        resultTypes, errs, init);
   }
 };
 

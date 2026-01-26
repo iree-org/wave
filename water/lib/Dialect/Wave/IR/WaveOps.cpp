@@ -92,6 +92,55 @@ static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
   printer.printSymbolName(symbolAttr.getName());
 }
 
+// Parse an array of wave symbols like [@M, @N, @K].
+// Custom parsing is required because MLIR's default parser creates
+// SymbolRefAttr for @Name syntax, but Wave requires WaveSymbolAttr for type
+// system consistency.
+static ParseResult parseSymbolArray(OpAsmParser &parser,
+                                    ArrayAttr &symbolArrayAttr) {
+  SmallVector<Attribute> symbols;
+  if (parser.parseLSquare())
+    return failure();
+
+  // Handle empty array.
+  if (succeeded(parser.parseOptionalRSquare())) {
+    symbolArrayAttr = parser.getBuilder().getArrayAttr(symbols);
+    return success();
+  }
+
+  // Parse first symbol.
+  StringAttr strAttr;
+  if (failed(parser.parseSymbolName(strAttr)))
+    return failure();
+  symbols.push_back(
+      wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
+
+  // Parse remaining symbols.
+  while (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseSymbolName(strAttr)))
+      return failure();
+    symbols.push_back(
+        wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
+  }
+
+  if (parser.parseRSquare())
+    return failure();
+
+  symbolArrayAttr = parser.getBuilder().getArrayAttr(symbols);
+  return success();
+}
+
+// Print an array of wave symbols like [@M, @N, @K].
+static void printSymbolArray(OpAsmPrinter &printer, Operation *,
+                             ArrayAttr symbolArrayAttr) {
+  printer << "[";
+  llvm::interleaveComma(symbolArrayAttr, printer, [&](Attribute attr) {
+    auto sym = llvm::cast<wave::WaveSymbolAttr>(attr);
+    printer.printSymbolName(sym.getName());
+  });
+  printer << "]";
+}
+
 #define GET_OP_CLASSES
 #include "water/Dialect/Wave/IR/WaveOps.cpp.inc"
 
@@ -1886,4 +1935,116 @@ LogicalResult wave::ReciprocalOp::verify() {
     return emitOpError("requires float element type, but got ") << elementType;
 
   return success();
+}
+//-----------------------------------------------------------------------------
+// BroadcastOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::BroadcastOp::verify() {
+  auto sourceType = llvm::dyn_cast<WaveTensorType>(getSource().getType());
+  auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
+
+  if (!sourceType || !resultType)
+    return success(); // Types not yet resolved, skip verification.
+
+  // Skip shape verification if source or result is not fully specified.
+  if (!sourceType.getFullySpecified() || !resultType.getFullySpecified())
+    return success();
+
+  // Check result has exactly source + broadcast dims (size check first).
+  size_t expectedResultRank =
+      sourceType.getShape().size() + getBroadcastDims().size();
+  if (resultType.getShape().size() != expectedResultRank)
+    return emitOpError("result shape size (")
+           << resultType.getShape().size()
+           << ") does not match source shape size ("
+           << sourceType.getShape().size() << ") plus broadcast dims size ("
+           << getBroadcastDims().size() << ")";
+
+  // Collect source shape symbols into a set.
+  llvm::StringSet<> sourceSymbols;
+  for (WaveSymbolAttr sym : sourceType.getShape())
+    sourceSymbols.insert(sym.getName());
+
+  // Collect broadcast dims into a set and check they don't exist in source.
+  llvm::StringSet<> broadcastSymbols;
+  for (Attribute attr : getBroadcastDims()) {
+    auto sym = llvm::cast<WaveSymbolAttr>(attr);
+    broadcastSymbols.insert(sym.getName());
+
+    // Broadcast dims should not be in source shape.
+    if (sourceSymbols.contains(sym.getName()))
+      return emitOpError("broadcast dimension '")
+             << sym.getName() << "' already exists in source shape";
+  }
+
+  // Verify result shape = source shape + broadcast dims (as sets).
+  llvm::StringSet<> resultSymbols;
+  for (WaveSymbolAttr sym : resultType.getShape())
+    resultSymbols.insert(sym.getName());
+
+  // Check all source symbols are in result.
+  for (WaveSymbolAttr sym : sourceType.getShape()) {
+    if (!resultSymbols.contains(sym.getName()))
+      return emitOpError("source dimension '")
+             << sym.getName() << "' not found in result shape";
+  }
+
+  // Check all broadcast dims are in result.
+  for (Attribute attr : getBroadcastDims()) {
+    auto sym = llvm::cast<WaveSymbolAttr>(attr);
+    if (!resultSymbols.contains(sym.getName()))
+      return emitOpError("broadcast dimension '")
+             << sym.getName() << "' not found in result shape";
+  }
+
+  return success();
+}
+
+llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateForward(
+    llvm::ArrayRef<WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  // Forward propagation: we cannot infer result shape from source alone
+  // because we don't know the order of dimensions in the result.
+  // The result type must already be specified.
+  return ChangeResult::NoChange;
+}
+
+llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
+    llvm::MutableArrayRef<WaveTensorType> operandTypes,
+    llvm::ArrayRef<WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  // Backward propagation: infer source shape = result shape - broadcast_dims.
+  WaveTensorType sourceType = operandTypes[0];
+  WaveTensorType resultType = resultTypes[0];
+
+  // If result is not fully specified, we can't infer source.
+  if (!resultType || !resultType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  // If source is already fully specified, nothing to do.
+  if (sourceType && sourceType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  // Collect broadcast dims into a set.
+  llvm::StringSet<> broadcastSymbols;
+  for (Attribute attr : getBroadcastDims()) {
+    auto sym = llvm::cast<WaveSymbolAttr>(attr);
+    broadcastSymbols.insert(sym.getName());
+  }
+
+  // Compute source shape = result shape - broadcast dims.
+  llvm::SmallVector<WaveSymbolAttr> sourceShape;
+  for (WaveSymbolAttr sym : resultType.getShape()) {
+    if (!broadcastSymbols.contains(sym.getName()))
+      sourceShape.push_back(sym);
+  }
+
+  // Create the inferred source type.
+  WaveTensorType inferredSourceType = WaveTensorType::get(
+      getContext(), sourceShape, /*fullySpecified=*/true,
+      resultType.getElementType(), resultType.getAddressSpace());
+
+  operandTypes[0] = inferredSourceType;
+  return ChangeResult::Change;
 }

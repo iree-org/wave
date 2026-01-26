@@ -463,6 +463,49 @@ wave::detail::propagateReductionElementsPerThreadBackward(
       resultElements, operandElements, "operands", "results", errs);
 }
 
+// Helper to check if any of the broadcast dimensions is the thread X dimension.
+static bool broadcastsAlongThreadX(mlir::ArrayAttr broadcastDims,
+                                   const wave::ElementsPerThreadInit &init) {
+  for (Attribute attr : broadcastDims) {
+    auto sym = llvm::cast<wave::WaveSymbolAttr>(attr);
+    if (sym == init.threadXDimension)
+      return true;
+  }
+  return false;
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateBroadcastElementsPerThreadForward(
+    mlir::ArrayAttr broadcastDims,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (broadcastsAlongThreadX(broadcastDims, init)) {
+    // Broadcasting along thread X adds a new dimension. The source doesn't have
+    // thread X, so we can't propagate EPT from it. Let downstream users (e.g.,
+    // write) determine the result EPT.
+    return ChangeResult::NoChange;
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      operandElements, resultElements, "operands", "results", errs);
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateBroadcastElementsPerThreadBackward(
+    mlir::ArrayAttr broadcastDims,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (broadcastsAlongThreadX(broadcastDims, init)) {
+    // Broadcasting along thread X adds a new dimension. The source doesn't have
+    // thread X, so we can't propagate EPT to it. The source's EPT (if any) is
+    // determined by its own context.
+    return ChangeResult::NoChange;
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "results", "operands", errs);
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
     llvm::ArrayRef<ElementsPerThreadLatticeValue> from,
     llvm::MutableArrayRef<ElementsPerThreadLatticeValue> to,

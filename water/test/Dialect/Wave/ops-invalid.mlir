@@ -793,3 +793,37 @@ func.func @reduction_init_and_result_contain_axis(%input: !wave.tensor<any of f3
   %result = wave.max_element %input init(%init) along @K <warp> : (!wave.tensor<any of f32>, !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32>
   return %result : !wave.tensor<[@K] of f32>
 }
+
+// -----
+
+func.func @broadcast_dim_already_in_source(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{broadcast dimension 'N' already exists in source shape}}
+  wave.broadcast %arg0 dims [@N] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_source_dim_not_in_result(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // Source has [@M, @N], broadcast adds [@K], result should have [@M, @N, @K].
+  // But result has [@M, @P, @K] - N is missing (replaced by P).
+  // expected-error @below {{source dimension 'N' not found in result shape}}
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @P, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_dim_not_in_result(%arg0: !wave.tensor<[@M] of f32, <register>>) {
+  // expected-error @below {{broadcast dimension 'K' not found in result shape}}
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_result_size_mismatch(%arg0: !wave.tensor<[@M] of f32, <register>>) {
+  // expected-error @below {{result shape size (2) does not match source shape size (1) plus broadcast dims size (2)}}
+  wave.broadcast %arg0 dims [@N, @K] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
