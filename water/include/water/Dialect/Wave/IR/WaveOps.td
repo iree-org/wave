@@ -551,7 +551,7 @@ def CastOp : WaveOp<"cast", [
 
 def BroadcastOp : WaveOp<"broadcast", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
-    WaveElementsPerThreadOpInterface, BroadcastElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Broadcast a tensor to a larger shape by replicating values";
   let description = [{
@@ -559,20 +559,19 @@ def BroadcastOp : WaveOp<"broadcast", [
     along the broadcast dimensions. The source shape symbols must be a subset
     of the result shape symbols.
 
-    The `broadcast_dims` attribute specifies which dimensions are being added
-    to the source shape to produce the result shape.
+    The broadcast dimensions are inferred from the difference between the
+    result shape and source shape (result_shape - source_shape).
 
     Example:
     ```mlir
     // Broadcast from [@M] to [@M, @N] by adding dimension @N
-    %result = wave.broadcast %src dims [@N] :
+    %result = wave.broadcast %src :
         !wave.tensor<[@M] of f32, <register>> -> !wave.tensor<[@M, @N] of f32, <register>>
     ```
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source,
-    Arg<WaveSymbolArrayAttr, "Dimensions being broadcast (added)">:$broadcast_dims
+    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source
   ), commonArguments);
 
   let results = (outs
@@ -580,7 +579,7 @@ def BroadcastOp : WaveOp<"broadcast", [
   );
 
   let assemblyFormat =
-    "$source `dims` custom<SymbolArray>($broadcast_dims) " # commonArgumentsSyntax # "attr-dict `:`"
+    "$source " # commonArgumentsSyntax # "attr-dict `:`"
     "functional-type(operands, results)";
 
   let hasVerifier = 1;

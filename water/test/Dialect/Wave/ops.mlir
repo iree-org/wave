@@ -565,8 +565,8 @@ func.func @sum_3d_reduction(%input: !wave.tensor<[@A, @B, @C] of f32>, %init: !w
 
 // CHECK-LABEL: @broadcast_1d_to_2d
 func.func @broadcast_1d_to_2d(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> {
-  // CHECK: wave.broadcast %{{.*}} dims [@N]
-  %0 = wave.broadcast %arg0 dims [@N] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return %0 : !wave.tensor<[@M, @N] of f32, <register>>
 }
 
@@ -574,8 +574,8 @@ func.func @broadcast_1d_to_2d(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !
 
 // CHECK-LABEL: @broadcast_2d_to_3d
 func.func @broadcast_2d_to_3d(%arg0: !wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>> {
-  // CHECK: wave.broadcast %{{.*}} dims [@K]
-  %0 = wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>>
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>>
   return %0 : !wave.tensor<[@M, @N, @K] of bf16, <register>>
 }
 
@@ -583,7 +583,7 @@ func.func @broadcast_2d_to_3d(%arg0: !wave.tensor<[@M, @N] of bf16, <register>>)
 
 // CHECK-LABEL: @broadcast_multiple_dims
 func.func @broadcast_multiple_dims(%arg0: !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>> {
-  // CHECK: wave.broadcast %{{.*}} dims [@N, @K]
-  %0 = wave.broadcast %arg0 dims [@N, @K] : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
   return %0 : !wave.tensor<[@M, @N, @K] of f16, <register>>
 }

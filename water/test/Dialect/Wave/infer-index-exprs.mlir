@@ -680,7 +680,7 @@ normalform.module [#wave.normal_form<full_types>] {
     // CHECK: wave.broadcast
     // CHECK-DAG: M : [#wave.index_symbol<T0>
     // CHECK-DAG: N : [#wave.index_symbol<T0>]
-    %broadcasted = wave.broadcast %mma dims [@P]
+    %broadcasted = wave.broadcast %mma
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
     return
@@ -717,11 +717,11 @@ normalform.module [#wave.normal_form<full_types>] {
     // CHECK-DAG: M : [#wave.index_symbol<T0>
     // CHECK-DAG: N : [#wave.index_symbol<T0>]
     // CHECK-DAG: P : [#wave.index_symbol<T0>]
-    %broadcasted = wave.broadcast %mma1 dims [@P]
+    %broadcasted = wave.broadcast %mma1
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
     // Broadcast mma2 result from [@M, @P] to [@M, @N, @P] to match.
-    %broadcasted2 = wave.broadcast %mma2 dims [@N]
+    %broadcasted2 = wave.broadcast %mma2
       : (!wave.tensor<[@M, @P] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
     // Add requires matching shapes - index exprs propagate between operands.

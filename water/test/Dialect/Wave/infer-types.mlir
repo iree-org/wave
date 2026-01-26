@@ -159,21 +159,19 @@ func.func @propagate_reduction_result_to_init() {
   return
 }
 
-// CHECK-LABEL: @broadcast_backward_propagation
-func.func @broadcast_backward_propagation() {
-  // CHECK: !wave.tensor<[@M] of f32, <register>>
-  %src = water_test.wave_tensor : !wave.tensor<any of f32, <register>>
-  // CHECK: (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
-  wave.broadcast %src dims [@N] : (!wave.tensor<any of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+// CHECK-LABEL: @broadcast_with_specified_types
+func.func @broadcast_with_specified_types(%src: !wave.tensor<[@M] of f32, <register>>) {
+  // Broadcast requires both source and result types to be fully specified
+  // since broadcast dims are inferred from the type difference.
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  wave.broadcast %src : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
 
-// CHECK-LABEL: @broadcast_backward_propagation_multiple_dims
-func.func @broadcast_backward_propagation_multiple_dims() {
-  // CHECK: !wave.tensor<[@A] of bf16, <register>>
-  %src = water_test.wave_tensor : !wave.tensor<any of bf16, <register>>
-  // CHECK: (!wave.tensor<[@A] of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
-  wave.broadcast %src dims [@B, @C] : (!wave.tensor<any of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
+// CHECK-LABEL: @broadcast_multiple_dims_with_specified_types
+func.func @broadcast_multiple_dims_with_specified_types(%src: !wave.tensor<[@A] of bf16, <register>>) {
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@A] of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
+  wave.broadcast %src : (!wave.tensor<[@A] of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
   return
 }
 

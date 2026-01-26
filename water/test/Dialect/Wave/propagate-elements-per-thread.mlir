@@ -455,6 +455,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // Test broadcast propagates EPT forward (identity case - no thread X broadcast).
 normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @broadcast_propagation_forward_identity
+  // expected-warning @+1 {{unused hyperparameter: N}}
   func.func @broadcast_propagation_forward_identity(%mem: !wave.tensor<[@M] of f32, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
 
@@ -463,7 +464,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // Broadcast along @N (not thread X) - identity propagation, EPT stays 8.
     // CHECK: wave.broadcast {{.*}} : (vector<8xf32>) -> vector<8xf32>
-    %bcast = wave.broadcast %reg dims [@N] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    %bcast = wave.broadcast %reg : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     return
   }
@@ -485,7 +486,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // Broadcast along @N (not thread X) - identity propagation, EPT from write propagates back.
     // CHECK: wave.broadcast {{.*}} : (vector<4xf32>) -> vector<4xf32>
-    %bcast = wave.broadcast %reg dims [@N] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    %bcast = wave.broadcast %reg : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.write {{.*}} : vector<4xf32>
     wave.write %bcast, %result_mem {elements_per_thread = 4} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
@@ -511,7 +512,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // Broadcasting along @M (thread X) - EPT comes from the write, not the source.
     // CHECK: wave.broadcast {{.*}} : (vector<1xf32>) -> vector<4xf32>
-    %bcast = wave.broadcast %reg dims [@M] : (!wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    %bcast = wave.broadcast %reg : (!wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // Write specifies EPT=4, which propagates back to broadcast result.
     // CHECK: wave.write {{.*}} : vector<4xf32>
