@@ -1755,6 +1755,8 @@ class TensorCounterWait(CustomOp):
     """
     Wait for the tensor counter to reach the specified value.
     Generates rocdl.s.wait.tensorcnt instruction.
+
+    NOTE: This operation is only supported on gfx1250 targets.
     """
 
     count: int = 0

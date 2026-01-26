@@ -1867,6 +1867,13 @@ def handle_memory_counter_wait_barrier(emitter: WaveEmitter, node: fx.Node):
 
 @handle_op(tensor_counter_wait)
 def handle_tensor_counter_wait(emitter: WaveEmitter, node: fx.Node):
+    # TensorCounterWait is only supported on gfx12xx
+    if not emitter.options.target.startswith("gfx12"):
+        raise CodegenError(
+            f"TensorCounterWait (s_wait_tensorcnt) is only supported on gfx12xx, "
+            f"got target: {emitter.options.target}"
+        )
+
     try:
         count = node.args[0]
     except ValueError as e:
