@@ -657,3 +657,77 @@ normalform.module [#wave.normal_form<full_types>] {
     return
   }
 }
+
+// -----
+
+// Test broadcast propagates index expressions (identity propagation).
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @broadcast_index_exprs
+  func.func @broadcast_index_exprs(
+      %a: !wave.tensor<[@M, @K] of f16>,
+      %b: !wave.tensor<[@N, @K] of f16>,
+      %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // First do an MMA to establish index expressions.
+    // CHECK: wave.mma
+    %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // Broadcast the MMA result from [@M, @N] to [@M, @N, @P] - should propagate M and N's index exprs.
+    // CHECK: wave.broadcast
+    // CHECK-DAG: M : [#wave.index_symbol<T0>
+    // CHECK-DAG: N : [#wave.index_symbol<T0>]
+    %broadcasted = wave.broadcast %mma dims [@P]
+      : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
+
+    return
+  }
+}
+
+// -----
+
+// Test broadcast gets index expression for broadcasted dimension via backward propagation.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @broadcast_index_exprs_backward
+  func.func @broadcast_index_exprs_backward(
+      %a: !wave.tensor<[@M, @K] of f16>,
+      %b: !wave.tensor<[@N, @K] of f16>,
+      %c: !wave.tensor<[@M, @N] of f32>,
+      %d: !wave.tensor<[@P, @K] of f16>,
+      %e: !wave.tensor<[@M, @P] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // First MMA establishes index expressions for @M and @N.
+    %mma1 = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // Second MMA establishes index expressions for @M and @P.
+    %mma2 = wave.mma %a, %d, %e {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@P, @K] of f16>, !wave.tensor<[@M, @P] of f32>) -> !wave.tensor<[@M, @P] of f32, <register>>
+
+    // Broadcast mma1 result from [@M, @N] to [@M, @N, @P].
+    // @M and @N get index exprs from mma1 (forward propagation).
+    // @P gets index expr from mma2 via the add operation (backward propagation).
+    // CHECK: wave.broadcast
+    // CHECK-DAG: M : [#wave.index_symbol<T0>
+    // CHECK-DAG: N : [#wave.index_symbol<T0>]
+    // CHECK-DAG: P : [#wave.index_symbol<T0>]
+    %broadcasted = wave.broadcast %mma1 dims [@P]
+      : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
+
+    // Broadcast mma2 result from [@M, @P] to [@M, @N, @P] to match.
+    %broadcasted2 = wave.broadcast %mma2 dims [@N]
+      : (!wave.tensor<[@M, @P] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
+
+    // Add requires matching shapes - index exprs propagate between operands.
+    %add = wave.add %broadcasted, %broadcasted2
+      : (!wave.tensor<[@M, @N, @P] of f32, <register>>, !wave.tensor<[@M, @N, @P] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
+
+    return
+  }
+}

@@ -159,6 +159,24 @@ func.func @propagate_reduction_result_to_init() {
   return
 }
 
+// CHECK-LABEL: @broadcast_backward_propagation
+func.func @broadcast_backward_propagation() {
+  // CHECK: !wave.tensor<[@M] of f32, <register>>
+  %src = water_test.wave_tensor : !wave.tensor<any of f32, <register>>
+  // CHECK: (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  wave.broadcast %src dims [@N] : (!wave.tensor<any of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// CHECK-LABEL: @broadcast_backward_propagation_multiple_dims
+func.func @broadcast_backward_propagation_multiple_dims() {
+  // CHECK: !wave.tensor<[@A] of bf16, <register>>
+  %src = water_test.wave_tensor : !wave.tensor<any of bf16, <register>>
+  // CHECK: (!wave.tensor<[@A] of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
+  wave.broadcast %src dims [@B, @C] : (!wave.tensor<any of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
+  return
+}
+
 } // normalform.module
 
 // -----
