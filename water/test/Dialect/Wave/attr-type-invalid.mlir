@@ -127,3 +127,8 @@ module attributes {wave_test.symbol = #wave.symbol<"_A">}
   step = affine_map<()[s0, s1] -> (s0)>,
   stride = affine_map<()[s0, s1] -> (s0)>
 } : () -> ()
+
+// -----
+
+// expected-error @below {{duplicate symbol #wave.symbol<"A"> in shape}}
+"wave_test.create_tensor"() {fully_specified = true, shape = [@A, @B, @A]} : () -> ()

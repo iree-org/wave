@@ -81,6 +81,12 @@ wave::WaveTensorType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "expected element type to be integer, index or "
                           "floating point scalar";
   }
+  llvm::SmallPtrSet<Attribute, 6> seenSymbols;
+  for (auto symbol : shape) {
+    if (!seenSymbols.insert(symbol).second) {
+      return emitError() << "duplicate symbol " << symbol << " in shape";
+    }
+  }
   return success();
 }
 
