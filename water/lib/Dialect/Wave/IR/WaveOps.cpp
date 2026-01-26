@@ -1851,30 +1851,11 @@ LogicalResult wave::ReciprocalOp::verify() {
 // Reductions
 //-----------------------------------------------------------------------------
 
-// Return the element type of a Wave tensor or vector type, or nullptr for other
-// types.
-static Type getElementType(Type type) {
-  return llvm::TypeSwitch<Type, Type>(type)
-      .Case<WaveTensorType, VectorType>(
-          [](auto containerType) { return containerType.getElementType(); })
-      .Default([](Type type) { return nullptr; });
-}
-
 // Common verification logic for types of reduction operations. We expect the
 // input type to have one more dimension that precisely matches the reduction
 // axis.
 template <typename OpTy>
 static LogicalResult verifyReductionOperationTypes(OpTy op) {
-
-  if (getElementType(op.getInput().getType()) !=
-      getElementType(op.getInit().getType())) {
-    return op.emitOpError() << "expects input and init element types to match";
-  }
-  if (getElementType(op.getInput().getType()) !=
-      getElementType(op.getResult().getType())) {
-    return op.emitOpError()
-           << "expects input and result element types to match";
-  }
 
   auto inputType = dyn_cast<WaveTensorType>(op.getInput().getType());
   auto initType = dyn_cast<WaveTensorType>(op.getInit().getType());
@@ -1924,8 +1905,13 @@ static LogicalResult verifyReductionOperationTypes(OpTy op) {
   }
 
   if (failed(wave::detail::verifyTypesCompatible(
-          initType, resultType,
+          op.getInit().getType(), op.getResult().getType(),
           /*includeAddressSpace=*/true, op.getLoc(), "init", "result"))) {
+    return failure();
+  }
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op.getLoc(), "input", op.getInput().getType(), "init",
+          op.getInit().getType()))) {
     return failure();
   }
 

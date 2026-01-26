@@ -689,7 +689,7 @@ func.func @nonexistent_axis(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.
 
 // -----
 
-func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@N] of f32> {
   // expected-error @below {{init tensor rank (2) must be one less than input tensor rank (2)}}
   %result = wave.sum %input init(%input) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
