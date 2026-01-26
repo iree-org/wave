@@ -189,7 +189,7 @@ class CMakeBuild(build_ext):
             installed_sha = None
             for line in vcs_content.split("\n"):
                 if line.strip().startswith("#define LLVM_REVISION"):
-                    # Extract SHA from: LLVM_REVISION R"(5c35af8...)"
+                    # Extract SHA from: #define LLVM_REVISION R"(5c35af8...)"
                     installed_sha = line.split('"')[1].replace("(", "").replace(")", "")
                     break
 
