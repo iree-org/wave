@@ -135,9 +135,6 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
 
     compiled_gemm = wave_compile(compile_options, gemm)
 
-    # Execute the compiled kernel
     compiled_gemm(a, b, c)
 
-    # Verify the result matches the reference
-    # Use slightly relaxed tolerance due to fp16 accumulation differences
     assert_close(c, ref_result, rtol=1e-3, atol=1e-3)
