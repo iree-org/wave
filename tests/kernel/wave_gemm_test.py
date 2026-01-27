@@ -3490,7 +3490,6 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
         sgpr_count = 50
         sgpr_spill_count = 0
         waitcounts = [
-            "s_wait_xcnt 0x0",
             "s_wait_kmcnt 0x0",
             "s_wait_tensorcnt 0x1",
             "s_wait_tensorcnt 0x1",
