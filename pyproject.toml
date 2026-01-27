@@ -35,7 +35,7 @@ dependencies = [
     "ml_dtypes",
     "numpy",
     "sympy",
-    "torch>=2.6,<2.9",
+    "torch>=2.6,<2.10",
     "typing_extensions",
 ]
 
