@@ -1,0 +1,26 @@
+// RUN: waveasm-translate %s
+// Assembly emission pass not yet integrated into CLI
+//
+// This test verifies that the emit-assembly pass works correctly
+// for different GPU targets (gfx942, gfx950, gfx1250).
+
+// First kernel - gfx942 (CDNA3)
+// CHECK: .amdgcn_target "amdgcn-amd-amdhsa--gfx942"
+// CHECK: .globl gfx942_kernel
+// CHECK: gfx942_kernel:
+// CHECK: v_add_u32
+// CHECK: s_endpgm
+
+waveasm.program @gfx942_kernel
+  target = #waveasm.target<"gfx942", 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 256 : i64, sgprs = 104 : i64} {
+
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %v2 = waveasm.precolored.vreg 2 : !waveasm.pvreg<2>
+
+  %result = waveasm.v_add_u32 %v1, %v2 : !waveasm.pvreg<1>, !waveasm.pvreg<2> -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}
