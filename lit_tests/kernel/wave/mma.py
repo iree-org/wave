@@ -673,10 +673,10 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
     # CHECK:        %[[MASK4:.*]] = arith.select %[[COND0]], %{{.*}}, %[[MASK3]] : index
 
-    # CHECK:        %[[TENSOR_DESC_0:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE0:.+]] globalSize [%{{.*}}, 32] globalStride [32, 1] sharedSize [16, 32]
+    # CHECK:        %[[TENSOR_DESC_0:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE0:.+]] globalSize [%{{.*}}, %{{.*}}] globalStride [32, 1] sharedSize [%{{.*}}, %{{.*}}] padShared({{.*}}) workgroupMask %{{.*}}
 
     # CHECK:        %[[DMA_BASE1:.+]] = amdgpu.make_dma_base {{.*}}, %[[VIEW0]][{{.*}}]
-    # CHECK:        %[[TENSOR_DESC_1:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE1:.+]] globalSize [%{{.*}}, 32] globalStride [32, 1] sharedSize [16, 32]
+    # CHECK:        %[[TENSOR_DESC_1:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE1:.+]] globalSize [%{{.*}}, %{{.*}}] globalStride [32, 1] sharedSize [%{{.*}}, %{{.*}}] padShared({{.*}}) workgroupMask %{{.*}}
 
     # Fused descriptors
     # CHECK:        %[[SELECTED:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
