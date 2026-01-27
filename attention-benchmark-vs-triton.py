@@ -40,8 +40,11 @@ try:
     from wave_lang.kernel.wave.constraints import MMAType
     from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
     from wave_lang.kernel.wave.templates.attention_common import AttentionShape
-    from wave_lang.kernel.wave.templates.vanilla_attention import (
-        get_vanilla_attention_kernel,
+    from wave_lang.kernel.wave.templates.tagged_attention import (
+        get_tagged_bshd_attention_kernel,
+    )
+    from wave_lang.kernel.wave.schedules.attention_prefetch import (
+        get_attention_prefetch_schedule,
     )
     from wave_lang.kernel.wave.utils.general_utils import (
         get_default_scheduling_params,
@@ -177,18 +180,12 @@ BATCH_SEQLEN_PAIRS = [
 # These parameters control Wave compiler optimizations.
 
 if WAVE_AVAILABLE:
-    # Scheduling strategies to test
-    SCHEDULING_STRATEGIES = [
-        SchedulingType.PREFETCH_ATTENTION,
-    ]
-
     # MMA Types for FP16
     MMA_TYPES_FP16 = [
         MMAType.F32_16x16x16_F16,
-        MMAType.F32_16x16x32_F16,
+        # MMAType.F32_16x16x32_F16,
     ]
 else:
-    SCHEDULING_STRATEGIES = []
     MMA_TYPES_FP16 = []
 
 # Waves per EU (Execution Unit) to test
@@ -198,8 +195,6 @@ WAVES_PER_EU_VALUES = [2]
 USE_SCHEDULING_BARRIERS_VALUES = [False, True]
 
 # Tile size hyperparameters
-# Default BLOCK_M=256, BLOCK_N=64 matches Triton's CDNA autotune config for fair comparison
-BLOCK_M_VALUES = [256]
 BLOCK_N_VALUES = [64]
 BLOCK_K2_VALUES = [64]
 
@@ -281,61 +276,68 @@ if WAVE_AVAILABLE:
         is_causal: bool,
         qk_t_mma: MMAType,
         att_v_mma: MMAType,
-        block_m: int,
         block_n: int,
         block_k2: int,
-        schedule: SchedulingType,
         waves_per_eu: int,
         use_scheduling_barriers: bool,
         use_buffer_ops: bool,
         canonicalize: bool,
     ):
-        """Compile a Wave attention kernel with custom tuning parameters."""
+        """Compile a Wave attention kernel with the manual prefetch schedule."""
         mfma_variant = (qk_t_mma, att_v_mma)
+
+        # IMPORTANT: num_waves must be 8 for the ping-pong schedule
+        if waves_per_eu != 2:
+            print(
+                f"Warning: Manual schedule designed for waves_per_eu=2 (8 waves), got {waves_per_eu}"
+            )
 
         (
             attention_kernel,
             hyperparams,
             dynamic_symbols,
-        ) = get_vanilla_attention_kernel(
+        ) = get_tagged_bshd_attention_kernel(
             shape,
             mfma_variant,
             dynamic_dims=False,
             is_causal=is_causal,
+            num_waves=8,  # Required for ping-pong schedule
         )
         hyperparams.update(get_default_scheduling_params())
 
-        # Override tile sizes if different from defaults
-        if block_m != 128:
-            hyperparams[tkl.sym.BLOCK_M] = block_m
-        if block_n != 64:
-            hyperparams[tkl.sym.BLOCK_N] = block_n
+        # Tagged attention uses different tile size parameters
+        # BLOCK_N_Q is automatically set based on num_waves in the kernel
+        # We'll respect block_k2 by setting BLOCK_N_KV
         if block_k2 != 64:
-            hyperparams[tkl.sym.BLOCK_K2] = block_k2
+            hyperparams[tkl.sym.BLOCK_N_KV] = block_k2
+        # BLOCK_D_KV corresponds to block_n
+        if block_n != 64:
+            hyperparams[tkl.sym.BLOCK_D_KV] = block_n
 
-        del hyperparams[tkl.sym.B]
-        del hyperparams[tkl.sym.M]
-        del hyperparams[tkl.sym.N]
-        del hyperparams[tkl.sym.K2]
-        dynamic_symbols = [tkl.sym.B, tkl.sym.M, tkl.sym.N, tkl.sym.K2]
+        # Get the manual schedule function
+        attention_schedule = get_attention_prefetch_schedule()
 
+        # Create compile options - must use MANUAL schedule and enable use_global_to_shared
         options = WaveCompileOptions(
             subs=hyperparams,
-            schedule=schedule,
+            schedule=SchedulingType.MANUAL,
             use_scheduling_barriers=use_scheduling_barriers,
-            dynamic_symbols=dynamic_symbols,
             waves_per_eu=waves_per_eu,
             denorm_fp_math_f32="preserve-sign",
             use_buffer_ops=use_buffer_ops,
             canonicalize=canonicalize,
+            use_global_to_shared=True,  # Required for GatherToLDS operations
         )
         options = set_default_run_config(options)
-        attention_kernel = wave_compile(options, attention_kernel)
+
+        # Compile with the manual schedule
+        attention_kernel = wave_compile(options, attention_kernel, attention_schedule)
+
         return attention_kernel
 
 
 class WaveAttention:
-    """Wrapper class for Wave attention."""
+    """Wrapper class for Wave attention with manual prefetch schedule."""
 
     def __init__(
         self,
@@ -345,11 +347,9 @@ class WaveAttention:
         head_dim: int,
         is_causal: bool,
         device: str,
-        mma_type: "MMAType",
-        block_m: int = 128,
+        mma_type: "MMAType" = None,
         block_n: int = 64,
         block_k2: int = 64,
-        schedule: "SchedulingType" = None,
         waves_per_eu: int = 2,
         use_scheduling_barriers: bool = False,
         use_buffer_ops: bool = False,
@@ -365,26 +365,17 @@ class WaveAttention:
         self.is_causal = is_causal
         self.device = device
 
-        # Compute flattened batch size for Wave
-        self.flattened_batch_size = batch_size * num_heads
-
-        # Create attention shape
+        # Create attention shape for tagged attention (BSHD layout)
         self.shape = AttentionShape(
-            num_query_heads=self.flattened_batch_size,
-            num_kv_heads=self.flattened_batch_size,
+            num_query_heads=num_heads,
+            num_kv_heads=num_heads,
             query_seq_len=seq_len,
             head_size_kv=head_dim,
             head_size=head_dim,
             kv_seq_len=seq_len,
         )
 
-        # Shapes for reshaping tensors
-        self.flat_q_shape = [self.flattened_batch_size, seq_len, head_dim]
-        self.flat_kv_shape = [self.flattened_batch_size, seq_len, head_dim]
-        self.flat_o_shape = [self.flattened_batch_size, seq_len, head_dim]
-
-        if schedule is None:
-            schedule = SchedulingType.PREFETCH_ATTENTION
+        self.output_shape = [batch_size, seq_len, num_heads, head_dim]
 
         # Get compiled kernel
         self.kernel = get_wave_kernel(
@@ -392,10 +383,8 @@ class WaveAttention:
             is_causal=is_causal,
             qk_t_mma=mma_type,
             att_v_mma=mma_type,
-            block_m=block_m,
             block_n=block_n,
             block_k2=block_k2,
-            schedule=schedule,
             waves_per_eu=waves_per_eu,
             use_scheduling_barriers=use_scheduling_barriers,
             use_buffer_ops=use_buffer_ops,
@@ -403,21 +392,23 @@ class WaveAttention:
         )
 
         # Pre-allocate output tensor
-        self.output = torch.empty(self.flat_o_shape, dtype=torch.float32, device=device)
+        self.output = torch.empty(self.output_shape, dtype=torch.float32, device=device)
 
     def __call__(
         self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
     ) -> torch.Tensor:
         """Run Wave attention forward pass."""
-        self.kernel(
-            q.view(self.flat_q_shape),
-            k.view(self.flat_kv_shape),
-            v.view(self.flat_kv_shape),
-            self.output,
-        )
-        return self.output.view(
-            self.batch_size, self.num_heads, self.seq_len, self.head_dim
-        )
+        # BSHD layout - convert from BHSD to BSHD
+        # Input is BHSD [batch, heads, seq, dim]
+        # Need BSHD [batch, seq, heads, dim]
+        q_bshd = q.transpose(1, 2)  # [B, S, H, D]
+        k_bshd = k.transpose(1, 2)
+        v_bshd = v.transpose(1, 2)
+
+        self.kernel(q_bshd, k_bshd, v_bshd, self.output)
+
+        # Convert output back from BSHD to BHSD
+        return self.output.transpose(1, 2)  # [B, H, S, D]
 
 
 # ============================================================================
@@ -519,10 +510,8 @@ def benchmark_attention_comparison(
     head_dim: int,
     is_causal: bool,
     mma_type: Optional["MMAType"],
-    block_m: int,
     block_n: int,
     block_k2: int,
-    schedule: Optional["SchedulingType"],
     waves_per_eu: int,
     use_scheduling_barriers: bool,
     use_buffer_ops: bool,
@@ -554,7 +543,6 @@ def benchmark_attention_comparison(
         "seq_len": seq_len,
         "head_dim": head_dim,
         "is_causal": is_causal,
-        "block_m": block_m,
         "block_n": block_n,
         "block_k2": block_k2,
         "waves_per_eu": waves_per_eu,
@@ -589,7 +577,7 @@ def benchmark_attention_comparison(
         result["triton_throughput_tflops"] = None
 
     # Benchmark Wave
-    if WAVE_AVAILABLE and mma_type is not None and schedule is not None:
+    if WAVE_AVAILABLE and mma_type is not None:
         try:
             wave_attn = WaveAttention(
                 batch_size,
@@ -599,10 +587,8 @@ def benchmark_attention_comparison(
                 is_causal,
                 device,
                 mma_type=mma_type,
-                block_m=block_m,
                 block_n=block_n,
                 block_k2=block_k2,
-                schedule=schedule,
                 waves_per_eu=waves_per_eu,
                 use_scheduling_barriers=use_scheduling_barriers,
                 use_buffer_ops=use_buffer_ops,
@@ -614,7 +600,6 @@ def benchmark_attention_comparison(
             wave_tflops = flops / (wave_avg / 1000) / 1e12
 
             result["mma_type"] = mma_type.name
-            result["schedule"] = schedule.name
             result["wave_avg_time_ms"] = wave_avg
             result["wave_min_time_ms"] = wave_min
             result["wave_max_time_ms"] = wave_max
@@ -622,14 +607,12 @@ def benchmark_attention_comparison(
         except Exception as e:
             print(f"  Wave error: {e}")
             result["mma_type"] = mma_type.name if mma_type else None
-            result["schedule"] = schedule.name if schedule else None
             result["wave_avg_time_ms"] = None
             result["wave_min_time_ms"] = None
             result["wave_max_time_ms"] = None
             result["wave_throughput_tflops"] = None
     else:
         result["mma_type"] = None
-        result["schedule"] = None
         result["wave_avg_time_ms"] = None
         result["wave_min_time_ms"] = None
         result["wave_max_time_ms"] = None
@@ -666,11 +649,10 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     print(f"  Triton: {'Yes' if TRITON_AVAILABLE else 'No'}")
     if WAVE_AVAILABLE:
         print(f"\nWave-Specific Tuning Parameters:")
-        print(f"  Scheduling Strategies: {[s.name for s in SCHEDULING_STRATEGIES]}")
+        print(f"  Schedule: Manual prefetch schedule (tagged kernel)")
         print(f"  Waves Per EU: {WAVES_PER_EU_VALUES}")
         print(f"  Scheduling Barriers: {USE_SCHEDULING_BARRIERS_VALUES}")
         print(f"  MMA Types: {len(MMA_TYPES_FP16)}")
-        print(f"  BLOCK_M values: {BLOCK_M_VALUES}")
         print(f"  BLOCK_N values: {BLOCK_N_VALUES}")
         print(f"  BLOCK_K2 values: {BLOCK_K2_VALUES}")
     print("\n" + "=" * 80)
@@ -685,10 +667,8 @@ def run_benchmarks() -> List[Dict[str, Any]]:
             len(CAUSAL_VALUES)
             * len(BATCH_SEQLEN_PAIRS)
             * len(MMA_TYPES_FP16)
-            * len(BLOCK_M_VALUES)
             * len(BLOCK_N_VALUES)
             * len(BLOCK_K2_VALUES)
-            * len(SCHEDULING_STRATEGIES)
             * len(WAVES_PER_EU_VALUES)
             * len(USE_SCHEDULING_BARRIERS_VALUES)
         )
@@ -702,78 +682,74 @@ def run_benchmarks() -> List[Dict[str, Any]]:
     if WAVE_AVAILABLE:
         for is_causal in CAUSAL_VALUES:
             for batch_size, seq_len in BATCH_SEQLEN_PAIRS:
+                if batch_size > 1:
+                    print(
+                        f"skipping, batch_size {batch_size} > 1 not yet supported by manual schedule"
+                    )
+                    continue
+
                 for mma_type in MMA_TYPES_FP16:
-                    for block_m in BLOCK_M_VALUES:
-                        for block_n in BLOCK_N_VALUES:
-                            for block_k2 in BLOCK_K2_VALUES:
-                                for schedule in SCHEDULING_STRATEGIES:
-                                    for waves_per_eu in WAVES_PER_EU_VALUES:
-                                        for (
-                                            use_barriers
-                                        ) in USE_SCHEDULING_BARRIERS_VALUES:
-                                            current_config += 1
-                                            mma_short = f"{mma_type.name.split('_')[1]}"
-                                            print(
-                                                f"\n[{current_config}/{total_configs}] Running: "
-                                                f"B={batch_size}, N_CTX={seq_len}, "
-                                                f"causal={is_causal}, mma={mma_short}, "
-                                                f"tiles={block_m}x{block_n}x{block_k2}, "
-                                                f"sched={schedule.name}, barriers={use_barriers}"
-                                            )
+                    for block_n in BLOCK_N_VALUES:
+                        for block_k2 in BLOCK_K2_VALUES:
+                            for waves_per_eu in WAVES_PER_EU_VALUES:
+                                for use_barriers in USE_SCHEDULING_BARRIERS_VALUES:
+                                    current_config += 1
+                                    mma_short = f"{mma_type.name.split('_')[1]}"
+                                    print(
+                                        f"\n[{current_config}/{total_configs}] Running: "
+                                        f"B={batch_size}, N_CTX={seq_len}, "
+                                        f"causal={is_causal}, mma={mma_short}, "
+                                        f"tiles={block_n}x{block_k2}, "
+                                        f"barriers={use_barriers}"
+                                    )
 
-                                            try:
-                                                result = benchmark_attention_comparison(
-                                                    batch_size=batch_size,
-                                                    num_heads=FIXED_PARAMS["num_heads"],
-                                                    seq_len=seq_len,
-                                                    head_dim=FIXED_PARAMS["head_dim"],
-                                                    is_causal=bool(is_causal),
-                                                    mma_type=mma_type,
-                                                    block_m=block_m,
-                                                    block_n=block_n,
-                                                    block_k2=block_k2,
-                                                    schedule=schedule,
-                                                    waves_per_eu=waves_per_eu,
-                                                    use_scheduling_barriers=use_barriers,
-                                                    use_buffer_ops=USE_BUFFER_OPS_VALUES[
-                                                        0
-                                                    ],
-                                                    canonicalize=CANONICALIZE_VALUES[0],
-                                                    num_warmup=DEFAULT_PARAMS[
-                                                        "num_warmup"
-                                                    ],
-                                                    num_iterations=DEFAULT_PARAMS[
-                                                        "num_iterations"
-                                                    ],
-                                                    dtype=DEFAULT_PARAMS["dtype"],
-                                                    device=DEFAULT_PARAMS["device"],
-                                                )
-                                                results.append(result)
+                                    try:
+                                        result = benchmark_attention_comparison(
+                                            batch_size=batch_size,
+                                            num_heads=FIXED_PARAMS["num_heads"],
+                                            seq_len=seq_len,
+                                            head_dim=FIXED_PARAMS["head_dim"],
+                                            is_causal=bool(is_causal),
+                                            mma_type=mma_type,
+                                            block_n=block_n,
+                                            block_k2=block_k2,
+                                            waves_per_eu=waves_per_eu,
+                                            use_scheduling_barriers=use_barriers,
+                                            use_buffer_ops=USE_BUFFER_OPS_VALUES[0],
+                                            canonicalize=CANONICALIZE_VALUES[0],
+                                            num_warmup=DEFAULT_PARAMS["num_warmup"],
+                                            num_iterations=DEFAULT_PARAMS[
+                                                "num_iterations"
+                                            ],
+                                            dtype=DEFAULT_PARAMS["dtype"],
+                                            device=DEFAULT_PARAMS["device"],
+                                        )
+                                        results.append(result)
 
-                                                # Print summary
-                                                triton_str = (
-                                                    f"Triton: {result['triton_avg_time_ms']:.3f} ms "
-                                                    f"({result['triton_throughput_tflops']:.2f} TFLOPs)"
-                                                    if result["triton_avg_time_ms"]
-                                                    else "Triton: N/A"
-                                                )
-                                                wave_str = (
-                                                    f"Wave: {result['wave_avg_time_ms']:.3f} ms "
-                                                    f"({result['wave_throughput_tflops']:.2f} TFLOPs)"
-                                                    if result["wave_avg_time_ms"]
-                                                    else "Wave: N/A"
-                                                )
-                                                speedup_str = (
-                                                    f"Speedup: {result['wave_vs_triton_speedup']:.2f}x"
-                                                    if result["wave_vs_triton_speedup"]
-                                                    else ""
-                                                )
-                                                print(f"  {triton_str}")
-                                                print(f"  {wave_str}")
-                                                if speedup_str:
-                                                    print(f"  {speedup_str}")
-                                            except Exception as e:
-                                                print(f"  Error: {e}")
+                                        # Print summary
+                                        triton_str = (
+                                            f"Triton: {result['triton_avg_time_ms']:.3f} ms "
+                                            f"({result['triton_throughput_tflops']:.2f} TFLOPs)"
+                                            if result["triton_avg_time_ms"]
+                                            else "Triton: N/A"
+                                        )
+                                        wave_str = (
+                                            f"Wave: {result['wave_avg_time_ms']:.3f} ms "
+                                            f"({result['wave_throughput_tflops']:.2f} TFLOPs)"
+                                            if result["wave_avg_time_ms"]
+                                            else "Wave: N/A"
+                                        )
+                                        speedup_str = (
+                                            f"Speedup: {result['wave_vs_triton_speedup']:.2f}x"
+                                            if result["wave_vs_triton_speedup"]
+                                            else ""
+                                        )
+                                        print(f"  {triton_str}")
+                                        print(f"  {wave_str}")
+                                        if speedup_str:
+                                            print(f"  {speedup_str}")
+                                    except Exception as e:
+                                        print(f"  Error: {e}")
     else:
         # Run Triton-only benchmarks
         for is_causal in CAUSAL_VALUES:
@@ -792,10 +768,8 @@ def run_benchmarks() -> List[Dict[str, Any]]:
                         head_dim=FIXED_PARAMS["head_dim"],
                         is_causal=bool(is_causal),
                         mma_type=None,
-                        block_m=BLOCK_M_VALUES[0],
                         block_n=BLOCK_N_VALUES[0],
                         block_k2=BLOCK_K2_VALUES[0],
-                        schedule=None,
                         waves_per_eu=WAVES_PER_EU_VALUES[0],
                         use_scheduling_barriers=False,
                         use_buffer_ops=False,
@@ -858,8 +832,6 @@ def save_results_csv(results: List[Dict[str, Any]], filename: str):
         fieldnames.extend(
             [
                 "mma_type",
-                "schedule",
-                "block_m",
                 "block_n",
                 "block_k2",
                 "waves_per_eu",
