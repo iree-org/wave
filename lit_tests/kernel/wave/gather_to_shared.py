@@ -139,6 +139,7 @@ def test_gather_to_shared_wave_tile_aligned_coalescing():
         use_global_to_shared=True,
         target="gfx950",
         coalescing_strategy_hint=CoalescingType.WAVE_TILE_ALIGNED,
+        enable_swizzle=False,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)

@@ -576,6 +576,10 @@ def gather_to_shared_swizzling(
     new_col = xor(row % max_phase, col // elements_per_thread) * elements_per_thread
     ```
     """
+    if not options.enable_swizzle:
+        logger.info("gather_to_shared_swizzling disabled via enable_swizzle=False")
+        return
+
     if "gfx95" not in options.target:
         logger.info("gather_to_shared_swizzling not supported on this architecture")
         return
@@ -697,5 +701,3 @@ def gather_to_shared_swizzling(
             index[col_dim] = IndexSequence(col_final, col_seq.size, col_seq.stride)
             gather.update_arg("src_index", index)
             logger.info(f"gather.src_index={gather.src_index} -> {index}")
-
-
