@@ -54,9 +54,10 @@ try:
     )
 
     WAVE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     WAVE_AVAILABLE = False
     print("Warning: wave_lang not available. Wave benchmarks will be skipped.")
+    print(f"exception: {e}")
 
 # ============================================================================
 # TRITON IMPORTS
