@@ -109,7 +109,12 @@ def WaterWaveInferTypesPass : Pass<"water-wave-infer-types", "::normalform::Modu
            /*valueType=*/"bool",
            /*default=*/"false",
            "Keep processing after error emission without updating the type. "
-           "May construct invalid IR useful for debugging">
+           "May construct invalid IR useful for debugging">,
+    Option</*varName=*/"partial",
+           /*arg=*/"partial",
+           /*valueType=*/"bool",
+           /*default=*/"false",
+           "Allow some types to remain underspecified.">
   ];
 }
 

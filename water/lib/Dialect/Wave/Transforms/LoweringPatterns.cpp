@@ -818,3 +818,59 @@ void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
                                            RewritePatternSet &patterns) {
   patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
 }
+
+//===----------------------------------------------------------------------===//
+// Reduction ops (SumOp, MaxElementOp)
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+template <typename WaveOp, vector::CombiningKind Kind>
+class ReductionOpLoweringPattern : public OpConversionPattern<WaveOp> {
+public:
+  using OpConversionPattern<WaveOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WaveOp op, typename WaveOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    static_assert(Kind == vector::CombiningKind::ADD ||
+                      Kind == vector::CombiningKind::MAXIMUMF,
+                  "unsupported reduction kind");
+    // Expect PropagateElementsPerThread pass to have run, converting
+    // WaveTensorType results to VectorType.
+    Location loc = op.getLoc();
+
+    Value input = adaptor.getInput();
+    Value init = adaptor.getInit();
+
+    if constexpr (Kind == vector::CombiningKind::ADD) {
+      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+      Value threadReduce = vector::ReductionOp::create(
+          rewriter, loc, vector::CombiningKind::ADD, input, initElement);
+      Value subgroupReduce = gpu::SubgroupReduceOp::create(
+          rewriter, loc, threadReduce, gpu::AllReduceOperation::ADD, false);
+      rewriter.replaceOp(op, subgroupReduce);
+    } else if constexpr (Kind == vector::CombiningKind::MAXIMUMF) {
+      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+      Value threadReduce = vector::ReductionOp::create(
+          rewriter, loc, vector::CombiningKind::MAXIMUMF, input, initElement);
+      Value subgroupReduce = gpu::SubgroupReduceOp::create(
+          rewriter, loc, threadReduce, gpu::AllReduceOperation::MAXIMUMF,
+          false);
+      rewriter.replaceOp(op, subgroupReduce);
+    }
+
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveReductionOpLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns
+      .add<ReductionOpLoweringPattern<wave::SumOp, vector::CombiningKind::ADD>,
+           ReductionOpLoweringPattern<wave::MaxElementOp,
+                                      vector::CombiningKind::MAXIMUMF>>(
+          typeConverter, patterns.getContext());
+}

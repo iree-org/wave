@@ -1075,3 +1075,70 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return
   }
 }
+
+// -----
+
+// Test wave.sum lowering - reduces input vector to scalar via thread-local
+// reduction followed by subgroup reduction.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_sum
+  // expected-warning @below {{unused hyperparameter: N}}
+  func.func @lower_sum() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
+    %input = wave.register %cst_input : vector<8xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.sum
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<8xf32> into f32
+    // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (f32) -> f32
+    %result = wave.sum %input init(%init) along @M : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test wave.max_element lowering - reduces input vector to scalar via
+// thread-local max followed by subgroup max.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_max_element
+  // expected-warning @below {{unused hyperparameter: M}}
+  func.func @lower_max_element() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<2.000000e+00> : vector<16xf32>
+    %input = wave.register %cst_input : vector<16xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.max_element
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <maximumf>, %[[INPUT]], %[[INIT_ELEM]] : vector<16xf32> into f32
+    // CHECK: gpu.subgroup_reduce maximumf %[[THREAD_REDUCE]] : (f32) -> f32
+    %result = wave.max_element %input init(%init) along @N : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test reduction with integer types.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_sum_integer
+  func.func @lower_sum_integer() attributes {wave.hyperparameters = #wave.hyperparameters<{K = 16}>} {
+    %cst_input = arith.constant 1 : i32
+    %cst_init = arith.constant 0 : i32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<1> : vector<4xi32>
+    %input = wave.register %cst_input : vector<4xi32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0> : vector<1xi32>
+    %init = wave.register %cst_init : vector<1xi32>
+    // CHECK-NOT: wave.sum
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : i32 from vector<1xi32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<4xi32> into i32
+    // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (i32) -> i32
+    %result = wave.sum %input init(%init) along @K : (vector<4xi32>, vector<1xi32>) -> vector<1xi32>
+    return
+  }
+}

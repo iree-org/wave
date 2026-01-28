@@ -93,10 +93,12 @@ try:
         ExtractOp,
         ExtractSliceOp,
         IterateOp,
+        MaxElementOp,
         MmaOp,
         MulOp,
         ReadOp,
         RegisterOp,
+        SumOp,
         WriteOp,
         YieldOp,
         DeviceConstraintAttr,
@@ -139,6 +141,8 @@ WAVE_OP_CONSTRUCTORS = {
     "iterate": IterateOp,
     "output": YieldOp,
     "write": WriteOp,
+    "max_element": MaxElementOp,
+    "sum": SumOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
 }
 
