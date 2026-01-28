@@ -23,6 +23,12 @@ def WaveTensorType : TypeDef<WaveDialect, "WaveTensor"> {
     unknown in the earlier stages and will be inferred later. Tensors may have
     an address space indicating whether the data is expected to live in a
     certain location, including local data store (shared memory) and registers.
+
+    When the shape is specified, symbols used in its dimensions indicate which
+    "logical iterators" will be used to index into the tensor. Therefore, all
+    symbols must be unique. (If the same symbol were used twice, it would mean
+    that only a diagonal of the tensor can be indexed since two or more
+    dimensions would be co-indexed).
   }];
 
   let parameters = (ins
