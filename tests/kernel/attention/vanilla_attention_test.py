@@ -211,6 +211,7 @@ def testAttentionPure(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=use_global_to_shared,
+        enable_swizzle=False,
     )
 
     options = set_default_run_config(options)
