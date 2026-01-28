@@ -99,6 +99,7 @@ try:
         RegisterOp,
         WriteOp,
         YieldOp,
+        PermuteOp,
         DeviceConstraintAttr,
         HardwareConstraintAttr,
         TilingConstraintAttr,
@@ -139,6 +140,7 @@ WAVE_OP_CONSTRUCTORS = {
     "iterate": IterateOp,
     "output": YieldOp,
     "write": WriteOp,
+    "permute": PermuteOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
 }
 
