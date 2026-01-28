@@ -844,20 +844,20 @@ public:
     Value init = adaptor.getInit();
 
     if constexpr (Kind == vector::CombiningKind::ADD) {
-      Value init_element = vector::ExtractOp::create(rewriter, loc, init, 0);
-      Value thread_reduce = vector::ReductionOp::create(
-          rewriter, loc, vector::CombiningKind::ADD, input, init_element);
-      Value subgroup_reduce = gpu::SubgroupReduceOp::create(
-          rewriter, loc, thread_reduce, gpu::AllReduceOperation::ADD, false);
-      rewriter.replaceOp(op, subgroup_reduce);
+      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+      Value threadReduce = vector::ReductionOp::create(
+          rewriter, loc, vector::CombiningKind::ADD, input, initElement);
+      Value subgroupReduce = gpu::SubgroupReduceOp::create(
+          rewriter, loc, threadReduce, gpu::AllReduceOperation::ADD, false);
+      rewriter.replaceOp(op, subgroupReduce);
     } else if constexpr (Kind == vector::CombiningKind::MAXIMUMF) {
-      Value init_element = vector::ExtractOp::create(rewriter, loc, init, 0);
-      Value thread_reduce = vector::ReductionOp::create(
-          rewriter, loc, vector::CombiningKind::MAXIMUMF, input, init_element);
-      Value subgroup_reduce = gpu::SubgroupReduceOp::create(
-          rewriter, loc, thread_reduce, gpu::AllReduceOperation::MAXIMUMF,
+      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+      Value threadReduce = vector::ReductionOp::create(
+          rewriter, loc, vector::CombiningKind::MAXIMUMF, input, initElement);
+      Value subgroupReduce = gpu::SubgroupReduceOp::create(
+          rewriter, loc, threadReduce, gpu::AllReduceOperation::MAXIMUMF,
           false);
-      rewriter.replaceOp(op, subgroup_reduce);
+      rewriter.replaceOp(op, subgroupReduce);
     }
 
     return success();
