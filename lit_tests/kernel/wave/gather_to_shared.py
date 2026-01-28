@@ -432,3 +432,82 @@ def test_gather_to_shared_not_minimize_shared_allocs():
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
     # CHECK-COUNT-4:    vector.store
+
+
+@run_test
+def test_gather_to_shared_with_mixed_granularity_swizzling():
+    """
+    Test XOR swizzling with mixed access granularities.
+
+    This test verifies the swizzling pass correctly handles different vector sizes:
+    - gather_to_lds: vector<8xf16> (8 elements per thread)
+    - vector.load : vector<4xf16> (4 elements per thread)
+
+    The swizzling pass must compute internal_offset correctly so that threads reading
+    smaller chunks (4 elements) can correctly access data written in larger
+    chunks (8 elements). The XOR swizzling formula must account for this
+    granularity difference to prevent misaligned or incorrect accesses.
+
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 128,
+            N: 256,
+            K: 1024,
+            BLOCK_M: 128,
+            BLOCK_N: 256,
+            BLOCK_K: 64,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        use_global_to_shared=True,
+        minimize_shared_allocs=False,
+        target="gfx950",
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # CHECK-LABEL: test_gather_to_shared_with_mixed_granularity_swizzling
+    # CHECK:       func.func @gemm
+    #
+    # Verify XOR swizzling exists for gather_to_lds (8-element granularity)
+    # CHECK:       %[[GATHER_XOR:.*]] = arith.xori
+    # CHECK:       %[[GATHER_OFFSET:.*]] = affine.apply {{.*}}%[[GATHER_XOR]]
+    # CHECK:       amdgpu.gather_to_lds {{.*}}[{{.*}}], {{.*}} : vector<8xf16>
+    #
+    # Verify XOR swizzling exists for vector.load (4-element granularity)
+    # CHECK:       %[[LOAD_XOR:.*]] = arith.xori
+    # CHECK:       %[[LOAD_IDX:.*]] = affine.apply {{.*}}%[[LOAD_XOR]]
+    # CHECK:       vector.load {{.*}}[{{.*}}, %[[LOAD_IDX]]] : {{.*}}, vector<4xf16>
