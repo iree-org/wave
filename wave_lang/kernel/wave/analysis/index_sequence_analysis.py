@@ -477,9 +477,16 @@ def set_thread_independent_index(
                 continue
 
             # If the constraint is a tiling constraint, and the node
-            # is outside a reduction, we don't apply the constraint.
+            # is outside a reduction for this specific dimension, we don't apply the constraint.
             if isinstance(constraint, TilingConstraint):
                 if not hasattr(custom.graph, "parent_op"):
+                    continue
+                # Check if we're inside an iterate for this specific tiled dimension
+                parent_iterate = get_custom(custom.graph.parent_op)
+                if (
+                    not isinstance(parent_iterate, Iterate)
+                    or parent_iterate.axis != constraint.dim
+                ):
                     continue
 
             if isinstance(constraint, WorkgroupConstraint) and has_grid_constraint:
