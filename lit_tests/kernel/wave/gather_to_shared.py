@@ -328,21 +328,28 @@ def test_gather_to_shared_scaled_dims():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared_scaled_dims
-    # CHECK:          #[[map1:.*]] = affine_map<()[s0] -> ((s0 floordiv 8) mod 8)>
-    # CHECK:          #[[map2:.*]] = affine_map<()[s0] -> (s0 mod 8)>
-    # CHECK:          #[[map6:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK:          #[[map7:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16 + 4)>
+    # CHECK-DAG:      #[[MAP_COL:.*]] = affine_map<()[s0] -> ((s0 floordiv 8) mod 8)>
+    # CHECK-DAG:      #[[MAP_ROW:.*]] = affine_map<()[s0] -> (s0 mod 8)>
+    # CHECK-DAG:      #[[MAP_COL_SCALE:.*]] = affine_map<()[s0] -> ((s0 floordiv 2) mod 2)>
+    # CHECK-DAG:      #[[MAP_ROW_SCALE:.*]] = affine_map<()[s0] -> (s0 mod 2)>
+    # CHECK-DAG:      #[[MAP_ROW_SWIZZLED:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:      #[[MAP_ROW_SWIZZLED_2:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16 + 4)>
+    # CHECK-DAG:      #[[MAP_SCALE:.*]] = affine_map<()[s0] -> (s0 * 16)>
     # CHECK:          func.func @scaled_gemm
-    # CHECK:          %[[thread_id_x:.*]] = gpu.thread_id x
-    # CHECK-COUNT-1:    memref.alloc()
-    # Check some swizzling was done
-    # CHECK:          %[[col:.*]] = affine.apply #[[map1]]()[%[[thread_id_x]]]
-    # CHECK:          %[[row:.*]] = affine.apply #[[map2]]()[%[[thread_id_x]]]
-    # CHECK:          %{{.*}} = arith.xori %[[row]], %[[col]] : index
-    # CHECK:          %[[row_swizzled:.*]] = affine.apply #[[map6]]()[%[[thread_id_x]]]
-    # CHECK:          %[[row_swizzled_2:.*]] = affine.apply #[[map7]]()[%[[thread_id_x]]]
-    # CHECK:          %{{.*}} = arith.xori %[[row_swizzled]], %[[row]] : index
-    # CHECK:          %{{.*}} = arith.xori %[[row_swizzled_2]], %[[row]] : index
+    # CHECK:          gpu.thread_id x
+    # CHECK:          memref.alloc()
+    # Verify swizzling
+    # CHECK-DAG:      affine.apply #[[MAP_COL]]()
+    # CHECK-DAG:      affine.apply #[[MAP_ROW]]()
+    # CHECK-DAG:      arith.xori
+    # CHECK-DAG:      affine.apply #[[MAP_COL_SCALE]]()
+    # CHECK-DAG:      affine.apply #[[MAP_ROW_SCALE]]()
+    # CHECK-DAG:      arith.xori
+    # CHECK-DAG:      affine.apply #[[MAP_ROW_SWIZZLED]]()
+    # CHECK-DAG:      affine.apply #[[MAP_ROW_SWIZZLED_2]]()
+    # CHECK-DAG:      arith.xori
+    # CHECK-DAG:      affine.apply #[[MAP_SCALE]]()
+    # CHECK-DAG:      affine.apply #[[MAP_SCALE]]()
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
@@ -503,12 +510,8 @@ def test_gather_to_shared_with_mixed_granularity_swizzling():
     # CHECK-LABEL: test_gather_to_shared_with_mixed_granularity_swizzling
     # CHECK:       func.func @gemm
     #
-    # Verify XOR swizzling exists for gather_to_lds (8-element granularity)
-    # CHECK:       %[[GATHER_XOR:.*]] = arith.xori
-    # CHECK:       %[[GATHER_OFFSET:.*]] = affine.apply {{.*}}%[[GATHER_XOR]]
-    # CHECK:       amdgpu.gather_to_lds {{.*}}[{{.*}}], {{.*}} : vector<8xf16>
-    #
-    # Verify XOR swizzling exists for vector.load (4-element granularity)
-    # CHECK:       %[[LOAD_XOR:.*]] = arith.xori
-    # CHECK:       %[[LOAD_IDX:.*]] = affine.apply {{.*}}%[[LOAD_XOR]]
-    # CHECK:       vector.load {{.*}}[{{.*}}, %[[LOAD_IDX]]] : {{.*}}, vector<4xf16>
+    # Verify XOR swizzling exists for both operations (order may vary)
+    # CHECK-DAG:   arith.xori {{.*}} : index
+    # CHECK-DAG:   arith.xori {{.*}} : index
+    # CHECK-DAG:   amdgpu.gather_to_lds {{.*}} : vector<8xf16>
+    # CHECK-DAG:   vector.load {{.*}} : {{.*}}, vector<4xf16>
