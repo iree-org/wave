@@ -62,28 +62,6 @@ private:
   int64_t maxVGPRs = 256;
   int64_t maxSGPRs = 104;
 
-  /// Check if an operation is an MFMA instruction
-  bool isMFMAOp(Operation *op) {
-    return isa<V_MFMA_F32_16X16X16_F16, V_MFMA_F32_16X16X32_F16,
-               V_MFMA_F32_32X32X8_F16,
-               V_MFMA_F32_16X16X4_F16, V_MFMA_F32_32X32X4_F16,
-               V_MFMA_F32_4X4X4_F16,
-               V_MFMA_F32_16X16X16_BF16, V_MFMA_F32_16X16X32_BF16,
-               V_MFMA_F32_32X32X8_BF16,
-               V_MFMA_F32_16X16X4_BF16, V_MFMA_F32_32X32X4_BF16,
-               V_MFMA_F32_4X4X4_BF16,
-               V_MFMA_I32_16X16X16_I8, V_MFMA_I32_32X32X8_I8,
-               V_MFMA_I32_16X16X4_I8, V_MFMA_I32_32X32X4_I8,
-               V_MFMA_I32_4X4X4_I8,
-               V_MFMA_F32_16X16X4_F32, V_MFMA_F32_32X32X2_F32,
-               V_MFMA_F32_4X4X1_F32,
-               V_MFMA_F64_16X16X4_F64, V_MFMA_F64_4X4X4_F64,
-               V_MFMA_F32_16X16X32_FP8_FP8, V_MFMA_F32_32X32X16_FP8_FP8,
-               V_MFMA_F32_16X16X32_FP8_BF8, V_MFMA_F32_32X32X16_FP8_BF8,
-               V_MFMA_F32_16X16X32_BF8_FP8, V_MFMA_F32_32X32X16_BF8_FP8,
-               V_MFMA_F32_16X16X32_BF8_BF8, V_MFMA_F32_32X32X16_BF8_BF8>(op);
-  }
-
   /// Get the accumulator operand from an MFMA op (always operand index 2)
   Value getMFMAAccumulator(Operation *op) {
     if (op->getNumOperands() >= 3) {
@@ -123,7 +101,7 @@ private:
         for (int64_t i = 0; i < size; ++i) {
           reservedSGPRs.insert(physIdx + i);
         }
-      } else if (isMFMAOp(op) && op->getNumResults() > 0) {
+      } else if (op->hasTrait<OpTrait::MFMAOp>() && op->getNumResults() > 0) {
         // For MFMA with VGPR accumulator, tie result to accumulator
         Value acc = getMFMAAccumulator(op);
         if (acc && isVGPRType(acc.getType())) {

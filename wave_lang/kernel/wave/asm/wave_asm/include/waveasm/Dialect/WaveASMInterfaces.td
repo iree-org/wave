@@ -134,6 +134,9 @@ def WaveASM_TargetAttrInterface : AttrInterface<"TargetAttrInterface"> {
 // Trait for arithmetic/ALU operations that are pure and CSE-eligible
 def WaveASM_ArithmeticOp : NativeOpTrait<"ArithmeticOp">;
 
+// Trait for MFMA operations
+def WaveASM_MFMAOp : NativeOpTrait<"MFMAOp">;
+
 // Trait for memory operations (loads/stores)
 def WaveASM_MemoryOp : NativeOpTrait<"MemoryOp">;
 

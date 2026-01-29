@@ -110,7 +110,7 @@ class SALUCmpOp<string mnemonic, list<Trait> traits = []>
 // The result is tied to operand index 2 (the accumulator) when acc is a VGPR.
 // MFMA instructions support inline 0 for the accumulator (no tying needed).
 class MFMAOp<string mnemonic, int accSize, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([Pure], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_MFMAOp], traits)> {
   let arguments = (ins WaveASM_VALUSrc:$a, WaveASM_VALUSrc:$b, WaveASM_VALUSrc:$acc);
   let results = (outs WaveASM_AnyVGPR:$dst);
   let assemblyFormat = "$a `,` $b `,` $acc attr-dict `:` type($a) `,` type($b) `,` type($acc) `->` type($dst)";
