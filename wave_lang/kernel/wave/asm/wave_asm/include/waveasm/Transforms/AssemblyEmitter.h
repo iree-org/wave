@@ -7,9 +7,8 @@
 #ifndef WaveASM_TRANSFORMS_ASSEMBLYEMITTER_H
 #define WaveASM_TRANSFORMS_ASSEMBLYEMITTER_H
 
-#include "waveasm/Transforms/RegAlloc.h"
 #include "waveasm/Dialect/WaveASMOps.h"
-#include "waveasm/Target/AMDGCN/AMDGCNTarget.h"
+#include "waveasm/Transforms/RegAlloc.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"

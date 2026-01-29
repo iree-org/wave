@@ -5,10 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 add_mlir_library(MLIRWaveASMTarget
-  GFX942Target.cpp
-  GFX950Target.cpp
-  GFX1250Target.cpp
-  TargetRegistry.cpp
   InstructionInfo.cpp
 
   ADDITIONAL_HEADER_DIRS

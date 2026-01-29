@@ -5,11 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Transforms/TranslateFromMLIR.h"
+#include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "waveasm/Dialect/WaveASMAttrs.h"
-#include "waveasm/Target/AMDGCN/AMDGCNTarget.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"

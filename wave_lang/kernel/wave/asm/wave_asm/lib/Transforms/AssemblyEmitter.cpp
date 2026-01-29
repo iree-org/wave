@@ -5,11 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Transforms/AssemblyEmitter.h"
-#include "waveasm/Transforms/RegAlloc.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "waveasm/Target/AMDGCN/AMDGCNTarget.h"
 #include "waveasm/Target/AMDGCN/RegisterInfo.h"
+#include "waveasm/Transforms/RegAlloc.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
