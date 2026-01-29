@@ -392,57 +392,6 @@ def WaveASM_TargetAttr : WAVEASMAttr<"Target", "target"> {
       DefaultValuedParameter<"int64_t", "5">:$code_object_version);
 
   let assemblyFormat = "`<` $target_kind (`,` $code_object_version^)? `>`";
-
-  let extraClassDeclaration = [{
-
-    // // Check if target supports MFMA.
-    // bool supportsMFMA() const {
-    //   return getTargetKind() == TargetKind::GFX942 ||
-    //          getTargetKind() == TargetKind::GFX950;
-    // }
-
-    // // Check if target supports FP8.
-    // bool supportsFP8() const {
-    //   return getTargetKind() == TargetKind::GFX942 ||
-    //          getTargetKind() == TargetKind::GFX950;
-    // }
-
-    // // Get max VGPRs for target.
-    // int64_t getMaxVGPRs() const {
-    //   switch (getTargetKind()) {
-    //     case TargetKind::GFX1250:
-    //       return 256;
-    //     case TargetKind::GFX942:
-    //       return 512;
-    //     case TargetKind::GFX950:
-    //       return 512;
-    //   }
-    // }
-
-    // // Get max SGPRs for target.
-    // int64_t getMaxSGPRs() const {
-    //   switch (getTargetKind()) {
-    //     case TargetKind::GFX1250:
-    //       return 106;
-    //     case TargetKind::GFX942:
-    //       return 104;
-    //     case TargetKind::GFX950:
-    //       return 104;
-    //   }
-    // }
-
-    // // Get wave size.
-    // int64_t getWaveSize() const {
-    //   switch (getTargetKind()) {
-    //     case TargetKind::GFX1250:
-    //       return 32;
-    //     case TargetKind::GFX942:
-    //       return 64;
-    //     case TargetKind::GFX950:
-    //       return 64;
-    //   }
-    // }
-  }];
 }
 
 #endif // WaveASM_DIALECT_WAVEASMATTRS
