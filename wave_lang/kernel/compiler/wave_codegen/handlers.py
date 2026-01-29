@@ -1758,7 +1758,8 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if tensor_wait:
+    # Water backend have a dedicated tensor waitcount insertion pass.
+    if tensor_wait and not emitter.options.use_water_backend:
         rocdl_d.s_wait_tensorcnt(0)
 
     if ds_wait and barId != CLUSTER_BARRIER_ID:
