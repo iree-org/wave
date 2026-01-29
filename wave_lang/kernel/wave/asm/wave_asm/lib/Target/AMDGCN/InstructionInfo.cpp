@@ -10,8 +10,6 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <regex>
-
 namespace waveasm {
 
 //===----------------------------------------------------------------------===//

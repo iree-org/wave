@@ -7,13 +7,11 @@
 #ifndef WaveASM_TARGET_AMDGCN_INSTRUCTIONINFO_H
 #define WaveASM_TARGET_AMDGCN_INSTRUCTIONINFO_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace waveasm {
 
@@ -75,7 +73,7 @@ struct OperandDesc {
   bool isUse = true;         // Is this a use (input)?
 
   /// For tied operands: index of the operand this is tied to
-  std::optional<int64_t> tiedTo;
+  std::optional<int64_t> tiedTo = std::nullopt;
 };
 
 //===----------------------------------------------------------------------===//
