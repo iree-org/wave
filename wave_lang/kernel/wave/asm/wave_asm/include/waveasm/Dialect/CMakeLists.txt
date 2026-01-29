@@ -13,6 +13,7 @@ mlir_tablegen(WaveASMDialect.h.inc -gen-dialect-decls)
 mlir_tablegen(WaveASMDialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(MLIRWaveASMDialectIncGen)
 
+
 #-------------------------------------------------------------------------------
 # Types TableGen
 #-------------------------------------------------------------------------------
@@ -31,7 +32,18 @@ add_public_tablegen_target(MLIRWaveASMTypesIncGen)
 set(LLVM_TARGET_DEFINITIONS WaveASMAttrs.td)
 mlir_tablegen(WaveASMAttrs.h.inc -gen-attrdef-decls)
 mlir_tablegen(WaveASMAttrs.cpp.inc -gen-attrdef-defs)
+mlir_tablegen(WaveASMAttrEnums.h.inc -gen-enum-decls)
+mlir_tablegen(WaveASMAttrEnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(MLIRWaveASMAttrsIncGen)
+
+#-------------------------------------------------------------------------------
+# Interfaces TableGen
+#-------------------------------------------------------------------------------
+
+set(LLVM_TARGET_DEFINITIONS WaveASMInterfaces.td)
+mlir_tablegen(WaveASMAttrInterfaces.h.inc -gen-attr-interface-decls)
+mlir_tablegen(WaveASMAttrInterfaces.cpp.inc -gen-attr-interface-defs)
+add_public_tablegen_target(MLIRWaveASMInterfacesIncGen)
 
 #-------------------------------------------------------------------------------
 # Operations TableGen

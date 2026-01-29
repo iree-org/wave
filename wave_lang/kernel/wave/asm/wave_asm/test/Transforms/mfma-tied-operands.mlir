@@ -4,7 +4,7 @@
 
 // Test 1: MFMA with VGPR accumulator - result tied to acc
 // CHECK-LABEL: waveasm.program @mfma_tied_acc
-waveasm.program @mfma_tied_acc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_tied_acc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Input operands for MFMA
   %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
   %b = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
@@ -27,7 +27,7 @@ waveasm.program @mfma_tied_acc target = #waveasm.target<"gfx942", 5> abi = #wave
 
 // Test 2: MFMA with immediate zero accumulator - no tying needed
 // CHECK-LABEL: waveasm.program @mfma_imm_acc
-waveasm.program @mfma_imm_acc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_imm_acc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
   %b = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
   %zero = waveasm.constant 0 : !waveasm.imm<0>
@@ -41,7 +41,7 @@ waveasm.program @mfma_imm_acc target = #waveasm.target<"gfx942", 5> abi = #wavea
 
 // Test 3: Multiple independent MFMA chains - each tied within its chain
 // CHECK-LABEL: waveasm.program @mfma_two_chains
-waveasm.program @mfma_two_chains target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_two_chains target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
   %b = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>
@@ -67,7 +67,7 @@ waveasm.program @mfma_two_chains target = #waveasm.target<"gfx942", 5> abi = #wa
 
 // Test 4: 16x16 MFMA variant (4 register accumulator)
 // CHECK-LABEL: waveasm.program @mfma_16x16
-waveasm.program @mfma_16x16 target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_16x16 target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
   %b = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>

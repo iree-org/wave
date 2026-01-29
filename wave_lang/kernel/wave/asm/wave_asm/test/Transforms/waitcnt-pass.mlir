@@ -4,7 +4,7 @@
 // This tests that memory operations are properly tracked and waitcnts inserted
 
 // CHECK-LABEL: waveasm.program @simple_load_use
-waveasm.program @simple_load_use target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @simple_load_use target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Define address register
   %addr = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -23,7 +23,7 @@ waveasm.program @simple_load_use target = #waveasm.target<"gfx942", 5> abi = #wa
 
 // Test VMEM load with vmcnt insertion
 // CHECK-LABEL: waveasm.program @vmem_load_use
-waveasm.program @vmem_load_use target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @vmem_load_use target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %saddr = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %voffset = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -41,7 +41,7 @@ waveasm.program @vmem_load_use target = #waveasm.target<"gfx942", 5> abi = #wave
 
 // Test multiple loads with coalesced waitcnt
 // CHECK-LABEL: waveasm.program @coalesced_waitcnt
-waveasm.program @coalesced_waitcnt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @coalesced_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %addr = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // Two LDS loads

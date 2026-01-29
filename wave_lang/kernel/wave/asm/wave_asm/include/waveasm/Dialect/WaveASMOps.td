@@ -197,7 +197,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
     Example:
     ```mlir
     waveasm.program @my_kernel
-      target = #waveasm.target<"gfx942", 5>
+      target = #waveasm.target<#waveasm.gfx942, 5>
       abi = #waveasm.abi<tid = 0, kernarg = 0>
       attributes {vgprs = 64 : i64, sgprs = 32 : i64} {
       %tid = waveasm.precolored.vreg 0 : !waveasm.vreg

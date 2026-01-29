@@ -3,7 +3,7 @@
 // Test: Waitcnt insertion pass for memory operations
 
 // CHECK-LABEL: waveasm.program @vmem_waitcnt
-waveasm.program @vmem_waitcnt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @vmem_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -21,7 +21,7 @@ waveasm.program @vmem_waitcnt target = #waveasm.target<"gfx942", 5> abi = #wavea
 }
 
 // CHECK-LABEL: waveasm.program @smem_waitcnt
-waveasm.program @smem_waitcnt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @smem_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %offset = waveasm.constant 0 : !waveasm.imm<0>
 
@@ -38,7 +38,7 @@ waveasm.program @smem_waitcnt target = #waveasm.target<"gfx942", 5> abi = #wavea
 }
 
 // CHECK-LABEL: waveasm.program @lds_waitcnt
-waveasm.program @lds_waitcnt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @lds_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %addr = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // LDS read
@@ -54,7 +54,7 @@ waveasm.program @lds_waitcnt target = #waveasm.target<"gfx942", 5> abi = #waveas
 }
 
 // CHECK-LABEL: waveasm.program @multiple_loads
-waveasm.program @multiple_loads target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @multiple_loads target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %voff1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>

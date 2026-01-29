@@ -3,7 +3,7 @@
 // Test: Scoped common subexpression elimination
 
 // CHECK-LABEL: waveasm.program @cse_duplicate_constants
-waveasm.program @cse_duplicate_constants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_duplicate_constants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Two identical constants should be deduplicated
   // CHECK: waveasm.constant 42
   // CHECK-NOT: waveasm.constant 42
@@ -18,7 +18,7 @@ waveasm.program @cse_duplicate_constants target = #waveasm.target<"gfx942", 5> a
 }
 
 // CHECK-LABEL: waveasm.program @cse_duplicate_ops
-waveasm.program @cse_duplicate_ops target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_duplicate_ops target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c1 = waveasm.constant 10 : !waveasm.imm<10>
 
@@ -32,7 +32,7 @@ waveasm.program @cse_duplicate_ops target = #waveasm.target<"gfx942", 5> abi = #
 }
 
 // CHECK-LABEL: waveasm.program @cse_different_values_kept
-waveasm.program @cse_different_values_kept target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_different_values_kept target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Different constants should NOT be eliminated
   // CHECK: waveasm.constant 100
   // CHECK: waveasm.constant 200
@@ -47,7 +47,7 @@ waveasm.program @cse_different_values_kept target = #waveasm.target<"gfx942", 5>
 }
 
 // CHECK-LABEL: waveasm.program @cse_memory_not_eliminated
-waveasm.program @cse_memory_not_eliminated target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_memory_not_eliminated target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -61,7 +61,7 @@ waveasm.program @cse_memory_not_eliminated target = #waveasm.target<"gfx942", 5>
 }
 
 // CHECK-LABEL: waveasm.program @cse_precolored_not_eliminated
-waveasm.program @cse_precolored_not_eliminated target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_precolored_not_eliminated target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Precolored registers should NOT be eliminated (they're fixed bindings)
   // CHECK: waveasm.precolored.vreg 0
   // CHECK: waveasm.precolored.vreg 0

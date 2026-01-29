@@ -5,7 +5,7 @@
 // Test 1: gfx950 with preloading enabled (3 pointers = 6 SGPRs)
 // CHECK-LABEL: waveasm.program @gemm_preload
 waveasm.program @gemm_preload
-    target = #waveasm.target<"gfx950", 5>
+    target = #waveasm.target<#waveasm.gfx950, 5>
     abi = #waveasm.abi<>
     attributes {kernarg_preload_length = 6 : i64} {
 
@@ -26,7 +26,7 @@ waveasm.program @gemm_preload
 // Test 2: gfx942 without preloading (older target doesn't support it)
 // CHECK-LABEL: waveasm.program @gemm_no_preload
 waveasm.program @gemm_no_preload
-    target = #waveasm.target<"gfx942", 5>
+    target = #waveasm.target<#waveasm.gfx942, 5>
     abi = #waveasm.abi<> {
 
   // Without preloading, kernel args must be loaded via s_load
@@ -42,7 +42,7 @@ waveasm.program @gemm_no_preload
 // Test 3: Maximum preload (8 pointers = 16 SGPRs, hardware limit)
 // CHECK-LABEL: waveasm.program @max_preload
 waveasm.program @max_preload
-    target = #waveasm.target<"gfx950", 5>
+    target = #waveasm.target<#waveasm.gfx950, 5>
     abi = #waveasm.abi<>
     attributes {kernarg_preload_length = 16 : i64} {
 
@@ -62,7 +62,7 @@ waveasm.program @max_preload
 // Test 4: Code object version check (preload only works with COv5+)
 // CHECK-LABEL: waveasm.program @cov4_no_preload
 waveasm.program @cov4_no_preload
-    target = #waveasm.target<"gfx950", 4>
+    target = #waveasm.target<#waveasm.gfx950, 4>
     abi = #waveasm.abi<>
     attributes {kernarg_preload_length = 6 : i64} {
 

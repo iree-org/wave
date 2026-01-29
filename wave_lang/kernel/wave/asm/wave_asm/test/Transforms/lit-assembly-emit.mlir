@@ -8,7 +8,7 @@
 // CHECK: .p2align 8
 // CHECK: assembly_test:
 
-waveasm.program @assembly_test target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @assembly_test target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Test: precolored registers are resolved correctly
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>

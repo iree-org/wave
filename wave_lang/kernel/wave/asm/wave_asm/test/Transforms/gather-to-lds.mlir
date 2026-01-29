@@ -4,7 +4,7 @@
 
 // Test 1: Basic gather-to-LDS using buffer_load_dword_lds
 // CHECK-LABEL: waveasm.program @gather_to_lds_basic
-waveasm.program @gather_to_lds_basic target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @gather_to_lds_basic target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // SRD (buffer descriptor) for global memory
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   // Per-lane offset in VGPR
@@ -27,7 +27,7 @@ waveasm.program @gather_to_lds_basic target = #waveasm.target<"gfx942", 5> abi =
 
 // Test 2: Gather-to-LDS with dwordx4 (16 bytes)
 // CHECK-LABEL: waveasm.program @gather_to_lds_x4
-waveasm.program @gather_to_lds_x4 target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @gather_to_lds_x4 target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %lds_off = waveasm.constant 512 : !waveasm.imm<512>
@@ -45,7 +45,7 @@ waveasm.program @gather_to_lds_x4 target = #waveasm.target<"gfx942", 5> abi = #w
 
 // Test 3: Dynamic M0 from SGPR
 // CHECK-LABEL: waveasm.program @gather_dynamic_m0
-waveasm.program @gather_dynamic_m0 target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @gather_dynamic_m0 target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %soff = waveasm.constant 0 : !waveasm.imm<0>
@@ -65,7 +65,7 @@ waveasm.program @gather_dynamic_m0 target = #waveasm.target<"gfx942", 5> abi = #
 
 // Test 4: Multiple gather operations in sequence
 // CHECK-LABEL: waveasm.program @gather_sequence
-waveasm.program @gather_sequence target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @gather_sequence target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %voff1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>

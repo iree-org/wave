@@ -4,7 +4,7 @@
 
 // Test 1: Buffer loads - various sizes
 // CHECK-LABEL: waveasm.program @buffer_loads
-waveasm.program @buffer_loads target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @buffer_loads target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // SRD (buffer descriptor) in SGPRs
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   // Offset in VGPR
@@ -24,7 +24,7 @@ waveasm.program @buffer_loads target = #waveasm.target<"gfx942", 5> abi = #wavea
 
 // Test 2: Buffer stores
 // CHECK-LABEL: waveasm.program @buffer_stores
-waveasm.program @buffer_stores target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @buffer_stores target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %data = waveasm.precolored.vreg 1, 4 : !waveasm.pvreg<1, 4>
@@ -37,7 +37,7 @@ waveasm.program @buffer_stores target = #waveasm.target<"gfx942", 5> abi = #wave
 
 // Test 3: Global loads (saddr + voffset format)
 // CHECK-LABEL: waveasm.program @global_loads
-waveasm.program @global_loads target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @global_loads target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Base address in SGPRs (64-bit pointer)
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   // Per-lane offset in VGPR
@@ -54,7 +54,7 @@ waveasm.program @global_loads target = #waveasm.target<"gfx942", 5> abi = #wavea
 
 // Test 4: Global stores
 // CHECK-LABEL: waveasm.program @global_stores
-waveasm.program @global_stores target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @global_stores target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %data = waveasm.precolored.vreg 2, 4 : !waveasm.pvreg<2, 4>
@@ -67,7 +67,7 @@ waveasm.program @global_stores target = #waveasm.target<"gfx942", 5> abi = #wave
 
 // Test 5: LDS reads (DS operations)
 // CHECK-LABEL: waveasm.program @lds_reads
-waveasm.program @lds_reads target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @lds_reads target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %ldsoff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // CHECK: waveasm.ds_read_b32
@@ -84,7 +84,7 @@ waveasm.program @lds_reads target = #waveasm.target<"gfx942", 5> abi = #waveasm.
 
 // Test 6: LDS writes (DS operations)
 // CHECK-LABEL: waveasm.program @lds_writes
-waveasm.program @lds_writes target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @lds_writes target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %ldsoff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %data32 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %data64 = waveasm.precolored.vreg 2, 2 : !waveasm.pvreg<2, 2>
@@ -100,7 +100,7 @@ waveasm.program @lds_writes target = #waveasm.target<"gfx942", 5> abi = #waveasm
 
 // Test 7: SGPR loads (scalar memory)
 // CHECK-LABEL: waveasm.program @smem_loads
-waveasm.program @smem_loads target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @smem_loads target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %offset = waveasm.constant 0 : !waveasm.imm<0>
 
@@ -118,7 +118,7 @@ waveasm.program @smem_loads target = #waveasm.target<"gfx942", 5> abi = #waveasm
 
 // Test 8: Register allocation for memory ops
 // CHECK-LABEL: waveasm.program @mem_regalloc
-waveasm.program @mem_regalloc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mem_regalloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 

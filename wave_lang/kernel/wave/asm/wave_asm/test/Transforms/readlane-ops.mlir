@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_readfirstlane
-waveasm.program @test_readfirstlane target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_readfirstlane target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Create a VGPR value to read from
   %c42 = waveasm.constant 42 : !waveasm.imm<42>
   %vgpr = waveasm.v_mov_b32 %c42 : !waveasm.imm<42> -> !waveasm.vreg
@@ -25,7 +25,7 @@ waveasm.program @test_readfirstlane target = #waveasm.target<"gfx942", 5> abi = 
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_readlane
-waveasm.program @test_readlane target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_readlane target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Create a VGPR value to read from
   %c100 = waveasm.constant 100 : !waveasm.imm<100>
   %vgpr = waveasm.v_mov_b32 %c100 : !waveasm.imm<100> -> !waveasm.vreg
@@ -45,7 +45,7 @@ waveasm.program @test_readlane target = #waveasm.target<"gfx942", 5> abi = #wave
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_readlane_sgpr_lane
-waveasm.program @test_readlane_sgpr_lane target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_readlane_sgpr_lane target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Create a VGPR value
   %c50 = waveasm.constant 50 : !waveasm.imm<50>
   %vgpr = waveasm.v_mov_b32 %c50 : !waveasm.imm<50> -> !waveasm.vreg

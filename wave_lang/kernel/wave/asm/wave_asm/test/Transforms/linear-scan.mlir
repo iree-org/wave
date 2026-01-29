@@ -4,7 +4,7 @@
 
 // Test 1: Basic allocation - single registers
 // CHECK-LABEL: waveasm.program @basic_alloc
-waveasm.program @basic_alloc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @basic_alloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Precolored registers should keep their physical assignment
   // CHECK: waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
@@ -20,7 +20,7 @@ waveasm.program @basic_alloc target = #waveasm.target<"gfx942", 5> abi = #waveas
 
 // Test 2: Multi-register allocation (4 consecutive VGPRs with 4-alignment)
 // CHECK-LABEL: waveasm.program @multi_reg_alloc
-waveasm.program @multi_reg_alloc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @multi_reg_alloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // Vector of 4 registers with 4-alignment - must start at v0, v4, v8, etc.
@@ -33,7 +33,7 @@ waveasm.program @multi_reg_alloc target = #waveasm.target<"gfx942", 5> abi = #wa
 
 // Test 3: SGPR multi-register allocation (2 consecutive SGPRs for 64-bit pointer)
 // CHECK-LABEL: waveasm.program @sgpr_pair_alloc
-waveasm.program @sgpr_pair_alloc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @sgpr_pair_alloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Precolored SGPR pair (kernarg pointer at s[0:1])
   // CHECK: waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %karg = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
@@ -49,7 +49,7 @@ waveasm.program @sgpr_pair_alloc target = #waveasm.target<"gfx942", 5> abi = #wa
 
 // Test 4: MFMA accumulator (16 consecutive VGPRs)
 // CHECK-LABEL: waveasm.program @mfma_acc_alloc
-waveasm.program @mfma_acc_alloc target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_acc_alloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
   %v4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>
@@ -63,7 +63,7 @@ waveasm.program @mfma_acc_alloc target = #waveasm.target<"gfx942", 5> abi = #wav
 
 // Test 5: Multiple overlapping ranges
 // CHECK-LABEL: waveasm.program @overlapping_ranges
-waveasm.program @overlapping_ranges target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @overlapping_ranges target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 

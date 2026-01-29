@@ -60,7 +60,7 @@ public:
 /// Emits kernel metadata for AMDGPU
 class MetadataEmitter {
 public:
-  MetadataEmitter(ProgramOp program, const AMDGCNTarget &target);
+  MetadataEmitter(ProgramOp program, TargetAttrInterface target);
 
   /// Emit assembly prologue (target directive, .text, kernel directive)
   llvm::SmallVector<std::string> emitPrologue();
@@ -82,7 +82,7 @@ private:
                                                    int64_t ldsSize);
 
   ProgramOp program;
-  const AMDGCNTarget &target;
+  TargetAttrInterface target;
 };
 
 //===----------------------------------------------------------------------===//
@@ -93,7 +93,7 @@ private:
 class KernelGenerator {
 public:
   KernelGenerator(ProgramOp program, const PhysicalMapping &mapping,
-                  const AMDGCNTarget &target);
+                  TargetAttrInterface target);
 
   /// Generate complete assembly output
   llvm::SmallVector<std::string> generate();
@@ -131,7 +131,7 @@ private:
 
   ProgramOp program;
   const PhysicalMapping &mapping;
-  const AMDGCNTarget &target;
+  TargetAttrInterface target;
   InstructionFormatter formatter;
 
   int64_t peakVGPRs = 0;
