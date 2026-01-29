@@ -2874,7 +2874,7 @@ def testTensorLoadToShared(
     asm = gemm.asm
 
     assert (
-        "wait.tensorcnt" in asm
+        "memory_counter_wait tensor" in asm
     ), "tensor waitcnts are not found in asm: required for tensor load instructions."
 
     validate_gemm_result(a, b, c, options)
