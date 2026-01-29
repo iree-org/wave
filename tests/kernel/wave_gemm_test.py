@@ -3398,7 +3398,9 @@ def test_gfx1250_tbuf_gemm(
         compile_to_mlir=False,
     )
 
-    schedule = get_gfx1250_tbuf_gemm_schedule()
+    schedule = get_gfx1250_tbuf_gemm_schedule(
+        insert_tensor_waitcount=not use_water_backend
+    )
     options = set_default_run_config(options)
     options.use_water_backend = use_water_backend
     gemm = wave_compile(options, gemm, schedule)
@@ -3424,7 +3426,9 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
         compile_to_mlir=False,
     )
 
-    schedule = get_gfx1250_tbuf_gemm_schedule()
+    schedule = get_gfx1250_tbuf_gemm_schedule(
+        insert_tensor_waitcount=not use_water_backend
+    )
     options.target = "gfx1250"
     options.dump_intermediates = tmp_path
     options.use_water_backend = use_water_backend
