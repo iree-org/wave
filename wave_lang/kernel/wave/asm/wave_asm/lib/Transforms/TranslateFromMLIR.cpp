@@ -10,19 +10,21 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/IR/AffineMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -41,7 +43,8 @@ namespace waveasm {
 
 TranslationContext::TranslationContext(OpBuilder &builder, ProgramOp program,
                                        TargetAttrInterface target)
-    : builder(builder), program(program), target(target) {}
+    : builder(builder), registry(builder.getContext()), program(program),
+      target(target) {}
 
 VRegType TranslationContext::createVRegType(int64_t size, int64_t alignment) {
   return VRegType::get(builder.getContext(), size, alignment);
@@ -3098,28 +3101,25 @@ namespace waveasm {
 // OpHandlerRegistry Implementation
 //===----------------------------------------------------------------------===//
 
-OpHandlerRegistry::OpHandlerRegistry() {
-  registerDefaultHandlers();
+OpHandlerRegistry::OpHandlerRegistry(mlir::MLIRContext *ctx) {
+  registerDefaultHandlers(ctx);
 }
 
-void OpHandlerRegistry::registerHandler(StringRef opName, OpHandler handler) {
+void OpHandlerRegistry::registerHandler(OperationName opName,
+                                        OpHandler handler) {
   handlers[opName] = std::move(handler);
 }
 
-std::optional<OpHandler> OpHandlerRegistry::getHandler(StringRef opName) const {
+std::optional<OpHandler>
+OpHandlerRegistry::getHandler(OperationName opName) const {
   auto it = handlers.find(opName);
   if (it != handlers.end())
     return it->second;
   return std::nullopt;
 }
 
-bool OpHandlerRegistry::hasHandler(StringRef opName) const {
+bool OpHandlerRegistry::hasHandler(OperationName opName) const {
   return handlers.contains(opName);
-}
-
-OpHandlerRegistry &OpHandlerRegistry::getDefault() {
-  static OpHandlerRegistry registry;
-  return registry;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3648,100 +3648,106 @@ LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx) {
 // Handler Registration
 //===----------------------------------------------------------------------===//
 
-void OpHandlerRegistry::registerDefaultHandlers() {
+void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
+#define REGISTER_HANDLER(OP, HANDLER)                                          \
+  registerHandler(mlir::OperationName(OP::getOperationName(), ctx), HANDLER)
+
   // GPU dialect
-  registerHandler("gpu.thread_id", handleGPUThreadId);
-  registerHandler("gpu.block_id", handleGPUBlockId);
-  registerHandler("gpu.barrier", handleGPUBarrier);
-  registerHandler("gpu.block_dim", handleGPUBlockDim);
-  registerHandler("gpu.grid_dim", handleGPUGridDim);
-  registerHandler("gpu.lane_id", handleGPULaneId);
-  registerHandler("gpu.subgroup_broadcast", handleGPUSubgroupBroadcast);
+  REGISTER_HANDLER(gpu::ThreadIdOp, handleGPUThreadId);
+  REGISTER_HANDLER(gpu::BlockIdOp, handleGPUBlockId);
+  REGISTER_HANDLER(gpu::BarrierOp, handleGPUBarrier);
+  REGISTER_HANDLER(gpu::BlockDimOp, handleGPUBlockDim);
+  REGISTER_HANDLER(gpu::GridDimOp, handleGPUGridDim);
+  REGISTER_HANDLER(gpu::LaneIdOp, handleGPULaneId);
+  REGISTER_HANDLER(gpu::SubgroupBroadcastOp, handleGPUSubgroupBroadcast);
 
   // Arith dialect - basic operations
-  registerHandler("arith.constant", handleArithConstant);
-  registerHandler("arith.addi", handleArithAddI);
-  registerHandler("arith.subi", handleArithSubI);
-  registerHandler("arith.muli", handleArithMulI);
-  registerHandler("arith.divui", handleArithDivUI);
-  registerHandler("arith.remui", handleArithRemUI);
-  registerHandler("arith.index_cast", handleArithIndexCast);
+  REGISTER_HANDLER(arith::ConstantOp, handleArithConstant);
+  REGISTER_HANDLER(arith::AddIOp, handleArithAddI);
+  REGISTER_HANDLER(arith::SubIOp, handleArithSubI);
+  REGISTER_HANDLER(arith::MulIOp, handleArithMulI);
+  REGISTER_HANDLER(arith::DivUIOp, handleArithDivUI);
+  REGISTER_HANDLER(arith::RemUIOp, handleArithRemUI);
+  REGISTER_HANDLER(arith::IndexCastOp, handleArithIndexCast);
 
   // Arith dialect - bitwise operations
-  registerHandler("arith.andi", handleArithAndI);
-  registerHandler("arith.ori", handleArithOrI);
-  registerHandler("arith.xori", handleArithXorI);
+  REGISTER_HANDLER(arith::AndIOp, handleArithAndI);
+  REGISTER_HANDLER(arith::OrIOp, handleArithOrI);
+  REGISTER_HANDLER(arith::XOrIOp, handleArithXorI);
 
   // Arith dialect - shift operations
-  registerHandler("arith.shli", handleArithShLI);
-  registerHandler("arith.shrui", handleArithShRUI);
-  registerHandler("arith.shrsi", handleArithShRSI);
+  REGISTER_HANDLER(arith::ShLIOp, handleArithShLI);
+  REGISTER_HANDLER(arith::ShRUIOp, handleArithShRUI);
+  REGISTER_HANDLER(arith::ShRSIOp, handleArithShRSI);
 
   // Arith dialect - type conversions
-  registerHandler("arith.extui", handleArithExtUI);
-  registerHandler("arith.extsi", handleArithExtSI);
-  registerHandler("arith.trunci", handleArithTruncI);
+  REGISTER_HANDLER(arith::ExtUIOp, handleArithExtUI);
+  REGISTER_HANDLER(arith::ExtSIOp, handleArithExtSI);
+  REGISTER_HANDLER(arith::TruncIOp, handleArithTruncI);
 
   // Arith dialect - comparison and select
-  registerHandler("arith.cmpi", handleArithCmpI);
-  registerHandler("arith.select", handleArithSelect);
+  REGISTER_HANDLER(arith::CmpIOp, handleArithCmpI);
+  REGISTER_HANDLER(arith::SelectOp, handleArithSelect);
 
   // Arith dialect - floating-point operations
-  registerHandler("arith.addf", handleArithAddF);
-  registerHandler("arith.subf", handleArithSubF);
-  registerHandler("arith.mulf", handleArithMulF);
-  registerHandler("arith.divf", handleArithDivF);
-  registerHandler("arith.negf", handleArithNegF);
-  registerHandler("arith.cmpf", handleArithCmpF);
+  REGISTER_HANDLER(arith::AddFOp, handleArithAddF);
+  REGISTER_HANDLER(arith::SubFOp, handleArithSubF);
+  REGISTER_HANDLER(arith::MulFOp, handleArithMulF);
+  REGISTER_HANDLER(arith::DivFOp, handleArithDivF);
+  REGISTER_HANDLER(arith::NegFOp, handleArithNegF);
+  REGISTER_HANDLER(arith::CmpFOp, handleArithCmpF);
 
   // Math dialect
-  registerHandler("math.fma", handleMathFma);
+  REGISTER_HANDLER(math::FmaOp, handleMathFma);
 
   // Affine dialect
-  registerHandler("affine.apply", handleAffineApply);
+  REGISTER_HANDLER(affine::AffineApplyOp, handleAffineApply);
 
   // Vector dialect
-  registerHandler("vector.load", handleVectorLoad);
-  registerHandler("vector.store", handleVectorStore);
-  registerHandler("vector.extract_strided_slice", handleVectorExtractStridedSlice);
-  registerHandler("vector.broadcast", handleVectorBroadcast);
-  registerHandler("vector.extract", handleVectorExtract);
-  registerHandler("vector.insert", handleVectorInsert);
-  registerHandler("vector.shape_cast", handleVectorShapeCast);
-  registerHandler("vector.transfer_read", handleVectorTransferRead);
-  registerHandler("vector.transfer_write", handleVectorTransferWrite);
-  registerHandler("vector.fma", handleVectorFma);
-  registerHandler("vector.reduction", handleVectorReduction);
+  REGISTER_HANDLER(vector::LoadOp, handleVectorLoad);
+  REGISTER_HANDLER(vector::StoreOp, handleVectorStore);
+  REGISTER_HANDLER(vector::ExtractStridedSliceOp,
+                   handleVectorExtractStridedSlice);
+  REGISTER_HANDLER(vector::BroadcastOp, handleVectorBroadcast);
+  REGISTER_HANDLER(vector::ExtractOp, handleVectorExtract);
+  REGISTER_HANDLER(vector::InsertOp, handleVectorInsert);
+  REGISTER_HANDLER(vector::ShapeCastOp, handleVectorShapeCast);
+  REGISTER_HANDLER(vector::TransferReadOp, handleVectorTransferRead);
+  REGISTER_HANDLER(vector::TransferWriteOp, handleVectorTransferWrite);
+  REGISTER_HANDLER(vector::FMAOp, handleVectorFma);
+  REGISTER_HANDLER(vector::ReductionOp, handleVectorReduction);
 
   // AMDGPU dialect
-  registerHandler("amdgpu.lds_barrier", handleAMDGPULdsBarrier);
-  registerHandler("amdgpu.mfma", handleAMDGPUMfma);
-  registerHandler("amdgpu.fat_raw_buffer_cast", handleFatRawBufferCast);
-  registerHandler("amdgpu.gather_to_lds", handleGatherToLds);
-  registerHandler("amdgpu.raw_buffer_load", handleRawBufferLoad);
-  registerHandler("amdgpu.raw_buffer_store", handleRawBufferStore);
+  REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
+  REGISTER_HANDLER(amdgpu::MFMAOp, handleAMDGPUMfma);
+  REGISTER_HANDLER(amdgpu::FatRawBufferCastOp, handleFatRawBufferCast);
+  REGISTER_HANDLER(amdgpu::GatherToLDSOp, handleGatherToLds);
+  REGISTER_HANDLER(amdgpu::RawBufferLoadOp, handleRawBufferLoad);
+  REGISTER_HANDLER(amdgpu::RawBufferStoreOp, handleRawBufferStore);
 
   // ROCDL dialect
-  registerHandler("rocdl.readfirstlane", handleReadFirstLane);
-  registerHandler("rocdl.s.waitcnt", handleSWaitcnt);
+  REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);
+  REGISTER_HANDLER(ROCDL::SWaitcntOp, handleSWaitcnt);
 
   // IREE/Stream dialect (unregistered operations)
-  registerHandler("stream.binding.subspan", handleBindingSubspan);
-  registerHandler("iree_input.binding.subspan", handleBindingSubspan);
+  registerHandler(mlir::OperationName("stream.binding.subspan", ctx),
+                  handleBindingSubspan);
+  registerHandler(mlir::OperationName("iree_input.binding.subspan", ctx),
+                  handleBindingSubspan);
 
   // MemRef dialect
-  registerHandler("memref.alloc", handleMemRefAlloc);
-  registerHandler("memref.view", handleMemRefView);
-  registerHandler("memref.reinterpret_cast", handleMemRefReinterpretCast);
-  registerHandler("memref.subview", handleMemRefSubView);
-  registerHandler("memref.load", handleMemRefLoad);
-  registerHandler("memref.store", handleMemRefStore);
-  registerHandler("memref.cast", handleMemRefCast);
+  REGISTER_HANDLER(memref::AllocOp, handleMemRefAlloc);
+  REGISTER_HANDLER(memref::ViewOp, handleMemRefView);
+  REGISTER_HANDLER(memref::ReinterpretCastOp, handleMemRefReinterpretCast);
+  REGISTER_HANDLER(memref::SubViewOp, handleMemRefSubView);
+  REGISTER_HANDLER(memref::LoadOp, handleMemRefLoad);
+  REGISTER_HANDLER(memref::StoreOp, handleMemRefStore);
+  REGISTER_HANDLER(memref::CastOp, handleMemRefCast);
 
   // SCF dialect
-  registerHandler("scf.for", handleSCFFor);
-  registerHandler("scf.if", handleSCFIf);
-  registerHandler("scf.yield", handleSCFYield);
+  REGISTER_HANDLER(scf::ForOp, handleSCFFor);
+  REGISTER_HANDLER(scf::IfOp, handleSCFIf);
+  REGISTER_HANDLER(scf::YieldOp, handleSCFYield);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3749,21 +3755,20 @@ void OpHandlerRegistry::registerDefaultHandlers() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult translateOperation(Operation *op, TranslationContext &ctx) {
-  StringRef opName = op->getName().getStringRef();
+  OperationName opName = op->getName();
 
   // Skip terminators (handled by parent)
   if (op->hasTrait<OpTrait::IsTerminator>())
     return success();
 
   // Look up handler
-  auto &registry = OpHandlerRegistry::getDefault();
-  if (auto handler = registry.getHandler(opName)) {
+  if (auto handler = ctx.getRegistry().getHandler(opName)) {
     return (*handler)(op, ctx);
   }
 
   // No handler - emit comment for debugging
   LLVM_DEBUG(llvm::dbgs() << "No handler for: " << opName << "\n");
-  ctx.emitComment(("unhandled: " + opName).str());
+  ctx.emitComment(("unhandled: " + opName.getStringRef()).str());
   return success();
 }
 

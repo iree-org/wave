@@ -151,6 +151,39 @@ struct BitRange {
 };
 
 //===----------------------------------------------------------------------===//
+// Operation Handlers
+//===----------------------------------------------------------------------===//
+
+class TranslationContext;
+
+/// Handler function type for translating operations
+using OpHandler =
+    std::function<mlir::LogicalResult(mlir::Operation *, TranslationContext &)>;
+
+/// Registry of operation handlers
+class OpHandlerRegistry {
+public:
+  explicit OpHandlerRegistry(mlir::MLIRContext *ctx);
+
+  /// Register a handler for an operation
+  void registerHandler(mlir::OperationName opName, OpHandler handler);
+
+  /// Get the handler for an operation
+  std::optional<OpHandler> getHandler(mlir::OperationName opName) const;
+
+  /// Check if an operation has a handler
+  bool hasHandler(mlir::OperationName opName) const;
+
+  /// Get the default registry with built-in handlers
+  static OpHandlerRegistry &getDefault();
+
+private:
+  void registerDefaultHandlers(mlir::MLIRContext *ctx);
+
+  llvm::DenseMap<mlir::OperationName, OpHandler> handlers;
+};
+
+//===----------------------------------------------------------------------===//
 // Loop Context for scf.for with iter_args
 //===----------------------------------------------------------------------===//
 
@@ -547,8 +580,11 @@ public:
     return {wgX, wgY, wgZ};
   }
 
+  const OpHandlerRegistry &getRegistry() const { return registry; }
+
 private:
   mlir::OpBuilder &builder;
+  OpHandlerRegistry registry;
   ProgramOp program;
   TargetAttrInterface target;
   ValueMapper mapper;
@@ -574,37 +610,6 @@ private:
   bool usesWorkgroupIdY = false;
   bool usesWorkgroupIdZ = false;
   bool usesWorkitemId = false;
-};
-
-//===----------------------------------------------------------------------===//
-// Operation Handlers
-//===----------------------------------------------------------------------===//
-
-/// Handler function type for translating operations
-using OpHandler = std::function<mlir::LogicalResult(mlir::Operation *,
-                                                     TranslationContext &)>;
-
-/// Registry of operation handlers
-class OpHandlerRegistry {
-public:
-  OpHandlerRegistry();
-
-  /// Register a handler for an operation
-  void registerHandler(mlir::StringRef opName, OpHandler handler);
-
-  /// Get the handler for an operation
-  std::optional<OpHandler> getHandler(mlir::StringRef opName) const;
-
-  /// Check if an operation has a handler
-  bool hasHandler(mlir::StringRef opName) const;
-
-  /// Get the default registry with built-in handlers
-  static OpHandlerRegistry &getDefault();
-
-private:
-  void registerDefaultHandlers();
-
-  llvm::StringMap<OpHandler> handlers;
 };
 
 //===----------------------------------------------------------------------===//

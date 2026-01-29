@@ -64,10 +64,9 @@ private:
 
   /// Get the accumulator operand from an MFMA op (always operand index 2)
   Value getMFMAAccumulator(Operation *op) {
-    if (op->getNumOperands() >= 3) {
-      return op->getOperand(2);  // acc is the third operand
-    }
-    return Value();
+    assert(op->getNumOperands() >= 3 &&
+           "MFMA op must have at least 3 operands");
+    return op->getOperand(2); // acc is the third operand
   }
 
   LogicalResult processProgram(ProgramOp program) {
