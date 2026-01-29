@@ -143,7 +143,6 @@ class VMEMStoreOp<string mnemonic, list<Trait> traits = []>
   // instOffset is an optional immediate offset added to voffset (emitted as "offset:N")
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
                        DefaultValuedAttr<I64Attr, "0">:$instOffset);
-  let results = (outs);
   let assemblyFormat = "$data `,` $saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($data) `,` type($saddr) `,` type($voffset)";
 }
 
@@ -175,7 +174,6 @@ class LDSLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
 class LDSStoreOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_VRegOrImm:$vaddr);
-  let results = (outs);
   let assemblyFormat = "$data `,` $vaddr attr-dict `:` type($data) `,` type($vaddr)";
 }
 
@@ -800,7 +798,6 @@ def WaveASM_S_MOV_B32_M0 : WAVEASMOp<"s_mov_b32_m0", [WaveASM_SpecialRegOp]> {
     - LDS/GDS indirect addressing
   }];
   let arguments = (ins WaveASM_SRegOrImm:$src);
-  let results = (outs);
   let assemblyFormat = "$src attr-dict `:` type($src)";
 }
 
@@ -870,8 +867,6 @@ def WaveASM_DS_WRITE_B16 : LDSStoreOp<"ds_write_b16">;
 
 def WaveASM_S_ENDPGM : WAVEASMOp<"s_endpgm", [WaveASM_ControlFlowOp]> {
   let summary = "End program execution";
-  let arguments = (ins);
-  let results = (outs);
   let assemblyFormat = "attr-dict";
 }
 
@@ -879,65 +874,55 @@ def WaveASM_S_ENDPGM : WAVEASMOp<"s_endpgm", [WaveASM_ControlFlowOp]> {
 // inside a SingleBlock/NoTerminator container (ProgramOp).
 // Control flow is assembly-like, not SSA block-based.
 
-def WaveASM_S_BRANCH : WAVEASMOp<"s_branch", [WaveASM_ControlFlowOp]> {
+class WaveASM_BranchLikeOp<string mnemonic> :
+    WAVEASMOp<mnemonic, [WaveASM_ControlFlowOp]> {
+  let arguments = (ins SymbolRefAttr:$target);
+  let assemblyFormat = "$target attr-dict";
+}
+
+def WaveASM_S_BRANCH : WaveASM_BranchLikeOp<"s_branch"> {
   let summary = "Unconditional branch";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_SCC0 : WAVEASMOp<"s_cbranch_scc0", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_SCC0 : WaveASM_BranchLikeOp<"s_cbranch_scc0"> {
   let summary = "Branch if SCC == 0";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_SCC1 : WAVEASMOp<"s_cbranch_scc1", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_SCC1 : WaveASM_BranchLikeOp<"s_cbranch_scc1"> {
   let summary = "Branch if SCC == 1";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_VCCZ : WAVEASMOp<"s_cbranch_vccz", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_VCCZ : WaveASM_BranchLikeOp<"s_cbranch_vccz"> {
   let summary = "Branch if VCC == 0";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_VCCNZ : WAVEASMOp<"s_cbranch_vccnz", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_VCCNZ : WaveASM_BranchLikeOp<"s_cbranch_vccnz"> {
   let summary = "Branch if VCC != 0";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_EXECZ : WAVEASMOp<"s_cbranch_execz", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_EXECZ : WaveASM_BranchLikeOp<"s_cbranch_execz"> {
   let summary = "Branch if EXEC == 0";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
-def WaveASM_S_CBRANCH_EXECNZ : WAVEASMOp<"s_cbranch_execnz", [WaveASM_ControlFlowOp]> {
+def WaveASM_S_CBRANCH_EXECNZ : WaveASM_BranchLikeOp<"s_cbranch_execnz"> {
   let summary = "Branch if EXEC != 0";
-  let arguments = (ins SymbolRefAttr:$target);
-  let results = (outs);
-  let assemblyFormat = "$target attr-dict";
 }
 
 def WaveASM_LabelOp : WAVEASMOp<"label"> {
   let summary = "Define a branch target label";
   let arguments = (ins SymbolNameAttr:$name);
-  let results = (outs);
   let assemblyFormat = "$name attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
 // Synchronization Instructions
 //===----------------------------------------------------------------------===//
+
+class WaveASM_CountedWaitOp<string mnemonic> :
+  WAVEASMOp<mnemonic, [WaveASM_ControlFlowOp]> {
+  let arguments = (ins I32Attr:$count);
+  let assemblyFormat = "$count attr-dict";
+}
 
 def WaveASM_S_WAITCNT : WAVEASMOp<"s_waitcnt", [WaveASM_ControlFlowOp]> {
   let summary = "Wait for memory operations to complete";
@@ -946,43 +931,28 @@ def WaveASM_S_WAITCNT : WAVEASMOp<"s_waitcnt", [WaveASM_ControlFlowOp]> {
     OptionalAttr<I32Attr>:$lgkmcnt,
     OptionalAttr<I32Attr>:$expcnt
   );
-  let results = (outs);
   let assemblyFormat = "(`vmcnt` `(` $vmcnt^ `)`)? (`lgkmcnt` `(` $lgkmcnt^ `)`)? (`expcnt` `(` $expcnt^ `)`)? attr-dict";
 }
 
-def WaveASM_S_WAITCNT_VMCNT : WAVEASMOp<"s_waitcnt_vmcnt"> {
+def WaveASM_S_WAITCNT_VMCNT : WaveASM_CountedWaitOp<"s_waitcnt_vmcnt"> {
   let summary = "Wait for vector memory operations";
-  let arguments = (ins I32Attr:$count);
-  let results = (outs);
-  let assemblyFormat = "$count attr-dict";
 }
 
-def WaveASM_S_WAITCNT_LGKMCNT : WAVEASMOp<"s_waitcnt_lgkmcnt"> {
+def WaveASM_S_WAITCNT_LGKMCNT : WaveASM_CountedWaitOp<"s_waitcnt_lgkmcnt"> {
   let summary = "Wait for LDS/GDS/scalar memory operations";
-  let arguments = (ins I32Attr:$count);
-  let results = (outs);
-  let assemblyFormat = "$count attr-dict";
 }
 
-def WaveASM_S_WAITCNT_EXPCNT : WAVEASMOp<"s_waitcnt_expcnt"> {
+def WaveASM_S_WAITCNT_EXPCNT : WaveASM_CountedWaitOp<"s_waitcnt_expcnt"> {
   let summary = "Wait for export operations";
-  let arguments = (ins I32Attr:$count);
-  let results = (outs);
-  let assemblyFormat = "$count attr-dict";
 }
 
 def WaveASM_S_BARRIER : WAVEASMOp<"s_barrier", [WaveASM_ControlFlowOp]> {
   let summary = "Workgroup barrier synchronization";
-  let arguments = (ins);
-  let results = (outs);
   let assemblyFormat = "attr-dict";
 }
 
-def WaveASM_S_NOP : WAVEASMOp<"s_nop"> {
+def WaveASM_S_NOP : WaveASM_CountedWaitOp<"s_nop"> {
   let summary = "No operation (wait cycles)";
-  let arguments = (ins I32Attr:$count);
-  let results = (outs);
-  let assemblyFormat = "$count attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -992,14 +962,12 @@ def WaveASM_S_NOP : WAVEASMOp<"s_nop"> {
 def WaveASM_CommentOp : WAVEASMOp<"comment"> {
   let summary = "Emit a comment in generated assembly";
   let arguments = (ins StrAttr:$text);
-  let results = (outs);
   let assemblyFormat = "$text attr-dict";
 }
 
 def WaveASM_RawOp : WAVEASMOp<"raw"> {
   let summary = "Emit raw assembly text";
   let arguments = (ins StrAttr:$text);
-  let results = (outs);
   let assemblyFormat = "$text attr-dict";
 }
 
