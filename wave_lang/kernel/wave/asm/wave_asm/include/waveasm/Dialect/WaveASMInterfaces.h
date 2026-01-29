@@ -26,6 +26,10 @@ template <typename ConcreteType>
 class ArithmeticOp : public TraitBase<ConcreteType, ArithmeticOp> {
 };
 
+/// Trait for MFMA operations. This is orthogonal to CSE.
+template <typename ConcreteType>
+class MFMAOp : public TraitBase<ConcreteType, MFMAOp> {};
+
 /// Trait for memory operations (loads/stores).
 /// These are NOT eligible for CSE.
 template <typename ConcreteType>
