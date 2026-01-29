@@ -63,8 +63,6 @@ struct LshlOrFusePattern : public OpRewritePattern<V_OR_B32> {
       if (!constOp)
         return failure();
 
-      int64_t shiftAmount = constOp.getValue();
-
       // v_lshl_or_b32 operands: src (value to shift), shift_amt, orend
       // In v_lshlrev_b32: src0 = shift_amt, src1 = value to shift
       Value shiftSrc = lshlOp.getSrc1();  // value being shifted
@@ -423,17 +421,21 @@ struct PeepholePass
     RewritePatternSet patterns(ctx);
 
     // Add all peephole patterns
-    patterns.add<LshlOrFusePattern>(ctx);  // Fuse lshlrev + or -> lshl_or
-    patterns.add<LshlAddPattern>(ctx);
-    patterns.add<RedundantMovePattern>(ctx);
-    patterns.add<MulPow2ToShiftPattern>(ctx);
-    patterns.add<AddZeroPattern>(ctx);
-    patterns.add<MulOnePattern>(ctx);
-    patterns.add<MulZeroPattern>(ctx);
-    patterns.add<MFMAZeroAccumPattern>(ctx);
+    patterns.add<
+        // clang-format off
+        AddZeroPattern,
+        LshlAddPattern,
+        LshlOrFusePattern,
+        MFMAZeroAccumPattern,
+        MulOnePattern,
+        MulPow2ToShiftPattern,
+        MulZeroPattern,
+        RedundantMovePattern
+        // clang-format on
+        >(ctx);
 
     // Apply patterns greedily
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
       signalPassFailure();
       return;
     }
