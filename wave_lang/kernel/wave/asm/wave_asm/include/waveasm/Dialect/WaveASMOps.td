@@ -884,7 +884,6 @@ def WaveASM_S_BRANCH : WAVEASMOp<"s_branch", [WaveASM_ControlFlowOp]> {
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_SCC0 : WAVEASMOp<"s_cbranch_scc0", [WaveASM_ControlFlowOp]> {
@@ -892,7 +891,6 @@ def WaveASM_S_CBRANCH_SCC0 : WAVEASMOp<"s_cbranch_scc0", [WaveASM_ControlFlowOp]
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_SCC1 : WAVEASMOp<"s_cbranch_scc1", [WaveASM_ControlFlowOp]> {
@@ -900,7 +898,6 @@ def WaveASM_S_CBRANCH_SCC1 : WAVEASMOp<"s_cbranch_scc1", [WaveASM_ControlFlowOp]
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_VCCZ : WAVEASMOp<"s_cbranch_vccz", [WaveASM_ControlFlowOp]> {
@@ -908,7 +905,6 @@ def WaveASM_S_CBRANCH_VCCZ : WAVEASMOp<"s_cbranch_vccz", [WaveASM_ControlFlowOp]
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_VCCNZ : WAVEASMOp<"s_cbranch_vccnz", [WaveASM_ControlFlowOp]> {
@@ -916,7 +912,6 @@ def WaveASM_S_CBRANCH_VCCNZ : WAVEASMOp<"s_cbranch_vccnz", [WaveASM_ControlFlowO
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_EXECZ : WAVEASMOp<"s_cbranch_execz", [WaveASM_ControlFlowOp]> {
@@ -924,7 +919,6 @@ def WaveASM_S_CBRANCH_EXECZ : WAVEASMOp<"s_cbranch_execz", [WaveASM_ControlFlowO
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_S_CBRANCH_EXECNZ : WAVEASMOp<"s_cbranch_execnz", [WaveASM_ControlFlowOp]> {
@@ -932,7 +926,6 @@ def WaveASM_S_CBRANCH_EXECNZ : WAVEASMOp<"s_cbranch_execnz", [WaveASM_ControlFlo
   let arguments = (ins SymbolRefAttr:$target);
   let results = (outs);
   let assemblyFormat = "$target attr-dict";
-  let extraClassDeclaration = [{ bool isBranch() { return true; } }];
 }
 
 def WaveASM_LabelOp : WAVEASMOp<"label"> {
@@ -955,7 +948,6 @@ def WaveASM_S_WAITCNT : WAVEASMOp<"s_waitcnt", [WaveASM_ControlFlowOp]> {
   );
   let results = (outs);
   let assemblyFormat = "(`vmcnt` `(` $vmcnt^ `)`)? (`lgkmcnt` `(` $lgkmcnt^ `)`)? (`expcnt` `(` $expcnt^ `)`)? attr-dict";
-  let extraClassDeclaration = [{ bool isBarrier() { return true; } }];
 }
 
 def WaveASM_S_WAITCNT_VMCNT : WAVEASMOp<"s_waitcnt_vmcnt"> {
@@ -984,7 +976,6 @@ def WaveASM_S_BARRIER : WAVEASMOp<"s_barrier", [WaveASM_ControlFlowOp]> {
   let arguments = (ins);
   let results = (outs);
   let assemblyFormat = "attr-dict";
-  let extraClassDeclaration = [{ bool isBarrier() { return true; } }];
 }
 
 def WaveASM_S_NOP : WAVEASMOp<"s_nop"> {
