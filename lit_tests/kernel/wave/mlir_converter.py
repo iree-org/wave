@@ -724,5 +724,9 @@ def mlir_converter_permute():
     # CHECK: %[[CAST:.*]] = wave.cast %[[PERMUTE]]
     # CHECK-SAME: : !wave.tensor<[@N, @M] of f16, <register>> to !wave.tensor<[@N, @M] of f32, <register>>
 
-    # CHECK: wave.write %[[CAST]], %[[ARG1]]
+    # The permuted write has non-contiguous access, so it gets partitioned into
+    # multiple extract_slice + write pairs. Check that the first one has correct types.
+    # CHECK: %[[SLICE:.*]] = wave.extract_slice %[[CAST]]
+    # CHECK-SAME: (!wave.tensor<[@N, @M] of f32, <register>>) -> !wave.tensor<[@N, @M] of f32, <register>>
+    # CHECK: wave.write %[[SLICE]], %[[ARG1]]
     # CHECK-SAME: !wave.tensor<[@N, @M] of f32, <register>>, !wave.tensor<[@N, @M] of f32, <global>>
