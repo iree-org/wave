@@ -3387,7 +3387,7 @@ def testSpecializeGemm(
 @pytest.mark.parametrize("mfma_variant", [MMAType.GFX1250_F32_16x16x32_F16])
 @use_water_backend_bool("use_water_backend")
 def test_gfx1250_tbuf_gemm(
-    shape: tuple[int], mfma_variant: MMAType, use_water_backend: bool
+    shape: tuple[int, int, int], mfma_variant: MMAType, use_water_backend: bool
 ):
     gemm, options = get_tagged_BxA_T_gemm(
         shape=shape,
