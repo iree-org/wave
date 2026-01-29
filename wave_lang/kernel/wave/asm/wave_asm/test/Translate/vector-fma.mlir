@@ -3,7 +3,7 @@
 // Test v_fma_f32 instruction
 
 // CHECK-LABEL: waveasm.program @test_fma_f32
-waveasm.program @test_fma_f32 target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_fma_f32 target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Define operand registers
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>

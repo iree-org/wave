@@ -23,7 +23,7 @@
 
 waveasm.program @simple_add
   abi = #waveasm.abi<flatTidVReg = 0, kernargPtrSRegLo = 0, kernargPtrSRegHi = 1>
-  target = #waveasm.target<"gfx942", 5>
+  target = #waveasm.target<#waveasm.gfx942, 5>
   attributes {maxVGPRs = 256, maxSGPRs = 104, workgroupSize = [64, 1, 1]} {
 
   // Physical registers

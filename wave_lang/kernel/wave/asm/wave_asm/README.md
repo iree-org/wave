@@ -201,13 +201,13 @@ The dialect provides ~300 individual instruction ops organized by category:
 | Attribute | Description |
 |-----------|-------------|
 | `#waveasm.abi<tid = 0, kernarg = 0>` | ABI bindings (precolored regs) |
-| `#waveasm.target<"gfx942", 5>` | Target architecture and wave size |
+| `#waveasm.target<#waveasm.gfx942, 5>` | Target architecture and wave size |
 
 ## Example
 
 ```mlir
 waveasm.program @my_kernel
-  target = #waveasm.target<"gfx942", 5>
+  target = #waveasm.target<#waveasm.gfx942, 5>
   abi = #waveasm.abi<tid = 0, kernarg = 0>
   attributes {vgprs = 256 : i64, sgprs = 104 : i64} {
 
@@ -237,7 +237,7 @@ Here is a complete GEMM kernel (16x16x16 tile, f16 inputs, f32 accumulator) in t
 
 ```mlir
 waveasm.program @gemm_16x16x16
-  target = #waveasm.target<"gfx942", 5>
+  target = #waveasm.target<#waveasm.gfx942, 5>
   abi = #waveasm.abi<tid = 0, kernarg = 0>
   attributes {lds_size = 1024 : i64, vgprs = 24 : i64, sgprs = 32 : i64} {
 

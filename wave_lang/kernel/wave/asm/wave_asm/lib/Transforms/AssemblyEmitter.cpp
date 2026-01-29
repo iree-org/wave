@@ -92,14 +92,14 @@ std::string InstructionFormatter::formatRaw(llvm::StringRef text) {
 // Metadata Emitter Implementation
 //===----------------------------------------------------------------------===//
 
-MetadataEmitter::MetadataEmitter(ProgramOp program, const AMDGCNTarget &target)
+MetadataEmitter::MetadataEmitter(ProgramOp program, TargetAttrInterface target)
     : program(program), target(target) {}
 
 llvm::SmallVector<std::string> MetadataEmitter::emitPrologue() {
   llvm::SmallVector<std::string> lines;
 
   // Target directive
-  lines.push_back(target.getTargetDirective());
+  lines.push_back(target.getTargetDirective().str());
   lines.push_back("");
 
   // Text section
@@ -149,8 +149,7 @@ static void scanSystemRegisterUsage(ProgramOp program,
   // Compute user SGPR count to determine where workgroup IDs are located
   // User SGPRs = 2 (kernarg ptr) + preloaded args (on gfx950+)
   auto targetAttr = program.getTarget();
-  llvm::StringRef targetId = targetAttr ? targetAttr.getId() : "";
-  bool isGfx950 = targetId.starts_with("gfx95");
+  bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetAttr);
 
   int64_t numArgs = 2;  // Default to 2 pointers
   if (auto numArgsAttr = program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
@@ -213,11 +212,10 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   // For gfx95* with preloading: user_sgpr_count = 2 (kernarg ptr) + 4 (preload) = 6
   // For other targets: user_sgpr_count = 2 (just kernarg ptr)
   auto targetAttr = program.getTarget();
-  llvm::StringRef targetId = targetAttr ? targetAttr.getId() : "";
 
   // Determine preload length based on actual kernel args
   int64_t preloadLength = program.getKernargPreloadLength();
-  bool usePreloading = targetId.starts_with("gfx95");
+  bool usePreloading = llvm::isa<GFX950TargetAttr>(targetAttr);
 
   // If no explicit preload length but we're on gfx95*, use actual kernel arg count
   if (usePreloading && preloadLength == 0) {
@@ -257,8 +255,7 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   // gfx940/gfx942/gfx950: VGPRs allocated in groups of 8
   // other GFX9: VGPRs allocated in groups of 4
   int64_t vgprGranularity = 4;
-  if (targetId.contains("gfx940") || targetId.contains("gfx942") ||
-      targetId.contains("gfx950")) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
     vgprGranularity = 8;
   }
   int64_t nextFreeVGPR = ((peakVGPRs + vgprGranularity - 1) / vgprGranularity) *
@@ -268,12 +265,12 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   int64_t nextFreeSGPR = ((peakSGPRs + sgprGranularity - 1) / sgprGranularity) *
                           sgprGranularity;
   // Cap to max for target (targetAttr/targetId already declared above)
-  if (targetId.starts_with("gfx9")) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
     nextFreeSGPR = std::min(nextFreeSGPR, int64_t(102));
   }
 
   // Accumulator offset (required for gfx9 targets) - must come before next_free_vgpr
-  if (targetId.starts_with("gfx9")) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
     // accum_offset must be in range [4, 256] and multiple of 4
     int64_t accumOffset = std::max(int64_t(4), ((nextFreeVGPR + 3) / 4) * 4);
     lines.push_back("  .amdhsa_accum_offset " + std::to_string(accumOffset));
@@ -366,8 +363,7 @@ MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
   lines.push_back("    .kernarg_segment_align: 8");
 
   // Wave size
-  WaveSize waveSize = target.getDefaultWaveSize();
-  int64_t waveSizeVal = static_cast<int64_t>(waveSize);
+  int64_t waveSizeVal = target.getDefaultWaveSize();
   lines.push_back("    .wavefront_size: " + std::to_string(waveSizeVal));
 
   // VGPR/SGPR counts
@@ -399,8 +395,8 @@ MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
 //===----------------------------------------------------------------------===//
 
 KernelGenerator::KernelGenerator(ProgramOp program,
-                                  const PhysicalMapping &mapping,
-                                  const AMDGCNTarget &target)
+                                 const PhysicalMapping &mapping,
+                                 TargetAttrInterface target)
     : program(program), mapping(mapping), target(target) {}
 
 // Check if a literal value is within the inline constant range
@@ -950,13 +946,12 @@ LogicalResult writeAssembly(ProgramOp program,
                              llvm::raw_ostream &os) {
   // Get target
   auto targetAttr = program.getTarget();
-  auto target = getAMDGCNTarget(targetAttr.getId());
-  if (!target) {
-    return program.emitError() << "Unknown target: " << targetAttr.getId();
+  if (!targetAttr) {
+    return program.emitError() << "target attribute not specified";
   }
 
   // Generate assembly
-  KernelGenerator generator(program, mapping, *target);
+  KernelGenerator generator(program, mapping, targetAttr.getTargetKind());
   auto lines = generator.generate();
 
   // Write to stream

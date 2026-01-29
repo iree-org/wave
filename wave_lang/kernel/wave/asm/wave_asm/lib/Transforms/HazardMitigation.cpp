@@ -11,6 +11,7 @@
 // - VALU → v_readfirstlane hazard (gfx940+)
 //===----------------------------------------------------------------------===//
 
+#include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Transforms/Passes.h"
@@ -114,10 +115,9 @@ bool hasIntersection(const llvm::DenseSet<Value> &a,
 //===----------------------------------------------------------------------===//
 
 /// Check if target requires VALU → readfirstlane hazard mitigation
-bool needsVALUReadfirstlaneHazard(StringRef target) {
+static bool needsVALUReadFirstLaneHazard(TargetAttrInterface target) {
   // gfx940+ (CDNA3/4) architectures need this hazard mitigation
-  return target.starts_with("gfx94") || target.starts_with("gfx95") ||
-         target.starts_with("gfx12");
+  return isa<GFX942TargetAttr, GFX950TargetAttr, GFX1250TargetAttr>(target);
 }
 
 //===----------------------------------------------------------------------===//
@@ -129,7 +129,11 @@ struct HazardMitigationPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HazardMitigationPass)
 
   HazardMitigationPass() = default;
-  HazardMitigationPass(StringRef target) : targetArch(target.str()) {}
+  HazardMitigationPass(StringRef target) {
+    std::optional<TargetKind> targetKindEnum = symbolizeTargetKind(target);
+    assert(targetKindEnum && "Invalid target");
+    targetKindEnum = *targetKindEnum;
+  }
 
   StringRef getArgument() const override { return "waveasm-hazard-mitigation"; }
 
@@ -145,17 +149,20 @@ struct HazardMitigationPass
   }
 
 private:
-  std::string targetArch = "gfx942";
+  TargetKind targetKindEnum = TargetKind::GFX942;
   unsigned numNopsInserted = 0;
 
   void processProgram(ProgramOp program) {
-    // Get target from program if available
+    TargetAttrInterface targetKind;
+    // Get target from program if available.
     if (auto targetAttr = program.getTarget()) {
-      targetArch = targetAttr.getId().str();
+      targetKind = targetAttr.getTargetKind();
+    } else {
+      targetKind = getTargetKindAttr(program.getContext(), targetKindEnum);
     }
 
     // Check if this target needs VALU → readfirstlane hazard mitigation
-    bool needsVALUHazard = needsVALUReadfirstlaneHazard(targetArch);
+    bool needsVALUHazard = needsVALUReadFirstLaneHazard(targetKind);
     if (!needsVALUHazard)
       return;
 

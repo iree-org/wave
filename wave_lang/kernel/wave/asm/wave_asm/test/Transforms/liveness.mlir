@@ -7,7 +7,7 @@
 // CHECK: SGPRs:
 
 waveasm.program @simple_kernel
-  target = #waveasm.target<"gfx942", 5>
+  target = #waveasm.target<#waveasm.gfx942, 5>
   abi = #waveasm.abi<tid = 0, kernarg = 0>
   attributes {vgprs = 256 : i64, sgprs = 104 : i64} {
 

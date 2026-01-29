@@ -4,7 +4,7 @@
 
 // Test 1: MFMA F16 variants
 // CHECK-LABEL: waveasm.program @mfma_f16_variants
-waveasm.program @mfma_f16_variants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_f16_variants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 2 : !waveasm.pvreg<0, 2>
   %b = waveasm.precolored.vreg 2, 2 : !waveasm.pvreg<2, 2>
   %c4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
@@ -24,7 +24,7 @@ waveasm.program @mfma_f16_variants target = #waveasm.target<"gfx942", 5> abi = #
 
 // Test 2: MFMA BF16 variants
 // CHECK-LABEL: waveasm.program @mfma_bf16_variants
-waveasm.program @mfma_bf16_variants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_bf16_variants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 2 : !waveasm.pvreg<0, 2>
   %b = waveasm.precolored.vreg 2, 2 : !waveasm.pvreg<2, 2>
   %c4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
@@ -44,7 +44,7 @@ waveasm.program @mfma_bf16_variants target = #waveasm.target<"gfx942", 5> abi = 
 
 // Test 3: MFMA I8 variants
 // CHECK-LABEL: waveasm.program @mfma_i8_variants
-waveasm.program @mfma_i8_variants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_i8_variants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %c4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
@@ -64,7 +64,7 @@ waveasm.program @mfma_i8_variants target = #waveasm.target<"gfx942", 5> abi = #w
 
 // Test 4: MFMA F32 variants
 // CHECK-LABEL: waveasm.program @mfma_f32_variants
-waveasm.program @mfma_f32_variants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_f32_variants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %c4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
@@ -84,7 +84,7 @@ waveasm.program @mfma_f32_variants target = #waveasm.target<"gfx942", 5> abi = #
 
 // Test 5: MFMA F64 variants
 // CHECK-LABEL: waveasm.program @mfma_f64_variants
-waveasm.program @mfma_f64_variants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_f64_variants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 2 : !waveasm.pvreg<0, 2>
   %b = waveasm.precolored.vreg 2, 2 : !waveasm.pvreg<2, 2>
   %c8 = waveasm.precolored.vreg 4, 8 : !waveasm.pvreg<4, 8>
@@ -101,7 +101,7 @@ waveasm.program @mfma_f64_variants target = #waveasm.target<"gfx942", 5> abi = #
 
 // Test 6: MFMA FP8 variants (gfx950+)
 // CHECK-LABEL: waveasm.program @mfma_fp8_variants
-waveasm.program @mfma_fp8_variants target = #waveasm.target<"gfx950", 5> abi = #waveasm.abi<> {
+waveasm.program @mfma_fp8_variants target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 2 : !waveasm.pvreg<0, 2>
   %b = waveasm.precolored.vreg 2, 2 : !waveasm.pvreg<2, 2>
   %c4 = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>

@@ -2,7 +2,7 @@
 
 // Test that the MLIR-to-WAVEASM handlers emit the correct ops
 
-// CHECK: waveasm.program @mma_test target = <"gfx942">
+// CHECK: waveasm.program @mma_test target = <#waveasm.gfx942>
 
 // Test gpu.thread_id -> v_mbcnt_lo/hi sequence
 // CHECK: waveasm.constant -1

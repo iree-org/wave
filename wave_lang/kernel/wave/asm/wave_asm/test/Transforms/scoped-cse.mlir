@@ -4,7 +4,7 @@
 
 // Test 1: Basic CSE - duplicate constants should be eliminated
 // CHECK-LABEL: waveasm.program @basic_cse
-waveasm.program @basic_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @basic_cse target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Two identical constants - second should be eliminated
   // Only one constant 42 should remain after CSE
   %c1 = waveasm.constant 42 : !waveasm.imm<42>
@@ -22,7 +22,7 @@ waveasm.program @basic_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.
 
 // Test 2: Different constants should NOT be eliminated
 // CHECK-LABEL: waveasm.program @different_constants
-waveasm.program @different_constants target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @different_constants target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Different constants - both should remain
   // CHECK: waveasm.constant 10
   // CHECK: waveasm.constant 20
@@ -38,7 +38,7 @@ waveasm.program @different_constants target = #waveasm.target<"gfx942", 5> abi =
 
 // Test 3: Multiple duplicate constants - should be deduplicated
 // CHECK-LABEL: waveasm.program @multiple_duplicates
-waveasm.program @multiple_duplicates target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @multiple_duplicates target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Multiple zero constants - should be deduplicated
   %c0a = waveasm.constant 0 : !waveasm.imm<0>
   %c0b = waveasm.constant 0 : !waveasm.imm<0>
@@ -54,7 +54,7 @@ waveasm.program @multiple_duplicates target = #waveasm.target<"gfx942", 5> abi =
 
 // Test 4: Memory operations should NOT be CSE'd
 // CHECK-LABEL: waveasm.program @no_mem_cse
-waveasm.program @no_mem_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_mem_cse target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -69,7 +69,7 @@ waveasm.program @no_mem_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm
 
 // Test 5: Precolored registers should NOT be CSE'd
 // CHECK-LABEL: waveasm.program @no_precolored_cse
-waveasm.program @no_precolored_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_precolored_cse target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Two identical precolored regs - both should remain
   // CHECK: waveasm.precolored.vreg 0
   // CHECK: waveasm.precolored.vreg 0

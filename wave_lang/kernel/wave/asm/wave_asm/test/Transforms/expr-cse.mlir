@@ -5,7 +5,7 @@
 
 // Test 1: Basic CSE - identical operations
 // CHECK-LABEL: waveasm.program @basic_cse
-waveasm.program @basic_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @basic_cse target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
@@ -26,7 +26,7 @@ waveasm.program @basic_cse target = #waveasm.target<"gfx942", 5> abi = #waveasm.
 
 // Test 2: CSE across operations - only arithmetic ops are CSE-able
 // CHECK-LABEL: waveasm.program @cse_arithmetic_only
-waveasm.program @cse_arithmetic_only target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_arithmetic_only target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
@@ -46,7 +46,7 @@ waveasm.program @cse_arithmetic_only target = #waveasm.target<"gfx942", 5> abi =
 
 // Test 3: Memory ops should NOT be CSE'd (have MemoryOp trait)
 // CHECK-LABEL: waveasm.program @no_cse_memory_ops
-waveasm.program @no_cse_memory_ops target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_cse_memory_ops target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -63,7 +63,7 @@ waveasm.program @no_cse_memory_ops target = #waveasm.target<"gfx942", 5> abi = #
 
 // Test 4: Control flow ops should NOT be CSE'd (have ControlFlowOp trait)
 // CHECK-LABEL: waveasm.program @no_cse_control_flow
-waveasm.program @no_cse_control_flow target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_cse_control_flow target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Waitcnt and barriers are not CSE-able
   // CHECK: waveasm.s_waitcnt_vmcnt 0
   waveasm.s_waitcnt_vmcnt 0
@@ -80,7 +80,7 @@ waveasm.program @no_cse_control_flow target = #waveasm.target<"gfx942", 5> abi =
 
 // Test 5: SGPR arithmetic should also be CSE'd
 // CHECK-LABEL: waveasm.program @cse_sgpr_arith
-waveasm.program @cse_sgpr_arith target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @cse_sgpr_arith target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %s0 = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
   %s1 = waveasm.precolored.sreg 1 : !waveasm.psreg<1>
 

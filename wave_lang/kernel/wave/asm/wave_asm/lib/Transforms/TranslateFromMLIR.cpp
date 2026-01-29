@@ -41,7 +41,7 @@ namespace waveasm {
 //===----------------------------------------------------------------------===//
 
 TranslationContext::TranslationContext(OpBuilder &builder, ProgramOp program,
-                                        const AMDGCNTarget &target)
+                                       TargetAttrInterface target)
     : builder(builder), program(program), target(target) {}
 
 VRegType TranslationContext::createVRegType(int64_t size, int64_t alignment) {
@@ -139,7 +139,7 @@ void TranslationContext::emitSRDPrologue() {
   auto loc = builder.getUnknownLoc();
 
   // Check if this is a gfx95* target (requires preload pattern with branch+alignment)
-  bool isGFX95 = target.getTargetId().starts_with("gfx95");
+  bool isGFX95 = llvm::isa<GFX950TargetAttr>(target);
 
   // Recompute SRD base indices now that we know the total number of args
   // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
@@ -3770,7 +3770,7 @@ LogicalResult translateOperation(Operation *op, TranslationContext &ctx) {
 
 LogicalResult translateModule(ModuleOp module, StringRef targetId) {
   // Get target
-  auto target = getAMDGCNTarget(targetId);
+  auto target = getTargetKindAttr(module.getContext(), targetId);
   if (!target) {
     return module.emitError() << "Unknown target: " << targetId;
   }
@@ -3794,7 +3794,7 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
 
     // Set up translation context
     builder.setInsertionPointToStart(&program.getBodyBlock());
-    TranslationContext ctx(builder, program, *target);
+    TranslationContext ctx(builder, program, target);
 
     // Map function arguments
     for (auto arg : gpuFunc.getBody().getArguments()) {
@@ -3888,8 +3888,8 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
     // Set up translation context
     builder.setInsertionPointToStart(&program.getBodyBlock());
     // Create target instance and keep it alive for the duration of ctx
-    auto targetInstance = getAMDGCNTarget(targetId);
-    TranslationContext ctx(builder, program, *targetInstance);
+    auto targetInstance = getTargetKindAttr(module.getContext(), targetId);
+    TranslationContext ctx(builder, program, targetInstance);
 
     // Map function arguments
     for (auto arg : funcOp.getBody().getArguments()) {
@@ -3948,7 +3948,7 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
 
 LogicalResult translateModule(ModuleOp module, const TranslationOptions &options) {
   // Get target
-  auto target = getAMDGCNTarget(options.targetId);
+  auto target = getTargetKindAttr(module.getContext(), options.targetId);
   if (!target) {
     return module.emitError() << "Unknown target: " << options.targetId;
   }
@@ -3970,7 +3970,8 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
     // Create target attribute
     auto *ctx = builder.getContext();
     auto loc = funcOp.getLoc();
-    auto targetAttr = TargetAttr::get(ctx, options.targetId, 5);
+    auto targetAttr =
+        TargetAttr::get(ctx, getTargetKindAttr(ctx, options.targetId), 5);
 
     // Create ABI attribute
     auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
@@ -4062,8 +4063,8 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
 
     // Set up translation context
     builder.setInsertionPointToStart(&program.getBodyBlock());
-    auto targetInstance = getAMDGCNTarget(options.targetId);
-    TranslationContext transCtx(builder, program, *targetInstance);
+    auto targetInstance = getTargetKindAttr(ctx, options.targetId);
+    TranslationContext transCtx(builder, program, targetInstance);
 
     // Map function arguments
     for (auto arg : funcOp.getBody().getArguments()) {
@@ -4124,7 +4125,7 @@ ProgramOp createProgramFromGPUFunc(gpu::GPUFuncOp gpuFunc,
   auto loc = gpuFunc.getLoc();
 
   // Create target attribute
-  auto targetAttr = TargetAttr::get(ctx, targetId, 5);
+  auto targetAttr = TargetAttr::get(ctx, getTargetKindAttr(ctx, targetId), 5);
 
   // Create ABI attribute with default bindings
   auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
@@ -4150,7 +4151,7 @@ ProgramOp createProgramFromFunc(func::FuncOp funcOp,
   auto loc = funcOp.getLoc();
 
   // Create target attribute
-  auto targetAttr = TargetAttr::get(ctx, targetId, 5);
+  auto targetAttr = TargetAttr::get(ctx, getTargetKindAttr(ctx, targetId), 5);
 
   // Create ABI attribute
   auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);

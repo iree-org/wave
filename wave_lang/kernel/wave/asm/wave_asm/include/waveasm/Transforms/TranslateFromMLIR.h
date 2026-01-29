@@ -9,7 +9,6 @@
 
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "waveasm/Target/AMDGCN/AMDGCNTarget.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -22,7 +21,6 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <functional>
-#include <memory>
 #include <optional>
 
 namespace waveasm {
@@ -174,7 +172,7 @@ struct LoopContext {
 class TranslationContext {
 public:
   TranslationContext(mlir::OpBuilder &builder, ProgramOp program,
-                     const AMDGCNTarget &target);
+                     TargetAttrInterface target);
 
   /// Get the MLIR builder
   mlir::OpBuilder &getBuilder() { return builder; }
@@ -183,7 +181,7 @@ public:
   ProgramOp getProgram() { return program; }
 
   /// Get the target architecture
-  const AMDGCNTarget &getTarget() { return target; }
+  TargetAttrInterface getTarget() { return target; }
 
   /// Get the value mapper
   ValueMapper &getMapper() { return mapper; }
@@ -489,7 +487,7 @@ public:
     // Base: 2 SGPRs for kernarg_segment_ptr
     int64_t count = 2;
     // On gfx950+ with kernarg preloading, add preloaded args
-    if (target.getTargetId().starts_with("gfx95")) {
+    if (llvm::isa<GFX950TargetAttr>(target)) {
       // Each kernel arg pointer uses 2 SGPRs
       count += getNumKernelArgs() * 2;
     }
@@ -552,7 +550,7 @@ public:
 private:
   mlir::OpBuilder &builder;
   ProgramOp program;
-  const AMDGCNTarget &target;
+  TargetAttrInterface target;
   ValueMapper mapper;
   llvm::DenseMap<mlir::Value, int64_t> bindingMap;
   llvm::DenseMap<mlir::Value, int64_t> cacheSwizzleMap;

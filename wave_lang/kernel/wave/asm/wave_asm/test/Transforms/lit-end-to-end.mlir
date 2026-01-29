@@ -8,7 +8,7 @@
 // CHECK: .globl gemm_kernel
 // CHECK: gemm_kernel:
 
-waveasm.program @gemm_kernel target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<tid = 0, kernarg = 0> {
+waveasm.program @gemm_kernel target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<tid = 0, kernarg = 0> {
   // Thread ID
   %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 

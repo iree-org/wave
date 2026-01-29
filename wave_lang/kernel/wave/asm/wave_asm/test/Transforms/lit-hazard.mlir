@@ -3,7 +3,7 @@
 // Test: Hazard mitigation pass inserts s_nop for VALU -> v_readfirstlane hazard
 
 // CHECK-LABEL: waveasm.program @readfirstlane_hazard
-waveasm.program @readfirstlane_hazard target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @readfirstlane_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
@@ -20,7 +20,7 @@ waveasm.program @readfirstlane_hazard target = #waveasm.target<"gfx942", 5> abi 
 }
 
 // CHECK-LABEL: waveasm.program @no_hazard_different_reg
-waveasm.program @no_hazard_different_reg target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_hazard_different_reg target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %v2 = waveasm.precolored.vreg 2 : !waveasm.pvreg<2>
@@ -37,7 +37,7 @@ waveasm.program @no_hazard_different_reg target = #waveasm.target<"gfx942", 5> a
 }
 
 // CHECK-LABEL: waveasm.program @no_hazard_with_gap
-waveasm.program @no_hazard_with_gap target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @no_hazard_with_gap target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %c10 = waveasm.constant 10 : !waveasm.imm<10>

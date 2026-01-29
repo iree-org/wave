@@ -4,7 +4,7 @@
 
 // Test 1: Basic FP arithmetic operations
 // CHECK-LABEL: waveasm.program @fp_arith_basic
-waveasm.program @fp_arith_basic target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_arith_basic target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
@@ -22,7 +22,7 @@ waveasm.program @fp_arith_basic target = #waveasm.target<"gfx942", 5> abi = #wav
 
 // Test 2: FMA operations
 // CHECK-LABEL: waveasm.program @fp_fma
-waveasm.program @fp_fma target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_fma target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %c = waveasm.precolored.vreg 2 : !waveasm.pvreg<2>
@@ -35,7 +35,7 @@ waveasm.program @fp_fma target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi
 
 // Test 3: FP comparison operations
 // CHECK-LABEL: waveasm.program @fp_cmp
-waveasm.program @fp_cmp target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_cmp target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
@@ -53,7 +53,7 @@ waveasm.program @fp_cmp target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi
 
 // Test 4: FP conversions
 // CHECK-LABEL: waveasm.program @fp_cvt
-waveasm.program @fp_cvt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_cvt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // CHECK: waveasm.v_cvt_f32_f16
@@ -73,7 +73,7 @@ waveasm.program @fp_cvt target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi
 
 // Test 5: FP special functions
 // CHECK-LABEL: waveasm.program @fp_special
-waveasm.program @fp_special target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_special target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
   // CHECK: waveasm.v_rcp_f32
@@ -93,7 +93,7 @@ waveasm.program @fp_special target = #waveasm.target<"gfx942", 5> abi = #waveasm
 
 // Test 6: MAC/MAD operations
 // CHECK-LABEL: waveasm.program @fp_mac
-waveasm.program @fp_mac target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_mac target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %c = waveasm.precolored.vreg 2 : !waveasm.pvreg<2>
@@ -106,7 +106,7 @@ waveasm.program @fp_mac target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi
 
 // Test 7: FP min/max operations
 // CHECK-LABEL: waveasm.program @fp_minmax
-waveasm.program @fp_minmax target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @fp_minmax target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %b = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 

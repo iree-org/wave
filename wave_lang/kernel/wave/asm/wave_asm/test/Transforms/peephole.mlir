@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_lshl_add_fusion
-waveasm.program @test_lshl_add_fusion target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_lshl_add_fusion target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %base = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %offset = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -29,7 +29,7 @@ waveasm.program @test_lshl_add_fusion target = #waveasm.target<"gfx942", 5> abi 
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_add_zero
-waveasm.program @test_add_zero target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_add_zero target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -50,7 +50,7 @@ waveasm.program @test_add_zero target = #waveasm.target<"gfx942", 5> abi = #wave
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_mul_one
-waveasm.program @test_mul_one target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_mul_one target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c1 = waveasm.constant 1 : !waveasm.imm<1>
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -71,7 +71,7 @@ waveasm.program @test_mul_one target = #waveasm.target<"gfx942", 5> abi = #wavea
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_mul_pow2
-waveasm.program @test_mul_pow2 target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_mul_pow2 target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c8 = waveasm.constant 8 : !waveasm.imm<8>
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -92,7 +92,7 @@ waveasm.program @test_mul_pow2 target = #waveasm.target<"gfx942", 5> abi = #wave
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_mul_zero
-waveasm.program @test_mul_zero target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @test_mul_zero target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>

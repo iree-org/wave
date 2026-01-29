@@ -4,7 +4,7 @@
 
 // Test 1: Basic SRD setup and buffer load
 // CHECK-LABEL: waveasm.program @srd_basic
-waveasm.program @srd_basic target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @srd_basic target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // SRD is a 4-SGPR descriptor: base ptr (s[0:1]) + size + stride (s[2:3])
   // CHECK: waveasm.precolored.sreg 0, 4
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -21,7 +21,7 @@ waveasm.program @srd_basic target = #waveasm.target<"gfx942", 5> abi = #waveasm.
 
 // Test 2: Multiple SRDs for different buffers
 // CHECK-LABEL: waveasm.program @srd_multiple_buffers
-waveasm.program @srd_multiple_buffers target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @srd_multiple_buffers target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // SRD for buffer A
   // CHECK: waveasm.precolored.sreg 0, 4
   %srd_a = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
@@ -49,7 +49,7 @@ waveasm.program @srd_multiple_buffers target = #waveasm.target<"gfx942", 5> abi 
 
 // Test 3: SRD with scalar memory load (s_load)
 // CHECK-LABEL: waveasm.program @srd_scalar_load
-waveasm.program @srd_scalar_load target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @srd_scalar_load target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Kernarg pointer in first 2 SGPRs
   %kernarg = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %offset = waveasm.constant 0 : !waveasm.imm<0>
@@ -63,7 +63,7 @@ waveasm.program @srd_scalar_load target = #waveasm.target<"gfx942", 5> abi = #wa
 
 // Test 4: Buffer store with SRD
 // CHECK-LABEL: waveasm.program @srd_buffer_store
-waveasm.program @srd_buffer_store target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @srd_buffer_store target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %data = waveasm.precolored.vreg 1, 4 : !waveasm.pvreg<1, 4>
@@ -77,7 +77,7 @@ waveasm.program @srd_buffer_store target = #waveasm.target<"gfx942", 5> abi = #w
 
 // Test 5: SRD with swizzling (cache swizzle stride)
 // CHECK-LABEL: waveasm.program @srd_with_swizzle
-waveasm.program @srd_with_swizzle target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @srd_with_swizzle target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %base_off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
 
@@ -96,7 +96,7 @@ waveasm.program @srd_with_swizzle target = #waveasm.target<"gfx942", 5> abi = #w
 
 // Test 6: Global memory access (saddr + voffset format)
 // CHECK-LABEL: waveasm.program @global_memory_access
-waveasm.program @global_memory_access target = #waveasm.target<"gfx942", 5> abi = #waveasm.abi<> {
+waveasm.program @global_memory_access target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Base address in SGPRs (64-bit pointer)
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   // Per-lane offset in VGPR
