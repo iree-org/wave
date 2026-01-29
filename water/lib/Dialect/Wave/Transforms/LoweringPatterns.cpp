@@ -838,6 +838,44 @@ combiningKindToAllReduceOp(vector::CombiningKind kind) {
   }
 }
 
+/// Emit a warning if the block reduction setting is inconsistent with the
+/// hardware constraint's waves_per_block.
+static void warnIfReductionScopeMismatch(Operation *op, bool isBlockReduction) {
+  func::FuncOp parentFunc = op->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return;
+  ArrayAttr constraints = parentFunc->getAttrOfType<ArrayAttr>(
+      wave::WaveDialect::kWaveConstraintsAttrName);
+  if (!constraints)
+    return;
+  for (Attribute constraint : constraints) {
+    auto hwConstraint =
+        llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint);
+    if (!hwConstraint)
+      continue;
+    ArrayRef<unsigned> wavesPerBlock = hwConstraint.getWavesPerBlock();
+    unsigned totalWaves = 1;
+    for (unsigned w : wavesPerBlock)
+      totalWaves *= w;
+    if (isBlockReduction && totalWaves == 1) {
+      op->emitWarning()
+          << "block reduction requested but hardware constraint "
+             "specifies only one wave per block (waves_per_block = ["
+          << wavesPerBlock[0] << ", " << wavesPerBlock[1] << ", "
+          << wavesPerBlock[2]
+          << "]); consider using wave-level reduction instead";
+    } else if (!isBlockReduction && totalWaves > 1) {
+      op->emitWarning()
+          << "wave-level reduction requested but hardware constraint "
+             "specifies multiple waves per block (waves_per_block = ["
+          << wavesPerBlock[0] << ", " << wavesPerBlock[1] << ", "
+          << wavesPerBlock[2]
+          << "]); consider using block reduction to reduce across all waves";
+    }
+    return;
+  }
+}
+
 template <typename WaveOp, vector::CombiningKind Kind>
 class ReductionOpLoweringPattern : public OpConversionPattern<WaveOp> {
 public:
@@ -856,6 +894,9 @@ public:
     Value input = adaptor.getInput();
     Value init = adaptor.getInit();
     bool isBlockReduction = op.getBlock();
+
+    // Warn if reduction scope is inconsistent with hardware constraints.
+    warnIfReductionScopeMismatch(op, isBlockReduction);
 
     Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
     Value threadReduce =

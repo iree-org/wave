@@ -1188,3 +1188,75 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return
   }
 }
+
+// -----
+
+// Test warning when block = true but hardware constraint specifies only one wave per block.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_block_reduction_single_wave
+  func.func @warn_block_reduction_single_wave()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>]} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<8xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
+    %result = wave.sum %input init(%init) along @M block = true : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning when block = false but hardware constraint specifies multiple waves per block.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_wave_reduction_multiple_waves
+  func.func @warn_wave_reduction_multiple_waves()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1]>]} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<8xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [2, 2, 1]); consider using block reduction to reduce across all waves}}
+    %result = wave.sum %input init(%init) along @M block = false : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning for max_element with block = true and single wave.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_block_max_single_wave
+  func.func @warn_block_max_single_wave()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{N = 32}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>]} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<16xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
+    %result = wave.max_element %input init(%init) along @N block = true : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning for max_element with block = false and multiple waves.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_wave_max_multiple_waves
+  func.func @warn_wave_max_multiple_waves()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{N = 32}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [4, 1, 1]>]} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<16xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [4, 1, 1]); consider using block reduction to reduce across all waves}}
+    %result = wave.max_element %input init(%init) along @N block = false : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
