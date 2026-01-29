@@ -255,20 +255,20 @@ private:
             builder.setInsertionPoint(op);
 
             if (neededVmcnt.has_value() && neededLgkmcnt.has_value()) {
-              builder.create<S_WAITCNT>(
-                  op->getLoc(),
-                  builder.getI32IntegerAttr(*neededVmcnt),
-                  builder.getI32IntegerAttr(*neededLgkmcnt),
-                  IntegerAttr());
+              S_WAITCNT::create(builder, op->getLoc(),
+                                builder.getI32IntegerAttr(*neededVmcnt),
+                                builder.getI32IntegerAttr(*neededLgkmcnt),
+                                IntegerAttr());
               ticketing.observeVmemWait(*neededVmcnt);
               ticketing.observeLgkmWait(*neededLgkmcnt);
             } else if (neededVmcnt.has_value()) {
-              builder.create<S_WAITCNT_VMCNT>(op->getLoc(),
-                                             builder.getI32IntegerAttr(*neededVmcnt));
+              S_WAITCNT_VMCNT::create(builder, op->getLoc(),
+                                      builder.getI32IntegerAttr(*neededVmcnt));
               ticketing.observeVmemWait(*neededVmcnt);
             } else {
-              builder.create<S_WAITCNT_LGKMCNT>(op->getLoc(),
-                                               builder.getI32IntegerAttr(*neededLgkmcnt));
+              S_WAITCNT_LGKMCNT::create(
+                  builder, op->getLoc(),
+                  builder.getI32IntegerAttr(*neededLgkmcnt));
               ticketing.observeLgkmWait(*neededLgkmcnt);
             }
             numWaitcntInserted++;
@@ -302,12 +302,12 @@ private:
           builder.setInsertionPointAfter(op);
 
           if (kind == MemOpKind::VmemLoad) {
-            builder.create<S_WAITCNT_VMCNT>(op->getLoc(),
-                                           builder.getI32IntegerAttr(0));
+            S_WAITCNT_VMCNT::create(builder, op->getLoc(),
+                                    builder.getI32IntegerAttr(0));
             ticketing.observeVmemWait(0);
           } else {
-            builder.create<S_WAITCNT_LGKMCNT>(op->getLoc(),
-                                             builder.getI32IntegerAttr(0));
+            S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
+                                      builder.getI32IntegerAttr(0));
             ticketing.observeLgkmWait(0);
           }
           numWaitcntInserted++;
@@ -348,20 +348,18 @@ private:
 
         // Use combined s_waitcnt if both are needed
         if (neededVmcnt.has_value() && neededLgkmcnt.has_value()) {
-          builder.create<S_WAITCNT>(
-              op->getLoc(),
-              builder.getI32IntegerAttr(*neededVmcnt),
-              builder.getI32IntegerAttr(*neededLgkmcnt),
-              IntegerAttr());
+          S_WAITCNT::create(
+              builder, op->getLoc(), builder.getI32IntegerAttr(*neededVmcnt),
+              builder.getI32IntegerAttr(*neededLgkmcnt), IntegerAttr());
           ticketing.observeVmemWait(*neededVmcnt);
           ticketing.observeLgkmWait(*neededLgkmcnt);
         } else if (neededVmcnt.has_value()) {
-          builder.create<S_WAITCNT_VMCNT>(op->getLoc(),
-                                         builder.getI32IntegerAttr(*neededVmcnt));
+          S_WAITCNT_VMCNT::create(builder, op->getLoc(),
+                                  builder.getI32IntegerAttr(*neededVmcnt));
           ticketing.observeVmemWait(*neededVmcnt);
         } else {
-          builder.create<S_WAITCNT_LGKMCNT>(op->getLoc(),
-                                           builder.getI32IntegerAttr(*neededLgkmcnt));
+          S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
+                                    builder.getI32IntegerAttr(*neededLgkmcnt));
           ticketing.observeLgkmWait(*neededLgkmcnt);
         }
         numWaitcntInserted++;
