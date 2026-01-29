@@ -375,7 +375,7 @@ normalform.module [#wave.normal_form<full_types>] {
     %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<8xf32>, vector<8xf32>) -> vector<8xf32>
-    %sum = wave.sum %reg init(%init) along @M : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
     return
   }
 }
@@ -396,7 +396,7 @@ normalform.module [#wave.normal_form<full_types>] {
     %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
-    %sum = wave.sum %reg init(%init) along @M : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.write {{.*}} : vector<4xf32>
     wave.write %sum, %result_mem {elements_per_thread = 4} : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
@@ -421,7 +421,7 @@ normalform.module [#wave.normal_form<full_types>] {
     %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
-    %sum = wave.sum %reg init(%init) along @M : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
 
     // CHECK: wave.write {{.*}} : vector<1xf32>
     wave.write %sum, %result_mem : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
@@ -442,7 +442,7 @@ normalform.module [#wave.normal_form<full_types>] {
     %c0 = arith.constant 0.0 : f32
     %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
 
-    %sum = wave.sum %reg init(%init) along @M : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
     // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (1)}}
     wave.write %sum, %result_mem { elements_per_thread = 8} : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
     return

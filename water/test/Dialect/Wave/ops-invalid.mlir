@@ -683,7 +683,7 @@ func.func @iterate_multidim_vectors_rejected() attributes {wave.hyperparameters 
 
 func.func @nonexistent_axis(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
   // expected-error @below {{reduction along a non-existing dimension #wave.symbol<"K">}}
-  %result = wave.sum %input init(%init) along @K : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  %result = wave.sum %input init(%init) along @K block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 
@@ -691,7 +691,7 @@ func.func @nonexistent_axis(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.
 
 func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@N] of f32> {
   // expected-error @below {{init tensor rank (2) must be one less than input tensor rank (2)}}
-  %result = wave.sum %input init(%input) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<[@N] of f32>
+  %result = wave.sum %input init(%input) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 
@@ -699,7 +699,7 @@ func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.ten
 
 func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
   // expected-error @below {{result tensor rank (2) must be one less than input tensor rank (2)}}
-  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32>
+  %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32>
   return %result : !wave.tensor<[@N, @M] of f32>
 }
 
@@ -707,6 +707,6 @@ func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.ten
 
 func.func @symbol_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32> {
   // expected-error @below {{expected input dimension #0 (#wave.symbol<"N">) to match result dimension #0 (#wave.symbol<"M">)}}
-  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32>
+  %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32>
   return %result : !wave.tensor<[@M] of f32>
 }

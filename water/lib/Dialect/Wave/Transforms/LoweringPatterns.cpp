@@ -825,6 +825,19 @@ void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
 
 namespace {
 
+/// Convert vector::CombiningKind to gpu::AllReduceOperation.
+constexpr gpu::AllReduceOperation
+combiningKindToAllReduceOp(vector::CombiningKind kind) {
+  switch (kind) {
+  case vector::CombiningKind::ADD:
+    return gpu::AllReduceOperation::ADD;
+  case vector::CombiningKind::MAXIMUMF:
+    return gpu::AllReduceOperation::MAXIMUMF;
+  default:
+    llvm_unreachable("unsupported reduction kind");
+  }
+}
+
 template <typename WaveOp, vector::CombiningKind Kind>
 class ReductionOpLoweringPattern : public OpConversionPattern<WaveOp> {
 public:
@@ -842,23 +855,26 @@ public:
 
     Value input = adaptor.getInput();
     Value init = adaptor.getInit();
+    bool isBlockReduction = op.getBlock();
 
-    if constexpr (Kind == vector::CombiningKind::ADD) {
-      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
-      Value threadReduce = vector::ReductionOp::create(
-          rewriter, loc, vector::CombiningKind::ADD, input, initElement);
-      Value subgroupReduce = gpu::SubgroupReduceOp::create(
-          rewriter, loc, threadReduce, gpu::AllReduceOperation::ADD, false);
-      rewriter.replaceOp(op, subgroupReduce);
-    } else if constexpr (Kind == vector::CombiningKind::MAXIMUMF) {
-      Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
-      Value threadReduce = vector::ReductionOp::create(
-          rewriter, loc, vector::CombiningKind::MAXIMUMF, input, initElement);
-      Value subgroupReduce = gpu::SubgroupReduceOp::create(
-          rewriter, loc, threadReduce, gpu::AllReduceOperation::MAXIMUMF,
-          false);
-      rewriter.replaceOp(op, subgroupReduce);
+    Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+    Value threadReduce =
+        vector::ReductionOp::create(rewriter, loc, Kind, input, initElement);
+
+    constexpr gpu::AllReduceOperation gpuReduceOp =
+        combiningKindToAllReduceOp(Kind);
+
+    Value result;
+    if (isBlockReduction) {
+      auto opAttr =
+          gpu::AllReduceOperationAttr::get(rewriter.getContext(), gpuReduceOp);
+      result =
+          gpu::AllReduceOp::create(rewriter, loc, threadReduce, opAttr, false);
+    } else {
+      result = gpu::SubgroupReduceOp::create(rewriter, loc, threadReduce,
+                                             gpuReduceOp, false);
     }
+    rewriter.replaceOp(op, result);
 
     return success();
   }

@@ -109,7 +109,8 @@ class ReductionWaveOp<string mnemonic>
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
     Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
-    Arg<WaveSymbolAttr, "Reduction axis">:$axis
+    Arg<WaveSymbolAttr, "Reduction axis">:$axis,
+    Arg<BoolAttr, "Reduce across block instead of warp">:$block
   ), commonArguments);
 
   let results = (outs
@@ -118,6 +119,7 @@ class ReductionWaveOp<string mnemonic>
 
   let assemblyFormat =
       "$input `init` `(` $init `)` `along` custom<SingleSymbol>($axis) "
+      "`block` `=` $block "
       # commonArgumentsSyntax # "attr-dict `:`"
       "functional-type(operands, results)";
 

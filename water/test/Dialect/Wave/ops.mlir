@@ -509,8 +509,8 @@ func.func @shuffle_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
 
 // CHECK-LABEL: @sum_tensor
 func.func @sum_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
-  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M
-  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M block = false
+  %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 
@@ -518,8 +518,8 @@ func.func @sum_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor
 
 // CHECK-LABEL: @max_tensor
 func.func @max_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
-  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) along @M
-  %result = wave.max_element %input init(%init) along @M : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) along @M block = false
+  %result = wave.max_element %input init(%init) along @M block = false : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 
@@ -527,8 +527,8 @@ func.func @max_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor
 
 // CHECK-LABEL: @sum_vector
 func.func @sum_vector(%input: vector<16xf32>, %init: vector<4xf32>) -> vector<4xf32> {
-  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
-  %result = wave.sum %input init(%init) along @M : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M block = false : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
+  %result = wave.sum %input init(%init) along @M block = false : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
   return %result : vector<4xf32>
 }
 
@@ -536,8 +536,8 @@ func.func @sum_vector(%input: vector<16xf32>, %init: vector<4xf32>) -> vector<4x
 
 // CHECK-LABEL: @max_element_vector
 func.func @max_element_vector(%input: vector<8xf32>, %init: vector<2xf32>) -> vector<2xf32> {
-  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) along @N : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
-  %result = wave.max_element %input init(%init) along @N : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
+  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) along @N block = false : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
+  %result = wave.max_element %input init(%init) along @N block = false : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
   return %result : vector<2xf32>
 }
 
@@ -546,8 +546,8 @@ func.func @max_element_vector(%input: vector<8xf32>, %init: vector<2xf32>) -> ve
 // Test reduction along different dimensions
 // CHECK-LABEL: @sum_along_first_dim
 func.func @sum_along_first_dim(%input: !wave.tensor<[@M, @N] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
-  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M
-  %result = wave.sum %input init(%init) along @M : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M block = false
+  %result = wave.sum %input init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 
@@ -556,7 +556,7 @@ func.func @sum_along_first_dim(%input: !wave.tensor<[@M, @N] of f32>, %init: !wa
 // Test 3D reduction
 // CHECK-LABEL: @sum_3d_reduction
 func.func @sum_3d_reduction(%input: !wave.tensor<[@A, @B, @C] of f32>, %init: !wave.tensor<[@A, @C] of f32>) -> !wave.tensor<[@A, @C] of f32> {
-  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @B
-  %result = wave.sum %input init(%init) along @B : (!wave.tensor<[@A, @B, @C] of f32>, !wave.tensor<[@A, @C] of f32>) -> !wave.tensor<[@A, @C] of f32>
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @B block = false
+  %result = wave.sum %input init(%init) along @B block = false : (!wave.tensor<[@A, @B, @C] of f32>, !wave.tensor<[@A, @C] of f32>) -> !wave.tensor<[@A, @C] of f32>
   return %result : !wave.tensor<[@A, @C] of f32>
 }
