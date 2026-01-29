@@ -139,8 +139,8 @@ struct LshlAddPattern : public OpRewritePattern<V_ADD_U32> {
 
       // Create v_lshl_add_u32: dst = (base << shift) + other
       auto resultType = addOp.getResult().getType();
-      auto lshlAddOp = rewriter.create<V_LSHL_ADD_U32>(
-          loc, resultType, base, shiftConst, other);
+      auto lshlAddOp = V_LSHL_ADD_U32::create(rewriter, loc, resultType, base,
+                                              shiftConst, other);
 
       rewriter.replaceOp(addOp, lshlAddOp.getResult());
       return success();
@@ -218,11 +218,12 @@ struct MulPow2ToShiftPattern : public OpRewritePattern<V_MUL_LO_U32> {
       // Create the shift constant
       auto loc = mulOp.getLoc();
       auto immType = rewriter.getType<ImmType>(shiftAmount);
-      auto shiftConst = rewriter.create<ConstantOp>(loc, immType, shiftAmount);
+      auto shiftConst = ConstantOp::create(rewriter, loc, immType, shiftAmount);
 
       // Create lshlrev: dst = other << shiftAmount
       auto resultType = mulOp.getResult().getType();
-      auto lshlOp = rewriter.create<V_LSHLREV_B32>(loc, resultType, shiftConst, other);
+      auto lshlOp =
+          V_LSHLREV_B32::create(rewriter, loc, resultType, shiftConst, other);
 
       rewriter.replaceOp(mulOp, lshlOp.getResult());
       return success();
@@ -328,10 +329,10 @@ struct MulZeroPattern : public OpRewritePattern<V_MUL_LO_U32> {
     if (checkOperand(mulOp.getSrc0()) || checkOperand(mulOp.getSrc1())) {
       auto loc = mulOp.getLoc();
       auto immType = rewriter.getType<ImmType>(0);
-      auto zeroConst = rewriter.create<ConstantOp>(loc, immType, 0);
+      auto zeroConst = ConstantOp::create(rewriter, loc, immType, 0);
       // Move to VGPR if needed
       auto vregType = rewriter.getType<VRegType>(1, 1);
-      auto movOp = rewriter.create<V_MOV_B32>(loc, vregType, zeroConst);
+      auto movOp = V_MOV_B32::create(rewriter, loc, vregType, zeroConst);
       rewriter.replaceOp(mulOp, movOp.getResult());
       return success();
     }
@@ -390,7 +391,7 @@ struct MFMAZeroAccumPattern : public RewritePattern {
     // Replace the accumulator with an inline zero constant
     auto loc = op->getLoc();
     auto immType = rewriter.getType<ImmType>(0);
-    auto zeroConst = rewriter.create<ConstantOp>(loc, immType, 0);
+    auto zeroConst = ConstantOp::create(rewriter, loc, immType, 0);
 
     // Update the MFMA's accumulator operand
     op->setOperand(2, zeroConst);

@@ -196,7 +196,8 @@ private:
     for (Operation *insertBefore : insertionPoints) {
       OpBuilder builder(insertBefore);
       // Insert s_nop 0 (no extra wait states beyond the instruction itself)
-      builder.create<S_NOP>(insertBefore->getLoc(), builder.getI32IntegerAttr(0));
+      S_NOP::create(builder, insertBefore->getLoc(),
+                    builder.getI32IntegerAttr(0));
       numNopsInserted++;
     }
   }
