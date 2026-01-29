@@ -243,7 +243,7 @@ def get_gfx1250_tbuf_gemm_schedule():
             tkw.cluster(
                 [
                     prologue_global_to_shared_fused,
-                    tkw.TensorCounterWait(1),
+                    # tkw.TensorCounterWait(1),
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SharedMemoryBarrierWait(-1),
                 ],
@@ -285,7 +285,7 @@ def get_gfx1250_tbuf_gemm_schedule():
                     loop_shared_load_b,
                     # Barrier pattern after shared loads
                     tkw.SetWavePrio(0),
-                    tkw.TensorCounterWait(1),
+                    # tkw.TensorCounterWait(1),
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=True),
                     tkw.SchedulingBarrier([]),
                     tkw.SharedMemoryBarrierWait(-1),
@@ -329,7 +329,7 @@ def get_gfx1250_tbuf_gemm_schedule():
             tkw.cluster(
                 [
                     # First set of loads (B and A together)
-                    tkw.TensorCounterWait(1),
+                    # tkw.TensorCounterWait(1),
                     epilogue_shared_load_b_chunks[0],
                     epilogue_shared_load_a_chunks[0],
                     # Stagger barrier before first MMAs (no ds_wait)
@@ -341,7 +341,7 @@ def get_gfx1250_tbuf_gemm_schedule():
                     epilogue_mma_chunks[0],
                     # Stagger barrier before second loads
                     tkw.SetWavePrio(1),
-                    tkw.TensorCounterWait(0),
+                    # tkw.TensorCounterWait(0),
                     tkw.SharedMemoryBarrierSignal(-1, ds_wait=False),
                     tkw.SchedulingBarrier([]),
                     tkw.SharedMemoryBarrierWait(-1),
