@@ -3385,7 +3385,10 @@ def testSpecializeGemm(
 @require_gfx1250
 @pytest.mark.parametrize("shape", [(1024, 1024, 1024)])
 @pytest.mark.parametrize("mfma_variant", [MMAType.GFX1250_F32_16x16x32_F16])
-def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
+@use_water_backend_bool("use_water_backend")
+def test_gfx1250_tbuf_gemm(
+    shape: tuple[int], mfma_variant: MMAType, use_water_backend: bool
+):
     gemm, options = get_tagged_BxA_T_gemm(
         shape=shape,
         block_shape=(256, 256, 64),
@@ -3397,6 +3400,7 @@ def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
 
     schedule = get_gfx1250_tbuf_gemm_schedule()
     options = set_default_run_config(options)
+    options.use_water_backend = use_water_backend
     gemm = wave_compile(options, gemm, schedule)
 
     a = device_randn(shape[0], shape[2], dtype=torch.float16)
