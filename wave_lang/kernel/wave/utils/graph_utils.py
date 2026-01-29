@@ -3,16 +3,27 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Callable, Optional, Sequence
+from typing import (
+    Callable,
+    Optional,
+    Sequence,
+    TypeAlias,
+    Any,
+    NamedTuple,
+)
 
+import sympy
 import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 
+from ....support.indexing import IndexSequence
+from ..._support.dtype import DataType
 from ..._support.indexing import IndexSymbol
 from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
-from ...lang.global_symbols import *
+from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
+from ...lang.wave_types import Memory, Register
 from ...ops.wave_ops import (
     MMA,
     Conditional,
@@ -35,7 +46,52 @@ from ...ops.wave_ops import (
 from .symbol_utils import subs_idxc
 
 
-def DCE(trace: CapturedTrace):
+class CheckResult(NamedTuple):
+    """Result of equivalence checking with success flag and optional reason."""
+
+    success: bool
+    reason: str | None
+
+
+IndexDict: TypeAlias = dict[IndexSymbol, IndexSequence | sympy.Basic | int]
+Payload: TypeAlias = (
+    fx.Node
+    | IndexSequence
+    | sympy.Basic
+    | int
+    | DataType
+    | dict[Any, "Payload"]
+    | Sequence["Payload"]
+    | None
+)
+ResultType: TypeAlias = DataType | Memory | Register | Sequence["ResultType"] | None
+
+
+# Attributes compared for trace equivalence.
+# Excluded on purpose:
+# - "index": compared via _index_equivalent.
+# - "location": non-semantic and unstable across runs.
+# - "expanded_dims" and "scheduling_parameters": scheduling artifacts.
+# TODO: Ideally, we would have a canonical list of core attributes on the CustomOp
+# definition in wave_ops. They should also inform how to clone an an operation.
+# The current behavior of also cloning everything that's attached in
+# the meta field of a node makes this information unconstrained and distributed across the codebase.
+# across the codebase.
+CORE_ATTR_NAMES = (
+    "vector_shapes",
+    "reduction_dim",
+    "iter_idx",
+    "elements_per_thread",
+    "bounds",
+    "mma_type",
+    "offset",
+    "size",
+    "stride",
+    "value",
+)
+
+
+def DCE(trace: CapturedTrace) -> None:
     """
     Removes all operators that are not used in the graph,
     excluding output and global write nodes.
@@ -80,6 +136,377 @@ def DCE(trace: CapturedTrace):
     while removable_nodes := trace.walk(is_removable_operator):
         for node in removable_nodes:
             get_custom(node).erase()
+
+
+def _expr_symbols(expr: IndexSequence | sympy.Basic | int) -> set[str]:
+    """Collect free-symbol names from index expressions."""
+    if isinstance(expr, IndexSequence):
+        return (
+            _expr_symbols(expr.start)
+            | _expr_symbols(expr.size)
+            | _expr_symbols(expr.stride)
+        )
+    if isinstance(expr, sympy.Basic):
+        return {s.name for s in expr.free_symbols}
+    if isinstance(expr, int):
+        return set()
+    raise ValueError(f"Unsupported expression type: {type(expr)}")
+
+
+def _apply_subs(
+    expr: IndexSequence | sympy.Basic | int, subs: Optional[dict[IndexSymbol, int]]
+) -> IndexSequence | sympy.Basic | int:
+    """Apply substitutions to expressions or index sequences."""
+    if subs is None:
+        return expr
+    if isinstance(expr, int):
+        return expr
+    if isinstance(expr, (sympy.Basic, IndexSequence)):
+        return expr.subs(subs)
+    raise ValueError(f"Unsupported expression type: {type(expr)}")
+
+
+def _check_expr_equivalent(
+    lhs: IndexSequence | sympy.Basic | int,
+    rhs: IndexSequence | sympy.Basic | int,
+    subs: Optional[dict[IndexSymbol, int]],
+) -> CheckResult:
+    """Check symbolic equivalence after substitution and simplification."""
+    if _expr_symbols(lhs) != _expr_symbols(rhs):
+        return CheckResult(
+            False, f"symbol mismatch: {_expr_symbols(lhs)} vs {_expr_symbols(rhs)}"
+        )
+    lhs = _apply_subs(lhs, subs)
+    rhs = _apply_subs(rhs, subs)
+    if isinstance(lhs, IndexSequence) and isinstance(rhs, IndexSequence):
+        if not (
+            check_result := _check_expr_equivalent(lhs.start, rhs.start, subs)
+        ).success:
+            return CheckResult(
+                False, f"IndexSequence.start mismatch: {check_result.reason}"
+            )
+        if not (
+            check_result := _check_expr_equivalent(lhs.size, rhs.size, subs)
+        ).success:
+            return CheckResult(
+                False, f"IndexSequence.size mismatch: {check_result.reason}"
+            )
+        if not (
+            check_result := _check_expr_equivalent(lhs.stride, rhs.stride, subs)
+        ).success:
+            return CheckResult(
+                False, f"IndexSequence.stride mismatch: {check_result.reason}"
+            )
+        return CheckResult(True, None)
+    if isinstance(lhs, int) and isinstance(rhs, int):
+        return (
+            CheckResult(True, None)
+            if lhs == rhs
+            else CheckResult(False, f"int mismatch: {lhs} vs {rhs}")
+        )
+    if isinstance(lhs, sympy.Basic) and isinstance(rhs, sympy.Basic):
+        if sympy.simplify(lhs - rhs) == 0:
+            return CheckResult(True, None)
+        return CheckResult(False, f"symbolic expr mismatch: {lhs} vs {rhs}")
+    if isinstance(lhs, (int, sympy.Basic)) and isinstance(rhs, (int, sympy.Basic)):
+        if sympy.simplify(sympy.sympify(lhs) - sympy.sympify(rhs)) == 0:
+            return CheckResult(True, None)
+        return CheckResult(False, f"expr mismatch: {lhs} vs {rhs}")
+    raise ValueError(f"Unsupported expression types: {type(lhs)} vs {type(rhs)}")
+
+
+def _check_index_mapping_equivalent(
+    lhs: IndexDict, rhs: IndexDict, subs: Optional[dict[IndexSymbol, int]]
+) -> CheckResult:
+    """Compare two index-mapping dictionaries for symbolic equivalence."""
+    if lhs.keys() != rhs.keys():
+        return CheckResult(False, f"index keys mismatch: {lhs.keys()} vs {rhs.keys()}")
+    for key in lhs:
+        if not (
+            check_result := _check_expr_equivalent(lhs[key], rhs[key], subs)
+        ).success:
+            return CheckResult(
+                False, f"index expr mismatch for '{key}': {check_result.reason}"
+            )
+    return CheckResult(True, None)
+
+
+def _check_payloads_equivalent(
+    lhs: Payload,
+    rhs: Payload,
+    subs: Optional[dict[IndexSymbol, int]],
+    node_map: dict[fx.Node, fx.Node],
+) -> CheckResult:
+    """Compare nested payloads, resolving nodes via node_map."""
+    # fx.Node comparison
+    if isinstance(lhs, fx.Node) or isinstance(rhs, fx.Node):
+        if not (isinstance(lhs, fx.Node) and isinstance(rhs, fx.Node)):
+            return CheckResult(False, f"node vs non-node: {type(lhs)} vs {type(rhs)}")
+        expected = node_map.get(lhs)
+        if expected is None:
+            return CheckResult(False, "node mapping not provided")
+        return (
+            CheckResult(True, None)
+            if expected is rhs
+            else CheckResult(False, f"node mapping mismatch: {lhs} vs {rhs}")
+        )
+
+    # Dict comparison
+    if isinstance(lhs, dict) and isinstance(rhs, dict):
+        if all(isinstance(k, IndexSymbol) for k in lhs.keys()):
+            return _check_index_mapping_equivalent(lhs, rhs, subs)
+        if lhs.keys() != rhs.keys():
+            return CheckResult(
+                False, f"dict keys mismatch: {lhs.keys()} vs {rhs.keys()}"
+            )
+        for key in lhs:
+            if not (
+                check_result := _check_payloads_equivalent(
+                    lhs[key], rhs[key], subs, node_map
+                )
+            ).success:
+                return CheckResult(
+                    False, f"dict value mismatch at '{key}': {check_result.reason}"
+                )
+        return CheckResult(True, None)
+
+    # Sequence comparison (list, tuple, etc.) - handles node.args, return_vals, etc.
+    if isinstance(lhs, Sequence) and not isinstance(lhs, (str, bytes, dict)):
+        if not (isinstance(rhs, Sequence) and not isinstance(rhs, (str, bytes, dict))):
+            return CheckResult(
+                False, f"sequence vs non-sequence: {type(lhs)} vs {type(rhs)}"
+            )
+        if len(lhs) != len(rhs):
+            return CheckResult(
+                False, f"sequence length mismatch: {len(lhs)} vs {len(rhs)}"
+            )
+        for idx, (lval, rval) in enumerate(zip(lhs, rhs)):
+            if not (
+                check_result := _check_payloads_equivalent(lval, rval, subs, node_map)
+            ).success:
+                return CheckResult(
+                    False, f"sequence mismatch at {idx}: {check_result.reason}"
+                )
+        return CheckResult(True, None)
+
+    # IndexSequence and symbolic expression comparison
+    if isinstance(lhs, IndexSequence) or isinstance(rhs, IndexSequence):
+        if not (isinstance(lhs, IndexSequence) and isinstance(rhs, IndexSequence)):
+            return CheckResult(
+                False, f"index sequence type mismatch: {type(lhs)} vs {type(rhs)}"
+            )
+        if not (check_result := _check_expr_equivalent(lhs, rhs, subs)).success:
+            return CheckResult(False, f"index sequence mismatch: {check_result.reason}")
+        return CheckResult(True, None)
+    if isinstance(lhs, (sympy.Basic, int)) or isinstance(rhs, (sympy.Basic, int)):
+        if not (check_result := _check_expr_equivalent(lhs, rhs, subs)).success:
+            return CheckResult(False, f"expr mismatch: {check_result.reason}")
+        return CheckResult(True, None)
+
+    # DataType comparison
+    if isinstance(lhs, DataType) or isinstance(rhs, DataType):
+        if not (isinstance(lhs, DataType) and isinstance(rhs, DataType)):
+            return CheckResult(False, f"dtype vs non-dtype: {type(lhs)} vs {type(rhs)}")
+        return (
+            CheckResult(True, None)
+            if lhs == rhs
+            else CheckResult(False, f"dtype mismatch: {lhs} vs {rhs}")
+        )
+
+    # Fallback to default equality, e.g. lhs == rhs == None
+    return (
+        CheckResult(True, None)
+        if lhs == rhs
+        else CheckResult(False, f"value mismatch: {lhs} vs {rhs}")
+    )
+
+
+def _check_result_types_equivalent(lhs: ResultType, rhs: ResultType) -> CheckResult:
+    """Compare result types by shape, dtype, and address space."""
+    if lhs == rhs:
+        return CheckResult(True, None)
+    if lhs is None or rhs is None:
+        return CheckResult(False, f"type presence mismatch: {lhs} vs {rhs}")
+
+    # Compare attributes that define type equivalence
+    for attr in ("symbolic_shape", "dtype", "address_space"):
+        lhs_val = getattr(lhs, attr, None)
+        rhs_val = getattr(rhs, attr, None)
+        if lhs_val != rhs_val:
+            return CheckResult(False, f"{attr} mismatch: {lhs_val} vs {rhs_val}")
+
+    return CheckResult(True, None)
+
+
+def _check_index_equivalent(
+    lhs: IndexDict | Sequence[IndexDict] | None,
+    rhs: IndexDict | Sequence[IndexDict] | None,
+    subs: Optional[dict[IndexSymbol, int]],
+) -> CheckResult:
+    """Compare index mappings or sequences for equivalence."""
+    if lhs == rhs:
+        return CheckResult(True, None)
+    if lhs is None or rhs is None:
+        return CheckResult(False, f"index presence mismatch: {lhs} vs {rhs}")
+    if isinstance(lhs, dict) and isinstance(rhs, dict):
+        return _check_index_mapping_equivalent(lhs, rhs, subs)
+    if isinstance(lhs, (list, tuple)) and isinstance(rhs, (list, tuple)):
+        if len(lhs) != len(rhs):
+            return CheckResult(
+                False, f"index list length mismatch: {len(lhs)} vs {len(rhs)}"
+            )
+        for idx, (lval, rval) in enumerate(zip(lhs, rhs)):
+            if not (
+                check_result := _check_index_mapping_equivalent(lval, rval, subs)
+            ).success:
+                return CheckResult(
+                    False, f"index list mismatch at {idx}: {check_result.reason}"
+                )
+        return CheckResult(True, None)
+    raise ValueError(f"Unsupported index types: {type(lhs)} vs {type(rhs)}")
+
+
+def _check_nodes_equivalent(
+    lhs_custom: CustomOp,
+    rhs_custom: CustomOp,
+    subs: Optional[dict[IndexSymbol, int]],
+    node_map: dict[fx.Node, fx.Node],
+) -> CheckResult:
+    """Compare node identity, result type, index, and core attributes."""
+    if type(lhs_custom) is not type(rhs_custom):
+        return CheckResult(
+            False,
+            f"op mismatch: {type(lhs_custom).__name__} vs {type(rhs_custom).__name__}",
+        )
+
+    # Check result types
+    if not (
+        check_result := _check_result_types_equivalent(lhs_custom.type, rhs_custom.type)
+    ).success:
+        return check_result
+
+    # Check indices
+    if not (
+        check_result := _check_index_equivalent(
+            lhs_custom.index, rhs_custom.index, subs
+        )
+    ).success:
+        return check_result
+
+    # Check core attributes
+    for attr_name in CORE_ATTR_NAMES:
+        lhs_val = getattr(lhs_custom, attr_name, None)
+        rhs_val = getattr(rhs_custom, attr_name, None)
+
+        if (lhs_val is None) != (rhs_val is None):
+            return CheckResult(False, f"attr '{attr_name}' presence mismatch")
+
+        if lhs_val is None:
+            continue
+
+        if not (
+            check_result := _check_payloads_equivalent(lhs_val, rhs_val, subs, node_map)
+        ).success:
+            return CheckResult(
+                False, f"attr '{attr_name}' mismatch: {check_result.reason}"
+            )
+
+    return CheckResult(True, None)
+
+
+def _check_graphs_equivalent(
+    lhs_trace: CapturedTrace,
+    rhs_trace: CapturedTrace,
+    subs: Optional[dict[IndexSymbol, int]],
+    node_map: dict[fx.Node, fx.Node],
+    lhs_graph_name: str | None = None,
+    rhs_graph_name: str | None = None,
+) -> CheckResult:
+    """Compare two graphs node-by-node with shared node_map.
+
+    If no graph names are provided, the root graphs of the traces are compared.
+    This comparison is order-sensitive: nodes are paired by position in the
+    graph, not solely by their use-def relationships.
+    """
+    lhs = (
+        lhs_trace.get_root_graph()
+        if lhs_graph_name is None
+        else lhs_trace.get_subgraph(lhs_graph_name)
+    )
+    rhs = (
+        rhs_trace.get_root_graph()
+        if rhs_graph_name is None
+        else rhs_trace.get_subgraph(rhs_graph_name)
+    )
+
+    lhs_nodes = list(lhs.nodes)
+    rhs_nodes = list(rhs.nodes)
+    if len(lhs_nodes) != len(rhs_nodes):
+        return CheckResult(False, f"node count mismatch")
+
+    # Compare nodes, args/kwargs, then recurse into nested regions.
+    for lhs_node, rhs_node in zip(lhs_nodes, rhs_nodes):
+        lhs_custom = get_custom(lhs_node)
+        rhs_custom = get_custom(rhs_node)
+        node_map[lhs_node] = rhs_node
+        if not (
+            check_result := _check_nodes_equivalent(
+                lhs_custom, rhs_custom, subs, node_map
+            )
+        ).success:
+            return CheckResult(
+                False,
+                f"node mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
+            )
+        if not (
+            check_result := _check_payloads_equivalent(
+                lhs_node.args, rhs_node.args, subs, node_map
+            )
+        ).success:
+            return CheckResult(
+                False,
+                f"args mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
+            )
+        if not (
+            check_result := _check_payloads_equivalent(
+                lhs_node.kwargs, rhs_node.kwargs, subs, node_map
+            )
+        ).success:
+            return CheckResult(
+                False,
+                f"kwargs mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
+            )
+        lhs_subgraph = getattr(lhs_custom, "subgraph_name", None)
+        rhs_subgraph = getattr(rhs_custom, "subgraph_name", None)
+        if (lhs_subgraph is None) != (rhs_subgraph is None):
+            return CheckResult(False, "subgraph presence mismatch")
+        if lhs_subgraph is not None:
+            if not (
+                check_result := _check_graphs_equivalent(
+                    lhs_trace,
+                    rhs_trace,
+                    subs,
+                    node_map,
+                    lhs_subgraph,
+                    rhs_subgraph,
+                )
+            ).success:
+                return CheckResult(
+                    False, f"subgraph '{lhs_subgraph}' mismatch: {check_result.reason}"
+                )
+    return CheckResult(True, None)
+
+
+def assert_traces_equivalent(
+    lhs: CapturedTrace,
+    rhs: CapturedTrace,
+    subs: Optional[dict[IndexSymbol, int]] = None,
+) -> None:
+    """Assert structural equivalence between two traces."""
+    node_map: dict[fx.Node, fx.Node] = {}
+    check_result = _check_graphs_equivalent(lhs, rhs, subs, node_map)
+    if not check_result.success:
+        raise AssertionError(f"Traces are not equivalent: {check_result.reason}")
 
 
 def move_node_after(src_node: fx.Node, anchor: fx.Node):
