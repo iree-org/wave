@@ -869,7 +869,11 @@ public:
     LDBG() << "  After: " << *after;
 
     SmallVector<RegionSuccessor> successors;
-    branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
+    if (regionFrom) {
+      branch.getSuccessorRegions(branch->getRegion(*regionFrom), successors);
+    } else {
+      branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
+    }
 
     auto destSuccessor = [&]() -> RegionSuccessor {
       if (regionTo) {
@@ -880,7 +884,7 @@ public:
       }
     }();
     // Dest values are either nested block args or branch op results.
-    ValueRange destValues = destSuccessor.getSuccessorInputs();
+    ValueRange destValues = branch.getSuccessorInputs(destSuccessor);
 
     // Map from input values to dest values.
     llvm::SmallDenseMap<Value, Value> valuesMapping;
