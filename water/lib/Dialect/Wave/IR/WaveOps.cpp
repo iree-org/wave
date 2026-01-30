@@ -1858,6 +1858,8 @@ LogicalResult wave::ReciprocalOp::verify() {
 // PermuteOp
 //-----------------------------------------------------------------------------
 
+/// Helper to validate the input type of a permute operation.
+/// Checks if the input shape is a permutation of the result shape.
 static LogicalResult validatePermutationInput(WaveTensorType inputType,
                                               WaveTensorType resultType,
                                               llvm::raw_ostream &errs) {
@@ -1880,11 +1882,13 @@ static LogicalResult validatePermutationInput(WaveTensorType inputType,
   resultShapeSet.insert_range(resultType.getShape());
 
   for (auto inputDim : inputType.getShape()) {
-    auto [_, inserted] = resultShapeSet.insert(inputDim);
-    if (inserted) {
-      errs << "input dimension '" << inputDim.getName()
-           << "' is not present in result shape";
-      return failure();
+    if (!resultShapeSet.contains(inputDim)) {
+      auto [_, inserted] = resultShapeSet.insert(inputDim);
+      if (inserted) {
+        errs << "input dimension '" << inputDim.getName()
+             << "' is not present in result shape";
+        return failure();
+      }
     }
   }
 
@@ -1892,9 +1896,16 @@ static LogicalResult validatePermutationInput(WaveTensorType inputType,
 }
 
 LogicalResult wave::PermuteOp::verify() {
-  auto inputType = dyn_cast<WaveTensorType>(getValue().getType());
-  auto resultType = dyn_cast<WaveTensorType>(getResult().getType());
+  Value input = getValue();
+  Value result = getResult();
 
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "input", input.getType(),
+                                             "result", result.getType()))) {
+    return failure();
+  }
+
+  auto inputType = dyn_cast<WaveTensorType>(input.getType());
+  auto resultType = dyn_cast<WaveTensorType>(result.getType());
   // If result / input is a vector (post-lowering phase), skip wave tensor
   // checks.
   if (!resultType || !inputType) {
@@ -1935,9 +1946,7 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateForward(
     return llvm::failure();
   }
 
-  // Result type is already specified, propagate it.
-  return detail::propagateShapeInformation(resultType, resultType,
-                                           "permutation", "result", errs);
+  return ChangeResult::NoChange;
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateBackward(
@@ -1972,12 +1981,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   if (inputLattice.isBottom() || inputLattice.isTop())
     return inputLattice;
 
-  if (srcShape.size() != targetShape.size()) {
-    emitError() << "source shape rank (" << srcShape.size()
-                << ") does not match target shape rank (" << targetShape.size()
-                << ")";
-    return IndexExprsLatticeStorage::top();
-  }
+  assert(srcShape.size() == targetShape.size() &&
+         "source shape rank does not match target shape rank");
 
   DictionaryAttr inputDict = inputLattice.getConcreteValue();
 
@@ -2003,17 +2008,10 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
     llvm::StringRef targetName = targetSymbol.getName();
     auto targetMappingIt = symbolToMapping.find(targetName);
 
-    // If the target or source mapping is not found, we cannot propagate the
-    // index expression.
-    if (srcMappingIt == symbolToMapping.end()) {
-      emitError() << "source mapping not found for symbol: " << srcSymbol;
-      return IndexExprsLatticeStorage::top();
-    }
-
-    if (targetMappingIt == symbolToMapping.end()) {
-      emitError() << "target mapping not found for symbol: " << targetSymbol;
-      return IndexExprsLatticeStorage::top();
-    }
+    assert(srcMappingIt != symbolToMapping.end() &&
+           "source mapping not found for symbol");
+    assert(targetMappingIt != symbolToMapping.end() &&
+           "target mapping not found for symbol");
 
     WaveIndexMappingAttr srcMapping = srcMappingIt->second;
     WaveIndexMappingAttr targetMapping = targetMappingIt->second;
@@ -2060,8 +2058,6 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(
   IndexExprsLatticeStorage permuted = permuteIndexExprsStrides(
       operandExprs[0], srcShape, targetShape, getContext(), emitError);
 
-  permuted = permuted.keepOnlySymbols(resultType.getShape());
-
   IndexExprsLatticeStorage newResultLattice =
       IndexExprsLatticeStorage::join(resultExprs[0], permuted);
 
@@ -2097,8 +2093,6 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
 
   IndexExprsLatticeStorage permuted = permuteIndexExprsStrides(
       resultExprs[0], resultShape, srcShape, getContext(), emitError);
-
-  permuted = permuted.keepOnlySymbols(srcShape);
 
   IndexExprsLatticeStorage newOperandLattice =
       IndexExprsLatticeStorage::join(operandExprs[0], permuted);

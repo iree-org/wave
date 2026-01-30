@@ -701,7 +701,7 @@ func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <regi
 
 // Test that permute input and result element types must match
 func.func @permute_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
-  // expected-error @below {{'wave.permute' op result element type ('f16') does not match input element type ('f32')}}
+  // expected-error @below {{expected input and result elemental types to match, got 'f32', 'f16'}}
   wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
   return
 }
