@@ -402,6 +402,14 @@ class WaveEmitter:
             grid = [gen_sympy_index(subs, s) for s in self.grid]
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
 
+            # Generate cluster size if specified.
+            cluster_size = None
+            workgroups_per_cluster = self.hardware_constraint.workgroups_per_cluster
+            if workgroups_per_cluster is not None:
+                cluster_size = tuple(
+                    gen_sympy_index(subs, s) for s in workgroups_per_cluster
+                )
+
             # Populate launch arguments
             launch_args = []
             for binding, dst_type in zip(bindings, arg_types):
@@ -450,11 +458,11 @@ class WaveEmitter:
                     raise CodegenError(f"Unsupported binding type: {binding}")
 
             gpu_d.launch_func(
-                async_dependencies=[],
                 kernel=[gpu_module.sym_name.value, self.kernel_name],
                 grid_size=grid,
                 block_size=threads,
                 kernel_operands=launch_args,
+                cluster_size=cluster_size,
             )
             func_d.return_([])
 
