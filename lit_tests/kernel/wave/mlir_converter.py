@@ -664,17 +664,15 @@ def mlir_converter_permute():
     @wave.wave(permute_constraints)
     def permute_kernel(
         a: Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
-        c: Memory[N, M, ADDRESS_SPACE_C, tkl.f32],
+        c: Memory[N, M, ADDRESS_SPACE_C, tkl.f16],
     ):
         # Load values from memory into registers
-        a_reg = wave.read(a)
+        a_reg = wave.read(a, elements_per_thread=1)
 
         # Permute dimensions from [M, N] to [N, M]
         permuted = wave.permute(a_reg, target_shape=[N, M])
 
-        # Cast and write results back to memory
-        permuted_f32 = wave.cast(permuted, tkl.f32)
-        wave.write(permuted_f32, c)
+        wave.write(permuted, c, elements_per_thread=1)
 
     # Set parameters for compilation
     subs = {
@@ -713,7 +711,7 @@ def mlir_converter_permute():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_permute
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @M] of f32, <global>>)
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @M] of f16, <global>>)
 
     # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
@@ -721,12 +719,5 @@ def mlir_converter_permute():
     # CHECK: %[[PERMUTE:.*]] = wave.permute %[[READ]]
     # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
 
-    # CHECK: %[[CAST:.*]] = wave.cast %[[PERMUTE]]
-    # CHECK-SAME: : !wave.tensor<[@N, @M] of f16, <register>> to !wave.tensor<[@N, @M] of f32, <register>>
-
-    # The permuted write has non-contiguous access, so it gets partitioned into
-    # multiple extract_slice + write pairs. Check that the first one has correct types.
-    # CHECK: %[[SLICE:.*]] = wave.extract_slice %[[CAST]]
-    # CHECK-SAME: (!wave.tensor<[@N, @M] of f32, <register>>) -> !wave.tensor<[@N, @M] of f32, <register>>
-    # CHECK: wave.write %[[SLICE]], %[[ARG1]]
-    # CHECK-SAME: !wave.tensor<[@N, @M] of f32, <register>>, !wave.tensor<[@N, @M] of f32, <global>>
+    # CHECK: wave.write %[[PERMUTE]], %[[ARG1]]
+    # CHECK-SAME: !wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@N, @M] of f16, <global>>
