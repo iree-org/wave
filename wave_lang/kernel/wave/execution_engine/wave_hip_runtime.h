@@ -17,5 +17,6 @@ void *wave_load_kernel(void *stream, void **cached_kernel_handle,
 
 void wave_launch_kernel(void *stream, void *function, int shared_memory_bytes,
                         int grid_x, int grid_y, int grid_z, int block_x,
-                        int block_y, int block_z, void **args, int num_args);
+                        int block_y, int block_z, int cluster_x, int cluster_y,
+                        int cluster_z, void **args, int num_args);
 }
