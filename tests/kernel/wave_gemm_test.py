@@ -2793,12 +2793,14 @@ def test_gemm_two_async_cluster_pingpong(shape: tuple[int], mfma_variant: MMATyp
     "mfma_variant, threads_per_wave",
     [(MMAType.GFX1250_F32_16x16x32_F16, 32)],
 )
+@use_water_backend_bool("use_water_backend")
 def testTensorLoadToShared(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
     threads_per_wave,
     datatype: torch.dtype,
+    use_water_backend: bool,
 ):
     M = tkl.sym.M
     N = tkl.sym.N
@@ -2863,6 +2865,7 @@ def testTensorLoadToShared(
         wave_runtime=True,
         target="gfx1250",
         cluster_barrier_delay=1,
+        use_water_backend=use_water_backend,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)

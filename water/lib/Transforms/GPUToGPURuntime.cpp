@@ -165,6 +165,9 @@ struct WaterGPUToGPURuntimePass final
                                               i64Type, // blockX
                                               i64Type, // blockY
                                               i64Type, // blockZ
+                                              i64Type, // clusterX
+                                              i64Type, // clusterY
+                                              i64Type, // clusterZ
                                               ptrType, // kernel operands
                                               i32Type  // kernel operands count
                                           });
@@ -247,11 +250,20 @@ struct WaterGPUToGPURuntimePass final
       LLVM::StoreOp::create(builder, loc, argsArray, argsArrayPtr);
       Value argsCount = createConst(i32Type, args.size());
 
+      // Get cluster sizes (default to 0 if not specified).
+      Value clusterX =
+          op.getClusterSizeX() ? op.getClusterSizeX() : createConst(i64Type, 0);
+      Value clusterY =
+          op.getClusterSizeY() ? op.getClusterSizeY() : createConst(i64Type, 0);
+      Value clusterZ =
+          op.getClusterSizeZ() ? op.getClusterSizeZ() : createConst(i64Type, 0);
+
       launchFuncBuilder.create(
           loc, builder,
           {stream, funcObject, sharedMemoryBytes, op.getGridSizeX(),
            op.getGridSizeY(), op.getGridSizeZ(), op.getBlockSizeX(),
-           op.getBlockSizeY(), op.getBlockSizeZ(), argsArrayPtr, argsCount});
+           op.getBlockSizeY(), op.getBlockSizeZ(), clusterX, clusterY, clusterZ,
+           argsArrayPtr, argsCount});
       builder.eraseOp(op);
       return WalkResult::advance();
     };
