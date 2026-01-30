@@ -505,4 +505,38 @@ def CastOp : WaveOp<"cast", [
   let hasVerifier = 1;
 }
 
+def PermuteOp : WaveOp<"permute", [
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+  let summary = "Permute the dimensions of a register-resident tensor";
+  let description = [{
+    Reorders the symbolic dimensions of a register-resident tensor according
+    to the result type shape. This operation is primarily a semantic marker
+    that affects how index expressions are transformed during compilation.
+    At lowering time, the operation is a pass-through since the actual data
+    layout in registers remains unchanged - only the interpretation of which
+    dimension each element belongs to changes.
+
+    For example, permuting a tensor with shape [B, M, N] to [M, N, B] swaps
+    the strides associated with the symbolic dimensions in the index
+    expressions.
+
+    The result type must be fully-specified and must be a permutation of the
+    input shape (same symbols in a different order).
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to permute">:$value
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorFullySpecifiedInRegister, "Permuted value">:$result
+  );
+
+  let assemblyFormat =
+    "$value " # commonArgumentsSyntax # " attr-dict `:`"
+    "qualified(type($value)) `to` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEOPS

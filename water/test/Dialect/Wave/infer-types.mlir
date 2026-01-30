@@ -197,6 +197,39 @@ normalform.module [#wave.normal_form<full_func_boundary>] {
 
 // -----
 
+// CHECK: #wave.normal_form<full_types>
+normalform.module [#wave.normal_form<full_func_boundary>] {
+
+// CHECK-LABEL: @propagate_permute_forward
+func.func @propagate_permute_forward(%a: !wave.tensor<[@B, @M, @N] of f32, <register>>) {
+  // Result type is specified at parse time (required to be fully-specified).
+  // CHECK: !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  wave.permute %a : !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  return
+}
+
+// CHECK-LABEL: @propagate_permute_2d
+func.func @propagate_permute_2d(%a: !wave.tensor<[@M, @N] of f16, <register>>) {
+  // CHECK: !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  wave.permute %a : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  return
+}
+
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>] {
+  func.func @permute_mismatching_symbols(%arg0: !wave.tensor<[@A, @B, @C] of f32, <register>>) {
+    %0 = wave.exp2 %arg0 : (!wave.tensor<[@A, @B, @C] of f32, <register>>) -> !wave.tensor<any of f32, <register>>
+    // expected-error @below {{failed to propagate type information forward: input dimension 'A' is not present in result shape}}
+    wave.permute %0 : !wave.tensor<any of f32, <register>> to !wave.tensor<[@M, @N, @K] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
 // expected-error @below {{water-wave-infer-types pass expects the root operation or its ancestor to guarantee the full_func_boundary normal form}}
 normalform.module [] {
 }
