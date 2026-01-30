@@ -896,6 +896,25 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
     }
   }
 
+  // VectorsInRegisters: wave.read must have VectorType result and wave.write
+  // must have VectorType operand (the value being stored). This ensures
+  // PropagateElementsPerThread has run before lowering.
+  if (wave::bitEnumContainsAll(form,
+                               wave::WaveNormalForm::VectorsInRegisters)) {
+    if (auto readOp = llvm::dyn_cast<wave::ReadOp>(op)) {
+      if (!llvm::isa<VectorType>(readOp.getResult().getType()))
+        return emitError() << "normal form requires wave.read to have vector "
+                              "result type (PropagateElementsPerThread pass "
+                              "should have run first)";
+    }
+    if (auto writeOp = llvm::dyn_cast<wave::WriteOp>(op)) {
+      if (!llvm::isa<VectorType>(writeOp.getValueToStore().getType()))
+        return emitError() << "normal form requires wave.write to have vector "
+                              "operand type (PropagateElementsPerThread pass "
+                              "should have run first)";
+    }
+  }
+
   if (wave::bitEnumContainsAll(form,
                                wave::WaveNormalForm::IndexExprsSpecified)) {
     if (op->hasTrait<wave::HasWaveIndexMapping>() &&

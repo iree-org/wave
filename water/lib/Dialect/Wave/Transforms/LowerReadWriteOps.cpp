@@ -378,13 +378,8 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Expect PropagateElementsPerThread pass to have run, converting
-    // WaveTensorType results to VectorType.
-    auto vectorType = dyn_cast<VectorType>(op.getResult().getType());
-    if (!vectorType)
-      return rewriter.notifyMatchFailure(
-          op, "expected vector result type (PropagateElementsPerThread pass "
-              "should have run first)");
+    // VectorsInRegisters normal form guarantees VectorType result.
+    auto vectorType = cast<VectorType>(op.getResult().getType());
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vectorType);
     if (failed(memInfo))
@@ -405,13 +400,9 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Expect PropagateElementsPerThread pass to have run, converting
-    // WaveTensorType operands to VectorType.
-    auto vecType = dyn_cast<VectorType>(op.getValueToStore().getType());
-    if (!vecType)
-      return rewriter.notifyMatchFailure(
-          op, "expected vector operand type (PropagateElementsPerThread pass "
-              "should have run first)");
+    // VectorsInRegisters normal form guarantees VectorType operand.
+    Value vec = adaptor.getValueToStore();
+    auto vecType = cast<VectorType>(vec.getType());
 
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vecType);
@@ -419,8 +410,8 @@ public:
       return failure();
 
     buildVectorWrite(op.getLoc(), rewriter, adaptor.getMemory(),
-                     memInfo->startIndices, adaptor.getValueToStore(),
-                     memInfo->mask, memInfo->vectorizedDim);
+                     memInfo->startIndices, vec, memInfo->mask,
+                     memInfo->vectorizedDim);
     rewriter.eraseOp(op);
     return success();
   }
