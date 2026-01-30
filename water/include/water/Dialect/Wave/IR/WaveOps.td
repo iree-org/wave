@@ -331,13 +331,15 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
-def ExtractOp : WaveOp<"extract"> {
+def ExtractOp : WaveOp<"extract",
+    [DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
   let summary = "Extracts a single element from a vector at the given index";
   let description = [{
     This is an internal operation that appears during expansion/lowering and
     is not intended for use in user code. As such, it intentionally does not
-    implement the various interfaces for dataflow analyses as it only appears
-    after those.
+    implement the interfaces for type and index dataflow analyses as it only
+    appears after those. It does, however, implement the elements per thread
+    interface as it is needed for lowering to vectors.
 
     When lowered, extracts a single element from the vector that corresponds
     to lowered register-resident tensor, producing a 1-element vector.

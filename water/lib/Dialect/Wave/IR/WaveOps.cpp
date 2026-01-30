@@ -1686,6 +1686,24 @@ LogicalResult wave::RegisterOp::verify() {
 // ExtractOp
 //-----------------------------------------------------------------------------
 
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+
+  return detail::checkAndPropagateElementsPerThreadFromConstant(
+      wave::ElementsPerThreadLatticeValue(1), /*immutableValues=*/{},
+      resultElements, "op semantics", "", "result", errs);
+}
+
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // We don't have enough information to propagate backwards here.
+  return ChangeResult::NoChange;
+}
+
 LogicalResult ExtractOp::verify() {
   wave::WaveExprListAttr position = getPosition();
   if (position.getRank() != 1) {
