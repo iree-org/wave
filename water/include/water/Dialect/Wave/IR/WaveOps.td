@@ -104,13 +104,13 @@ class ReductionWaveOp<string mnemonic>
     : WaveOp<mnemonic,
         [WaveInferTypeOpInterface, ReductionTypeInferenceOpTrait,
          WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
-         RequiresSidewaysBackwardPropagationOpTrait]>,
+         RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
     Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
-    Arg<WaveSymbolAttr, "Reduction axis">:$axis,
-    Arg<BoolAttr, "Reduce across block instead of warp">:$block
+    Arg<WaveReductionScopeAttr, "Scope of the reduction">:$scope,
+    Arg<OptionalAttr<WaveSymbolAttr>, "Reduction axis">:$axis
   ), commonArguments);
 
   let results = (outs
@@ -118,12 +118,9 @@ class ReductionWaveOp<string mnemonic>
   );
 
   let assemblyFormat =
-      "$input `init` `(` $init `)` `along` custom<SingleSymbol>($axis) "
-      "`block` `=` $block "
-      # commonArgumentsSyntax # "attr-dict `:`"
+      "$input `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
+      "$scope " # commonArgumentsSyntax # " attr-dict `:`"
       "functional-type(operands, results)";
-
-  let hasVerifier = 1;
 }
 
 def SumOp : ReductionWaveOp<"sum"> {

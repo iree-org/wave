@@ -287,4 +287,13 @@ def RequiresSidewaysBackwardPropagationOpTrait
   let cppNamespace = "::wave";
 }
 
+//-----------------------------------------------------------------------------
+// Reduction operation traits
+//-----------------------------------------------------------------------------
+
+def WaveReductionOpTrait
+    : NativeOpTrait<"WaveReductionOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEINTERFACES

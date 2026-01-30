@@ -38,6 +38,67 @@ using namespace wave;
 // op classes.
 //-----------------------------------------------------------------------------
 
+// constexpr const static llvm::StringLiteral kwInit = "init";
+// constexpr const static llvm::StringLiteral kwIndex = "index";
+// constexpr const static llvm::StringLiteral kwAlong = "along";
+
+// static ParseResult parseReduction(OpAsmParser &parser, OperationState &state)
+// {
+//   OpAsmParser::UnresolvedOperand input, init;
+//   if (failed(parser.parseOperand(input)) ||
+//       failed(parser.parseKeyword(kwInit)) ||
+//       failed(parser.parseLParen()) ||
+//       failed(parser.parseOperand(init)) ||
+//       failed(parser.parseRParen()))
+//     return failure();
+
+//   WaveReductionScopeAttr scope;
+//   if (failed(parser.parseAttribute(scope)))
+//     return failure();
+
+//   WaveSymbolAttr axis;
+//   if (succeeded(parser.parseOptionalKeyword(kwAlong))) {
+//     if (failed(parseSingleSymbol(parser, axis)))
+//       return failure();
+//   }
+
+//   DictionaryAttr index;
+//   if (succeeded(parser.parseOptionalKeyword(kwIndex))) {
+//     if (failed(parseWaveIndexDict(parser, index)))
+//       return failure();
+//   }
+
+//   llvm::SMLoc typeLoc;
+//   FunctionType trailingType;
+//   if (failed(parser.parseOptionalAttrDict(state.attributes)) ||
+//       failed(parser.getCurrentLocation(&typeLoc)) ||
+//       failed(parser.parseColonType(trailingType)))
+//     return failure();
+
+//   if (trailingType.getNumInputs() != 2 || trailingType.getNumResults() != 1)
+//     return parser.emitError(typeLoc)
+//            << "expected function type with 2 inputs and 1 result";
+
+//   if (failed(parser.resolveOperand(input, trailingType.getInput(0),
+//                                    state.operands)) ||
+//       failed(parser.resolveOperand(init, trailingType.getInput(1),
+//                                    state.operands)))
+//     return failure();
+
+//   return success();
+// }
+
+// static void printReduction(OpAsmPrinter &printer, SumOp op) {
+//   printer << op.getInput() << " " << kwInit << "(" << op.getInit() << ") ";
+//   printer << op.getScope();
+//   if (op.getAxis()) {
+//     printer << kwAlong << " ";
+//     printSingleSymbol(printer, op.getAxis());
+//   }
+//   printer.printFunctionType(op.getInput().getType(),
+//   op.getResult().getType());
+// }
+
 // Parse types of the `wave.register` op and perform type inference. The syntax
 // is simply the tensor type from which the elemental type is extract for the
 // initializer type.
@@ -1835,101 +1896,9 @@ LogicalResult wave::CastOp::verify() {
 
 LogicalResult wave::ReciprocalOp::verify() {
   Type argType = getArgument().getType();
-  Type elementType =
-      llvm::TypeSwitch<Type, Type>(argType)
-          .Case<WaveTensorType, VectorType>(
-              [](auto containerType) { return containerType.getElementType(); })
-          .Default([](Type type) { return type; });
-
+  Type elementType = wave::getElementType(argType);
   if (!isa<FloatType>(elementType))
     return emitOpError("requires float element type, but got ") << elementType;
 
   return success();
-}
-
-//-----------------------------------------------------------------------------
-// Reductions
-//-----------------------------------------------------------------------------
-
-// Common verification logic for types of reduction operations. We expect the
-// input type to have one more dimension that precisely matches the reduction
-// axis.
-template <typename OpTy>
-static LogicalResult verifyReductionOperationTypes(OpTy op) {
-
-  auto inputType = dyn_cast<WaveTensorType>(op.getInput().getType());
-  auto initType = dyn_cast<WaveTensorType>(op.getInit().getType());
-  auto resultType = dyn_cast<WaveTensorType>(op.getResult().getType());
-
-  if (inputType && inputType.getFullySpecified()) {
-    auto it = llvm::find(inputType.getShape(), op.getAxis());
-    if (it == inputType.getShape().end()) {
-      return op.emitOpError()
-             << "reduction along a non-existing dimension " << op.getAxis();
-    }
-    size_t axisIndex = std::distance(inputType.getShape().begin(), it);
-
-    SmallVector<int> remainingDimensions;
-    remainingDimensions.reserve(inputType.getRank() - 1);
-    llvm::append_range(remainingDimensions, llvm::seq<int>(0, axisIndex));
-    llvm::append_range(remainingDimensions,
-                       llvm::seq<int>(axisIndex + 1, inputType.getRank()));
-
-    if (initType && initType.getFullySpecified()) {
-      if (inputType.getRank() - 1 != initType.getRank()) {
-        return op.emitOpError() << "init tensor rank (" << initType.getRank()
-                                << ") must be one less than input tensor rank ("
-                                << inputType.getRank() << ")";
-      }
-      if (failed(wave::detail::verifyTypesMatchingDimensions(
-              op.getLoc(), "input", inputType, remainingDimensions, "init",
-              initType, llvm::to_vector(llvm::seq<int>(initType.getRank()))))) {
-        return failure();
-      }
-    }
-
-    if (resultType && resultType.getFullySpecified()) {
-      if (inputType.getRank() - 1 != resultType.getRank()) {
-        return op.emitOpError()
-               << "result tensor rank (" << resultType.getRank()
-               << ") must be one less than input tensor rank ("
-               << inputType.getRank() << ")";
-      }
-      if (failed(wave::detail::verifyTypesMatchingDimensions(
-              op.getLoc(), "input", inputType, remainingDimensions, "result",
-              resultType,
-              llvm::to_vector(llvm::seq<int>(resultType.getRank()))))) {
-        return failure();
-      }
-    }
-  }
-
-  if (failed(wave::detail::verifyTypesCompatible(
-          op.getInit().getType(), op.getResult().getType(),
-          /*includeAddressSpace=*/true, op.getLoc(), "init", "result"))) {
-    return failure();
-  }
-  if (failed(wave::detail::verifyElementTypesMatch(
-          op.getLoc(), "input", op.getInput().getType(), "init",
-          op.getInit().getType()))) {
-    return failure();
-  }
-
-  return success();
-}
-
-//-----------------------------------------------------------------------------
-// SumOp
-//-----------------------------------------------------------------------------
-
-LogicalResult wave::SumOp::verify() {
-  return verifyReductionOperationTypes(*this);
-}
-
-//-----------------------------------------------------------------------------
-// MaxElementOp
-//-----------------------------------------------------------------------------
-
-LogicalResult wave::MaxElementOp::verify() {
-  return verifyReductionOperationTypes(*this);
 }

@@ -893,7 +893,7 @@ public:
 
     Value input = adaptor.getInput();
     Value init = adaptor.getInit();
-    bool isBlockReduction = op.getBlock();
+    bool isBlockReduction = op.getScope() == wave::WaveReductionScope::Block;
 
     // Warn if reduction scope is inconsistent with hardware constraints.
     warnIfReductionScopeMismatch(op, isBlockReduction);

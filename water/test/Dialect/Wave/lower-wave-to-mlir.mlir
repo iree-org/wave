@@ -1094,7 +1094,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
     // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<8xf32> into f32
     // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (f32) -> f32
-    %result = wave.sum %input init(%init) along @M block = false : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.sum %input init(%init) along @M <warp> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
@@ -1117,7 +1117,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
     // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <maximumf>, %[[INPUT]], %[[INIT_ELEM]] : vector<16xf32> into f32
     // CHECK: gpu.subgroup_reduce maximumf %[[THREAD_REDUCE]] : (f32) -> f32
-    %result = wave.max_element %input init(%init) along @N block = false : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.max_element %input init(%init) along @N <warp> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
@@ -1138,14 +1138,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : i32 from vector<1xi32>
     // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<4xi32> into i32
     // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (i32) -> i32
-    %result = wave.sum %input init(%init) along @K block = false : (vector<4xi32>, vector<1xi32>) -> vector<1xi32>
+    %result = wave.sum %input init(%init) along @K <warp> : (vector<4xi32>, vector<1xi32>) -> vector<1xi32>
     return
   }
 }
 
 // -----
 
-// Test wave.sum lowering with block = true - uses gpu.all_reduce instead of gpu.subgroup_reduce.
+// Test wave.sum lowering with <block> - uses gpu.all_reduce instead of gpu.subgroup_reduce.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @lower_sum_block
   // expected-warning @below {{unused hyperparameter: N}}
@@ -1161,14 +1161,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<8xf32> into f32
     // CHECK: gpu.all_reduce add %[[THREAD_REDUCE]] {
     // CHECK: } : (f32) -> f32
-    %result = wave.sum %input init(%init) along @M block = true : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.sum %input init(%init) along @M <block> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
 
 // -----
 
-// Test wave.max_element lowering with block = true - uses gpu.all_reduce instead of gpu.subgroup_reduce.
+// Test wave.max_element lowering with <block> - uses gpu.all_reduce instead of gpu.subgroup_reduce.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @lower_max_element_block
   // expected-warning @below {{unused hyperparameter: M}}
@@ -1184,14 +1184,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <maximumf>, %[[INPUT]], %[[INIT_ELEM]] : vector<16xf32> into f32
     // CHECK: gpu.all_reduce maximumf %[[THREAD_REDUCE]] {
     // CHECK: } : (f32) -> f32
-    %result = wave.max_element %input init(%init) along @N block = true : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.max_element %input init(%init) along @N <block> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
 
 // -----
 
-// Test warning when block = true but hardware constraint specifies only one wave per block.
+// Test warning when <block> but hardware constraint specifies only one wave per block.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @warn_block_reduction_single_wave
   func.func @warn_block_reduction_single_wave()
@@ -1202,14 +1202,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %input = wave.register %cst_input : vector<8xf32>
     %init = wave.register %cst_init : vector<1xf32>
     // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
-    %result = wave.sum %input init(%init) along @M block = true : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.sum %input init(%init) along @M <block> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
 
 // -----
 
-// Test warning when block = false but hardware constraint specifies multiple waves per block.
+// Test warning when <warp> but hardware constraint specifies multiple waves per block.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @warn_wave_reduction_multiple_waves
   func.func @warn_wave_reduction_multiple_waves()
@@ -1220,14 +1220,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %input = wave.register %cst_input : vector<8xf32>
     %init = wave.register %cst_init : vector<1xf32>
     // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [2, 2, 1]); consider using block reduction to reduce across all waves}}
-    %result = wave.sum %input init(%init) along @M block = false : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.sum %input init(%init) along @M <warp> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
 
 // -----
 
-// Test warning for max_element with block = true and single wave.
+// Test warning for max_element with <block> and single wave.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @warn_block_max_single_wave
   func.func @warn_block_max_single_wave()
@@ -1238,14 +1238,14 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %input = wave.register %cst_input : vector<16xf32>
     %init = wave.register %cst_init : vector<1xf32>
     // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
-    %result = wave.max_element %input init(%init) along @N block = true : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.max_element %input init(%init) along @N <block> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }
 
 // -----
 
-// Test warning for max_element with block = false and multiple waves.
+// Test warning for max_element with <warp> and multiple waves.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @warn_wave_max_multiple_waves
   func.func @warn_wave_max_multiple_waves()
@@ -1256,7 +1256,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %input = wave.register %cst_input : vector<16xf32>
     %init = wave.register %cst_init : vector<1xf32>
     // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [4, 1, 1]); consider using block reduction to reduce across all waves}}
-    %result = wave.max_element %input init(%init) along @N block = false : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    %result = wave.max_element %input init(%init) along @N <warp> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
     return
   }
 }

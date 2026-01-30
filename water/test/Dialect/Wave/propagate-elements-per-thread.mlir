@@ -372,10 +372,10 @@ normalform.module [#wave.normal_form<full_types>] {
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     %c0 = arith.constant 0.0 : f32
     // CHECK: wave.register {{.*}} : vector<8xf32>
-    %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
+    %init = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<8xf32>, vector<8xf32>) -> vector<8xf32>
-    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) <warp> : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
     return
   }
 }
@@ -386,20 +386,20 @@ normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @reduction_propagation_backward
   func.func @reduction_propagation_backward(
       %mem: !wave.tensor<[@M, @N] of f32, <global>>,
-      %result_mem: !wave.tensor<[@N] of f32, <global>>)
+      %result_mem: !wave.tensor<[@M] of f32, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
 
     // CHECK: wave.read {{.*}} -> vector<4xf32>
     %reg = wave.read %mem : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     %c0 = arith.constant 0.0 : f32
     // CHECK: wave.register {{.*}} : vector<4xf32>
-    %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
+    %init = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
-    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) <warp> : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.write {{.*}} : vector<4xf32>
-    wave.write %sum, %result_mem {elements_per_thread = 4} : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
+    wave.write %sum, %result_mem {elements_per_thread = 4} : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
     return
   }
 }
@@ -410,21 +410,21 @@ normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @reduction_propagation_tx
   func.func @reduction_propagation_tx(
       %mem: !wave.tensor<[@M, @N] of f32, <global>>,
-      %result_mem: !wave.tensor<[@N] of f32, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, BLOCK_M = 16}>,
-                wave.constraints = [#wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>]} {
+      %result_mem: !wave.tensor<[@M] of f32, <global>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, BLOCK_N = 16}>,
+                wave.constraints = [#wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <x>>]} {
 
     // CHECK: wave.read {{.*}} -> vector<8xf32>
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     %c0 = arith.constant 0.0 : f32
     // CHECK: wave.register {{.*}} : vector<1xf32>
-    %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
+    %init = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.sum {{.*}} : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
-    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) <warp> : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.write {{.*}} : vector<1xf32>
-    wave.write %sum, %result_mem : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
+    wave.write %sum, %result_mem : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
     return
   }
 }
@@ -434,17 +434,17 @@ normalform.module [#wave.normal_form<full_types>] {
 normalform.module [#wave.normal_form<full_types>] {
   func.func @reduction_propagation_tx_conflict(
       %mem: !wave.tensor<[@M, @N] of f32, <global>>,
-      %result_mem: !wave.tensor<[@N] of f32, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, BLOCK_M = 16}>,
-                wave.constraints = [#wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>]} {
+      %result_mem: !wave.tensor<[@M] of f32, <global>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, BLOCK_N = 16}>,
+                wave.constraints = [#wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <x>>]} {
 
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     %c0 = arith.constant 0.0 : f32
-    %init = wave.register %c0 : !wave.tensor<[@N] of f32, <register>>
+    %init = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
 
-    %sum = wave.sum %reg init(%init) along @M block = false : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@N] of f32, <register>>
+    %sum = wave.sum %reg init(%init) <warp> : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
     // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (1)}}
-    wave.write %sum, %result_mem { elements_per_thread = 8} : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32, <global>>
+    wave.write %sum, %result_mem { elements_per_thread = 8} : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
     return
   }
 }

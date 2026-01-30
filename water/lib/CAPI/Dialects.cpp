@@ -75,7 +75,7 @@ MlirType mlirWaveTensorTypeGet(MlirContext mlirCtx, MlirAttribute *shapeSymbols,
          "expected non-null shapeSymbols when numShapeSymbols > 0");
   llvm::SmallVector<Attribute> shapeAttrs;
   shapeAttrs.reserve(numShapeSymbols);
-  unwrapList(numShapeSymbols, shapeSymbols, shapeAttrs);
+  (void)unwrapList(numShapeSymbols, shapeSymbols, shapeAttrs);
   assert(llvm::all_of(shapeAttrs, llvm::IsaPred<wave::WaveSymbolAttr>) &&
          "expected shapeSymbols to contain only WaveSymbolAttr values");
   assert(llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(addressSpace)) &&

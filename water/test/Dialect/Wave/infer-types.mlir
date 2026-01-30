@@ -132,8 +132,8 @@ func.func @propagate_reduction_input_to_others() {
   %input = water_test.wave_tensor : !wave.tensor<[@M, @N, @K, @L] of f32>
   %init = water_test.wave_tensor : !wave.tensor<any of f32>
   // CHECK: wave.sum
-  // CHECK-SAME: (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<[@M, @N, @L] of f32>) -> !wave.tensor<[@M, @N, @L] of f32>
-  wave.sum %input init(%init) along @K block = false
+  // CHECK-SAME: (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
+  wave.sum %input init(%init) <warp>
     : (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   return
 }
@@ -144,7 +144,7 @@ func.func @propagate_reduction_init_to_result() {
   %init = water_test.wave_tensor : !wave.tensor<[@M, @N, @K] of f32>
   // CHECK: wave.sum
   // CHECK-SAME: (!wave.tensor<any of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
-  wave.sum %input init(%init) along @K block = false
+  wave.sum %input init(%init) along @K <warp>
     : (!wave.tensor<any of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<any of f32>
   return
 }
@@ -154,7 +154,7 @@ func.func @propagate_reduction_result_to_init() {
   %init = water_test.wave_tensor : !wave.tensor<any of f32>
   // CHECK: wave.sum
   // CHECK-SAME: (!wave.tensor<any of f32>, !wave.tensor<[@N, @M, @L] of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
-  wave.sum %input init(%init) along @K block = false
+  wave.sum %input init(%init) along @K <warp>
     : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
   return
 }

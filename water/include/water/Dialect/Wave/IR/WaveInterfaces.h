@@ -140,7 +140,7 @@ public:
                    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
                    llvm::raw_ostream &errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    wave::WaveSymbolAttr axis = concrete.getAxis();
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
     unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
     return detail::propagateReductionTypesForward(
@@ -152,7 +152,7 @@ public:
                     llvm::ArrayRef<wave::WaveTensorType> resultTypes,
                     llvm::raw_ostream &errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    wave::WaveSymbolAttr axis = concrete.getAxis();
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
     unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
     return detail::propagateReductionTypesBackward(
@@ -443,7 +443,7 @@ public:
       llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
       llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
     return wave::detail::propagateReductionElementsPerThreadForward(
-        llvm::cast<OpTy>(this->getOperation()).getAxis(), operandTypes,
+        llvm::cast<OpTy>(this->getOperation()).getReducedSymbol(), operandTypes,
         resultTypes, errs, init);
   }
 
@@ -454,8 +454,9 @@ public:
       llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     return wave::detail::propagateReductionElementsPerThreadBackward(
-        concrete.getAxis(), concrete.getInitMutable().getOperandNumber(),
-        operandTypes, resultTypes, errs, init);
+        concrete.getReducedSymbol(),
+        concrete.getInitMutable().getOperandNumber(), operandTypes, resultTypes,
+        errs, init);
   }
 };
 
@@ -648,6 +649,53 @@ template <typename OpTy>
 class RequiresSidewaysBackwardPropagationOpTrait
     : public mlir::OpTrait::TraitBase<
           OpTy, RequiresSidewaysBackwardPropagationOpTrait> {};
+
+// ----------------------------------------------------------------------------
+// Reduction operation traits
+// ----------------------------------------------------------------------------
+
+namespace detail {
+// Return the symbol along which the reduction happens if known given the axis
+// and the input type.
+WaveSymbolAttr getReducedSymbol(mlir::Operation *op, WaveSymbolAttr axisAttr,
+                                mlir::Type inputType);
+
+// Verify the types of a reduction operation.
+llvm::LogicalResult verifyReductionOperation(mlir::Operation *op,
+                                             mlir::Type inputType,
+                                             mlir::Type initType,
+                                             mlir::Type resultType,
+                                             mlir::Attribute axisAttr);
+
+// Return the symbol along which the reduction happens if known.
+template <typename OpTy>
+static inline WaveSymbolAttr getReducedSymbol(OpTy op) {
+  return wave::detail::getReducedSymbol(op, op.getAxisAttr(),
+                                        op.getInput().getType());
+}
+
+// Common verification logic for reduction operations. We expect the input type
+// to have one more dimension that precisely matches the reduction axis.
+template <typename OpTy>
+static inline llvm::LogicalResult verifyReductionOperation(OpTy op) {
+  return wave::detail::verifyReductionOperation(
+      op, op.getInput().getType(), op.getInit().getType(),
+      op.getResult().getType(), op.getAxisAttr());
+}
+} // namespace detail
+
+template <typename OpTy>
+class WaveReductionOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, WaveReductionOpTrait> {
+public:
+  ::wave::WaveSymbolAttr getReducedSymbol() {
+    return detail::getReducedSymbol(llvm::cast<OpTy>(this->getOperation()));
+  }
+
+  static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
+    return detail::verifyReductionOperation(llvm::cast<OpTy>(op));
+  }
+};
 
 } // namespace wave
 

@@ -479,15 +479,6 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
   return success();
 }
 
-// Return the element type of a Wave tensor or builtin shaped type, or nullptr
-// for other types.
-static Type getElementType(Type type) {
-  return llvm::TypeSwitch<Type, Type>(type)
-      .Case<wave::WaveTensorType, ShapedType>(
-          [](auto containerType) { return containerType.getElementType(); })
-      .DefaultUnreachable("expected Wave tensor or vector type");
-}
-
 llvm::LogicalResult
 wave::detail::verifyElementTypesMatch(std::optional<Location> loc,
                                       llvm::StringRef lhsName, Type lhs,
@@ -1242,6 +1233,85 @@ llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
   op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
               ArrayAttr::get(op->getContext(), indexExprs));
   return llvm::success();
+}
+
+// ----------------------------------------------------------------------------
+// Reduction operation traits
+// ----------------------------------------------------------------------------
+
+wave::WaveSymbolAttr
+wave::detail::getReducedSymbol(Operation *op, wave::WaveSymbolAttr axisAttr,
+                               Type inputType) {
+  if (axisAttr)
+    return axisAttr;
+
+  auto tensor = dyn_cast<wave::WaveTensorType>(inputType);
+  if (tensor && tensor.getFullySpecified()) {
+    return tensor.getShape().back();
+  }
+  return {};
+}
+
+LogicalResult wave::detail::verifyReductionOperation(Operation *op,
+                                                     Type inputTypeBase,
+                                                     Type initTypeBase,
+                                                     Type resultTypeBase,
+                                                     Attribute axisAttr) {
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "input", inputTypeBase, "init", initTypeBase))) {
+    return failure();
+  }
+  if (failed(wave::detail::verifyTypesCompatible(
+          initTypeBase, resultTypeBase, /*includeAddressSpace=*/true,
+          op->getLoc(), "init", "result"))) {
+    return failure();
+  }
+
+  auto inputType = dyn_cast<WaveTensorType>(inputTypeBase);
+  auto initType = dyn_cast<WaveTensorType>(initTypeBase);
+  auto resultType = dyn_cast<WaveTensorType>(resultTypeBase);
+
+  if (inputType && !inputType.getFullySpecified() && !axisAttr) {
+    return op->emitOpError() << "expected axis attribute when input type is "
+                             << "not fully specified";
+  }
+
+  if (inputType && inputType.getFullySpecified()) {
+    if (axisAttr) {
+      return op->emitOpError() << "did not expect axis attribute when input "
+                                  "type is fully specified";
+    }
+
+    if (initType && initType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != initType.getRank()) {
+        return op->emitOpError()
+               << "init tensor rank (" << initType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(initType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "init", initType, leadingDims, "input", inputType,
+              leadingDims)))
+        return failure();
+    }
+
+    if (resultType && resultType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != resultType.getRank()) {
+        return op->emitOpError()
+               << "result tensor rank (" << resultType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(resultType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "input", inputType, leadingDims, "result",
+              resultType, leadingDims)))
+        return failure();
+    }
+  }
+
+  return success();
 }
 
 #include "water/Dialect/Wave/IR/WaveOpInterfaces.cpp.inc"
