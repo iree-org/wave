@@ -49,6 +49,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
+    Extract,
     ExtractSlice,
     get_custom,
     GetResult,
@@ -59,6 +60,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     SharedMemoryBarrier,
+    ShuffleOp as Shuffle,
     Write,
 )
 from wave_lang.kernel.wave.constraints import (
@@ -98,6 +100,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        ShuffleOp,
         SumOp,
         WriteOp,
         YieldOp,
@@ -138,6 +141,7 @@ WAVE_OP_CONSTRUCTORS = {
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
+    "shuffle": ShuffleOp,
     "iterate": IterateOp,
     "output": YieldOp,
     "write": WriteOp,
@@ -658,6 +662,21 @@ def _emit_ops_from_graph(
                     offset = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(
                         result_type, *mlir_operands, offset, size, stride
+                    )
+                elif isinstance(node, Extract):
+                    assert len(node.offset) == 1
+                    position = _convert_to_wave_expr_list_tuple(node.offset)
+                    mlir_op = op_builder(result_type, *mlir_operands, position)
+                elif isinstance(node, Shuffle):
+                    offset = ir.IntegerAttr.get(
+                        ir.IntegerType.get_signless(32), node.offset
+                    )
+                    width = ir.IntegerAttr.get(
+                        ir.IntegerType.get_signless(32), node.width
+                    )
+                    mode = wave.WaveShuffleModeAttr.get(node.mode.value)
+                    mlir_op = op_builder(
+                        result_type, *mlir_operands, offset, width, mode
                     )
                 else:
                     try:
