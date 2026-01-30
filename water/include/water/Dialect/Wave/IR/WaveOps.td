@@ -346,7 +346,7 @@ def ExtractOp : WaveOp<"extract",
     Therefore, the result tensor is always indexed by one dimension.
 
     TODO: we don't have a good way of verifying this, but the indexing symbol
-    symbol of the result must be the indexing symbol for which the size
+    of the result must be the indexing symbol for which the size
     (second element of the index expression) is greater than 1 when such a
     symbol exists (and presumably the last / the one mapped to thread X
     otherwise).
