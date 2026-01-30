@@ -240,35 +240,33 @@ def get_attention_prefetch_schedule():
         # - Cluster 2: PV computation + softmax0
         # - Cluster 3: V data movement + local load K
         clusters = [
-            # Cluster 0: QK computation and softmax1 (high priority)
+            # Cluster 0: QK computation and softmax1 (high priority through barrier)
             tkw.cluster(
                 [
                     tkw.SetWavePrio(1),
                     mma_qk_init_kernel,
                     mma_qk_kernel,
                     *softmax1_ops_kernel,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
+                    tkw.WorkgroupBarrier(),
+                    tkw.SetWavePrio(0),  # Lower priority after barrier
                 ],
             ),
             # Cluster 1: K data movement (global_to_shared_k) + local load V
-            # Barrier needed after g2lds K to sync before cluster 0 reads it
             tkw.cluster(
                 [
                     shared_load_v_kernel,
                     global_to_shared_k_kernel,
                     tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
                 ],
             ),
-            # Cluster 2: PV computation and softmax0 (high priority)
+            # Cluster 2: PV computation and softmax0 (high priority through barrier)
             tkw.cluster(
                 [
                     tkw.SetWavePrio(1),
                     mma_pv_kernel,
                     *softmax0_ops_kernel,
+                    tkw.WorkgroupBarrier(),
                     tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
                 ],
             ),
             # Cluster 3: V data movement (global_to_shared_v) + local load K
@@ -277,7 +275,6 @@ def get_attention_prefetch_schedule():
                     shared_load_k_kernel,
                     global_to_shared_v_kernel,
                     tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
                 ],
             ),
         ]
