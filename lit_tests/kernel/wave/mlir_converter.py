@@ -312,6 +312,87 @@ def mlir_converter_matrix_add():
 
 
 @run_test
+def mlir_converter_sum():
+    """Test MLIR converter with sum kernel."""
+
+    permute_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @tkw.wave(permute_constraints)
+    def sum(
+        a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
+        c: tkl.Memory[M, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        res = tkw.read(a)
+        init = tkw.read(c)
+        res = tkw.sum(res, init, dim=N)
+        tkw.write(res, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, sum)
+
+    # Get the trace from the compiled kernel
+    trace = compiled_kernel.compiled_graph
+
+    constraints = sum.constraints
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    # Print to stdout for FileCheck.
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_sum
+    # CHECK: wave.read
+    # CHECK: wave.read
+    # CHECK: wave.extract
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.add
+    # CHECK: wave.write
+
+
+@run_test
 def mlir_converter_matmul():
     """Test MLIR converter with matmul kernel."""
 
