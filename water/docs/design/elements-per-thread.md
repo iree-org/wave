@@ -184,6 +184,20 @@ Atomic/Scatter count: 1 (only process first element)
 
 ---
 
+## Code Simplification from Removing PropagateElementsPerThread
+
+If lowering patterns convert WaveTensorType to VectorType during lowering (using the type converter), instead of expecting pre-converted types, we can simplify:
+
+| Component | Current State | After Change |
+|-----------|---------------|--------------|
+| `ReadOpLoweringPattern` | Expects VectorType result, fails if WaveTensorType | Use type converter to get vector width from `index.size` |
+| `WriteOpLoweringPattern` | Expects VectorType operand, fails if WaveTensorType | Use type converter to get vector width from `index.size` |
+| `WaveIterableType` constraint | Accepts both WaveTensorType and VectorType | Only WaveTensorType needed |
+| `wave.iterate` type constraints | Dual-type support for iter_args/captures/results | Only WaveTensorType needed |
+| `VectorsInRegisters` normal form | Verifies register tensors converted to vectors (not yet merged) | Remove |
+
+---
+
 ## Example
 
 **Current:**
