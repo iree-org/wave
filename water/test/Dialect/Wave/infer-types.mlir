@@ -1,6 +1,6 @@
-// RUN: water-opt %s --water-wave-infer-types --split-input-file --verify-diagnostics | FileCheck %s
+// RUN: water-opt %s --water-wave-infer-types='partial=true' --split-input-file --verify-diagnostics | FileCheck %s
 
-// CHECK: #wave.normal_form<full_types>
+// CHECK: #wave.normal_form<full_func_boundary>
 normalform.module [#wave.normal_form<full_func_boundary>] {
 
 // CHECK-LABEL: @propagate_forward
@@ -124,6 +124,38 @@ func.func @propagate_structured_control_backward() {
   } : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   // CHECK: (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
   wave.exp2 %0 : (!wave.tensor<any of f32>) -> !wave.tensor<[@A] of f32>
+  return
+}
+
+// CHECK-LABEL: @propagate_reduction_input_to_others
+func.func @propagate_reduction_input_to_others() {
+  %input = water_test.wave_tensor : !wave.tensor<[@M, @N, @K, @L] of f32>
+  %init = water_test.wave_tensor : !wave.tensor<any of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
+  wave.sum %input init(%init) <warp>
+    : (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return
+}
+
+// CHECK-LABEL: @propagate_reduction_init_to_result
+func.func @propagate_reduction_init_to_result() {
+  %input = water_test.wave_tensor : !wave.tensor<any of f32>
+  %init = water_test.wave_tensor : !wave.tensor<[@M, @N, @K] of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<any of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
+  wave.sum %input init(%init) along @K <warp>
+    : (!wave.tensor<any of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<any of f32>
+  return
+}
+
+func.func @propagate_reduction_result_to_init() {
+  %input = water_test.wave_tensor : !wave.tensor<any of f32>
+  %init = water_test.wave_tensor : !wave.tensor<any of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<any of f32>, !wave.tensor<[@N, @M, @L] of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
+  wave.sum %input init(%init) along @K <warp>
+    : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
   return
 }
 

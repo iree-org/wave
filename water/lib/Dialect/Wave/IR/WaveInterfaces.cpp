@@ -181,6 +181,8 @@ llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
 llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
     wave::WaveTensorType from, wave::WaveTensorType &to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  if (!from || !from.getFullySpecified())
+    return ChangeResult::NoChange;
   llvm::FailureOr<ChangeResult> res =
       checkPropagateShapeConflict(from, to, fromName, toName, errs);
   if (failed(res) || *res == ChangeResult::NoChange)
@@ -222,6 +224,83 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     changeResult |= *res;
   }
   return changeResult;
+}
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
+                                         FailureOr<ChangeResult> rhs) {
+  if (failed(lhs) || failed(rhs))
+    return failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
+
+// Propagate type information from the reduction input type by removing the
+// reduction axis from it to the given type. Report errors to `errs` using
+// `toName` to identify the target type.
+static FailureOr<ChangeResult>
+propagateFromReductionInput(wave::WaveTensorType inputType,
+                            wave::WaveSymbolAttr axis, wave::WaveTensorType &to,
+                            StringRef toName, raw_ostream &errs) {
+  if (!inputType || !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  SmallVector<wave::WaveSymbolAttr> filteredShape = llvm::filter_to_vector(
+      inputType.getShape(),
+      [&](wave::WaveSymbolAttr dim) { return dim != axis; });
+  assert(inputType.getRank() - 1 == filteredShape.size() &&
+         "expected rank to be reduced by 1 in reduction");
+  auto inferredType = wave::WaveTensorType::get(
+      inputType.getContext(), filteredShape, /*fully_specified=*/true,
+      inputType.getElementType(), inputType.getAddressSpace());
+
+  return wave::detail::propagateShapeInformation(inferredType, to, "input",
+                                                 toName, errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesForward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum, llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  // If init is present, we can propagate from it directly,
+  // otherwise propagate from input after removing the axis.
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          operandTypes[initOperandNum], resultTypes[0], "init", "result", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  return maybeChangeResult |
+         propagateFromReductionInput(inputType, axis, resultTypes[0], "result",
+                                     errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum,
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          resultTypes[0], operandTypes[initOperandNum], "result", "init", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  // Propagate "sideways" from input to init operand.
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  return maybeChangeResult |
+         propagateFromReductionInput(
+             inputType, axis, operandTypes[initOperandNum], "init", errs);
+
+  // TODO: we cannot propagate to input here because we don't know at which
+  // position the reduction axis should be. We may consider a form where we
+  // always reduce trailing dimensions and require a reshape before. We could
+  // introduce an additional attribute indicating the position of the reduction
+  // axis as long as we ensure its consistency with the type in the verifier.
 }
 
 //-----------------------------------------------------------------------------
@@ -274,6 +353,48 @@ wave::detail::checkAndPropagateElementsPerThreadFromConstant(
     }
   }
   return changeResult;
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadForward(
+    wave::WaveSymbolAttr axis,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: not sure about that, it feels more like one element in general, not
+    // per thread.
+    wave::ElementsPerThreadLatticeValue expectedResult(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedResult, {}, resultElements,
+        "reduction along thread X dimension", "", "result", errs);
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      operandElements, resultElements, "operands", "results", errs);
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadBackward(
+    wave::WaveSymbolAttr axis, unsigned int initOperandNum,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: same as above.
+    wave::ElementsPerThreadLatticeValue expectedOperand(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedOperand, {}, operandElements.slice(initOperandNum, 1),
+        "reduction along thread X dimension", "", "operands", errs);
+
+    // TODO: do we need to have elements per thread attribute here so we can set
+    // it as lattice value for input?
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "operands", "results", errs);
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
@@ -356,15 +477,6 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
     return failure();
   }
   return success();
-}
-
-// Return the element type of a Wave tensor or builtin shaped type, or nullptr
-// for other types.
-static Type getElementType(Type type) {
-  return llvm::TypeSwitch<Type, Type>(type)
-      .Case<wave::WaveTensorType, ShapedType>(
-          [](auto containerType) { return containerType.getElementType(); })
-      .DefaultUnreachable("expected Wave tensor or vector type");
 }
 
 llvm::LogicalResult
@@ -1121,6 +1233,85 @@ llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
   op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
               ArrayAttr::get(op->getContext(), indexExprs));
   return llvm::success();
+}
+
+// ----------------------------------------------------------------------------
+// Reduction operation traits
+// ----------------------------------------------------------------------------
+
+wave::WaveSymbolAttr
+wave::detail::getReducedSymbol(Operation *op, wave::WaveSymbolAttr axisAttr,
+                               Type inputType) {
+  if (axisAttr)
+    return axisAttr;
+
+  auto tensor = dyn_cast<wave::WaveTensorType>(inputType);
+  if (tensor && tensor.getFullySpecified()) {
+    return tensor.getShape().back();
+  }
+  return {};
+}
+
+LogicalResult wave::detail::verifyReductionOperation(Operation *op,
+                                                     Type inputTypeBase,
+                                                     Type initTypeBase,
+                                                     Type resultTypeBase,
+                                                     Attribute axisAttr) {
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "input", inputTypeBase, "init", initTypeBase))) {
+    return failure();
+  }
+  if (failed(wave::detail::verifyTypesCompatible(
+          initTypeBase, resultTypeBase, /*includeAddressSpace=*/true,
+          op->getLoc(), "init", "result"))) {
+    return failure();
+  }
+
+  auto inputType = dyn_cast<WaveTensorType>(inputTypeBase);
+  auto initType = dyn_cast<WaveTensorType>(initTypeBase);
+  auto resultType = dyn_cast<WaveTensorType>(resultTypeBase);
+
+  if (inputType && !inputType.getFullySpecified() && !axisAttr) {
+    return op->emitOpError() << "expected axis attribute when input type is "
+                             << "not fully specified";
+  }
+
+  if (inputType && inputType.getFullySpecified()) {
+    if (axisAttr) {
+      return op->emitOpError() << "did not expect axis attribute when input "
+                                  "type is fully specified";
+    }
+
+    if (initType && initType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != initType.getRank()) {
+        return op->emitOpError()
+               << "init tensor rank (" << initType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(initType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "init", initType, leadingDims, "input", inputType,
+              leadingDims)))
+        return failure();
+    }
+
+    if (resultType && resultType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != resultType.getRank()) {
+        return op->emitOpError()
+               << "result tensor rank (" << resultType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(resultType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "input", inputType, leadingDims, "result",
+              resultType, leadingDims)))
+        return failure();
+    }
+  }
+
+  return success();
 }
 
 #include "water/Dialect/Wave/IR/WaveOpInterfaces.cpp.inc"

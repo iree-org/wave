@@ -14,6 +14,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -71,6 +72,24 @@ propagateShapeInformation(wave::WaveTensorType from, wave::WaveTensorType &to,
                           llvm::StringRef fromName, llvm::StringRef toName,
                           llvm::raw_ostream &errs);
 
+// Propagate type information for reduction operations from operands to results.
+// If init is present, we can propagate from it directly, otherwise propagate
+// from input after removing the reduction axis.
+llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesForward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum, llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs);
+
+// Propagate type information for reduction operations from results to operands.
+// Propagates from result to init operand, and "sideways" from input to init
+// operand.
+llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesBackward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum,
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs);
+
 // Check whether the `from` and `to` tensor types have reconcilable shapes and
 // and print error messages to `errs` otherwise. The error message uses `toName`
 // and `fromName` to to describe `from` and `to` tensors. If types are
@@ -103,6 +122,41 @@ public:
                     llvm::raw_ostream &errs) {
     return wave::detail::identityTypeInferencePropagate(
         resultTypes, operandTypes, "results", "operands", errs);
+  }
+};
+
+// A trait providing an implementation of the WaveInferTypeOpInterface for
+// reduction operations. It handles addition/removal of the reduction axis from
+// the types. Expects the operation to:
+// - have an 'axis' attribute of type WaveSymbolAttr indicating the reduction
+//   axis;
+// - have 'init' and 'input' operands.
+template <typename OpTy>
+class ReductionTypeInferenceOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, ReductionTypeInferenceOpTrait> {
+public:
+  llvm::FailureOr<mlir::ChangeResult>
+  propagateForward(llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+                   llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+                   llvm::raw_ostream &errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
+    unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
+    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    return detail::propagateReductionTypesForward(
+        axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
+  }
+
+  llvm::FailureOr<mlir::ChangeResult>
+  propagateBackward(llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+                    llvm::ArrayRef<wave::WaveTensorType> resultTypes,
+                    llvm::raw_ostream &errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
+    unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
+    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    return detail::propagateReductionTypesBackward(
+        axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
 };
 
@@ -290,7 +344,30 @@ private:
       std::numeric_limits<uint64_t>::max();
 };
 
+// Shared for elements per thread analyses, visible to every call but immutable.
+struct ElementsPerThreadInit {
+  wave::WaveSymbolAttr threadXDimension;
+};
+
 namespace detail {
+
+// Propagate elements per thread lattice values for reduction operations from
+// from operands to results. When reducing along the thread X dimension, set the
+// elements per threads of the result to 1.
+llvm::FailureOr<mlir::ChangeResult> propagateReductionElementsPerThreadForward(
+    wave::WaveSymbolAttr axis,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init);
+
+// Propagate elements per thread lattice values for reduction operations from
+// from results to operands and between operands. When reducing along the thread
+// X dimension, set the elements per threads of the init operand to 1.
+llvm::FailureOr<mlir::ChangeResult> propagateReductionElementsPerThreadBackward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init);
 
 // Propagate elements per thread lattice values from the list in `from` to the
 // list in `to`. The lattice values in the `from` list are expected to be
@@ -329,7 +406,7 @@ public:
   llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
       llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
       llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
-      llvm::raw_ostream &errs) {
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
     return wave::detail::identityElementsPerThreadPropagate(
         operandTypes, resultTypes, "operands", "results", errs);
   }
@@ -338,7 +415,7 @@ public:
   llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
       llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
       llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
-      llvm::raw_ostream &errs) {
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
     return wave::detail::identityElementsPerThreadPropagate(
         resultTypes, operandTypes, "results", "operands", errs);
   }
@@ -349,6 +426,39 @@ public:
 template <typename OpTy>
 class NoOpElementsPerThreadOpTrait
     : public mlir::OpTrait::TraitBase<OpTy, NoOpElementsPerThreadOpTrait> {};
+
+// Trait implementing the methods of the WaveElementsPerThreadOpInterface for
+// reduction operations where elements-per-thread values are propagated between
+// operands and results as identity, except when reducing along the thread X.
+// Expects the operation to have:
+//   - an attribute 'axis' of type WaveSymbolAttr indicating the reduction axis;
+//   - an operand 'init' representing the initial value for the reduction.
+template <typename OpTy>
+class ReductionElementsPerThreadOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, ReductionElementsPerThreadOpTrait> {
+public:
+  // Propagate from operands to results.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+    return wave::detail::propagateReductionElementsPerThreadForward(
+        llvm::cast<OpTy>(this->getOperation()).getReducedSymbol(), operandTypes,
+        resultTypes, errs, init);
+  }
+
+  // Propagate from results to operands.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    return wave::detail::propagateReductionElementsPerThreadBackward(
+        concrete.getReducedSymbol(),
+        concrete.getInitMutable().getOperandNumber(), operandTypes, resultTypes,
+        errs, init);
+  }
+};
 
 //-----------------------------------------------------------------------------
 // WaveInferIndexExprsOpInterface
@@ -528,13 +638,64 @@ public:
   }
 };
 
-// A tag trait indicating that the operation requires index expressions to be
+// ----------------------------------------------------------------------------
+// Traits indicating sideways propagation requirements.
+// ----------------------------------------------------------------------------
+
+// A tag trait indicating that the operation requires lattices to be
 // propagated between operands during backward analysis. This needs no methods,
 // its mere presence is enough.
 template <typename OpTy>
-class RequiresIndexExprsSidewaysBackwardPropagationOpTrait
+class RequiresSidewaysBackwardPropagationOpTrait
     : public mlir::OpTrait::TraitBase<
-          OpTy, RequiresIndexExprsSidewaysBackwardPropagationOpTrait> {};
+          OpTy, RequiresSidewaysBackwardPropagationOpTrait> {};
+
+// ----------------------------------------------------------------------------
+// Reduction operation traits
+// ----------------------------------------------------------------------------
+
+namespace detail {
+// Return the symbol along which the reduction happens if known given the axis
+// and the input type.
+WaveSymbolAttr getReducedSymbol(mlir::Operation *op, WaveSymbolAttr axisAttr,
+                                mlir::Type inputType);
+
+// Verify the types of a reduction operation.
+llvm::LogicalResult verifyReductionOperation(mlir::Operation *op,
+                                             mlir::Type inputType,
+                                             mlir::Type initType,
+                                             mlir::Type resultType,
+                                             mlir::Attribute axisAttr);
+
+// Return the symbol along which the reduction happens if known.
+template <typename OpTy>
+static inline WaveSymbolAttr getReducedSymbol(OpTy op) {
+  return wave::detail::getReducedSymbol(op, op.getAxisAttr(),
+                                        op.getInput().getType());
+}
+
+// Common verification logic for reduction operations. We expect the input type
+// to have one more dimension that precisely matches the reduction axis.
+template <typename OpTy>
+static inline llvm::LogicalResult verifyReductionOperation(OpTy op) {
+  return wave::detail::verifyReductionOperation(
+      op, op.getInput().getType(), op.getInit().getType(),
+      op.getResult().getType(), op.getAxisAttr());
+}
+} // namespace detail
+
+template <typename OpTy>
+class WaveReductionOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, WaveReductionOpTrait> {
+public:
+  ::wave::WaveSymbolAttr getReducedSymbol() {
+    return detail::getReducedSymbol(llvm::cast<OpTy>(this->getOperation()));
+  }
+
+  static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
+    return detail::verifyReductionOperation(llvm::cast<OpTy>(op));
+  }
+};
 
 } // namespace wave
 

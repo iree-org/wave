@@ -100,6 +100,47 @@ class BinaryWaveOp<string mnemonic>
     "functional-type(operands, results)";
 }
 
+class ReductionWaveOp<string mnemonic>
+    : WaveOp<mnemonic,
+        [WaveInferTypeOpInterface, ReductionTypeInferenceOpTrait,
+         WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
+         RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
+      WaveArithmeticOpDoc {
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
+    Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
+    Arg<WaveReductionScopeAttr, "Scope of the reduction">:$scope,
+    Arg<OptionalAttr<WaveSymbolAttr>, "Reduction axis">:$axis
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Reduced result">:$result
+  );
+
+  let assemblyFormat =
+      "$input `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
+      "$scope " # commonArgumentsSyntax # " attr-dict `:`"
+      "functional-type(operands, results)";
+}
+
+def SumOp : ReductionWaveOp<"sum"> {
+  let summary = "Reduce a tensor by summing along a specified axis";
+  let description = [{
+    Reduces the input tensor by summing its elements along the specified
+    symbolic axis. The initial value is used as the starting point for the
+    reduction.
+  }] # baseDescription;
+}
+
+def MaxElementOp : ReductionWaveOp<"max_element"> {
+  let summary = "Reduce a tensor by taking the maximum along a specified axis";
+  let description = [{
+    Reduces the input tensor by taking the maximum of its elements along the
+    specified symbolic axis. The initial value is used as the starting point
+    for the reduction.
+  }] # baseDescription;
+}
+
 //-----------------------------------------------------------------------------
 // Arithmetic operations
 //-----------------------------------------------------------------------------
@@ -402,7 +443,7 @@ def WriteOp : WaveOp<"write", [
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
-    RequiresIndexExprsSidewaysBackwardPropagationOpTrait]> {
+    RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor

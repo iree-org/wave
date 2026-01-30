@@ -1075,3 +1075,188 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return
   }
 }
+
+// -----
+
+// Test wave.sum lowering - reduces input vector to scalar via thread-local
+// reduction followed by subgroup reduction.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_sum
+  // expected-warning @below {{unused hyperparameter: N}}
+  func.func @lower_sum() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
+    %input = wave.register %cst_input : vector<8xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.sum
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<8xf32> into f32
+    // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (f32) -> f32
+    %result = wave.sum %input init(%init) along @M <warp> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test wave.max_element lowering - reduces input vector to scalar via
+// thread-local max followed by subgroup max.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_max_element
+  // expected-warning @below {{unused hyperparameter: M}}
+  func.func @lower_max_element() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<2.000000e+00> : vector<16xf32>
+    %input = wave.register %cst_input : vector<16xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.max_element
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <maximumf>, %[[INPUT]], %[[INIT_ELEM]] : vector<16xf32> into f32
+    // CHECK: gpu.subgroup_reduce maximumf %[[THREAD_REDUCE]] : (f32) -> f32
+    %result = wave.max_element %input init(%init) along @N <warp> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test reduction with integer types.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_sum_integer
+  func.func @lower_sum_integer() attributes {wave.hyperparameters = #wave.hyperparameters<{K = 16}>} {
+    %cst_input = arith.constant 1 : i32
+    %cst_init = arith.constant 0 : i32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<1> : vector<4xi32>
+    %input = wave.register %cst_input : vector<4xi32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0> : vector<1xi32>
+    %init = wave.register %cst_init : vector<1xi32>
+    // CHECK-NOT: wave.sum
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : i32 from vector<1xi32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<4xi32> into i32
+    // CHECK: gpu.subgroup_reduce add %[[THREAD_REDUCE]] : (i32) -> i32
+    %result = wave.sum %input init(%init) along @K <warp> : (vector<4xi32>, vector<1xi32>) -> vector<1xi32>
+    return
+  }
+}
+
+// -----
+
+// Test wave.sum lowering with <block> - uses gpu.all_reduce instead of gpu.subgroup_reduce.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_sum_block
+  // expected-warning @below {{unused hyperparameter: N}}
+  func.func @lower_sum_block() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
+    %input = wave.register %cst_input : vector<8xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.sum
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <add>, %[[INPUT]], %[[INIT_ELEM]] : vector<8xf32> into f32
+    // CHECK: gpu.all_reduce add %[[THREAD_REDUCE]] {
+    // CHECK: } : (f32) -> f32
+    %result = wave.sum %input init(%init) along @M <block> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test wave.max_element lowering with <block> - uses gpu.all_reduce instead of gpu.subgroup_reduce.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_max_element_block
+  // expected-warning @below {{unused hyperparameter: M}}
+  func.func @lower_max_element_block() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 32}>} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    // CHECK: %[[INPUT:.*]] = arith.constant dense<2.000000e+00> : vector<16xf32>
+    %input = wave.register %cst_input : vector<16xf32>
+    // CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // CHECK-NOT: wave.max_element
+    // CHECK: %[[INIT_ELEM:.*]] = vector.extract %[[INIT]][0] : f32 from vector<1xf32>
+    // CHECK: %[[THREAD_REDUCE:.*]] = vector.reduction <maximumf>, %[[INPUT]], %[[INIT_ELEM]] : vector<16xf32> into f32
+    // CHECK: gpu.all_reduce maximumf %[[THREAD_REDUCE]] {
+    // CHECK: } : (f32) -> f32
+    %result = wave.max_element %input init(%init) along @N <block> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning when <block> but hardware constraint specifies only one wave per block.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_block_reduction_single_wave
+  func.func @warn_block_reduction_single_wave()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>]} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<8xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
+    %result = wave.sum %input init(%init) along @M <block> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning when <warp> but hardware constraint specifies multiple waves per block.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_wave_reduction_multiple_waves
+  func.func @warn_wave_reduction_multiple_waves()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1]>]} {
+    %cst_input = arith.constant 1.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<8xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [2, 2, 1]); consider using block reduction to reduce across all waves}}
+    %result = wave.sum %input init(%init) along @M <warp> : (vector<8xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning for max_element with <block> and single wave.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_block_max_single_wave
+  func.func @warn_block_max_single_wave()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{N = 32}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>]} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<16xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{block reduction requested but hardware constraint specifies only one wave per block (waves_per_block = [1, 1, 1]); consider using wave-level reduction instead}}
+    %result = wave.max_element %input init(%init) along @N <block> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}
+
+// -----
+
+// Test warning for max_element with <warp> and multiple waves.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @warn_wave_max_multiple_waves
+  func.func @warn_wave_max_multiple_waves()
+    attributes {wave.hyperparameters = #wave.hyperparameters<{N = 32}>,
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [4, 1, 1]>]} {
+    %cst_input = arith.constant 2.0 : f32
+    %cst_init = arith.constant 0.0 : f32
+    %input = wave.register %cst_input : vector<16xf32>
+    %init = wave.register %cst_init : vector<1xf32>
+    // expected-warning @below {{wave-level reduction requested but hardware constraint specifies multiple waves per block (waves_per_block = [4, 1, 1]); consider using block reduction to reduce across all waves}}
+    %result = wave.max_element %input init(%init) along @N <warp> : (vector<16xf32>, vector<1xf32>) -> vector<1xf32>
+    return
+  }
+}

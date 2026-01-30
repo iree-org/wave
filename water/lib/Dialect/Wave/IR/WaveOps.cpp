@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -22,7 +24,9 @@
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -33,6 +37,67 @@ using namespace wave;
 // Custom parsing and printing hooks. These must be defined before including the
 // op classes.
 //-----------------------------------------------------------------------------
+
+// constexpr const static llvm::StringLiteral kwInit = "init";
+// constexpr const static llvm::StringLiteral kwIndex = "index";
+// constexpr const static llvm::StringLiteral kwAlong = "along";
+
+// static ParseResult parseReduction(OpAsmParser &parser, OperationState &state)
+// {
+//   OpAsmParser::UnresolvedOperand input, init;
+//   if (failed(parser.parseOperand(input)) ||
+//       failed(parser.parseKeyword(kwInit)) ||
+//       failed(parser.parseLParen()) ||
+//       failed(parser.parseOperand(init)) ||
+//       failed(parser.parseRParen()))
+//     return failure();
+
+//   WaveReductionScopeAttr scope;
+//   if (failed(parser.parseAttribute(scope)))
+//     return failure();
+
+//   WaveSymbolAttr axis;
+//   if (succeeded(parser.parseOptionalKeyword(kwAlong))) {
+//     if (failed(parseSingleSymbol(parser, axis)))
+//       return failure();
+//   }
+
+//   DictionaryAttr index;
+//   if (succeeded(parser.parseOptionalKeyword(kwIndex))) {
+//     if (failed(parseWaveIndexDict(parser, index)))
+//       return failure();
+//   }
+
+//   llvm::SMLoc typeLoc;
+//   FunctionType trailingType;
+//   if (failed(parser.parseOptionalAttrDict(state.attributes)) ||
+//       failed(parser.getCurrentLocation(&typeLoc)) ||
+//       failed(parser.parseColonType(trailingType)))
+//     return failure();
+
+//   if (trailingType.getNumInputs() != 2 || trailingType.getNumResults() != 1)
+//     return parser.emitError(typeLoc)
+//            << "expected function type with 2 inputs and 1 result";
+
+//   if (failed(parser.resolveOperand(input, trailingType.getInput(0),
+//                                    state.operands)) ||
+//       failed(parser.resolveOperand(init, trailingType.getInput(1),
+//                                    state.operands)))
+//     return failure();
+
+//   return success();
+// }
+
+// static void printReduction(OpAsmPrinter &printer, SumOp op) {
+//   printer << op.getInput() << " " << kwInit << "(" << op.getInit() << ") ";
+//   printer << op.getScope();
+//   if (op.getAxis()) {
+//     printer << kwAlong << " ";
+//     printSingleSymbol(printer, op.getAxis());
+//   }
+//   printer.printFunctionType(op.getInput().getType(),
+//   op.getResult().getType());
+// }
 
 // Parse types of the `wave.register` op and perform type inference. The syntax
 // is simply the tensor type from which the elemental type is extract for the
@@ -449,17 +514,6 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   lattice = newLattice;
   return ChangeResult::Change;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                  FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Update index expressions of the result of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
@@ -1277,7 +1331,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
       computeElementsPerThreadForOperand(
           getAccumulatorMutable().getOperandNumber());
@@ -1296,7 +1350,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // For MMA, the accumulator should have the same elements per thread as the
   // result. The LHS and RHS operands may have different constraints based on
   // their dimensions.
@@ -1581,7 +1635,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // ReadOp only propagates elements_per_thread attribute to result (register).
   // Memory operand is ignored for propagation - you can read any number of
   // elements from memory regardless of how many were written.
@@ -1599,7 +1653,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &) {
+    llvm::raw_ostream &, const wave::ElementsPerThreadInit &) {
   // ReadOp doesn't propagate backward to memory operand.
   // Memory is decoupled from register dataflow for elements_per_thread.
   return mlir::ChangeResult::NoChange;
@@ -1694,7 +1748,7 @@ LogicalResult WriteOp::verify() {
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only validates that elements_per_thread attribute matches register
   // operand. Memory operand is ignored for propagation - you can write to
   // memory with any layout.
@@ -1716,7 +1770,7 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only propagates backward to register operand (value_to_store).
   // Memory operand is ignored - you can write any layout to memory.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
@@ -1842,12 +1896,7 @@ LogicalResult wave::CastOp::verify() {
 
 LogicalResult wave::ReciprocalOp::verify() {
   Type argType = getArgument().getType();
-  Type elementType =
-      llvm::TypeSwitch<Type, Type>(argType)
-          .Case<WaveTensorType, VectorType>(
-              [](auto containerType) { return containerType.getElementType(); })
-          .Default([](Type type) { return type; });
-
+  Type elementType = wave::getElementType(argType);
   if (!isa<FloatType>(elementType))
     return emitOpError("requires float element type, but got ") << elementType;
 

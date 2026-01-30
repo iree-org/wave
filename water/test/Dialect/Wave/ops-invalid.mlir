@@ -678,3 +678,60 @@ func.func @iterate_multidim_vectors_rejected() attributes {wave.hyperparameters 
   } : (vector<4x8xf32>) -> (vector<4x8xf32>)
   return
 }
+
+// -----
+
+func.func @nonexistent_axis(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // expected-error @below {{did not expect axis attribute when input type is fully specified}}
+  %result = wave.sum %input init(%init) along @K <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
+  // expected-error @below {{init tensor rank (2) must be one less than input tensor rank (2)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return %result : !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  %init_any = wave.reciprocal %init: (!wave.tensor<[@N] of f32>) -> !wave.tensor<any of f32>
+  // expected-error @below {{result tensor rank (2) must be one less than input tensor rank (2)}}
+  %result = wave.sum %input init(%init_any) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  // expected-error @below {{rank mismatch between init and result}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @symbol_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32> {
+  // expected-error @below {{expected init dimension #0 (#wave.symbol<"N">) to match result dimension #0 (#wave.symbol<"M">)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32>
+  return %result : !wave.tensor<[@M] of f32>
+}
+
+// -----
+
+func.func @sum_along_first_dim(%input: !wave.tensor<[@M, @N] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // expected-error @below {{expected init dimension #0 (#wave.symbol<"N">) to match input dimension #0 (#wave.symbol<"M">)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wave.tensor<any of f32>) -> !wave.tensor<any of f32> {
+  // expected-error @below {{expected axis attribute when input type is not fully specified}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return %result : !wave.tensor<any of f32>
+}

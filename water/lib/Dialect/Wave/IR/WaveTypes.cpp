@@ -99,3 +99,10 @@ wave::WaveTensorType::getResolvedShape(
   llvm::ArrayRef<mlir::Attribute> symbols(getShape().begin(), getShape().end());
   return wave::resolveSymbolNames(symbols, hyper);
 }
+
+Type wave::getElementType(Type type) {
+  return llvm::TypeSwitch<Type, Type>(type)
+      .Case<wave::WaveTensorType, ShapedType>(
+          [](auto containerType) { return containerType.getElementType(); })
+      .DefaultUnreachable("expected Wave tensor or vector type");
+}

@@ -29,7 +29,9 @@ def WaveElementsPerThreadOpInterface
     when lowering the Wave dialect programming model to the SIMT programming
     model. Each operation may indicate how to infer the elements per threads for
     its results based on the operation itself and the elements per thread values
-    of its operands, and vice versa.
+    of its operands, and vice versa. The trailing `init` object contains common
+    immutable values provided to the analysis, such as the dimension mapped to
+    the workgroup X identifier.
 
     Several common implementations are provided via traits.
   }];
@@ -45,7 +47,8 @@ def WaveElementsPerThreadOpInterface
                :$operandElements,
            "::llvm::MutableArrayRef<::wave::ElementsPerThreadLatticeValue>"
                :$resultElements,
-           "::llvm::raw_ostream &":$errs)
+           "::llvm::raw_ostream &":$errs,
+           "const ::wave::ElementsPerThreadInit &":$init)
     >,
     InterfaceMethod<[{
       Propagate elements per threads information from results to operands.
@@ -58,7 +61,23 @@ def WaveElementsPerThreadOpInterface
                :$operandElements,
            "::llvm::ArrayRef<::wave::ElementsPerThreadLatticeValue>"
                :$resultElements,
-           "::llvm::raw_ostream &":$errs)
+           "::llvm::raw_ostream &":$errs,
+           "const ::wave::ElementsPerThreadInit &":$init)
+    >,
+    InterfaceMethod<[{
+      Initialize elements per thread information for operands of the current
+      operation. By default, they are initialized to lattice bottom and will be
+      updated by the analysis. Certain operations may want to initialize them
+      to specific values based on the operation semantics.
+      }],
+      "::llvm::LogicalResult",
+      "initializeElementsPerThreadBackward",
+      (ins "::llvm::MutableArrayRef<::wave::ElementsPerThreadLatticeValue>"
+               :$operandElements),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return ::llvm::success();
+      }]
     >,
   ];
   let cppNamespace = "::wave";
@@ -71,6 +90,11 @@ def NoOpElementsPerThreadOpTrait
 
 def IdentityElementsPerThreadOpTrait
     : NativeOpTrait<"IdentityElementsPerThreadOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+def ReductionElementsPerThreadOpTrait
+    : NativeOpTrait<"ReductionElementsPerThreadOpTrait"> {
   let cppNamespace = "::wave";
 }
 
@@ -121,6 +145,11 @@ def IdentityTypeInferenceOpTrait
 }
 
 def NoOpTypeInferenceOpTrait : NativeOpTrait<"NoOpTypeInferenceOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+def ReductionTypeInferenceOpTrait
+    : NativeOpTrait<"ReductionTypeInferenceOpTrait"> {
   let cppNamespace = "::wave";
 }
 
@@ -249,8 +278,21 @@ def IdentityIndexExprsOpTrait
   let cppNamespace = "::wave";
 }
 
-def RequiresIndexExprsSidewaysBackwardPropagationOpTrait
-    : NativeOpTrait<"RequiresIndexExprsSidewaysBackwardPropagationOpTrait"> {
+//-----------------------------------------------------------------------------
+// Traits indicating sideways propagation requirements
+//-----------------------------------------------------------------------------
+
+def RequiresSidewaysBackwardPropagationOpTrait
+    : NativeOpTrait<"RequiresSidewaysBackwardPropagationOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+//-----------------------------------------------------------------------------
+// Reduction operation traits
+//-----------------------------------------------------------------------------
+
+def WaveReductionOpTrait
+    : NativeOpTrait<"WaveReductionOpTrait"> {
   let cppNamespace = "::wave";
 }
 
