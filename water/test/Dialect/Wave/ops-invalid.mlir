@@ -541,6 +541,48 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
 
 // -----
 
+func.func @extract_invalid_position_rank(%src: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{position must contain exactly one expression, but got 2}}
+  wave.extract %src[#wave.expr_list<[] -> (0, 1)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_vector_result_not_one_element(%src: vector<4xf32>) {
+  // expected-error @below {{result must be a 1-element vector, got}}
+  wave.extract %src[#wave.expr_list<[] -> (0)>] : (vector<4xf32>) -> vector<3xf32>
+  return
+}
+
+// -----
+
+func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16}>
+} {
+  // expected-error @below {{result must be a 1-dimensional tensor, got}}
+  wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_source_not_fully_specified(%src: !wave.tensor<any of f32>) {
+  // expected-error @below {{source tensor type must be fully specified}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<any of f32>) -> !wave.tensor<[@X] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_dimension_mismatch(%src: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{source tensor type dimensions must contain the result tensor type dimension}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@X] of f32>
+  return
+}
+
+// -----
+
 func.func @extract_slice_mismatch_offset_size(%memory: !wave.tensor<[@A, @B] of f16>) {
   // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 2, and stride rank 1}}
   wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>

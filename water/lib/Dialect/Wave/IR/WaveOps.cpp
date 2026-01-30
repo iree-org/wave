@@ -1693,6 +1693,42 @@ LogicalResult ExtractOp::verify() {
                             "got "
                          << position.getRank();
   }
+
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
+                                             getSource().getType(), "result",
+                                             getResult().getType()))) {
+    return failure();
+  }
+
+  if (auto resultVectorType = dyn_cast<VectorType>(getResult().getType())) {
+    if (resultVectorType.getShape()[0] != 1) {
+      return emitOpError() << "result must be a 1-element vector, got "
+                           << resultVectorType;
+    }
+    return success();
+  }
+
+  auto resultTensorType = cast<WaveTensorType>(getResult().getType());
+  if (!resultTensorType.getFullySpecified() ||
+      resultTensorType.getRank() != 1) {
+    return emitOpError() << "result must be a 1-dimensional tensor, got "
+                         << resultTensorType;
+  }
+
+  auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
+  // For mixed types, cannot do anything here.
+  if (!sourceTensorType)
+    return success();
+
+  if (!sourceTensorType.getFullySpecified())
+    return emitOpError() << "source tensor type must be fully specified";
+
+  if (!llvm::is_contained(sourceTensorType.getShape(),
+                          resultTensorType.getShape()[0])) {
+    return emitOpError() << "source tensor type dimensions must contain the "
+                            "result tensor type dimension";
+  }
+
   return success();
 }
 

@@ -331,23 +331,37 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
-def ExtractOp : WaveOp<"extract", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
+def ExtractOp : WaveOp<"extract"> {
   let summary = "Extracts a single element from a vector at the given index";
   let description = [{
-    Extracts a single element from a 1-D vector at the specified index position,
-    producing a 1-element vector.
+    This is an internal operation that appears during expansion/lowering and
+    is not intended for use in user code. As such, it intentionally does not
+    implement the various interfaces for dataflow analyses as it only appears
+    after those.
+
+    When lowered, extracts a single element from the vector that corresponds
+    to lowered register-resident tensor, producing a 1-element vector.
+    Therefore, the result tensor is always indexed by one dimension.
+
+    TODO: we don't have a good way of verifying this, but the indexing symbol
+    symbol of the result must be the indexing symbol for which the size
+    (second element of the index expression) is greater than 1 when such a
+    symbol exists (and presumably the last / the one mapped to thread X
+    otherwise).
   }];
 
-  let arguments = (ins
+  let arguments = !con((ins
     Arg<WaveTensorInRegister, "Vector to extract from">:$source,
     Arg<WaveExprListAttr, "Index position to extract">:$position
-  );
+  ), commonArguments);
 
   let results = (outs
     Res<WaveTensorInRegister, "Extracted 1-element vector">:$result
   );
 
-  let assemblyFormat = "$source `[` $position `]` attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat =
+    "$source `[` $position `]` " # commonArgumentsSyntax # "attr-dict "
+    "`:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
