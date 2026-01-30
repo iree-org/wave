@@ -1176,7 +1176,7 @@ def test_tensor_waitcnt():
     print(schedule_ops.asm)
 
     # CHECK-LABEL:    func.func @schedule_ops
-    # CHECK:            rocdl.s.wait.tensorcnt 0
+    # CHECK:            amdgpu.memory_counter_wait tensor(0)
     # CHECK:            rocdl.s.wait.dscnt 0
     # CHECK:            rocdl.s.barrier.signal id = -1
     # CHECK:            rocdl.s.barrier.wait id = -1

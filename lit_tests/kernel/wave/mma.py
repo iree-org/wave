@@ -684,7 +684,7 @@ def test_wmma_with_tensor_load():
 
     ### resource provider
     # CHECK:        amdgpu.tensor_load_to_lds %[[DESC_FUSED:.*]]
-    # CHECK:        rocdl.s.wait.tensorcnt 0
+    # CHECK:        amdgpu.memory_counter_wait tensor(0)
     # CHECK:        rocdl.s.wait.dscnt 0
     # CHECK:        rocdl.s.barrier.signal id = -1
 

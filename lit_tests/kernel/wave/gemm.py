@@ -1421,7 +1421,7 @@ def test_gemm_four_stage_global_to_lds():
     # Verify prologue stores to shared memory
     # CHECK: amdgpu.tensor_load_to_lds
 
-    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: amdgpu.memory_counter_wait tensor(0)
     # CHECK: rocdl.s.wait.dscnt 0
     # CHECK: rocdl.s.barrier.signal id = -1
     # CHECK: rocdl.s.barrier.wait id = -1
@@ -1440,7 +1440,7 @@ def test_gemm_four_stage_global_to_lds():
     # Verify WMMA exists
     # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
 
-    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: amdgpu.memory_counter_wait tensor(0)
     # CHECK: rocdl.s.wait.dscnt 0
     # CHECK: rocdl.s.barrier.signal id = -1
     # CHECK: rocdl.s.barrier.wait id = -1
@@ -1459,7 +1459,7 @@ def test_gemm_four_stage_global_to_lds():
     # Epilogue:
     # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
 
-    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: amdgpu.memory_counter_wait tensor(0)
     # CHECK: rocdl.s.wait.dscnt 0
     # CHECK: rocdl.s.barrier.signal id = -1
     # CHECK: rocdl.s.barrier.wait id = -1

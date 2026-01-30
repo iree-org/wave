@@ -428,6 +428,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     toolkit_path = get_water_mlir_pkg_path()
 
     pipeline = [
+        "water-insert-waitcnt",
         "water-memref-decomposition",
         *add_opt(canonicalize_cse),
         "lower-affine",
