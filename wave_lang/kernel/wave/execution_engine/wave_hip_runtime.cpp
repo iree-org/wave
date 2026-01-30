@@ -152,7 +152,7 @@ extern "C" void wave_launch_kernel(void *stream, void *function,
         1 // Number of attributes.
     };
 
-    HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, nullptr, args));
+    HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, args, nullptr));
   } else {
     HIP_CHECK_EXC(hipModuleLaunchKernel(
         function, grid_x, grid_y, grid_z, block_x, block_y, block_z,
