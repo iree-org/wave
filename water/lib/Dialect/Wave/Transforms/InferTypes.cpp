@@ -1054,7 +1054,9 @@ public:
       return signalPassFailure();
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
+            wave::WaveNormalForm::MemoryOnlyTypes |
+                wave::WaveNormalForm::VectorsInRegisters,
+            getOperation())))
       return signalPassFailure();
   }
 };

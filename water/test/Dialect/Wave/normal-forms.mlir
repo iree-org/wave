@@ -1,6 +1,6 @@
 // RUN: water-opt %s --water-wave-infer-types --water-wave-propagate-elements-per-thread | FileCheck %s
 
-// CHECK: normalform.module [#wave.normal_form<full_types,memory_only_types>]
+// CHECK: normalform.module [#wave.normal_form<full_types,memory_only_types,vectors_in_registers>]
 normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @test_multiple_forms_in_sequence(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
     %0 = arith.constant 0.0 : f32

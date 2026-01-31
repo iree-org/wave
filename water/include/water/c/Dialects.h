@@ -311,6 +311,9 @@ enum WaveNormalForm {
   WaveNormalFormOpTypesSpecified = 2,
   WaveNormalFormIndexExprsSpecified = 4,
   WaveNormalFormMemoryOnlyTypes = 8,
+  WaveNormalFormResolvedAllocations = 16,
+  WaveNormalFormOrderedSymsSpecified = 32,
+  WaveNormalFormVectorsInRegisters = 64,
 
   WaveNormalFormAllTypesSPecified =
       WaveNormalFormFunctionBoundarySpecified | WaveNormalFormOpTypesSpecified

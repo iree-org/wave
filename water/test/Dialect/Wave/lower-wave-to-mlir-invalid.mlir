@@ -1,6 +1,6 @@
 // RUN: water-opt %s -allow-unregistered-dialect -lower-wave-to-mlir --split-input-file --verify-diagnostics
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers>] {
   func.func @binary_ops_pattern_failure() {
     %cst = arith.constant 1.0 : f32
     // expected-error @below {{wave dialect operation with no hyperparameters provided by any ancestor}}
@@ -12,7 +12,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 // Test that missing index_exprs normal form causes precondition failure.
-// expected-error @below {{LowerWaveToMLIRPass pass expects the root operation or its ancestor to guarantee the full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms normal form}}
+// expected-error @below {{LowerWaveToMLIRPass pass expects the root operation or its ancestor to guarantee the full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers normal form}}
 normalform.module [#wave.normal_form<full_types,memory_only_types,resolved_allocations>] {
   func.func @missing_index_exprs_normal_form(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
@@ -23,7 +23,7 @@ normalform.module [#wave.normal_form<full_types,memory_only_types,resolved_alloc
 
 // -----
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers>] {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @write_pattern_failure(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
@@ -46,7 +46,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 // Test that wave.read with memref memory operand requires ordered_syms attribute.
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers>] {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @read_memref_missing_ordered_syms(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64}>} {
@@ -63,7 +63,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 // Test that wave.write with memref memory operand requires ordered_syms attribute.
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers>] {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @write_memref_missing_ordered_syms(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64}>} {
@@ -83,7 +83,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 
 // Should not crash on null stride.
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms,vectors_in_registers>] {
   // expected-error @below {{failed to convert starting at this operation}}
   func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>} {

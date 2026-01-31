@@ -898,6 +898,9 @@ NB_MODULE(_waterDialects, m) {
       .value("OpTypesSpecified", WaveNormalFormOpTypesSpecified)
       .value("IndexExprsSpecified", WaveNormalFormIndexExprsSpecified)
       .value("MemoryOnlyTypes", WaveNormalFormMemoryOnlyTypes)
+      .value("ResolvedAllocations", WaveNormalFormResolvedAllocations)
+      .value("OrderedSymsSpecified", WaveNormalFormOrderedSymsSpecified)
+      .value("VectorsInRegisters", WaveNormalFormVectorsInRegisters)
       .value("AllTypesSpecified", WaveNormalFormAllTypesSPecified);
 
   nb::enum_<WaveWorkgroupDim>(d, "WaveWorkgroupDim")

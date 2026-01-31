@@ -103,6 +103,8 @@ def NORMAL_FORM_RESOLVED_ALLOCATIONS : I32BitEnumAttrCaseBit<
     "ResolvedAllocations",       4, "resolved_allocations">;
 def NORMAL_FORM_ORDERED_SYMS : I32BitEnumAttrCaseBit<
     "OrderedSymsSpecified",      5, "ordered_syms">;
+def NORMAL_FORM_VECTORS_IN_REGISTERS : I32BitEnumAttrCaseBit<
+    "VectorsInRegisters",        6, "vectors_in_registers">;
 
 def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
     "AllTypesSpecified", [
@@ -119,6 +121,7 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   NORMAL_FORM_MEMORY_ONLY_TYPES,
   NORMAL_FORM_RESOLVED_ALLOCATIONS,
   NORMAL_FORM_ORDERED_SYMS,
+  NORMAL_FORM_VECTORS_IN_REGISTERS,
 
   // Group aliases.
   NORMAL_FORM_FULL_TYPES

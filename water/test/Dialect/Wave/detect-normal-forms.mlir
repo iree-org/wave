@@ -79,6 +79,7 @@ module @index_exprs_not_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<memory_only_types>
 // CHECK-SAME: #wave.normal_form<ordered_syms>
+// CHECK-SAME: #wave.normal_form<vectors_in_registers>
 module @memory_only_types_satisfied_module {
   func.func @memory_only_types_satisfied(%global: !wave.tensor<[@X] of f32, <global>>) {
     %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_Y">] -> (BLOCK_Y)>} : !wave.tensor<[@Y] of bf16, <shared>>
@@ -136,6 +137,7 @@ module @multiple_ops_with_index_module {
 // CHECK-SAME: #wave.normal_form<memory_only_types>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
 // CHECK-SAME: #wave.normal_form<ordered_syms>
+// CHECK-SAME: #wave.normal_form<vectors_in_registers>
 module @empty_module {
 }
 
