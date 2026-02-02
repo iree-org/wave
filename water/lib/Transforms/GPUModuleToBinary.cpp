@@ -190,13 +190,30 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
     return failure();
 
   // Step 6: Assemble to binary.
-  // Use ROCM_PATH environment variable if toolkitPath is not provided.
-  StringRef actualToolkitPath = toolkitPath;
-  if (actualToolkitPath.empty())
-    actualToolkitPath = ROCDL::getROCMPath();
+  // Try using ROCM_PATH environment variable if lldPath is not provided.
+  SmallString<128> actualLldPath(lldPath.getValue());
+  if (actualLldPath.empty() || !llvm::sys::fs::exists(actualLldPath)) {
+    if (!ignoreSystemROCm) {
+      actualLldPath = ROCDL::getROCMPath();
+      llvm::sys::path::append(actualLldPath, "llvm", "bin", "ld.lld");
+    }
+    if (!llvm::sys::fs::exists(actualLldPath)) {
+      InFlightDiagnostic error = mod.emitError("failed to find ld.lld");
+      if (!ignoreSystemROCm) {
+        error.attachNote() << "tried ROCM_PATH: " << ROCDL::getROCMPath();
+      }
+      if (lldPath.getValue().empty()) {
+        error.attachNote() << "no explicit lld path was provided";
+      } else {
+        error.attachNote()
+            << "explicit lld path does not point to a valid file";
+      }
+      return error;
+    }
+  }
 
   FailureOr<SmallVector<char, 0>> binary =
-      water::assembleISAToHSACO(mod, *isa, **targetMachine, actualToolkitPath);
+      water::assembleISAToHSACO(mod, *isa, **targetMachine, actualLldPath);
   if (failed(binary))
     return mod.emitError("Failed to assemble to binary");
 

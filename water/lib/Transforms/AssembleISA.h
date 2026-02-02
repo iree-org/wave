@@ -31,11 +31,11 @@ void initializeAMDGPUTarget();
 /// \param op Operation for error reporting
 /// \param isa Assembly code to assemble
 /// \param targetMachine Target machine for MC infrastructure setup
-/// \param toolkitPath Path to toolkit containing ld.lld
+/// \param lldPath Path to ld.lld
 /// \return Binary data of the HSACO file, or failure
 FailureOr<SmallVector<char, 0>>
 assembleISAToHSACO(Operation *op, StringRef isa,
-                   llvm::TargetMachine &targetMachine, StringRef toolkitPath);
+                   llvm::TargetMachine &targetMachine, StringRef lldPath);
 
 } // namespace mlir::water
 
