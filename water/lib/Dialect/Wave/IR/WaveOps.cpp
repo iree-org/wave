@@ -1923,11 +1923,15 @@ LogicalResult wave::ReciprocalOp::verify() {
 // BroadcastOp
 //-----------------------------------------------------------------------------
 
-/// Compute broadcast dimensions as the set difference: result_shape -
-/// source_shape. Returns the broadcast dims in the order they appear in the
-/// result shape.
-static llvm::SmallVector<WaveSymbolAttr>
-computeBroadcastDims(WaveTensorType sourceType, WaveTensorType resultType) {
+llvm::SmallVector<WaveSymbolAttr> wave::BroadcastOp::inferBroadcastDims() {
+  if (auto dims = getBroadcastDims())
+    return llvm::to_vector(dims->getAsRange<WaveSymbolAttr>());
+
+  WaveTensorType sourceType = llvm::cast<WaveTensorType>(getSource().getType());
+  WaveTensorType resultType = llvm::cast<WaveTensorType>(getResult().getType());
+  assert(sourceType.getFullySpecified() && resultType.getFullySpecified() &&
+         "expected source and result types to be fully specified");
+
   llvm::DenseSet<WaveSymbolAttr> sourceSymbols;
   for (WaveSymbolAttr sym : sourceType.getShape())
     sourceSymbols.insert(sym);
@@ -1941,18 +1945,24 @@ computeBroadcastDims(WaveTensorType sourceType, WaveTensorType resultType) {
 }
 
 LogicalResult wave::BroadcastOp::verify() {
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
+                                             getSource().getType(), "result",
+                                             getResult().getType())))
+    return failure();
+
   auto sourceType = llvm::dyn_cast<WaveTensorType>(getSource().getType());
   auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
 
   if (!sourceType || !resultType)
-    return success(); // Types not yet resolved, skip verification.
+    return success();
 
-  // Skip verification if types are not fully specified. Broadcast dims are
-  // computed from the type difference, so checks only apply after type
-  // inference. The full_types normal form ensures types are specified before
-  // lowering.
   if (!sourceType.getFullySpecified() || !resultType.getFullySpecified())
     return success();
+
+  if (getBroadcastDims()) {
+    return emitOpError("does not expect explicit dims when source and result "
+                       "types are fully specified");
+  }
 
   // Check all source symbols are in result.
   for (WaveSymbolAttr sym : sourceType.getShape()) {
@@ -1960,18 +1970,6 @@ LogicalResult wave::BroadcastOp::verify() {
       return emitOpError("source dimension '")
              << sym.getName() << "' not found in result shape";
   }
-
-  auto broadcastDims = computeBroadcastDims(sourceType, resultType);
-
-  // Check result has exactly source + broadcast dims.
-  size_t expectedResultRank =
-      sourceType.getShape().size() + broadcastDims.size();
-  if (resultType.getShape().size() != expectedResultRank)
-    return emitOpError("result shape size (")
-           << resultType.getShape().size()
-           << ") does not match source shape size ("
-           << sourceType.getShape().size() << ") plus broadcast dims size ("
-           << broadcastDims.size() << ")";
 
   return success();
 }
@@ -2000,10 +1998,10 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
   return ChangeResult::NoChange;
 }
 
-/// Check if the broadcast operation is broadcasting along the thread X
-/// dimension. Returns true if types are fully specified and one of the
-/// broadcast dims matches the thread X dimension, meaning EPT propagation
-/// should be blocked.
+// Check if the broadcast operation is broadcasting along the thread X
+// dimension. Returns true if types are fully specified and one of the
+// broadcast dims matches the thread X dimension, meaning EPT propagation
+// should be blocked.
 static bool isBroadcastingAlongThreadX(wave::BroadcastOp op,
                                        const ElementsPerThreadInit &init) {
   auto sourceType = llvm::dyn_cast<WaveTensorType>(op.getSource().getType());
@@ -2013,7 +2011,7 @@ static bool isBroadcastingAlongThreadX(wave::BroadcastOp op,
       !resultType.getFullySpecified())
     return false;
 
-  auto broadcastDims = computeBroadcastDims(sourceType, resultType);
+  SmallVector<WaveSymbolAttr> broadcastDims = op.inferBroadcastDims();
   return llvm::any_of(broadcastDims, [&](WaveSymbolAttr sym) {
     return sym == init.threadXDimension;
   });

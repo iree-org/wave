@@ -584,7 +584,8 @@ def BroadcastOp : WaveOp<"broadcast", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source
+    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source,
+    Arg<OptionalAttr<WaveSymbolArrayAttr>, "Dimensions being broadcast">:$broadcast_dims
   ), commonArguments);
 
   let results = (outs
@@ -592,10 +593,17 @@ def BroadcastOp : WaveOp<"broadcast", [
   );
 
   let assemblyFormat =
-    "$source " # commonArgumentsSyntax # "attr-dict `:`"
+    "$source (`dims` custom<SymbolArray>($broadcast_dims)^)?" #
+    commonArgumentsSyntax # "attr-dict `:`"
     "functional-type(operands, results)";
 
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    // Infer broadcast dimensions from types. Expects both source and result
+    // types to be fully specified tensor types.
+    ::llvm::SmallVector<::wave::WaveSymbolAttr> inferBroadcastDims();
+  }];
 }
 
 #endif // WATER_DIALECT_WAVE_WAVEOPS
