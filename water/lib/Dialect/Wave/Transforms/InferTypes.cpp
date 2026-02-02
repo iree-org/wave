@@ -322,7 +322,7 @@ public:
       for (auto &&[terminatorOperand, iterArg, lattice] : llvm::zip_equal(
                yieldOp.getOperands(), iterateOp.getIterArgs(),
                lattices.take_front(iterateOp.getIterArgs().size()))) {
-        // Fetch the lattice and create a dependecy to re-visit the program
+        // Fetch the lattice and create a dependency to re-visit the program
         // point at the start of the loop body block when the lattice changes
         // since we know we are processing a branch into the loop body. Taking
         // the program point before the block / first operation will call

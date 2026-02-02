@@ -214,7 +214,7 @@ def MmaOp : WaveOp<"mma",
 def IterateOp : Op<WaveDialect, "iterate", [
     AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<RegionBranchOpInterface,
-        ["areTypesCompatible", "getEntrySuccessorOperands", "getSuccessorInputs"]>,
+        ["areTypesCompatible", "getEntrySuccessorOperands"]>,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Executes the body repeatedly";
   let description = [{
