@@ -44,7 +44,7 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
-    # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
+    # CHECK: #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
     symbols = [
         wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
         wave.WaveSymbolAttr.get("BLOCK_M"),
@@ -117,18 +117,18 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
-    mapping = ir.Attribute.parse("#wave<index_mapping[] -> (<NULL>, 1, 1)>")
+    mapping = ir.Attribute.parse("#wave.index_mapping<[] -> (<NULL>, 1, 1)>")
     assert mapping.start is None
     assert isinstance(mapping.step, ir.AffineMap)
     assert isinstance(mapping.stride, ir.AffineMap)
-    # CHECK: #wave<index_mapping[] -> (<NULL>, 1, 1)>
+    # CHECK: #wave.index_mapping<[] -> (<NULL>, 1, 1)>
     print(mapping)
 
-    mapping = ir.Attribute.parse("#wave<index_mapping[] -> (1, <NULL>, <NULL>)>")
+    mapping = ir.Attribute.parse("#wave.index_mapping<[] -> (1, <NULL>, <NULL>)>")
     assert isinstance(mapping.start, ir.AffineMap)
     assert mapping.step is None
     assert mapping.stride is None
-    # CHECK: #wave<index_mapping[] -> (1, <NULL>, <NULL>)>
+    # CHECK: #wave.index_mapping<[] -> (1, <NULL>, <NULL>)>
     print(mapping)
 
     # CHECK: #wave.hyperparameters<{A = 1 : i64, B = 2 : i64, C = 3 : i64}>

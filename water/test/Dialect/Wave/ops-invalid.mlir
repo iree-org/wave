@@ -260,7 +260,7 @@ func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<
 // must provide the full triple (start, step, stride)
 func.func @index_attr_wrong_attr_type(%arg0: f32) {
   // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr or WaveIterSymbolAtt}}
-  wave.register %arg0 index [{X : [#wave.workgroup_dim<x>] -> (WG0)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.workgroup_dim<x>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -270,7 +270,7 @@ func.func @index_attr_wrong_attr_type(%arg0: f32) {
 func.func @index_attr_missing_step_stride(%arg0: f32) {
   // expected-error @+2 {{expected ','}}
   // expected-error @+1 {{custom op 'wave.register' expected three affine expressions for '(start, step, stride)'}}
-  wave.register %arg0 index [{X : [#wave.index_symbol<WG0>] -> (WG0)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.index_symbol<WG0>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -280,7 +280,7 @@ func.func @index_attr_missing_step_stride(%arg0: f32) {
 func.func @index_attr_missing_stride(%arg0: f32) {
   // expected-error @+2 {{expected ','}}
   // expected-error @+1 {{custom op 'wave.register' expected three affine expressions for '(start, step, stride)'}}
-  wave.register %arg0 index [{X : [#wave.index_symbol<WG0>] -> (WG0, 1)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.index_symbol<WG0>] -> (WG0, 1)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -305,7 +305,7 @@ func.func @index_attr_wrong_value_type(%arg0: f32) {
 
 func.func @index_attr_iter_not_allowed(%arg0: f32) {
   // expected-error @below {{index expression uses iterator symbol M which is not defined by any parent op}}
-  wave.register %arg0 index [{M : [#wave.iter<"M">] -> (_Iter_M, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{M : <[#wave.iter<"M">] -> (_Iter_M, 1, 1)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -423,8 +423,8 @@ normalform.module [#wave.normal_form<full_types>] {
     // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
     // expected-note @below {{BLOCK_M, BLOCK_N, M}}
     %0 = wave.read %mem index [{
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-        N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+        M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+        N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
@@ -446,8 +446,8 @@ normalform.module [#wave.normal_form<full_types>] {
     // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
     // expected-note @below {{available symbols: M, N}}
     %0 = wave.read %mem index [{
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-        N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+        M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+        N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
@@ -494,8 +494,8 @@ func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{'index' has more than one entry with non-unit step}}
   // expected-note @below {{second non-unit step dimension: 1}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 2, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 2, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<any of f32, <register>>
   return
 }
@@ -505,8 +505,8 @@ func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
 func.func @read_index_elements_per_thread_mismatch(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{vectorized dimension step in the index expression with current hyperparameters (2) doesn't match the explicitly specified elements per thread value (4)}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 1, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 1, 1)>
   }]{
     elements_per_thread = 4
   } : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<any of f32, <register>>
@@ -519,8 +519,8 @@ func.func @read_index_elements_per_thread_mismatch(%mem: !wave.tensor<[@M, @N] o
 func.func @read_index_type_mismatch(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{vectorized dimension step in the index expression with current hyperparameters (2) doesn't match the vector size (4)}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 1, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 1, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
   return
 }
@@ -533,8 +533,8 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
   // expected-error @below {{'index' has more than one entry with non-unit step}}
   // expected-note @below {{second non-unit step dimension: 1}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1),
-    N : [#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
   return
 }
