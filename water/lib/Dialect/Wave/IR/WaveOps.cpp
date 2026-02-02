@@ -38,67 +38,6 @@ using namespace wave;
 // op classes.
 //-----------------------------------------------------------------------------
 
-// constexpr const static llvm::StringLiteral kwInit = "init";
-// constexpr const static llvm::StringLiteral kwIndex = "index";
-// constexpr const static llvm::StringLiteral kwAlong = "along";
-
-// static ParseResult parseReduction(OpAsmParser &parser, OperationState &state)
-// {
-//   OpAsmParser::UnresolvedOperand input, init;
-//   if (failed(parser.parseOperand(input)) ||
-//       failed(parser.parseKeyword(kwInit)) ||
-//       failed(parser.parseLParen()) ||
-//       failed(parser.parseOperand(init)) ||
-//       failed(parser.parseRParen()))
-//     return failure();
-
-//   WaveReductionScopeAttr scope;
-//   if (failed(parser.parseAttribute(scope)))
-//     return failure();
-
-//   WaveSymbolAttr axis;
-//   if (succeeded(parser.parseOptionalKeyword(kwAlong))) {
-//     if (failed(parseSingleSymbol(parser, axis)))
-//       return failure();
-//   }
-
-//   DictionaryAttr index;
-//   if (succeeded(parser.parseOptionalKeyword(kwIndex))) {
-//     if (failed(parseWaveIndexDict(parser, index)))
-//       return failure();
-//   }
-
-//   llvm::SMLoc typeLoc;
-//   FunctionType trailingType;
-//   if (failed(parser.parseOptionalAttrDict(state.attributes)) ||
-//       failed(parser.getCurrentLocation(&typeLoc)) ||
-//       failed(parser.parseColonType(trailingType)))
-//     return failure();
-
-//   if (trailingType.getNumInputs() != 2 || trailingType.getNumResults() != 1)
-//     return parser.emitError(typeLoc)
-//            << "expected function type with 2 inputs and 1 result";
-
-//   if (failed(parser.resolveOperand(input, trailingType.getInput(0),
-//                                    state.operands)) ||
-//       failed(parser.resolveOperand(init, trailingType.getInput(1),
-//                                    state.operands)))
-//     return failure();
-
-//   return success();
-// }
-
-// static void printReduction(OpAsmPrinter &printer, SumOp op) {
-//   printer << op.getInput() << " " << kwInit << "(" << op.getInit() << ") ";
-//   printer << op.getScope();
-//   if (op.getAxis()) {
-//     printer << kwAlong << " ";
-//     printSingleSymbol(printer, op.getAxis());
-//   }
-//   printer.printFunctionType(op.getInput().getType(),
-//   op.getResult().getType());
-// }
-
 // Parse types of the `wave.register` op and perform type inference. The syntax
 // is simply the tensor type from which the elemental type is extract for the
 // initializer type.
