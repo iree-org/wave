@@ -1533,3 +1533,83 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return %0 : vector<8xi32>
   }
 }
+
+// -----
+
+// Test wave.reshape lowering: multiple 1-element vectors to vector (vector.from_elements with extract).
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_single_elem_vectors_to_vector
+  func.func @lower_reshape_single_elem_vectors_to_vector() -> vector<3xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %v0 = wave.register %c0 : vector<1xf32>
+    %c1 = arith.constant 1.0 : f32
+    %v1 = wave.register %c1 : vector<1xf32>
+    %c2 = arith.constant 2.0 : f32
+    %v2 = wave.register %c2 : vector<1xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ONE:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: %[[TWO:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: %[[THREE:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: vector.from_elements %[[ONE]], %[[TWO]], %[[THREE]] : vector<3xf32>
+    %0 = wave.reshape %v0, %v1, %v2 {target_vector_shape = {}} : vector<1xf32> to vector<3xf32>
+    return %0 : vector<3xf32>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: multiple vectors concatenated (zeros + vector.insert_strided_slice).
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_concat_vectors
+  func.func @lower_reshape_concat_vectors() -> vector<8xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %v0 = wave.register %c0 : vector<4xf32>
+    %c1 = arith.constant 1.0 : f32
+    %v1 = wave.register %c1 : vector<4xf32>
+    // CHECK: %[[SLICE1:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK: %[[SLICE2:.+]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ZEROS:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+    // CHECK: %[[ONE:.+]] = vector.insert_strided_slice %[[SLICE1]], %[[ZEROS]] {offsets = [0], strides = [1]}
+    // CHECK: vector.insert_strided_slice %[[SLICE2]], %[[ONE]] {offsets = [4], strides = [1]}
+    %0 = wave.reshape %v0, %v1 {target_vector_shape = {}} : vector<4xf32> to vector<8xf32>
+    return %0 : vector<8xf32>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: multiple vectors concatenated (zeros + vector.insert_strided_slice), i16 element type.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_concat_vectors_i16
+  func.func @lower_reshape_concat_vectors_i16() -> vector<8xi16> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0 : i16
+    %v0 = wave.register %c0 : vector<4xi16>
+    %c1 = arith.constant 1 : i16
+    %v1 = wave.register %c1 : vector<4xi16>
+    // CHECK: %[[SLICE1:.+]] = arith.constant dense<0> : vector<4xi16>
+    // CHECK: %[[SLICE2:.+]] = arith.constant dense<1> : vector<4xi16>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ZEROS:.+]] = arith.constant dense<0> : vector<8xi16>
+    // CHECK: %[[ONE:.+]] = vector.insert_strided_slice %[[SLICE1]], %[[ZEROS]] {offsets = [0], strides = [1]}
+    // CHECK: vector.insert_strided_slice %[[SLICE2]], %[[ONE]] {offsets = [4], strides = [1]}
+    %0 = wave.reshape %v0, %v1 {target_vector_shape = {}} : vector<4xi16> to vector<8xi16>
+    return %0 : vector<8xi16>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: single source, extract slice (vector.extract_strided_slice).
+// Single-source case: offset = logical_slice * target_num_elements; extract that slice.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_extract_slice
+  func.func @lower_reshape_extract_slice() -> vector<4xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %vec = wave.register %c0 : vector<8xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: vector.extract_strided_slice %{{.*}} {offsets = [4], sizes = [4], strides = [1]}
+    %0 = wave.reshape %vec {target_vector_shape = {}, logical_slice = 1, num_slices = 2} : vector<8xf32> to vector<4xf32>
+    return %0 : vector<4xf32>
+  }
+}
