@@ -378,13 +378,13 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Expect PropagateElementsPerThread pass to have run, converting
-    // WaveTensorType results to VectorType.
+    // wave.read produces a register-resident value. PropagateElementsPerThread
+    // converts these from WaveTensorType<register> to VectorType. The
+    // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that
+    // no WaveTensorType<register> remains, ensuring VectorType is used.
     auto vectorType = dyn_cast<VectorType>(op.getResult().getType());
-    if (!vectorType)
-      return rewriter.notifyMatchFailure(
-          op, "expected vector result type (PropagateElementsPerThread pass "
-              "should have run first)");
+    assert(vectorType && "expected VectorType result; "
+                         "PropagateElementsPerThread may not have run");
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vectorType);
     if (failed(memInfo))
@@ -405,13 +405,14 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Expect PropagateElementsPerThread pass to have run, converting
-    // WaveTensorType operands to VectorType.
-    auto vecType = dyn_cast<VectorType>(op.getValueToStore().getType());
-    if (!vecType)
-      return rewriter.notifyMatchFailure(
-          op, "expected vector operand type (PropagateElementsPerThread pass "
-              "should have run first)");
+    // wave.write consumes a register-resident value. PropagateElementsPerThread
+    // converts these from WaveTensorType<register> to VectorType. The
+    // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that
+    // no WaveTensorType<register> remains, ensuring VectorType is used.
+    Value vec = adaptor.getValueToStore();
+    auto vecType = dyn_cast<VectorType>(vec.getType());
+    assert(vecType && "expected VectorType operand; PropagateElementsPerThread "
+                      "may not have run");
 
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vecType);
@@ -419,8 +420,8 @@ public:
       return failure();
 
     buildVectorWrite(op.getLoc(), rewriter, adaptor.getMemory(),
-                     memInfo->startIndices, adaptor.getValueToStore(),
-                     memInfo->mask, memInfo->vectorizedDim);
+                     memInfo->startIndices, vec, memInfo->mask,
+                     memInfo->vectorizedDim);
     rewriter.eraseOp(op);
     return success();
   }
