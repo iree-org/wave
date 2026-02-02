@@ -899,6 +899,7 @@ func.func @permute_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <regis
   return
 }
 
+
 // -----
 
 // Test that permute result shape with one unknown dimension fails
@@ -933,4 +934,64 @@ func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <
   // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
   wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @K] of f32, <register>>
   return
+}
+
+// -----
+
+func.func @reshape_no_source() {
+  // expected-error @below {{expected at least one source operand}}
+  "wave.reshape"() : () -> !wave.tensor<[@A, @B] of f32, <register>>
+}
+
+// -----
+
+func.func @reshape_unequal_source_types(%arg0: !wave.tensor<[@A, @B] of f32>, %arg1: vector<4xf32>, %arg2: vector<4xf32>) {
+  // expected-error @below {{expected source and result elemental types to match, got 'f32', 'f16'}}
+  "wave.reshape"(%arg1, %arg2) : (vector<4xf32>, vector<4xf32>) -> vector<8xf16>
+}
+
+// -----
+
+func.func @reshape_mixed_vector_types(%arg0: vector<4xf32>, %arg1: vector<8xf32>) {
+  // expected-error @below {{expected all source operands to have the same type}}
+  "wave.reshape"(%arg0, %arg1) : (vector<4xf32>, vector<8xf32>) -> vector<12xf32>
+}
+
+// -----
+
+func.func @reshape_element_type_mismatch(%tensor: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{expected source and result elemental types to match}}
+  wave.reshape %tensor : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@B, @A] of f16>
+}
+
+// -----
+
+func.func @reshape_rank_mismatch(%tensor: !wave.tensor<[@A, @B] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 16, B = 16, C = 16}>
+} {
+  // expected-error @below {{source and result tensor types must have the same rank}}
+  wave.reshape %tensor : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@A, @B, @C] of f32>
+}
+
+// -----
+
+func.func @reshape_symbol_mismatch(%tensor: !wave.tensor<[@A, @B] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 16, B = 16, C = 16}>
+} {
+  // expected-error @below {{result tensor type contains symbols that are not present in the source tensor type}}
+  wave.reshape %tensor : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@A, @C] of f32>
+}
+
+// -----
+
+func.func @reshape_multiple_tensors(%tensor1: !wave.tensor<[@A, @B] of f32>, %tensor2: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{expected all source operands to be vectors when more than one provided}}
+  "wave.reshape"(%tensor1, %tensor2) : (!wave.tensor<[@A, @B] of f32>, !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A, @B] of f32, <register>>
+}
+
+// -----
+
+func.func @reshape_element_count_mismatch(%arg0: vector<4xf32>) {
+  // expected-error @below {{the total number of elements must remain the same or be a concatenation}}
+  wave.reshape %arg0, %arg0 : vector<4xf32> to vector<6xf32>
 }

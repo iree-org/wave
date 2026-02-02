@@ -75,6 +75,29 @@ static void printRegisterOpTypes(OpAsmPrinter &printer, Operation *,
   printer.printType(resultType);
 }
 
+// Parse a single type and use it for all operands.
+static ParseResult
+parseReusedType(OpAsmParser &parser, SmallVectorImpl<Type> &types,
+                SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands) {
+  Type singleType;
+  if (failed(parser.parseType(singleType)))
+    return failure();
+
+  types.append(operands.size(), singleType);
+  return success();
+}
+
+// Print the first type assuming all types are equal.
+static void printReusedType(OpAsmPrinter &printer, Operation *, TypeRange types,
+                            ValueRange) {
+  printer.printType(types[0]);
+#ifndef NDEBUG
+  for (unsigned i = 1, e = types.size(); i < e; ++i) {
+    assert(types[i] == types[0] && "expected all types to be equal");
+  }
+#endif // NDEBUG
+}
+
 // Parse an @-symbol and interpret it as a wave symbol.
 static ParseResult parseSingleSymbol(OpAsmParser &parser,
                                      wave::WaveSymbolAttr &symbolAttr) {
@@ -1788,6 +1811,152 @@ LogicalResult ExtractSliceOp::verify() {
     return emitOpError() << "stride must only contain WaveSymbolAttr";
   }
 
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// ReshapeOp
+//-----------------------------------------------------------------------------
+
+// Propagate index expressions across the reshape operation. The expressions
+// remain the same for the given position regardless of what symbol used there.
+static ChangeResult propagateIndexExprsAcrossReshape(
+    MLIRContext *ctx, const wave::IndexExprsLatticeStorage &fromLattice,
+    wave::IndexExprsLatticeStorage &toLattice,
+    ArrayRef<WaveSymbolAttr> fromSyms, ArrayRef<WaveSymbolAttr> toSyms) {
+  // Bottom is neutral.
+  if (fromLattice.isBottom())
+    return ChangeResult::NoChange;
+
+  // Top is absorbing.
+  if (fromLattice.isTop()) {
+    if (toLattice.isTop())
+      return ChangeResult::NoChange;
+    toLattice = fromLattice;
+    return ChangeResult::Change;
+  }
+
+  DictionaryAttr fromMapping = fromLattice.getConcreteValue();
+  SmallVector<NamedAttribute> newMapping;
+  assert(fromSyms.size() == toSyms.size() &&
+         "source and result tensor types must have the same rank");
+  for (unsigned i = 0, e = fromSyms.size(); i < e; ++i) {
+    Attribute attr = fromMapping.get(fromSyms[i].getName());
+    newMapping.push_back(NamedAttribute(toSyms[i].getName(), attr));
+  }
+  wave::IndexExprsLatticeStorage expected(DictionaryAttr::get(ctx, newMapping));
+  if (toLattice == expected)
+    return ChangeResult::NoChange;
+  toLattice = expected;
+  return ChangeResult::Change;
+}
+
+FailureOr<ChangeResult> ReshapeOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  if (operandExprs.size() != 1) {
+    emitError() << "running propagation on vector-typed operations";
+    return failure();
+  }
+  auto *ctx = getContext();
+  auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
+  auto sourceType =
+      llvm::cast<wave::WaveTensorType>(getSource().front().getType());
+  ArrayRef<WaveSymbolAttr> srcSyms = sourceType.getShape();
+  ArrayRef<WaveSymbolAttr> resultSyms = resultType.getShape();
+  ChangeResult r = propagateIndexExprsAcrossReshape(
+      ctx, operandExprs[0], resultExprs[0], srcSyms, resultSyms);
+  return r;
+}
+
+LogicalResult ReshapeOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  return detail::identitySetIndexFromLattices(*this, operandExprs, resultExprs);
+}
+
+FailureOr<ChangeResult> ReshapeOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  if (operandExprs.size() != 1) {
+    emitError() << "running propagation on vector-typed operations";
+    return failure();
+  }
+  auto *ctx = getContext();
+  auto sourceType =
+      llvm::cast<wave::WaveTensorType>(getSource().front().getType());
+  auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
+  ArrayRef<WaveSymbolAttr> srcSyms = sourceType.getShape();
+  ArrayRef<WaveSymbolAttr> resultSyms = resultType.getShape();
+  ChangeResult r = propagateIndexExprsAcrossReshape(
+      ctx, resultExprs[0], operandExprs[0], resultSyms, srcSyms);
+  return r;
+}
+
+LogicalResult ReshapeOp::verify() {
+  if (getSource().empty()) {
+    return emitOpError() << "expected at least one source operand";
+  }
+
+  Type sourceType = getSource().front().getType();
+  for (unsigned i = 1, e = getSource().size(); i < e; ++i) {
+    Type currentSourceType = getSource()[i].getType();
+    if (currentSourceType != sourceType) {
+      return emitOpError()
+             << "expected all source operands to have the same type";
+    }
+    if (!llvm::isa<VectorType>(currentSourceType)) {
+      return emitOpError() << "expected all source operands to be vectors when "
+                              "more than one provided";
+    }
+  }
+
+  if (failed(detail::verifyElementTypesMatch(
+          getLoc(), "source", sourceType, "result", getResult().getType()))) {
+    return failure();
+  }
+
+  // We already verified that source types are equal vector types if there's
+  // more than one.
+  auto resultVecType = llvm::dyn_cast<VectorType>(getResult().getType());
+  if (resultVecType && getSource().size() > 1) {
+
+    int64_t resultNumElems = resultVecType.getNumElements();
+    auto operandType = llvm::cast<VectorType>(getSource()[0].getType());
+    int64_t operandNumElems = operandType.getNumElements();
+    unsigned numOperands = getSource().size();
+
+    if (!(operandNumElems == resultNumElems ||
+          (operandNumElems * numOperands == resultNumElems))) {
+      return emitOpError() << "the total number of elements must remain the "
+                              "same or be a concatenation";
+    }
+  }
+
+  auto sourceTensorType = dyn_cast<WaveTensorType>(sourceType);
+  auto resultTensorType = dyn_cast<WaveTensorType>(getResult().getType());
+  if (!sourceTensorType || !resultTensorType ||
+      !sourceTensorType.getFullySpecified() ||
+      !resultTensorType.getFullySpecified()) {
+    return success();
+  }
+
+  if (sourceTensorType.getRank() != resultTensorType.getRank()) {
+    return emitOpError()
+           << "source and result tensor types must have the same rank";
+  }
+
+  DenseSet<wave::WaveSymbolAttr> sourceSymbols;
+  sourceSymbols.insert(sourceTensorType.getShape().begin(),
+                       sourceTensorType.getShape().end());
+  for (wave::WaveSymbolAttr symbol : resultTensorType.getShape()) {
+    if (!sourceSymbols.contains(symbol)) {
+      return emitOpError() << "result tensor type contains symbols that are "
+                              "not present in the source tensor type";
+    }
+  }
   return success();
 }
 

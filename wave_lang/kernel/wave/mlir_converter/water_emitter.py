@@ -72,6 +72,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
+    Reshape,
     SelectOp,
     SelfIndex,
     SharedMemoryBarrier,
@@ -106,6 +107,7 @@ try:
         CastOp,
         DivOp,
         ReciprocalOp,
+        ReshapeOp,
         Exp2Op,
         ExtractOp,
         ExtractSliceOp,
@@ -160,6 +162,7 @@ WAVE_OP_CONSTRUCTORS = {
     "mul": MulOp,
     "div": DivOp,
     "reciprocal": ReciprocalOp,
+    "reshape": ReshapeOp,
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
@@ -516,6 +519,10 @@ def _emit_ops_from_graph(
                 Raises a RuntimeError if the value is not found and allow_missing is False.
                 """
                 if (mlir_args := value_map.get(node)) is not None:
+                    if len(mlir_args) == 0:
+                        if allow_missing:
+                            return None
+                        raise RuntimeError(f"Empty mapping for node {node}")
                     assert len(mlir_args) == 1, "A single-result node is expected."
                     return mlir_args[0]
                 if allow_missing:
@@ -529,7 +536,18 @@ def _emit_ops_from_graph(
                 """
                 mlir_operands = []
                 for arg in fx_node.args:
-                    if (
+                    if isinstance(arg, Sequence):
+                        mlir_operands.extend(
+                            mlir_arg
+                            for subarg in arg
+                            if (
+                                mlir_arg := get_single_mapped_value(
+                                    subarg, allow_missing=True
+                                )
+                            )
+                            is not None
+                        )
+                    elif (
                         mlir_arg := get_single_mapped_value(arg, allow_missing=True)
                     ) is not None:
                         mlir_operands.append(mlir_arg)
@@ -741,13 +759,15 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), offset, width, mode
                     )
+                elif isinstance(node, Reshape):
+                    mlir_op = op_builder(result_type, source=create_mlir_operands())
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
-                    except Exception:
+                    except Exception as e:
                         raise RuntimeError(
                             f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
-                        )
+                        ) from e
 
             if mlir_op is None:
                 raise NotImplementedError(

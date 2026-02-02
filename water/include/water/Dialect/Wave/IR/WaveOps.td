@@ -430,6 +430,36 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
   let hasVerifier = 1;
 }
 
+def ReshapeOp : WaveOp<"reshape", [
+    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+  let summary = "Reshapes a tensor";
+  let description = [{
+    Changes the shape of the tensor into a new shape by reordering its
+    dimensions. Unlike `wave.permute` that only acts on metadata, `wave.reshape`
+    physically rearranges the elements.
+
+    When register-resident tensors are lowered to vectors, this may become an
+    operation that composes multiple vectors into a single vector. Prior to
+    that, only one tensor operand is allowed.
+  }];
+
+  let arguments = !con((ins
+    Arg<Variadic<AnyType>,
+        "Tensor to reshape, potentially composed from a sequence "
+        "of registers">:$source
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Reshaped tensor">:$result
+  );
+
+  let assemblyFormat = "$source " # commonArgumentsSyntax # "attr-dict `:` "
+                       "custom<ReusedType>(type($source), ref($source)) `to` qualified(type($result))";
+  let hasVerifier = 1;
+}
+
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
