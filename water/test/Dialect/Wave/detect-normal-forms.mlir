@@ -190,3 +190,58 @@ module @resolved_allocations_not_satisfied_module {
     return
   }
 }
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: func.func @foo
+module {
+    module {
+    func.func @foo() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+    }
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: func.func @foo
+// CHECK: func.func @bar
+module {
+    module {
+      func.func @foo() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+      }
+    }
+
+    func.func @bar() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+module {
+    normalform.module [] {
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+normalform.module [] {
+
+}
