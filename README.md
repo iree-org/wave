@@ -165,6 +165,10 @@ Before installing Wave, ensure you have the following prerequisites:
      ```
      When set, the installation will create symlinks to the build directory instead of building Water from source. This enables a fast C++ development workflow where changes to Water are immediately available after running `ninja` without re-running `pip install`. Requires the build directory to have been configured with `-DWATER_ENABLE_PYTHON=ON -DMLIR_ENABLE_BINDINGS_PYTHON=ON`.
 
+5. Important Environment Flags
+
+   - `WAVE_CHECK_LEAKS`: Check whether Wave correctly deallocates tensors it owns (default: 0).
+
 5. **Contributing**
 
    Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to Wave.
