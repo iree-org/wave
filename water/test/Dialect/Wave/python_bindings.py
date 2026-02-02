@@ -316,6 +316,25 @@ with ir.Context() as ctx:
     print(hardware_constr_3)
     # CHECK: [2, 2, 1]
     print(hardware_constr_3.waves_per_block)
+    # CHECK: []
+    print(hardware_constr_3.workgroups_per_cluster)
+    # CHECK: 0
+    print(hardware_constr_3.n_service_waves)
+
+    # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], vector_shapes = {M = 512 : i64, N = 512 : i64}, workgroups_per_cluster = [4, 4, 1], n_service_waves = 2>
+    hardware_constr_4 = wave.HardwareConstraintAttr.get(
+        threads_per_wave=64,
+        waves_per_block=[2, 2, 1],
+        vector_shapes=shape_dict,
+        max_bits_per_load=128,
+        workgroups_per_cluster=[4, 4, 1],
+        n_service_waves=2,
+    )
+    print(hardware_constr_4)
+    # CHECK: [4, 4, 1]
+    print(hardware_constr_4.workgroups_per_cluster)
+    # CHECK: 2
+    print(hardware_constr_4.n_service_waves)
 
     # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, device_dim = 0>
     device_constr = wave.DeviceConstraintAttr.get(

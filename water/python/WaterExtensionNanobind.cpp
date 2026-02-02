@@ -641,6 +641,8 @@ struct PyHardwareConstraintAttr
            const std::optional<std::vector<unsigned>> &wavesPerBlock,
            std::optional<MlirAttribute> mmaType,
            std::optional<MlirAttribute> vectorShapes, unsigned maxBitsPerLoad,
+           const std::optional<std::vector<unsigned>> &workgroupsPerCluster,
+           unsigned nServiceWaves,
            mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
                context) {
           unsigned *wavesPerBlockPtr = nullptr;
@@ -650,16 +652,28 @@ struct PyHardwareConstraintAttr
             wavesPerBlockSize = wavesPerBlock->size();
           }
 
+          unsigned *workgroupsPerClusterPtr = nullptr;
+          size_t workgroupsPerClusterSize = 0;
+          if (workgroupsPerCluster.has_value()) {
+            workgroupsPerClusterPtr =
+                const_cast<unsigned *>(workgroupsPerCluster->data());
+            workgroupsPerClusterSize = workgroupsPerCluster->size();
+          }
+
           return PyHardwareConstraintAttr(
               context->getRef(),
               mlirHardwareConstraintAttrGet(
                   context->get(), threadsPerWave, wavesPerBlockSize,
                   wavesPerBlockPtr, mmaType.value_or(MlirAttribute()),
-                  vectorShapes.value_or(MlirAttribute()), maxBitsPerLoad));
+                  vectorShapes.value_or(MlirAttribute()), maxBitsPerLoad,
+                  workgroupsPerClusterSize, workgroupsPerClusterPtr,
+                  nServiceWaves));
         },
         nb::arg("threads_per_wave"), nb::arg("waves_per_block") = nb::none(),
         nb::arg("mma_type") = nb::none(), nb::arg("vector_shapes") = nb::none(),
-        nb::arg("max_bits_per_load") = 128, nb::arg("context") = nb::none(),
+        nb::arg("max_bits_per_load") = 128,
+        nb::arg("workgroups_per_cluster") = nb::none(),
+        nb::arg("n_service_waves") = 0, nb::arg("context") = nb::none(),
         "Gets a wave.HardwareConstraintAttr from parameters.");
 
     c.def_prop_ro("threads_per_wave", [](MlirAttribute self) {
@@ -687,6 +701,18 @@ struct PyHardwareConstraintAttr
     });
     c.def_prop_ro("max_bits_per_load", [](MlirAttribute self) {
       return mlirHardwareConstraintAttrGetMaxBitsPerLoad(self);
+    });
+    c.def_prop_ro("workgroups_per_cluster", [](MlirAttribute self) {
+      std::vector<unsigned> out;
+      intptr_t n = mlirHardwareConstraintAttrGetNumWorkgroupsPerCluster(self);
+      out.reserve(n);
+      for (intptr_t i = 0; i < n; ++i)
+        out.push_back(
+            mlirHardwareConstraintAttrGetWorkgroupsPerClusterElem(self, i));
+      return out;
+    });
+    c.def_prop_ro("n_service_waves", [](MlirAttribute self) {
+      return mlirHardwareConstraintAttrGetNServiceWaves(self);
     });
   }
 };

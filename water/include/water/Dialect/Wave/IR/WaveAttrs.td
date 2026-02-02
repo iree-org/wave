@@ -191,7 +191,9 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
                               waves_per_block = [1, 1, 1],
                               mma_type = #wave.mma_kind<f32_16x16x16_f16>,
                               vector_shapes = {M = 1, N = 1, K = 64},
-                              max_bits_per_load = 128>
+                              max_bits_per_load = 128,
+                              workgroups_per_cluster = [4, 4, 1],
+                              n_service_waves = 1>
     ```
 
     specifies that the hardware supports N `threads_per_wave`
@@ -211,19 +213,46 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
 
     `max_bits_per_load` specifies the maximum number of bits that can
     be loaded with a single load instruction.
+
+    `workgroups_per_cluster` (optional) specifies the cluster dimensions
+    (X, Y, Z) for GPU cluster-based multicast operations. When specified,
+    enables multicast optimization where tensor loads can be shared across
+    multiple workgroups within a cluster. This is a hardware-specific feature
+    (e.g., gfx1250+) that reduces memory bandwidth by broadcasting data.
+    Example: [4, 4, 1] creates a 4x4x1 cluster of 16 workgroups total.
+
+    `n_service_waves` (default 0) specifies the number of dedicated "service
+    waves" for asynchronous loading in wave specialization. When non-zero,
+    the kernel is specialized to partition operations into load and compute
+    waves, where service waves handle asynchronous data loading while compute
+    waves perform computation. This enables better latency hiding through
+    wave-level parallelism. The actual thread block size becomes:
+    threads_per_block = (waves_per_block[0] * threads_per_wave,
+                         waves_per_block[1] + n_service_waves,
+                         waves_per_block[2])
+
+    Note: The `workgroups_per_cluster` and `n_service_waves` attributes are
+    included for compatibility with the Python-based compilation infrastructure
+    and kernel configuration. The corresponding optimization passes (multicast
+    operation generation and wave specialization) are currently implemented in
+    Python and have not yet been ported to MLIR C++.
   }];
   let parameters = (ins "unsigned":$threads_per_wave,
                         OptionalArrayRefParameter<"unsigned">:$waves_per_block,
                         OptionalParameter<"::wave::WaveMmaKindAttr">:$mma_type,
                         OptionalParameter<"::mlir::DictionaryAttr">:$vector_shapes,
-                        DefaultValuedParameter<"unsigned", "128">:$max_bits_per_load);
+                        DefaultValuedParameter<"unsigned", "128">:$max_bits_per_load,
+                        OptionalArrayRefParameter<"unsigned">:$workgroups_per_cluster,
+                        DefaultValuedParameter<"unsigned", "0">:$n_service_waves);
 
   let assemblyFormat = [{
     `<` `threads_per_wave` `=` $threads_per_wave
     (`,` `waves_per_block` `=` `[` $waves_per_block^ `]`)?
     (`,` `mma_type` `=` $mma_type^)?
     (`,` `vector_shapes` `=` $vector_shapes^)?
-    (`,` `max_bits_per_load` `=` $max_bits_per_load^)? `>`
+    (`,` `max_bits_per_load` `=` $max_bits_per_load^)?
+    (`,` `workgroups_per_cluster` `=` `[` $workgroups_per_cluster^ `]`)?
+    (`,` `n_service_waves` `=` $n_service_waves^)? `>`
   }];
 
   let genVerifyDecl = 1;

@@ -423,11 +423,11 @@ bool mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr) {
   return llvm::isa<wave::HardwareConstraintAttr>(unwrap(attr));
 }
 
-MlirAttribute
-mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
-                              size_t wavesPerBlockSize, unsigned *wavesPerBlock,
-                              MlirAttribute mmaType, MlirAttribute vectorShapes,
-                              unsigned maxBitsPerLoad) {
+MlirAttribute mlirHardwareConstraintAttrGet(
+    MlirContext mlirCtx, unsigned threadsPerWave, size_t wavesPerBlockSize,
+    unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    unsigned maxBitsPerLoad, size_t workgroupsPerClusterSize,
+    unsigned *workgroupsPerCluster, unsigned nServiceWaves) {
   MLIRContext *ctx = unwrap(mlirCtx);
   auto mmaTypeAttr =
       llvm::cast_if_present<wave::WaveMmaKindAttr>(unwrap(mmaType));
@@ -436,7 +436,9 @@ mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
 
   return wrap(wave::HardwareConstraintAttr::get(
       ctx, threadsPerWave, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize),
-      mmaTypeAttr, vectorShapesAttr, maxBitsPerLoad));
+      mmaTypeAttr, vectorShapesAttr, maxBitsPerLoad,
+      llvm::ArrayRef(workgroupsPerCluster, workgroupsPerClusterSize),
+      nServiceWaves));
 }
 
 MlirTypeID mlirWHardwareConstraintAttrGetTypeID() {
@@ -468,6 +470,22 @@ MlirAttribute mlirHardwareConstraintAttrGetVectorShapes(MlirAttribute attr) {
 unsigned mlirHardwareConstraintAttrGetMaxBitsPerLoad(MlirAttribute attr) {
   return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
       .getMaxBitsPerLoad();
+}
+intptr_t
+mlirHardwareConstraintAttrGetNumWorkgroupsPerCluster(MlirAttribute attr) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getWorkgroupsPerCluster()
+      .size();
+}
+unsigned
+mlirHardwareConstraintAttrGetWorkgroupsPerClusterElem(MlirAttribute attr,
+                                                      intptr_t i) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getWorkgroupsPerCluster()[i];
+}
+unsigned mlirHardwareConstraintAttrGetNServiceWaves(MlirAttribute attr) {
+  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
+      .getNServiceWaves();
 }
 
 //===---------------------------------------------------------------------===//

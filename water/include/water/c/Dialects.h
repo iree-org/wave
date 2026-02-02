@@ -391,7 +391,8 @@ mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
     MlirContext mlirCtx, unsigned threadsPerWave, size_t wavesPerBlockSize,
     unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
-    unsigned maxBitsPerLoad);
+    unsigned maxBitsPerLoad, size_t workgroupsPerClusterSize,
+    unsigned *workgroupsPerCluster, unsigned nServiceWaves);
 
 /// Returns the typeID of a HardwareConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWHardwareConstraintAttrGetTypeID();
@@ -409,6 +410,13 @@ MLIR_CAPI_EXPORTED MlirAttribute
 mlirHardwareConstraintAttrGetVectorShapes(MlirAttribute attr);
 MLIR_CAPI_EXPORTED unsigned
 mlirHardwareConstraintAttrGetMaxBitsPerLoad(MlirAttribute attr);
+MLIR_CAPI_EXPORTED intptr_t
+mlirHardwareConstraintAttrGetNumWorkgroupsPerCluster(MlirAttribute attr);
+MLIR_CAPI_EXPORTED unsigned
+mlirHardwareConstraintAttrGetWorkgroupsPerClusterElem(MlirAttribute attr,
+                                                      intptr_t i);
+MLIR_CAPI_EXPORTED unsigned
+mlirHardwareConstraintAttrGetNServiceWaves(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
 // DeviceConstraintAttr

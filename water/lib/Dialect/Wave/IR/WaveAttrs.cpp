@@ -621,10 +621,15 @@ WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 LogicalResult HardwareConstraintAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, unsigned threadsPerWave,
     ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
-    DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
+    DictionaryAttr vectorShapes, unsigned maxBitsPerLoad,
+    ArrayRef<unsigned> workgroupsPerCluster, unsigned nServiceWaves) {
 
   if (!(wavesPerBlock.empty() || wavesPerBlock.size() == 3))
     return emitError() << "waves_per_block (" << wavesPerBlock
+                       << ") should have 3 elements";
+
+  if (!workgroupsPerCluster.empty() && workgroupsPerCluster.size() != 3)
+    return emitError() << "workgroups_per_cluster (" << workgroupsPerCluster
                        << ") should have 3 elements";
 
   if (vectorShapes) {
