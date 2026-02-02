@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-gpu-module-to-binary | FileCheck %s
+// RUN: water-opt %s --water-gpu-module-to-binary="lld-path=%llvm_tools_dir/ld.lld" | FileCheck %s
 
 // Test that the pass converts a gpu.module with ROCDL target to a gpu.binary
 // The gpu.module contains already-lowered LLVM IR
