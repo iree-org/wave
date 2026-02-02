@@ -45,8 +45,8 @@ module attributes {gpu.container_module} {
 
     // CHECK: %[[ARGS_COUNT:.*]] = llvm.mlir.constant(2 : i32) : i32
 
-    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC]], %[[SHARED_MEM]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ARGS_PTR]], %[[ARGS_COUNT]])
-    // CHECK-SAME: : (!llvm.ptr, !llvm.ptr, i32, i64, i64, i64, i64, i64, i64, !llvm.ptr, i32) -> ()
+    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC]], %[[SHARED_MEM]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ARGS_PTR]], %[[ARGS_COUNT]])
+    // CHECK-SAME: : (!llvm.ptr, !llvm.ptr, i32, i64, i64, i64, i64, i64, i64, i64, i64, i64, !llvm.ptr, i32) -> ()
 
     // CHECK-NOT: gpu.launch_func
     gpu.launch_func @kernel_binary::@my_kernel
@@ -108,7 +108,7 @@ module attributes {gpu.container_module} {
 
     // CHECK: %[[SHARED_MEM1:.*]] = llvm.mlir.constant(0 : i32) : i32
 
-    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC1]], %[[SHARED_MEM1]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
+    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC1]], %[[SHARED_MEM1]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
 
     // CHECK-NOT: gpu.launch_func @kernel_binary_a
     gpu.launch_func @kernel_binary_a::@kernel_a
@@ -131,7 +131,7 @@ module attributes {gpu.container_module} {
 
     // CHECK: %[[SHARED_MEM2:.*]] = llvm.mlir.constant(0 : i32) : i32
 
-    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC2]], %[[SHARED_MEM2]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
+    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC2]], %[[SHARED_MEM2]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
 
     // CHECK-NOT: gpu.launch_func @kernel_binary_b
     gpu.launch_func @kernel_binary_b::@kernel_b
@@ -154,7 +154,7 @@ module attributes {gpu.container_module} {
 
     // CHECK: %[[SHARED_MEM3:.*]] = llvm.mlir.constant(0 : i32) : i32
 
-    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC3]], %[[SHARED_MEM3]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
+    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC3]], %[[SHARED_MEM3]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
 
     // CHECK-NOT: gpu.launch_func @kernel_binary_a
     gpu.launch_func @kernel_binary_a::@kernel_a
@@ -166,6 +166,42 @@ module attributes {gpu.container_module} {
   }
 
   // CHECK-NOT: gpu.binary
+}
+
+// -----
+
+module attributes {gpu.container_module} {
+  gpu.binary @kernel_binary [
+    #gpu.object<#rocdl.target, "\00\01\02\03">
+  ]
+
+  // CHECK-LABEL: llvm.func @test_cluster_launch
+  // CHECK-SAME: (%[[STREAM:.*]]: !llvm.ptr, %[[ARG0:.*]]: f32)
+  llvm.func @test_cluster_launch(%stream: !llvm.ptr, %arg0: f32) {
+    // CHECK-DAG: %[[C128:.*]] = arith.constant 128 : i64
+    // CHECK-DAG: %[[C256:.*]] = arith.constant 256 : i64
+    // CHECK-DAG: %[[C2:.*]] = arith.constant 2 : i64
+    // CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i64
+    %c128 = arith.constant 128 : i64
+    %c256 = arith.constant 256 : i64
+    %c2 = arith.constant 2 : i64
+    %c1 = arith.constant 1 : i64
+
+    // CHECK: %[[FUNC:.*]] = llvm.call @wave_load_kernel
+    // CHECK: %[[SHARED_MEM:.*]] = llvm.mlir.constant(0 : i32) : i32
+
+    // Verify wave_launch_kernel is called with cluster dimensions (2, 2, 1).
+    // CHECK: llvm.call @wave_launch_kernel(%[[STREAM]], %[[FUNC]], %[[SHARED_MEM]], %[[C128]], %[[C1]], %[[C1]], %[[C256]], %[[C1]], %[[C1]], %[[C2]], %[[C2]], %[[C1]],
+    // CHECK-SAME: : (!llvm.ptr, !llvm.ptr, i32, i64, i64, i64, i64, i64, i64, i64, i64, i64, !llvm.ptr, i32) -> ()
+
+    gpu.launch_func @kernel_binary::@my_kernel
+      clusters in (%c2, %c2, %c1)
+      blocks in (%c128, %c1, %c1)
+      threads in (%c256, %c1, %c1) : i64
+      args(%arg0: f32)
+
+    llvm.return
+  }
 }
 
 // -----

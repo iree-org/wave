@@ -189,3 +189,43 @@ def test_dynamic_symbols():
     # CHECK:            %[[VIEW2:.*]] = memref.view %[[BUF2]][%[[C0]]][] : memref<?xi8> to memref<f16>
     # CHECK:            gpu.launch_func @gpu_module::@read_write blocks in (%[[BLOCK_M]], %[[BLOCK_N]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[VIEW1]] : memref<f16>, %[[VIEW2]] : memref<f16>, %[[DIM0]] : index, %[[DIM1]] : index)
     # CHECK:            return
+
+
+@run_test
+def test_cluster_dims():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 16, N: 16},
+            workgroups_per_cluster=(2, 2, 1),
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def read_write(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        tkw.write(res, b)
+
+    read_write = wave_compile(get_wave_compile_options(canonicalize=True), read_write)
+    print(read_write.asm)
+
+    # CHECK-LABEL:    test_cluster_dims
+    # CHECK:          gpu.func @read_write
+    # CHECK-SAME:       kernel attributes {known_block_size = array<i32: 64, 1, 1>}
+
+    # CHECK-LABEL:    func.func @isolated_benchmark
+    # CHECK-DAG:        %[[C1:.*]] = arith.constant 1 : index
+    # CHECK-DAG:        %[[C2:.*]] = arith.constant 2 : index
+    # CHECK-DAG:        %[[C64:.*]] = arith.constant 64 : index
+    # CHECK:            gpu.launch_func @gpu_module::@read_write
+    # CHECK-SAME:         clusters in (%[[C2]], %[[C2]], %[[C1]])
+    # CHECK-SAME:         blocks in (%[[C1]], %[[C1]], %[[C1]])
+    # CHECK-SAME:         threads in (%[[C64]], %[[C1]], %[[C1]])
+    # CHECK:            return
