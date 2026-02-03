@@ -17,6 +17,7 @@ The converter handles:
 - Triggering operation type inference and some simple wave type mapping
 """
 
+import linecache
 import subprocess
 import sys
 from pathlib import Path
@@ -27,13 +28,132 @@ from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.constraints import Constraint
 
 
+# ANSI color codes for terminal output
+_COLORS = {
+    "red": "\033[91m",
+    "yellow": "\033[93m",
+    "cyan": "\033[96m",
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+}
+
+
+def _get_severity_color(severity: str) -> str:
+    """Get ANSI color code based on diagnostic severity."""
+    severity_lower = severity.lower()
+    if "error" in severity_lower:
+        return _COLORS["red"]
+    if "warning" in severity_lower:
+        return _COLORS["yellow"]
+    return _COLORS["cyan"]
+
+
+def format_diagnostic(diag: dict, use_color: bool = True) -> str:
+    """Format a single diagnostic as a Python-style stack trace.
+
+    Args:
+        diag: A diagnostic dict with "type", "message", and optionally "location" and "severity".
+        use_color: Whether to use ANSI color codes in the output.
+
+    Returns:
+        A formatted string resembling a Python traceback.
+    """
+    lines = []
+    colors = _COLORS if use_color else {k: "" for k in _COLORS}
+
+    diag_type = diag.get("type", "Unknown")
+    message = diag.get("message", "")
+    severity = diag.get("severity", "")
+    location = diag.get("location", [])
+
+    # Header with severity
+    severity_color = _get_severity_color(severity) if use_color else ""
+    if severity:
+        severity_short = severity.replace("DiagnosticSeverity.", "")
+        lines.append(
+            f"{severity_color}{colors['bold']}{severity_short}{colors['reset']}: {message}"
+        )
+    else:
+        lines.append(f"{colors['bold']}{diag_type}{colors['reset']}: {message}")
+
+    # Stack trace (if location frames present)
+    if location:
+        lines.append("Traceback (Wave DSL source):")
+        for frame in location:
+            if frame.get("type") == "file":
+                filename = frame.get("filename", "<unknown>")
+                line_num = frame.get("line", 0)
+                col = frame.get("column", 0)
+
+                # Format file location
+                lines.append(f'  File "{filename}", line {line_num}')
+
+                # Try to read the actual source line
+                source_line = linecache.getline(filename, line_num).rstrip()
+                if source_line:
+                    lines.append(f"    {source_line}")
+                    # Add caret pointing to column if available
+                    if col > 0:
+                        lines.append(f"    {' ' * (col - 1)}^")
+            else:
+                # Unknown location type
+                lines.append(f"  {frame.get('repr', '<unknown location>')}")
+
+    # Include error_diagnostics if present (for MLIRError type)
+    error_diags = diag.get("error_diagnostics", [])
+    if error_diags:
+        lines.append("Related errors:")
+        for err in error_diags:
+            lines.append(f"  {err}")
+
+    return "\n".join(lines)
+
+
+def format_diagnostics(diagnostics: list[dict], use_color: bool = True) -> str:
+    """Format a list of diagnostics as stack traces.
+
+    Args:
+        diagnostics: List of diagnostic dicts.
+        use_color: Whether to use ANSI color codes in the output.
+
+    Returns:
+        A formatted string with all diagnostics separated by blank lines.
+    """
+    if not diagnostics:
+        return ""
+    return "\n\n".join(format_diagnostic(d, use_color) for d in diagnostics)
+
+
+def print_diagnostics(
+    diagnostics: list[dict],
+    file=None,
+    use_color: bool | None = None,
+) -> None:
+    """Print diagnostics to a file (default: stderr) as stack traces.
+
+    Args:
+        diagnostics: List of diagnostic dicts.
+        file: File to print to (default: sys.stderr).
+        use_color: Whether to use ANSI colors. If None, auto-detect based on terminal.
+    """
+    if file is None:
+        file = sys.stderr
+    if use_color is None:
+        # Auto-detect: use color if output is a terminal
+        use_color = hasattr(file, "isatty") and file.isatty()
+
+    formatted = format_diagnostics(diagnostics, use_color)
+    if formatted:
+        print(formatted, file=file)
+
+
 def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
     test_diagnostic_emission: bool = False,
     pipeline: str = "",
-) -> tuple[str, list[str], dict[str, dict[str, Any]]]:
+) -> tuple[str, list[dict], dict[str, dict[str, Any]]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
     The `subs` field of options is the only option used during emission. If
@@ -41,9 +161,18 @@ def emit_wave_dialect(
     containing a transform.named_sequence to be applied to the emitted module
     via the Transform dialect interpreter.
 
-    Returns the string representation of the MLIR module if all stages succeeded
-    and a list of diagnostic messages, including parsing and pass pipeline
-    errors produced by MLIR.
+    Returns:
+        A tuple of:
+        - The string representation of the MLIR module if all stages succeeded.
+        - A list of diagnostic dicts. Each diagnostic has a "type" key and may include:
+          - "message": The diagnostic message text.
+          - "location": A list of location frames (stack trace), each with:
+            - "type": "file" or "unknown"
+            - "filename", "line", "column" (for "file" type)
+            - "repr" (for "unknown" type)
+          - "severity": The severity level (for MLIRDiagnostic type).
+          - "error_diagnostics": List of error strings (for MLIRError type).
+        - A dict of inferred attributes per water ID.
     """
 
     child = Path(__file__).with_name("water_emitter.py")
@@ -118,6 +247,6 @@ module attributes {transform.with_named_sequence} {
 
     return (
         module.decode("utf-8"),
-        [d.decode("utf-8") for d in diagnostics],
+        diagnostics,
         inferred_attributes,
     )

@@ -12,8 +12,15 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostic,
+)
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.support.location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -55,42 +62,147 @@ def matrix_add(
     wave.write(c_reg, c)
 
 
-@run_test
-def mlir_converter_diagnostics_emission():
-    """Test MLIR converter with matrix addition kernel."""
-    # Set parameters for compilation
-    subs: dict[str | IndexSymbol, Any] = {
-        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
-        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
-        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        M: 128,
-        N: 128,
-    }
+# Common substitutions for all tests
+SUBS: dict[str | IndexSymbol, Any] = {
+    ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+    ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+    ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+    BLOCK_M: 64,
+    BLOCK_N: 64,
+    M: 128,
+    N: 128,
+}
 
-    # Compile the kernel to get the trace
+
+def compile_and_emit_diagnostics(
+    location_level: LocationCaptureLevel, test_diagnostic_emission: bool = True
+):
+    """Helper to compile kernel and emit diagnostics with given location level."""
+    # When location capture is disabled, we must also disable location enforcement
+    enforce_locations = location_level != LocationCaptureLevel.NONE
+
     options = WaveCompileOptions(
-        subs=subs,
-        compile_to_mlir=True,  # Avoid IREE compilation
+        subs=SUBS,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=location_level),
+        enforce_locations=enforce_locations,
     )
     options = set_default_run_config(options)
 
-    # Compile the kernel to get the trace
     compiled_kernel = wave_compile(options, matrix_add)
-
-    # Get the compiled graph from the compiled kernel
     trace = compiled_kernel.get_compiled_graph()
 
-    constraints = matrix_add.constraints
-
-    # Use the mlir_converter to emit wave MLIR dialect
     _, diagnostics, _ = emit_wave_dialect(
-        trace, constraints, options, test_diagnostic_emission=True
+        trace,
+        matrix_add.constraints,
+        options,
+        test_diagnostic_emission=test_diagnostic_emission,
+    )
+    return diagnostics
+
+
+@run_test
+def test_location_capture_none():
+    """Test with LocationCaptureLevel.NONE - compilation without location capture.
+
+    Note: We can't test diagnostic emission with NONE because the pipeline
+    requires locations. We just verify compilation succeeds without locations.
+    """
+    # Don't test diagnostic emission since locations are required for that
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.NONE, test_diagnostic_emission=False
     )
 
-    # Print to stdout for FileCheck
-    print(diagnostics[0])
+    # With NONE and no test diagnostic emission, we should have no diagnostics
+    print(f"diagnostics count: {len(diagnostics)}")
+    print("location capture none: compilation succeeded")
 
-    # CHECK-LABEL: mlir_converter_diagnostics_emission
-    # CHECK: loc("{{.*}}mlir_converter_diagnostics.py":37{{.*}}): test error
+    # CHECK-LABEL: test_location_capture_none
+    # CHECK: diagnostics count: 0
+    # CHECK: location capture none: compilation succeeded
+
+
+@run_test
+def test_location_capture_file_line_col():
+    """Test diagnostics with LocationCaptureLevel.FILE_LINE_COL - single location."""
+    diagnostics = compile_and_emit_diagnostics(LocationCaptureLevel.FILE_LINE_COL)
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostic(diag, use_color=False))
+
+    # Verify structured data
+    location = diag.get("location", [])
+    print(f"location frame count: {len(location)}")
+    if location:
+        frame = location[0]
+        print(f"first frame type: {frame.get('type')}")
+        print(f"has filename: {'filename' in frame}")
+        print(f"has line: {'line' in frame}")
+
+    # CHECK-LABEL: test_location_capture_file_line_col
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line
+    # CHECK: location frame count:
+    # CHECK: first frame type: file
+    # CHECK: has filename: True
+    # CHECK: has line: True
+
+
+@run_test
+def test_location_capture_stack_trace():
+    """Test diagnostics with LocationCaptureLevel.STACK_TRACE - multiple frames."""
+    diagnostics = compile_and_emit_diagnostics(LocationCaptureLevel.STACK_TRACE)
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostic(diag, use_color=False))
+
+    # Verify we have location frames
+    location = diag.get("location", [])
+    print(f"location frame count: {len(location)}")
+
+    # Print all frames for verification
+    for i, frame in enumerate(location):
+        if frame.get("type") == "file":
+            print(
+                f"frame {i}: {frame.get('filename', 'unknown')}:{frame.get('line', '?')}"
+            )
+
+    # CHECK-LABEL: test_location_capture_stack_trace
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK: location frame count:
+
+
+@run_test
+def test_location_capture_stack_trace_with_system():
+    """Test diagnostics with LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM."""
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM
+    )
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostic(diag, use_color=False))
+
+    # Verify we have location frames
+    location = diag.get("location", [])
+    print(f"location frame count: {len(location)}")
+
+    # With STACK_TRACE_WITH_SYSTEM, we should have more frames including system internals
+    for i, frame in enumerate(location):
+        if frame.get("type") == "file":
+            filename = frame.get("filename", "unknown")
+            # Print just the basename for readability
+            basename = filename.split("/")[-1]
+            print(f"frame {i}: {basename}:{frame.get('line', '?')}")
+
+    # CHECK-LABEL: test_location_capture_stack_trace_with_system
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK: location frame count:

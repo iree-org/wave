@@ -772,14 +772,59 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
+def _serialize_location(loc: ir.Location) -> list[dict]:
+    """Convert ir.Location to serializable list of location frames (stack trace).
+
+    Parses the string representation of the location to extract file/line/column
+    information, since direct attribute access may not be available in all bindings.
+
+    Handles:
+    - Simple file locations: loc("file.py":10:5)
+    - Callsite locations: loc(callsite("file1.py":10 at "file2.py":20))
+    - Nested callsites: loc(callsite("f1":1 at callsite("f2":2 at "f3":3)))
+
+    Returns frames from outermost (caller) to innermost (callee).
+    """
+    import re
+
+    loc_str = str(loc)
+
+    # Pattern to match file locations: "filename":line or "filename":line:col
+    file_pattern = r'"([^"]+)":(\d+)(?::(\d+))?'
+
+    # Find all file locations in the string
+    matches = list(re.finditer(file_pattern, loc_str))
+
+    if not matches:
+        # No file locations found, return raw string
+        return [{"type": "unknown", "repr": loc_str}]
+
+    # For callsite locations, the order in the string is:
+    # callsite(callee at caller) - so callee comes first, caller comes last
+    # We want to return frames from outermost (caller) to innermost (callee)
+    # So we reverse the order
+    frames = []
+    for match in reversed(matches):
+        frames.append(
+            {
+                "type": "file",
+                "filename": match.group(1),
+                "line": int(match.group(2)),
+                "column": int(match.group(3)) if match.group(3) else 0,
+            }
+        )
+
+    return frames
+
+
 def _flush_output(
     module_str: str,
-    diagnostics: list[str],
+    diagnostics: list[dict],
     inferred_attributes: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     output = dill.dumps(
         {
-            "diagnostics": [d.encode("utf-8") for d in diagnostics],
+            "diagnostics": diagnostics,
             "module": module_str.encode("utf-8"),
             "inferred_attributes": (
                 inferred_attributes if inferred_attributes is not None else {}
@@ -796,7 +841,7 @@ def _create_kernel_module(
     constraints: list[Constraint],
     options: WaveCompileOptions,
     test_diagnostics: bool = False,
-) -> tuple[ir.Module | None, list[str], set[str]]:
+) -> tuple[ir.Module | None, list[dict], set[str]]:
     """Creates an MLIR module containing the kernel function from the captured trace.
 
     Args:
@@ -811,11 +856,18 @@ def _create_kernel_module(
         - List of diagnostic messages.
         - Set of known water IDs if options require checking water analysis.
     """
-    diagnostics: list[str] = []
+    diagnostics: list[dict] = []
     known_ids: set[str] | None = set() if options.check_water_analysis else None
 
     def diagnostics_handler(d):
-        diagnostics.append(f"{d.location}: {d.message}")
+        diagnostics.append(
+            {
+                "type": "MLIRDiagnostic",
+                "message": d.message,
+                "location": _serialize_location(d.location),
+                "severity": str(d.severity),
+            }
+        )
         return True
 
     ctx.attach_diagnostic_handler(diagnostics_handler)
@@ -824,7 +876,13 @@ def _create_kernel_module(
         try:
             module = ir.Module.parse(options.override_mlir, context=ctx)
         except ir.MLIRError as e:
-            diagnostics.append(str(e))
+            diagnostics.append(
+                {
+                    "type": "MLIRError",
+                    "message": e.message,
+                    "error_diagnostics": [str(d) for d in e.errorDiagnostics],
+                }
+            )
             return None, diagnostics, known_ids
         else:
             return module, diagnostics, known_ids
@@ -961,7 +1019,12 @@ def _emit_from_captured_trace(
     )
 
     if enable_debug_info and not trace.location:
-        diagnostics.append("Missing debug location for wave trace")
+        diagnostics.append(
+            {
+                "type": "Error",
+                "message": "Missing debug location for wave trace",
+            }
+        )
 
     with (
         ir.Context() as ctx,
@@ -983,7 +1046,13 @@ def _emit_from_captured_trace(
         try:
             module.operation.verify()
         except ir.MLIRError as e:
-            diagnostics.append(str(e))
+            diagnostics.append(
+                {
+                    "type": "MLIRError",
+                    "message": e.message,
+                    "error_diagnostics": [str(d) for d in e.errorDiagnostics],
+                }
+            )
             # Print in generic form if verification fails, this form should be
             # robust to that.
             _flush_output(
@@ -1018,7 +1087,12 @@ def _emit_from_captured_trace(
                     transform_module,
                 )
             except Exception as e:
-                diagnostics.append(f"Failed to apply transform script: {e}")
+                diagnostics.append(
+                    {
+                        "type": "Exception",
+                        "message": f"Failed to apply transform script: {e}",
+                    }
+                )
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
         if options.print_mlir_after_water:
