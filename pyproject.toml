@@ -30,8 +30,8 @@ classifiers = [
 
 dependencies = [
     "dill",
-    "iree-base-compiler~=3.10.0rc",
-    "iree-base-runtime~=3.10.0rc",
+    "iree-base-compiler~=3.11.0rc",
+    "iree-base-runtime~=3.11.0rc",
     "ml_dtypes",
     "numpy",
     "sympy",
