@@ -26,8 +26,14 @@ static bool isElementwise(Operation *op) {
   if (!op)
     return false;
 
-  return OpTrait::hasElementwiseMappableTraits(op) && isPure(op) &&
-         op->getNumResults() == 1 && op->getNumOperands() == 1;
+  if (op->getNumResults() != 1 || op->getNumOperands() != 1 || !isPure(op))
+    return false;
+
+  // Support llvm.bitcast in addition to elementwise ops.
+  if (isa<LLVM::BitcastOp>(op))
+    return true;
+
+  return OpTrait::hasElementwiseMappableTraits(op);
 }
 
 // Collect elementwise ops between value and its defining load.
@@ -117,7 +123,7 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
     Location loc = op.getLoc();
     rewriter.setInsertionPoint(loadA);
 
-    auto upperBound = rewriter.getI32IntegerAttr(waveSize);
+    auto upperBound = rewriter.getIndexAttr(waveSize);
     Value laneId = gpu::LaneIdOp::create(rewriter, loc, upperBound);
     Value halfWave = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIndexAttr(waveSize / 2));
