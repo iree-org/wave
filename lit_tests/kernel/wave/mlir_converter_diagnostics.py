@@ -75,17 +75,30 @@ SUBS: dict[str | IndexSymbol, Any] = {
 
 
 def compile_and_emit_diagnostics(
-    location_level: LocationCaptureLevel, test_diagnostic_emission: bool = True
+    location_level: LocationCaptureLevel,
+    test_diagnostic_emission: bool = True,
+    use_local_scope: bool = False,
 ):
-    """Helper to compile kernel and emit diagnostics with given location level."""
+    """Helper to compile kernel and emit diagnostics with given location level.
+
+    Args:
+        location_level: The LocationCaptureLevel to use for capturing locations.
+        test_diagnostic_emission: Whether to emit a test diagnostic for verification.
+        use_local_scope: Whether to use local scope naming in MLIR output.
+
+    Returns:
+        List of diagnostic dicts.
+    """
     # When location capture is disabled, we must also disable location enforcement
     enforce_locations = location_level != LocationCaptureLevel.NONE
 
     options = WaveCompileOptions(
         subs=SUBS,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=False,
         location_capture_config=LocationCaptureConfig(level=location_level),
         enforce_locations=enforce_locations,
+        use_local_scope=use_local_scope,
     )
     options = set_default_run_config(options)
 
@@ -144,8 +157,9 @@ def test_location_capture_file_line_col():
     # CHECK-LABEL: test_location_capture_file_line_col
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line
-    # CHECK: location frame count:
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
     # CHECK: first frame type: file
     # CHECK: has filename: True
     # CHECK: has line: True
@@ -175,7 +189,10 @@ def test_location_capture_stack_trace():
     # CHECK-LABEL: test_location_capture_stack_trace
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK: location frame count:
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
+    # CHECK: frame 0: {{.*}}mlir_converter_diagnostics.py:44
 
 
 @run_test
@@ -205,4 +222,129 @@ def test_location_capture_stack_trace_with_system():
     # CHECK-LABEL: test_location_capture_stack_trace_with_system
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK: location frame count:
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
+    # CHECK: frame 0: mlir_converter_diagnostics.py:44
+
+
+# =============================================================================
+# Tests for use_local_scope option
+# =============================================================================
+
+
+@run_test
+def test_use_local_scope_with_file_line_col():
+    """Test use_local_scope=True with FILE_LINE_COL location capture."""
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.FILE_LINE_COL,
+        test_diagnostic_emission=True,
+        use_local_scope=True,
+    )
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostic(diag, use_color=False))
+
+    # Verify location is still properly captured with use_local_scope
+    location = diag.get("location", [])
+    print(f"use_local_scope=True, location frame count: {len(location)}")
+    if location:
+        frame = location[0]
+        print(f"frame type: {frame.get('type')}")
+        has_file_info = "filename" in frame and "line" in frame
+        print(f"has file info: {has_file_info}")
+
+    # CHECK-LABEL: test_use_local_scope_with_file_line_col
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: use_local_scope=True, location frame count: 1
+    # CHECK: frame type: file
+    # CHECK: has file info: True
+
+
+@run_test
+def test_use_local_scope_with_stack_trace():
+    """Test use_local_scope=True with STACK_TRACE location capture."""
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.STACK_TRACE,
+        test_diagnostic_emission=True,
+        use_local_scope=True,
+    )
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostic(diag, use_color=False))
+
+    location = diag.get("location", [])
+    print(f"use_local_scope=True with stack trace, frame count: {len(location)}")
+
+    # CHECK-LABEL: test_use_local_scope_with_stack_trace
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: use_local_scope=True with stack trace, frame count: 1
+
+
+@run_test
+def test_use_local_scope_false_default():
+    """Test use_local_scope=False (default) produces same results."""
+    diagnostics_local = compile_and_emit_diagnostics(
+        LocationCaptureLevel.FILE_LINE_COL,
+        test_diagnostic_emission=True,
+        use_local_scope=True,
+    )
+    diagnostics_global = compile_and_emit_diagnostics(
+        LocationCaptureLevel.FILE_LINE_COL,
+        test_diagnostic_emission=True,
+        use_local_scope=False,
+    )
+
+    # Both should have diagnostics
+    assert len(diagnostics_local) > 0, "Expected diagnostics with use_local_scope=True"
+    assert (
+        len(diagnostics_global) > 0
+    ), "Expected diagnostics with use_local_scope=False"
+
+    # Print formatted diagnostic from use_local_scope=False (default) case
+    print("Formatted diagnostic (use_local_scope=False):")
+    print(format_diagnostic(diagnostics_global[0], use_color=False))
+
+    # The diagnostic content should be the same (use_local_scope only affects MLIR output)
+    diag_local = diagnostics_local[0]
+    diag_global = diagnostics_global[0]
+
+    # Messages should match
+    msg_match = diag_local.get("message") == diag_global.get("message")
+    print(f"messages match: {msg_match}")
+
+    # Locations should match
+    loc_local = diag_local.get("location", [])
+    loc_global = diag_global.get("location", [])
+    loc_count_match = len(loc_local) == len(loc_global)
+    print(f"location counts match: {loc_count_match}")
+
+    if loc_local and loc_global:
+        # Compare first frame
+        frame_local = loc_local[0]
+        frame_global = loc_global[0]
+        filename_match = frame_local.get("filename") == frame_global.get("filename")
+        line_match = frame_local.get("line") == frame_global.get("line")
+        print(f"filename match: {filename_match}")
+        print(f"line match: {line_match}")
+
+    # CHECK-LABEL: test_use_local_scope_false_default
+    # CHECK: Formatted diagnostic (use_local_scope=False):
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 44
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: messages match: True
+    # CHECK: location counts match: True
+    # CHECK: filename match: True
+    # CHECK: line match: True
