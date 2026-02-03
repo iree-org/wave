@@ -1978,24 +1978,35 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateForward(
     llvm::ArrayRef<WaveTensorType> operandTypes,
     llvm::MutableArrayRef<WaveTensorType> resultTypes,
     llvm::raw_ostream &errs) {
-  // Forward propagation: we cannot infer result shape from source alone
-  // because we don't know the order of dimensions in the result.
-  // The result type must already be specified.
-  return ChangeResult::NoChange;
+  if (!getBroadcastDims())
+    return ChangeResult::NoChange;
+
+  unsigned operandNo = getSourceMutable().getOperandNumber();
+  WaveTensorType operandType = operandTypes[operandNo];
+  SmallVector<WaveSymbolAttr> broadcastDims =
+      llvm::to_vector(getBroadcastDims()->getAsRange<WaveSymbolAttr>());
+  return detail::propagateShapeAddTrailingDims(
+      operandType, resultTypes[0], "operand", "result", broadcastDims, errs);
 }
 
 llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
     llvm::MutableArrayRef<WaveTensorType> operandTypes,
     llvm::ArrayRef<WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
-  // Backward propagation: if the result type is specified but the source type
-  // is not, we cannot infer the source shape because we don't know which
-  // dimensions in the result are broadcast dims vs. which came from the source.
-  // For example, result [@M, @N, @K] could have source [@M, @N], [@M, @K], etc.
-  //
-  // Note: If partial type inference is needed in the future, an optional
-  // broadcast_dims attribute could be added (mutually exclusive with
-  // fully-specified types).
-  return ChangeResult::NoChange;
+  if (!getBroadcastDims())
+    return ChangeResult::NoChange;
+
+  WaveTensorType resultType = resultTypes[0];
+  unsigned operandNo = getSourceMutable().getOperandNumber();
+  return detail::propagateShapeDropTrailingDims(
+      resultType, operandTypes[operandNo], "result", "operand",
+      getBroadcastDims()->size(), errs);
+}
+
+LogicalResult wave::BroadcastOp::finalizeTypeInference() {
+  if (cast<WaveTensorType>(getOperand().getType()).getFullySpecified() &&
+      cast<WaveTensorType>(getResult().getType()).getFullySpecified())
+    removeBroadcastDimsAttr();
+  return success();
 }
 
 // Check if the broadcast operation is broadcasting along the thread X
