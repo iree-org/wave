@@ -182,6 +182,10 @@ def WaterFuseScaleLoadsPass : Pass<"water-fuse-scale-loads"> {
     "::mlir::amdgpu::AMDGPUDialect",
     "::mlir::vector::VectorDialect",
   ];
+  let options = [
+    Option<"waveSize", "wave-size", "unsigned", /*default=*/"32",
+      "Wave size of the target GPU (32 or 64)">,
+  ];
 }
 
 #endif // WATER_PASSES

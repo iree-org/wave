@@ -18,9 +18,10 @@ namespace mlir::water {
 } // namespace mlir::water
 
 namespace {
-class FuseScaleLoadsPass
+struct FuseScaleLoadsPass
     : public water::impl::WaterFuseScaleLoadsPassBase<FuseScaleLoadsPass> {
-public:
+  using WaterFuseScaleLoadsPassBase::WaterFuseScaleLoadsPassBase;
+
   void runOnOperation() override {
     // TODO: Implement scale load fusion.
   }
