@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -29,8 +30,8 @@ static bool isElementwise(Operation *op) {
   if (op->getNumResults() != 1 || op->getNumOperands() != 1 || !isPure(op))
     return false;
 
-  // LLVM::BitcastOp doesnt have elementwise mappable trait.
-  if (isa<LLVM::BitcastOp>(op))
+  // These bitcast ops don't have elementwise mappable trait.
+  if (isa<LLVM::BitcastOp, vector::BitCastOp>(op))
     return true;
 
   return OpTrait::hasElementwiseMappableTraits(op);
@@ -56,6 +57,7 @@ static Value cloneElementwiseChain(PatternRewriter &rewriter,
   IRMapping mapping;
   for (Operation *op : elemOps) {
     mapping.map(op->getOperand(0), current);
+    rewriter.setInsertionPointAfter(op);
     Operation *cloned = rewriter.clone(*op, mapping);
     current = cloned->getResult(0);
   }
@@ -121,6 +123,7 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
 
     // Create fused load: select(lane_id < waveSize/2, ptrA, ptrB).
     Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(loadA);
 
     auto upperBound = rewriter.getIndexAttr(waveSize);
