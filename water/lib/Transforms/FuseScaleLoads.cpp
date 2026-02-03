@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -25,16 +26,34 @@ static bool isElementwise(Operation *op) {
   if (!op)
     return false;
 
-  return OpTrait::hasElementwiseMappableTraits(op) &&
+  return OpTrait::hasElementwiseMappableTraits(op) && isPure(op) &&
          op->getNumResults() == 1 && op->getNumOperands() == 1;
 }
 
-static LLVM::LoadOp findLoadOp(Value value) {
-  // Follow elementwise operations until we find a load.
-  while (isElementwise(value.getDefiningOp()))
+// Collect elementwise ops between value and its defining load.
+// Returns the load op and populates elemOps in reverse order (load -> value).
+static LLVM::LoadOp
+collectElementwiseChain(Value value, SmallVectorImpl<Operation *> &elemOps) {
+  while (isElementwise(value.getDefiningOp())) {
+    elemOps.push_back(value.getDefiningOp());
     value = value.getDefiningOp()->getOperand(0);
-
+  }
+  std::reverse(elemOps.begin(), elemOps.end());
   return value.getDefiningOp<LLVM::LoadOp>();
+}
+
+// Clone elementwise chain, replacing the input with newInput.
+static Value cloneElementwiseChain(PatternRewriter &rewriter,
+                                   ArrayRef<Operation *> elemOps,
+                                   Value newInput) {
+  Value current = newInput;
+  IRMapping mapping;
+  for (Operation *op : elemOps) {
+    mapping.map(op->getOperand(0), current);
+    Operation *cloned = rewriter.clone(*op, mapping);
+    current = cloned->getResult(0);
+  }
+  return current;
 }
 
 namespace {
@@ -47,11 +66,12 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
     if (op.getAFirstScaleLane() != 0 || op.getBFirstScaleLane() != 0)
       return failure();
 
-    LLVM::LoadOp loadA = findLoadOp(op.getScaleA());
+    SmallVector<Operation *> elemOpsA, elemOpsB;
+    LLVM::LoadOp loadA = collectElementwiseChain(op.getScaleA(), elemOpsA);
     if (!loadA)
       return failure();
 
-    LLVM::LoadOp loadB = findLoadOp(op.getScaleB());
+    LLVM::LoadOp loadB = collectElementwiseChain(op.getScaleB(), elemOpsB);
     if (!loadB)
       return failure();
 
@@ -97,8 +117,8 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
     Location loc = op.getLoc();
     rewriter.setInsertionPoint(loadA);
 
-    Value laneId =
-        gpu::LaneIdOp::create(rewriter, loc, /*upper_bound=*/nullptr);
+    auto upperBound = rewriter.getI32IntegerAttr(waveSize);
+    Value laneId = gpu::LaneIdOp::create(rewriter, loc, upperBound);
     Value halfWave = arith::ConstantOp::create(
         rewriter, loc, rewriter.getIndexAttr(waveSize / 2));
     Value cmp = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ult,
@@ -107,7 +127,7 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
         rewriter, loc, cmp, loadA.getAddr(), loadB.getAddr());
 
     // Create new load with the selected pointer.
-    unsigned alignment = loadA.getAlignment() ? *loadA.getAlignment() : 0;
+    unsigned alignment = loadA.getAlignment().value_or(0);
     StringRef syncscope =
         loadA.getSyncscope() ? *loadA.getSyncscope() : StringRef();
     auto fusedLoad = LLVM::LoadOp::create(
@@ -115,12 +135,16 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
         loadA.getVolatile_(), loadA.getNontemporal(), loadA.getInvariant(),
         loadA.getInvariantGroup(), loadA.getOrdering(), syncscope);
 
-    // Replace old loads with the fused load.
-    rewriter.replaceOp(loadA, fusedLoad.getResult());
-    rewriter.replaceOp(loadB, fusedLoad.getResult());
+    // Clone elementwise chains with the fused load as input.
+    Value newScaleA =
+        cloneElementwiseChain(rewriter, elemOpsA, fusedLoad.getResult());
+    Value newScaleB =
+        cloneElementwiseChain(rewriter, elemOpsB, fusedLoad.getResult());
 
-    // Update wmma op to read scaleB from lane 16.
+    // Update wmma op to use fused scales and read scaleB from lane 16.
     rewriter.modifyOpInPlace(op, [&]() {
+      op.getScaleAMutable().assign(newScaleA);
+      op.getScaleBMutable().assign(newScaleB);
       op.setBFirstScaleLaneAttr(rewriter.getI32IntegerAttr(waveSize / 2));
     });
 
