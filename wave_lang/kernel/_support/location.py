@@ -96,9 +96,10 @@ class StackTraceInfo:
         if not self.frames:
             return Location.unknown()
         if len(self.frames) == 1:
-            return self.frames[0].to_mlir()
+            return self.frames[0]._to_mlir_impl(Context, Location)
         return Location.callsite(
-            self.frames[0].to_mlir(), [f.to_mlir() for f in self.frames[1:]]
+            self.frames[0]._to_mlir_impl(Context, Location),
+            [f._to_mlir_impl(Context, Location) for f in self.frames[1:]],
         )
 
     def to_mlir(self) -> Location:
