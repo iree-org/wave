@@ -769,6 +769,10 @@ def testGFX1250ScaledGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     assert len(asm_files) == 1, "Expected 1 ASM file"
     text = asm_files[0].read_text()
 
+    assert (
+        "matrix_b_scale:MATRIX_SCALE_ROW1" in text
+    ), "Expected matrix_b_scale:MATRIX_SCALE_ROW1 in assembly due to scales fusion"
+
     # Verify scaled WMMA intrinsic is present.
     assert "v_wmma_scale" in text, "Expected v_wmma_scale instruction in assembly"
 
