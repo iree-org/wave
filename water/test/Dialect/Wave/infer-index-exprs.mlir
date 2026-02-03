@@ -678,8 +678,8 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // Broadcast the MMA result from [@M, @N] to [@M, @N, @P] - should propagate M and N's index exprs.
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : [#wave.index_symbol<T0>
-    // CHECK-DAG: N : [#wave.index_symbol<T0>]
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>]
     %broadcasted = wave.broadcast %mma
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
@@ -714,9 +714,9 @@ normalform.module [#wave.normal_form<full_types>] {
     // @M and @N get index exprs from mma1 (forward propagation).
     // @P gets index expr from mma2 via the add operation (backward propagation).
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : [#wave.index_symbol<T0>
-    // CHECK-DAG: N : [#wave.index_symbol<T0>]
-    // CHECK-DAG: P : [#wave.index_symbol<T0>]
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>]
+    // CHECK-DAG: P : <[#wave.index_symbol<T0>]
     %broadcasted = wave.broadcast %mma1
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
