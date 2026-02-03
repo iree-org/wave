@@ -143,7 +143,8 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
   // Compute user SGPR count to determine where workgroup IDs are located
   // User SGPRs = 2 (kernarg ptr) + preloaded args (on gfx950+)
   auto targetAttr = program.getTarget();
-  bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetAttr);
+  auto targetKind = targetAttr.getTargetKind();
+  bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetKind);
 
   int64_t numArgs = 2; // Default to 2 pointers
   if (auto numArgsAttr =
@@ -211,9 +212,10 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   // = 6 For other targets: user_sgpr_count = 2 (just kernarg ptr)
   auto targetAttr = program.getTarget();
 
+  auto targetKind = targetAttr.getTargetKind();
   // Determine preload length based on actual kernel args
   int64_t preloadLength = program.getKernargPreloadLength();
-  bool usePreloading = llvm::isa<GFX950TargetAttr>(targetAttr);
+  bool usePreloading = llvm::isa<GFX950TargetAttr>(targetKind);
 
   // If no explicit preload length but we're on gfx95*, use actual kernel arg
   // count
@@ -256,7 +258,7 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   // gfx940/gfx942/gfx950: VGPRs allocated in groups of 8
   // other GFX9: VGPRs allocated in groups of 4
   int64_t vgprGranularity = 4;
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
     vgprGranularity = 8;
   }
   int64_t nextFreeVGPR =
@@ -266,13 +268,13 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   int64_t nextFreeSGPR =
       ((peakSGPRs + sgprGranularity - 1) / sgprGranularity) * sgprGranularity;
   // Cap to max for target (targetAttr/targetId already declared above)
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
     nextFreeSGPR = std::min(nextFreeSGPR, int64_t(102));
   }
 
   // Accumulator offset (required for gfx9 targets) - must come before
   // next_free_vgpr
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetAttr)) {
+  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
     // accum_offset must be in range [4, 256] and multiple of 4
     int64_t accumOffset = std::max(int64_t(4), ((nextFreeVGPR + 3) / 4) * 4);
     lines.push_back("  .amdhsa_accum_offset " + std::to_string(accumOffset));

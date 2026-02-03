@@ -32,10 +32,6 @@ The `test_asm_backend_e2e.py` file provides comprehensive coverage mirroring the
 Run the full test suite (mirrors asm_backend_test.py):
 
 ```bash
-# SSH into mi350-4 and start docker
-ssh mi350-4
-docker exec -it c2b37c0e9709 bash
-
 # Set up paths
 cd /path/to/wave-asm
 export WAVEASM_TRANSLATE=$(pwd)/build/tools/waveasm-translate/waveasm-translate
@@ -53,13 +49,9 @@ pytest test/e2e/test_asm_backend_e2e.py -v -k "compare"   # Backend comparison
 
 ## Quick Start: Standalone E2E Test
 
-The fastest way to test the C++ backend on mi350-4:
+The fastest way to test the C++ backend:
 
 ```bash
-# SSH into mi350-4 and start docker
-ssh mi350-4
-docker exec -it c2b37c0e9709 bash
-
 # Set up paths
 cd /path/to/wave-asm
 export WAVEASM_TRANSLATE=$(pwd)/build/tools/waveasm-translate/waveasm-translate
@@ -130,25 +122,6 @@ RUN_GPU_TESTS=1 pytest test/e2e/ -v --run-e2e
 | `WAVE_DEFAULT_ARCH` | Target architecture | Auto-detected or gfx942 |
 | `ROCM_PATH` | ROCm installation path | /opt/rocm |
 | `RUN_GPU_TESTS` | Enable GPU execution tests | 0 |
-
-## Running on MI350
-
-SSH into the test machine and run in Docker:
-
-```bash
-ssh mi350-4
-docker exec -it c2b37c0e9709 bash
-
-# In docker
-cd /path/to/wave-asm
-export WAVEASM_TRANSLATE=/path/to/build/tools/waveasm-translate/waveasm-translate
-
-# Run translation tests
-pytest test/e2e/ -v -k "translation"
-
-# Run full e2e tests
-RUN_GPU_TESTS=1 pytest test/e2e/ -v --run-e2e
-```
 
 ## Adding New Tests
 
