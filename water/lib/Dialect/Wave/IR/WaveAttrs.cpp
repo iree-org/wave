@@ -916,14 +916,12 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
                                         llvm::IsaPred<wave::WaveTensorType>);
       bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
 
-      // Parent allocations (byte buffers for combined shared memory) don't
+      // Allocations (byte buffers for combined shared memory) don't
       // need index expressions. They are never accessed directly by read/write
-      // operations - only child AllocateOps reference them as a parent buffer.
-      // A parent allocation has no operands (no parent buffer to view into).
-      bool isParentAllocation =
-          llvm::isa<wave::AllocateOp>(op) && op->getNumOperands() == 0;
+      // operations - only ViewOps reference them as a parent buffer.
+      bool isAllocation = llvm::isa<wave::AllocateOp>(op);
 
-      if ((!hasWaveTensor && !isMemoryAccessOp) || isParentAllocation)
+      if ((!hasWaveTensor && !isMemoryAccessOp) || isAllocation)
         return llvm::success();
 
       if (isMemoryAccessOp)
@@ -938,10 +936,22 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
 
   if (wave::bitEnumContainsAll(form,
                                wave::WaveNormalForm::ResolvedAllocations)) {
-    if (auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op)) {
-      if (!llvm::isa<MemRefType>(allocOp.getResult().getType()))
-        return emitError() << "normal form requires all wave.allocate "
-                              "operations to have memref result type";
+    LogicalResult result =
+        llvm::TypeSwitch<Operation *, LogicalResult>(op)
+            .Case<wave::AllocateOp, wave::ViewOp>(
+                [&](auto memOp) -> LogicalResult {
+                  using OpTy = decltype(memOp);
+                  if (!llvm::isa<MemRefType>(memOp.getResult().getType()))
+                    return emitError()
+                           << "normal form requires all "
+                           << OpTy::getOperationName()
+                           << " operations to have memref result type";
+
+                  return llvm::success();
+                })
+            .Default([&](Operation *op) { return llvm::success(); });
+    if (failed(result)) {
+      return llvm::failure();
     }
   }
 

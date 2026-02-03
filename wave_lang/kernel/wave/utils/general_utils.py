@@ -27,6 +27,7 @@ from ...ops.wave_ops import (
     TensorLoadToLDS,
     Iterate,
     Read,
+    View,
     Write,
     get_custom,
 )
@@ -516,8 +517,8 @@ def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
         for operand in operands:
             operand = propagate_loop_carried_vars(operand)
             assert isinstance(
-                get_custom(operand), Allocate
-            ), f"Expected Allocate, but got {get_custom(operand)}"
+                get_custom(operand), (Allocate, View)
+            ), f"Expected Allocate or View, but got {get_custom(operand)}"
             shared_memory_operands[operand] = node
 
     return list(shared_memory_operands.keys())

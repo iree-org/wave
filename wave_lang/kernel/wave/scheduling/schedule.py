@@ -23,6 +23,7 @@ from ...ops.wave_ops import (
     Iterate,
     NewScalar,
     Output,
+    View,
     get_custom,
 )
 from ..constraints import Constraint
@@ -247,7 +248,9 @@ def build_guarded_pipeline_with_remainder(
     # Prepare conditional subgraph
     captured_nodes = list(reduction.init_args) + list(reduction.implicit_captures)
     memory_nodes = [
-        node for node in captured_nodes if isinstance(get_custom(node), Allocate)
+        node
+        for node in captured_nodes
+        if isinstance(get_custom(node), (Allocate, View))
     ]
 
     subgraph_name = f"pipelined_conditional_{reduction.fx_node.name}"

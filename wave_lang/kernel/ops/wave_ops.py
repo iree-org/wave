@@ -1474,9 +1474,9 @@ class IterArg(Placeholder):
     @property
     def distributed_shape(self):
         init_arg = self.parent_op().init_args[self.iter_idx]
-        allocate = get_custom(init_arg)
-        assert isinstance(allocate, Allocate)
-        return allocate.distributed_shape
+        alloc_or_view = get_custom(init_arg)
+        assert isinstance(alloc_or_view, (Allocate, View))
+        return alloc_or_view.distributed_shape
 
     def infer_type(self, *args):
         parent_op = self.parent_op()
@@ -1499,8 +1499,6 @@ class Allocate(CustomOp):
     dtype: DataType
     address_space: AddressSpace = SHARED_ADDRESS_SPACE
     padding: int = 0
-    parent: Optional[fx.Node] = None
-    offset: Optional[IndexExpr] = None
     tail_padding: int = 0  # Padding after the array end
 
     @property
@@ -1519,6 +1517,71 @@ class Allocate(CustomOp):
     def allocation_size(self) -> IndexExpr:
         """
         Returns the full size of the allocation in bytes including all padding.
+        """
+        return (
+            (math.prod(self.distributed_shape) + self.tail_padding)
+            * self.dtype.bitwidth()
+        ) // 8
+
+    @property
+    def unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        from ..wave.utils.general_utils import infer_dim, is_scaled_dim
+
+        unpadded_dim = {}
+        last_sym_type = self.type.symbolic_shape[-1]
+        last_sym_type = (
+            infer_dim(self.type.symbolic_shape[-1])
+            if is_scaled_dim(last_sym_type)
+            else last_sym_type
+        )
+        unpadded_dim[last_sym_type] = self.distributed_shape[-1] - self.padding
+        for idx, sym_type in enumerate(self.type.symbolic_shape[:-1]):
+            sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
+            unpadded_dim[sym_type] = self.distributed_shape[idx]
+        return unpadded_dim
+
+    @property
+    def unpadded_shape(self) -> tuple[IndexExpr]:
+        unpadded_dims = self.unpadded_dims
+        return tuple(unpadded_dims[s] for s in self.shape)
+
+    def infer_type(self, *args):
+        type_expr = Memory[(*self.shape, self.address_space, self.dtype)]
+        self.fx_node.type = type_expr
+
+
+@define_op("view")
+@dataclass
+class View(CustomOp):
+    """
+    Represents a view into an existing allocation (such as shared memory).
+    """
+
+    parent: fx.Node
+    shape: tuple[IndexExpr]
+    distributed_shape: tuple[IndexExpr]
+    dtype: DataType
+    address_space: AddressSpace = SHARED_ADDRESS_SPACE
+    offset: IndexExpr = 0
+    padding: int = 0
+    tail_padding: int = 0  # Padding after the array end
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        from ..wave.utils.general_utils import infer_dim
+
+        shape = list(self.shape)
+        dims = [infer_dim(expr) for expr in shape]
+        return dims
+
+    @property
+    def type(self) -> "Memory":
+        return Memory[(*self.shape, self.address_space, self.dtype)]
+
+    @property
+    def allocation_size(self) -> IndexExpr:
+        """
+        Returns the full size of the view in bytes including all padding.
         """
         return (
             (math.prod(self.distributed_shape) + self.tail_padding)
@@ -2775,9 +2838,9 @@ class GetResult(CustomOp):
     @property
     def distributed_shape(self):
         iterate = get_custom(self.value)
-        allocate = get_custom(iterate.init_args[self.res_idx])
-        assert isinstance(allocate, Allocate)
-        return allocate.distributed_shape
+        alloc_or_view = get_custom(iterate.init_args[self.res_idx])
+        assert isinstance(alloc_or_view, (Allocate, View))
+        return alloc_or_view.distributed_shape
 
 
 @define_op("extract")

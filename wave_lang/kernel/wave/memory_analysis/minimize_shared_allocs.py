@@ -19,6 +19,7 @@ from ...ops.wave_ops import (
     Iterate,
     SharedMemoryBarrier,
     Conditional,
+    View,
     get_custom,
 )
 from ..utils.graph_utils import get_users, is_barrier_between, update_sort_keys
@@ -189,17 +190,32 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
 
     first_node = list(trace.get_root_graph().nodes)[0]
     with trace.get_root_graph().inserting_before(first_node):
-        parent = Allocate(
+        parent_alloc = Allocate(
             shape=list(combined_shape),
             distributed_shape=[allocation_size],
             dtype=i8,
             address_space=SHARED_ADDRESS_SPACE,
         )
-        parent.add_to_graph(trace.get_root_graph(), loc=get_custom(allocs[0]).location)
+        parent = parent_alloc.add_to_graph(
+            trace.get_root_graph(), loc=get_custom(allocs[0]).location
+        )
 
+    # Replace each allocation with a view into the parent allocation.
     for alloc, offset in allocs_to_offsets.items():
-        get_custom(alloc).update_arg("parent", parent)
-        get_custom(alloc).update_arg("offset", offset)
-        get_custom(alloc).update_arg("tail_padding", 0)
+        custom_alloc = get_custom(alloc)
+        with alloc.graph.inserting_after(alloc):
+            view = View(
+                parent=parent,
+                shape=custom_alloc.shape,
+                distributed_shape=list(custom_alloc.distributed_shape),
+                dtype=custom_alloc.dtype,
+                address_space=custom_alloc.address_space,
+                offset=offset,
+                padding=custom_alloc.padding,
+                tail_padding=0,
+            )
+            view_node = view.add_to_graph(alloc.graph, loc=custom_alloc.location)
+            alloc.replace_all_uses_with(view_node)
+        alloc.graph.erase_node(alloc)
 
     return

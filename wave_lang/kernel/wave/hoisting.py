@@ -59,7 +59,7 @@ def get_hoistable_ops(
     hoistable_ops = []
     for node in graph.nodes:
         custom_node = get_custom(node)
-        if isinstance(custom_node, Allocate):
+        if isinstance(custom_node, (Allocate, View)):
             hoistable_allocs.append(custom_node)
         elif isinstance(custom_node, Read):
             if custom_node.index is None:

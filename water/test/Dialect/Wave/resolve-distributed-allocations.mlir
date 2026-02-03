@@ -30,21 +30,21 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-// Test that child allocation is also resolved.
+// Test that child view is also resolved.
 // CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
-// CHECK-LABEL: func.func @resolve_child_alloc
+// CHECK-LABEL: func.func @resolve_child_view
 normalform.module [#wave.normal_form<full_types>] {
-  func.func @resolve_child_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64, SIZE = 8192}>} {
+  func.func @resolve_child_view() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64, SIZE = 8192}>} {
     // CHECK: %[[PARENT:.*]] = wave.allocate {distributed_shape = #wave.expr_list<[] -> (8192)>}
     // CHECK-SAME: memref<8192xi8, #gpu.address_space<workgroup>>
     %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (8192)> }
       : !wave.tensor<[@SIZE] of i8, <shared>>
 
-    // CHECK: wave.allocate in %[[PARENT]] : {{.*}} {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>
+    // CHECK: wave.view %[[PARENT]][0] {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
-    %buf = wave.allocate in %parent : !wave.tensor<[@SIZE] of i8, <shared>>
-      { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, offset = 0 }
-      : !wave.tensor<[@M, @K] of bf16, <shared>>
+    %buf = wave.view %parent[0]
+      { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
+      : !wave.tensor<[@SIZE] of i8, <shared>> to !wave.tensor<[@M, @K] of bf16, <shared>>
     return
   }
 }

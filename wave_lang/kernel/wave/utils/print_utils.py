@@ -16,6 +16,7 @@ from wave_lang.kernel.ops.wave_ops import (
     NestedRegionOp,
     Placeholder,
     Read,
+    View,
     Write,
     get_custom,
 )
@@ -43,7 +44,7 @@ def get_node_type(node: fx.Node) -> str:
     if isinstance(custom, (Read, Write)):
         base_type = "Read" if isinstance(custom, Read) else "Write"
         uses_allocate = custom.memory and isinstance(
-            get_custom(custom.memory), Allocate
+            get_custom(custom.memory), (Allocate, View)
         )
         memory_type = "Global" if not uses_allocate else "Shared"
         return f"{base_type}{memory_type}"

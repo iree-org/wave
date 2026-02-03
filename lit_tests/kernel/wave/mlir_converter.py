@@ -524,20 +524,19 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[CST_0:.*]] = arith.constant 0.000000e+00 : f32
     # CHECK-NEXT: %[[REG:.*]] = wave.register %[[CST_0]]
     #
-    # Child allocation with parent reference and offset.
+    # View with parent reference and offset.
     # Symbols related to induction variables must be dropped from the mapping. This is a bug in the
     # Python propagation algorithm that is immediately caught by the verifier on construction.
     #
-    # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-NEXT: %[[VIEW_1:.*]] = wave.view %[[ALLOCATE]][{{.*}}]
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
     # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
-    # CHECK-SAME: offset =
     #
-    # Another child allocation with parent reference and offset.
+    # Another view into parent allocation with offset.
     #
-    # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
+    # CHECK-NEXT: %[[VIEW_2:.*]] = wave.view %[[ALLOCATE]][{{.*}}]
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
     # CHECK-SAME: offset =
@@ -545,18 +544,18 @@ def mlir_converter_matmul():
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-NEXT:     amdgpu.lds_barrier
-    # CHECK-NEXT:     wave.write %[[READ_A]], %[[ALLOCATE_2]]
+    # CHECK-NEXT:     wave.write %[[READ_A]], %[[VIEW_2]]
     # CHECK-NEXT:     %[[READ_B:.*]] = wave.read %[[ARG1]]
-    # CHECK-NEXT:     wave.write %[[READ_B]], %[[ALLOCATE_1]]
+    # CHECK-NEXT:     wave.write %[[READ_B]], %[[VIEW_1]]
     # CHECK-NEXT:     amdgpu.lds_barrier
-    # CHECK-NEXT:     %[[READ_SHARED_A_0:.*]] = wave.read %[[ALLOCATE_1]]
-    # CHECK-NEXT:     %[[READ_SHARED_A_1:.*]] = wave.read %[[ALLOCATE_1]]
-    # CHECK-NEXT:     %[[READ_SHARED_A_2:.*]] = wave.read %[[ALLOCATE_1]]
-    # CHECK-NEXT:     %[[READ_SHARED_A_3:.*]] = wave.read %[[ALLOCATE_1]]
-    # CHECK-NEXT:     %[[READ_SHARED_B_0:.*]] = wave.read %[[ALLOCATE_2]]
-    # CHECK-NEXT:     %[[READ_SHARED_B_1:.*]] = wave.read %[[ALLOCATE_2]]
-    # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[ALLOCATE_2]]
-    # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[ALLOCATE_2]]
+    # CHECK-NEXT:     %[[READ_SHARED_A_0:.*]] = wave.read %[[VIEW_1]]
+    # CHECK-NEXT:     %[[READ_SHARED_A_1:.*]] = wave.read %[[VIEW_1]]
+    # CHECK-NEXT:     %[[READ_SHARED_A_2:.*]] = wave.read %[[VIEW_1]]
+    # CHECK-NEXT:     %[[READ_SHARED_A_3:.*]] = wave.read %[[VIEW_1]]
+    # CHECK-NEXT:     %[[READ_SHARED_B_0:.*]] = wave.read %[[VIEW_2]]
+    # CHECK-NEXT:     %[[READ_SHARED_B_1:.*]] = wave.read %[[VIEW_2]]
+    # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[VIEW_2]]
+    # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[VIEW_2]]
     # CHECK-NEXT:     %[[MMA_0:.*]] = wave.mma %[[READ_SHARED_B_0]], %[[READ_SHARED_A_0]], %[[ARG3]]
     # CHECK-COUNT-2:  {K : <[
     # CHECK-SAME:     {M : <[

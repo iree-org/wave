@@ -100,13 +100,20 @@ static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
 //-----------------------------------------------------------------------------
 
 llvm::LogicalResult wave::AllocateOp::verify() {
-  bool hasParent = getParent() != Value();
-  bool hasOffset = getOffset() != std::nullopt;
-  if (hasParent ^ hasOffset) {
+  if (!llvm::all_of(getDistributedShape().getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
     return emitOpError()
-           << "expects parent and offset to be present simultaneously";
+           << "distributed_shape must only contain WaveSymbolAttr";
   }
 
+  return llvm::success();
+}
+
+//-----------------------------------------------------------------------------
+// ViewOp
+//-----------------------------------------------------------------------------
+
+llvm::LogicalResult wave::ViewOp::verify() {
   if (!llvm::all_of(getDistributedShape().getSymbols(),
                     llvm::IsaPred<wave::WaveSymbolAttr>)) {
     return emitOpError()

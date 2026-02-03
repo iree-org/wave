@@ -46,6 +46,7 @@ from ...ops.wave_ops import (
     MMABase,
     abs,
     allocate,
+    view,
     apply_expr,
     atan2,
     atomic_add,
@@ -217,8 +218,6 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
             dtype,
             address_space,
             padding,
-            parent,
-            offset,
             tail_padding,
         ) = node.args
     except ValueError as e:
@@ -229,9 +228,7 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
     address_space = Attribute.parse("#gpu.address_space<workgroup>")
     memref_type = MemRefType.get(memref_shape, element_type, None, address_space)
 
-    if parent is not None:
-        parent = cast_py_value(emitter, parent).ir_value
-    elif tail_padding != 0:
+    if tail_padding != 0:
         # Tail padded memref cannot be represented as a normal alloc, allocate
         # a flat i8 array and then view it as the original type.
         alloc_size = get_custom(node).allocation_size
@@ -239,10 +236,7 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
         i8_type = IntegerType.get_signless(8)
         alloc_type = MemRefType.get([alloc_size], i8_type, None, address_space)
         parent = memref_d.alloc(alloc_type, [], [])
-        offset = 0
-
-    if parent is not None:
-        offset = arith_d.constant(IndexType.get(), int(offset))
+        offset = arith_d.constant(IndexType.get(), 0)
         alloc = memref_d.view(
             memref_type,
             parent,
@@ -254,6 +248,38 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
 
     alloc = memref_d.alloc(memref_type, [], [])
     emitter.bind_node_proxy(node, IRProxyValue(alloc))
+
+
+@handle_op(view)
+def handle_view(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (
+            parent,
+            shape,
+            distributed_shape,
+            dtype,
+            address_space,
+            offset,
+            padding,
+            tail_padding,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    memref_shape = cast_py_literal(emitter, distributed_shape)
+    element_type = IrType.parse(dtype.ir_type_asm())
+    address_space = Attribute.parse("#gpu.address_space<workgroup>")
+    memref_type = MemRefType.get(memref_shape, element_type, None, address_space)
+
+    parent_value = cast_py_value(emitter, parent).ir_value
+    offset_value = arith_d.constant(IndexType.get(), int(offset))
+    view_op = memref_d.view(
+        memref_type,
+        parent_value,
+        offset_value,
+        [],
+    )
+    emitter.bind_node_proxy(node, IRProxyValue(view_op))
 
 
 def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:

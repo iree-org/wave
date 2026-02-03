@@ -51,9 +51,9 @@ void populateWaveMiscellaneousOpsLoweringPatterns(
 void populateWaveBinaryOpLoweringPatterns(WaveTypeConverter &typeConverter,
                                           mlir::RewritePatternSet &patterns);
 
-// Adds pattern that lowers 'wave.allocate' ops to upstream MLIR ops.
-void populateWaveAllocateOpLoweringPatterns(WaveTypeConverter &typeConverter,
-                                            mlir::RewritePatternSet &patterns);
+// Adds pattern that lowers memory ops to upstream MLIR ops.
+void populateWaveMemoryOpLoweringPatterns(WaveTypeConverter &typeConverter,
+                                          mlir::RewritePatternSet &patterns);
 
 // Adds pattern that lowers 'wave.mma' ops to upstream MLIR ops.
 void populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,

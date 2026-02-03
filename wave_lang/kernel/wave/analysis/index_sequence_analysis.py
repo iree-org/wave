@@ -47,6 +47,7 @@ from ...ops.wave_ops import (
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
+    View,
     WorkgroupBarrier,
     Write,
     get_custom,
@@ -219,7 +220,7 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
     nodes = trace.walk(lambda x: x)
     for node in nodes:
         custom = get_custom(node)
-        if isinstance(custom, (Placeholder, Allocate)) and not isinstance(
+        if isinstance(custom, (Placeholder, Allocate, View)) and not isinstance(
             custom, IterArg
         ):
             continue

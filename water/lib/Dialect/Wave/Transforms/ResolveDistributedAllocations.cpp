@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "mlir/IR/Visitors.h"
+#include "mlir/Support/WalkResult.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -12,6 +14,8 @@
 #include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/LogicalResult.h"
 
 #define DEBUG_TYPE "wave-resolve-distributed-allocations"
 
@@ -55,46 +59,54 @@ struct ResolveDistributedAllocations
     });
   }
 
-  /// Resolve all allocate operations within the given operation using the
-  /// provided type converter. Returns failure if any allocation fails to
+  /// Resolve all allocate and view operations within the given operation using
+  /// the provided type converter. Returns failure if any allocation fails to
   /// resolve.
-  LogicalResult resolveAllocations(Operation *root,
-                                   WaveTypeConverter &typeConverter) {
-    LogicalResult result = success();
-    root->walk([&](AllocateOp allocateOp) {
-      if (isa<MemRefType>(allocateOp.getResult().getType()))
-        return;
+  LogicalResult resolveMemoryOps(Operation *root,
+                                 WaveTypeConverter &typeConverter) {
+    WalkResult walkResult = root->walk([&](Operation *op) {
+      return llvm::TypeSwitch<Operation *, WalkResult>(op)
+          .Case<wave::AllocateOp, wave::ViewOp>([&](auto memOp) {
+            if (isa<MemRefType>(memOp.getResult().getType()))
+              return WalkResult::advance();
 
-      auto tensorType = cast<WaveTensorType>(allocateOp.getResult().getType());
+            auto tensorType = cast<WaveTensorType>(memOp.getResult().getType());
 
-      // Only handle shared memory allocations for now.
-      if (tensorType.getAddressSpaceValue() != WaveAddressSpace::Shared)
-        return;
+            // Only handle shared memory for now.
+            if (tensorType.getAddressSpaceValue() != WaveAddressSpace::Shared)
+              return WalkResult::skip();
 
-      WaveExprListAttr distributedShape = allocateOp.getDistributedShape();
-      Type memrefType = typeConverter.convertTensorFromComponents(
-          distributedShape.getSymbols(), distributedShape.getMap(),
-          tensorType.getElementType(), tensorType.getAddressSpaceValue());
-      if (!memrefType) {
-        allocateOp.emitError("failed to create memref type");
-        result = failure();
-        return;
-      }
+            WaveExprListAttr distributedShape = memOp.getDistributedShape();
+            Type memrefType = typeConverter.convertTensorFromComponents(
+                distributedShape.getSymbols(), distributedShape.getMap(),
+                tensorType.getElementType(), tensorType.getAddressSpaceValue());
+            if (!memrefType) {
+              memOp.emitError("failed to create memref type");
+              return WalkResult::interrupt();
+            }
 
-      // Update the result type in place.
-      allocateOp.getResult().setType(memrefType);
+            // Update the result type in place.
+            memOp.getResult().setType(memrefType);
+
+            return WalkResult::advance();
+          })
+          .Default([&](Operation *op) { return WalkResult::advance(); });
     });
-    return result;
+
+    return llvm::failure(walkResult.wasInterrupted());
   }
 
   void runOnOperation() override {
     auto *waveDialect = getContext().getLoadedDialect<WaveDialect>();
     WalkResult walkResult =
         getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) {
-          // If we hit an AllocateOp before finding hyperparameters, error.
-          if (op->getDialect() == waveDialect && isa<AllocateOp>(op)) {
-            op->emitError() << "allocate operation with no hyperparameters "
-                               "provided by any ancestor";
+          // If we hit an AllocateOp or ViewOp before finding hyperparameters,
+          // error.
+          if (op->getDialect() == waveDialect &&
+              (isa<AllocateOp>(op) || isa<ViewOp>(op))) {
+            op->emitError()
+                << "allocate/view operation with no hyperparameters "
+                   "provided by any ancestor";
             return WalkResult::interrupt();
           }
 
@@ -107,9 +119,9 @@ struct ResolveDistributedAllocations
           // type conversion loses the dimension ordering information.
           setOrderedSymsOnReadWriteOps(op);
 
-          // Resolve all allocations in this subtree.
+          // Resolve all allocations and views in this subtree.
           WaveTypeConverter typeConverter(hyperparam);
-          if (failed(resolveAllocations(op, typeConverter)))
+          if (failed(resolveMemoryOps(op, typeConverter)))
             return WalkResult::interrupt();
 
           // Skip children since we already processed this subtree.

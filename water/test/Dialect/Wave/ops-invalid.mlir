@@ -346,24 +346,6 @@ func.func @empty_distributed_shape() {
 
 // -----
 
-func.func @alloc_offset_no_parent() {
-  // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate { distributed_shape = #wave.expr_list<[] -> (42)>, offset = 42}
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
-}
-
-// -----
-
-func.func @alloc_parent_no_offset() {
-  %alloc = wave.allocate { distributed_shape = #wave.expr_list<[] -> (100)> }
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
-  // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr_list<[] -> (42)>}
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
-}
-
-// -----
-
 module attributes { wave.hyperparameters = #wave.hyperparameters<{}> } {
   // expected-error @below {{defines hyperparameters when its ancestor already had}}
   // expected-note @above {{ancestor}}

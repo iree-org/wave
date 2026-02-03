@@ -315,10 +315,19 @@ func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   // CHECK: wave.allocate
   %parent = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     : !wave.tensor<[@M, @N] of bf16, <shared>>
+  return %parent : !wave.tensor<[@M, @N] of bf16, <shared>>
+}
 
-  %buf = wave.allocate in %parent : !wave.tensor<[@M, @N] of bf16, <shared>>
-    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>, offset = 64}
+// CHECK-LABEL: @view
+func.func @view() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
+  // CHECK: wave.allocate
+  %parent = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     : !wave.tensor<[@M, @N] of bf16, <shared>>
+
+  // CHECK: wave.view
+  %buf = wave.view %parent[64]
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
+    : !wave.tensor<[@M, @N] of bf16, <shared>> to !wave.tensor<[@M, @N] of bf16, <shared>>
 
   return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
 }

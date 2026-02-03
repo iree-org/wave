@@ -191,7 +191,7 @@ def promote_node(
         # If the read/write operation already has a set distributed shape at the kernel
         # we use that for allocation. Otherwise deduce the shape from constraints.
         memory_node = get_custom(node.memory)
-        if isinstance(memory_node, Allocate) and memory_node.distributed_shape:
+        if isinstance(memory_node, (Allocate, View)) and memory_node.distributed_shape:
             constrained_shape = memory_node.distributed_shape
         padding, padded_shape = apply_padding(
             constrained_shape, node.type.dtype, padding_bits
@@ -246,14 +246,12 @@ def compute_shared_memory_usage(
 ):
     """
     Compute the amount of shared memory used in bytes by iterating over all allocate
-    nodes and summing up their distributed shapes.
+    nodes and summing up their distributed shapes. Note: View nodes are not counted
+    since they are views into existing allocations.
     """
     is_allocate = lambda x: isinstance(get_custom(x), Allocate)
     for alloc in graph.walk(is_allocate):
         custom_alloc = get_custom(alloc)
-        # Ignore allocations that are slices of a larger allocation.
-        if custom_alloc.parent is not None:
-            continue
         shape = subs_idxc(math.prod(custom_alloc.distributed_shape))
         bits = custom_alloc.type.dtype.bitwidth()
         kernel_launch_info.shared_memory_bytes += int((shape * bits) // 8)

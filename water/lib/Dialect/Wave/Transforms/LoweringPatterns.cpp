@@ -152,7 +152,7 @@ wave::materializeAffine(Location loc, ArrayRef<Attribute> symbols,
 }
 
 //===----------------------------------------------------------------------===//
-// AllocateOp
+// Memory ops
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -170,20 +170,7 @@ public:
       return rewriter.notifyMatchFailure(
           op, "expected memref type; ResolveDistributedAllocations must run "
               "before lowering");
-    Location loc = op.getLoc();
 
-    // If operation contains a parent op, emit a view into this parent
-    // allocation.
-    Value parent = adaptor.getParent();
-    if (parent) {
-      int64_t byteOffset = static_cast<int64_t>(*op.getOffset());
-      Value off = arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
-      rewriter.replaceOpWithNewOp<memref::ViewOp>(op, memrefType, parent, off,
-                                                  ValueRange());
-      return success();
-    }
-
-    // No parent : emit plain memref.alloc
     rewriter.replaceOpWithNewOp<memref::AllocOp>(op, memrefType);
 
     return success();
@@ -192,9 +179,42 @@ public:
 
 } // namespace
 
-void wave::populateWaveAllocateOpLoweringPatterns(
+//===----------------------------------------------------------------------===//
+// ViewOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+class ViewOpLoweringPattern : public OpConversionPattern<wave::ViewOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ViewOp op, wave::ViewOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // ResolveDistributedAllocations must run before this pass to convert
+    // the result type from WaveTensorType to MemRefType.
+    auto memrefType = dyn_cast<MemRefType>(op.getResult().getType());
+    if (!memrefType)
+      return rewriter.notifyMatchFailure(
+          op, "expected memref type; ResolveDistributedAllocations must run "
+              "before lowering");
+    Location loc = op.getLoc();
+
+    Value parent = adaptor.getParent();
+    int64_t byteOffset = static_cast<int64_t>(op.getOffset());
+    Value off = arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
+    rewriter.replaceOpWithNewOp<memref::ViewOp>(op, memrefType, parent, off,
+                                                ValueRange());
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveMemoryOpLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<AllocateOpLoweringPattern>(typeConverter, patterns.getContext());
+  patterns.add<AllocateOpLoweringPattern, ViewOpLoweringPattern>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

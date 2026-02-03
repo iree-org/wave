@@ -127,10 +127,10 @@ func.func @alloc_is_harmless() attributes {wave.hyperparameters = #wave.hyperpar
   %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (256)> }
     : !wave.tensor<[@M,@N,@K] of i8, <shared>>
 
-  // CHECK: wave.allocate
-  %buf = wave.allocate in %parent : !wave.tensor<[@M,@N,@K] of i8, <shared>>
-    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
+  // CHECK: wave.view
+  %buf = wave.view %parent[128]
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
+    : !wave.tensor<[@M,@N,@K] of i8, <shared>> to !wave.tensor<[@M, @K] of bf16, <shared>>
   return
   }
 }
