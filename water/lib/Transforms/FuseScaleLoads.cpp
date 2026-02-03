@@ -13,6 +13,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -49,6 +50,25 @@ collectElementwiseChain(Value value, SmallVectorImpl<Operation *> &elemOps) {
   return value.getDefiningOp<LLVM::LoadOp>();
 }
 
+// Check that both ops are in the same block and there are no side effecting
+// ops between them. Read-only ops are allowed.
+static bool canFuseOps(Operation *opA, Operation *opB) {
+  if (opA->getBlock() != opB->getBlock())
+    return false;
+
+  Operation *firstOp = opA->isBeforeInBlock(opB) ? opA : opB;
+  Operation *lastOp = opA->isBeforeInBlock(opB) ? opB : opA;
+  for (Operation *curr = firstOp->getNextNode(); curr != lastOp;
+       curr = curr->getNextNode()) {
+    if (isPure(curr))
+      continue;
+    if (!isa<MemoryEffectOpInterface>(curr) ||
+        hasEffect<MemoryEffects::Write>(curr))
+      return false;
+  }
+  return true;
+}
+
 // Clone elementwise chain, replacing the input with newInput.
 static Value cloneElementwiseChain(PatternRewriter &rewriter,
                                    ArrayRef<Operation *> elemOps,
@@ -81,6 +101,9 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
 
     LLVM::LoadOp loadB = collectElementwiseChain(op.getScaleB(), elemOpsB);
     if (!loadB)
+      return failure();
+
+    if (!canFuseOps(loadA, loadB))
       return failure();
 
     // Check if loads are from the same base pointer.
