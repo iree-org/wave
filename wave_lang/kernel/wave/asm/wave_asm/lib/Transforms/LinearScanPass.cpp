@@ -11,12 +11,12 @@
 // register types to physical register types in the IR.
 //===----------------------------------------------------------------------===//
 
-#include "waveasm/Transforms/RegAlloc.h"
-#include "waveasm/Transforms/Liveness.h"
-#include "waveasm/Transforms/Passes.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/Liveness.h"
+#include "waveasm/Transforms/Passes.h"
+#include "waveasm/Transforms/RegAlloc.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -79,10 +79,10 @@ private:
     // tiedPairs[result] = accumulator (result should get same phys reg as acc)
     llvm::DenseMap<Value, Value> tiedPairs;
 
-    // Reserve v15 as scratch VGPR for literal materialization in assembly emitter.
-    // See AssemblyEmitter.h kScratchVGPR.
-    // VOP3 instructions like v_mul_lo_u32 don't support large literal operands,
-    // so the emitter generates v_mov_b32 v15, <literal> before such instructions.
+    // Reserve v15 as scratch VGPR for literal materialization in assembly
+    // emitter. See AssemblyEmitter.h kScratchVGPR. VOP3 instructions like
+    // v_mul_lo_u32 don't support large literal operands, so the emitter
+    // generates v_mov_b32 v15, <literal> before such instructions.
     reservedVGPRs.insert(15);
 
     program.walk([&](Operation *op) {
@@ -112,7 +112,7 @@ private:
 
     // Create allocator with precolored values and tied operands
     LinearScanRegAlloc allocator(maxVGPRs, maxSGPRs, reservedVGPRs,
-                                  reservedSGPRs);
+                                 reservedSGPRs);
     for (const auto &[value, physIdx] : precoloredValues) {
       allocator.precolorValue(value, physIdx);
     }
@@ -129,7 +129,8 @@ private:
     auto [mapping, stats] = *result;
 
     // Handle waveasm.extract ops: result = source[offset]
-    // Set the extract result's physical register = source's physical register + offset
+    // Set the extract result's physical register = source's physical register +
+    // offset
     program.walk([&](ExtractOp extractOp) {
       Value source = extractOp.getVector();
       Value extractResult = extractOp.getResult();
@@ -210,7 +211,7 @@ std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass() {
 }
 
 std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
-                                                         int64_t maxSGPRs) {
+                                                        int64_t maxSGPRs) {
   return std::make_unique<LinearScanPass>(maxVGPRs, maxSGPRs);
 }
 

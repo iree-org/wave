@@ -46,6 +46,7 @@ from torch.testing import assert_close
 @dataclass
 class CompilationResult:
     """Result of compilation through C++ WaveASM backend."""
+
     mlir_text: str
     asm_text: str
     binary_path: Optional[Path]
@@ -60,14 +61,22 @@ def get_waveasm_translate_path() -> Path:
 
     # Default: look in wave-asm build directory
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
 
     if default_path.exists():
         return default_path
 
     # Try to find it in PATH
     try:
-        result = subprocess.run(["which", "waveasm-translate"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["which", "waveasm-translate"], capture_output=True, text=True
+        )
         if result.returncode == 0:
             return Path(result.stdout.strip())
     except Exception:
@@ -107,7 +116,7 @@ def get_target_arch() -> str:
 
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
-        if hasattr(props, 'gcnArchName'):
+        if hasattr(props, "gcnArchName"):
             return props.gcnArchName.split(":")[0]
 
     return "gfx942"
@@ -194,18 +203,23 @@ class WaveASMCompiler:
         # Step 1: Assemble to object file (same as Python backend)
         compile_cmd = [
             self.amdclang,
-            "-x", "assembler",
-            "-target", "amdgcn-amd-amdhsa",
+            "-x",
+            "assembler",
+            "-target",
+            "amdgcn-amd-amdhsa",
             f"-mcode-object-version={self.codeobj}",
             f"-mcpu={self.target}",
             "-mwavefrontsize64",
             "-c",
             str(asm_file),
-            "-o", str(obj_file),
+            "-o",
+            str(obj_file),
         ]
 
         try:
-            result = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                compile_cmd, capture_output=True, text=True, timeout=60
+            )
 
             if result.returncode != 0:
                 return False, None, f"Assembly failed: {result.stderr}"
@@ -213,13 +227,18 @@ class WaveASMCompiler:
             # Step 2: Link to HSACO (same as Python backend)
             link_cmd = [
                 self.amdclang,
-                "-target", "amdgcn-amd-amdhsa",
-                "-Xlinker", "--build-id=sha1",
-                "-o", str(hsaco_file),
+                "-target",
+                "amdgcn-amd-amdhsa",
+                "-Xlinker",
+                "--build-id=sha1",
+                "-o",
+                str(hsaco_file),
                 str(obj_file),
             ]
 
-            result = subprocess.run(link_cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                link_cmd, capture_output=True, text=True, timeout=60
+            )
 
             if result.returncode != 0:
                 return False, None, f"Linking failed: {result.stderr}"
@@ -267,6 +286,7 @@ class WaveASMCompiler:
     def cleanup(self):
         if not self.keep_temp_files and self._temp_dir is not None:
             import shutil
+
             try:
                 shutil.rmtree(self._temp_dir)
             except Exception:
@@ -385,7 +405,9 @@ def run_with_wave_runtime(
         block[0],
         block[1],
         block[2],
-        1, 1, 1,  # cluster_dims
+        1,
+        1,
+        1,  # cluster_dims
     )
 
     # Prepare kernel arguments
@@ -514,11 +536,13 @@ def test_copy_kernel_cpp_backend():
     print(f"  Saved to: {asm_path}")
 
     # Count key instructions
-    lines = asm_text.split('\n')
-    buffer_loads = sum(1 for l in lines if 'buffer_load' in l)
-    buffer_stores = sum(1 for l in lines if 'buffer_store' in l)
-    waitcnts = sum(1 for l in lines if 's_waitcnt' in l)
-    print(f"  Instructions: {buffer_loads} buffer_load, {buffer_stores} buffer_store, {waitcnts} s_waitcnt")
+    lines = asm_text.split("\n")
+    buffer_loads = sum(1 for l in lines if "buffer_load" in l)
+    buffer_stores = sum(1 for l in lines if "buffer_store" in l)
+    waitcnts = sum(1 for l in lines if "s_waitcnt" in l)
+    print(
+        f"  Instructions: {buffer_loads} buffer_load, {buffer_stores} buffer_store, {waitcnts} s_waitcnt"
+    )
 
     # Step 3: Assemble to binary
     print("\n[Step 3] Assembling to GPU binary...")
@@ -552,6 +576,7 @@ def test_copy_kernel_cpp_backend():
     except Exception as e:
         print(f"  ERROR: Execution failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -649,7 +674,10 @@ def test_compare_cpp_vs_python_backend():
     # Python backend
     print("\n[Step 3] Compiling with Python backend...")
     try:
-        from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
+        from wave_lang.kernel.wave.asm.kernel_module_compiler import (
+            KernelModuleCompiler,
+        )
+
         python_compiler = KernelModuleCompiler(targetid=target, codeobj="5")
         python_asm = python_compiler.compile_mlir_string(mlir_text)
     except Exception as e:
@@ -668,22 +696,26 @@ def test_compare_cpp_vs_python_backend():
 
     # Save for detailed diff
     temp_dir = Path(tempfile.mkdtemp(prefix="waveasm_compare_"))
-    (temp_dir / "cpp_backend.s").write_text(cpp_asm if isinstance(cpp_asm, str) else str(cpp_asm))
-    (temp_dir / "python_backend.s").write_text(python_asm if isinstance(python_asm, str) else str(python_asm))
+    (temp_dir / "cpp_backend.s").write_text(
+        cpp_asm if isinstance(cpp_asm, str) else str(cpp_asm)
+    )
+    (temp_dir / "python_backend.s").write_text(
+        python_asm if isinstance(python_asm, str) else str(python_asm)
+    )
     print(f"\nSaved to: {temp_dir}")
 
     # Basic comparison stats
     def count_instructions(asm):
         if "failed" in asm.lower():
             return {}
-        lines = asm.split('\n')
+        lines = asm.split("\n")
         return {
-            'total_lines': len(lines),
-            'buffer_load': sum(1 for l in lines if 'buffer_load' in l),
-            'buffer_store': sum(1 for l in lines if 'buffer_store' in l),
-            's_waitcnt': sum(1 for l in lines if 's_waitcnt' in l),
-            's_mov': sum(1 for l in lines if 's_mov' in l),
-            's_load': sum(1 for l in lines if 's_load' in l),
+            "total_lines": len(lines),
+            "buffer_load": sum(1 for l in lines if "buffer_load" in l),
+            "buffer_store": sum(1 for l in lines if "buffer_store" in l),
+            "s_waitcnt": sum(1 for l in lines if "s_waitcnt" in l),
+            "s_mov": sum(1 for l in lines if "s_mov" in l),
+            "s_load": sum(1 for l in lines if "s_load" in l),
         }
 
     print("\n" + "=" * 60)
@@ -701,8 +733,11 @@ def test_compare_cpp_vs_python_backend():
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="C++ WaveASM Backend E2E Test")
-    parser.add_argument("--compare", action="store_true", help="Compare C++ vs Python backend")
+    parser.add_argument(
+        "--compare", action="store_true", help="Compare C++ vs Python backend"
+    )
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files")
     args = parser.parse_args()
 

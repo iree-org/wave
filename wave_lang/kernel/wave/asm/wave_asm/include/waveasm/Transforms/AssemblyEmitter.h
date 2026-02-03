@@ -29,7 +29,8 @@ public:
   InstructionFormatter() = default;
 
   /// Format an instruction with operands
-  std::string format(llvm::StringRef name, llvm::ArrayRef<std::string> operands);
+  std::string format(llvm::StringRef name,
+                     llvm::ArrayRef<std::string> operands);
 
   /// Format a label
   std::string formatLabel(llvm::StringRef label);
@@ -65,20 +66,17 @@ public:
   llvm::SmallVector<std::string> emitPrologue();
 
   /// Emit assembly epilogue (kernel symbol info, metadata YAML)
-  llvm::SmallVector<std::string> emitEpilogue(int64_t peakVGPRs,
-                                               int64_t peakSGPRs,
-                                               int64_t ldsSize);
+  llvm::SmallVector<std::string>
+  emitEpilogue(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
 
 private:
   /// Emit .amdhsa_kernel directive and its fields
-  llvm::SmallVector<std::string> emitKernelDescriptor(int64_t peakVGPRs,
-                                                       int64_t peakSGPRs,
-                                                       int64_t ldsSize);
+  llvm::SmallVector<std::string>
+  emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
 
   /// Emit .amdgpu_metadata section
-  llvm::SmallVector<std::string> emitMetadataYAML(int64_t peakVGPRs,
-                                                   int64_t peakSGPRs,
-                                                   int64_t ldsSize);
+  llvm::SmallVector<std::string>
+  emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
 
   ProgramOp program;
   TargetAttrInterface target;
@@ -117,7 +115,8 @@ private:
 
   /// Generate instructions with literal handling
   /// For VOP3 ops that don't support literals, emit s_mov_b32 first
-  llvm::SmallVector<std::string> generateOpWithLiteralHandling(mlir::Operation *op);
+  llvm::SmallVector<std::string>
+  generateOpWithLiteralHandling(mlir::Operation *op);
 
   /// Generate code for a label op
   std::string generateLabel(LabelOp labelOp);
@@ -150,13 +149,13 @@ private:
 
 /// Write assembly to a file
 mlir::LogicalResult writeAssembly(ProgramOp program,
-                                   const PhysicalMapping &mapping,
-                                   llvm::StringRef outputPath);
+                                  const PhysicalMapping &mapping,
+                                  llvm::StringRef outputPath);
 
 /// Write assembly to a stream
 mlir::LogicalResult writeAssembly(ProgramOp program,
-                                   const PhysicalMapping &mapping,
-                                   llvm::raw_ostream &os);
+                                  const PhysicalMapping &mapping,
+                                  llvm::raw_ostream &os);
 
 } // namespace waveasm
 

@@ -36,13 +36,21 @@ def get_target_arch() -> str:
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
     if default_path.exists():
         return default_path
     raise FileNotFoundError(f"waveasm-translate not found at {default_path}")
 
 
-def capture_mma_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, str, tuple[int, int, int]]:
+def capture_mma_kernel_mlir(
+    target: str, use_g2s: bool = False
+) -> tuple[str, str, tuple[int, int, int]]:
     """Define a multi-workgroup multi-wave MMA kernel and capture its MLIR.
 
     Config: 128x128 problem with 64x64 blocks = 2x2 workgroups
@@ -106,8 +114,11 @@ def capture_mma_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, st
     # 128x128x16 problem with 64x64 blocks = 2x2 workgroups, 16 waves per WG
     options = WaveCompileOptions(
         subs={
-            M: 128, N: 128, K: 16,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 128,
+            N: 128,
+            K: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -148,7 +159,9 @@ def capture_mma_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, st
     return mlir_text, "mma_multi_wg_wave", wg_size
 
 
-def capture_gemm_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, str, tuple[int, int, int]]:
+def capture_gemm_kernel_mlir(
+    target: str, use_g2s: bool = False
+) -> tuple[str, str, tuple[int, int, int]]:
     """Define a GEMM kernel with K-loop and capture its MLIR.
 
     Config: 64x64x128 problem with 32x32 blocks, BLOCK_K=64
@@ -216,9 +229,14 @@ def capture_gemm_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, s
     # 64x64x128 problem with 32x32 blocks, BLOCK_K=64 -> 2 K-loop iterations
     options = WaveCompileOptions(
         subs={
-            M: 64, N: 64, K: 128,
-            BLOCK_M: 32, BLOCK_N: 32, BLOCK_K: 64,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 64,
+            N: 64,
+            K: 128,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 64,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -262,11 +280,15 @@ def capture_gemm_kernel_mlir(target: str, use_g2s: bool = False) -> tuple[str, s
 def compile_with_python_backend(mlir_text: str, target: str) -> str:
     """Compile MLIR using Python backend."""
     try:
-        from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
+        from wave_lang.kernel.wave.asm.kernel_module_compiler import (
+            KernelModuleCompiler,
+        )
+
         compiler = KernelModuleCompiler(targetid=target, codeobj="5")
         return compiler.compile_mlir_string(mlir_text)
     except Exception as e:
         import traceback
+
         return f"Python backend error: {e}\n{traceback.format_exc()}"
 
 
@@ -275,8 +297,8 @@ def extract_func_from_stream(mlir_text: str) -> str:
     # First pass: extract arg -> memref type mappings from stream.binding.subspan
     arg_types = {}
     for match in re.finditer(
-        r'stream\.binding\.subspan\s+(%arg\d+)\[[^\]]*\]\s*:\s*!stream\.binding\s*->\s*(memref<[^>]+>)',
-        mlir_text
+        r"stream\.binding\.subspan\s+(%arg\d+)\[[^\]]*\]\s*:\s*!stream\.binding\s*->\s*(memref<[^>]+>)",
+        mlir_text,
     ):
         arg_name = match.group(1)
         memref_type = match.group(2)
@@ -284,9 +306,7 @@ def extract_func_from_stream(mlir_text: str) -> str:
 
     # Find the func.func inside builtin.module
     func_match = re.search(
-        r'(func\.func @\w+\([^)]*\)[^{]*\{.*?return\s*\})',
-        mlir_text,
-        re.DOTALL
+        r"(func\.func @\w+\([^)]*\)[^{]*\{.*?return\s*\})", mlir_text, re.DOTALL
     )
 
     if not func_match:
@@ -301,50 +321,53 @@ def extract_func_from_stream(mlir_text: str) -> str:
             return f"{arg_name}: {arg_types[arg_name]}"
         return m.group(0)
 
-    func_body = re.sub(r'(%arg\d+):\s*!stream\.binding', replace_arg_type, func_body)
+    func_body = re.sub(r"(%arg\d+):\s*!stream\.binding", replace_arg_type, func_body)
 
     # Also handle any remaining !stream.binding
-    func_body = func_body.replace('!stream.binding', 'memref<f16>')
+    func_body = func_body.replace("!stream.binding", "memref<f16>")
 
     # Remove stream.binding.subspan operations and create mapping
-    lines = func_body.split('\n')
+    lines = func_body.split("\n")
     new_lines = []
     binding_map = {}
 
     for line in lines:
-        if 'stream.binding.subspan' in line:
-            match = re.match(r'\s*(%\w+)\s*=\s*stream\.binding\.subspan\s+(%arg\d+)', line)
+        if "stream.binding.subspan" in line:
+            match = re.match(
+                r"\s*(%\w+)\s*=\s*stream\.binding\.subspan\s+(%arg\d+)", line
+            )
             if match:
                 binding_map[match.group(1)] = match.group(2)
             continue
         new_lines.append(line)
 
-    func_body = '\n'.join(new_lines)
+    func_body = "\n".join(new_lines)
 
     # Replace binding results with arg references
     for result, arg in binding_map.items():
         func_body = func_body.replace(result, arg)
 
     # Remove iree_codegen attributes
-    func_body = re.sub(r'attributes\s*\{[^}]*translation_info[^}]*\}', '', func_body)
+    func_body = re.sub(r"attributes\s*\{[^}]*translation_info[^}]*\}", "", func_body)
 
     # Extract affine_map definitions (use .+ to match to end of line for nested >)
-    map_defs = re.findall(r'^(#\w+\s*=\s*affine_map<.+>)\s*$', mlir_text, re.MULTILINE)
-    map_section = '\n'.join(map_defs) if map_defs else ''
+    map_defs = re.findall(r"^(#\w+\s*=\s*affine_map<.+>)\s*$", mlir_text, re.MULTILINE)
+    map_section = "\n".join(map_defs) if map_defs else ""
 
-    return f'''{map_section}
+    return f"""{map_section}
 module {{
   {func_body}
 }}
-'''
+"""
 
 
-def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942",
-                              wg_size: tuple[int, int, int] = None) -> str:
+def compile_with_cpp_backend(
+    mlir_text: str, target: str = "gfx942", wg_size: tuple[int, int, int] = None
+) -> str:
     """Compile MLIR using C++ backend via waveasm-translate."""
     waveasm_translate = get_waveasm_translate_path()
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.mlir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
         f.write(mlir_text)
         mlir_file = f.name
 
@@ -362,11 +385,13 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942",
         ]
         # Add workgroup size if specified
         if wg_size:
-            cmd.extend([
-                f"--workgroup-size-x={wg_size[0]}",
-                f"--workgroup-size-y={wg_size[1]}",
-                f"--workgroup-size-z={wg_size[2]}",
-            ])
+            cmd.extend(
+                [
+                    f"--workgroup-size-x={wg_size[0]}",
+                    f"--workgroup-size-y={wg_size[1]}",
+                    f"--workgroup-size-z={wg_size[2]}",
+                ]
+            )
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
@@ -387,14 +412,16 @@ def is_label_line(line: str) -> bool:
     """Check if line is a label (e.g., 'foo:', 'L_loop:') - not a register range like s[4:7]."""
     stripped = line.strip()
     # Labels end with : and the part before : is a valid label name (alphanumeric/_)
-    if stripped.endswith(':'):
+    if stripped.endswith(":"):
         label_name = stripped[:-1]
-        return label_name.replace('_', '').replace('.', '').isalnum()
+        return label_name.replace("_", "").replace(".", "").isalnum()
     # Also check for label at start of line like "label: instr"
-    if ':' in stripped:
-        before_colon = stripped.split(':')[0]
+    if ":" in stripped:
+        before_colon = stripped.split(":")[0]
         # If before_colon is a simple identifier, it's a label
-        if before_colon.replace('_', '').replace('.', '').isalnum() and not before_colon.startswith(('s[', 'v[')):
+        if before_colon.replace("_", "").replace(
+            ".", ""
+        ).isalnum() and not before_colon.startswith(("s[", "v[")):
             return True
     return False
 
@@ -403,12 +430,17 @@ def count_instructions(asm: str) -> int:
     """Count actual instructions in assembly."""
     count = 0
     in_kernel = False
-    for line in asm.split('\n'):
+    for line in asm.split("\n"):
         stripped = line.strip()
         if not stripped:
             continue
         # Skip directives and comments
-        if stripped.startswith('.') or stripped.startswith('#') or stripped.startswith('//') or stripped.startswith(';'):
+        if (
+            stripped.startswith(".")
+            or stripped.startswith("#")
+            or stripped.startswith("//")
+            or stripped.startswith(";")
+        ):
             continue
         # Detect kernel entry (a label line)
         if is_label_line(stripped):
@@ -416,7 +448,7 @@ def count_instructions(asm: str) -> int:
             continue
         if in_kernel:
             # Count instruction lines
-            if stripped and not stripped.startswith('.'):
+            if stripped and not stripped.startswith("."):
                 count += 1
     return count
 
@@ -425,9 +457,15 @@ def extract_instruction_counts(asm: str) -> dict:
     """Extract counts of specific instruction types."""
     counts = {}
     in_kernel = False
-    for line in asm.split('\n'):
+    for line in asm.split("\n"):
         stripped = line.strip()
-        if not stripped or stripped.startswith('.') or stripped.startswith('#') or stripped.startswith('//') or stripped.startswith(';'):
+        if (
+            not stripped
+            or stripped.startswith(".")
+            or stripped.startswith("#")
+            or stripped.startswith("//")
+            or stripped.startswith(";")
+        ):
             continue
         if is_label_line(stripped):
             in_kernel = True
@@ -444,22 +482,29 @@ def extract_instruction_counts(asm: str) -> dict:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Compare Python and C++ WaveASM backends")
+
+    parser = argparse.ArgumentParser(
+        description="Compare Python and C++ WaveASM backends"
+    )
     parser.add_argument("--g2s", action="store_true", help="Enable global_to_shared")
-    parser.add_argument("--gemm", action="store_true", help="Use GEMM with K-loop instead of simple MMA")
-    parser.add_argument("--mma", action="store_true", help="Use simple MMA kernel (default)")
+    parser.add_argument(
+        "--gemm", action="store_true", help="Use GEMM with K-loop instead of simple MMA"
+    )
+    parser.add_argument(
+        "--mma", action="store_true", help="Use simple MMA kernel (default)"
+    )
     args = parser.parse_args()
 
     use_g2s = args.g2s
     use_gemm = args.gemm
 
-    print("="*80)
+    print("=" * 80)
     if use_gemm:
         print("GEMM with K-loop (64x64x128, 32x32 blocks, BLOCK_K=64)")
         print("4 waves per WG (2x2 in M/N), 2 K-loop iterations")
     else:
         print("Multi-WG Multi-Wave MMA (2x2 WGs, 4x4 waves per WG = 16 waves)")
-    print("="*80)
+    print("=" * 80)
 
     target = get_target_arch()
     print(f"\nTarget: {target}")
@@ -467,24 +512,30 @@ def main():
 
     print("\nCapturing MLIR...")
     if use_gemm:
-        mlir_text, kernel_name, wg_size = capture_gemm_kernel_mlir(target, use_g2s=use_g2s)
+        mlir_text, kernel_name, wg_size = capture_gemm_kernel_mlir(
+            target, use_g2s=use_g2s
+        )
     else:
-        mlir_text, kernel_name, wg_size = capture_mma_kernel_mlir(target, use_g2s=use_g2s)
-    Path('/tmp/gemm_full.mlir').write_text(mlir_text)
+        mlir_text, kernel_name, wg_size = capture_mma_kernel_mlir(
+            target, use_g2s=use_g2s
+        )
+    Path("/tmp/gemm_full.mlir").write_text(mlir_text)
     print(f"Kernel: {kernel_name}")
-    print(f"Workgroup size: {wg_size} (total threads: {wg_size[0] * wg_size[1] * wg_size[2]})")
+    print(
+        f"Workgroup size: {wg_size} (total threads: {wg_size[0] * wg_size[1] * wg_size[2]})"
+    )
 
     print("Extracting kernel MLIR...")
     try:
         simplified_mlir = extract_func_from_stream(mlir_text)
-        Path('/tmp/gemm_simplified.mlir').write_text(simplified_mlir)
+        Path("/tmp/gemm_simplified.mlir").write_text(simplified_mlir)
     except Exception as e:
         print(f"Error extracting MLIR: {e}")
         return 1
 
     print("Compiling with Python backend...")
     python_asm = compile_with_python_backend(mlir_text, target)
-    Path('/tmp/gemm_python.s').write_text(python_asm)
+    Path("/tmp/gemm_python.s").write_text(python_asm)
 
     if "Python backend error" in python_asm:
         print(f"\n{python_asm}")
@@ -492,7 +543,7 @@ def main():
 
     print("Compiling with C++ backend...")
     cpp_asm = compile_with_cpp_backend(simplified_mlir, target, wg_size)
-    Path('/tmp/gemm_cpp.s').write_text(cpp_asm)
+    Path("/tmp/gemm_cpp.s").write_text(cpp_asm)
 
     if "C++ backend error" in cpp_asm:
         print(f"\n{cpp_asm}")
@@ -505,9 +556,9 @@ def main():
     print(f"\nPython backend: {python_count} instructions")
     print(f"C++ backend: {cpp_count} instructions")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("INSTRUCTION BREAKDOWN")
-    print("="*80)
+    print("=" * 80)
 
     python_counts = extract_instruction_counts(python_asm)
     cpp_counts = extract_instruction_counts(cpp_asm)
@@ -515,17 +566,26 @@ def main():
     all_mnemonics = sorted(set(python_counts.keys()) | set(cpp_counts.keys()))
 
     print(f"\n{'Instruction':<40} {'Python':>10} {'C++':>10} {'Match':>10}")
-    print("-"*70)
+    print("-" * 70)
     for mnemonic in all_mnemonics:
         py = python_counts.get(mnemonic, 0)
         cpp = cpp_counts.get(mnemonic, 0)
         match = "Y" if py == cpp else "X"
         print(f"{mnemonic:<40} {py:>10} {cpp:>10} {match:>10}")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("KEY METRICS")
-    print("="*80)
-    key_patterns = ['v_mfma', 'buffer_load', 'buffer_store', 'ds_read', 'ds_write', 's_barrier', 's_waitcnt', 's_endpgm']
+    print("=" * 80)
+    key_patterns = [
+        "v_mfma",
+        "buffer_load",
+        "buffer_store",
+        "ds_read",
+        "ds_write",
+        "s_barrier",
+        "s_waitcnt",
+        "s_endpgm",
+    ]
     for pattern in key_patterns:
         py = sum(v for k, v in python_counts.items() if pattern in k)
         cpp = sum(v for k, v in cpp_counts.items() if pattern in k)

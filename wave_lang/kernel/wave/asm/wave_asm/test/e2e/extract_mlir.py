@@ -12,7 +12,6 @@ Run with:
     python test/e2e/extract_mlir.py
 """
 
-import os
 import sys
 import subprocess
 import tempfile
@@ -47,7 +46,13 @@ GLOBAL_ADDRESS_SPACE = tkl.AddressSpace.GLOBAL_MEMORY.value
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
     if default_path.exists():
         return default_path
     raise FileNotFoundError(f"waveasm-translate not found at {default_path}")
@@ -86,7 +91,7 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
     """Compile MLIR using C++ backend via waveasm-translate."""
     waveasm_translate = get_waveasm_translate_path()
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.mlir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
         f.write(mlir_text)
         mlir_file = f.name
 
@@ -120,44 +125,44 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
 def count_instructions(asm: str) -> dict:
     """Count key instructions in assembly."""
     counts = {
-        'buffer_load': 0,
-        'buffer_store': 0,
-        'ds_read': 0,
-        'ds_write': 0,
-        'v_mfma': 0,
-        's_barrier': 0,
-        's_endpgm': 0,
-        's_waitcnt': 0,
-        'buffer_load_lds': 0,
+        "buffer_load": 0,
+        "buffer_store": 0,
+        "ds_read": 0,
+        "ds_write": 0,
+        "v_mfma": 0,
+        "s_barrier": 0,
+        "s_endpgm": 0,
+        "s_waitcnt": 0,
+        "buffer_load_lds": 0,
     }
-    for line in asm.split('\n'):
+    for line in asm.split("\n"):
         lower = line.lower().strip()
-        if lower.startswith('buffer_load') and 'lds' in lower:
-            counts['buffer_load_lds'] += 1
-        elif lower.startswith('buffer_load'):
-            counts['buffer_load'] += 1
-        elif lower.startswith('buffer_store'):
-            counts['buffer_store'] += 1
-        elif lower.startswith('ds_read'):
-            counts['ds_read'] += 1
-        elif lower.startswith('ds_write'):
-            counts['ds_write'] += 1
-        elif 'v_mfma' in lower:
-            counts['v_mfma'] += 1
-        elif lower.startswith('s_barrier'):
-            counts['s_barrier'] += 1
-        elif lower.startswith('s_endpgm'):
-            counts['s_endpgm'] += 1
-        elif lower.startswith('s_waitcnt'):
-            counts['s_waitcnt'] += 1
+        if lower.startswith("buffer_load") and "lds" in lower:
+            counts["buffer_load_lds"] += 1
+        elif lower.startswith("buffer_load"):
+            counts["buffer_load"] += 1
+        elif lower.startswith("buffer_store"):
+            counts["buffer_store"] += 1
+        elif lower.startswith("ds_read"):
+            counts["ds_read"] += 1
+        elif lower.startswith("ds_write"):
+            counts["ds_write"] += 1
+        elif "v_mfma" in lower:
+            counts["v_mfma"] += 1
+        elif lower.startswith("s_barrier"):
+            counts["s_barrier"] += 1
+        elif lower.startswith("s_endpgm"):
+            counts["s_endpgm"] += 1
+        elif lower.startswith("s_waitcnt"):
+            counts["s_waitcnt"] += 1
     return counts
 
 
 def test_read_write():
     """Test copy kernel (read_write)."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: read_write (copy kernel)")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16}),
@@ -177,7 +182,10 @@ def test_read_write():
 
     options = WaveCompileOptions(
         subs={
-            M: 16, N: 16, BLOCK_M: 16, BLOCK_N: 16,
+            M: 16,
+            N: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
@@ -191,7 +199,10 @@ def test_read_write():
     # Get MLIR using module builder internals
     options2 = WaveCompileOptions(
         subs={
-            M: 16, N: 16, BLOCK_M: 16, BLOCK_N: 16,
+            M: 16,
+            N: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
@@ -201,7 +212,7 @@ def test_read_write():
     compiled2 = wave_compile(options2, read_write)
 
     # The MLIR is in the module_op
-    from wave_lang.kernel.wave.compile import _trace_launchable_and_get_kernel_signature
+
     # Actually we need to get MLIR differently...
 
     # For now, just compare Python vs expected
@@ -209,30 +220,32 @@ def test_read_write():
 
     # Expected C++ counts for this kernel
     expected_counts = {
-        'buffer_load': 2,
-        'buffer_store': 2,
-        's_endpgm': 1,
+        "buffer_load": 2,
+        "buffer_store": 2,
+        "s_endpgm": 1,
     }
 
     print(f"Python counts: {python_counts}")
     print(f"Expected:      buffer_load=2, buffer_store=2, s_endpgm=1")
 
-    matches = (python_counts['buffer_load'] == 2 and
-               python_counts['buffer_store'] == 2 and
-               python_counts['s_endpgm'] == 1)
+    matches = (
+        python_counts["buffer_load"] == 2
+        and python_counts["buffer_store"] == 2
+        and python_counts["s_endpgm"] == 1
+    )
 
     print(f"Match: {'OK' if matches else 'FAIL'}")
 
     Path("/tmp/read_write_python.s").write_text(python_asm)
 
-    return {'kernel': 'read_write', 'matches': matches, 'python_counts': python_counts}
+    return {"kernel": "read_write", "matches": matches, "python_counts": python_counts}
 
 
 def test_mma():
     """Test MMA kernel."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: mma (16x16x16)")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -259,8 +272,13 @@ def test_mma():
 
     options = WaveCompileOptions(
         subs={
-            M: 16, N: 16, K: 16, BLOCK_M: 16, BLOCK_N: 16,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 16,
+            N: 16,
+            K: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -275,27 +293,31 @@ def test_mma():
     python_counts = count_instructions(python_asm)
 
     print(f"Python counts: {python_counts}")
-    print(f"Expected:      buffer_load=2, buffer_store=4, ds_read=2, ds_write=2, v_mfma=1, s_barrier=1")
+    print(
+        f"Expected:      buffer_load=2, buffer_store=4, ds_read=2, ds_write=2, v_mfma=1, s_barrier=1"
+    )
 
-    matches = (python_counts['buffer_load'] == 2 and
-               python_counts['buffer_store'] == 4 and
-               python_counts['ds_read'] == 2 and
-               python_counts['ds_write'] == 2 and
-               python_counts['v_mfma'] == 1 and
-               python_counts['s_barrier'] == 1)
+    matches = (
+        python_counts["buffer_load"] == 2
+        and python_counts["buffer_store"] == 4
+        and python_counts["ds_read"] == 2
+        and python_counts["ds_write"] == 2
+        and python_counts["v_mfma"] == 1
+        and python_counts["s_barrier"] == 1
+    )
 
     print(f"Match: {'OK' if matches else 'FAIL'}")
 
     Path("/tmp/mma_python.s").write_text(python_asm)
 
-    return {'kernel': 'mma', 'matches': matches, 'python_counts': python_counts}
+    return {"kernel": "mma", "matches": matches, "python_counts": python_counts}
 
 
 def test_gemm_k_loop():
     """Test GEMM with K-loop."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: gemm_k_loop")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -328,9 +350,14 @@ def test_gemm_k_loop():
 
     options = WaveCompileOptions(
         subs={
-            M: 32, N: 32, K: 32,
-            BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 32,
+            N: 32,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            BLOCK_K: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -347,19 +374,18 @@ def test_gemm_k_loop():
     print(f"Python counts: {python_counts}")
 
     # gemm_k_loop should have loop structure with v_mfma
-    matches = (python_counts['v_mfma'] >= 1 and
-               python_counts['s_endpgm'] == 1)
+    matches = python_counts["v_mfma"] >= 1 and python_counts["s_endpgm"] == 1
 
     print(f"Match: {'OK' if matches else 'FAIL'}")
 
     Path("/tmp/gemm_k_loop_python.s").write_text(python_asm)
 
-    return {'kernel': 'gemm_k_loop', 'matches': matches, 'python_counts': python_counts}
+    return {"kernel": "gemm_k_loop", "matches": matches, "python_counts": python_counts}
 
 
 def main():
     print("Extracting MLIR and comparing Python backend outputs")
-    print("="*80)
+    print("=" * 80)
 
     results = []
 
@@ -368,6 +394,7 @@ def main():
     except Exception as e:
         print(f"read_write FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
     try:
@@ -375,6 +402,7 @@ def main():
     except Exception as e:
         print(f"mma FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
     try:
@@ -382,16 +410,17 @@ def main():
     except Exception as e:
         print(f"gemm_k_loop FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("SUMMARY")
-    print("="*80)
+    print("=" * 80)
     for r in results:
-        status = "OK" if r['matches'] else "FAIL"
+        status = "OK" if r["matches"] else "FAIL"
         print(f"  {r['kernel']}: {status}")
 
-    all_match = all(r['matches'] for r in results)
+    all_match = all(r["matches"] for r in results)
     print(f"\nAll kernels correct: {'OK' if all_match else 'FAIL'}")
 
     return 0 if all_match else 1

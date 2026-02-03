@@ -7,10 +7,10 @@
 #ifndef WaveASM_TRANSFORMS_REGALLOC_H
 #define WaveASM_TRANSFORMS_REGALLOC_H
 
-#include "waveasm/Transforms/Liveness.h"
+#include "mlir/IR/Value.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "mlir/IR/Value.h"
+#include "waveasm/Transforms/Liveness.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -200,14 +200,16 @@ public:
     precoloredValues[value] = physIdx;
   }
 
-  /// Add a tied operand constraint: result must get same physical reg as operand
-  /// Used for MFMA accumulator tying where result overwrites the accumulator
+  /// Add a tied operand constraint: result must get same physical reg as
+  /// operand Used for MFMA accumulator tying where result overwrites the
+  /// accumulator
   void addTiedOperand(mlir::Value result, mlir::Value operand) {
     tiedOperands[result] = operand;
   }
 
   /// Run allocation on a kernel program
-  /// Returns the physical mapping and statistics, or failure if allocation fails
+  /// Returns the physical mapping and statistics, or failure if allocation
+  /// fails
   mlir::FailureOr<std::pair<PhysicalMapping, AllocationStats>>
   allocate(ProgramOp program);
 
@@ -222,7 +224,7 @@ private:
   llvm::DenseSet<int64_t> reservedVGPRs;
   llvm::DenseSet<int64_t> reservedSGPRs;
   llvm::DenseMap<mlir::Value, int64_t> precoloredValues;
-  llvm::DenseMap<mlir::Value, mlir::Value> tiedOperands;  // result -> operand
+  llvm::DenseMap<mlir::Value, mlir::Value> tiedOperands; // result -> operand
 };
 
 } // namespace waveasm

@@ -4,10 +4,10 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "waveasm/Transforms/RegAlloc.h"
-#include "waveasm/Transforms/Liveness.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/Liveness.h"
+#include "waveasm/Transforms/RegAlloc.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
@@ -25,18 +25,17 @@ void LinearScanRegAlloc::expireRanges(
     int64_t currentPoint, RegPool &pool, AllocationStats &stats) {
 
   // Remove ranges that ended before currentPoint
-  active.erase(
-      std::remove_if(active.begin(), active.end(),
-                     [&](const auto &entry) {
-                       auto [endPoint, range, physReg] = entry;
-                       if (endPoint < currentPoint) {
-                         pool.freeRange(physReg, range.size);
-                         stats.rangesExpired++;
-                         return true;
-                       }
-                       return false;
-                     }),
-      active.end());
+  active.erase(std::remove_if(active.begin(), active.end(),
+                              [&](const auto &entry) {
+                                auto [endPoint, range, physReg] = entry;
+                                if (endPoint < currentPoint) {
+                                  pool.freeRange(physReg, range.size);
+                                  stats.rangesExpired++;
+                                  return true;
+                                }
+                                return false;
+                              }),
+               active.end());
 }
 
 //===----------------------------------------------------------------------===//
@@ -123,10 +122,9 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
 
     // Add to active list (sorted by end point)
     activeVRegs.push_back({range.end, range, physReg});
-    llvm::sort(activeVRegs,
-               [](const auto &a, const auto &b) {
-                 return std::get<0>(a) < std::get<0>(b);
-               });
+    llvm::sort(activeVRegs, [](const auto &a, const auto &b) {
+      return std::get<0>(a) < std::get<0>(b);
+    });
 
     stats.rangesAllocated++;
   }
@@ -165,10 +163,9 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
 
     // Add to active list (sorted by end point)
     activeSRegs.push_back({range.end, range, physReg});
-    llvm::sort(activeSRegs,
-               [](const auto &a, const auto &b) {
-                 return std::get<0>(a) < std::get<0>(b);
-               });
+    llvm::sort(activeSRegs, [](const auto &a, const auto &b) {
+      return std::get<0>(a) < std::get<0>(b);
+    });
 
     stats.rangesAllocated++;
   }

@@ -7,9 +7,9 @@
 #ifndef WaveASM_TRANSFORMS_LIVENESS_H
 #define WaveASM_TRANSFORMS_LIVENESS_H
 
+#include "mlir/IR/Value.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -46,9 +46,7 @@ struct LiveRange {
   }
 
   /// Check if an instruction index is within this range
-  bool contains(int64_t point) const {
-    return start <= point && point <= end;
-  }
+  bool contains(int64_t point) const { return start <= point && point <= end; }
 
   /// Get the duration of this range
   int64_t length() const { return end - start + 1; }
@@ -186,8 +184,8 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges);
 /// Each virtual register should be defined exactly once
 /// (with exceptions for loop control and accumulator registers)
 mlir::LogicalResult validateSSA(ProgramOp program,
-                                 llvm::DenseSet<int64_t> loopControlSRegs = {},
-                                 llvm::DenseSet<int64_t> accumulatorVRegs = {});
+                                llvm::DenseSet<int64_t> loopControlSRegs = {},
+                                llvm::DenseSet<int64_t> accumulatorVRegs = {});
 
 } // namespace waveasm
 

@@ -23,8 +23,9 @@ Or just test MLIR->ASM translation (no GPU):
 
 import os
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Add wave_lang to path if needed
 wave_root = Path(__file__).parent.parent.parent.parent
@@ -34,6 +35,7 @@ if str(wave_root) not in sys.path:
 # Import test utilities
 import sys
 from pathlib import Path
+
 # Add e2e directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -41,7 +43,6 @@ from waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_mlir,
     compare_with_python_backend,
-    CompilationResult,
 )
 
 
@@ -57,6 +58,7 @@ def require_gpu(fn):
     """Skip test if no GPU available."""
     try:
         import torch
+
         if not torch.cuda.is_available():
             return pytest.mark.skip(reason="No GPU available")(fn)
         return fn
@@ -73,10 +75,11 @@ def get_target_arch() -> str:
 
     try:
         import torch
+
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
             # Map compute capability to gfx name
-            gcn_arch = props.gcnArchName if hasattr(props, 'gcnArchName') else None
+            gcn_arch = props.gcnArchName if hasattr(props, "gcnArchName") else None
             if gcn_arch:
                 # Strip feature flags like :sramecc+:xnack-
                 return gcn_arch.split(":")[0]
@@ -89,6 +92,7 @@ def get_target_arch() -> str:
 # ============================================================================
 # Test: MLIR -> ASM Translation (No GPU required)
 # ============================================================================
+
 
 class TestMLIRTranslation:
     """Test MLIR to ASM translation using C++ backend."""
@@ -129,6 +133,7 @@ module {
 # Test: Full Pipeline with Wave Kernel (Requires wave_lang)
 # ============================================================================
 
+
 class TestWaveKernelCompilation:
     """Test full compilation pipeline with Wave kernels."""
 
@@ -142,7 +147,6 @@ class TestWaveKernelCompilation:
     def test_capture_copy_kernel_mlir(self, compiler):
         """Test capturing MLIR from copy kernel definition."""
         try:
-            import torch
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -218,7 +222,6 @@ class TestWaveKernelCompilation:
     def test_compare_cpp_vs_python_backend(self, compiler):
         """Compare C++ and Python backend outputs for copy kernel."""
         try:
-            import torch
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -286,9 +289,10 @@ class TestWaveKernelCompilation:
 # Test: End-to-End GPU Execution (Requires GPU)
 # ============================================================================
 
+
 @pytest.mark.skipif(
     not os.environ.get("RUN_GPU_TESTS", False),
-    reason="GPU tests disabled. Set RUN_GPU_TESTS=1 to enable."
+    reason="GPU tests disabled. Set RUN_GPU_TESTS=1 to enable.",
 )
 class TestGPUExecution:
     """End-to-end GPU execution tests."""
@@ -300,11 +304,15 @@ class TestGPUExecution:
         try:
             import torch
             from torch.testing import assert_close
+
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
             from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-            from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
+            from wave_lang.kernel.wave.utils.torch_utils import (
+                device_randn,
+                device_zeros,
+            )
         except ImportError:
             pytest.skip("Required packages not available")
 
@@ -387,6 +395,7 @@ class TestGPUExecution:
 # ============================================================================
 # Pytest configuration
 # ============================================================================
+
 
 def pytest_addoption(parser):
     """Add custom command line options."""

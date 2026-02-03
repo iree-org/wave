@@ -5,14 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
-#include "waveasm/Dialect/WaveASMAttrs.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace waveasm;

@@ -17,18 +17,21 @@ Usage:
 """
 
 import argparse
-import torch
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.support.location_config import LocationCaptureConfig, LocationCaptureLevel
+from wave_lang.support.location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
 
 
 # ============================================================================
 # Kernel Definitions
 # ============================================================================
+
 
 def get_copy_kernel():
     """Simple copy kernel - reads from A, writes to B."""
@@ -41,7 +44,9 @@ def get_copy_kernel():
     BLOCK_N = 16
 
     constraints = [
-        tkw.HardwareConstraint(threads_per_wave=wave_size, vector_shapes={M: BLOCK_M, N: BLOCK_N}),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.WaveConstraint(M, BLOCK_M),
@@ -174,14 +179,21 @@ def get_gemm_kernel():
 # Main
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="Dump MLIR/ASM from Wave kernels")
-    parser.add_argument("--kernel", choices=["copy", "mma", "gemm"], default="copy",
-                        help="Kernel to compile")
-    parser.add_argument("--asm", action="store_true",
-                        help="Also generate and print assembly")
-    parser.add_argument("--mlir-only", action="store_true",
-                        help="Only print MLIR, no assembly")
+    parser.add_argument(
+        "--kernel",
+        choices=["copy", "mma", "gemm"],
+        default="copy",
+        help="Kernel to compile",
+    )
+    parser.add_argument(
+        "--asm", action="store_true", help="Also generate and print assembly"
+    )
+    parser.add_argument(
+        "--mlir-only", action="store_true", help="Only print MLIR, no assembly"
+    )
     args = parser.parse_args()
 
     # Get kernel

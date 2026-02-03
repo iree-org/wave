@@ -122,10 +122,10 @@ private:
 
 enum class MemOpKind {
   None,
-  VmemLoad,   // buffer_load, global_load, flat_load
-  VmemStore,  // buffer_store, global_store, flat_store
-  LgkmLoad,   // ds_read, s_load
-  LgkmStore   // ds_write
+  VmemLoad,  // buffer_load, global_load, flat_load
+  VmemStore, // buffer_store, global_store, flat_store
+  LgkmLoad,  // ds_read, s_load
+  LgkmStore  // ds_write
 };
 
 /// Classify an operation by its memory type using MLIR op types
@@ -133,12 +133,11 @@ MemOpKind classifyMemOp(Operation *op) {
   // VMEM loads (buffer, global, flat)
   if (isa<BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX3,
           BUFFER_LOAD_DWORDX4, BUFFER_LOAD_UBYTE, BUFFER_LOAD_SBYTE,
-          BUFFER_LOAD_USHORT, BUFFER_LOAD_SSHORT,
-          GLOBAL_LOAD_DWORD, GLOBAL_LOAD_DWORDX2, GLOBAL_LOAD_DWORDX3,
-          GLOBAL_LOAD_DWORDX4, GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE,
-          GLOBAL_LOAD_USHORT, GLOBAL_LOAD_SSHORT,
-          FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2, FLAT_LOAD_DWORDX3,
-          FLAT_LOAD_DWORDX4,
+          BUFFER_LOAD_USHORT, BUFFER_LOAD_SSHORT, GLOBAL_LOAD_DWORD,
+          GLOBAL_LOAD_DWORDX2, GLOBAL_LOAD_DWORDX3, GLOBAL_LOAD_DWORDX4,
+          GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE, GLOBAL_LOAD_USHORT,
+          GLOBAL_LOAD_SSHORT, FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2,
+          FLAT_LOAD_DWORDX3, FLAT_LOAD_DWORDX4,
           // Gather-to-LDS: VMEM load directly to LDS (still uses VMEM path)
           BUFFER_LOAD_DWORD_LDS, BUFFER_LOAD_DWORDX4_LDS>(op))
     return MemOpKind::VmemLoad;
@@ -153,20 +152,18 @@ MemOpKind classifyMemOp(Operation *op) {
     return MemOpKind::VmemStore;
 
   // LDS loads (ds_read)
-  if (isa<DS_READ_B32, DS_READ_B64, DS_READ_B128,
-          DS_READ2_B32, DS_READ2_B64,
+  if (isa<DS_READ_B32, DS_READ_B64, DS_READ_B128, DS_READ2_B32, DS_READ2_B64,
           DS_READ_U8, DS_READ_I8, DS_READ_U16, DS_READ_I16>(op))
     return MemOpKind::LgkmLoad;
 
   // LDS stores (ds_write)
-  if (isa<DS_WRITE_B32, DS_WRITE_B64, DS_WRITE_B128,
-          DS_WRITE2_B32, DS_WRITE2_B64,
-          DS_WRITE_B8, DS_WRITE_B16>(op))
+  if (isa<DS_WRITE_B32, DS_WRITE_B64, DS_WRITE_B128, DS_WRITE2_B32,
+          DS_WRITE2_B64, DS_WRITE_B8, DS_WRITE_B16>(op))
     return MemOpKind::LgkmStore;
 
   // Scalar loads (s_load) - also use LGKM counter
-  if (isa<S_LOAD_DWORD, S_LOAD_DWORDX2, S_LOAD_DWORDX4,
-          S_LOAD_DWORDX8, S_LOAD_DWORDX16>(op))
+  if (isa<S_LOAD_DWORD, S_LOAD_DWORDX2, S_LOAD_DWORDX4, S_LOAD_DWORDX8,
+          S_LOAD_DWORDX16>(op))
     return MemOpKind::LgkmLoad;
 
   return MemOpKind::None;
@@ -277,7 +274,8 @@ private:
 
         // Now increment the ticket counter for this memory op
         // NOTE: Only LOADS increment the counter because vmcnt/lgkmcnt only
-        // track outstanding loads, not stores. Stores don't affect these counters.
+        // track outstanding loads, not stores. Stores don't affect these
+        // counters.
         int64_t ticket = -1;
         if (kind == MemOpKind::VmemLoad) {
           ticket = ticketing.nextVmemTicket();
@@ -381,7 +379,8 @@ std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass() {
   return std::make_unique<InsertWaitcntPass>();
 }
 
-std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass(bool insertAfterLoads) {
+std::unique_ptr<mlir::Pass>
+createWAVEASMInsertWaitcntPass(bool insertAfterLoads) {
   return std::make_unique<InsertWaitcntPass>(insertAfterLoads);
 }
 

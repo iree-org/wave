@@ -10,12 +10,12 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -78,16 +78,17 @@ struct ExprKey {
 
 /// Information about a buffer's SRD setup
 struct SRDInfo {
-  mlir::Value baseSGPR;      // SGPR pair holding base address
-  mlir::Value srdSGPR;       // SGPR quad holding full SRD
-  int64_t bindingIndex;      // Which kernel argument this refers to
-  int64_t bufferSize;        // Buffer size in bytes (for bounds checking)
-  int64_t elementSize;       // Element size in bytes
+  mlir::Value baseSGPR; // SGPR pair holding base address
+  mlir::Value srdSGPR;  // SGPR quad holding full SRD
+  int64_t bindingIndex; // Which kernel argument this refers to
+  int64_t bufferSize;   // Buffer size in bytes (for bounds checking)
+  int64_t elementSize;  // Element size in bytes
 
   SRDInfo() : bindingIndex(-1), bufferSize(0), elementSize(4) {}
-  SRDInfo(mlir::Value base, mlir::Value srd, int64_t binding, int64_t size, int64_t elemSize)
-      : baseSGPR(base), srdSGPR(srd), bindingIndex(binding),
-        bufferSize(size), elementSize(elemSize) {}
+  SRDInfo(mlir::Value base, mlir::Value srd, int64_t binding, int64_t size,
+          int64_t elemSize)
+      : baseSGPR(base), srdSGPR(srd), bindingIndex(binding), bufferSize(size),
+        elementSize(elemSize) {}
 };
 
 //===----------------------------------------------------------------------===//
@@ -95,12 +96,13 @@ struct SRDInfo {
 //===----------------------------------------------------------------------===//
 
 /// Represents a range of bits [lowBit, highBit] that an expression can occupy.
-/// Used to determine if two additions can be fused into OR when bits don't overlap.
+/// Used to determine if two additions can be fused into OR when bits don't
+/// overlap.
 struct BitRange {
-  int64_t lowBit;   // Lowest bit index used (0-based)
-  int64_t highBit;  // Highest bit index used (0-based)
+  int64_t lowBit;  // Lowest bit index used (0-based)
+  int64_t highBit; // Highest bit index used (0-based)
 
-  BitRange() : lowBit(0), highBit(31) {}  // Default: full 32-bit range
+  BitRange() : lowBit(0), highBit(31) {} // Default: full 32-bit range
   BitRange(int64_t low, int64_t high) : lowBit(low), highBit(high) {}
 
   /// Check if this range overlaps with another
@@ -133,19 +135,27 @@ struct BitRange {
 
   /// Create range from a constant value
   static BitRange fromConstant(int64_t value) {
-    if (value == 0) return BitRange(0, 0);
+    if (value == 0)
+      return BitRange(0, 0);
     int64_t bits = 0;
     int64_t v = value;
-    while (v > 0) { bits++; v >>= 1; }
+    while (v > 0) {
+      bits++;
+      v >>= 1;
+    }
     return BitRange(0, bits - 1);
   }
 
   /// Create range for a value with known max
   static BitRange fromMaxValue(int64_t maxValue) {
-    if (maxValue <= 0) return BitRange(0, 0);
+    if (maxValue <= 0)
+      return BitRange(0, 0);
     int64_t bits = 0;
     int64_t v = maxValue;
-    while (v > 0) { bits++; v >>= 1; }
+    while (v > 0) {
+      bits++;
+      v >>= 1;
+    }
     return BitRange(0, bits - 1);
   }
 };
@@ -189,10 +199,10 @@ private:
 
 /// Context for tracking loop state during translation
 struct LoopContext {
-  mlir::Value inductionVar;           // Current loop counter
-  llvm::SmallVector<mlir::Value, 4> iterArgs;  // Loop-carried values
-  llvm::StringRef labelName;          // Loop label for branching
-  int64_t depth;                      // Nesting depth
+  mlir::Value inductionVar;                   // Current loop counter
+  llvm::SmallVector<mlir::Value, 4> iterArgs; // Loop-carried values
+  llvm::StringRef labelName;                  // Loop label for branching
+  int64_t depth;                              // Nesting depth
 
   LoopContext() : depth(0) {}
 };
@@ -284,18 +294,14 @@ public:
   }
 
   /// Check if SRD is already set up for a memref
-  bool hasSRD(mlir::Value memref) const {
-    return srdMap.contains(memref);
-  }
+  bool hasSRD(mlir::Value memref) const { return srdMap.contains(memref); }
 
   //===--------------------------------------------------------------------===//
   // Loop Context Management
   //===--------------------------------------------------------------------===//
 
   /// Push a new loop context
-  void pushLoopContext(const LoopContext &ctx) {
-    loopStack.push_back(ctx);
-  }
+  void pushLoopContext(const LoopContext &ctx) { loopStack.push_back(ctx); }
 
   /// Pop the current loop context
   void popLoopContext() {
@@ -318,13 +324,13 @@ public:
   //===--------------------------------------------------------------------===//
 
   /// Check if an expression result is already cached
-  std::optional<mlir::Value> getCachedExpr(llvm::StringRef opName,
-                                            mlir::ValueRange operands,
-                                            llvm::ArrayRef<int64_t> constants = {}) const;
+  std::optional<mlir::Value>
+  getCachedExpr(llvm::StringRef opName, mlir::ValueRange operands,
+                llvm::ArrayRef<int64_t> constants = {}) const;
 
   /// Cache an expression result
   void cacheExpr(llvm::StringRef opName, mlir::ValueRange operands,
-                  llvm::ArrayRef<int64_t> constants, mlir::Value result);
+                 llvm::ArrayRef<int64_t> constants, mlir::Value result);
 
   /// Clear expression cache (e.g., at loop boundaries)
   void clearExprCache() { exprCache.clear(); }
@@ -338,10 +344,10 @@ public:
 
   /// Information about a pending SRD setup
   struct PendingSRD {
-    mlir::Value memref;      // The memref value this SRD is for
-    int64_t argIndex;        // Which kernel argument (0, 1, 2, ...)
-    int64_t bufferSize;      // Size in bytes for SRD[2]
-    int64_t srdBaseIndex;    // SGPR index for SRD (e.g., 8 for s[8:11])
+    mlir::Value memref;   // The memref value this SRD is for
+    int64_t argIndex;     // Which kernel argument (0, 1, 2, ...)
+    int64_t bufferSize;   // Size in bytes for SRD[2]
+    int64_t srdBaseIndex; // SGPR index for SRD (e.g., 8 for s[8:11])
   };
 
   /// Queue an SRD setup for a binding
@@ -363,7 +369,7 @@ public:
   /// These are allocated after the regular SRDs, starting at s24
   int64_t getNextSwizzleSRDIndex() {
     int64_t idx = nextSwizzleSRDIndex;
-    nextSwizzleSRDIndex += 4;  // Each SRD uses 4 consecutive SGPRs
+    nextSwizzleSRDIndex += 4; // Each SRD uses 4 consecutive SGPRs
     return idx;
   }
 
@@ -434,7 +440,7 @@ public:
     auto it = bitRangeMap.find(value);
     if (it != bitRangeMap.end())
       return it->second;
-    return BitRange();  // Default: full 32-bit range (conservative)
+    return BitRange(); // Default: full 32-bit range (conservative)
   }
 
   /// Check if a value has a tracked bit range
@@ -536,20 +542,24 @@ public:
 
   /// Check if this is a multi-wave kernel (more than 64 threads per workgroup)
   /// Multi-wave means workgroup_size_y > 1 or workgroup_size_z > 1
-  /// (We assume wave size of 64 and workgroup_size_x is always a multiple of 64)
+  /// (We assume wave size of 64 and workgroup_size_x is always a multiple of
+  /// 64)
   bool isMultiWaveKernel() const {
     // Get workgroup_size attribute (using const-safe accessor)
-    mlir::ArrayAttr workgroupSizeAttr = program->getAttrOfType<mlir::ArrayAttr>("workgroup_size");
+    mlir::ArrayAttr workgroupSizeAttr =
+        program->getAttrOfType<mlir::ArrayAttr>("workgroup_size");
 
     if (!workgroupSizeAttr || workgroupSizeAttr.size() < 2)
       return false;
 
     int64_t wgY = 1, wgZ = 1;
-    if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[1])) {
+    if (auto intAttr =
+            llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[1])) {
       wgY = intAttr.getInt();
     }
     if (workgroupSizeAttr.size() >= 3) {
-      if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[2])) {
+      if (auto intAttr =
+              llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[2])) {
         wgZ = intAttr.getInt();
       }
     }
@@ -560,19 +570,23 @@ public:
   /// Get workgroup size as (x, y, z) tuple
   std::tuple<int64_t, int64_t, int64_t> getWorkgroupSize() const {
     // Get workgroup_size attribute (using const-safe accessor)
-    mlir::ArrayAttr workgroupSizeAttr = program->getAttrOfType<mlir::ArrayAttr>("workgroup_size");
-    int64_t wgX = 64, wgY = 1, wgZ = 1;  // defaults
+    mlir::ArrayAttr workgroupSizeAttr =
+        program->getAttrOfType<mlir::ArrayAttr>("workgroup_size");
+    int64_t wgX = 64, wgY = 1, wgZ = 1; // defaults
     if (workgroupSizeAttr && workgroupSizeAttr.size() >= 1) {
-      if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[0])) {
+      if (auto intAttr =
+              llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[0])) {
         wgX = intAttr.getInt();
       }
       if (workgroupSizeAttr.size() >= 2) {
-        if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[1])) {
+        if (auto intAttr =
+                llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[1])) {
           wgY = intAttr.getInt();
         }
       }
       if (workgroupSizeAttr.size() >= 3) {
-        if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[2])) {
+        if (auto intAttr =
+                llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[2])) {
           wgZ = intAttr.getInt();
         }
       }
@@ -591,19 +605,27 @@ private:
   llvm::DenseMap<mlir::Value, int64_t> bindingMap;
   llvm::DenseMap<mlir::Value, int64_t> cacheSwizzleMap;
   llvm::DenseMap<mlir::Value, SRDInfo> srdMap;
-  llvm::DenseMap<mlir::Value, int64_t> srdIndexMap;  // memref -> SRD SGPR base index
-  llvm::DenseMap<mlir::Value, llvm::SmallVector<mlir::Value, 4>> splitResultsMap;  // originalValue -> split results
-  llvm::DenseMap<mlir::Value, int64_t> threadIdUpperBounds;  // thread ID -> upper bound
-  llvm::DenseMap<mlir::Value, BitRange> bitRangeMap;  // value -> bit range (for OR vs ADD opt)
-  llvm::DenseMap<mlir::Value, int64_t> constOffsetMap;  // value -> constant offset (for buffer store offset:N)
-  llvm::DenseMap<mlir::Value, mlir::Value> ldsBaseOffsetMap;  // memref -> LDS byte offset from memref.view
+  llvm::DenseMap<mlir::Value, int64_t>
+      srdIndexMap; // memref -> SRD SGPR base index
+  llvm::DenseMap<mlir::Value, llvm::SmallVector<mlir::Value, 4>>
+      splitResultsMap; // originalValue -> split results
+  llvm::DenseMap<mlir::Value, int64_t>
+      threadIdUpperBounds; // thread ID -> upper bound
+  llvm::DenseMap<mlir::Value, BitRange>
+      bitRangeMap; // value -> bit range (for OR vs ADD opt)
+  llvm::DenseMap<mlir::Value, int64_t>
+      constOffsetMap; // value -> constant offset (for buffer store offset:N)
+  llvm::DenseMap<mlir::Value, mlir::Value>
+      ldsBaseOffsetMap; // memref -> LDS byte offset from memref.view
   llvm::SmallVector<LoopContext, 4> loopStack;
   llvm::SmallVector<PendingSRD, 4> pendingSRDs;
   llvm::StringMap<mlir::Value> exprCache;
   int64_t labelCounter = 0;
-  int64_t nextSRDIndex = -1;  // Will be computed lazily, starts after user+system SGPRs
-  int64_t nextSwizzleSRDIndex = 24;  // Swizzle SRDs start at s24 (after regular arg SRDs)
-  int64_t totalLDSSize = 0;  // Total LDS allocation size in bytes
+  int64_t nextSRDIndex =
+      -1; // Will be computed lazily, starts after user+system SGPRs
+  int64_t nextSwizzleSRDIndex =
+      24; // Swizzle SRDs start at s24 (after regular arg SRDs)
+  int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
   bool srdPrologueEmitted = false;
   // System register usage tracking
   bool usesWorkgroupIdX = false;
@@ -648,25 +670,25 @@ struct TranslationOptions {
 
 /// Translate a single MLIR operation to waveasm
 mlir::LogicalResult translateOperation(mlir::Operation *op,
-                                         TranslationContext &ctx);
+                                       TranslationContext &ctx);
 
 /// Translate an MLIR module containing GPU kernels to waveasm programs
 mlir::LogicalResult translateModule(mlir::ModuleOp module,
-                                     llvm::StringRef targetId);
+                                    llvm::StringRef targetId);
 
 /// Translate an MLIR module with explicit options
 mlir::LogicalResult translateModule(mlir::ModuleOp module,
-                                     const TranslationOptions &options);
+                                    const TranslationOptions &options);
 
 /// Create an waveasm.program from a GPU function
 ProgramOp createProgramFromGPUFunc(mlir::gpu::GPUFuncOp gpuFunc,
-                                    mlir::OpBuilder &builder,
-                                    llvm::StringRef targetId);
+                                   mlir::OpBuilder &builder,
+                                   llvm::StringRef targetId);
 
 /// Create an waveasm.program from a func.func
 ProgramOp createProgramFromFunc(mlir::func::FuncOp funcOp,
-                                 mlir::OpBuilder &builder,
-                                 llvm::StringRef targetId);
+                                mlir::OpBuilder &builder,
+                                llvm::StringRef targetId);
 
 } // namespace waveasm
 

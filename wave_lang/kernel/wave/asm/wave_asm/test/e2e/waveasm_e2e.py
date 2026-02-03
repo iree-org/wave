@@ -41,6 +41,7 @@ import torch
 @dataclass
 class CompilationResult:
     """Result of compilation through C++ WaveASM backend."""
+
     mlir_text: str
     asm_text: str
     binary_path: Optional[Path]
@@ -50,8 +51,9 @@ class CompilationResult:
     def get_kernel_name(self) -> Optional[str]:
         """Extract kernel function name from generated assembly."""
         import re
+
         # Look for .globl directive which marks the kernel entry point
-        match = re.search(r'\.globl\s+(\w+)', self.asm_text)
+        match = re.search(r"\.globl\s+(\w+)", self.asm_text)
         if match:
             return match.group(1)
         return None
@@ -59,8 +61,9 @@ class CompilationResult:
     def get_lds_size(self) -> int:
         """Extract LDS (shared memory) size from kernel descriptor."""
         import re
+
         # Look for .amdhsa_group_segment_fixed_size directive
-        match = re.search(r'\.amdhsa_group_segment_fixed_size\s+(\d+)', self.asm_text)
+        match = re.search(r"\.amdhsa_group_segment_fixed_size\s+(\d+)", self.asm_text)
         if match:
             return int(match.group(1))
         return 0
@@ -68,8 +71,9 @@ class CompilationResult:
     def get_max_flat_workgroup_size(self) -> int:
         """Extract max flat workgroup size from YAML metadata."""
         import re
+
         # Look for .max_flat_workgroup_size in YAML metadata
-        match = re.search(r'\.max_flat_workgroup_size:\s+(\d+)', self.asm_text)
+        match = re.search(r"\.max_flat_workgroup_size:\s+(\d+)", self.asm_text)
         if match:
             return int(match.group(1))
         return 64  # Default to 1 wave
@@ -83,14 +87,22 @@ def get_waveasm_translate_path() -> Path:
 
     # Default: look in wave-asm build directory
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
 
     if default_path.exists():
         return default_path
 
     # Try to find it in PATH
     try:
-        result = subprocess.run(["which", "waveasm-translate"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["which", "waveasm-translate"], capture_output=True, text=True
+        )
         if result.returncode == 0:
             return Path(result.stdout.strip())
     except Exception:
@@ -172,20 +184,22 @@ class WaveASMCompiler:
         cmd = [
             str(self.waveasm_translate),
             f"--target={self.target}",
-            "--waveasm-scoped-cse",      # Run CSE
-            "--waveasm-linear-scan",      # Run register allocation
-            "--waveasm-insert-waitcnt",   # Insert wait instructions
-            "--waveasm-hazard-mitigation", # Handle hazards
-            "--emit-assembly",            # Emit AMDGCN assembly
+            "--waveasm-scoped-cse",  # Run CSE
+            "--waveasm-linear-scan",  # Run register allocation
+            "--waveasm-insert-waitcnt",  # Insert wait instructions
+            "--waveasm-hazard-mitigation",  # Handle hazards
+            "--emit-assembly",  # Emit AMDGCN assembly
         ]
 
         # Add workgroup size if specified
         if workgroup_size:
-            cmd.extend([
-                f"--workgroup-size-x={workgroup_size[0]}",
-                f"--workgroup-size-y={workgroup_size[1]}",
-                f"--workgroup-size-z={workgroup_size[2]}",
-            ])
+            cmd.extend(
+                [
+                    f"--workgroup-size-x={workgroup_size[0]}",
+                    f"--workgroup-size-y={workgroup_size[1]}",
+                    f"--workgroup-size-z={workgroup_size[2]}",
+                ]
+            )
 
         cmd.append(str(mlir_file))
 
@@ -234,14 +248,17 @@ class WaveASMCompiler:
         # Step 1: Assemble to object file
         compile_cmd = [
             self.amdclang,
-            "-x", "assembler",
-            "-target", "amdgcn-amd-amdhsa",
+            "-x",
+            "assembler",
+            "-target",
+            "amdgcn-amd-amdhsa",
             f"-mcode-object-version={self.codeobj}",
             f"-mcpu={self.target}",
             "-mwavefrontsize64",
             "-c",
             str(asm_file),
-            "-o", str(obj_file),
+            "-o",
+            str(obj_file),
         ]
 
         try:
@@ -258,9 +275,12 @@ class WaveASMCompiler:
             # Step 2: Link to HSACO
             link_cmd = [
                 self.amdclang,
-                "-target", "amdgcn-amd-amdhsa",
-                "-Xlinker", "--build-id=sha1",
-                "-o", str(hsaco_file),
+                "-target",
+                "amdgcn-amd-amdhsa",
+                "-Xlinker",
+                "--build-id=sha1",
+                "-o",
+                str(hsaco_file),
                 str(obj_file),
             ]
 
@@ -335,6 +355,7 @@ class WaveASMCompiler:
         """Clean up temporary files."""
         if not self.keep_temp_files and self._temp_dir is not None:
             import shutil
+
             try:
                 shutil.rmtree(self._temp_dir)
             except Exception:
@@ -388,6 +409,7 @@ def extract_func_from_stream_mlir(mlir_text: str) -> str:
 @dataclass
 class CapturedKernelInfo:
     """Information captured from Wave compilation for kernel launch."""
+
     mlir_text: str
     kernel_name: str
     workgroup_size: Tuple[int, int, int]
@@ -537,6 +559,7 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
 
     # Debug output
     import os
+
     if os.environ.get("WAVEASM_DEBUG"):
         print(f"\n=== Captured Kernel Info ===")
         print(f"  kernel_name: {info.kernel_name}")
@@ -615,18 +638,18 @@ def run_with_wave_runtime(
     # Create launch info (using positional args - the API expects 12 int args)
     stream = torch.cuda.current_stream().cuda_stream
     kernel_launch_info = wave_runtime.KernelLaunchInfo(
-        stream,           # arg0: stream
-        gpu_func,         # arg1: gpu_func
+        stream,  # arg0: stream
+        gpu_func,  # arg1: gpu_func
         shared_memory_bytes,  # arg2: shared_memory_bytes
-        grid[0],          # arg3: grid_dim_x
-        grid[1],          # arg4: grid_dim_y
-        grid[2],          # arg5: grid_dim_z
-        block[0],         # arg6: block_dim_x
-        block[1],         # arg7: block_dim_y
-        block[2],         # arg8: block_dim_z
-        1,                # arg9: cluster_dim_x
-        1,                # arg10: cluster_dim_y
-        1,                # arg11: cluster_dim_z
+        grid[0],  # arg3: grid_dim_x
+        grid[1],  # arg4: grid_dim_y
+        grid[2],  # arg5: grid_dim_z
+        block[0],  # arg6: block_dim_x
+        block[1],  # arg7: block_dim_y
+        block[2],  # arg8: block_dim_z
+        1,  # arg9: cluster_dim_x
+        1,  # arg10: cluster_dim_y
+        1,  # arg11: cluster_dim_z
     )
 
     # Prepare kernel arguments

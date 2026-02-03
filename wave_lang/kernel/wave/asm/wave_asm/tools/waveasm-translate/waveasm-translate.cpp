@@ -15,29 +15,29 @@
 
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
-#include "waveasm/Transforms/Passes.h"
-#include "waveasm/Transforms/TranslateFromMLIR.h"
 #include "waveasm/Transforms/AssemblyEmitter.h"
+#include "waveasm/Transforms/Passes.h"
 #include "waveasm/Transforms/RegAlloc.h"
+#include "waveasm/Transforms/TranslateFromMLIR.h"
 
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Pass/PassManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
@@ -47,8 +47,9 @@ using namespace waveasm;
 // Command Line Options
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::opt<std::string> inputFilename(
-    llvm::cl::Positional, llvm::cl::desc("<input file>"), llvm::cl::init("-"));
+static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
+                                                llvm::cl::desc("<input file>"),
+                                                llvm::cl::init("-"));
 
 static llvm::cl::opt<std::string>
     outputFilename("o", llvm::cl::desc("Output filename"),
@@ -64,50 +65,49 @@ static llvm::cl::opt<bool> runHazardMitigation(
     llvm::cl::desc("Run hazard mitigation pass (insert s_nop for hazards)"),
     llvm::cl::init(false));
 
-static llvm::cl::opt<bool> runWaitcntInsertion(
-    "waveasm-insert-waitcnt",
-    llvm::cl::desc("Run waitcnt insertion pass"),
-    llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    runWaitcntInsertion("waveasm-insert-waitcnt",
+                        llvm::cl::desc("Run waitcnt insertion pass"),
+                        llvm::cl::init(false));
 
-static llvm::cl::opt<bool> runLinearScan(
-    "waveasm-linear-scan",
-    llvm::cl::desc("Run linear scan register allocation"),
-    llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    runLinearScan("waveasm-linear-scan",
+                  llvm::cl::desc("Run linear scan register allocation"),
+                  llvm::cl::init(false));
 
-static llvm::cl::opt<bool> runScopedCSE(
-    "waveasm-scoped-cse",
-    llvm::cl::desc("Run scoped common subexpression elimination"),
-    llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    runScopedCSE("waveasm-scoped-cse",
+                 llvm::cl::desc("Run scoped common subexpression elimination"),
+                 llvm::cl::init(false));
 
-static llvm::cl::opt<bool> runPeephole(
-    "waveasm-peephole",
-    llvm::cl::desc("Run peephole optimizations"),
-    llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    runPeephole("waveasm-peephole",
+                llvm::cl::desc("Run peephole optimizations"),
+                llvm::cl::init(false));
 
-static llvm::cl::opt<bool> emitAssembly(
-    "emit-assembly",
-    llvm::cl::desc("Emit AMDGCN assembly instead of MLIR"),
-    llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    emitAssembly("emit-assembly",
+                 llvm::cl::desc("Emit AMDGCN assembly instead of MLIR"),
+                 llvm::cl::init(false));
 
-static llvm::cl::opt<int64_t> workgroupSizeX(
-    "workgroup-size-x",
-    llvm::cl::desc("Workgroup size in X dimension"),
-    llvm::cl::init(0));
+static llvm::cl::opt<int64_t>
+    workgroupSizeX("workgroup-size-x",
+                   llvm::cl::desc("Workgroup size in X dimension"),
+                   llvm::cl::init(0));
 
-static llvm::cl::opt<int64_t> workgroupSizeY(
-    "workgroup-size-y",
-    llvm::cl::desc("Workgroup size in Y dimension"),
-    llvm::cl::init(0));
+static llvm::cl::opt<int64_t>
+    workgroupSizeY("workgroup-size-y",
+                   llvm::cl::desc("Workgroup size in Y dimension"),
+                   llvm::cl::init(0));
 
-static llvm::cl::opt<int64_t> workgroupSizeZ(
-    "workgroup-size-z",
-    llvm::cl::desc("Workgroup size in Z dimension"),
-    llvm::cl::init(0));
+static llvm::cl::opt<int64_t>
+    workgroupSizeZ("workgroup-size-z",
+                   llvm::cl::desc("Workgroup size in Z dimension"),
+                   llvm::cl::init(0));
 
-static llvm::cl::opt<int64_t> subgroupSize(
-    "subgroup-size",
-    llvm::cl::desc("Subgroup (wavefront) size"),
-    llvm::cl::init(64));
+static llvm::cl::opt<int64_t>
+    subgroupSize("subgroup-size", llvm::cl::desc("Subgroup (wavefront) size"),
+                 llvm::cl::init(64));
 
 //===----------------------------------------------------------------------===//
 // Main Function
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
 
   llvm::cl::ParseCommandLineOptions(argc, argv,
-                                     "WAVEASM IR translation tool\n");
+                                    "WAVEASM IR translation tool\n");
 
   // Set up the MLIR context and register essential dialects
   DialectRegistry registry;
@@ -146,8 +146,7 @@ int main(int argc, char **argv) {
   llvm::SourceMgr sourceMgr;
   sourceMgr.AddNewSourceBuffer(std::move(*inputFileOrErr), llvm::SMLoc());
 
-  OwningOpRef<ModuleOp> module =
-      parseSourceFile<ModuleOp>(sourceMgr, &context);
+  OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(sourceMgr, &context);
   if (!module) {
     llvm::errs() << "Failed to parse input file\n";
     return 1;

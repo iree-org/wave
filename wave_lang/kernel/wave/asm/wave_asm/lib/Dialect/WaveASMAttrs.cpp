@@ -25,5 +25,6 @@ TargetAttrInterface waveasm::getTargetKindAttr(mlir::MLIRContext *ctx,
   llvm_unreachable("Invalid target kind");
 }
 
-// Note: Attribute definitions (GET_ATTRDEF_CLASSES) are included in WaveASMDialect.cpp
-// to ensure storage types are complete when registering attributes.
+// Note: Attribute definitions (GET_ATTRDEF_CLASSES) are included in
+// WaveASMDialect.cpp to ensure storage types are complete when registering
+// attributes.

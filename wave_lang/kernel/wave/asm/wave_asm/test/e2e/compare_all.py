@@ -11,7 +11,6 @@ Compare Python and C++ WaveASM backend outputs for all kernels.
 This script runs each kernel through both backends and compares instruction counts.
 """
 
-import os
 import sys
 import subprocess
 import tempfile
@@ -25,7 +24,10 @@ if str(wave_root) not in sys.path:
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile, _trace_launchable_and_get_kernel_signature
+from wave_lang.kernel.wave.compile import (
+    WaveCompileOptions,
+    _trace_launchable_and_get_kernel_signature,
+)
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
@@ -50,7 +52,13 @@ GLOBAL_ADDRESS_SPACE = tkl.AddressSpace.GLOBAL_MEMORY.value
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
     if default_path.exists():
         return default_path
     raise FileNotFoundError(f"waveasm-translate not found at {default_path}")
@@ -95,7 +103,7 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
     except Exception as e:
         return f"C++ backend error: Failed to extract func: {e}"
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.mlir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
         f.write(simplified_mlir)
         mlir_file = f.name
 
@@ -129,36 +137,36 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
 def count_instructions(asm: str) -> dict:
     """Count key instructions in assembly."""
     counts = {
-        'buffer_load': 0,
-        'buffer_store': 0,
-        'ds_read': 0,
-        'ds_write': 0,
-        'v_mfma': 0,
-        's_barrier': 0,
-        's_endpgm': 0,
-        's_waitcnt': 0,
-        'buffer_load_lds': 0,
+        "buffer_load": 0,
+        "buffer_store": 0,
+        "ds_read": 0,
+        "ds_write": 0,
+        "v_mfma": 0,
+        "s_barrier": 0,
+        "s_endpgm": 0,
+        "s_waitcnt": 0,
+        "buffer_load_lds": 0,
     }
-    for line in asm.split('\n'):
+    for line in asm.split("\n"):
         lower = line.lower().strip()
-        if lower.startswith('buffer_load') and 'lds' in lower:
-            counts['buffer_load_lds'] += 1
-        elif lower.startswith('buffer_load'):
-            counts['buffer_load'] += 1
-        elif lower.startswith('buffer_store'):
-            counts['buffer_store'] += 1
-        elif lower.startswith('ds_read'):
-            counts['ds_read'] += 1
-        elif lower.startswith('ds_write'):
-            counts['ds_write'] += 1
-        elif 'v_mfma' in lower:
-            counts['v_mfma'] += 1
-        elif lower.startswith('s_barrier'):
-            counts['s_barrier'] += 1
-        elif lower.startswith('s_endpgm'):
-            counts['s_endpgm'] += 1
-        elif lower.startswith('s_waitcnt'):
-            counts['s_waitcnt'] += 1
+        if lower.startswith("buffer_load") and "lds" in lower:
+            counts["buffer_load_lds"] += 1
+        elif lower.startswith("buffer_load"):
+            counts["buffer_load"] += 1
+        elif lower.startswith("buffer_store"):
+            counts["buffer_store"] += 1
+        elif lower.startswith("ds_read"):
+            counts["ds_read"] += 1
+        elif lower.startswith("ds_write"):
+            counts["ds_write"] += 1
+        elif "v_mfma" in lower:
+            counts["v_mfma"] += 1
+        elif lower.startswith("s_barrier"):
+            counts["s_barrier"] += 1
+        elif lower.startswith("s_endpgm"):
+            counts["s_endpgm"] += 1
+        elif lower.startswith("s_waitcnt"):
+            counts["s_waitcnt"] += 1
     return counts
 
 
@@ -186,6 +194,7 @@ def compile_kernel(kernel_func, constraints, subs, kernel_name):
 
     # Compile with Python backend
     from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
+
     compiler = KernelModuleCompiler(targetid="gfx942", codeobj="5")
     python_asm = compiler.compile_mlir_string(mlir_text)
 
@@ -198,7 +207,15 @@ def compare_kernel(name, python_asm, cpp_asm):
     cpp_counts = count_instructions(cpp_asm)
 
     # Key instructions that must match
-    key_instrs = ['buffer_load', 'buffer_store', 'ds_read', 'ds_write', 'v_mfma', 's_barrier', 's_endpgm']
+    key_instrs = [
+        "buffer_load",
+        "buffer_store",
+        "ds_read",
+        "ds_write",
+        "v_mfma",
+        "s_barrier",
+        "s_endpgm",
+    ]
 
     all_match = True
     results = []
@@ -233,7 +250,10 @@ def define_read_write():
         tkw.write(res, b)
 
     subs = {
-        M: 16, N: 16, BLOCK_M: 16, BLOCK_N: 16,
+        M: 16,
+        N: 16,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     return read_write, constraints, subs
@@ -264,8 +284,13 @@ def define_mma():
         tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     subs = {
-        M: 16, N: 16, K: 16, BLOCK_M: 16, BLOCK_N: 16,
-        LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+        M: 16,
+        N: 16,
+        K: 16,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
     }
@@ -303,9 +328,14 @@ def define_gemm_k_loop():
         tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     subs = {
-        M: 32, N: 32, K: 32,
-        BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16,
-        LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+        M: 32,
+        N: 32,
+        K: 32,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 16,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
     }
@@ -338,8 +368,13 @@ def define_mma_16x16x32():
         tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     subs = {
-        M: 16, N: 16, K: 32, BLOCK_M: 16, BLOCK_N: 16,
-        LOAD_ELEMS_PER_THREAD: 8, STORE_ELEMS_PER_THREAD: 4,
+        M: 16,
+        N: 16,
+        K: 32,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        LOAD_ELEMS_PER_THREAD: 8,
+        STORE_ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
     }
@@ -372,8 +407,13 @@ def define_mma_multi_workgroup():
         tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     subs = {
-        M: 1024, N: 1024, K: 16, BLOCK_M: 16, BLOCK_N: 16,
-        LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+        M: 1024,
+        N: 1024,
+        K: 16,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
     }
@@ -412,8 +452,12 @@ def define_gemm_multi_wave():
         tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     subs = {
-        M: 64, N: 64, K: 128,
-        BLOCK_M: 32, BLOCK_N: 32, BLOCK_K: 64,
+        M: 64,
+        N: 64,
+        K: 128,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 64,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         LOAD_ELEMS_PER_THREAD: 4,
@@ -451,7 +495,9 @@ def main():
             kernel_func, constraints, subs = define_func()
 
             print("Compiling with Python backend...")
-            python_asm, mlir_text = compile_kernel(kernel_func, constraints, subs, kernel_name)
+            python_asm, mlir_text = compile_kernel(
+                kernel_func, constraints, subs, kernel_name
+            )
 
             # Save MLIR for debugging
             Path(f"/tmp/{kernel_name}.mlir").write_text(mlir_text)
@@ -483,6 +529,7 @@ def main():
 
         except Exception as e:
             import traceback
+
             print(f"  FAILED: {e}")
             traceback.print_exc()
             results_summary.append((kernel_name, False, str(e)))

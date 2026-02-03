@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Dialect/WaveASMDialect.h"
-#include "waveasm/Dialect/WaveASMTypes.h"
 #include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"

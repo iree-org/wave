@@ -30,21 +30,23 @@ std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
 
 /// Create the hazard mitigation pass
 std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass();
-std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass(llvm::StringRef targetArch);
+std::unique_ptr<mlir::Pass>
+createWAVEASMHazardMitigationPass(llvm::StringRef targetArch);
 
 /// Create the waitcnt insertion pass
 std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass();
-std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass(bool insertAfterLoads);
+std::unique_ptr<mlir::Pass>
+createWAVEASMInsertWaitcntPass(bool insertAfterLoads);
 
 /// Create the assembly emission pass
 std::unique_ptr<mlir::Pass> createWAVEASMEmitAssemblyPass();
-std::unique_ptr<mlir::Pass> createWAVEASMEmitAssemblyPass(
-    llvm::StringRef outputPath);
+std::unique_ptr<mlir::Pass>
+createWAVEASMEmitAssemblyPass(llvm::StringRef outputPath);
 
 /// Create the MLIR translation pass
 std::unique_ptr<mlir::Pass> createWAVEASMTranslateFromMLIRPass();
-std::unique_ptr<mlir::Pass> createWAVEASMTranslateFromMLIRPass(
-    llvm::StringRef targetId);
+std::unique_ptr<mlir::Pass>
+createWAVEASMTranslateFromMLIRPass(llvm::StringRef targetId);
 
 /// Create the scoped CSE pass
 std::unique_ptr<mlir::Pass> createWAVEASMScopedCSEPass();

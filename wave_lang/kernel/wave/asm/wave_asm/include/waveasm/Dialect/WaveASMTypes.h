@@ -7,10 +7,10 @@
 #ifndef WaveASM_DIALECT_WAVEASMTYPES_H
 #define WaveASM_DIALECT_WAVEASMTYPES_H
 
-#include "mlir/IR/Types.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Types.h"
 
 // Include the generated enum declarations
 #include "waveasm/Dialect/WaveASMEnums.h.inc"
@@ -80,9 +80,7 @@ inline int64_t getRegAlignment(mlir::Type type) {
 }
 
 /// Check if type is an immediate
-inline bool isImmType(mlir::Type type) {
-  return mlir::isa<ImmType>(type);
-}
+inline bool isImmType(mlir::Type type) { return mlir::isa<ImmType>(type); }
 
 } // namespace waveasm
 

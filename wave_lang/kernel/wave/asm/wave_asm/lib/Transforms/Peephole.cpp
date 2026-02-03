@@ -65,15 +65,15 @@ struct LshlOrFusePattern : public OpRewritePattern<V_OR_B32> {
 
       // v_lshl_or_b32 operands: src (value to shift), shift_amt, orend
       // In v_lshlrev_b32: src0 = shift_amt, src1 = value to shift
-      Value shiftSrc = lshlOp.getSrc1();  // value being shifted
-      Value shiftAmt = lshlOp.getSrc0();  // shift amount
+      Value shiftSrc = lshlOp.getSrc1(); // value being shifted
+      Value shiftAmt = lshlOp.getSrc0(); // shift amount
 
       auto loc = orOp.getLoc();
       auto resultType = orOp.getResult().getType();
 
       // Create v_lshl_or_b32: dst = (src << shift_amt) | orend
-      auto fusedOp = V_LSHL_OR_B32::create(rewriter, loc, resultType,
-                                            shiftSrc, shiftAmt, orend);
+      auto fusedOp = V_LSHL_OR_B32::create(rewriter, loc, resultType, shiftSrc,
+                                           shiftAmt, orend);
 
       rewriter.replaceOp(orOp, fusedOp.getResult());
       return success();

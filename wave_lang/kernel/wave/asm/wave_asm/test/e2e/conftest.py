@@ -46,9 +46,7 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     """Configure pytest markers."""
-    config.addinivalue_line(
-        "markers", "e2e: mark test as end-to-end (requires GPU)"
-    )
+    config.addinivalue_line("markers", "e2e: mark test as end-to-end (requires GPU)")
     config.addinivalue_line(
         "markers", "translation: mark test as translation-only (no GPU)"
     )
@@ -80,9 +78,10 @@ def target_arch(request):
     # Try to detect from GPU
     try:
         import torch
+
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
-            if hasattr(props, 'gcnArchName'):
+            if hasattr(props, "gcnArchName"):
                 return props.gcnArchName
     except Exception:
         pass

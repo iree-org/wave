@@ -91,17 +91,17 @@ constexpr llvm::StringLiteral FLAT_SCRATCH_HI = "flat_scratch_hi";
 /// Standard ABI register assignments for kernels
 struct KernelABIRegs {
   // VGPR assignments
-  static constexpr int64_t WORKITEM_ID_X = 0;  // v0 = workitem_id_x
-  static constexpr int64_t WORKITEM_ID_Y = 1;  // v1 = workitem_id_y (if used)
-  static constexpr int64_t WORKITEM_ID_Z = 2;  // v2 = workitem_id_z (if used)
+  static constexpr int64_t WORKITEM_ID_X = 0; // v0 = workitem_id_x
+  static constexpr int64_t WORKITEM_ID_Y = 1; // v1 = workitem_id_y (if used)
+  static constexpr int64_t WORKITEM_ID_Z = 2; // v2 = workitem_id_z (if used)
 
   // SGPR assignments (typical, may vary)
-  static constexpr int64_t KERNARG_SEGMENT_PTR = 0;     // s[0:1]
-  static constexpr int64_t DISPATCH_PTR = 2;            // s[2:3] (if enabled)
-  static constexpr int64_t WORKGROUP_ID_X = 4;          // s4 or later
-  static constexpr int64_t WORKGROUP_ID_Y = 5;          // s5 or later
-  static constexpr int64_t WORKGROUP_ID_Z = 6;          // s6 or later
-  static constexpr int64_t FLAT_SCRATCH_INIT = 4;       // s[4:5] when enabled
+  static constexpr int64_t KERNARG_SEGMENT_PTR = 0; // s[0:1]
+  static constexpr int64_t DISPATCH_PTR = 2;        // s[2:3] (if enabled)
+  static constexpr int64_t WORKGROUP_ID_X = 4;      // s4 or later
+  static constexpr int64_t WORKGROUP_ID_Y = 5;      // s5 or later
+  static constexpr int64_t WORKGROUP_ID_Z = 6;      // s6 or later
+  static constexpr int64_t FLAT_SCRATCH_INIT = 4;   // s[4:5] when enabled
 };
 
 //===----------------------------------------------------------------------===//
@@ -127,7 +127,7 @@ inline int64_t getAlignmentForSize(int64_t size) {
 
 /// Check if a register index is valid for a given size and alignment
 inline bool isValidRegisterAllocation(int64_t index, int64_t size,
-                                       int64_t alignment, int64_t maxRegs) {
+                                      int64_t alignment, int64_t maxRegs) {
   // Check alignment
   if (index % alignment != 0)
     return false;

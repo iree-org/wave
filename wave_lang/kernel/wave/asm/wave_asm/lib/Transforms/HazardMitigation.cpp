@@ -47,15 +47,13 @@ bool isVALUOp(Operation *op) {
   // Exclude memory operations (VMEM, LDS, SMEM)
   if (isa<BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX3,
           BUFFER_LOAD_DWORDX4, BUFFER_LOAD_UBYTE, BUFFER_LOAD_SBYTE,
-          BUFFER_LOAD_USHORT, BUFFER_LOAD_SSHORT,
-          GLOBAL_LOAD_DWORD, GLOBAL_LOAD_DWORDX2, GLOBAL_LOAD_DWORDX3,
-          GLOBAL_LOAD_DWORDX4, GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE,
-          GLOBAL_LOAD_USHORT, GLOBAL_LOAD_SSHORT,
-          FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2, FLAT_LOAD_DWORDX3,
-          FLAT_LOAD_DWORDX4,
-          DS_READ_B32, DS_READ_B64, DS_READ_B128,
-          DS_READ2_B32, DS_READ2_B64,
-          DS_READ_U8, DS_READ_I8, DS_READ_U16, DS_READ_I16>(op))
+          BUFFER_LOAD_USHORT, BUFFER_LOAD_SSHORT, GLOBAL_LOAD_DWORD,
+          GLOBAL_LOAD_DWORDX2, GLOBAL_LOAD_DWORDX3, GLOBAL_LOAD_DWORDX4,
+          GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE, GLOBAL_LOAD_USHORT,
+          GLOBAL_LOAD_SSHORT, FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2,
+          FLAT_LOAD_DWORDX3, FLAT_LOAD_DWORDX4, DS_READ_B32, DS_READ_B64,
+          DS_READ_B128, DS_READ2_B32, DS_READ2_B64, DS_READ_U8, DS_READ_I8,
+          DS_READ_U16, DS_READ_I16>(op))
     return false;
 
   // Exclude non-ALU ops that produce VGPRs
@@ -70,9 +68,7 @@ bool isVALUOp(Operation *op) {
 }
 
 /// Check if an operation is v_readfirstlane
-bool isReadfirstlaneOp(Operation *op) {
-  return isa<V_READFIRSTLANE_B32>(op);
-}
+bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 
 /// Get the set of VGPRs written by an operation
 llvm::DenseSet<Value> getVGPRDefs(Operation *op) {
@@ -211,8 +207,8 @@ std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass() {
   return std::make_unique<HazardMitigationPass>();
 }
 
-std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass(
-    llvm::StringRef targetArch) {
+std::unique_ptr<mlir::Pass>
+createWAVEASMHazardMitigationPass(llvm::StringRef targetArch) {
   return std::make_unique<HazardMitigationPass>(targetArch);
 }
 

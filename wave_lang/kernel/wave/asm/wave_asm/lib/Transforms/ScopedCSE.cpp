@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 // Scoped CSE Pass - Common Subexpression Elimination respecting control flow
 //
-// This pass implements scoped CSE for WAVEASM IR. Unlike global CSE, it respects
-// structured control flow by maintaining a scope stack:
+// This pass implements scoped CSE for WAVEASM IR. Unlike global CSE, it
+// respects structured control flow by maintaining a scope stack:
 // - Global scope: Values that dominate all uses
 // - Region scopes: Pushed/popped for structured regions (loops, ifs)
 //
@@ -16,8 +16,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
-#include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMInterfaces.h"
+#include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Transforms/Passes.h"
 
 #include "mlir/IR/Builders.h"
@@ -67,8 +67,7 @@ struct ExpressionKey {
 } // namespace
 
 namespace llvm {
-template <>
-struct DenseMapInfo<ExpressionKey> {
+template <> struct DenseMapInfo<ExpressionKey> {
   static ExpressionKey getEmptyKey() {
     ExpressionKey key;
     return key;
@@ -111,7 +110,8 @@ namespace {
 /// Check if an operation is eligible for CSE (pure, no side effects)
 /// Uses MLIR traits instead of string matching for type safety.
 bool isCSEEligible(Operation *op) {
-  // Exclude operations explicitly marked as non-CSE-able (e.g., accumulator inits)
+  // Exclude operations explicitly marked as non-CSE-able (e.g., accumulator
+  // inits)
   if (op->hasAttr("no_cse"))
     return false;
 

@@ -30,9 +30,10 @@ def get_target_arch() -> str:
 
     try:
         import torch
+
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
-            if hasattr(props, 'gcnArchName'):
+            if hasattr(props, "gcnArchName"):
                 return props.gcnArchName.split(":")[0]
     except Exception:
         pass
@@ -128,11 +129,15 @@ def capture_mma_kernel_mlir(target: str) -> tuple[str, str]:
 def compile_with_python_backend(mlir_text: str, target: str) -> str:
     """Compile MLIR using Python backend."""
     try:
-        from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
+        from wave_lang.kernel.wave.asm.kernel_module_compiler import (
+            KernelModuleCompiler,
+        )
+
         compiler = KernelModuleCompiler(targetid=target, codeobj="5")
         return compiler.compile_mlir_string(mlir_text)
     except Exception as e:
         import traceback
+
         return f"Python backend error: {e}\n{traceback.format_exc()}"
 
 
@@ -142,8 +147,8 @@ def extract_func_from_stream(mlir_text: str) -> str:
     # Pattern: %0 = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<f16>
     arg_types = {}
     for match in re.finditer(
-        r'stream\.binding\.subspan\s+(%arg\d+)\[[^\]]*\]\s*:\s*!stream\.binding\s*->\s*(memref<[^>]+>)',
-        mlir_text
+        r"stream\.binding\.subspan\s+(%arg\d+)\[[^\]]*\]\s*:\s*!stream\.binding\s*->\s*(memref<[^>]+>)",
+        mlir_text,
     ):
         arg_name = match.group(1)
         memref_type = match.group(2)
@@ -151,9 +156,7 @@ def extract_func_from_stream(mlir_text: str) -> str:
 
     # Find the func.func inside builtin.module
     func_match = re.search(
-        r'(func\.func @\w+\([^)]*\)[^{]*\{.*?return\s*\})',
-        mlir_text,
-        re.DOTALL
+        r"(func\.func @\w+\([^)]*\)[^{]*\{.*?return\s*\})", mlir_text, re.DOTALL
     )
 
     if not func_match:
@@ -169,42 +172,44 @@ def extract_func_from_stream(mlir_text: str) -> str:
             return f"{arg_name}: {arg_types[arg_name]}"
         return m.group(0)  # Keep original if not found
 
-    func_body = re.sub(r'(%arg\d+):\s*!stream\.binding', replace_arg_type, func_body)
+    func_body = re.sub(r"(%arg\d+):\s*!stream\.binding", replace_arg_type, func_body)
 
     # Also handle any remaining !stream.binding (shouldn't happen but just in case)
-    func_body = func_body.replace('!stream.binding', 'memref<f16>')
+    func_body = func_body.replace("!stream.binding", "memref<f16>")
 
     # Remove stream.binding.subspan operations and create mapping
-    lines = func_body.split('\n')
+    lines = func_body.split("\n")
     new_lines = []
     binding_map = {}
 
     for line in lines:
-        if 'stream.binding.subspan' in line:
-            match = re.match(r'\s*(%\w+)\s*=\s*stream\.binding\.subspan\s+(%arg\d+)', line)
+        if "stream.binding.subspan" in line:
+            match = re.match(
+                r"\s*(%\w+)\s*=\s*stream\.binding\.subspan\s+(%arg\d+)", line
+            )
             if match:
                 binding_map[match.group(1)] = match.group(2)
             continue
         new_lines.append(line)
 
-    func_body = '\n'.join(new_lines)
+    func_body = "\n".join(new_lines)
 
     # Replace binding results with arg references
     for result, arg in binding_map.items():
         func_body = func_body.replace(result, arg)
 
     # Remove iree_codegen attributes
-    func_body = re.sub(r'attributes\s*\{[^}]*translation_info[^}]*\}', '', func_body)
+    func_body = re.sub(r"attributes\s*\{[^}]*translation_info[^}]*\}", "", func_body)
 
     # Extract affine_map definitions
-    map_defs = re.findall(r'^(#\w+\s*=\s*affine_map<.+>)\s*$', mlir_text, re.MULTILINE)
-    map_section = '\n'.join(map_defs) if map_defs else ''
+    map_defs = re.findall(r"^(#\w+\s*=\s*affine_map<.+>)\s*$", mlir_text, re.MULTILINE)
+    map_section = "\n".join(map_defs) if map_defs else ""
 
-    simplified_mlir = f'''{map_section}
+    simplified_mlir = f"""{map_section}
 module {{
   {func_body}
 }}
-'''
+"""
     return simplified_mlir
 
 
@@ -217,12 +222,18 @@ def compile_with_cpp_backend(mlir_text: str, target: str) -> str:
     Path("/tmp/mma_kernel_simplified.mlir").write_text(simplified_mlir)
 
     script_dir = Path(__file__).parent
-    waveasm_translate = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    waveasm_translate = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
 
     if not waveasm_translate.exists():
         return f"C++ backend error: waveasm-translate not found at {waveasm_translate}"
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.mlir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
         f.write(simplified_mlir)
         mlir_file = f.name
 
@@ -258,25 +269,29 @@ def extract_instructions(asm: str) -> list[str]:
     """Extract instruction lines from assembly."""
     lines = []
     in_kernel = False
-    for line in asm.split('\n'):
+    for line in asm.split("\n"):
         stripped = line.strip()
         if not stripped:
             continue
         # Skip comments and directives
-        if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith(';'):
+        if (
+            stripped.startswith("#")
+            or stripped.startswith("//")
+            or stripped.startswith(";")
+        ):
             continue
         # Look for kernel entry
-        if stripped.endswith(':') and not stripped.startswith('.'):
+        if stripped.endswith(":") and not stripped.startswith("."):
             in_kernel = True
             lines.append(stripped)
             continue
         if in_kernel:
             # Skip directives
-            if stripped.startswith('.'):
+            if stripped.startswith("."):
                 in_kernel = False
                 continue
             lines.append(stripped)
-            if 's_endpgm' in stripped:
+            if "s_endpgm" in stripped:
                 break
     return lines
 
@@ -293,7 +308,7 @@ def compare_instructions(python_instrs: list[str], cpp_instrs: list[str]):
         for instr in instrs:
             parts = instr.split()
             if parts:
-                mnemonic = parts[0].rstrip(':')
+                mnemonic = parts[0].rstrip(":")
                 counts[mnemonic] = counts.get(mnemonic, 0) + 1
         return counts
 
@@ -324,14 +339,14 @@ def compare_instructions(python_instrs: list[str], cpp_instrs: list[str]):
 
     # Check for key MMA-related instructions
     key_patterns = [
-        'v_mfma_f32_16x16x16_f16',
-        'buffer_load',
-        'buffer_store',
-        'ds_write',
-        'ds_read',
-        's_barrier',
-        's_waitcnt',
-        's_endpgm',
+        "v_mfma_f32_16x16x16_f16",
+        "buffer_load",
+        "buffer_store",
+        "ds_write",
+        "ds_read",
+        "s_barrier",
+        "s_waitcnt",
+        "s_endpgm",
     ]
 
     print("\n" + "=" * 80)
@@ -345,7 +360,9 @@ def compare_instructions(python_instrs: list[str], cpp_instrs: list[str]):
         print(f"  {pattern:<35}: Python={py_count:>3}, C++={cpp_count:>3} {match}")
 
 
-def print_side_by_side(python_instrs: list[str], cpp_instrs: list[str], max_lines: int = 50):
+def print_side_by_side(
+    python_instrs: list[str], cpp_instrs: list[str], max_lines: int = 50
+):
     """Print instructions side by side."""
     print("\n" + "=" * 100)
     print("SIDE-BY-SIDE INSTRUCTION COMPARISON (first {} lines)".format(max_lines))
@@ -388,8 +405,8 @@ def main():
     print("\n" + "=" * 80)
     print("INPUT MLIR (first 30 lines)")
     print("=" * 80)
-    mlir_lines = mlir_text.split('\n')[:30]
-    print('\n'.join(mlir_lines))
+    mlir_lines = mlir_text.split("\n")[:30]
+    print("\n".join(mlir_lines))
 
     print("\n\nCompiling with Python backend...")
     python_asm = compile_with_python_backend(mlir_text, target)

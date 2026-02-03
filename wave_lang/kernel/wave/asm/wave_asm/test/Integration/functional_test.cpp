@@ -11,10 +11,10 @@
 /// 3. Loading and running the kernel via HIP
 /// 4. Verifying results match expected output
 
-#include <hip/hip_runtime.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <hip/hip_runtime.h>
 #include <vector>
 
 #define HIP_CHECK(call)                                                        \
@@ -78,7 +78,7 @@ static int testVectorAdd(hipFunction_t kernel, int numElements) {
   int gridSize = (numElements + blockSize - 1) / blockSize;
 
   HIP_CHECK(hipModuleLaunchKernel(kernel, gridSize, 1, 1, blockSize, 1, 1, 0,
-                                   nullptr, nullptr, config));
+                                  nullptr, nullptr, config));
   HIP_CHECK(hipDeviceSynchronize());
 
   // Copy result back

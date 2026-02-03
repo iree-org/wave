@@ -23,8 +23,7 @@ namespace OpTrait {
 /// Trait for arithmetic/ALU operations that are pure and CSE-eligible.
 /// Includes VALU and SALU operations like v_add_u32, s_add_u32, etc.
 template <typename ConcreteType>
-class ArithmeticOp : public TraitBase<ConcreteType, ArithmeticOp> {
-};
+class ArithmeticOp : public TraitBase<ConcreteType, ArithmeticOp> {};
 
 /// Trait for MFMA operations. This is orthogonal to CSE.
 template <typename ConcreteType>
@@ -33,20 +32,17 @@ class MFMAOp : public TraitBase<ConcreteType, MFMAOp> {};
 /// Trait for memory operations (loads/stores).
 /// These are NOT eligible for CSE.
 template <typename ConcreteType>
-class MemoryOp : public TraitBase<ConcreteType, MemoryOp> {
-};
+class MemoryOp : public TraitBase<ConcreteType, MemoryOp> {};
 
 /// Trait for control flow operations (branches, barriers, waitcnt).
 /// These are NOT eligible for CSE.
 template <typename ConcreteType>
-class ControlFlowOp : public TraitBase<ConcreteType, ControlFlowOp> {
-};
+class ControlFlowOp : public TraitBase<ConcreteType, ControlFlowOp> {};
 
 /// Trait for special register operations (M0, VCC, EXEC).
 /// These are NOT eligible for CSE.
 template <typename ConcreteType>
-class SpecialRegOp : public TraitBase<ConcreteType, SpecialRegOp> {
-};
+class SpecialRegOp : public TraitBase<ConcreteType, SpecialRegOp> {};
 
 } // namespace OpTrait
 } // namespace mlir

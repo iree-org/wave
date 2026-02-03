@@ -20,5 +20,6 @@ using namespace waveasm;
 
 #include "waveasm/Dialect/WaveASMEnums.cpp.inc"
 
-// Note: Type definitions (GET_TYPEDEF_CLASSES) are included in WaveASMDialect.cpp
-// to ensure storage types are complete when registering types.
+// Note: Type definitions (GET_TYPEDEF_CLASSES) are included in
+// WaveASMDialect.cpp to ensure storage types are complete when registering
+// types.

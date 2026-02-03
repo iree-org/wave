@@ -19,22 +19,26 @@ Usage:
 """
 
 import argparse
-import subprocess
-import tempfile
 import os
+import subprocess
 import sys
+import tempfile
+
 import numpy as np
 
 # ROCm toolchain paths - can be overridden via environment variables
 ROCM_PATH = os.environ.get("ROCM_PATH", "/opt/rocm")
-CLANG_PATH = os.environ.get("AMDASM_CLANG", os.path.join(ROCM_PATH, "llvm", "bin", "clang"))
-LLD_PATH = os.environ.get("AMDASM_LLD", os.path.join(ROCM_PATH, "llvm", "bin", "ld.lld"))
+CLANG_PATH = os.environ.get(
+    "AMDASM_CLANG", os.path.join(ROCM_PATH, "llvm", "bin", "clang")
+)
+LLD_PATH = os.environ.get(
+    "AMDASM_LLD", os.path.join(ROCM_PATH, "llvm", "bin", "ld.lld")
+)
 
-try:
-    from hip import hip
-    HAS_HIP = True
-except ImportError:
-    HAS_HIP = False
+import importlib.util
+
+HAS_HIP = importlib.util.find_spec("hip") is not None
+if not HAS_HIP:
     print("Warning: HIP Python bindings not available", file=sys.stderr)
 
 
@@ -44,8 +48,10 @@ def run_amdasm_translate(input_path: str, output_path: str, target: str = "gfx94
         "amdasm-translate",
         input_path,
         "--emit-assembly",
-        "-o", output_path,
-        "--target", target
+        "-o",
+        output_path,
+        "--target",
+        target,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -58,11 +64,15 @@ def assemble_to_binary(asm_path: str, output_path: str, target: str = "gfx942"):
     """Assemble assembly to GPU binary using clang."""
     cmd = [
         CLANG_PATH,
-        "-x", "assembler",
-        "-target", "amdgcn-amd-amdhsa",
+        "-x",
+        "assembler",
+        "-target",
+        "amdgcn-amd-amdhsa",
         f"-mcpu={target}",
-        "-c", asm_path,
-        "-o", output_path
+        "-c",
+        asm_path,
+        "-o",
+        output_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -73,13 +83,7 @@ def assemble_to_binary(asm_path: str, output_path: str, target: str = "gfx942"):
 
 def link_binary(obj_path: str, output_path: str, target: str = "gfx942"):
     """Link object file to create executable kernel."""
-    cmd = [
-        LLD_PATH,
-        "--no-undefined",
-        "-shared",
-        "-o", output_path,
-        obj_path
-    ]
+    cmd = [LLD_PATH, "--no-undefined", "-shared", "-o", output_path, obj_path]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"lld link failed: {result.stderr}", file=sys.stderr)
@@ -87,8 +91,9 @@ def link_binary(obj_path: str, output_path: str, target: str = "gfx942"):
     return True
 
 
-def run_kernel_hip(binary_path: str, kernel_name: str,
-                   input_data: np.ndarray, output_shape: tuple):
+def run_kernel_hip(
+    binary_path: str, kernel_name: str, input_data: np.ndarray, output_shape: tuple
+):
     """Load and run a kernel using HIP."""
     if not HAS_HIP:
         print("HIP not available, cannot run kernel", file=sys.stderr)
@@ -113,7 +118,9 @@ def run_kernel_hip(binary_path: str, kernel_name: str,
 def main():
     parser = argparse.ArgumentParser(description="Run AMDASM kernel functional test")
     parser.add_argument("input", help="Input AMDASM MLIR file")
-    parser.add_argument("--target", default="gfx942", help="GPU target (default: gfx942)")
+    parser.add_argument(
+        "--target", default="gfx942", help="GPU target (default: gfx942)"
+    )
     parser.add_argument("--kernel", default="", help="Kernel name to run")
     parser.add_argument("--verify", action="store_true", help="Verify results")
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files")

@@ -74,8 +74,9 @@ Block::iterator TranslationContext::getInsertionPoint() {
   return builder.getInsertionPoint();
 }
 
-std::optional<Value> TranslationContext::getCachedExpr(
-    StringRef opName, ValueRange operands, ArrayRef<int64_t> constants) const {
+std::optional<Value>
+TranslationContext::getCachedExpr(StringRef opName, ValueRange operands,
+                                  ArrayRef<int64_t> constants) const {
   // Build a cache key string
   std::string key;
   llvm::raw_string_ostream os(key);
@@ -94,7 +95,7 @@ std::optional<Value> TranslationContext::getCachedExpr(
 }
 
 void TranslationContext::cacheExpr(StringRef opName, ValueRange operands,
-                                    ArrayRef<int64_t> constants, Value result) {
+                                   ArrayRef<int64_t> constants, Value result) {
   std::string key;
   llvm::raw_string_ostream os(key);
   os << opName;
@@ -112,7 +113,7 @@ std::string TranslationContext::generateLabel(StringRef prefix) {
 }
 
 void TranslationContext::queueSRDSetup(Value memref, int64_t argIndex,
-                                        int64_t bufferSize) {
+                                       int64_t bufferSize) {
   // Check if this memref already has an SRD assigned (avoid duplicates)
   if (srdIndexMap.count(memref) > 0) {
     // Already processed - just update size if larger
@@ -140,17 +141,19 @@ void TranslationContext::emitSRDPrologue() {
   srdPrologueEmitted = true;
   auto loc = builder.getUnknownLoc();
 
-  // Check if this is a gfx95* target (requires preload pattern with branch+alignment)
+  // Check if this is a gfx95* target (requires preload pattern with
+  // branch+alignment)
   bool isGFX95 = llvm::isa<GFX950TargetAttr>(target);
 
   // Recompute SRD base indices now that we know the total number of args
   // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
-  int64_t userSgprCount = 2;  // kernarg ptr
+  int64_t userSgprCount = 2; // kernarg ptr
   if (isGFX95) {
-    userSgprCount += pendingSRDs.size() * 2;  // preloaded args
+    userSgprCount += pendingSRDs.size() * 2; // preloaded args
   }
-  int64_t systemSgprCount = 3;  // workgroup_id_x, y, z
-  int64_t srdStartIndex = (userSgprCount + systemSgprCount + 3) & ~3;  // Align to 4
+  int64_t systemSgprCount = 3; // workgroup_id_x, y, z
+  int64_t srdStartIndex =
+      (userSgprCount + systemSgprCount + 3) & ~3; // Align to 4
 
   // Update pending SRDs with correct indices and update srdIndexMap
   for (size_t i = 0; i < pendingSRDs.size(); ++i) {
@@ -163,24 +166,25 @@ void TranslationContext::emitSRDPrologue() {
   CommentOp::create(builder, loc, "SRD setup prologue");
 
   if (isGFX95) {
-    // GFX95* path: Use preload pattern with intermediate locations and s_mov_b64 copies
-    // This matches the Python backend behavior for gfx950.
+    // GFX95* path: Use preload pattern with intermediate locations and
+    // s_mov_b64 copies This matches the Python backend behavior for gfx950.
     //
     // Step 1: Load base addresses into preload locations s[2:3], s[4:5], etc.
     for (const auto &pending : pendingSRDs) {
       int64_t loadBase = 2 + pending.argIndex * 2;
       int64_t kernargOffset = pending.argIndex * 8;
 
-      std::string loadStr = "s_load_dwordx2 s[" + std::to_string(loadBase) + ":" +
-                            std::to_string(loadBase + 1) + "], s[0:1], 0x" +
-                            llvm::utohexstr(kernargOffset);
+      std::string loadStr = "s_load_dwordx2 s[" + std::to_string(loadBase) +
+                            ":" + std::to_string(loadBase + 1) +
+                            "], s[0:1], 0x" + llvm::utohexstr(kernargOffset);
       RawOp::create(builder, loc, loadStr);
     }
 
     // Step 2: Wait for all scalar loads to complete
     auto i32Type = builder.getI32Type();
     auto lgkmcntAttr = IntegerAttr::get(i32Type, 0);
-    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr, /*expcnt=*/IntegerAttr{});
+    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr,
+                      /*expcnt=*/IntegerAttr{});
 
     // Step 2.5: Branch to aligned entry point (gfx95* requirement)
     std::string kernelName = program.getSymName().str();
@@ -207,11 +211,12 @@ void TranslationContext::emitSRDPrologue() {
       RawOp::create(builder, loc, movB64Str);
 
       // Fill size and stride
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0x" +
-                               llvm::utohexstr(pending.bufferSize);
+      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
+                               ", 0x" + llvm::utohexstr(pending.bufferSize);
       RawOp::create(builder, loc, movSizeStr);
 
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) + ", 0x20000";
+      std::string movStrideStr =
+          "s_mov_b32 s" + std::to_string(srdBase + 3) + ", 0x20000";
       RawOp::create(builder, loc, movStrideStr);
 
       mapper.mapValue(pending.memref, srdReg);
@@ -219,7 +224,8 @@ void TranslationContext::emitSRDPrologue() {
   } else {
     // Non-GFX95* path (e.g., gfx942): Load directly into SRD positions
     // This eliminates the s_mov_b64 copies by loading args directly into the
-    // SRD base addresses (SRD[0:1]), then only filling size/stride with s_mov_b32.
+    // SRD base addresses (SRD[0:1]), then only filling size/stride with
+    // s_mov_b32.
     //
     // Step 1: Load base addresses directly into SRD[0:1] positions
     for (const auto &pending : pendingSRDs) {
@@ -227,16 +233,17 @@ void TranslationContext::emitSRDPrologue() {
       int64_t kernargOffset = pending.argIndex * 8;
 
       // Load directly into SRD base: s[srdBase:srdBase+1]
-      std::string loadStr = "s_load_dwordx2 s[" + std::to_string(srdBase) + ":" +
-                            std::to_string(srdBase + 1) + "], s[0:1], 0x" +
-                            llvm::utohexstr(kernargOffset);
+      std::string loadStr = "s_load_dwordx2 s[" + std::to_string(srdBase) +
+                            ":" + std::to_string(srdBase + 1) +
+                            "], s[0:1], 0x" + llvm::utohexstr(kernargOffset);
       RawOp::create(builder, loc, loadStr);
     }
 
     // Step 2: Wait for all scalar loads to complete
     auto i32Type = builder.getI32Type();
     auto lgkmcntAttr = IntegerAttr::get(i32Type, 0);
-    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr, /*expcnt=*/IntegerAttr{});
+    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr,
+                      /*expcnt=*/IntegerAttr{});
 
     // Step 3: Fill SRD[2:3] with size and stride (no s_mov_b64 copies needed!)
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
@@ -247,12 +254,13 @@ void TranslationContext::emitSRDPrologue() {
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       // Fill size
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0x" +
-                               llvm::utohexstr(pending.bufferSize);
+      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
+                               ", 0x" + llvm::utohexstr(pending.bufferSize);
       RawOp::create(builder, loc, movSizeStr);
 
       // Fill stride descriptor
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) + ", 0x20000";
+      std::string movStrideStr =
+          "s_mov_b32 s" + std::to_string(srdBase + 3) + ", 0x20000";
       RawOp::create(builder, loc, movStrideStr);
 
       mapper.mapValue(pending.memref, srdReg);
@@ -280,7 +288,7 @@ int64_t TranslationContext::getNextSRDIndex() {
   // For now, just use a simple incrementing scheme starting from 0.
   // The actual SGPR indices will be computed in emitSRDPrologue.
   int64_t idx = nextSRDIndex < 0 ? 0 : nextSRDIndex;
-  nextSRDIndex = idx + 4;  // Each SRD uses 4 consecutive SGPRs
+  nextSRDIndex = idx + 4; // Each SRD uses 4 consecutive SGPRs
   return idx;
 }
 
@@ -312,18 +320,19 @@ static int64_t computeBufferSizeFromMemRef(MemRefType memrefType) {
   int64_t numElements = 1;
   for (int64_t dim : memrefType.getShape()) {
     if (dim == ShapedType::kDynamic)
-      dim = 1;  // Conservative estimate for dynamic dims
+      dim = 1; // Conservative estimate for dynamic dims
     numElements *= dim;
   }
   int64_t elementBytes = memrefType.getElementTypeBitWidth() / 8;
   if (elementBytes == 0)
-    elementBytes = 1;  // Minimum 1 byte
+    elementBytes = 1; // Minimum 1 byte
   return numElements * elementBytes;
 }
 
 /// Get or create a mapped VGPR value for an MLIR value
 [[maybe_unused]]
-static Value getOrCreateVReg(Value mlirValue, TranslationContext &ctx, int64_t size = 1) {
+static Value getOrCreateVReg(Value mlirValue, TranslationContext &ctx,
+                             int64_t size = 1) {
   auto &mapper = ctx.getMapper();
 
   // Check if already mapped
@@ -332,21 +341,22 @@ static Value getOrCreateVReg(Value mlirValue, TranslationContext &ctx, int64_t s
 
   // Create a new VGPR - this will be a placeholder that gets resolved
   // In a real implementation, we'd need more sophisticated tracking
-  [[maybe_unused]] auto vregType = ctx.createVRegType(size, size > 1 ? size : 1);
+  [[maybe_unused]] auto vregType =
+      ctx.createVRegType(size, size > 1 ? size : 1);
   auto loc = mlirValue.getLoc();
 
   // For block arguments (like function parameters), create a precolored reg
   if (auto blockArg = dyn_cast<BlockArgument>(mlirValue)) {
     // Function arguments are passed via SGPRs (buffer descriptors)
     // This is a simplification - real ABI handling is more complex
-    auto sregType = ctx.createSRegType(2, 2);  // 64-bit pointer
-    auto sreg = PrecoloredSRegOp::create(ctx.getBuilder(),
-        loc, sregType, blockArg.getArgNumber() * 2, 2);
+    auto sregType = ctx.createSRegType(2, 2); // 64-bit pointer
+    auto sreg = PrecoloredSRegOp::create(ctx.getBuilder(), loc, sregType,
+                                         blockArg.getArgNumber() * 2, 2);
     mapper.mapValue(mlirValue, sreg);
     return sreg;
   }
 
-  return mlirValue;  // Return as-is for now, handler will create proper op
+  return mlirValue; // Return as-is for now, handler will create proper op
 }
 
 /// Check if a memref has LDS address space
@@ -376,9 +386,7 @@ int64_t getVectorBytes(VectorType vecType) {
 }
 
 /// Check if value is power of 2
-bool isPowerOf2(int64_t val) {
-  return val > 0 && (val & (val - 1)) == 0;
-}
+bool isPowerOf2(int64_t val) { return val > 0 && (val & (val - 1)) == 0; }
 
 /// Get log2 of power of 2
 int64_t log2(int64_t val) {
@@ -394,7 +402,8 @@ int64_t log2(int64_t val) {
 // GPU Dialect Handlers
 //===----------------------------------------------------------------------===//
 
-/// Handle gpu.thread_id - emit v_mbcnt for single-wave or use v_bfe_u32 for multi-wave
+/// Handle gpu.thread_id - emit v_mbcnt for single-wave or use v_bfe_u32 for
+/// multi-wave
 LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
   auto threadIdOp = cast<gpu::ThreadIdOp>(op);
   auto &builder = ctx.getBuilder();
@@ -411,15 +420,17 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
   // For single-wave, we compute lane_id using v_mbcnt
   if (ctx.isMultiWaveKernel()) {
     // Multi-wave: hardware provides flat workitem ID in v0
-    // The flat workitem ID is packed as: tid_x + tid_y * wg_x + tid_z * wg_x * wg_y
-    // We use v_bfe_u32 to extract the individual components
-    // Following Python's approach: 10 bits per dimension (supports up to 1024 per dim)
+    // The flat workitem ID is packed as: tid_x + tid_y * wg_x + tid_z * wg_x *
+    // wg_y We use v_bfe_u32 to extract the individual components Following
+    // Python's approach: 10 bits per dimension (supports up to 1024 per dim)
 
-    // Mark that this kernel uses workitem ID (set amdhsa_system_vgpr_workitem_id)
+    // Mark that this kernel uses workitem ID (set
+    // amdhsa_system_vgpr_workitem_id)
     ctx.setUsesWorkitemId(true);
 
     // Get flat workitem ID from v0
-    auto flatWorkitemId = PrecoloredVRegOp::create(builder, loc, vregType, 0, 1);
+    auto flatWorkitemId =
+        PrecoloredVRegOp::create(builder, loc, vregType, 0, 1);
 
     // Determine bit offset and width based on dimension
     // Python uses 10 bits per dimension:
@@ -430,15 +441,15 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
     int64_t bitWidth = 10;
 
     switch (dim) {
-      case gpu::Dimension::x:
-        bitOffset = 0;
-        break;
-      case gpu::Dimension::y:
-        bitOffset = 10;
-        break;
-      case gpu::Dimension::z:
-        bitOffset = 20;
-        break;
+    case gpu::Dimension::x:
+      bitOffset = 0;
+      break;
+    case gpu::Dimension::y:
+      bitOffset = 10;
+      break;
+    case gpu::Dimension::z:
+      bitOffset = 20;
+      break;
     }
 
     // Create constants for offset and width
@@ -449,7 +460,8 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
     auto widthConst = ConstantOp::create(builder, loc, immWidth, bitWidth);
 
     // v_bfe_u32 dst, src, offset, width - extract bits [offset, offset+width-1]
-    result = V_BFE_U32::create(builder, loc, vregType, flatWorkitemId, offsetConst, widthConst);
+    result = V_BFE_U32::create(builder, loc, vregType, flatWorkitemId,
+                               offsetConst, widthConst);
   } else {
     // Single-wave: compute lane ID using v_mbcnt
     // Note: for single-wave, tid_x == lane_id, and tid_y/tid_z are always 0
@@ -464,10 +476,12 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
       auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
 
       // v_mbcnt_lo_u32_b32 - count bits in lower 32 lanes
-      auto mbcntLo = V_MBCNT_LO_U32_B32::create(builder, loc, vregType, maskConst, zeroConst);
+      auto mbcntLo = V_MBCNT_LO_U32_B32::create(builder, loc, vregType,
+                                                maskConst, zeroConst);
 
       // v_mbcnt_hi_u32_b32 - count bits in upper 32 lanes, add to low
-      auto mbcntHi = V_MBCNT_HI_U32_B32::create(builder, loc, vregType, maskConst, mbcntLo);
+      auto mbcntHi = V_MBCNT_HI_U32_B32::create(builder, loc, vregType,
+                                                maskConst, mbcntLo);
 
       result = mbcntHi;
     } else {
@@ -491,7 +505,8 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
     ctx.setThreadIdUpperBound(threadIdOp.getResult(), upperBound);
 
     // Also set bit range for OR vs ADD optimization
-    // Thread ID is in range [0, upperBound-1], so we need bits 0..log2(upperBound-1)
+    // Thread ID is in range [0, upperBound-1], so we need bits
+    // 0..log2(upperBound-1)
     ctx.setBitRange(result, BitRange::fromMaxValue(upperBound - 1));
   } else {
     // Default for 64-lane wavefront: [0, 63] needs 6 bits
@@ -512,18 +527,18 @@ LogicalResult handleGPUBlockId(Operation *op, TranslationContext &ctx) {
   gpu::Dimension dim = blockIdOp.getDimension();
   int dimIndex = 0;
   switch (dim) {
-    case gpu::Dimension::x:
-      dimIndex = 0;
-      ctx.setUsesWorkgroupIdX(true);
-      break;
-    case gpu::Dimension::y:
-      dimIndex = 1;
-      ctx.setUsesWorkgroupIdY(true);
-      break;
-    case gpu::Dimension::z:
-      dimIndex = 2;
-      ctx.setUsesWorkgroupIdZ(true);
-      break;
+  case gpu::Dimension::x:
+    dimIndex = 0;
+    ctx.setUsesWorkgroupIdX(true);
+    break;
+  case gpu::Dimension::y:
+    dimIndex = 1;
+    ctx.setUsesWorkgroupIdY(true);
+    break;
+  case gpu::Dimension::z:
+    dimIndex = 2;
+    ctx.setUsesWorkgroupIdZ(true);
+    break;
   }
 
   int64_t sgprIndex = ctx.getWorkgroupIdSgprIndex(dimIndex);
@@ -554,13 +569,20 @@ LogicalResult handleGPUBlockDim(Operation *op, TranslationContext &ctx) {
   // For now, use precolored SGPRs at standard ABI locations
   int64_t sgprIndex = 0;
   switch (blockDimOp.getDimension()) {
-    case gpu::Dimension::x: sgprIndex = 6; break;   // workgroup_size_x
-    case gpu::Dimension::y: sgprIndex = 7; break;   // workgroup_size_y
-    case gpu::Dimension::z: sgprIndex = 8; break;   // workgroup_size_z
+  case gpu::Dimension::x:
+    sgprIndex = 6;
+    break; // workgroup_size_x
+  case gpu::Dimension::y:
+    sgprIndex = 7;
+    break; // workgroup_size_y
+  case gpu::Dimension::z:
+    sgprIndex = 8;
+    break; // workgroup_size_z
   }
 
   auto sregType = ctx.createSRegType();
-  auto blockDim = PrecoloredSRegOp::create(builder, loc, sregType, sgprIndex, 1);
+  auto blockDim =
+      PrecoloredSRegOp::create(builder, loc, sregType, sgprIndex, 1);
 
   ctx.getMapper().mapValue(blockDimOp.getResult(), blockDim);
   return success();
@@ -575,9 +597,15 @@ LogicalResult handleGPUGridDim(Operation *op, TranslationContext &ctx) {
   // Grid dimensions come from dispatch packet
   int64_t sgprIndex = 0;
   switch (gridDimOp.getDimension()) {
-    case gpu::Dimension::x: sgprIndex = 9; break;   // grid_size_x
-    case gpu::Dimension::y: sgprIndex = 10; break;  // grid_size_y
-    case gpu::Dimension::z: sgprIndex = 11; break;  // grid_size_z
+  case gpu::Dimension::x:
+    sgprIndex = 9;
+    break; // grid_size_x
+  case gpu::Dimension::y:
+    sgprIndex = 10;
+    break; // grid_size_y
+  case gpu::Dimension::z:
+    sgprIndex = 11;
+    break; // grid_size_z
   }
 
   auto sregType = ctx.createSRegType();
@@ -602,17 +630,20 @@ LogicalResult handleGPULaneId(Operation *op, TranslationContext &ctx) {
   auto immZero = ctx.createImmType(0);
   auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
 
-  auto mbcntLo = V_MBCNT_LO_U32_B32::create(builder, loc, vregType, maskConst, zeroConst);
-  auto mbcntHi = V_MBCNT_HI_U32_B32::create(builder, loc, vregType, maskConst, mbcntLo);
+  auto mbcntLo =
+      V_MBCNT_LO_U32_B32::create(builder, loc, vregType, maskConst, zeroConst);
+  auto mbcntHi =
+      V_MBCNT_HI_U32_B32::create(builder, loc, vregType, maskConst, mbcntLo);
 
   ctx.getMapper().mapValue(laneIdOp.getResult(), mbcntHi);
   return success();
 }
 
 /// Handle gpu.subgroup_broadcast - broadcast value from one lane to all
-/// This emits v_readlane_b32 to read from a specific lane, or v_readfirstlane_b32
-/// for broadcasting from lane 0.
-LogicalResult handleGPUSubgroupBroadcast(Operation *op, TranslationContext &ctx) {
+/// This emits v_readlane_b32 to read from a specific lane, or
+/// v_readfirstlane_b32 for broadcasting from lane 0.
+LogicalResult handleGPUSubgroupBroadcast(Operation *op,
+                                         TranslationContext &ctx) {
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
 
@@ -620,7 +651,8 @@ LogicalResult handleGPUSubgroupBroadcast(Operation *op, TranslationContext &ctx)
   // - 2 operands: value and lane_id
   // - 1 operand with lane_id as attribute (newer MLIR versions)
   if (op->getNumOperands() < 1) {
-    return op->emitError("subgroup_broadcast requires at least a value operand");
+    return op->emitError(
+        "subgroup_broadcast requires at least a value operand");
   }
 
   Value srcValue = op->getOperand(0);
@@ -650,7 +682,8 @@ LogicalResult handleGPUSubgroupBroadcast(Operation *op, TranslationContext &ctx)
     // Lane ID is an attribute (newer MLIR)
     laneIdValue = laneAttr.getInt();
     hasLaneId = true;
-  } else if (auto subgroupIdAttr = op->getAttrOfType<IntegerAttr>("subgroup_id")) {
+  } else if (auto subgroupIdAttr =
+                 op->getAttrOfType<IntegerAttr>("subgroup_id")) {
     // Alternative attribute name
     laneIdValue = subgroupIdAttr.getInt();
     hasLaneId = true;
@@ -679,7 +712,8 @@ LogicalResult handleGPUSubgroupBroadcast(Operation *op, TranslationContext &ctx)
       auto immType = ctx.createImmType(laneIdValue);
       laneMapped = ConstantOp::create(builder, loc, immType, laneIdValue);
     }
-    result = V_READLANE_B32::create(builder, loc, sregType, *srcMapped, *laneMapped);
+    result =
+        V_READLANE_B32::create(builder, loc, sregType, *srcMapped, *laneMapped);
   }
 
   ctx.getMapper().mapValue(op->getResult(0), result);
@@ -784,7 +818,8 @@ LogicalResult handleArithMulI(Operation *op, TranslationContext &ctx) {
 LogicalResult handleArithIndexCast(Operation *op, TranslationContext &ctx) {
   auto castOp = cast<arith::IndexCastOp>(op);
 
-  // Index casts are usually no-ops (same register, different type interpretation)
+  // Index casts are usually no-ops (same register, different type
+  // interpretation)
   auto src = ctx.getMapper().getMapped(castOp.getIn());
   if (src) {
     ctx.getMapper().mapValue(castOp.getResult(), *src);
@@ -981,40 +1016,40 @@ LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx) {
   // Emit comparison based on predicate
   // These operations set VCC implicitly (no SSA result)
   switch (cmpOp.getPredicate()) {
-    case arith::CmpIPredicate::eq:
-      V_CMP_EQ_U32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::ne:
-      V_CMP_NE_U32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::slt:
-      V_CMP_LT_I32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::sle:
-      V_CMP_LE_I32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::sgt:
-      V_CMP_GT_I32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::sge:
-      V_CMP_GE_I32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::ult:
-      V_CMP_LT_U32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::ule:
-      V_CMP_LE_U32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::ugt:
-      V_CMP_GT_U32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpIPredicate::uge:
-      V_CMP_GE_U32::create(builder, loc, *lhs, *rhs);
-      break;
+  case arith::CmpIPredicate::eq:
+    V_CMP_EQ_U32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::ne:
+    V_CMP_NE_U32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::slt:
+    V_CMP_LT_I32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::sle:
+    V_CMP_LE_I32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::sgt:
+    V_CMP_GT_I32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::sge:
+    V_CMP_GE_I32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::ult:
+    V_CMP_LT_U32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::ule:
+    V_CMP_LE_U32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::ugt:
+    V_CMP_GT_U32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpIPredicate::uge:
+    V_CMP_GE_U32::create(builder, loc, *lhs, *rhs);
+    break;
   }
 
-  // For now, we don't track VCC as a value - the select handler uses it implicitly
-  // Map result to a placeholder (the select handler will use VCC)
+  // For now, we don't track VCC as a value - the select handler uses it
+  // implicitly Map result to a placeholder (the select handler will use VCC)
   auto immOne = ctx.createImmType(1);
   auto one = ConstantOp::create(builder, loc, immOne, 1);
   ctx.getMapper().mapValue(cmpOp.getResult(), one);
@@ -1043,13 +1078,15 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
 
   // v_cndmask_b32: select true_val if vcc set, false_val otherwise
   // The third operand is VCC (implicitly used from previous v_cmp)
-  auto select = V_CNDMASK_B32::create(builder, loc, vregType, *falseVal, *trueVal, zeroConst);
+  auto select = V_CNDMASK_B32::create(builder, loc, vregType, *falseVal,
+                                      *trueVal, zeroConst);
   ctx.getMapper().mapValue(selectOp.getResult(), select);
   return success();
 }
 
 /// Helper to check if an MLIR value is a constant power of 2
-static std::optional<int64_t> getConstantPowerOf2(Value val, TranslationContext &ctx) {
+static std::optional<int64_t> getConstantPowerOf2(Value val,
+                                                  TranslationContext &ctx) {
   // Check if it's a waveasm.constant
   if (auto constOp = val.getDefiningOp<ConstantOp>()) {
     int64_t value = constOp.getValue();
@@ -1064,7 +1101,8 @@ static std::optional<int64_t> getConstantPowerOf2(Value val, TranslationContext 
   }
   // Check for arith.constant in the original MLIR
   auto *defOp = val.getDefiningOp();
-  if (!defOp) return std::nullopt;
+  if (!defOp)
+    return std::nullopt;
 
   if (auto arithConst = dyn_cast<arith::ConstantOp>(defOp)) {
     if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
@@ -1116,7 +1154,8 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
 /// Helper to get constant value from arith.constant
 static std::optional<int64_t> getConstantValue(Value val) {
   auto *defOp = val.getDefiningOp();
-  if (!defOp) return std::nullopt;
+  if (!defOp)
+    return std::nullopt;
 
   // Try typed arith::ConstantOp first
   if (auto arithConst = dyn_cast<arith::ConstantOp>(defOp)) {
@@ -1291,34 +1330,34 @@ LogicalResult handleArithCmpF(Operation *op, TranslationContext &ctx) {
 
   // Emit comparison based on predicate (sets VCC)
   switch (cmpOp.getPredicate()) {
-    case arith::CmpFPredicate::OEQ:
-    case arith::CmpFPredicate::UEQ:
-      V_CMP_EQ_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpFPredicate::ONE:
-    case arith::CmpFPredicate::UNE:
-      V_CMP_NE_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpFPredicate::OLT:
-    case arith::CmpFPredicate::ULT:
-      V_CMP_LT_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpFPredicate::OLE:
-    case arith::CmpFPredicate::ULE:
-      V_CMP_LE_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpFPredicate::OGT:
-    case arith::CmpFPredicate::UGT:
-      V_CMP_GT_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    case arith::CmpFPredicate::OGE:
-    case arith::CmpFPredicate::UGE:
-      V_CMP_GE_F32::create(builder, loc, *lhs, *rhs);
-      break;
-    default:
-      // Handle other predicates as unordered
-      V_CMP_NE_F32::create(builder, loc, *lhs, *rhs);
-      break;
+  case arith::CmpFPredicate::OEQ:
+  case arith::CmpFPredicate::UEQ:
+    V_CMP_EQ_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpFPredicate::ONE:
+  case arith::CmpFPredicate::UNE:
+    V_CMP_NE_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpFPredicate::OLT:
+  case arith::CmpFPredicate::ULT:
+    V_CMP_LT_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpFPredicate::OLE:
+  case arith::CmpFPredicate::ULE:
+    V_CMP_LE_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpFPredicate::OGT:
+  case arith::CmpFPredicate::UGT:
+    V_CMP_GT_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  case arith::CmpFPredicate::OGE:
+  case arith::CmpFPredicate::UGE:
+    V_CMP_GE_F32::create(builder, loc, *lhs, *rhs);
+    break;
+  default:
+    // Handle other predicates as unordered
+    V_CMP_NE_F32::create(builder, loc, *lhs, *rhs);
+    break;
   }
 
   // Map result to a placeholder (select handler uses VCC implicitly)
@@ -1403,7 +1442,7 @@ LogicalResult handleVectorExtract(Operation *op, TranslationContext &ctx) {
     // This will be lowered to proper register offset during register allocation
     auto elemType = ctx.createVRegType(1, 1);
     auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
-                                                    builder.getI64IntegerAttr(index));
+                                           builder.getI64IntegerAttr(index));
     ctx.getMapper().mapValue(extractOp.getResult(), extractWaveOp.getResult());
   }
   return success();
@@ -1463,7 +1502,8 @@ LogicalResult handleVectorTransferRead(Operation *op, TranslationContext &ctx) {
     if (numBytes == 8) {
       loadInstr = DS_READ_B64::create(builder, loc, TypeRange{vregType}, vaddr);
     } else if (numBytes == 16) {
-      loadInstr = DS_READ_B128::create(builder, loc, TypeRange{vregType}, vaddr);
+      loadInstr =
+          DS_READ_B128::create(builder, loc, TypeRange{vregType}, vaddr);
     } else {
       loadInstr = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr);
     }
@@ -1486,11 +1526,14 @@ LogicalResult handleVectorTransferRead(Operation *op, TranslationContext &ctx) {
 
     Operation *loadInstr;
     if (numDwords == 1) {
-      loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType}, srd, voffset);
+      loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType},
+                                            srd, voffset);
     } else if (numDwords == 2) {
-      loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType}, srd, voffset);
+      loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType},
+                                              srd, voffset);
     } else {
-      loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType}, srd, voffset);
+      loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType},
+                                              srd, voffset);
     }
     ctx.getMapper().mapValue(readOp.getResult(), loadInstr->getResult(0));
   }
@@ -1499,7 +1542,8 @@ LogicalResult handleVectorTransferRead(Operation *op, TranslationContext &ctx) {
 }
 
 /// Handle vector.transfer_write - similar to vector.store
-LogicalResult handleVectorTransferWrite(Operation *op, TranslationContext &ctx) {
+LogicalResult handleVectorTransferWrite(Operation *op,
+                                        TranslationContext &ctx) {
   auto writeOp = cast<vector::TransferWriteOp>(op);
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
@@ -1562,8 +1606,8 @@ LogicalResult handleVectorTransferWrite(Operation *op, TranslationContext &ctx) 
   return success();
 }
 
-// Note: gpu.subgroup_broadcast handler removed - not available in this MLIR version
-// When available, it would emit v_readlane_b32 or v_readfirstlane_b32
+// Note: gpu.subgroup_broadcast handler removed - not available in this MLIR
+// version When available, it would emit v_readlane_b32 or v_readfirstlane_b32
 
 /// Handle vector.fma - fused multiply-add
 LogicalResult handleVectorFma(Operation *op, TranslationContext &ctx) {
@@ -1644,7 +1688,8 @@ LogicalResult handleSCFIf(Operation *op, TranslationContext &ctx) {
   }
 
   // Create labels for if/else/endif
-  std::string baseName = "L_if_" + std::to_string(reinterpret_cast<uintptr_t>(op));
+  std::string baseName =
+      "L_if_" + std::to_string(reinterpret_cast<uintptr_t>(op));
   std::string elseLabel = baseName + "_else";
   std::string endLabel = baseName + "_end";
 
@@ -1668,7 +1713,8 @@ LogicalResult handleSCFIf(Operation *op, TranslationContext &ctx) {
   // Else label and block
   if (!ifOp.getElseRegion().empty()) {
     LabelOp::create(builder, loc, elseLabel);
-    for (Operation &elseOp : ifOp.getElseRegion().front().without_terminator()) {
+    for (Operation &elseOp :
+         ifOp.getElseRegion().front().without_terminator()) {
       if (failed(translateOperation(&elseOp, ctx))) {
         return failure();
       }
@@ -1732,7 +1778,8 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
       voffset = ConstantOp::create(builder, loc, immType, 0);
     }
 
-    auto loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType}, srd, voffset);
+    auto loadInstr = BUFFER_LOAD_DWORD::create(
+        builder, loc, TypeRange{vregType}, srd, voffset);
     ctx.getMapper().mapValue(loadOp.getResult(), loadInstr.getResult(0));
   }
 
@@ -1838,9 +1885,9 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
     threadIdUpperBound = ctx.getThreadIdUpperBound(applyOp.getOperands()[0]);
   }
 
-  // HIGH-LEVEL SIMPLIFICATION: Check if the entire expression simplifies to just
-  // the input symbol when floor divisions evaluate to 0
-  // Pattern: s0 + (s0 floordiv N) * C where N >= upper_bound
+  // HIGH-LEVEL SIMPLIFICATION: Check if the entire expression simplifies to
+  // just the input symbol when floor divisions evaluate to 0 Pattern: s0 + (s0
+  // floordiv N) * C where N >= upper_bound
   //       => s0 + 0 * C = s0
   if (threadIdUpperBound > 0) {
     // Check if expression is Add(symbol, Mul(FloorDiv(symbol, N), C))
@@ -1852,9 +1899,11 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
           if (auto mulExpr = dyn_cast<AffineBinaryOpExpr>(addExpr.getRHS())) {
             if (mulExpr.getKind() == AffineExprKind::Mul) {
               // Check if LHS of Mul is FloorDiv with divisor >= upperBound
-              if (auto floorExpr = dyn_cast<AffineBinaryOpExpr>(mulExpr.getLHS())) {
+              if (auto floorExpr =
+                      dyn_cast<AffineBinaryOpExpr>(mulExpr.getLHS())) {
                 if (floorExpr.getKind() == AffineExprKind::FloorDiv) {
-                  if (auto constDiv = dyn_cast<AffineConstantExpr>(floorExpr.getRHS())) {
+                  if (auto constDiv =
+                          dyn_cast<AffineConstantExpr>(floorExpr.getRHS())) {
                     if (constDiv.getValue() >= threadIdUpperBound) {
                       // Expression simplifies to just the symbol (s0)
                       // Map result to the thread ID value
@@ -1865,9 +1914,11 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
                 }
               }
               // Also check RHS of Mul
-              if (auto floorExpr = dyn_cast<AffineBinaryOpExpr>(mulExpr.getRHS())) {
+              if (auto floorExpr =
+                      dyn_cast<AffineBinaryOpExpr>(mulExpr.getRHS())) {
                 if (floorExpr.getKind() == AffineExprKind::FloorDiv) {
-                  if (auto constDiv = dyn_cast<AffineConstantExpr>(floorExpr.getRHS())) {
+                  if (auto constDiv =
+                          dyn_cast<AffineConstantExpr>(floorExpr.getRHS())) {
                     if (constDiv.getValue() >= threadIdUpperBound) {
                       ctx.getMapper().mapValue(applyOp.getResult(), baseValue);
                       return success();
@@ -1916,7 +1967,8 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
   };
 
   // Helper to emit the compiled expression with bit range tracking
-  std::function<ExprResult(AffineExpr)> compileExpr = [&](AffineExpr e) -> ExprResult {
+  std::function<ExprResult(AffineExpr)> compileExpr =
+      [&](AffineExpr e) -> ExprResult {
     // Dimension reference
     if (auto dimExpr = dyn_cast<AffineDimExpr>(e)) {
       if (dimExpr.getPosition() < applyOp.getOperands().size()) {
@@ -1961,177 +2013,196 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
       BitRange rhsRange = rhsResult.range;
 
       switch (binExpr.getKind()) {
-        case AffineExprKind::Add: {
-          // Check if bit ranges overlap - if not, use OR instead of ADD
-          if (!lhsRange.overlaps(rhsRange)) {
-            // Check if either operand is a shift (Mul by power of 2)
-            // If so, emit v_lshl_or_b32 directly instead of lshlrev + or
-            auto tryFuseShiftOr = [&](AffineExpr shiftExpr, Value orend,
-                                       BitRange orendRange) -> std::optional<ExprResult> {
-              if (auto mulExpr = dyn_cast<AffineBinaryOpExpr>(shiftExpr)) {
-                if (mulExpr.getKind() == AffineExprKind::Mul) {
-                  // Check for power of 2 multiplier
-                  if (auto constRhs = dyn_cast<AffineConstantExpr>(mulExpr.getRHS())) {
-                    int64_t val = constRhs.getValue();
-                    if (val > 0 && (val & (val - 1)) == 0) {
-                      // It's a shift! Emit v_lshl_or_b32 directly
-                      int64_t shiftAmount = log2(val);
-                      // Get the base value being shifted (compile without the multiply)
-                      ExprResult baseResult = compileExpr(mulExpr.getLHS());
-                      auto shiftImm = ctx.createImmType(shiftAmount);
-                      auto shiftConst = ConstantOp::create(builder, loc, shiftImm, shiftAmount);
-                      // v_lshl_or_b32: dst = (src << shift) | orend
-                      Value fusedResult = V_LSHL_OR_B32::create(builder, loc, vregType,
-                                                                 baseResult.value, shiftConst, orend);
-                      BitRange shiftedRange = baseResult.range.shiftLeft(shiftAmount);
-                      BitRange resultRange = shiftedRange.merge(orendRange);
-                      ctx.setBitRange(fusedResult, resultRange);
-                      return ExprResult(fusedResult, resultRange);
-                    }
+      case AffineExprKind::Add: {
+        // Check if bit ranges overlap - if not, use OR instead of ADD
+        if (!lhsRange.overlaps(rhsRange)) {
+          // Check if either operand is a shift (Mul by power of 2)
+          // If so, emit v_lshl_or_b32 directly instead of lshlrev + or
+          auto tryFuseShiftOr =
+              [&](AffineExpr shiftExpr, Value orend,
+                  BitRange orendRange) -> std::optional<ExprResult> {
+            if (auto mulExpr = dyn_cast<AffineBinaryOpExpr>(shiftExpr)) {
+              if (mulExpr.getKind() == AffineExprKind::Mul) {
+                // Check for power of 2 multiplier
+                if (auto constRhs =
+                        dyn_cast<AffineConstantExpr>(mulExpr.getRHS())) {
+                  int64_t val = constRhs.getValue();
+                  if (val > 0 && (val & (val - 1)) == 0) {
+                    // It's a shift! Emit v_lshl_or_b32 directly
+                    int64_t shiftAmount = log2(val);
+                    // Get the base value being shifted (compile without the
+                    // multiply)
+                    ExprResult baseResult = compileExpr(mulExpr.getLHS());
+                    auto shiftImm = ctx.createImmType(shiftAmount);
+                    auto shiftConst =
+                        ConstantOp::create(builder, loc, shiftImm, shiftAmount);
+                    // v_lshl_or_b32: dst = (src << shift) | orend
+                    Value fusedResult = V_LSHL_OR_B32::create(
+                        builder, loc, vregType, baseResult.value, shiftConst,
+                        orend);
+                    BitRange shiftedRange =
+                        baseResult.range.shiftLeft(shiftAmount);
+                    BitRange resultRange = shiftedRange.merge(orendRange);
+                    ctx.setBitRange(fusedResult, resultRange);
+                    return ExprResult(fusedResult, resultRange);
                   }
-                  // Also check LHS for constant
-                  if (auto constLhs = dyn_cast<AffineConstantExpr>(mulExpr.getLHS())) {
-                    int64_t val = constLhs.getValue();
-                    if (val > 0 && (val & (val - 1)) == 0) {
-                      int64_t shiftAmount = log2(val);
-                      ExprResult baseResult = compileExpr(mulExpr.getRHS());
-                      auto shiftImm = ctx.createImmType(shiftAmount);
-                      auto shiftConst = ConstantOp::create(builder, loc, shiftImm, shiftAmount);
-                      Value fusedResult = V_LSHL_OR_B32::create(builder, loc, vregType,
-                                                                 baseResult.value, shiftConst, orend);
-                      BitRange shiftedRange = baseResult.range.shiftLeft(shiftAmount);
-                      BitRange resultRange = shiftedRange.merge(orendRange);
-                      ctx.setBitRange(fusedResult, resultRange);
-                      return ExprResult(fusedResult, resultRange);
-                    }
+                }
+                // Also check LHS for constant
+                if (auto constLhs =
+                        dyn_cast<AffineConstantExpr>(mulExpr.getLHS())) {
+                  int64_t val = constLhs.getValue();
+                  if (val > 0 && (val & (val - 1)) == 0) {
+                    int64_t shiftAmount = log2(val);
+                    ExprResult baseResult = compileExpr(mulExpr.getRHS());
+                    auto shiftImm = ctx.createImmType(shiftAmount);
+                    auto shiftConst =
+                        ConstantOp::create(builder, loc, shiftImm, shiftAmount);
+                    Value fusedResult = V_LSHL_OR_B32::create(
+                        builder, loc, vregType, baseResult.value, shiftConst,
+                        orend);
+                    BitRange shiftedRange =
+                        baseResult.range.shiftLeft(shiftAmount);
+                    BitRange resultRange = shiftedRange.merge(orendRange);
+                    ctx.setBitRange(fusedResult, resultRange);
+                    return ExprResult(fusedResult, resultRange);
                   }
                 }
               }
-              return std::nullopt;
-            };
-
-            // Try to fuse: check if LHS is a shift
-            if (auto result = tryFuseShiftOr(binExpr.getLHS(), rhs, rhsRange)) {
-              return *result;
             }
-            // Try to fuse: check if RHS is a shift
-            if (auto result = tryFuseShiftOr(binExpr.getRHS(), lhs, lhsRange)) {
-              return *result;
-            }
+            return std::nullopt;
+          };
 
-            // No fusion possible, emit regular v_or_b32
-            Value orResult = V_OR_B32::create(builder, loc, vregType, lhs, rhs);
-            BitRange resultRange = lhsRange.merge(rhsRange);
-            ctx.setBitRange(orResult, resultRange);
-            return ExprResult(orResult, resultRange);
+          // Try to fuse: check if LHS is a shift
+          if (auto result = tryFuseShiftOr(binExpr.getLHS(), rhs, rhsRange)) {
+            return *result;
           }
-          // Overlapping ranges - must use ADD
-          Value addResult = V_ADD_U32::create(builder, loc, vregType, lhs, rhs);
-          BitRange resultRange = lhsRange.extendForAdd(rhsRange);
-          ctx.setBitRange(addResult, resultRange);
-          return ExprResult(addResult, resultRange);
+          // Try to fuse: check if RHS is a shift
+          if (auto result = tryFuseShiftOr(binExpr.getRHS(), lhs, lhsRange)) {
+            return *result;
+          }
+
+          // No fusion possible, emit regular v_or_b32
+          Value orResult = V_OR_B32::create(builder, loc, vregType, lhs, rhs);
+          BitRange resultRange = lhsRange.merge(rhsRange);
+          ctx.setBitRange(orResult, resultRange);
+          return ExprResult(orResult, resultRange);
         }
+        // Overlapping ranges - must use ADD
+        Value addResult = V_ADD_U32::create(builder, loc, vregType, lhs, rhs);
+        BitRange resultRange = lhsRange.extendForAdd(rhsRange);
+        ctx.setBitRange(addResult, resultRange);
+        return ExprResult(addResult, resultRange);
+      }
 
-        case AffineExprKind::Mul: {
-          // Constant folding: if either operand is constant 0, result is 0
-          if (auto constLhs = dyn_cast<AffineConstantExpr>(binExpr.getLHS())) {
-            if (constLhs.getValue() == 0) {
-              auto immZero = ctx.createImmType(0);
-              return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
-                                BitRange(0, 0));
-            }
+      case AffineExprKind::Mul: {
+        // Constant folding: if either operand is constant 0, result is 0
+        if (auto constLhs = dyn_cast<AffineConstantExpr>(binExpr.getLHS())) {
+          if (constLhs.getValue() == 0) {
+            auto immZero = ctx.createImmType(0);
+            return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
+                              BitRange(0, 0));
           }
-          if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
-            if (constRhs.getValue() == 0) {
-              auto immZero = ctx.createImmType(0);
-              return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
-                                BitRange(0, 0));
-            }
-            // Check if RHS is constant power of 2 -> use shift
-            int64_t val = constRhs.getValue();
-            if (isPowerOf2(val)) {
-              int64_t shiftAmount = log2(val);
-              auto shiftAmt = ctx.createImmType(shiftAmount);
-              auto shiftConst = ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
-              Value shiftResult = V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, lhs);
-              // Shift the bit range left by shiftAmount
-              BitRange resultRange = lhsRange.shiftLeft(shiftAmount);
-              ctx.setBitRange(shiftResult, resultRange);
-              return ExprResult(shiftResult, resultRange);
-            }
-          }
-          // Also check LHS for power of 2 multiply
-          if (auto constLhs = dyn_cast<AffineConstantExpr>(binExpr.getLHS())) {
-            int64_t val = constLhs.getValue();
-            if (isPowerOf2(val)) {
-              int64_t shiftAmount = log2(val);
-              auto shiftAmt = ctx.createImmType(shiftAmount);
-              auto shiftConst = ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
-              Value shiftResult = V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, rhs);
-              BitRange resultRange = rhsRange.shiftLeft(shiftAmount);
-              ctx.setBitRange(shiftResult, resultRange);
-              return ExprResult(shiftResult, resultRange);
-            }
-          }
-          Value mulResult = V_MUL_LO_U32::create(builder, loc, vregType, lhs, rhs);
-          return ExprResult(mulResult, BitRange());  // Conservative: full range
         }
-
-        case AffineExprKind::FloorDiv: {
-          // Check if RHS is constant
-          if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
-            int64_t divisor = constRhs.getValue();
-
-            // SIMPLIFICATION: If the LHS is a thread ID with upper_bound <= divisor,
-            // then floor(tid / divisor) = 0 for all valid thread IDs.
-            // Example: tid_x in [0, 63], floor(tid_x / 64) = 0
-            if (threadIdUpperBound > 0 && divisor >= threadIdUpperBound) {
-              // LHS is in range [0, upper_bound-1], so floor(LHS / divisor) = 0
-              auto immZero = ctx.createImmType(0);
-              return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
-                                BitRange(0, 0));
-            }
-
-            // Check if divisor is power of 2 -> use right shift
-            if (isPowerOf2(divisor)) {
-              int64_t shiftAmount = log2(divisor);
-              auto shiftAmt = ctx.createImmType(shiftAmount);
-              auto shiftConst = ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
-              Value shiftResult = V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, lhs);
-              // Shift the bit range right by shiftAmount
-              BitRange resultRange = lhsRange.shiftRight(shiftAmount);
-              ctx.setBitRange(shiftResult, resultRange);
-              return ExprResult(shiftResult, resultRange);
-            }
+        if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
+          if (constRhs.getValue() == 0) {
+            auto immZero = ctx.createImmType(0);
+            return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
+                              BitRange(0, 0));
           }
-          // General floordiv - needs more complex handling
-          return ExprResult(lhs, BitRange());  // Conservative
-        }
-
-        case AffineExprKind::Mod: {
-          // Check if RHS is constant power of 2 -> use AND
-          if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
-            int64_t val = constRhs.getValue();
-            if (isPowerOf2(val)) {
-              auto maskVal = ctx.createImmType(val - 1);
-              auto maskConst = ConstantOp::create(builder, loc, maskVal, val - 1);
-              Value andResult = V_AND_B32::create(builder, loc, vregType, lhs, maskConst);
-              // Result uses bits 0..(log2(val)-1)
-              BitRange resultRange = BitRange(0, log2(val) - 1);
-              ctx.setBitRange(andResult, resultRange);
-              return ExprResult(andResult, resultRange);
-            }
+          // Check if RHS is constant power of 2 -> use shift
+          int64_t val = constRhs.getValue();
+          if (isPowerOf2(val)) {
+            int64_t shiftAmount = log2(val);
+            auto shiftAmt = ctx.createImmType(shiftAmount);
+            auto shiftConst =
+                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
+            Value shiftResult =
+                V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, lhs);
+            // Shift the bit range left by shiftAmount
+            BitRange resultRange = lhsRange.shiftLeft(shiftAmount);
+            ctx.setBitRange(shiftResult, resultRange);
+            return ExprResult(shiftResult, resultRange);
           }
-          // General mod - needs more complex handling
-          return ExprResult(lhs, BitRange());  // Conservative
         }
+        // Also check LHS for power of 2 multiply
+        if (auto constLhs = dyn_cast<AffineConstantExpr>(binExpr.getLHS())) {
+          int64_t val = constLhs.getValue();
+          if (isPowerOf2(val)) {
+            int64_t shiftAmount = log2(val);
+            auto shiftAmt = ctx.createImmType(shiftAmount);
+            auto shiftConst =
+                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
+            Value shiftResult =
+                V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, rhs);
+            BitRange resultRange = rhsRange.shiftLeft(shiftAmount);
+            ctx.setBitRange(shiftResult, resultRange);
+            return ExprResult(shiftResult, resultRange);
+          }
+        }
+        Value mulResult =
+            V_MUL_LO_U32::create(builder, loc, vregType, lhs, rhs);
+        return ExprResult(mulResult, BitRange()); // Conservative: full range
+      }
 
-        default:
-          return ExprResult(lhs, BitRange());  // Unsupported, return LHS as fallback
+      case AffineExprKind::FloorDiv: {
+        // Check if RHS is constant
+        if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
+          int64_t divisor = constRhs.getValue();
+
+          // SIMPLIFICATION: If the LHS is a thread ID with upper_bound <=
+          // divisor, then floor(tid / divisor) = 0 for all valid thread IDs.
+          // Example: tid_x in [0, 63], floor(tid_x / 64) = 0
+          if (threadIdUpperBound > 0 && divisor >= threadIdUpperBound) {
+            // LHS is in range [0, upper_bound-1], so floor(LHS / divisor) = 0
+            auto immZero = ctx.createImmType(0);
+            return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
+                              BitRange(0, 0));
+          }
+
+          // Check if divisor is power of 2 -> use right shift
+          if (isPowerOf2(divisor)) {
+            int64_t shiftAmount = log2(divisor);
+            auto shiftAmt = ctx.createImmType(shiftAmount);
+            auto shiftConst =
+                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
+            Value shiftResult =
+                V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, lhs);
+            // Shift the bit range right by shiftAmount
+            BitRange resultRange = lhsRange.shiftRight(shiftAmount);
+            ctx.setBitRange(shiftResult, resultRange);
+            return ExprResult(shiftResult, resultRange);
+          }
+        }
+        // General floordiv - needs more complex handling
+        return ExprResult(lhs, BitRange()); // Conservative
+      }
+
+      case AffineExprKind::Mod: {
+        // Check if RHS is constant power of 2 -> use AND
+        if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
+          int64_t val = constRhs.getValue();
+          if (isPowerOf2(val)) {
+            auto maskVal = ctx.createImmType(val - 1);
+            auto maskConst = ConstantOp::create(builder, loc, maskVal, val - 1);
+            Value andResult =
+                V_AND_B32::create(builder, loc, vregType, lhs, maskConst);
+            // Result uses bits 0..(log2(val)-1)
+            BitRange resultRange = BitRange(0, log2(val) - 1);
+            ctx.setBitRange(andResult, resultRange);
+            return ExprResult(andResult, resultRange);
+          }
+        }
+        // General mod - needs more complex handling
+        return ExprResult(lhs, BitRange()); // Conservative
+      }
+
+      default:
+        return ExprResult(lhs,
+                          BitRange()); // Unsupported, return LHS as fallback
       }
     }
 
-    return ExprResult(baseValue, BitRange());  // Fallback
+    return ExprResult(baseValue, BitRange()); // Fallback
   };
 
   ExprResult result = compileExpr(exprToCompile);
@@ -2151,7 +2222,8 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
 //===----------------------------------------------------------------------===//
 
 /// Handle vector.load - emit buffer_load or ds_read based on address space
-/// Splits large loads (> 16 bytes) into multiple buffer_load_dwordx4 instructions
+/// Splits large loads (> 16 bytes) into multiple buffer_load_dwordx4
+/// instructions
 LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
   auto loadOp = cast<vector::LoadOp>(op);
   auto &builder = ctx.getBuilder();
@@ -2164,7 +2236,8 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
 
   if (isLDSMemRef(memrefType)) {
     // LDS load - ds_read_b* with proper byte address computation
-    auto vregType = ctx.createVRegType(numDwords, numDwords > 1 ? numDwords : 1);
+    auto vregType =
+        ctx.createVRegType(numDwords, numDwords > 1 ? numDwords : 1);
     auto indices = loadOp.getIndices();
     Type elementType = memrefType.getElementType();
     int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
@@ -2172,22 +2245,25 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     // Compute vaddr as byte offset from indices and strides
     // Also track instruction offset from constant addends in affine expressions
     Value vaddr;
-    int64_t instOffset = 0;  // Instruction offset for ds_read offset:N
+    int64_t instOffset = 0; // Instruction offset for ds_read offset:N
     SmallVector<int64_t, 4> strides;
     int64_t offset;
     if (succeeded(memrefType.getStridesAndOffset(strides, offset))) {
       // Process each index dimension
       for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
         auto idxMapped = ctx.getMapper().getMapped(indices[i]);
-        if (!idxMapped) continue;
+        if (!idxMapped)
+          continue;
 
         Value idx = *idxMapped;
         int64_t strideBytes = strides[i] * elementBytes;
 
-        if (strideBytes == 0) continue;
+        if (strideBytes == 0)
+          continue;
 
         // Check if this index has a constant addend from affine.apply
-        // This allows using "offset:N" in the instruction instead of VGPR computation
+        // This allows using "offset:N" in the instruction instead of VGPR
+        // computation
         int64_t constAddend = ctx.getConstOffset(indices[i]);
         if (constAddend != 0) {
           // Add constant * stride to instruction offset
@@ -2201,19 +2277,27 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
           // Power of 2 - use shift
           int shift = 0;
           int64_t temp = strideBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, idx);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                            shiftImm, idx);
         } else {
           // General case - use multiply
-          auto strideImm = ConstantOp::create(builder, loc, ctx.createImmType(strideBytes), strideBytes);
-          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(), idx, strideImm);
+          auto strideImm = ConstantOp::create(
+              builder, loc, ctx.createImmType(strideBytes), strideBytes);
+          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                           idx, strideImm);
         }
 
         if (!vaddr) {
           vaddr = dimOffset;
         } else {
-          vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr, dimOffset);
+          vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                    dimOffset);
         }
       }
     }
@@ -2225,9 +2309,14 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
         if (elementBytes > 1) {
           int shift = 0;
           int64_t temp = elementBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          vaddr = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, *idxMapped);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          vaddr = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                        shiftImm, *idxMapped);
         } else {
           vaddr = *idxMapped;
         }
@@ -2242,8 +2331,10 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     if (auto baseOffset = ctx.getLDSBaseOffset(loadOp.getBase())) {
       // Need to move the base offset to a VGPR first since v_add_u32 requires
       // src1 to be a VGPR, and the base offset may be an immediate
-      Value baseOffsetVgpr = V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
-      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr, baseOffsetVgpr);
+      Value baseOffsetVgpr =
+          V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                baseOffsetVgpr);
     }
 
     // Create the DS_READ operation with optional offset attribute
@@ -2276,7 +2367,7 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     // Get strides from the memref type
     SmallVector<int64_t, 4> strides;
     int64_t offset;
-    int64_t instOffset = 0;  // Instruction offset for offset:N modifier
+    int64_t instOffset = 0; // Instruction offset for offset:N modifier
     if (succeeded(memrefType.getStridesAndOffset(strides, offset))) {
       // Compute linearized byte offset
       // For a 2D memref with indices [i, j] and strides [s0, s1]:
@@ -2285,15 +2376,18 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
       // Process each index dimension
       for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
         auto idxMapped = ctx.getMapper().getMapped(indices[i]);
-        if (!idxMapped) continue;
+        if (!idxMapped)
+          continue;
 
         Value idx = *idxMapped;
         int64_t strideBytes = strides[i] * elementBytes;
 
-        if (strideBytes == 0) continue;
+        if (strideBytes == 0)
+          continue;
 
-        // Check if this index has a constant addend that can be used for instOffset
-        // This allows using "offset:N" in the instruction instead of VGPR computation
+        // Check if this index has a constant addend that can be used for
+        // instOffset This allows using "offset:N" in the instruction instead of
+        // VGPR computation
         int64_t constAddend = ctx.getConstOffset(indices[i]);
         if (constAddend != 0) {
           // Add constant * stride to instruction offset
@@ -2307,20 +2401,28 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
           // Power of 2 - use shift
           int shift = 0;
           int64_t temp = strideBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, idx);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                            shiftImm, idx);
         } else {
           // General case - use multiply
-          auto strideImm = ConstantOp::create(builder, loc, ctx.createImmType(strideBytes), strideBytes);
-          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(), idx, strideImm);
+          auto strideImm = ConstantOp::create(
+              builder, loc, ctx.createImmType(strideBytes), strideBytes);
+          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                           idx, strideImm);
         }
 
         if (!voffset) {
           voffset = dimOffset;
         } else {
           // Add to existing offset
-          voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(), voffset, dimOffset);
+          voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                      voffset, dimOffset);
         }
       }
     } else {
@@ -2371,19 +2473,24 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
         loadDwords = 1;
       }
 
-      auto loadVregType = ctx.createVRegType(loadDwords, loadDwords > 1 ? loadDwords : 1);
+      auto loadVregType =
+          ctx.createVRegType(loadDwords, loadDwords > 1 ? loadDwords : 1);
 
       // Use instOffset attribute instead of computing new voffset
-      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32 instruction
-      // Combine the base instOffset (from affine constant addends) with currentOffset (for split loads)
+      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
+      // instruction Combine the base instOffset (from affine constant addends)
+      // with currentOffset (for split loads)
       int64_t totalOffset = instOffset + currentOffset;
       Operation *loadInstr;
       if (loadDwords == 4) {
-        loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr = BUFFER_LOAD_DWORDX4::create(
+            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
       } else if (loadDwords == 2) {
-        loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr = BUFFER_LOAD_DWORDX2::create(
+            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
       } else {
-        loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr = BUFFER_LOAD_DWORD::create(
+            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
       }
 
       loadResults.push_back(loadInstr->getResult(0));
@@ -2407,7 +2514,8 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
 }
 
 /// Handle vector.store - emit buffer_store or ds_write
-/// Splits large stores (> 16 bytes) into multiple buffer_store_dwordx4 instructions
+/// Splits large stores (> 16 bytes) into multiple buffer_store_dwordx4
+/// instructions
 LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
   auto storeOp = cast<vector::StoreOp>(op);
   auto &builder = ctx.getBuilder();
@@ -2437,12 +2545,14 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       // Process each index dimension
       for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
         auto idxMapped = ctx.getMapper().getMapped(indices[i]);
-        if (!idxMapped) continue;
+        if (!idxMapped)
+          continue;
 
         Value idx = *idxMapped;
         int64_t strideBytes = strides[i] * elementBytes;
 
-        if (strideBytes == 0) continue;
+        if (strideBytes == 0)
+          continue;
 
         Value dimOffset;
         if (strideBytes == 1) {
@@ -2451,19 +2561,27 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
           // Power of 2 - use shift
           int shift = 0;
           int64_t temp = strideBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, idx);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                            shiftImm, idx);
         } else {
           // General case - use multiply
-          auto strideImm = ConstantOp::create(builder, loc, ctx.createImmType(strideBytes), strideBytes);
-          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(), idx, strideImm);
+          auto strideImm = ConstantOp::create(
+              builder, loc, ctx.createImmType(strideBytes), strideBytes);
+          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                           idx, strideImm);
         }
 
         if (!vaddr) {
           vaddr = dimOffset;
         } else {
-          vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr, dimOffset);
+          vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                    dimOffset);
         }
       }
     }
@@ -2475,9 +2593,14 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
         if (elementBytes > 1) {
           int shift = 0;
           int64_t temp = elementBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          vaddr = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, *idxMapped);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          vaddr = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                        shiftImm, *idxMapped);
         } else {
           vaddr = *idxMapped;
         }
@@ -2492,8 +2615,10 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     if (auto baseOffset = ctx.getLDSBaseOffset(storeOp.getBase())) {
       // Need to move the base offset to a VGPR first since v_add_u32 requires
       // src1 to be a VGPR, and the base offset may be an immediate
-      Value baseOffsetVgpr = V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
-      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr, baseOffsetVgpr);
+      Value baseOffsetVgpr =
+          V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                baseOffsetVgpr);
     }
 
     if (numBytes == 8) {
@@ -2507,9 +2632,10 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // Global store - buffer_store_dwordx* with splitting for large vectors
 
     // Compute voffset as byte offset from indices and strides
-    // For 2D memrefs: offset = idx0 * stride0 * elementBytes + idx1 * stride1 * elementBytes
+    // For 2D memrefs: offset = idx0 * stride0 * elementBytes + idx1 * stride1 *
+    // elementBytes
     Value voffset;
-    int64_t instOffset = 0;  // Constant offset for buffer_store offset:N syntax
+    int64_t instOffset = 0; // Constant offset for buffer_store offset:N syntax
     auto indices = storeOp.getIndices();
     Type elementType = memrefType.getElementType();
     int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
@@ -2521,15 +2647,18 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       // Process each index dimension
       for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
         auto idxMapped = ctx.getMapper().getMapped(indices[i]);
-        if (!idxMapped) continue;
+        if (!idxMapped)
+          continue;
 
         Value idx = *idxMapped;
         int64_t strideBytes = strides[i] * elementBytes;
 
-        if (strideBytes == 0) continue;
+        if (strideBytes == 0)
+          continue;
 
-        // Check if this index has a constant addend that can be used for instOffset
-        // This allows using "offset:N" in the instruction instead of VGPR computation
+        // Check if this index has a constant addend that can be used for
+        // instOffset This allows using "offset:N" in the instruction instead of
+        // VGPR computation
         int64_t constAddend = ctx.getConstOffset(indices[i]);
         if (constAddend != 0) {
           // Add constant * stride to instruction offset
@@ -2543,20 +2672,28 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
           // Power of 2 - use shift
           int shift = 0;
           int64_t temp = strideBytes;
-          while (temp > 1) { shift++; temp >>= 1; }
-          auto shiftImm = ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(), shiftImm, idx);
+          while (temp > 1) {
+            shift++;
+            temp >>= 1;
+          }
+          auto shiftImm =
+              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                            shiftImm, idx);
         } else {
           // General case - use multiply
-          auto strideImm = ConstantOp::create(builder, loc, ctx.createImmType(strideBytes), strideBytes);
-          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(), idx, strideImm);
+          auto strideImm = ConstantOp::create(
+              builder, loc, ctx.createImmType(strideBytes), strideBytes);
+          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                           idx, strideImm);
         }
 
         if (!voffset) {
           voffset = dimOffset;
         } else {
           // Add to existing offset
-          voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(), voffset, dimOffset);
+          voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                      voffset, dimOffset);
         }
       }
     } else {
@@ -2590,10 +2727,11 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     auto splitResults = ctx.getSplitResults(storeOp.getValueToStore());
 
     // Split large stores into multiple buffer_store_dwordx4 (16 bytes each)
-    // Use the same voffset for all stores, with instOffset for subsequent chunks
-    // Add any constant offset from affine expressions to the base offset
+    // Use the same voffset for all stores, with instOffset for subsequent
+    // chunks Add any constant offset from affine expressions to the base offset
     int64_t bytesRemaining = numBytes;
-    int64_t currentOffset = instOffset;  // Start with constant offset from affine expressions
+    int64_t currentOffset =
+        instOffset; // Start with constant offset from affine expressions
     size_t splitIndex = 0;
 
     while (bytesRemaining > 0) {
@@ -2618,13 +2756,17 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       }
 
       // Use instOffset attribute instead of computing new voffset
-      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32 instruction
+      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
+      // instruction
       if (storeDwords == 4) {
-        BUFFER_STORE_DWORDX4::create(builder, loc, storeData, srd, voffset, currentOffset);
+        BUFFER_STORE_DWORDX4::create(builder, loc, storeData, srd, voffset,
+                                     currentOffset);
       } else if (storeDwords == 2) {
-        BUFFER_STORE_DWORDX2::create(builder, loc, storeData, srd, voffset, currentOffset);
+        BUFFER_STORE_DWORDX2::create(builder, loc, storeData, srd, voffset,
+                                     currentOffset);
       } else {
-        BUFFER_STORE_DWORD::create(builder, loc, storeData, srd, voffset, currentOffset);
+        BUFFER_STORE_DWORD::create(builder, loc, storeData, srd, voffset,
+                                   currentOffset);
       }
 
       bytesRemaining -= storeBytes;
@@ -2638,7 +2780,8 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
 
 /// Handle vector.extract_strided_slice - extract subset of source registers
 /// Creates a register alias at the correct offset for proper assembly emission
-LogicalResult handleVectorExtractStridedSlice(Operation *op, TranslationContext &ctx) {
+LogicalResult handleVectorExtractStridedSlice(Operation *op,
+                                              TranslationContext &ctx) {
   auto extractOp = cast<vector::ExtractStridedSliceOp>(op);
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
@@ -2669,14 +2812,15 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op, TranslationContext 
     // Physical VGPR - extract element(s) at offset
     int64_t baseIdx = pvreg.getIndex() + offset;
     auto elemType = PVRegType::get(builder.getContext(), baseIdx, size);
-    auto elemReg = PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, size);
+    auto elemReg =
+        PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, size);
     ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
   } else {
     // Virtual VGPR or other type - use waveasm.extract op
     // This will be lowered to proper register offset during register allocation
     auto elemType = ctx.createVRegType(size, 1);
     auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
-                                                    builder.getI64IntegerAttr(offset));
+                                           builder.getI64IntegerAttr(offset));
     ctx.getMapper().mapValue(extractOp.getResult(), extractWaveOp.getResult());
   }
   return success();
@@ -2730,22 +2874,24 @@ LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx) {
   }
 
   // Determine accumulator size based on MFMA variant
-  int64_t accSize = 4;  // Default for 16x16xk small variants
+  int64_t accSize = 4; // Default for 16x16xk small variants
   if (m == 32 && n == 32) {
-    accSize = 16;  // 32x32xk variants
+    accSize = 16; // 32x32xk variants
   } else if (m == 4 && n == 4) {
-    accSize = 4;   // 4x4xk variants
+    accSize = 4; // 4x4xk variants
   } else if (m == 16 && n == 16 && k == 4) {
-    accSize = 16;  // 16x16x4 variants (larger accumulator)
+    accSize = 16; // 16x16x4 variants (larger accumulator)
   }
 
   // For f64 variants, sizes are different
   if (elemType.isF64()) {
-    if (m == 16 && n == 16) accSize = 8;
-    else if (m == 4 && n == 4) accSize = 2;
+    if (m == 16 && n == 16)
+      accSize = 8;
+    else if (m == 4 && n == 4)
+      accSize = 2;
   }
 
-  auto vregType = ctx.createVRegType(accSize, 4);  // Quad-aligned
+  auto vregType = ctx.createVRegType(accSize, 4); // Quad-aligned
 
   // Select MFMA instruction based on dimensions and element type
   Value result;
@@ -2760,91 +2906,119 @@ LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx) {
   // F16 variants
   if (isF16()) {
     if (m == 16 && n == 16 && k == 16) {
-      result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA,
+                                               *srcB, *srcC);
     } else if (m == 16 && n == 16 && k == 32) {
       // gfx950+ (MI350) - v_mfma_f32_16x16x32_f16
-      result = V_MFMA_F32_16X16X32_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X32_F16::create(builder, loc, vregType, *srcA,
+                                               *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 8) {
-      result = V_MFMA_F32_32X32X8_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_32X32X8_F16::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     } else if (m == 16 && n == 16 && k == 4) {
       auto largeVregType = ctx.createVRegType(16, 4);
-      result = V_MFMA_F32_16X16X4_F16::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X4_F16::create(builder, loc, largeVregType,
+                                              *srcA, *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 4) {
       auto largeVregType = ctx.createVRegType(32, 4);
-      result = V_MFMA_F32_32X32X4_F16::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_32X32X4_F16::create(builder, loc, largeVregType,
+                                              *srcA, *srcB, *srcC);
     } else if (m == 4 && n == 4 && k == 4) {
-      result = V_MFMA_F32_4X4X4_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_4X4X4_F16::create(builder, loc, vregType, *srcA,
+                                            *srcB, *srcC);
     } else {
-      result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA,
+                                               *srcB, *srcC);
     }
   }
   // BF16 variants
   else if (isBF16()) {
     if (m == 16 && n == 16 && k == 16) {
-      result = V_MFMA_F32_16X16X16_BF16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X16_BF16::create(builder, loc, vregType, *srcA,
+                                                *srcB, *srcC);
     } else if (m == 16 && n == 16 && k == 32) {
       // gfx950+ (MI350) - v_mfma_f32_16x16x32_bf16
-      result = V_MFMA_F32_16X16X32_BF16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X32_BF16::create(builder, loc, vregType, *srcA,
+                                                *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 8) {
-      result = V_MFMA_F32_32X32X8_BF16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_32X32X8_BF16::create(builder, loc, vregType, *srcA,
+                                               *srcB, *srcC);
     } else if (m == 16 && n == 16 && k == 4) {
       auto largeVregType = ctx.createVRegType(16, 4);
-      result = V_MFMA_F32_16X16X4_BF16::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X4_BF16::create(builder, loc, largeVregType,
+                                               *srcA, *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 4) {
       auto largeVregType = ctx.createVRegType(32, 4);
-      result = V_MFMA_F32_32X32X4_BF16::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_32X32X4_BF16::create(builder, loc, largeVregType,
+                                               *srcA, *srcB, *srcC);
     } else if (m == 4 && n == 4 && k == 4) {
-      result = V_MFMA_F32_4X4X4_BF16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_4X4X4_BF16::create(builder, loc, vregType, *srcA,
+                                             *srcB, *srcC);
     } else {
-      result = V_MFMA_F32_16X16X16_BF16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X16_BF16::create(builder, loc, vregType, *srcA,
+                                                *srcB, *srcC);
     }
   }
   // I8 variants
   else if (isI8()) {
     if (m == 16 && n == 16 && k == 16) {
-      result = V_MFMA_I32_16X16X16_I8::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_16X16X16_I8::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 8) {
-      result = V_MFMA_I32_32X32X8_I8::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_32X32X8_I8::create(builder, loc, vregType, *srcA,
+                                             *srcB, *srcC);
     } else if (m == 16 && n == 16 && k == 4) {
       auto largeVregType = ctx.createVRegType(16, 4);
-      result = V_MFMA_I32_16X16X4_I8::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_16X16X4_I8::create(builder, loc, largeVregType, *srcA,
+                                             *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 4) {
       auto largeVregType = ctx.createVRegType(32, 4);
-      result = V_MFMA_I32_32X32X4_I8::create(builder, loc, largeVregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_32X32X4_I8::create(builder, loc, largeVregType, *srcA,
+                                             *srcB, *srcC);
     } else if (m == 4 && n == 4 && k == 4) {
-      result = V_MFMA_I32_4X4X4_I8::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_4X4X4_I8::create(builder, loc, vregType, *srcA, *srcB,
+                                           *srcC);
     } else {
-      result = V_MFMA_I32_16X16X16_I8::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_I32_16X16X16_I8::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     }
   }
   // F32 variants
   else if (isF32()) {
     if (m == 16 && n == 16 && k == 4) {
-      result = V_MFMA_F32_16X16X4_F32::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X4_F32::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     } else if (m == 32 && n == 32 && k == 2) {
-      result = V_MFMA_F32_32X32X2_F32::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_32X32X2_F32::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     } else if (m == 4 && n == 4 && k == 1) {
-      result = V_MFMA_F32_4X4X1_F32::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_4X4X1_F32::create(builder, loc, vregType, *srcA,
+                                            *srcB, *srcC);
     } else {
-      result = V_MFMA_F32_16X16X4_F32::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F32_16X16X4_F32::create(builder, loc, vregType, *srcA,
+                                              *srcB, *srcC);
     }
   }
   // F64 variants
   else if (isF64()) {
     if (m == 16 && n == 16 && k == 4) {
       auto f64VregType = ctx.createVRegType(8, 4);
-      result = V_MFMA_F64_16X16X4_F64::create(builder, loc, f64VregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F64_16X16X4_F64::create(builder, loc, f64VregType, *srcA,
+                                              *srcB, *srcC);
     } else if (m == 4 && n == 4 && k == 4) {
       auto f64VregType = ctx.createVRegType(2, 2);
-      result = V_MFMA_F64_4X4X4_F64::create(builder, loc, f64VregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F64_4X4X4_F64::create(builder, loc, f64VregType, *srcA,
+                                            *srcB, *srcC);
     } else {
       auto f64VregType = ctx.createVRegType(8, 4);
-      result = V_MFMA_F64_16X16X4_F64::create(builder, loc, f64VregType, *srcA, *srcB, *srcC);
+      result = V_MFMA_F64_16X16X4_F64::create(builder, loc, f64VregType, *srcA,
+                                              *srcB, *srcC);
     }
   }
   // Default to F16 16x16x16
   else {
-    result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA, *srcB, *srcC);
+    result = V_MFMA_F32_16X16X16_F16::create(builder, loc, vregType, *srcA,
+                                             *srcB, *srcC);
   }
 
   ctx.getMapper().mapValue(mfmaOp.getDestD(), result);
@@ -2895,7 +3069,8 @@ LogicalResult handleMemRefView(Operation *op, TranslationContext &ctx) {
 }
 
 /// Handle memref.reinterpret_cast - track memref identity
-LogicalResult handleMemRefReinterpretCast(Operation *op, TranslationContext &ctx) {
+LogicalResult handleMemRefReinterpretCast(Operation *op,
+                                          TranslationContext &ctx) {
   auto castOp = cast<memref::ReinterpretCastOp>(op);
 
   // Reinterpret cast doesn't change the underlying buffer
@@ -2940,11 +3115,14 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
   std::string endLabelName = labelName + "_end";
 
   // Initialize loop counter in a FIXED physical SGPR
-  // Using a fixed register ensures the counter value persists across loop iterations
-  // Reserve s32+ for loop counters (avoiding s0-s31 which may be used for arguments/SRDs/cache-swizzle)
-  // Note: s[24:31] may be used for cache swizzle SRDs in g2s kernels
-  int64_t loopCounterPhysReg = 32 + ctx.getLoopDepth();  // Use s32, s33, etc. for nested loops
-  auto counterType = PSRegType::get(builder.getContext(), loopCounterPhysReg, 1);
+  // Using a fixed register ensures the counter value persists across loop
+  // iterations Reserve s32+ for loop counters (avoiding s0-s31 which may be
+  // used for arguments/SRDs/cache-swizzle) Note: s[24:31] may be used for cache
+  // swizzle SRDs in g2s kernels
+  int64_t loopCounterPhysReg =
+      32 + ctx.getLoopDepth(); // Use s32, s33, etc. for nested loops
+  auto counterType =
+      PSRegType::get(builder.getContext(), loopCounterPhysReg, 1);
 
   auto lb = ctx.getMapper().getMapped(forOp.getLowerBound());
   if (!lb) {
@@ -2962,8 +3140,8 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
   // 2. Initialize them with v_mov_b32
   // 3. Map the region arg to those VREGs for in-place accumulation
   SmallVector<Value, 4> iterArgValues;
-  for (auto [initArg, regionArg] : llvm::zip(forOp.getInitArgs(),
-                                              forOp.getRegionIterArgs())) {
+  for (auto [initArg, regionArg] :
+       llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs())) {
     auto mapped = ctx.getMapper().getMapped(initArg);
 
     // Check if this is a vector type (likely an accumulator for MFMA)
@@ -2977,7 +3155,8 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
       if (auto constOp = initArg.getDefiningOp<arith::ConstantOp>()) {
         if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
           if (denseAttr.isSplat()) {
-            if (auto floatAttr = dyn_cast<FloatAttr>(denseAttr.getSplatValue<Attribute>())) {
+            if (auto floatAttr =
+                    dyn_cast<FloatAttr>(denseAttr.getSplatValue<Attribute>())) {
               isZeroInit = (floatAttr.getValueAsDouble() == 0.0);
             }
           }
@@ -2986,8 +3165,10 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
 
       if (isZeroInit) {
         // Allocate VREGs for the accumulator and initialize to 0
-        // The MFMA instruction will use these registers for in-place accumulation
-        auto vregType = ctx.createVRegType(numElems, 4);  // Quad-aligned for MFMA
+        // The MFMA instruction will use these registers for in-place
+        // accumulation
+        auto vregType =
+            ctx.createVRegType(numElems, 4); // Quad-aligned for MFMA
         auto zeroImm = ctx.createImmType(0);
         auto zero = ConstantOp::create(builder, loc, zeroImm, 0);
 
@@ -3019,7 +3200,8 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
   loopCtx.depth = ctx.getLoopDepth() + 1;
   ctx.pushLoopContext(loopCtx);
 
-  // Clear expression cache at loop entry (loop-variant expressions must be recomputed)
+  // Clear expression cache at loop entry (loop-variant expressions must be
+  // recomputed)
   ctx.clearExprCache();
 
   // Loop label
@@ -3035,8 +3217,8 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
 
   // Handle yield - update iter_args for next iteration
   if (auto yieldOp = dyn_cast<scf::YieldOp>(forOp.getBody()->getTerminator())) {
-    for (auto [yieldedVal, regionArg] : llvm::zip(yieldOp.getOperands(),
-                                                   forOp.getRegionIterArgs())) {
+    for (auto [yieldedVal, regionArg] :
+         llvm::zip(yieldOp.getOperands(), forOp.getRegionIterArgs())) {
       auto mapped = ctx.getMapper().getMapped(yieldedVal);
       if (mapped) {
         // Update the region argument mapping for the next iteration
@@ -3053,12 +3235,14 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
     step = ConstantOp::create(builder, loc, immType, 1);
   }
 
-  // Get the counter type from the original counter (it's a physical register type)
+  // Get the counter type from the original counter (it's a physical register
+  // type)
   auto counterPhysType = counter.getType();
-  auto newCounter = S_ADD_U32::create(builder, loc, counterPhysType, counter, *step);
+  auto newCounter =
+      S_ADD_U32::create(builder, loc, counterPhysType, counter, *step);
 
-  // Since we're using physical registers, newCounter is in the same register as counter
-  // Update the mapping for any post-loop uses
+  // Since we're using physical registers, newCounter is in the same register as
+  // counter Update the mapping for any post-loop uses
   ctx.getMapper().mapValue(forOp.getInductionVar(), newCounter);
 
   // Compare and branch back to loop header
@@ -3074,8 +3258,8 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
 
   // Map loop results to final iter_arg values
   if (auto yieldOp = dyn_cast<scf::YieldOp>(forOp.getBody()->getTerminator())) {
-    for (auto [result, yieldedVal] : llvm::zip(forOp.getResults(),
-                                                yieldOp.getOperands())) {
+    for (auto [result, yieldedVal] :
+         llvm::zip(forOp.getResults(), yieldOp.getOperands())) {
       auto mapped = ctx.getMapper().getMapped(yieldedVal);
       if (mapped) {
         ctx.getMapper().mapValue(result, *mapped);
@@ -3150,7 +3334,7 @@ LogicalResult handleBindingSubspan(Operation *op, TranslationContext &ctx) {
   ctx.trackBinding(op->getResult(0), bindingIdx);
 
   // Try to compute buffer size from result type
-  int64_t bufferSize = 512;  // Default buffer size
+  int64_t bufferSize = 512; // Default buffer size
   if (auto memrefType = dyn_cast<MemRefType>(op->getResult(0).getType())) {
     bufferSize = computeBufferSizeFromMemRef(memrefType);
   }
@@ -3162,10 +3346,12 @@ LogicalResult handleBindingSubspan(Operation *op, TranslationContext &ctx) {
 }
 
 /// Handle amdgpu.fat_raw_buffer_cast
-/// This operation creates a buffer descriptor with cache swizzle info for gather_to_lds
+/// This operation creates a buffer descriptor with cache swizzle info for
+/// gather_to_lds
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // The operation format is:
-  //   %result = amdgpu.fat_raw_buffer_cast %source, %offset, %cacheSwizzleStride
+  //   %result = amdgpu.fat_raw_buffer_cast %source, %offset,
+  //   %cacheSwizzleStride
   //
   // For gather_to_lds, we need to create a new SRD with cache swizzle bits:
   //   word0: copy from source SRD word0 (base address low)
@@ -3174,7 +3360,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   //   word3: 0x27000 (format with swizzle, instead of standard 0x20000)
 
   if (op->getNumOperands() < 1) {
-    return success();  // No source operand
+    return success(); // No source operand
   }
 
   auto &builder = ctx.getBuilder();
@@ -3211,7 +3397,8 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // Get source SRD base index
   int64_t srcSrdBase = -1;
 
-  // Check if srcMapped is defined by a PrecoloredSRegOp (which has the physical index)
+  // Check if srcMapped is defined by a PrecoloredSRegOp (which has the physical
+  // index)
   if (auto defOp = srcMapped->getDefiningOp()) {
     if (defOp->getName().getStringRef() == "waveasm.precolored.sreg") {
       if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index")) {
@@ -3262,11 +3449,13 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   RawOp::create(builder, loc, or1);
 
   // word2: size for gather operations
-  std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0x7ffffffd";
+  std::string mov2 =
+      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0x7ffffffd";
   RawOp::create(builder, loc, mov2);
 
   // word3: format with swizzle (0x27000 instead of 0x20000)
-  std::string mov3 = "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x27000";
+  std::string mov3 =
+      "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x27000";
   RawOp::create(builder, loc, mov3);
 
   // Create precolored SREG for the new SRD and map the result
@@ -3285,10 +3474,10 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
 ///
 /// Operand layout (from MLIR):
 ///   operand(0) = source buffer (fat_raw_buffer memref)
-///   operand(1) = source index (global memory offset) -> voffset for buffer_load
-///   operand(2) = LDS destination memref -> used to get LDS base offset
-///   operand(3) = LDS row index -> used to compute m0
-///   operand(4) = LDS col index -> used to compute m0
+///   operand(1) = source index (global memory offset) -> voffset for
+///   buffer_load operand(2) = LDS destination memref -> used to get LDS base
+///   offset operand(3) = LDS row index -> used to compute m0 operand(4) = LDS
+///   col index -> used to compute m0
 ///
 /// For buffer_load...lds:
 ///   - voffset provides the global memory offset
@@ -3328,7 +3517,7 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
 
   // operand(2): LDS destination memref -> get LDS base offset and shape info
   int64_t ldsBaseOffsetConst = 0;
-  int64_t ldsRowStride = 0;  // bytes per row in LDS
+  int64_t ldsRowStride = 0; // bytes per row in LDS
   bool hasLdsBaseOffset = false;
 
   if (op->getNumOperands() > 2) {
@@ -3347,7 +3536,7 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     // The LDS layout is typically [rows, cols] with element type f16 (2 bytes)
     if (auto memrefType = dyn_cast<MemRefType>(ldsMemref.getType())) {
       auto shape = memrefType.getShape();
-      int64_t elementBytes = 2;  // Default f16
+      int64_t elementBytes = 2; // Default f16
       if (auto elemType = memrefType.getElementType()) {
         if (elemType.isF16() || elemType.isBF16())
           elementBytes = 2;
@@ -3408,11 +3597,14 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
         // Use v_add_u32 with zero to broadcast SGPR to VGPR
         auto convertToVgpr = [&](Value val) -> Value {
           if (!isVGPRType(val.getType())) {
-            // v_add_u32 can take SGPR as one operand and broadcasts it to all lanes
+            // v_add_u32 can take SGPR as one operand and broadcasts it to all
+            // lanes
             auto zeroImm = ctx.createImmType(0);
             auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-            Value zeroVgpr = V_MOV_B32::create(builder, loc, ctx.createVRegType(), zeroConst);
-            return V_ADD_U32::create(builder, loc, ctx.createVRegType(), zeroVgpr, val);
+            Value zeroVgpr = V_MOV_B32::create(builder, loc,
+                                               ctx.createVRegType(), zeroConst);
+            return V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                     zeroVgpr, val);
           }
           return val;
         };
@@ -3420,18 +3612,23 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
         // Multiply row index by row stride if needed
         if (ldsRowStride > 1) {
           auto strideImm = ctx.createImmType(ldsRowStride);
-          auto strideConst = ConstantOp::create(builder, loc, strideImm, ldsRowStride);
+          auto strideConst =
+              ConstantOp::create(builder, loc, strideImm, ldsRowStride);
           m0Val = convertToVgpr(m0Val);
-          m0Val = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(), m0Val, strideConst);
+          m0Val = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                       m0Val, strideConst);
         }
 
         // Add base offset
         if (hasLdsBaseOffset && ldsBaseOffsetConst != 0) {
           auto baseImm = ctx.createImmType(ldsBaseOffsetConst);
-          auto baseConst = ConstantOp::create(builder, loc, baseImm, ldsBaseOffsetConst);
-          Value baseVgpr = V_MOV_B32::create(builder, loc, ctx.createVRegType(), baseConst);
+          auto baseConst =
+              ConstantOp::create(builder, loc, baseImm, ldsBaseOffsetConst);
+          Value baseVgpr =
+              V_MOV_B32::create(builder, loc, ctx.createVRegType(), baseConst);
           m0Val = convertToVgpr(m0Val);
-          m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(), m0Val, baseVgpr);
+          m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(), m0Val,
+                                    baseVgpr);
         }
       }
     }
@@ -3499,13 +3696,16 @@ LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx) {
   Operation *loadInstr;
   if (numElements == 1) {
     auto vregType = ctx.createVRegType(1);
-    loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType}, *srcMapped, voffset);
+    loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType},
+                                          *srcMapped, voffset);
   } else if (numElements == 2) {
     auto vregType = ctx.createVRegType(2, 2);
-    loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType}, *srcMapped, voffset);
+    loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType},
+                                            *srcMapped, voffset);
   } else if (numElements == 4) {
     auto vregType = ctx.createVRegType(4, 4);
-    loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType}, *srcMapped, voffset);
+    loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType},
+                                            *srcMapped, voffset);
   } else {
     return op->emitError("unsupported buffer load width");
   }
@@ -3606,7 +3806,7 @@ LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx) {
   //
   // A value of 15 (0xF) for lgkmcnt means "don't wait" (max outstanding)
   // A value of 63 (0x3F) for vmcnt means "don't wait" (6-bit counter on GFX9+)
-  int64_t vmcnt = -1, lgkmcnt = -1;  // -1 means "not specified"
+  int64_t vmcnt = -1, lgkmcnt = -1; // -1 means "not specified"
 
   if (auto bitfieldAttr = op->getAttrOfType<IntegerAttr>("bitfield")) {
     int64_t bitfield = bitfieldAttr.getInt();
@@ -3618,10 +3818,10 @@ LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx) {
     int64_t lgkmcnt_full = (bitfield >> 8) & 0xF;
 
     // Only emit wait if not max value (max = "don't wait")
-    if (vmcnt_full < 63) {  // 63 = 0x3F = max vmcnt
+    if (vmcnt_full < 63) { // 63 = 0x3F = max vmcnt
       vmcnt = vmcnt_full;
     }
-    if (lgkmcnt_full < 15) {  // 15 = 0xF = max lgkmcnt
+    if (lgkmcnt_full < 15) { // 15 = 0xF = max lgkmcnt
       lgkmcnt = lgkmcnt_full;
     }
   }
@@ -3811,7 +4011,8 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
       } else {
         // Non-memref args (i32, index, etc.) - map to VGPR
         auto vregType = ctx.createVRegType();
-        auto vreg = PrecoloredVRegOp::create(builder, gpuFunc.getLoc(), vregType, argIdx, 1);
+        auto vreg = PrecoloredVRegOp::create(builder, gpuFunc.getLoc(),
+                                             vregType, argIdx, 1);
         ctx.getMapper().mapValue(arg, vreg);
       }
     }
@@ -3840,8 +4041,9 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
 
     // Set the number of kernel arguments attribute on the program
     size_t numKernelArgs = ctx.getNumKernelArgs();
-    program->setAttr("num_kernel_args",
-                     builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
+    program->setAttr(
+        "num_kernel_args",
+        builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
 
     // Set the LDS size attribute if any LDS was allocated
     int64_t ldsSize = ctx.getTotalLDSSize();
@@ -3856,7 +4058,8 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
   // Clean up empty gpu.module containers
   SmallVector<gpu::GPUModuleOp> gpuModulesToErase;
   module.walk([&](gpu::GPUModuleOp gpuModule) {
-    // Check if the module is now empty (only contains gpu.module_end terminator)
+    // Check if the module is now empty (only contains gpu.module_end
+    // terminator)
     auto *body = gpuModule.getBody();
     if (body) {
       // If only one op (the terminator) remains, erase the module
@@ -3906,7 +4109,8 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
       } else {
         // Non-memref args (i32, index, etc.) - map to VGPR
         auto vregType = ctx.createVRegType();
-        auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType, argIdx, 1);
+        auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType,
+                                             argIdx, 1);
         ctx.getMapper().mapValue(arg, vreg);
       }
     }
@@ -3934,8 +4138,9 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
 
     // Set the number of kernel arguments attribute on the program
     size_t numKernelArgs = ctx.getNumKernelArgs();
-    program->setAttr("num_kernel_args",
-                     builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
+    program->setAttr(
+        "num_kernel_args",
+        builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
 
     // Set the LDS size attribute if any LDS was allocated
     int64_t ldsSize = ctx.getTotalLDSSize();
@@ -3950,7 +4155,8 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
   return success();
 }
 
-LogicalResult translateModule(ModuleOp module, const TranslationOptions &options) {
+LogicalResult translateModule(ModuleOp module,
+                              const TranslationOptions &options) {
   // Get target
   auto target = getTargetKindAttr(module.getContext(), options.targetId);
   if (!target) {
@@ -3978,17 +4184,16 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
         TargetAttr::get(ctx, getTargetKindAttr(ctx, options.targetId), 5);
 
     // Create ABI attribute
-    auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
+    auto abiAttr =
+        KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
 
     // Determine workgroup size - use explicit options if provided
     ArrayAttr workgroupSizeAttr;
     if (options.hasExplicitWorkgroupSize()) {
       auto [wgX, wgY, wgZ] = options.getWorkgroupSize();
-      SmallVector<Attribute, 3> sizes = {
-          builder.getI64IntegerAttr(wgX),
-          builder.getI64IntegerAttr(wgY),
-          builder.getI64IntegerAttr(wgZ)
-      };
+      SmallVector<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgX),
+                                         builder.getI64IntegerAttr(wgY),
+                                         builder.getI64IntegerAttr(wgZ)};
       workgroupSizeAttr = builder.getArrayAttr(sizes);
     } else {
       // Fall back to extraction from MLIR (translation_info or gpu.thread_id)
@@ -4002,8 +4207,10 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
         if (pos != std::string::npos) {
           auto bracketStart = attrStr.find('[', pos);
           auto bracketEnd = attrStr.find(']', bracketStart);
-          if (bracketStart != std::string::npos && bracketEnd != std::string::npos) {
-            std::string arrayStr = attrStr.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+          if (bracketStart != std::string::npos &&
+              bracketEnd != std::string::npos) {
+            std::string arrayStr =
+                attrStr.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
             SmallVector<Attribute, 3> sizes;
             std::stringstream ss(arrayStr);
             std::string token;
@@ -4015,7 +4222,8 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
                 bool isValid = !numStr.empty();
                 for (size_t i = 0; i < numStr.size(); ++i) {
                   char c = numStr[i];
-                  if (i == 0 && c == '-') continue;
+                  if (i == 0 && c == '-')
+                    continue;
                   if (!std::isdigit(static_cast<unsigned char>(c))) {
                     isValid = false;
                     break;
@@ -4037,30 +4245,36 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
       if (!workgroupSizeAttr) {
         int64_t wgSizeX = 64, wgSizeY = 1, wgSizeZ = 1;
         funcOp.walk([&](gpu::ThreadIdOp threadIdOp) {
-          if (auto upperBoundAttr = threadIdOp->getAttrOfType<IntegerAttr>("upper_bound")) {
+          if (auto upperBoundAttr =
+                  threadIdOp->getAttrOfType<IntegerAttr>("upper_bound")) {
             int64_t bound = upperBoundAttr.getInt();
             switch (threadIdOp.getDimension()) {
-              case gpu::Dimension::x: wgSizeX = bound; break;
-              case gpu::Dimension::y: wgSizeY = bound; break;
-              case gpu::Dimension::z: wgSizeZ = bound; break;
+            case gpu::Dimension::x:
+              wgSizeX = bound;
+              break;
+            case gpu::Dimension::y:
+              wgSizeY = bound;
+              break;
+            case gpu::Dimension::z:
+              wgSizeZ = bound;
+              break;
             }
           }
         });
-        SmallVector<Attribute, 3> sizes = {
-            builder.getI64IntegerAttr(wgSizeX),
-            builder.getI64IntegerAttr(wgSizeY),
-            builder.getI64IntegerAttr(wgSizeZ)
-        };
+        SmallVector<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgSizeX),
+                                           builder.getI64IntegerAttr(wgSizeY),
+                                           builder.getI64IntegerAttr(wgSizeZ)};
         workgroupSizeAttr = builder.getArrayAttr(sizes);
       }
     }
 
     // Create program with workgroup size
-    auto program = ProgramOp::create(builder, loc, funcOp.getName(), targetAttr, abiAttr,
-        /*vgprs=*/int64_t{256},
-        /*sgprs=*/int64_t{104},
-        /*workgroup_size=*/workgroupSizeAttr,
-        /*lds_size=*/IntegerAttr{});
+    auto program =
+        ProgramOp::create(builder, loc, funcOp.getName(), targetAttr, abiAttr,
+                          /*vgprs=*/int64_t{256},
+                          /*sgprs=*/int64_t{104},
+                          /*workgroup_size=*/workgroupSizeAttr,
+                          /*lds_size=*/IntegerAttr{});
 
     if (program.getBody().empty())
       program.getBody().emplaceBlock();
@@ -4078,7 +4292,8 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
         transCtx.queueSRDSetup(arg, argIdx, bufferSize);
       } else {
         auto vregType = transCtx.createVRegType();
-        auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType, argIdx, 1);
+        auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType,
+                                             argIdx, 1);
         transCtx.getMapper().mapValue(arg, vreg);
       }
     }
@@ -4106,8 +4321,9 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
 
     // Set kernel arguments count
     size_t numKernelArgs = transCtx.getNumKernelArgs();
-    program->setAttr("num_kernel_args",
-                     builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
+    program->setAttr(
+        "num_kernel_args",
+        builder.getI64IntegerAttr(static_cast<int64_t>(numKernelArgs)));
 
     // Set LDS size if used
     int64_t ldsSize = transCtx.getTotalLDSSize();
@@ -4122,9 +4338,8 @@ LogicalResult translateModule(ModuleOp module, const TranslationOptions &options
   return success();
 }
 
-ProgramOp createProgramFromGPUFunc(gpu::GPUFuncOp gpuFunc,
-                                    OpBuilder &builder,
-                                    StringRef targetId) {
+ProgramOp createProgramFromGPUFunc(gpu::GPUFuncOp gpuFunc, OpBuilder &builder,
+                                   StringRef targetId) {
   auto *ctx = builder.getContext();
   auto loc = gpuFunc.getLoc();
 
@@ -4132,14 +4347,16 @@ ProgramOp createProgramFromGPUFunc(gpu::GPUFuncOp gpuFunc,
   auto targetAttr = TargetAttr::get(ctx, getTargetKindAttr(ctx, targetId), 5);
 
   // Create ABI attribute with default bindings
-  auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
+  auto abiAttr =
+      KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
 
   // Create program
-  auto program = ProgramOp::create(builder, loc, gpuFunc.getName(), targetAttr, abiAttr,
-      /*vgprs=*/int64_t{256},
-      /*sgprs=*/int64_t{104},
-      /*workgroup_size=*/ArrayAttr{},
-      /*lds_size=*/IntegerAttr{});
+  auto program =
+      ProgramOp::create(builder, loc, gpuFunc.getName(), targetAttr, abiAttr,
+                        /*vgprs=*/int64_t{256},
+                        /*sgprs=*/int64_t{104},
+                        /*workgroup_size=*/ArrayAttr{},
+                        /*lds_size=*/IntegerAttr{});
 
   // Ensure the body region has a block
   if (program.getBody().empty())
@@ -4148,9 +4365,8 @@ ProgramOp createProgramFromGPUFunc(gpu::GPUFuncOp gpuFunc,
   return program;
 }
 
-ProgramOp createProgramFromFunc(func::FuncOp funcOp,
-                                 OpBuilder &builder,
-                                 StringRef targetId) {
+ProgramOp createProgramFromFunc(func::FuncOp funcOp, OpBuilder &builder,
+                                StringRef targetId) {
   auto *ctx = builder.getContext();
   auto loc = funcOp.getLoc();
 
@@ -4158,12 +4374,13 @@ ProgramOp createProgramFromFunc(func::FuncOp funcOp,
   auto targetAttr = TargetAttr::get(ctx, getTargetKindAttr(ctx, targetId), 5);
 
   // Create ABI attribute
-  auto abiAttr = KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
+  auto abiAttr =
+      KernelABIAttr::get(ctx, 0, 0, std::nullopt, std::nullopt, std::nullopt);
 
   // Try to extract workgroup size from translation_info attribute
-  // The attribute looks like: #iree_codegen.translation_info<... workgroup_size = [64, 1, 1] ...>
-  // When parsed with unregistered dialects, it becomes an opaque attribute that we need
-  // to parse from its string representation.
+  // The attribute looks like: #iree_codegen.translation_info<... workgroup_size
+  // = [64, 1, 1] ...> When parsed with unregistered dialects, it becomes an
+  // opaque attribute that we need to parse from its string representation.
   ArrayAttr workgroupSizeAttr;
   if (auto translationInfo = funcOp->getAttr("translation_info")) {
     // Try as dictionary first (in case it's a registered dialect)
@@ -4185,8 +4402,10 @@ ProgramOp createProgramFromFunc(func::FuncOp funcOp,
       if (pos != std::string::npos) {
         auto bracketStart = attrStr.find('[', pos);
         auto bracketEnd = attrStr.find(']', bracketStart);
-        if (bracketStart != std::string::npos && bracketEnd != std::string::npos) {
-          std::string arrayStr = attrStr.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+        if (bracketStart != std::string::npos &&
+            bracketEnd != std::string::npos) {
+          std::string arrayStr =
+              attrStr.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
           SmallVector<Attribute, 3> sizes;
           std::stringstream ss(arrayStr);
           std::string token;
@@ -4200,7 +4419,8 @@ ProgramOp createProgramFromFunc(func::FuncOp funcOp,
               bool isValid = !numStr.empty();
               for (size_t i = 0; i < numStr.size(); ++i) {
                 char c = numStr[i];
-                if (i == 0 && c == '-') continue;  // Allow leading minus
+                if (i == 0 && c == '-')
+                  continue; // Allow leading minus
                 if (!std::isdigit(static_cast<unsigned char>(c))) {
                   isValid = false;
                   break;
@@ -4222,31 +4442,37 @@ ProgramOp createProgramFromFunc(func::FuncOp funcOp,
 
   // If no translation_info, try to extract from gpu.thread_id upper_bound attrs
   if (!workgroupSizeAttr) {
-    int64_t wgSizeX = 64, wgSizeY = 1, wgSizeZ = 1;  // defaults
+    int64_t wgSizeX = 64, wgSizeY = 1, wgSizeZ = 1; // defaults
     funcOp.walk([&](gpu::ThreadIdOp threadIdOp) {
-      if (auto upperBoundAttr = threadIdOp->getAttrOfType<IntegerAttr>("upper_bound")) {
+      if (auto upperBoundAttr =
+              threadIdOp->getAttrOfType<IntegerAttr>("upper_bound")) {
         int64_t bound = upperBoundAttr.getInt();
         switch (threadIdOp.getDimension()) {
-          case gpu::Dimension::x: wgSizeX = bound; break;
-          case gpu::Dimension::y: wgSizeY = bound; break;
-          case gpu::Dimension::z: wgSizeZ = bound; break;
+        case gpu::Dimension::x:
+          wgSizeX = bound;
+          break;
+        case gpu::Dimension::y:
+          wgSizeY = bound;
+          break;
+        case gpu::Dimension::z:
+          wgSizeZ = bound;
+          break;
         }
       }
     });
-    SmallVector<Attribute, 3> sizes = {
-        builder.getI64IntegerAttr(wgSizeX),
-        builder.getI64IntegerAttr(wgSizeY),
-        builder.getI64IntegerAttr(wgSizeZ)
-    };
+    SmallVector<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgSizeX),
+                                       builder.getI64IntegerAttr(wgSizeY),
+                                       builder.getI64IntegerAttr(wgSizeZ)};
     workgroupSizeAttr = builder.getArrayAttr(sizes);
   }
 
   // Create program
-  auto program = ProgramOp::create(builder, loc, funcOp.getName(), targetAttr, abiAttr,
-      /*vgprs=*/int64_t{256},
-      /*sgprs=*/int64_t{104},
-      /*workgroup_size=*/workgroupSizeAttr,
-      /*lds_size=*/IntegerAttr{});
+  auto program =
+      ProgramOp::create(builder, loc, funcOp.getName(), targetAttr, abiAttr,
+                        /*vgprs=*/int64_t{256},
+                        /*sgprs=*/int64_t{104},
+                        /*workgroup_size=*/workgroupSizeAttr,
+                        /*lds_size=*/IntegerAttr{});
 
   // Ensure the body region has a block
   if (program.getBody().empty())

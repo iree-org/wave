@@ -68,7 +68,7 @@ CFG CFG::build(ProgramOp program) {
 
   // Sort block starts
   llvm::SmallVector<int64_t> sortedStarts(blockStarts.begin(),
-                                           blockStarts.end());
+                                          blockStarts.end());
   llvm::sort(sortedStarts);
 
   // Pass 2: Create basic blocks
@@ -110,7 +110,8 @@ CFG CFG::build(ProgramOp program) {
       llvm::StringRef targetLabel;
       if (auto targetAttr = lastOp->getAttrOfType<StringAttr>("target")) {
         targetLabel = targetAttr.getValue();
-      } else if (auto targetAttr = lastOp->getAttrOfType<SymbolRefAttr>("target")) {
+      } else if (auto targetAttr =
+                     lastOp->getAttrOfType<SymbolRefAttr>("target")) {
         targetLabel = targetAttr.getRootReference().getValue();
       }
       if (!targetLabel.empty()) {
@@ -194,8 +195,7 @@ void computeBlockLocalInfo(BasicBlock &block,
 // Backward Dataflow Analysis
 //===----------------------------------------------------------------------===//
 
-void computeCFGLiveness(CFG &cfg,
-                        llvm::ArrayRef<Operation *> instructions) {
+void computeCFGLiveness(CFG &cfg, llvm::ArrayRef<Operation *> instructions) {
   auto &blocks = cfg.getMutableBlocks();
 
   // Compute local use/def sets for each block
@@ -399,8 +399,8 @@ LivenessInfo computeLiveness(ProgramOp program, bool useCFG) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult validateSSA(ProgramOp program,
-                           llvm::DenseSet<int64_t> /*loopControlSRegs*/,
-                           llvm::DenseSet<int64_t> /*accumulatorVRegs*/) {
+                          llvm::DenseSet<int64_t> /*loopControlSRegs*/,
+                          llvm::DenseSet<int64_t> /*accumulatorVRegs*/) {
   // In pure SSA, MLIR already enforces single definition for each Value
   // This function can validate additional constraints if needed
   llvm::DenseSet<Value> definitions;

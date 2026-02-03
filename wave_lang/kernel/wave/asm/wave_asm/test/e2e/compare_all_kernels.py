@@ -15,7 +15,6 @@ Run with:
     python test/e2e/compare_all_kernels.py
 """
 
-import os
 import sys
 import subprocess
 import tempfile
@@ -30,7 +29,6 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel._support.indexing import IndexingContext
 
 # Symbols
 M = tkl.sym.M
@@ -51,7 +49,13 @@ GLOBAL_ADDRESS_SPACE = tkl.AddressSpace.GLOBAL_MEMORY.value
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""
     script_dir = Path(__file__).parent
-    default_path = script_dir.parent.parent / "build" / "tools" / "waveasm-translate" / "waveasm-translate"
+    default_path = (
+        script_dir.parent.parent
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
     if default_path.exists():
         return default_path
     raise FileNotFoundError(f"waveasm-translate not found at {default_path}")
@@ -61,7 +65,7 @@ def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
     """Compile MLIR using C++ backend via waveasm-translate."""
     waveasm_translate = get_waveasm_translate_path()
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.mlir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
         f.write(mlir_text)
         mlir_file = f.name
 
@@ -123,13 +127,23 @@ def extract_func_from_stream(mlir_text: str) -> str:
 
 def compare_assembly(python_asm: str, cpp_asm: str, kernel_name: str) -> dict:
     """Compare assembly outputs and return stats."""
+
     def count_instructions(asm: str) -> dict:
         counts = {}
-        patterns = ['buffer_load', 'buffer_store', 's_endpgm', 's_waitcnt',
-                    'v_mfma', 'ds_read', 'ds_write', 's_barrier']
+        patterns = [
+            "buffer_load",
+            "buffer_store",
+            "s_endpgm",
+            "s_waitcnt",
+            "v_mfma",
+            "ds_read",
+            "ds_write",
+            "s_barrier",
+        ]
         for pattern in patterns:
-            counts[pattern] = sum(1 for line in asm.split('\n')
-                                  if pattern in line.lower())
+            counts[pattern] = sum(
+                1 for line in asm.split("\n") if pattern in line.lower()
+            )
         return counts
 
     python_counts = count_instructions(python_asm)
@@ -138,18 +152,18 @@ def compare_assembly(python_asm: str, cpp_asm: str, kernel_name: str) -> dict:
     matches = all(python_counts[k] == cpp_counts[k] for k in python_counts)
 
     return {
-        'kernel': kernel_name,
-        'matches': matches,
-        'python_counts': python_counts,
-        'cpp_counts': cpp_counts,
+        "kernel": kernel_name,
+        "matches": matches,
+        "python_counts": python_counts,
+        "cpp_counts": cpp_counts,
     }
 
 
 def test_read_write():
     """Test copy kernel (read_write)."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: read_write (copy kernel)")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16}),
@@ -169,7 +183,10 @@ def test_read_write():
 
     options = WaveCompileOptions(
         subs={
-            M: 16, N: 16, BLOCK_M: 16, BLOCK_N: 16,
+            M: 16,
+            N: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
@@ -200,9 +217,9 @@ def test_read_write():
 
 def test_mma():
     """Test MMA kernel."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: mma (16x16x16)")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -229,8 +246,13 @@ def test_mma():
 
     options = WaveCompileOptions(
         subs={
-            M: 16, N: 16, K: 16, BLOCK_M: 16, BLOCK_N: 16,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 16,
+            N: 16,
+            K: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -260,9 +282,9 @@ def test_mma():
 
 def test_gemm_k_loop():
     """Test GEMM with K-loop."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST: gemm_k_loop")
-    print("="*80)
+    print("=" * 80)
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -295,9 +317,14 @@ def test_gemm_k_loop():
 
     options = WaveCompileOptions(
         subs={
-            M: 32, N: 32, K: 32,
-            BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16,
-            LOAD_ELEMS_PER_THREAD: 4, STORE_ELEMS_PER_THREAD: 4,
+            M: 32,
+            N: 32,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            BLOCK_K: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -327,7 +354,7 @@ def test_gemm_k_loop():
 
 def main():
     print("Comparing Python vs C++ WaveASM backends")
-    print("="*80)
+    print("=" * 80)
 
     results = []
 
@@ -336,6 +363,7 @@ def main():
     except Exception as e:
         print(f"read_write FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
     try:
@@ -343,6 +371,7 @@ def main():
     except Exception as e:
         print(f"mma FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
     try:
@@ -350,16 +379,17 @@ def main():
     except Exception as e:
         print(f"gemm_k_loop FAILED: {e}")
         import traceback
+
         traceback.print_exc()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("SUMMARY")
-    print("="*80)
+    print("=" * 80)
     for r in results:
-        status = "✓" if r['matches'] else "✗"
+        status = "✓" if r["matches"] else "✗"
         print(f"  {r['kernel']}: {status}")
 
-    all_match = all(r['matches'] for r in results)
+    all_match = all(r["matches"] for r in results)
     print(f"\nAll kernels match: {'✓' if all_match else '✗'}")
 
     return 0 if all_match else 1

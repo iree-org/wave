@@ -110,9 +110,7 @@ InstructionRegistry::InstructionRegistry() {
       .name = "global_load_dword",
       .category = InstrCategory::VectorMem,
       .defs = {{.name = "vdst", .type = OperandType::VGPR, .isDef = true}},
-      .uses = {{.name = "vaddr",
-                .type = OperandType::VGPR_Pair,
-                .size = 2}},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR_Pair, .size = 2}},
       .latency = 100,
       .mayLoad = true,
       .incrementsVmcnt = true,
@@ -125,9 +123,7 @@ InstructionRegistry::InstructionRegistry() {
                 .type = OperandType::VGPR_Pair,
                 .size = 2,
                 .isDef = true}},
-      .uses = {{.name = "vaddr",
-                .type = OperandType::VGPR_Pair,
-                .size = 2}},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR_Pair, .size = 2}},
       .latency = 100,
       .mayLoad = true,
       .incrementsVmcnt = true,
@@ -140,9 +136,7 @@ InstructionRegistry::InstructionRegistry() {
                 .type = OperandType::VGPR_Quad,
                 .size = 4,
                 .isDef = true}},
-      .uses = {{.name = "vaddr",
-                .type = OperandType::VGPR_Pair,
-                .size = 2}},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR_Pair, .size = 2}},
       .latency = 100,
       .mayLoad = true,
       .incrementsVmcnt = true,
@@ -152,9 +146,7 @@ InstructionRegistry::InstructionRegistry() {
       .name = "global_store_dword",
       .category = InstrCategory::VectorMem,
       .defs = {},
-      .uses = {{.name = "vaddr",
-                .type = OperandType::VGPR_Pair,
-                .size = 2},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR_Pair, .size = 2},
                {.name = "vdata", .type = OperandType::VGPR}},
       .latency = 100,
       .mayStore = true,
@@ -205,15 +197,9 @@ InstructionRegistry::InstructionRegistry() {
                 .size = 16,
                 .alignment = 4,
                 .isDef = true}},
-      .uses = {{.name = "src0",
-                .type = OperandType::VGPR_Range,
-                .size = 4},
-               {.name = "src1",
-                .type = OperandType::VGPR_Range,
-                .size = 4},
-               {.name = "src2",
-                .type = OperandType::AGPR_Range,
-                .size = 16}},
+      .uses = {{.name = "src0", .type = OperandType::VGPR_Range, .size = 4},
+               {.name = "src1", .type = OperandType::VGPR_Range, .size = 4},
+               {.name = "src2", .type = OperandType::AGPR_Range, .size = 16}},
       .latency = 64,
   });
 
@@ -225,15 +211,9 @@ InstructionRegistry::InstructionRegistry() {
                 .size = 4,
                 .alignment = 4,
                 .isDef = true}},
-      .uses = {{.name = "src0",
-                .type = OperandType::VGPR_Range,
-                .size = 4},
-               {.name = "src1",
-                .type = OperandType::VGPR_Range,
-                .size = 4},
-               {.name = "src2",
-                .type = OperandType::AGPR_Range,
-                .size = 4}},
+      .uses = {{.name = "src0", .type = OperandType::VGPR_Range, .size = 4},
+               {.name = "src1", .type = OperandType::VGPR_Range, .size = 4},
+               {.name = "src2", .type = OperandType::AGPR_Range, .size = 4}},
       .latency = 32,
   });
 
@@ -248,17 +228,16 @@ InstructionRegistry::InstructionRegistry() {
                 .isDef = true}},
       .uses = {{.name = "src0",
                 .type = OperandType::VGPR_Range,
-                .size = 8},  // 8xf16 = 4 VGPRs
+                .size = 8}, // 8xf16 = 4 VGPRs
                {.name = "src1",
                 .type = OperandType::VGPR_Range,
-                .size = 8},  // 8xf16 = 4 VGPRs
-               {.name = "src2",
-                .type = OperandType::AGPR_Range,
-                .size = 4}},
+                .size = 8}, // 8xf16 = 4 VGPRs
+               {.name = "src2", .type = OperandType::AGPR_Range, .size = 4}},
       .latency = 32,
   });
 
-  // v_mfma_f32_16x16x32_bf16 - gfx950+ (MI350), uses 8xbf16 inputs (4 VGPRs each)
+  // v_mfma_f32_16x16x32_bf16 - gfx950+ (MI350), uses 8xbf16 inputs (4 VGPRs
+  // each)
   registerInstruction(InstrDesc{
       .name = "v_mfma_f32_16x16x32_bf16",
       .category = InstrCategory::MFMA,
@@ -269,13 +248,11 @@ InstructionRegistry::InstructionRegistry() {
                 .isDef = true}},
       .uses = {{.name = "src0",
                 .type = OperandType::VGPR_Range,
-                .size = 8},  // 8xbf16 = 4 VGPRs
+                .size = 8}, // 8xbf16 = 4 VGPRs
                {.name = "src1",
                 .type = OperandType::VGPR_Range,
-                .size = 8},  // 8xbf16 = 4 VGPRs
-               {.name = "src2",
-                .type = OperandType::AGPR_Range,
-                .size = 4}},
+                .size = 8}, // 8xbf16 = 4 VGPRs
+               {.name = "src2", .type = OperandType::AGPR_Range, .size = 4}},
       .latency = 32,
   });
 
@@ -528,8 +505,7 @@ parseRegisterString(llvm::StringRef regStr) {
       endStr = endStr.drop_back(1);
 
     int64_t startIdx, endIdx;
-    if (startStr.getAsInteger(10, startIdx) ||
-        endStr.getAsInteger(10, endIdx))
+    if (startStr.getAsInteger(10, startIdx) || endStr.getAsInteger(10, endIdx))
       return std::nullopt;
 
     int64_t size = endIdx - startIdx + 1;
