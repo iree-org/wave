@@ -23,8 +23,9 @@ Or just test MLIR->ASM translation (no GPU):
 
 import os
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Add wave_lang to path if needed
 wave_root = Path(__file__).parent.parent.parent.parent
@@ -34,6 +35,7 @@ if str(wave_root) not in sys.path:
 # Import test utilities
 import sys
 from pathlib import Path
+
 # Add e2e directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -41,7 +43,6 @@ from waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_mlir,
     compare_with_python_backend,
-    CompilationResult,
 )
 
 
@@ -142,7 +143,6 @@ class TestWaveKernelCompilation:
     def test_capture_copy_kernel_mlir(self, compiler):
         """Test capturing MLIR from copy kernel definition."""
         try:
-            import torch
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -218,7 +218,6 @@ class TestWaveKernelCompilation:
     def test_compare_cpp_vs_python_backend(self, compiler):
         """Compare C++ and Python backend outputs for copy kernel."""
         try:
-            import torch
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -300,11 +299,15 @@ class TestGPUExecution:
         try:
             import torch
             from torch.testing import assert_close
+
             import wave_lang.kernel.lang as tkl
             import wave_lang.kernel.wave as tkw
             from wave_lang.kernel.wave.compile import WaveCompileOptions
             from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-            from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
+            from wave_lang.kernel.wave.utils.torch_utils import (
+                device_randn,
+                device_zeros,
+            )
         except ImportError:
             pytest.skip("Required packages not available")
 

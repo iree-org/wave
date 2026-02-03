@@ -45,11 +45,9 @@ Environment variables:
 
 import os
 import sys
-import pytest
-import tempfile
 from pathlib import Path
-from typing import Tuple, List, Optional
-from dataclasses import dataclass
+
+import pytest
 
 # Add wave_lang to path
 wave_root = Path(__file__).parent.parent.parent.parent
@@ -61,14 +59,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from waveasm_e2e import (
     WaveASMCompiler,
-    capture_wave_mlir,
     capture_wave_kernel_info,
+    capture_wave_mlir,
     compare_with_python_backend,
     run_with_wave_runtime,
-    CompilationResult,
-    CapturedKernelInfo,
 )
-
 
 # =============================================================================
 # Test Configuration
@@ -109,10 +104,8 @@ def skip_if_no_gpu():
 
 def skip_if_no_wave_lang():
     """Skip test if wave_lang is not available."""
-    try:
-        import wave_lang.kernel.lang as tkl
-        import wave_lang.kernel.wave as tkw
-    except ImportError:
+    import importlib.util
+    if importlib.util.find_spec("wave_lang") is None:
         pytest.skip("wave_lang not available")
 
 
@@ -146,6 +139,7 @@ def test_copy_kernel_cpp_backend(shape, compiler):
 
     import torch
     from torch.testing import assert_close
+
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
     from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -255,12 +249,16 @@ def test_mma_kernel_cpp_backend(mma_type, k_size, load_elems, compiler):
 
     import torch
     from torch.testing import assert_close
+
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
-    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE
 
     M = tkl.sym.M
     N = tkl.sym.N
@@ -379,12 +377,16 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
 
     import torch
     from torch.testing import assert_close
+
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
-    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE
 
     M = tkl.sym.M
     N = tkl.sym.N
@@ -505,12 +507,16 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
 
     import torch
     from torch.testing import assert_close
+
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
-    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE
 
     M = tkl.sym.M
     N = tkl.sym.N
@@ -674,6 +680,7 @@ def test_gemm_cpp_backend(shape, block_k, config, use_global_to_shared, mma_type
 
     import torch
     from torch.testing import assert_close
+
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
 
@@ -682,11 +689,14 @@ def test_gemm_cpp_backend(shape, block_k, config, use_global_to_shared, mma_type
         not use_global_to_shared and
         shape == (256, 256, 128)):
         pytest.xfail("16x16x32-no_g2s with large problem size has intermittent failures")
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
-    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE
-    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
 
     M = tkl.sym.M
     N = tkl.sym.N

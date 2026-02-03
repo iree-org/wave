@@ -19,10 +19,11 @@ Usage:
 """
 
 import argparse
-import subprocess
-import tempfile
 import os
+import subprocess
 import sys
+import tempfile
+
 import numpy as np
 
 # ROCm toolchain paths - can be overridden via environment variables
@@ -30,11 +31,10 @@ ROCM_PATH = os.environ.get("ROCM_PATH", "/opt/rocm")
 CLANG_PATH = os.environ.get("AMDASM_CLANG", os.path.join(ROCM_PATH, "llvm", "bin", "clang"))
 LLD_PATH = os.environ.get("AMDASM_LLD", os.path.join(ROCM_PATH, "llvm", "bin", "ld.lld"))
 
-try:
-    from hip import hip
-    HAS_HIP = True
-except ImportError:
-    HAS_HIP = False
+import importlib.util
+
+HAS_HIP = importlib.util.find_spec("hip") is not None
+if not HAS_HIP:
     print("Warning: HIP Python bindings not available", file=sys.stderr)
 
 
