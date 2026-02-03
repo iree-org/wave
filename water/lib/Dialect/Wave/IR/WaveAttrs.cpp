@@ -257,6 +257,9 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   // This preserves meaningful symbol names while leveraging the existing
   // affine parser.
 
+  if (failed(parser.parseLess()))
+    return {};
+
   SmallVector<Attribute> symbolNameAttrs;
   // Parse '[' symbol-names ']' allowing empty or non-empty lists.
   if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
@@ -302,6 +305,9 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
     return {};
   }
 
+  if (failed(parser.parseGreater()))
+    return {};
+
   auto startMap = startExpr
                       ? AffineMap::get(
                             /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
@@ -326,7 +332,8 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   // We keep one global symbol list (symbol_names) for all three expressions.
   // Each expression is an affine map with the same numSymbols; we substitute
   // s0, s1, ... using the shared names when rendering each expression.
-  printer << "[";
+
+  printer << "<[";
   ArrayRef<Attribute> symbols = getSymbols();
   llvm::interleaveComma(symbols, printer,
                         [&](Attribute attr) { printer.printAttribute(attr); });
@@ -347,7 +354,7 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   std::string stepStr = stringifyWithNames(getStep(), names);
   std::string strideStr = stringifyWithNames(getStride(), names);
 
-  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")";
+  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")>";
 }
 
 LogicalResult

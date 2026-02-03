@@ -254,8 +254,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -265,8 +265,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -276,20 +276,20 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -531,7 +531,7 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
-    # CHECK-SAME: K = #wave<index_mapping
+    # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
     # CHECK-SAME: offset =
     #
@@ -558,20 +558,20 @@ def mlir_converter_matmul():
     # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[MMA_0:.*]] = wave.mma %[[READ_SHARED_B_0]], %[[READ_SHARED_A_0]], %[[ARG3]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_1:.*]] = wave.mma %[[READ_SHARED_B_1]], %[[READ_SHARED_A_1]], %[[MMA_0]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_2:.*]] = wave.mma %[[READ_SHARED_B_2]], %[[READ_SHARED_A_2]], %[[MMA_1]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_3:.*]] = wave.mma %[[READ_SHARED_B_3]], %[[READ_SHARED_A_3]], %[[MMA_2]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     wave.yield %[[MMA_3]] : !wave.tensor<[@M, @N] of f32, <register>>
     # CHECK-NEXT: }

@@ -94,7 +94,7 @@ func.func @using_iter_symbol(%arg0: f32) {
   %0 = wave.register %arg0 : !wave.tensor<[@M] of f32, <register>>
   wave.iterate @M iter_args(%0) {
   ^bb0(%arg1: !wave.tensor<[@M] of f32, <register>>):
-    wave.register %arg0 index [{M : [#wave.iter<"M">] -> (0, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+    wave.register %arg0 index [{M : <[#wave.iter<"M">] -> (0, 1, 1)>}] : !wave.tensor<[@M] of f32, <register>>
     wave.yield %arg1 : !wave.tensor<[@M] of f32, <register>>
   } : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<any of f32>
   return
@@ -114,8 +114,8 @@ func.func @register_with_symbols() {
   // CHECK: wave.register
   %register = wave.register %0
     index [{
-      M : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1),
-      N : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)
+      M : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1)>,
+      N : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)>
     }]
     : !wave.tensor<[@M, @N] of f32, <register>>
   return
@@ -127,9 +127,9 @@ func.func @register_with_symbols_complex_index() {
   // CHECK: wave.register
   %register = wave.register %0
     index [{
-      B : [#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * (BLOCK_B+BLOCK_B), BLOCK_B * (WG2+WG2), WG2 * BLOCK_B),
-      M : [#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + BLOCK_M * ((T0 floordiv 64) floordiv 2) + T0 mod 32, 1, 1),
-      N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">, #wave.index_symbol<WG1>, #wave.index_symbol<GPR_NUM>, #wave.index_symbol<T0>] -> (T1 * (BLOCK_N floordiv 2) + BLOCK_N * WG1 + GPR_NUM mod 4 + ((GPR_NUM floordiv 4) mod 4) * 8 + ((T0 mod 64) floordiv 32) * 4, 1, 1)
+      B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * (BLOCK_B+BLOCK_B), BLOCK_B * (WG2+WG2), WG2 * BLOCK_B)>,
+      M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + BLOCK_M * ((T0 floordiv 64) floordiv 2) + T0 mod 32, 1, 1)>,
+      N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">, #wave.index_symbol<WG1>, #wave.index_symbol<GPR_NUM>, #wave.index_symbol<T0>] -> (T1 * (BLOCK_N floordiv 2) + BLOCK_N * WG1 + GPR_NUM mod 4 + ((GPR_NUM floordiv 4) mod 4) * 8 + ((T0 mod 64) floordiv 32) * 4, 1, 1)>
     }]
     : !wave.tensor<[@B, @N, @M] of f32, <register>>
   return
@@ -139,7 +139,7 @@ func.func @register_with_symbols_complex_index() {
 func.func @register_with_symbols_empty_symbol_list() {
   %0 = arith.constant 0.0 : f32
   // CHECK: wave.register
-  %register = wave.register %0 index [{B : [] -> (0, 1, 1)}]
+  %register = wave.register %0 index [{B : <[] -> (0, 1, 1)>}]
     : !wave.tensor<[@B] of f32, <register>>
   return
 }
@@ -331,8 +331,8 @@ attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N 
   // CHECK: #wave.index_symbol<WG0>
   // CHECK: #wave.index_symbol<T0>
   %0 = wave.read %mem index [{
-      M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-      N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+      M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+      N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
     : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
   return
 }
@@ -377,8 +377,8 @@ func.func @cast_wave_tensor_with_index(%arg0: !wave.tensor<[@M, @N] of f32>) -> 
   // CHECK: wave.cast
   // CHECK-SAME: index
   %0 = wave.cast %arg0 index [{
-    M : [#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1),
-    N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)>
   }] : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
   return %0 : !wave.tensor<[@M, @N] of f16>
 }

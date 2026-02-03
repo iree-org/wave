@@ -101,8 +101,8 @@ ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
       StringRef symbolName;
       if (parser.parseKeyword(&symbolName) || parser.parseColon())
         return failure();
-      Attribute mapping = wave::WaveIndexMappingAttr::parse(parser, Type{});
-      if (!mapping)
+      WaveIndexMappingAttr mapping;
+      if (failed(parser.parseCustomAttributeWithFallback(mapping)))
         return failure();
       entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
                            mapping);
