@@ -185,7 +185,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         )
         loop_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
 
-        #TODO: Look into removing cross-wave TDM dependency
+        # TODO: Look into removing cross-wave TDM dependency
         clusters = [
             tkw.cluster(
                 [
