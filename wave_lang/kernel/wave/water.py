@@ -429,6 +429,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     pipeline = [
         "water-memref-decomposition",
+        "water-fuse-scale-loads",  # operates on llvm.load ops so should ge after memref decomposition
         *add_opt(canonicalize_cse),
         "lower-affine",
         *add_opt(int_range_optimizations),

@@ -29,7 +29,7 @@ static bool isElementwise(Operation *op) {
   if (op->getNumResults() != 1 || op->getNumOperands() != 1 || !isPure(op))
     return false;
 
-  // Support llvm.bitcast in addition to elementwise ops.
+  // LLVM::BitcastOp doesnt have elementwise mappable trait.
   if (isa<LLVM::BitcastOp>(op))
     return true;
 
