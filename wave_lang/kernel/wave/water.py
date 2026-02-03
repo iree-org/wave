@@ -425,7 +425,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     llvm_opt_level = 3 if options.optimization_level else 0
     dump_intermediates = options.dump_intermediates or ""
-    toolkit_path = get_water_mlir_pkg_path()
+    toolkit_path = os.path.join(get_water_mlir_pkg_path(), "llvm", "bin", "ld.lld")
 
     pipeline = [
         "water-memref-decomposition",
