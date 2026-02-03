@@ -442,6 +442,8 @@ llvm::FailureOr<ChangeResult> wave::MmaOp::propagateBackward(
                                            "result", "accumulator", errs);
 }
 
+LogicalResult wave::MmaOp::finalizeTypeInference() { return success(); }
+
 // Set the value of `lattice` to `newLattice` and return whether a change
 // happened. Note that this does NOT verify whether the lattice change goes into
 // the direction of top or bottom.

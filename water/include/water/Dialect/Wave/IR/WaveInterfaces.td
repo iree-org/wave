@@ -135,6 +135,15 @@ def WaveInferTypeOpInterface : OpInterface<"WaveInferTypeOpInterface"> {
       (ins "::llvm::MutableArrayRef<::wave::WaveTensorType>":$operandTypes,
            "::llvm::ArrayRef<::wave::WaveTensorType>":$resultTypes,
            "::llvm::raw_ostream &":$errs)
+    >,
+    InterfaceMethod<[{
+      Finalize the type inference on the operation, e.g., by modifying its
+      attributes. This will be called after the value types were updated in
+      place and may be used for additional verification.
+      }],
+      "::llvm::LogicalResult",
+      "finalizeTypeInference",
+      (ins)
     >
   ];
 }
