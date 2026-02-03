@@ -584,7 +584,8 @@ def BroadcastOp : WaveOp<"broadcast", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source
+    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source,
+    Arg<OptionalAttr<WaveSymbolArrayAttr>, "Dimensions being broadcast">:$broadcast_dims
   ), commonArguments);
 
   let results = (outs
@@ -592,7 +593,8 @@ def BroadcastOp : WaveOp<"broadcast", [
   );
 
   let assemblyFormat =
-    "$source " # commonArgumentsSyntax # "attr-dict `:`"
+    "$source (`dims` custom<SymbolArray>($broadcast_dims)^)?" #
+    commonArgumentsSyntax # "attr-dict `:`"
     "functional-type(operands, results)";
 
   let hasVerifier = 1;

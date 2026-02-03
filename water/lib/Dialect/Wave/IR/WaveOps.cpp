@@ -1924,6 +1924,9 @@ LogicalResult wave::ReciprocalOp::verify() {
 //-----------------------------------------------------------------------------
 
 llvm::SmallVector<WaveSymbolAttr> wave::BroadcastOp::inferBroadcastDims() {
+  if (auto dims = getBroadcastDims())
+    return llvm::to_vector(dims->getAsRange<WaveSymbolAttr>());
+
   WaveTensorType sourceType = llvm::cast<WaveTensorType>(getSource().getType());
   WaveTensorType resultType = llvm::cast<WaveTensorType>(getResult().getType());
   assert(sourceType.getFullySpecified() && resultType.getFullySpecified() &&
@@ -1956,6 +1959,11 @@ LogicalResult wave::BroadcastOp::verify() {
   if (!sourceType.getFullySpecified() || !resultType.getFullySpecified())
     return success();
 
+  if (getBroadcastDims()) {
+    return emitOpError("does not expect explicit dims when source and result "
+                       "types are fully specified");
+  }
+
   // Check all source symbols are in result.
   for (WaveSymbolAttr sym : sourceType.getShape()) {
     if (!llvm::is_contained(resultType.getShape(), sym))
@@ -1983,6 +1991,10 @@ llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
   // is not, we cannot infer the source shape because we don't know which
   // dimensions in the result are broadcast dims vs. which came from the source.
   // For example, result [@M, @N, @K] could have source [@M, @N], [@M, @K], etc.
+  //
+  // Note: If partial type inference is needed in the future, an optional
+  // broadcast_dims attribute could be added (mutually exclusive with
+  // fully-specified types).
   return ChangeResult::NoChange;
 }
 
