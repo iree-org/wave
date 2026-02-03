@@ -179,8 +179,8 @@ def WaterFuseScaleLoadsPass : Pass<"water-fuse-scale-loads"> {
     values to be loaded together, reducing memory traffic.
   }];
   let dependentDialects = [
-    "::mlir::amdgpu::AMDGPUDialect",
-    "::mlir::vector::VectorDialect",
+    "::mlir::arith::ArithDialect",
+    "::mlir::gpu::GPUDialect",
   ];
   let options = [
     Option<"waveSize", "wave-size", "unsigned", /*default=*/"32",
