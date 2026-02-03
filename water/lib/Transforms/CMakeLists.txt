@@ -4,6 +4,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   AssembleISA.cpp
   CheckStaticAssertions.cpp
   DropTransformOps.cpp
+  FuseScaleLoads.cpp
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   MemrefDecomposition.cpp
