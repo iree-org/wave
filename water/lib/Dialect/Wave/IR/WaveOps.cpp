@@ -263,8 +263,6 @@ LogicalResult wave::IterateOp::verify() {
   TypeRange blockIterArgTypes = getIterArgs().getTypes();
   TypeRange iterArgTypes =
       getOperands().drop_back(getCaptures().size()).getTypes();
-  TypeRange captureTypes = getCaptures().getTypes();
-  TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
   TypeRange resultTypes = getResultTypes();
   if (iterArgTypes.size() != blockIterArgTypes.size()) {
     return emitOpError() << "expects the same number if iter_args ("
@@ -826,9 +824,15 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
   return *this;
 }
 
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() {
+  return parent.m();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() {
+  return parent.n();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() {
+  return parent.k();
+}
 void MmaSingleIndexExprBuilder::populate(
     llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
   parent.populate(attributes);
