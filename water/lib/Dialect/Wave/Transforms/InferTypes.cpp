@@ -296,11 +296,10 @@ public:
     return success();
   }
 
-  void visitNonControlFlowArguments(Operation *op,
-                                    const RegionSuccessor &successor,
-                                    ValueRange successorInputs,
-                                    llvm::ArrayRef<InferTypeLattice *> lattices,
-                                    unsigned firstIndex) override {
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<InferTypeLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -308,8 +307,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
@@ -800,9 +797,8 @@ public:
 
   void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor &successor,
-      ValueRange successorInputs,
-      llvm::ArrayRef<ElementsPerThreadLattice *> lattices,
-      unsigned firstIndex) override {
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<ElementsPerThreadLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -810,8 +806,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
@@ -1371,11 +1365,10 @@ public:
     return llvm::success();
   }
 
-  void
-  visitNonControlFlowArguments(Operation *op, const RegionSuccessor &successor,
-                               ValueRange successorInputs,
-                               llvm::ArrayRef<IndexExprsLattice *> lattices,
-                               unsigned firstIndex) override {
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<IndexExprsLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -1383,8 +1376,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
