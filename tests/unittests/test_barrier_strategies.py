@@ -8,11 +8,18 @@
 
 from dataclasses import dataclass
 from typing import Optional, List
+from unittest.mock import patch
 
 from wave_lang.kernel.wave.utils.barriers_utils import (
     minimize_placement_strategy,
     find_disjoint_interval_strategy,
 )
+
+
+# Mock filter_regions_with_barriers to return input unchanged for unit tests
+# since DummyNodes don't have actual graph structure for barrier detection
+def _mock_filter_regions_with_barriers(sync_regions):
+    return sync_regions
 
 
 # Stubs just for these tests
@@ -27,6 +34,27 @@ class DummyNode:
         self._topo_location = topo
         self.graph = graph
         self.prev = None
+        self.next = None  # No next node - iteration will stop immediately
+
+    def __ge__(self, other: "DummyNode") -> bool:
+        return self._topo_location >= other._topo_location
+
+    def __le__(self, other: "DummyNode") -> bool:
+        return self._topo_location <= other._topo_location
+
+    def __gt__(self, other: "DummyNode") -> bool:
+        return self._topo_location > other._topo_location
+
+    def __lt__(self, other: "DummyNode") -> bool:
+        return self._topo_location < other._topo_location
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DummyNode):
+            return NotImplemented
+        return self._topo_location == other._topo_location
+
+    def __hash__(self) -> int:
+        return hash(self._topo_location)
 
 
 # helpers
@@ -66,6 +94,10 @@ def test_minimize_placement_empty():
     assert minimize_placement_strategy([]) == []
 
 
+@patch(
+    "wave_lang.kernel.wave.utils.barriers_utils.filter_regions_with_barriers",
+    _mock_filter_regions_with_barriers,
+)
 def test_minimize_placement_overlapping_forward_intervals():
     """
     Two overlapping forward hazards:
@@ -110,6 +142,10 @@ def test_find_disjoint_interval_empty():
     assert find_disjoint_interval_strategy([]) == []
 
 
+@patch(
+    "wave_lang.kernel.wave.utils.barriers_utils.filter_regions_with_barriers",
+    _mock_filter_regions_with_barriers,
+)
 def test_find_disjoint_interval_coalesces_overlapping_simple():
     """
     Same two overlapping forward hazards:
@@ -134,6 +170,10 @@ def test_find_disjoint_interval_coalesces_overlapping_simple():
     assert barrier.cons_location == 3
 
 
+@patch(
+    "wave_lang.kernel.wave.utils.barriers_utils.filter_regions_with_barriers",
+    _mock_filter_regions_with_barriers,
+)
 def test_find_disjoint_interval_coalesces_overlapping_simple_1():
     """
     These are the patterns observed in pipelined kernels
@@ -172,6 +212,10 @@ def test_find_disjoint_interval_coalesces_overlapping_simple_1():
     assert [171, 184] in out_intervals
 
 
+@patch(
+    "wave_lang.kernel.wave.utils.barriers_utils.filter_regions_with_barriers",
+    _mock_filter_regions_with_barriers,
+)
 def test_find_disjoint_interval_coalesces_overlapping_with_loop():
     """
     These are the patterns observed in bshd attention kernels with modulo pipeline
