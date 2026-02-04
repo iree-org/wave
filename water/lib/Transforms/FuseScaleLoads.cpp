@@ -56,8 +56,9 @@ static bool canFuseOps(Operation *opA, Operation *opB) {
   if (opA->getBlock() != opB->getBlock())
     return false;
 
-  Operation *firstOp = opA->isBeforeInBlock(opB) ? opA : opB;
-  Operation *lastOp = opA->isBeforeInBlock(opB) ? opB : opA;
+  bool isBefore = opA->isBeforeInBlock(opB);
+  Operation *firstOp = isBefore ? opA : opB;
+  Operation *lastOp = isBefore ? opB : opA;
   for (Operation *curr = firstOp->getNextNode(); curr != lastOp;
        curr = curr->getNextNode()) {
     if (isPure(curr))
@@ -147,7 +148,8 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
     // Create fused load: select(lane_id < waveSize/2, ptrA, ptrB).
     Location loc = op.getLoc();
     OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPoint(loadA);
+    Operation *insertionPoint = loadA->isBeforeInBlock(loadB) ? loadA : loadB;
+    rewriter.setInsertionPoint(insertionPoint);
 
     auto upperBound = rewriter.getIndexAttr(waveSize);
     Value laneId = gpu::LaneIdOp::create(rewriter, loc, upperBound);
@@ -160,8 +162,7 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
 
     // Create new load with the selected pointer.
     unsigned alignment = loadA.getAlignment().value_or(0);
-    StringRef syncscope =
-        loadA.getSyncscope() ? *loadA.getSyncscope() : StringRef();
+    StringRef syncscope = loadA.getSyncscope().value_or(StringRef());
     auto fusedLoad = LLVM::LoadOp::create(
         rewriter, loc, loadA.getResult().getType(), selectedPtr, alignment,
         loadA.getVolatile_(), loadA.getNontemporal(), loadA.getInvariant(),
