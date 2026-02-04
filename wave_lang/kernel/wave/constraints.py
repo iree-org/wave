@@ -300,7 +300,7 @@ class HardwareConstraint(Constraint):
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
     def mma_index_offset(self, mma_type: Optional[MMAType | ScaledMMAType]):
-        lane = self.linearized_thread_id % self.threads_per_wave
+        lane = self.lane_id
         if mma_type is None:
             mma_type = self.mma_type
 
