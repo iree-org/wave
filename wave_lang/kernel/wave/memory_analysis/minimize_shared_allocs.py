@@ -212,7 +212,6 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
                 address_space=custom_alloc.address_space,
                 offset=offset,
                 padding=custom_alloc.padding,
-                tail_padding=0,
             )
             view_node = view.add_to_graph(alloc.graph, loc=custom_alloc.location)
             alloc.replace_all_uses_with(view_node)

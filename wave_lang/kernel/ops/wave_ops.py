@@ -1564,7 +1564,6 @@ class View(CustomOp):
     address_space: AddressSpace = SHARED_ADDRESS_SPACE
     offset: IndexExpr = 0
     padding: int = 0
-    tail_padding: int = 0  # Padding after the array end
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1581,12 +1580,9 @@ class View(CustomOp):
     @property
     def allocation_size(self) -> IndexExpr:
         """
-        Returns the full size of the view in bytes including all padding.
+        Returns the full size of the view in bytes.
         """
-        return (
-            (math.prod(self.distributed_shape) + self.tail_padding)
-            * self.dtype.bitwidth()
-        ) // 8
+        return (math.prod(self.distributed_shape) * self.dtype.bitwidth()) // 8
 
     @property
     def unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:

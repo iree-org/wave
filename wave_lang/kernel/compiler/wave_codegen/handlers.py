@@ -261,7 +261,6 @@ def handle_view(emitter: WaveEmitter, node: fx.Node):
             address_space,
             offset,
             padding,
-            tail_padding,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
