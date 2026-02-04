@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 import math
-from typing import Any, Sequence
+from typing import Any, Sequence, TYPE_CHECKING
 
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.detect_water import get_water_mlir_pkg_path, get_water_opt
@@ -32,6 +32,9 @@ from wave_lang.support.ir_imports import (
     memref_d,
     stream_d,
 )
+
+if TYPE_CHECKING:
+    from .constraints import Constraint
 
 
 def _find_single_nested(name: str, parent: Operation) -> Operation:
@@ -370,7 +373,9 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         print("[info] No out-of-bounds accesses detected.")
 
 
-def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
+def water_lowering_pipeline(
+    module: Module, hw_constraint: "Constraint", options: WaveCompileOptions
+) -> Module:
     binary = get_water_opt()
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
@@ -429,7 +434,8 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     pipeline = [
         "water-memref-decomposition",
-        "water-fuse-scale-loads",  # operates on llvm.load ops so should ge after memref decomposition
+        # scales fusion operates on llvm.load ops so should go after memref decomposition
+        ("water-fuse-scale-loads", {"wave-size": hw_constraint.threads_per_wave}),
         *add_opt(canonicalize_cse),
         "lower-affine",
         *add_opt(int_range_optimizations),

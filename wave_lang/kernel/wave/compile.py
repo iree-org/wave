@@ -1090,7 +1090,9 @@ def wave_compile(
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
         elif options.use_water_backend:
-            module = water_lowering_pipeline(mb.module_op, options)
+            module = water_lowering_pipeline(
+                mb.module_op, get_hardware_constraint(kernel.constraints), options
+            )
             return WaveKernelExecutionEngine(
                 options,
                 module,
