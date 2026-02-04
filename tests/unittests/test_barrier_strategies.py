@@ -34,27 +34,6 @@ class DummyNode:
         self._topo_location = topo
         self.graph = graph
         self.prev = None
-        self.next = None  # No next node - iteration will stop immediately
-
-    def __ge__(self, other: "DummyNode") -> bool:
-        return self._topo_location >= other._topo_location
-
-    def __le__(self, other: "DummyNode") -> bool:
-        return self._topo_location <= other._topo_location
-
-    def __gt__(self, other: "DummyNode") -> bool:
-        return self._topo_location > other._topo_location
-
-    def __lt__(self, other: "DummyNode") -> bool:
-        return self._topo_location < other._topo_location
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DummyNode):
-            return NotImplemented
-        return self._topo_location == other._topo_location
-
-    def __hash__(self) -> int:
-        return hash(self._topo_location)
 
 
 # helpers
