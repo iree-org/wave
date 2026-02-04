@@ -152,6 +152,7 @@ verifyConstraints(ArrayAttr constraints,
       waveConstraints;
   llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::TilingConstraintAttr>
       tilingConstraints;
+  wave::HardwareConstraintAttr hardwareConstraint;
 
   // collect constraints for each dimension symbol
   for (const Attribute &attr : constraints) {
@@ -183,6 +184,8 @@ verifyConstraints(ArrayAttr constraints,
         return emitError() << "more than one tiling constraint for dimension: "
                            << dim;
       }
+    } else if (auto hw = llvm::dyn_cast<wave::HardwareConstraintAttr>(attr)) {
+      hardwareConstraint = hw;
     }
   }
 
@@ -275,6 +278,9 @@ verifyConstraints(ArrayAttr constraints,
   // coresponding WorkgroupConstraint with the same dimension symbol.
   // * The number of waves in each workgroup should be greater than or equal to
   // one.
+  // * The wave constraint tile size should divide the workgroup constraint tile
+  // size evenly.
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedWaveCounts;
   for (auto &&[symbol, constraint] : waveConstraints) {
     if (!workgroupConstraints.contains(symbol)) {
       return emitError()
@@ -292,10 +298,39 @@ verifyConstraints(ArrayAttr constraints,
            "invalid evaluation of wave expression for wave constraint");
 
     int64_t resolvedWaveSize = evaluated->front();
-    int64_t numWaves = resolvedWorkgroupSizes[symbol] / resolvedWaveSize;
+    int64_t workgroupSize = resolvedWorkgroupSizes[symbol];
+    int64_t numWaves = workgroupSize / resolvedWaveSize;
     if (numWaves < 1) {
       return emitError() << "invalid number of waves: " << numWaves
                          << " for dimension: " << symbol;
+    }
+    if (workgroupSize % resolvedWaveSize != 0) {
+      return emitError() << "wave constraint tile size " << resolvedWaveSize
+                         << " does not evenly divide workgroup constraint tile "
+                            "size "
+                         << workgroupSize << " for dimension: " << symbol;
+    }
+    resolvedWaveCounts[symbol] = numWaves;
+  }
+
+  // verify consistency between wave constraints and waves_per_block
+  // * If both wave constraints and waves_per_block are present, the computed
+  // number of waves per dimension should match the waves_per_block attribute.
+  if (hardwareConstraint && !hardwareConstraint.getWavesPerBlock().empty() &&
+      !waveConstraints.empty()) {
+    llvm::ArrayRef<unsigned> wavesPerBlock =
+        hardwareConstraint.getWavesPerBlock();
+    for (auto &&[symbol, waveConstraint] : waveConstraints) {
+      wave::WorkgroupConstraintAttr wgConstraint = workgroupConstraints[symbol];
+      unsigned wgDim =
+          static_cast<unsigned>(wgConstraint.getWorkgroupDim().getValue());
+      int64_t computedWaves = resolvedWaveCounts[symbol];
+      if (computedWaves != wavesPerBlock[wgDim]) {
+        return emitError() << "computed number of waves (" << computedWaves
+                           << ") for dimension " << symbol
+                           << " does not match waves_per_block[" << wgDim
+                           << "] = " << wavesPerBlock[wgDim];
+      }
     }
   }
 

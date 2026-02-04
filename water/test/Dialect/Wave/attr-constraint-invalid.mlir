@@ -207,3 +207,48 @@ func.func private @test_wave_missing_hyperparams3() attributes { wave.hyperparam
 func.func private @test_tile_missing_hyperparams3() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#tl_constraint] }
 
 // -----
+
+#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 3)>>
+// expected-error @below {{wave constraint tile size 42 does not evenly divide workgroup constraint tile size 128 for dimension: #wave.symbol<"M">}}
+func.func private @test_wave_not_divisible_by_workgroup() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint, #wv_constraint] }
+
+// -----
+
+#hyperparams = #wave.hyperparameters<{N = 512, BLOCK_N = 64}>
+#wg_constraint = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+#wv_constraint = #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 5)>>
+// expected-error @below {{wave constraint tile size 12 does not evenly divide workgroup constraint tile size 64 for dimension: #wave.symbol<"N">}}
+func.func private @test_wave_not_divisible_by_workgroup2() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint, #wv_constraint] }
+
+// -----
+
+#hyperparams_wpb1 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_wpb1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_wpb1 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_wpb1 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 1, 1]>
+// expected-error @below {{computed number of waves (4) for dimension #wave.symbol<"M"> does not match waves_per_block[0] = 2}}
+func.func private @test_waves_per_block_mismatch_single_dim() attributes { wave.hyperparameters = #hyperparams_wpb1, wave.constraints = [#wg_constraint_wpb1, #wv_constraint_wpb1, #hw_constraint_wpb1] }
+
+// -----
+
+#hyperparams_wpb2 = #wave.hyperparameters<{M = 1024, N = 512, BLOCK_M = 128, BLOCK_N = 64}>
+#wg_constraint_wpb2_m = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wg_constraint_wpb2_n = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+#wv_constraint_wpb2_m = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
+#wv_constraint_wpb2_n = #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 4)>>
+#hw_constraint_wpb2 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1]>
+// expected-error @below {{computed number of waves (4) for dimension #wave.symbol<"N"> does not match waves_per_block[1] = 2}}
+func.func private @test_waves_per_block_mismatch_multi_dim() attributes { wave.hyperparameters = #hyperparams_wpb2, wave.constraints = [#wg_constraint_wpb2_m, #wg_constraint_wpb2_n, #wv_constraint_wpb2_m, #wv_constraint_wpb2_n, #hw_constraint_wpb2] }
+
+// -----
+
+#hyperparams_wpb3 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_wpb3 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <y>>
+#wv_constraint_wpb3 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
+#hw_constraint_wpb3 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 4, 1]>
+// expected-error @below {{computed number of waves (2) for dimension #wave.symbol<"M"> does not match waves_per_block[1] = 4}}
+func.func private @test_waves_per_block_mismatch_y_dim() attributes { wave.hyperparameters = #hyperparams_wpb3, wave.constraints = [#wg_constraint_wpb3, #wv_constraint_wpb3, #hw_constraint_wpb3] }
+
+// -----
