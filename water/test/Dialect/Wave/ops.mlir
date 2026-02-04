@@ -591,6 +591,7 @@ func.func @broadcast_multiple_dims(%arg0: !wave.tensor<[@M] of f16, <register>>)
 
 // CHECK-LABEL: @broadcast_explicit_dims
 func.func @broadcast_explicit_dims(%arg0: !wave.tensor<any of f32>) {
+  // CHECK: wave.broadcast %{{.*}} dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   wave.broadcast %arg0 dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   return
 }

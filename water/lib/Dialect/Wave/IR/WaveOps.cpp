@@ -2015,17 +2015,13 @@ LogicalResult wave::BroadcastOp::finalizeTypeInference() {
 // should be blocked.
 static bool isBroadcastingAlongThreadX(wave::BroadcastOp op,
                                        const ElementsPerThreadInit &init) {
-  auto sourceType = llvm::dyn_cast<WaveTensorType>(op.getSource().getType());
-  auto resultType = llvm::dyn_cast<WaveTensorType>(op.getResult().getType());
-
-  if (!sourceType || !resultType || !sourceType.getFullySpecified() ||
-      !resultType.getFullySpecified())
-    return false;
+  auto sourceType = llvm::cast<WaveTensorType>(op.getSource().getType());
+  auto resultType = llvm::cast<WaveTensorType>(op.getResult().getType());
+  assert(sourceType.getFullySpecified() && resultType.getFullySpecified() &&
+         "expected source and result types to be fully specified");
 
   SmallVector<WaveSymbolAttr> broadcastDims = op.inferBroadcastDims();
-  return llvm::any_of(broadcastDims, [&](WaveSymbolAttr sym) {
-    return sym == init.threadXDimension;
-  });
+  return llvm::any_of(broadcastDims, llvm::equal_to(init.threadXDimension));
 }
 
 llvm::FailureOr<ChangeResult>
