@@ -140,20 +140,8 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
 
         # Filter nodes for PROLOGUE stage (before the loop)
         prologue_global_to_shared_fused = tkw.filter_nodes(
-            tkw.get_node_by_tag("read_a,read_b"), subgraph=pipeline_loop.PROLOGUE
+            global_to_shared_fused, subgraph=pipeline_loop.PROLOGUE
         )
-        if len(prologue_global_to_shared_fused) == 0:
-            prologue_global_to_shared_fused = tkw.filter_nodes(
-                tkw.get_node_by_tag("read_a"), node_type=tkw.TensorLoadToLDS
-            )
-            prologue_global_to_shared_fused.extend(
-                tkw.filter_nodes(
-                    tkw.get_node_by_tag("read_b"), node_type=tkw.TensorLoadToLDS
-                )
-            )
-            prologue_global_to_shared_fused = tkw.filter_nodes(
-                prologue_global_to_shared_fused, subgraph=pipeline_loop.PROLOGUE
-            )
 
         # Prologue cluster: tensor_load_to_lds + wait.tensorcnt(1) + barrier.signal + barrier.wait
         # The conditional barrier for hi waves is handled by insert_conditional_barrier_before
@@ -197,6 +185,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
         )
         loop_mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
 
+        # TODO: Look into removing cross-wave TDM dependency
         clusters = [
             tkw.cluster(
                 [
@@ -205,7 +194,7 @@ def test_gfx1250_tbuf_gemm(is_debug=False):
                     loop_shared_load_b,
                     # Barrier pattern after shared loads
                     tkw.SetWavePrio(0),
-                    tkw.TensorCounterWait(1),  # rocdl.s.wait.tensorcnt 1
+                    tkw.TensorCounterWait(0),  # rocdl.s.wait.tensorcnt 0
                     tkw.SharedMemoryBarrierSignal(
                         -1, ds_wait=True
                     ),  # includes wait.dscnt(0)

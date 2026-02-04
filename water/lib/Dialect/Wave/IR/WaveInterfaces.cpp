@@ -156,22 +156,38 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
 // WaveInferTypeOpInterface helpers
 //-----------------------------------------------------------------------------
 
-// Return `true` if two tensor types have the same shape. Null types are
-// considered to have different shapes.
-static bool hasSameShape(wave::WaveTensorType lhs, wave::WaveTensorType rhs) {
-  // TODO: this may require more advanced checking if shapes are more complex
-  // than a single symbol.
-  return lhs && rhs && lhs.getShape() == rhs.getShape();
+// Check whether the shape of the `to` tensor is reconcilable with the shape
+// provided in the `from` array and print error messages to errs otherwise. The
+// error message uses toName and fromName to describe from and to tensors. If
+// shapes are reconcilable, returns an indicator whether the to type will have
+// to be updated. This version avoids constructing a tensor type, which may
+// be expensive.
+static FailureOr<ChangeResult>
+checkPropagateShapeConflict(ArrayRef<wave::WaveSymbolAttr> from,
+                            wave::WaveTensorType to, llvm::StringRef fromName,
+                            llvm::StringRef toName, llvm::raw_ostream &errs) {
+  if (!to || from == to.getShape())
+    return ChangeResult::NoChange;
+
+  if (!to.getFullySpecified())
+    return ChangeResult::Change;
+
+  errs << "irreconcilable types during type inference from " << fromName << "(";
+  llvm::interleaveComma(from, errs);
+  errs << ") to " << toName << "(" << to << ")";
+  return failure();
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
     wave::WaveTensorType from, wave::WaveTensorType to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
-  if (!from || !to || hasSameShape(from, to))
+  if (!from)
     return ChangeResult::NoChange;
 
-  if (!to.getFullySpecified())
-    return ChangeResult::Change;
+  FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      from.getShape(), to, fromName, toName, llvm::nulls());
+  if (succeeded(res))
+    return res;
 
   errs << "irreconcilable types during type inference from " << fromName << "("
        << from << ") to " << toName << "(" << to << ")";
@@ -260,6 +276,40 @@ propagateFromReductionInput(wave::WaveTensorType inputType,
                                                  toName, errs);
 }
 
+FailureOr<ChangeResult> wave::detail::propagateShapeDropTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    StringRef sourceName, StringRef targetName, unsigned n,
+    llvm::raw_ostream &errs) {
+  if (!source || !source.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  ArrayRef<wave::WaveSymbolAttr> expectedShape = source.getShape().drop_back(n);
+  FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      expectedShape, target, sourceName, targetName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+
+  target = target.copyShapeFrom(expectedShape);
+  return ChangeResult::Change;
+}
+
+FailureOr<ChangeResult> wave::detail::propagateShapeAddTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    StringRef sourceName, StringRef targetName,
+    llvm::ArrayRef<wave::WaveSymbolAttr> newDims, llvm::raw_ostream &errs) {
+  if (!source || !source.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  SmallVector<wave::WaveSymbolAttr> resultShape(source.getShape());
+  llvm::append_range(resultShape, newDims);
+  llvm::FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      resultShape, target, sourceName, targetName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+  target = target.copyShapeFrom(resultShape);
+  return ChangeResult::Change;
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesForward(
     wave::WaveSymbolAttr axis, unsigned initOperandNum,
     unsigned inputOperandNum, llvm::ArrayRef<wave::WaveTensorType> operandTypes,
@@ -274,9 +324,13 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesForward(
     return failure();
 
   wave::WaveTensorType inputType = operandTypes[inputOperandNum];
-  return maybeChangeResult |
-         propagateFromReductionInput(inputType, axis, resultTypes[0], "result",
-                                     errs);
+  maybeChangeResult =
+      maybeChangeResult | propagateFromReductionInput(
+                              inputType, axis, resultTypes[0], "result", errs);
+  maybeChangeResult = maybeChangeResult | propagateShapeDropTrailingDims(
+                                              inputType, resultTypes[0],
+                                              "input", "result", 1, errs);
+  return maybeChangeResult;
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
@@ -292,15 +346,27 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
 
   // Propagate "sideways" from input to init operand.
   wave::WaveTensorType inputType = operandTypes[inputOperandNum];
-  return maybeChangeResult |
-         propagateFromReductionInput(
-             inputType, axis, operandTypes[initOperandNum], "init", errs);
+  maybeChangeResult =
+      maybeChangeResult |
+      propagateFromReductionInput(inputType, axis, operandTypes[initOperandNum],
+                                  "init", errs);
 
-  // TODO: we cannot propagate to input here because we don't know at which
-  // position the reduction axis should be. We may consider a form where we
-  // always reduce trailing dimensions and require a reshape before. We could
-  // introduce an additional attribute indicating the position of the reduction
-  // axis as long as we ensure its consistency with the type in the verifier.
+  // Since we only reduce trailing dimensions, we can infer the operand shape by
+  // adding the reduction axis back to the result.
+  maybeChangeResult =
+      maybeChangeResult | propagateShapeAddTrailingDims(
+                              resultTypes[0], operandTypes[inputOperandNum],
+                              "result", "input", {axis}, errs);
+
+  return maybeChangeResult;
+}
+
+bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
+                                                    Value result) {
+  return llvm::all_of(
+      llvm::ArrayRef<Value>{input, init, result}, [&](Value value) {
+        return llvm::cast<WaveTensorType>(value.getType()).getFullySpecified();
+      });
 }
 
 //-----------------------------------------------------------------------------

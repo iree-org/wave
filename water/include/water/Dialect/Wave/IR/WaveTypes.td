@@ -82,6 +82,18 @@ def WaveTensorType : TypeDef<WaveDialect, "WaveTensor"> {
           getContext(), other.getShape(), other.getFullySpecified(),
           getElementType(), getAddressSpace());
     }
+
+    // Return a tensor with the same element type and address space and the
+    // given shape.
+    ::wave::WaveTensorType copyShapeFrom(
+        ::llvm::ArrayRef<::wave::WaveSymbolAttr> newShape) {
+      if (newShape == getShape())
+        return *this;
+
+      return ::wave::WaveTensorType::get(
+          getContext(), newShape, /*fully_specified=*/true, getElementType(),
+          getAddressSpace());
+    }
   }];
 }
 

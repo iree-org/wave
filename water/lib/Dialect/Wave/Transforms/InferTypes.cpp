@@ -670,6 +670,15 @@ public:
     if (llvm::failed(updateValueTypes(getOperation(), updateType)))
       return signalPassFailure();
 
+    WalkResult walkResult =
+        getOperation()->walk([&](wave::WaveInferTypeOpInterface iface) {
+          if (failed(iface.finalizeTypeInference()))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
+    if (walkResult.wasInterrupted())
+      return signalPassFailure();
+
     if (!partial) {
       llvm::LogicalResult result = setNormalFormPassPostcondition(
           wave::WaveNormalForm::AllTypesSpecified, getOperation());

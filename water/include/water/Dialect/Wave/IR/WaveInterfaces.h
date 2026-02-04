@@ -72,6 +72,26 @@ propagateShapeInformation(wave::WaveTensorType from, wave::WaveTensorType &to,
                           llvm::StringRef fromName, llvm::StringRef toName,
                           llvm::raw_ostream &errs);
 
+// Propagate shape information from `source` to `target` and drop the `n`
+// `source` dims. Expects both to be fully-specified tensor types. If
+// propagation discovers a type conflict, prints the error message to the
+// `errs` stream and returns failure. Otherwise returns a tag indicating whether
+// the target type changed.
+llvm::FailureOr<mlir::ChangeResult> propagateShapeDropTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    llvm::StringRef sourceName, llvm::StringRef targetName, unsigned n,
+    llvm::raw_ostream &errs);
+
+// Propagate shape information from `source` to `target` and add `n` trailing
+// dims. Expects both to be fully-specified tensor types. If propagation
+// discovers a type conflict, prints the error message to the `errs` stream and
+// returns failure. Otherwise returns a tag indicating whether the target type
+// changed.
+llvm::FailureOr<mlir::ChangeResult> propagateShapeAddTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    llvm::StringRef sourceName, llvm::StringRef targetName,
+    llvm::ArrayRef<wave::WaveSymbolAttr> newDims, llvm::raw_ostream &errs);
+
 // Propagate type information for reduction operations from operands to results.
 // If init is present, we can propagate from it directly, otherwise propagate
 // from input after removing the reduction axis.
@@ -89,6 +109,11 @@ llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesBackward(
     unsigned inputOperandNum,
     llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
     llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs);
+
+// Return true if type inference for operands and results of a reduction
+// operation is complete, i.e., all values have fully specified types.
+bool isReductionTypeInferenceComplete(mlir::Value input, mlir::Value init,
+                                      mlir::Value result);
 
 // Check whether the `from` and `to` tensor types have reconcilable shapes and
 // and print error messages to `errs` otherwise. The error message uses `toName`
@@ -123,6 +148,8 @@ public:
     return wave::detail::identityTypeInferencePropagate(
         resultTypes, operandTypes, "results", "operands", errs);
   }
+
+  llvm::LogicalResult finalizeTypeInference() { return llvm::success(); }
 };
 
 // A trait providing an implementation of the WaveInferTypeOpInterface for
@@ -158,6 +185,14 @@ public:
     return detail::propagateReductionTypesBackward(
         axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
+
+  llvm::LogicalResult finalizeTypeInference() {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    if (detail::isReductionTypeInferenceComplete(
+            concrete.getInput(), concrete.getInit(), concrete.getResult()))
+      concrete.removeAxisAttr();
+    return llvm::success();
+  }
 };
 
 // A trait providing an implementation of the WaveInferTypeOpInterface where no
@@ -180,6 +215,8 @@ public:
                     llvm::raw_ostream &errs) {
     return mlir::ChangeResult::NoChange;
   }
+
+  llvm::LogicalResult finalizeTypeInference() { return llvm::success(); }
 };
 
 // Verify that element types of Wave tensors or vectors match between LHS and

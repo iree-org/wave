@@ -134,5 +134,9 @@ llvm::FailureOr<ChangeResult> WaveFailPropagationOp::propagateBackward(
       resultTypes, operandTypes, "results", "operands", errs);
 }
 
+LogicalResult WaveFailPropagationOp::finalizeTypeInference() {
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "WaterTestDialectOps.cpp.inc"
