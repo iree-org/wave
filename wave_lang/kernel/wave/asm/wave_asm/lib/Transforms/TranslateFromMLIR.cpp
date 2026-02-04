@@ -668,6 +668,24 @@ LogicalResult handleGPUSubgroupBroadcast(Operation *op,
     return success();
   }
 
+  // Check for broadcast_type attribute first (newer MLIR with gpu.broadcast
+  // enum) #gpu<broadcast first_active_lane> means use v_readfirstlane_b32
+  bool usesFirstLane = false;
+  if (auto broadcastTypeAttr = op->getAttr("broadcast_type")) {
+    // The attribute is an enum like #gpu<broadcast first_active_lane>
+    // For gpu.subgroup_broadcast with broadcast_type = first_active_lane,
+    // we should use v_readfirstlane_b32
+    // The attribute prints as "#gpu<broadcast first_active_lane>"
+    // TODO: Use mlir::gpu::BroadcastTypeAttr when available to avoid string
+    // matching
+    std::string attrDump;
+    llvm::raw_string_ostream os(attrDump);
+    broadcastTypeAttr.print(os);
+    if (attrDump.find("first_active_lane") != std::string::npos) {
+      usesFirstLane = true;
+    }
+  }
+
   // Check for lane_id - either as operand or attribute
   std::optional<Value> laneMapped;
   int64_t laneIdValue = 0;
@@ -691,16 +709,17 @@ LogicalResult handleGPUSubgroupBroadcast(Operation *op,
 
   auto sregType = ctx.createSRegType();
 
-  // If lane is constant 0, use v_readfirstlane_b32 (simpler, no lane arg)
-  bool usesFirstLane = false;
-  if (laneMapped) {
-    if (auto constOp = laneMapped->getDefiningOp<ConstantOp>()) {
-      if (constOp.getValue() == 0) {
-        usesFirstLane = true;
+  // If lane is constant 0, also use v_readfirstlane_b32
+  if (!usesFirstLane) {
+    if (laneMapped) {
+      if (auto constOp = laneMapped->getDefiningOp<ConstantOp>()) {
+        if (constOp.getValue() == 0) {
+          usesFirstLane = true;
+        }
       }
+    } else if (hasLaneId && laneIdValue == 0) {
+      usesFirstLane = true;
     }
-  } else if (hasLaneId && laneIdValue == 0) {
-    usesFirstLane = true;
   }
 
   Value result;
@@ -1933,26 +1952,14 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // Extract constant addend from top-level expression for buffer store offset:N
-  // Pattern: dynamic_expr + constant -> track constant separately
-  // This allows using "offset:N" in buffer stores instead of computing in VGPR
+  // NOTE: We used to extract constant addends for buffer store offset:N
+  // optimization but this caused bugs when the affine result was used in arith
+  // operations (the constant was lost). For now, just compile the full
+  // expression.
+  // TODO: Re-enable constant extraction only for values used directly in memory
+  // ops
   int64_t constAddend = 0;
   AffineExpr exprToCompile = expr;
-
-  if (auto addExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
-    if (addExpr.getKind() == AffineExprKind::Add) {
-      // Check if RHS is a constant
-      if (auto constRhs = dyn_cast<AffineConstantExpr>(addExpr.getRHS())) {
-        constAddend = constRhs.getValue();
-        exprToCompile = addExpr.getLHS();
-      }
-      // Also check if LHS is a constant
-      else if (auto constLhs = dyn_cast<AffineConstantExpr>(addExpr.getLHS())) {
-        constAddend = constLhs.getValue();
-        exprToCompile = addExpr.getRHS();
-      }
-    }
-  }
 
   // Simple pattern matching for common affine expressions
   // Pattern: d0 mod N -> v_and_b32 (when N is power of 2)
@@ -3493,17 +3500,51 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     return op->emitError("source buffer not mapped");
   }
 
+  // Get element size from transferType attribute for scaling index to bytes
+  // The MLIR source index is in element units, but buffer_load needs byte
+  // offset
+  int64_t elemBytes = 2; // Default f16
+  if (auto transferTypeAttr = op->getAttrOfType<TypeAttr>("transferType")) {
+    if (auto vecType = dyn_cast<VectorType>(transferTypeAttr.getValue())) {
+      auto elemType = vecType.getElementType();
+      elemBytes = elemType.getIntOrFloatBitWidth() / 8;
+    }
+  }
+
   // operand(1): source index -> this is the voffset for global memory access
+  // IMPORTANT: Each gather_to_lds needs its OWN voffset VGPR because
+  // buffer_load_dword...lds is asynchronous. If we reuse the same VGPR
+  // for multiple gather_to_lds operations, subsequent operations may
+  // overwrite the voffset before the previous load completes.
+  // Also, the source index from MLIR is in ELEMENTS, not bytes, so we need
+  // to scale by the element size.
   Value voff;
   if (op->getNumOperands() > 1) {
     Value srcIndex = op->getOperand(1);
     auto srcIndexMapped = ctx.getMapper().getMapped(srcIndex);
     if (srcIndexMapped) {
-      voff = *srcIndexMapped;
-      // Ensure it's in a VGPR
-      if (!isVGPRType(voff.getType())) {
-        auto vregType = ctx.createVRegType();
-        voff = V_MOV_B32::create(builder, loc, vregType, voff);
+      // Scale index from elements to bytes
+      auto vregType = ctx.createVRegType();
+      if (elemBytes != 1) {
+        // Use shifts for power-of-2 scaling
+        if (llvm::isPowerOf2_64(elemBytes)) {
+          int64_t shiftAmt = llvm::Log2_64(elemBytes);
+          auto shiftImm = ctx.createImmType(shiftAmt);
+          auto shiftConst =
+              ConstantOp::create(builder, loc, shiftImm, shiftAmt);
+          voff = V_LSHLREV_B32::create(builder, loc, vregType, shiftConst,
+                                       *srcIndexMapped);
+        } else {
+          // Fallback: multiply for non-power-of-2
+          auto scaleImm = ctx.createImmType(elemBytes);
+          auto scaleConst =
+              ConstantOp::create(builder, loc, scaleImm, elemBytes);
+          voff = V_MUL_LO_U32::create(builder, loc, vregType, scaleConst,
+                                      *srcIndexMapped);
+        }
+      } else {
+        // elemBytes == 1, no scaling needed, just copy to fresh VGPR
+        voff = V_MOV_B32::create(builder, loc, vregType, *srcIndexMapped);
       }
     }
   }
@@ -3538,10 +3579,7 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
       auto shape = memrefType.getShape();
       int64_t elementBytes = 2; // Default f16
       if (auto elemType = memrefType.getElementType()) {
-        if (elemType.isF16() || elemType.isBF16())
-          elementBytes = 2;
-        else if (elemType.isF32())
-          elementBytes = 4;
+        elementBytes = elemType.getIntOrFloatBitWidth() / 8;
       }
       if (shape.size() >= 2) {
         // row stride = number of columns * element bytes
@@ -3550,10 +3588,35 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // operand(3): LDS row index -> used to compute m0 offset
-  // M0 = lds_base + row * row_stride
+  // Get element size for column offset calculation
+  int64_t ldsElemBytes = 2; // Default f16
+  if (op->getNumOperands() > 2) {
+    if (auto memrefType = dyn_cast<MemRefType>(op->getOperand(2).getType())) {
+      if (auto elemType = memrefType.getElementType()) {
+        ldsElemBytes = elemType.getIntOrFloatBitWidth() / 8;
+      }
+    }
+  }
+
+  // operand(3) and operand(4): LDS row and col indices -> used to compute m0
+  // M0 = lds_base + row * row_stride + col * elem_bytes
+  //    = lds_base + (row * lds_cols + col) * elem_bytes
   int64_t m0Const = ldsBaseOffsetConst;
   bool canUseImmediateM0 = hasLdsBaseOffset;
+  int64_t colIdxConst = 0;
+  bool hasConstCol = false;
+
+  // Get column index if available (operand 4)
+  if (op->getNumOperands() > 4) {
+    mlir::Value ldsColIndex = op->getOperand(4);
+    auto ldsColMapped = ctx.getMapper().getMapped(ldsColIndex);
+    if (ldsColMapped) {
+      if (auto immType = dyn_cast<ImmType>(ldsColMapped->getType())) {
+        colIdxConst = immType.getValue();
+        hasConstCol = true;
+      }
+    }
+  }
 
   if (op->getNumOperands() > 3) {
     mlir::Value ldsRowIndex = op->getOperand(3);
@@ -3563,14 +3626,17 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
       // Try to extract constant value from row index
       if (auto immType = dyn_cast<ImmType>(ldsRowMapped->getType())) {
         int64_t rowIdxConst = immType.getValue();
-        // Compute m0 = base + row * stride
+        // Compute m0 = base + row * stride + col * elem_bytes
         if (ldsRowStride > 0) {
           m0Const = ldsBaseOffsetConst + rowIdxConst * ldsRowStride;
+          if (hasConstCol) {
+            m0Const += colIdxConst * ldsElemBytes;
+          }
         } else {
           // Fallback: assume row index is already in bytes
           m0Const = ldsBaseOffsetConst + rowIdxConst;
         }
-        canUseImmediateM0 = true;
+        canUseImmediateM0 = hasConstCol || (colIdxConst == 0);
       } else {
         // Row index is not a constant, need to compute dynamically
         canUseImmediateM0 = false;
@@ -3619,6 +3685,41 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
                                        m0Val, strideConst);
         }
 
+        // Add column offset (col * elem_bytes)
+        if (op->getNumOperands() > 4) {
+          mlir::Value ldsColIndex = op->getOperand(4);
+          auto ldsColMapped = ctx.getMapper().getMapped(ldsColIndex);
+          if (ldsColMapped) {
+            if (auto immType = dyn_cast<ImmType>(ldsColMapped->getType())) {
+              int64_t colOffset = immType.getValue() * ldsElemBytes;
+              if (colOffset != 0) {
+                auto colImm = ctx.createImmType(colOffset);
+                auto colConst =
+                    ConstantOp::create(builder, loc, colImm, colOffset);
+                Value colVgpr = V_MOV_B32::create(
+                    builder, loc, ctx.createVRegType(), colConst);
+                m0Val = convertToVgpr(m0Val);
+                m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                          m0Val, colVgpr);
+              }
+            } else {
+              // Column is dynamic - need to multiply by elem_bytes and add
+              m0Val = convertToVgpr(m0Val);
+              Value colVgpr = convertToVgpr(*ldsColMapped);
+              if (ldsElemBytes > 1) {
+                // Multiply col by elem_bytes
+                auto scaleImm = ctx.createImmType(ldsElemBytes);
+                auto scaleConst =
+                    ConstantOp::create(builder, loc, scaleImm, ldsElemBytes);
+                colVgpr = V_MUL_LO_U32::create(
+                    builder, loc, ctx.createVRegType(), colVgpr, scaleConst);
+              }
+              m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                        m0Val, colVgpr);
+            }
+          }
+        }
+
         // Add base offset
         if (hasLdsBaseOffset && ldsBaseOffsetConst != 0) {
           auto baseImm = ctx.createImmType(ldsBaseOffsetConst);
@@ -3649,10 +3750,38 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // Emit buffer_load_dword_lds with correct voffset
+  // Determine transfer size from transferType attribute
+  int64_t transferBytes = 4; // Default: 4 bytes (buffer_load_dword_lds)
+  if (auto transferTypeAttr = op->getAttrOfType<TypeAttr>("transferType")) {
+    if (auto vecType = dyn_cast<VectorType>(transferTypeAttr.getValue())) {
+      int64_t numElems = vecType.getNumElements();
+      auto elemType = vecType.getElementType();
+      int64_t elemSize = elemType.getIntOrFloatBitWidth() / 8;
+      transferBytes = numElems * elemSize;
+    }
+  }
+
+  // Emit appropriate buffer_load instruction based on transfer size
   auto soffImm = ctx.createImmType(0);
   auto soffConst = ConstantOp::create(builder, loc, soffImm, 0);
-  BUFFER_LOAD_DWORD_LDS::create(builder, loc, voff, *srcMapped, soffConst);
+  if (transferBytes == 16) {
+    // 16 bytes = buffer_load_dwordx4_lds
+    BUFFER_LOAD_DWORDX4_LDS::create(builder, loc, voff, *srcMapped, soffConst);
+  } else if (transferBytes == 4) {
+    // 4 bytes = buffer_load_dword_lds (default)
+    BUFFER_LOAD_DWORD_LDS::create(builder, loc, voff, *srcMapped, soffConst);
+  } else {
+    return op->emitError("unsupported transfer size for gather_to_lds: " +
+                         std::to_string(transferBytes) + " bytes");
+  }
+
+  // Emit vmcnt wait after each gather_to_lds to ensure the voffset register
+  // is not reused before the load completes. This is necessary because
+  // buffer_load_dword_lds is asynchronous and the register allocator doesn't
+  // understand that the voffset must remain valid until the load completes.
+  // TODO: A more optimal solution would be to extend liveness analysis to
+  // keep voffset live until the next vmcnt(0) or barrier.
+  S_WAITCNT_VMCNT::create(builder, loc, /*count=*/0);
 
   return success();
 }

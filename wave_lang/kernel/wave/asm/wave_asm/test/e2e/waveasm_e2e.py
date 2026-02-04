@@ -185,6 +185,7 @@ class WaveASMCompiler:
             str(self.waveasm_translate),
             f"--target={self.target}",
             "--waveasm-scoped-cse",  # Run CSE
+            "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
             "--waveasm-linear-scan",  # Run register allocation
             "--waveasm-insert-waitcnt",  # Insert wait instructions
             "--waveasm-hazard-mitigation",  # Handle hazards

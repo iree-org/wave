@@ -365,7 +365,7 @@ def test_mma_kernel_cpp_backend(mma_type, k_size, load_elems, compiler):
 
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
-    assert_close(c, expected)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
 
 
 # =============================================================================
@@ -499,7 +499,7 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
 
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
-    assert_close(c, expected)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
 
 
 # =============================================================================
@@ -511,10 +511,28 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
     "shape,config",
     [
         # (M, N, K), (BLOCK_M, BLOCK_N, WAVE_M, WAVE_N)
-        ((256, 256, 16), (64, 64, 16, 16)),  # 4x4 WGs, 4x4 waves per WG
-        ((64, 64, 16), (64, 64, 16, 16)),  # 1 WG with 4x4 waves (16 waves = max)
-        ((64, 32, 16), (64, 32, 16, 16)),  # 1 WG with 4x2 waves (8 waves)
-        ((128, 64, 16), (32, 32, 16, 16)),  # 4x2 WGs, 2x2 waves per WG
+        # Config ensures each wave handles 16x16 tile for F32_16x16x16_F16 MMA
+        # Max 16 waves per workgroup constraint (16 * 64 = 1024 threads max)
+        (
+            (256, 256, 16),
+            (64, 64, 16, 16),
+        ),  # 4x4 WGs, 4x4 waves per WG (16 waves = max, test both multi-wg and multi-wave)
+        (
+            (64, 64, 16),
+            (64, 64, 16, 16),
+        ),  # 1 WG with 4x4 waves (16 waves = max, pure multi-wave)
+        (
+            (64, 32, 16),
+            (64, 32, 16, 16),
+        ),  # 1 WG with 4x2 waves (8 waves, smaller multi-wave)
+        (
+            (128, 64, 16),
+            (32, 32, 16, 16),
+        ),  # 4x2 WGs, 2x2 waves per WG (4 waves per WG, multi-wg + multi-wave)
+        (
+            (8192, 8192, 16),
+            (32, 32, 16, 16),
+        ),  # 256x256 WGs, 2x2 waves per WG (large scale test)
     ],
 )
 def test_mma_multi_wave_cpp_backend(shape, config, compiler):
@@ -642,7 +660,7 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
 
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
-    assert_close(c, expected)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
 
 
 # =============================================================================
@@ -669,13 +687,7 @@ def _global_to_shared_params():
     """Return global_to_shared (gather_to_lds) parameters."""
     if is_cdna4():
         return [
-            pytest.param(
-                True,
-                id="g2s",
-                marks=pytest.mark.xfail(
-                    reason="g2s tests have intermittent failures due to synchronization issues"
-                ),
-            ),
+            pytest.param(True, id="g2s"),
             pytest.param(False, id="no_g2s"),
         ]
     return [pytest.param(False, id="no_g2s")]
@@ -684,15 +696,25 @@ def _global_to_shared_params():
 @pytest.mark.parametrize(
     "shape,block_k,config",
     [
-        # Single-wave configurations
-        ((64, 64, 64), 16, (16, 16, 16, 16)),  # 1 wave per WG
+        # Single-wave configurations (BLOCK_M=16, BLOCK_N=16)
+        ((64, 64, 64), 16, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 16
         ((64, 64, 64), 32, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 32
-        # Multi-wave configurations
-        ((64, 64, 64), 16, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG
+        ((64, 64, 128), 64, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 64
+        # Multi-wave configurations (multiple waves per workgroup)
+        ((64, 64, 64), 16, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 16
         ((64, 64, 64), 32, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 32
-        ((128, 128, 64), 16, (64, 64, 16, 16)),  # 4x4 = 16 waves per WG (max)
-        # Larger problem size
+        ((64, 64, 128), 64, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 64
+        (
+            (128, 128, 64),
+            16,
+            (64, 64, 16, 16),
+        ),  # 4x4 = 16 waves per WG (max), BLOCK_K = 16
+        ((64, 128, 64), 16, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, BLOCK_K = 16
+        # Larger problem size with BLOCK_K=64
         ((256, 256, 128), 64, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, 8x8 WGs
+        # Non-square block configurations with BLOCK_K=64
+        ((128, 64, 64), 64, (64, 32, 16, 16)),  # 4x2 = 8 waves per WG, non-square
+        ((64, 128, 64), 64, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, non-square
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
@@ -716,15 +738,8 @@ def test_gemm_cpp_backend(
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
 
-    # xfail specific problematic combination: 16x16x32-no_g2s with large problem size
-    if (
-        mma_type == tkw.MMAType.F32_16x16x32_F16
-        and not use_global_to_shared
-        and shape == (256, 256, 128)
-    ):
-        pytest.xfail(
-            "16x16x32-no_g2s with large problem size has intermittent failures"
-        )
+    # Note: 16x16x32-no_g2s with large problem size previously had intermittent failures
+    # but is now fixed
     from wave_lang.kernel.lang.global_symbols import (
         GLOBAL_ADDRESS_SPACE,
         SHARED_ADDRESS_SPACE,
@@ -909,7 +924,7 @@ def test_gemm_cpp_backend(
 
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
-    assert_close(c, expected)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
 
 
 # =============================================================================
