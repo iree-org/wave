@@ -73,12 +73,13 @@ static bool canFuseOps(Operation *opA, Operation *opB) {
 // Clone elementwise chain, replacing the input with newInput.
 static Value cloneElementwiseChain(PatternRewriter &rewriter,
                                    ArrayRef<Operation *> elemOps,
-                                   Value newInput) {
+                                   Operation *producer, Value newInput) {
   Value current = newInput;
   IRMapping mapping;
   for (Operation *op : elemOps) {
     mapping.map(op->getOperand(0), current);
-    rewriter.setInsertionPointAfter(op);
+    Operation *insertionPoint = op->isBeforeInBlock(producer) ? producer : op;
+    rewriter.setInsertionPoint(insertionPoint);
     Operation *cloned = rewriter.clone(*op, mapping);
     current = cloned->getResult(0);
   }
@@ -148,7 +149,9 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
     // Create fused load: select(lane_id < waveSize/2, ptrA, ptrB).
     Location loc = op.getLoc();
     OpBuilder::InsertionGuard guard(rewriter);
-    Operation *insertionPoint = loadA->isBeforeInBlock(loadB) ? loadA : loadB;
+
+    // Set insertion point after the last load.
+    Operation *insertionPoint = loadA->isBeforeInBlock(loadB) ? loadB : loadA;
     rewriter.setInsertionPoint(insertionPoint);
 
     auto upperBound = rewriter.getIndexAttr(waveSize);
@@ -169,10 +172,10 @@ struct WmmaScaleLoadRewriter final : OpRewritePattern<amdgpu::ScaledWMMAOp> {
         loadA.getInvariantGroup(), loadA.getOrdering(), syncscope);
 
     // Clone elementwise chains with the fused load as input.
-    Value newScaleA =
-        cloneElementwiseChain(rewriter, elemOpsA, fusedLoad.getResult());
-    Value newScaleB =
-        cloneElementwiseChain(rewriter, elemOpsB, fusedLoad.getResult());
+    Value newScaleA = cloneElementwiseChain(rewriter, elemOpsA, insertionPoint,
+                                            fusedLoad.getResult());
+    Value newScaleB = cloneElementwiseChain(rewriter, elemOpsB, insertionPoint,
+                                            fusedLoad.getResult());
 
     // Update wmma op to use fused scales and read scaleB from lane 16.
     rewriter.modifyOpInPlace(op, [&]() {
