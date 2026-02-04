@@ -156,6 +156,12 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
 // WaveInferTypeOpInterface helpers
 //-----------------------------------------------------------------------------
 
+// Check whether the shape of the `to` tensor is reconcilable with the shape
+// provided in the `from` array and print error messages to errs otherwise. The
+// error message uses toName and fromName to describe from and to tensors. If
+// shapes are reconcilable, returns an indicator whether the to type will have
+// to be updated. This version avoids constructing a tensor type, which may
+// be expensive.
 static FailureOr<ChangeResult>
 checkPropagateShapeConflict(ArrayRef<wave::WaveSymbolAttr> from,
                             wave::WaveTensorType to, llvm::StringRef fromName,
@@ -277,8 +283,7 @@ FailureOr<ChangeResult> wave::detail::propagateShapeDropTrailingDims(
   if (!source || !source.getFullySpecified())
     return ChangeResult::NoChange;
 
-  SmallVector<wave::WaveSymbolAttr> expectedShape =
-      llvm::to_vector(llvm::drop_end(source.getShape(), n));
+  ArrayRef<wave::WaveSymbolAttr> expectedShape = source.getShape().drop_back(n);
   FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
       expectedShape, target, sourceName, targetName, errs);
   if (failed(res) || *res == ChangeResult::NoChange)
@@ -295,8 +300,7 @@ FailureOr<ChangeResult> wave::detail::propagateShapeAddTrailingDims(
   if (!source || !source.getFullySpecified())
     return ChangeResult::NoChange;
 
-  SmallVector<wave::WaveSymbolAttr> resultShape =
-      llvm::to_vector(source.getShape());
+  SmallVector<wave::WaveSymbolAttr> resultShape(source.getShape());
   llvm::append_range(resultShape, newDims);
   llvm::FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
       resultShape, target, sourceName, targetName, errs);
@@ -360,7 +364,7 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
 bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
                                                     Value result) {
   return llvm::all_of(
-      llvm::ArrayRef<mlir::Value>{input, init, result}, [&](Value value) {
+      llvm::ArrayRef<Value>{input, init, result}, [&](Value value) {
         return llvm::cast<WaveTensorType>(value.getType()).getFullySpecified();
       });
 }
