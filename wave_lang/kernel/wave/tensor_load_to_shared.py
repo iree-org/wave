@@ -186,9 +186,7 @@ def get_tensor_load_descriptor_config(
     # Some waves can copy duplicated data, take the full tile shape and
     # redistribute across the waves using linearized wave_id.
     total_waves = math.prod(hardware_constraint.waves_per_block)
-    linearized_wave_id = (
-        hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
-    )
+    linearized_wave_id = hardware_constraint.wave_id
     chunks_per_dim, chunk_shape = divide_shape_into_chunks(
         distributed_shape, total_waves
     )

@@ -238,14 +238,11 @@ def emit_interwave_reduction(
     """
 
     # Compute basic HW information.
-    lane_id = (
-        hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
-    )
+    lane_id = hardware_constraint.lane_id
 
     # Determining wave id along reduction dim.
     wave_id = delinearize_index(
-        hardware_constraint.linearized_thread_id
-        // hardware_constraint.threads_per_wave,
+        hardware_constraint.wave_id,
         hardware_constraint.waves_per_block,
     )
     reduction_wg_dim = wg_constraint_map[reduction_dim].workgroup_dim

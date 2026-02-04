@@ -363,9 +363,7 @@ def fuse_tensor_loads(
         logger.info("No fusable tensor load pairs found")
         return
 
-    wave_id = (
-        hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
-    )
+    wave_id = hardware_constraint.wave_id
 
     input_selector = wave_id % 2
 

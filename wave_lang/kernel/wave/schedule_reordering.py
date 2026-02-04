@@ -472,8 +472,7 @@ def add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
     assert flat_wave_count % 2 == 0
     mid_wave = flat_wave_count // 2
 
-    flat_id = hardware_constraint.linearized_thread_id
-    wave_id = flat_id // hardware_constraint.threads_per_wave
+    wave_id = hardware_constraint.wave_id
 
     # Inserting condition computation into graph.
     with graph.inserting_before(custom_iterate.fx_node):
