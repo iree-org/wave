@@ -193,14 +193,22 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   // Try using ROCM_PATH environment variable if lldPath is not provided.
   SmallString<128> actualLldPath(lldPath.getValue());
   if (actualLldPath.empty() || !llvm::sys::fs::exists(actualLldPath)) {
-    actualLldPath = ROCDL::getROCMPath();
-    llvm::sys::path::append(actualLldPath, "llvm", "bin", "ld.lld");
+    if (!ignoreSystemROCm) {
+      actualLldPath = ROCDL::getROCMPath();
+      llvm::sys::path::append(actualLldPath, "llvm", "bin", "ld.lld");
+    }
     if (!llvm::sys::fs::exists(actualLldPath)) {
-      return mod.emitError("failed to find ld.lld in ROCM_PATH: ")
-             << actualLldPath.str() << " and "
-             << (lldPath.hasValue()
-                     ? "explicit lld path does not point to a valid file"
-                     : "no explicit lld path was provided");
+      InFlightDiagnostic error = mod.emitError("failed to find ld.lld");
+      if (!ignoreSystemROCm) {
+        error.attachNote() << "tried ROCM_PATH: " << ROCDL::getROCMPath();
+      }
+      if (lldPath.getValue().empty()) {
+        error.attachNote() << "no explicit lld path was provided";
+      } else {
+        error.attachNote()
+            << "explicit lld path does not point to a valid file";
+      }
+      return error;
     }
   }
 
