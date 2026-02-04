@@ -74,7 +74,7 @@ propagateShapeInformation(wave::WaveTensorType from, wave::WaveTensorType &to,
 
 // Propagate shape information from `source` to `target` and drop the `n`
 // `source` dims. Expects both to be fully-specified tensor types. If
-// propagation is discovers a type conflict, prints the error message to the
+// propagation discovers a type conflict, prints the error message to the
 // `errs` stream and returns failure. Otherwise returns a tag indicating whether
 // the target type changed.
 llvm::FailureOr<mlir::ChangeResult> propagateShapeDropTrailingDims(
@@ -111,7 +111,7 @@ llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesBackward(
     llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs);
 
 // Return true if type inference for operands and results of a reduction
-// operation is complete, i.e., allv alues have fully specified types.
+// operation is complete, i.e., all values have fully specified types.
 bool isReductionTypeInferenceComplete(mlir::Value input, mlir::Value init,
                                       mlir::Value result);
 
