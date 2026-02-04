@@ -766,3 +766,30 @@ func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wa
   %result = wave.sum %input init(%init) <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   return %result : !wave.tensor<any of f32>
 }
+
+// -----
+
+func.func @reduction_init_contains_axis_explicit(%input: !wave.tensor<any of f32>, %init: !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<any of f32> {
+  // Reducing along axis @M, but init tensor shape contains @M.
+  // expected-error @below {{init tensor shape must not contain the reduced axis}}
+  %result = wave.sum %input init(%init) along @M <warp> : (!wave.tensor<any of f32>, !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<any of f32>
+  return %result : !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @reduction_result_contains_axis_explicit(%input: !wave.tensor<any of f32>, %init: !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  // Reducing along axis @M, but result tensor shape contains @M.
+  // expected-error @below {{result tensor shape must not contain the reduced axis}}
+  %result = wave.sum %input init(%init) along @M <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @reduction_init_and_result_contain_axis(%input: !wave.tensor<any of f32>, %init: !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32> {
+  // Reducing along axis @K, but both init and result shapes contain @K.
+  // expected-error @below {{init tensor shape must not contain the reduced axis}}
+  %result = wave.max_element %input init(%init) along @K <warp> : (!wave.tensor<any of f32>, !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32>
+  return %result : !wave.tensor<[@K] of f32>
+}

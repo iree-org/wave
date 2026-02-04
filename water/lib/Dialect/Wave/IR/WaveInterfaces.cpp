@@ -1377,6 +1377,20 @@ LogicalResult wave::detail::verifyReductionOperation(Operation *op,
     }
   }
 
+  if (initType && initType.getFullySpecified()) {
+    if (axisAttr && llvm::is_contained(initType.getShape(), axisAttr)) {
+      return op->emitOpError()
+             << "init tensor shape must not contain the reduced axis";
+    }
+  }
+
+  if (resultType && resultType.getFullySpecified()) {
+    if (axisAttr && llvm::is_contained(resultType.getShape(), axisAttr)) {
+      return op->emitOpError()
+             << "result tensor shape must not contain the reduced axis";
+    }
+  }
+
   return success();
 }
 
