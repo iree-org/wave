@@ -466,9 +466,13 @@ def test_manual_barriers_prevent_sync_regions():
 
         # Get sync regions with manual barriers
         logger.debug("Getting sync regions with manual barriers")
-        sync_regions = get_barriers_analysis(
-            trace, target_arch, check_existing_barriers=True
+        sync_regions_raw = get_barriers_analysis(trace, target_arch)
+
+        from wave_lang.kernel.wave.utils.barriers_utils import (
+            find_disjoint_interval_strategy,
         )
+
+        sync_regions = find_disjoint_interval_strategy(sync_regions_raw)
 
         # Assertion: should have fewer sync regions (0) because manual barriers are detected
         logger.info(
