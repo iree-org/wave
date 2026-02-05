@@ -524,7 +524,7 @@ public:
 
   // Waves-per-block extracted from the hardware constraint or computed from
   // wave constraints. Always stored here, even if copied from an attribute.
-  llvm::SmallVector<unsigned> wavesPerBlock;
+  llvm::SmallVector<unsigned, 3> wavesPerBlock;
 };
 
 // Lattice for propagating index expressions across wave dialect operations.

@@ -1025,7 +1025,8 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
 /// the constraints are being used, which is in particular necessary to only
 /// apply tiling constraints inside the relevant loops.
 static void mixInThreadIndependentConstraints(
-    Operation *where, llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
+    Operation *where, uint64_t threadsPerWave,
+    llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
     llvm::SmallVector<NamedAttribute> &symbolMappings) {
@@ -1041,15 +1042,30 @@ static void mixInThreadIndependentConstraints(
         mappingIt != symbolMappings.end()
             ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
             : nullptr;
+
+    // There is interaction between constraints of different kinds for the same
+    // symbol, find them all upfront.
+    wave::WorkgroupConstraintAttr workgroupConstraint;
+    wave::WaveConstraintAttr waveConstraint;
+    wave::TilingConstraintAttr tilingConstraint;
     for (Attribute constraint : it->second) {
+      if (auto maybeWorkgroupConstraint =
+              dyn_cast<wave::WorkgroupConstraintAttr>(constraint)) {
+        workgroupConstraint = maybeWorkgroupConstraint;
+      } else if (auto maybeWaveConstraint =
+                     dyn_cast<wave::WaveConstraintAttr>(constraint)) {
+        waveConstraint = maybeWaveConstraint;
+      } else if (auto maybeTilingConstraint =
+                     dyn_cast<wave::TilingConstraintAttr>(constraint)) {
+        tilingConstraint = maybeTilingConstraint;
+      } else {
+        llvm_unreachable("unsupported constraint type");
+      }
+    }
+
+    if (tilingConstraint) {
       // Tiling constraints should only be applied inside the corresponding
       // parent iterate op.
-      auto tilingConstraint = dyn_cast<wave::TilingConstraintAttr>(constraint);
-      if (!tilingConstraint) {
-        mapping = applyConstraintGeneric(constraint, mapping);
-        continue;
-      }
-
       for (Operation *parent = where->getParentOp(); parent;
            parent = parent->getParentOp()) {
         auto iterateOp = dyn_cast<wave::IterateOp>(parent);
@@ -1057,11 +1073,23 @@ static void mixInThreadIndependentConstraints(
           continue;
         wave::WaveSymbolAttr iterSymbol = iterateOp.getIterator();
         if (iterSymbol.getName() == symbol.getName()) {
-          mapping = wave::applyConstraint(tilingConstraint, mapping);
+          mapping = applyConstraint(tilingConstraint, mapping);
           break;
         }
       }
     }
+
+    if (workgroupConstraint)
+      mapping = applyConstraint(workgroupConstraint, mapping);
+
+    if (waveConstraint) {
+      assert(workgroupConstraint && "workgroup constraint must be present if a "
+                                    "wave constraint for the same symbol is");
+      mapping = applyConstraint(
+          waveConstraint, workgroupConstraint.getWorkgroupDim().getValue(),
+          threadsPerWave, mapping);
+    }
+
     if (mappingIt != symbolMappings.end())
       mappingIt->setValue(mapping);
     else if (mapping)
@@ -1098,7 +1126,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   }
 
   mixInThreadIndependentConstraints(
-      *this, indexingSymbols, initObject.symbolConstraints, symbolMappings);
+      *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
   resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
 
   return llvm::success();
@@ -1141,12 +1170,14 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol, kSymbol},
-                                    initObject.symbolConstraints,
-                                    operandSymbolMappings);
-  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol},
-                                    initObject.symbolConstraints,
-                                    accumulatorSymbolMappings);
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      {mSymbol, nSymbol, kSymbol}, initObject.symbolConstraints,
+      operandSymbolMappings);
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      {mSymbol, nSymbol}, initObject.symbolConstraints,
+      accumulatorSymbolMappings);
 
   // Create the LHS and RHS mappings that are not using symbols
   // irrelevant for them.

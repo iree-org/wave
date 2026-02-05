@@ -132,6 +132,40 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// MMA only, with wave constraints and workgroup constraints for M, N, K.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @mma_with_workgroup_constraints
+  func.func @mma_with_workgroup_constraints(%a: !wave.tensor<[@M, @K] of f16>,
+                                            %b: !wave.tensor<[@N, @K] of f16>,
+                                            %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64>,
+    #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+    #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>,
+    #wave.workgroup_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <z>>,
+    #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>,
+    #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 4)>>,
+    #wave.wave_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K floordiv 4)>>
+  ], wave.hyperparameters = #wave.hyperparameters<{M = 256 : i64, N = 256 : i64, K = 128 : i64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, BLOCK_K = 32 : i64}>} {
+    // CHECK: wave.mma
+    // CHECK-SAME: index
+    // CHECK-DAG: K : <[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG: K : <[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
 
 // Two MMAs in a row. We need to store to the temporary storage and
 // load back because of the index (layout) change.
