@@ -8,7 +8,7 @@
 # These files implement operation handlers organized by source MLIR dialect.
 
 set(HANDLERS_SRCS
-  Handlers.cpp
+  HandlerUtils.cpp
   GPUHandlers.cpp
   ArithHandlers.cpp
   MathHandlers.cpp

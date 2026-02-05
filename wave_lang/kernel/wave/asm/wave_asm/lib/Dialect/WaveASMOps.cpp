@@ -33,22 +33,32 @@ using namespace waveasm;
 /// Returns the expected number of 32-bit registers for the accumulator.
 static int64_t getMFMAAccumulatorSize(llvm::StringRef mnemonic) {
   // Parse mnemonic to extract dimensions: v_mfma_f32_MxNxK_type
-  // Accumulator size is typically M*N/64 for wave64
-  // Common MFMA variants:
+  // Accumulator sizes must match the AccumulatorSize in WaveASMOps.td.
+  // More specific checks (e.g. 4x4x4_f64) must come before generic ones
+  // (e.g. 4x4x4) to avoid false matches.
+
+  // F64 variants (check before generic patterns)
+  if (mnemonic.contains("4x4x4_f64"))
+    return 2;
+  if (mnemonic.contains("16x16x4_f64"))
+    return 8;
+
+  // 4-register accumulators
   if (mnemonic.contains("16x16x16") || mnemonic.contains("16x16x32") ||
       mnemonic.contains("16x16x4_f32") || mnemonic.contains("4x4x4") ||
       mnemonic.contains("4x4x1"))
     return 4;
+
+  // 16-register accumulators
   if (mnemonic.contains("32x32x8") || mnemonic.contains("32x32x16") ||
-      mnemonic.contains("16x16x4_f16") || mnemonic.contains("16x16x4_bf16") ||
-      mnemonic.contains("16x16x4_i8"))
+      mnemonic.contains("32x32x2") || mnemonic.contains("16x16x4_f16") ||
+      mnemonic.contains("16x16x4_bf16") || mnemonic.contains("16x16x4_i8"))
     return 16;
-  if (mnemonic.contains("32x32x4") || mnemonic.contains("32x32x2"))
+
+  // 32-register accumulators
+  if (mnemonic.contains("32x32x4"))
     return 32;
-  if (mnemonic.contains("16x16x4_f64"))
-    return 8;
-  if (mnemonic.contains("4x4x4_f64"))
-    return 2;
+
   // Default fallback
   return 4;
 }

@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-Compare LLVM and ASM backend assembly for GEMM kernels.
+Compare LLVM, ASM, and C++ backend assembly for GEMM kernels.
 
 This script produces side-by-side assembly artifacts for analysis of
-performance differences between the two backends.
+performance differences between the three backends.
 
 Usage:
   python compare_backends.py                           # Default failing config
   python compare_backends.py --passing                 # Working config
   python compare_backends.py --benchmark gemm-asm-benchmark  # Load from benchmark_configs.json
   python compare_backends.py --benchmark gemm-asm-benchmark --output-dir ./asm_comparison
+  python compare_backends.py --benchmark gemm-asm-benchmark --cpp  # Include C++ backend
 
 Output:
-  - llvm_asm.s / asm_asm.s: Raw assembly from each backend
-  - llvm_disasm.s / asm_disasm.s: Disassembly from HSACO binaries
+  - llvm_asm.s / asm_asm.s / cpp_asm.s: Raw assembly from each backend
+  - llvm_disasm.s / asm_disasm.s / cpp_disasm.s: Disassembly from HSACO binaries
   - comparison_report.txt: Instruction counts, metrics, and analysis
 
 Requirements:
   - llvm-objdump (from ROCm or LLVM install)
   - ROCm runtime for GPU execution
+  - waveasm-translate (for C++ backend)
 """
 
 import argparse
@@ -26,6 +28,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -37,7 +40,77 @@ from wave_lang.kernel.wave.perf.benchmark_asm_backend import (
     create_compile_options,
     create_gemm_schedule,
 )
+from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
 
+
+# =============================================================================
+# C++ Backend Support
+# =============================================================================
+
+
+def get_waveasm_translate_path() -> Path:
+    """Get path to waveasm-translate executable."""
+    if "WAVEASM_TRANSLATE" in os.environ:
+        return Path(os.environ["WAVEASM_TRANSLATE"])
+
+    # Default: look in wave-asm build directory
+    script_dir = Path(__file__).parent
+    default_path = (
+        script_dir.parent.parent.parent
+        / "wave_asm"
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
+
+    if default_path.exists():
+        return default_path
+
+    # Try alternative path
+    alt_path = (
+        script_dir.parent.parent.parent.parent.parent
+        / "kernel"
+        / "wave"
+        / "asm"
+        / "wave_asm"
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate"
+    )
+    if alt_path.exists():
+        return alt_path
+
+    raise FileNotFoundError(
+        "waveasm-translate not found. Set WAVEASM_TRANSLATE environment variable "
+        "or build wave-asm project."
+    )
+
+
+def get_amdclang_path() -> str:
+    """Get path to amdclang++ for assembly compilation."""
+    rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+    amdclang = os.path.join(rocm_path, "bin", "amdclang++")
+
+    if os.path.exists(amdclang):
+        return amdclang
+
+    try:
+        result = subprocess.run(["which", "amdclang++"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    raise FileNotFoundError(
+        "amdclang++ not found. Ensure ROCm is installed and in PATH."
+    )
+
+
+# =============================================================================
+# Configuration Presets
+# =============================================================================
 
 # Configuration presets (legacy)
 CONFIGS = {
@@ -174,15 +247,24 @@ def compile_backend(
         # LLVM backend - try to get disassembly from HSACO
         hsaco_path = getattr(result, "gpu_binary_path", None)
 
-        # Look for .rocmasm file in the output directory (intermediates)
-        # The caller passes output_dir as the intermediates directory itself
+        # Look for .rocmasm file - check multiple locations:
+        # 1. The output directory (intermediates)
+        # 2. The cache directory where HSACO is stored
+        search_dirs = []
         if output_dir:
-            intermediates_dir = Path(output_dir)
-            if intermediates_dir.exists():
-                rocmasm_files = list(intermediates_dir.glob("*.rocmasm"))
+            search_dirs.append(Path(output_dir))
+        if hsaco_path:
+            # Check the cache directory where HSACO is stored
+            cache_dir = Path(hsaco_path).parent
+            search_dirs.append(cache_dir)
+
+        for search_dir in search_dirs:
+            if search_dir.exists():
+                rocmasm_files = list(search_dir.glob("*.rocmasm"))
                 if rocmasm_files:
                     try:
                         rocmasm_content = rocmasm_files[0].read_text()
+                        break
                     except Exception as e:
                         print(f"  Warning: Could not read {rocmasm_files[0]}: {e}")
 
@@ -203,13 +285,21 @@ def compile_backend(
 
     # Extract register/LDS metadata
     # For ASM backend: use raw_asm (has HSA metadata)
-    # For LLVM backend: prefer rocmasm file (has YAML metadata), fallback to disasm
+    # For LLVM backend: prefer rocmasm file (has YAML metadata), then HSACO metadata, fallback to disasm
     if backend == "asm" and raw_asm:
         vgpr_count, sgpr_count, lds_size = extract_resource_usage(raw_asm)
     elif backend == "llvm" and rocmasm_content:
         vgpr_count, sgpr_count, lds_size = extract_resource_usage(rocmasm_content)
+    elif backend == "llvm" and hsaco_path:
+        # Try extracting from HSACO metadata using llvm-readelf
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage_from_hsaco(hsaco_path)
     else:
         vgpr_count, sgpr_count, lds_size = extract_resource_usage(disasm or raw_asm)
+
+    # For LLVM backend, prefer rocmasm content for raw_asm (used for instruction counting)
+    # because disasm includes padding NOPs that aren't real instructions
+    if backend == "llvm" and rocmasm_content:
+        raw_asm = rocmasm_content
 
     return BackendResult(
         backend=backend,
@@ -290,6 +380,207 @@ def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
             lds = int(lds_match.group(1))
 
     return vgpr, sgpr, lds
+
+
+def extract_resource_usage_from_hsaco(hsaco_path: str) -> Tuple[int, int, int]:
+    """Extract VGPR, SGPR, and LDS usage from HSACO binary using llvm-readelf."""
+    vgpr = 0
+    sgpr = 0
+    lds = 0
+
+    if not hsaco_path or not Path(hsaco_path).exists():
+        return vgpr, sgpr, lds
+
+    try:
+        result = subprocess.run(
+            ["/opt/rocm/llvm/bin/llvm-readelf", "--notes", hsaco_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            output = result.stdout
+            # Parse YAML metadata from llvm-readelf output
+            vgpr_match = re.search(r"\.vgpr_count:\s+(\d+)", output)
+            if vgpr_match:
+                vgpr = int(vgpr_match.group(1))
+
+            sgpr_match = re.search(r"\.sgpr_count:\s+(\d+)", output)
+            if sgpr_match:
+                sgpr = int(sgpr_match.group(1))
+
+            lds_match = re.search(r"\.group_segment_fixed_size:\s+(\d+)", output)
+            if lds_match:
+                lds = int(lds_match.group(1))
+    except Exception:
+        pass
+
+    return vgpr, sgpr, lds
+
+
+def compile_cpp_backend(
+    mlir_text: str,
+    target: str = "gfx942",
+    output_dir: Optional[Path] = None,
+) -> BackendResult:
+    """Compile MLIR using C++ waveasm-translate backend."""
+    try:
+        waveasm_translate = get_waveasm_translate_path()
+        amdclang = get_amdclang_path()
+    except FileNotFoundError as e:
+        return BackendResult(
+            backend="cpp",
+            raw_asm=f"C++ backend error: {e}",
+            hsaco_path=None,
+            disasm=None,
+        )
+
+    # Extract func from stream wrapper
+    try:
+        simplified_mlir = extract_func_from_stream_mlir(mlir_text)
+    except Exception as e:
+        return BackendResult(
+            backend="cpp",
+            raw_asm=f"C++ backend error: Failed to extract func: {e}",
+            hsaco_path=None,
+            disasm=None,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="waveasm_cpp_") as temp_dir:
+        temp_path = Path(temp_dir)
+        mlir_file = temp_path / "input.mlir"
+        asm_file = temp_path / "output.s"
+        obj_file = temp_path / "kernel.o"
+        hsaco_file = temp_path / "kernel.hsaco"
+
+        mlir_file.write_text(simplified_mlir)
+
+        # Run waveasm-translate
+        cmd = [
+            str(waveasm_translate),
+            f"--target={target}",
+            "--waveasm-scoped-cse",
+            "--waveasm-peephole",
+            "--waveasm-linear-scan",
+            "--waveasm-insert-waitcnt",
+            "--waveasm-hazard-mitigation",
+            "--emit-assembly",
+            str(mlir_file),
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                return BackendResult(
+                    backend="cpp",
+                    raw_asm=f"C++ backend error: {result.stderr}",
+                    hsaco_path=None,
+                    disasm=None,
+                )
+            raw_asm = result.stdout
+        except subprocess.TimeoutExpired:
+            return BackendResult(
+                backend="cpp",
+                raw_asm="C++ backend error: Compilation timed out",
+                hsaco_path=None,
+                disasm=None,
+            )
+
+        # Save raw assembly
+        asm_file.write_text(raw_asm)
+
+        # Assemble to HSACO
+        compile_cmd = [
+            amdclang,
+            "-x",
+            "assembler",
+            "-target",
+            "amdgcn-amd-amdhsa",
+            "-mcode-object-version=5",
+            f"-mcpu={target}",
+            "-mwavefrontsize64",
+            "-c",
+            str(asm_file),
+            "-o",
+            str(obj_file),
+        ]
+
+        try:
+            result = subprocess.run(
+                compile_cmd, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                # Still return the assembly even if linking fails
+                vgpr, sgpr, lds = extract_resource_usage(raw_asm)
+                return BackendResult(
+                    backend="cpp",
+                    raw_asm=raw_asm,
+                    hsaco_path=None,
+                    disasm=None,
+                    vgpr_count=vgpr,
+                    sgpr_count=sgpr,
+                    lds_size=lds,
+                )
+
+            # Link to HSACO
+            link_cmd = [
+                amdclang,
+                "-target",
+                "amdgcn-amd-amdhsa",
+                "-Xlinker",
+                "--build-id=sha1",
+                "-o",
+                str(hsaco_file),
+                str(obj_file),
+            ]
+            result = subprocess.run(
+                link_cmd, capture_output=True, text=True, timeout=60
+            )
+
+            hsaco_path_str = None
+            disasm = None
+            if result.returncode == 0 and hsaco_file.exists():
+                # Copy HSACO to output dir if specified
+                if output_dir:
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    final_hsaco = output_dir / "cpp_kernel.hsaco"
+                    import shutil
+
+                    shutil.copy(hsaco_file, final_hsaco)
+                    hsaco_path_str = str(final_hsaco)
+
+                # Disassemble
+                try:
+                    disasm = subprocess.check_output(
+                        ["/opt/rocm/llvm/bin/llvm-objdump", "-d", str(hsaco_file)],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
+
+        except Exception as e:
+            vgpr, sgpr, lds = extract_resource_usage(raw_asm)
+            return BackendResult(
+                backend="cpp",
+                raw_asm=raw_asm,
+                hsaco_path=None,
+                disasm=None,
+                vgpr_count=vgpr,
+                sgpr_count=sgpr,
+                lds_size=lds,
+            )
+
+        vgpr, sgpr, lds = extract_resource_usage(raw_asm)
+        return BackendResult(
+            backend="cpp",
+            raw_asm=raw_asm,
+            hsaco_path=hsaco_path_str,
+            disasm=disasm,
+            vgpr_count=vgpr,
+            sgpr_count=sgpr,
+            lds_size=lds,
+        )
 
 
 def classify_instruction(line: str) -> str:
@@ -417,78 +708,258 @@ def compute_metrics(asm_text: str) -> InstructionMetrics:
 
 
 def format_metrics_comparison(
-    llvm_metrics: InstructionMetrics, asm_metrics: InstructionMetrics
+    llvm_metrics: InstructionMetrics,
+    asm_metrics: InstructionMetrics,
+    cpp_metrics: Optional[InstructionMetrics] = None,
 ) -> str:
     """Format a comparison table of metrics."""
     lines = []
-    lines.append("=" * 70)
+    lines.append("=" * 90)
     lines.append("Instruction Metrics Comparison")
-    lines.append("=" * 70)
-    lines.append(
-        f"{'Category':<25} {'LLVM':>10} {'ASM':>10} {'Diff':>10} {'Ratio':>10}"
-    )
-    lines.append("-" * 70)
+    lines.append("=" * 90)
 
-    def row(name, llvm_val, asm_val):
-        diff = asm_val - llvm_val
-        ratio = f"{asm_val/llvm_val:.2f}x" if llvm_val > 0 else "N/A"
-        diff_str = f"+{diff}" if diff > 0 else str(diff)
-        return f"{name:<25} {llvm_val:>10} {asm_val:>10} {diff_str:>10} {ratio:>10}"
-
-    lines.append(row("Total Instructions", llvm_metrics.total, asm_metrics.total))
-    lines.append("-" * 70)
-    lines.append(row("Scalar ALU (SALU)", llvm_metrics.salu, asm_metrics.salu))
-    lines.append(row("Vector ALU (VALU)", llvm_metrics.valu, asm_metrics.valu))
-    lines.append(row("Vector Memory (VMEM)", llvm_metrics.vmem, asm_metrics.vmem))
-    lines.append(row("Scalar Memory (SMEM)", llvm_metrics.smem, asm_metrics.smem))
-    lines.append(row("LDS/GDS (DS)", llvm_metrics.ds, asm_metrics.ds))
-    lines.append(row("Matrix Ops (MFMA)", llvm_metrics.mfma, asm_metrics.mfma))
-    lines.append(row("Branch/Control", llvm_metrics.branch, asm_metrics.branch))
-    lines.append(row("Waits (s_waitcnt)", llvm_metrics.wait, asm_metrics.wait))
-    lines.append(row("Barriers (s_barrier)", llvm_metrics.barrier, asm_metrics.barrier))
-    lines.append(row("NOPs (s_nop)", llvm_metrics.nop, asm_metrics.nop))
-    lines.append(row("Other", llvm_metrics.other, asm_metrics.other))
-    lines.append("-" * 70)
-    lines.append("Specific Patterns:")
-    lines.append(
-        row(
-            "  buffer_load...lds",
-            llvm_metrics.buffer_load_lds,
-            asm_metrics.buffer_load_lds,
+    if cpp_metrics:
+        lines.append(
+            f"{'Category':<25} {'LLVM':>10} {'ASM':>10} {'C++':>10} {'ASM/LLVM':>10} {'C++/LLVM':>10}"
         )
-    )
-    lines.append(row("  ds_read*", llvm_metrics.ds_read, asm_metrics.ds_read))
-    lines.append(row("  ds_write*", llvm_metrics.ds_write, asm_metrics.ds_write))
-    lines.append(
-        row("  M0 setup (s_mov m0)", llvm_metrics.m0_setup, asm_metrics.m0_setup)
-    )
-    lines.append(
-        row("  v_readfirstlane", llvm_metrics.readfirstlane, asm_metrics.readfirstlane)
-    )
-    lines.append("=" * 70)
+        lines.append("-" * 90)
+
+        def row(name, llvm_val, asm_val, cpp_val):
+            asm_ratio = f"{asm_val/llvm_val:.2f}x" if llvm_val > 0 else "N/A"
+            cpp_ratio = f"{cpp_val/llvm_val:.2f}x" if llvm_val > 0 else "N/A"
+            return f"{name:<25} {llvm_val:>10} {asm_val:>10} {cpp_val:>10} {asm_ratio:>10} {cpp_ratio:>10}"
+
+        lines.append(
+            row(
+                "Total Instructions",
+                llvm_metrics.total,
+                asm_metrics.total,
+                cpp_metrics.total,
+            )
+        )
+        lines.append("-" * 90)
+        lines.append(
+            row(
+                "Scalar ALU (SALU)",
+                llvm_metrics.salu,
+                asm_metrics.salu,
+                cpp_metrics.salu,
+            )
+        )
+        lines.append(
+            row(
+                "Vector ALU (VALU)",
+                llvm_metrics.valu,
+                asm_metrics.valu,
+                cpp_metrics.valu,
+            )
+        )
+        lines.append(
+            row(
+                "Vector Memory (VMEM)",
+                llvm_metrics.vmem,
+                asm_metrics.vmem,
+                cpp_metrics.vmem,
+            )
+        )
+        lines.append(
+            row(
+                "Scalar Memory (SMEM)",
+                llvm_metrics.smem,
+                asm_metrics.smem,
+                cpp_metrics.smem,
+            )
+        )
+        lines.append(
+            row("LDS/GDS (DS)", llvm_metrics.ds, asm_metrics.ds, cpp_metrics.ds)
+        )
+        lines.append(
+            row(
+                "Matrix Ops (MFMA)",
+                llvm_metrics.mfma,
+                asm_metrics.mfma,
+                cpp_metrics.mfma,
+            )
+        )
+        lines.append(
+            row(
+                "Branch/Control",
+                llvm_metrics.branch,
+                asm_metrics.branch,
+                cpp_metrics.branch,
+            )
+        )
+        lines.append(
+            row(
+                "Waits (s_waitcnt)",
+                llvm_metrics.wait,
+                asm_metrics.wait,
+                cpp_metrics.wait,
+            )
+        )
+        lines.append(
+            row(
+                "Barriers (s_barrier)",
+                llvm_metrics.barrier,
+                asm_metrics.barrier,
+                cpp_metrics.barrier,
+            )
+        )
+        lines.append(
+            row("NOPs (s_nop)", llvm_metrics.nop, asm_metrics.nop, cpp_metrics.nop)
+        )
+        lines.append(
+            row("Other", llvm_metrics.other, asm_metrics.other, cpp_metrics.other)
+        )
+        lines.append("-" * 90)
+        lines.append("Specific Patterns:")
+        lines.append(
+            row(
+                "  buffer_load...lds",
+                llvm_metrics.buffer_load_lds,
+                asm_metrics.buffer_load_lds,
+                cpp_metrics.buffer_load_lds,
+            )
+        )
+        lines.append(
+            row(
+                "  ds_read*",
+                llvm_metrics.ds_read,
+                asm_metrics.ds_read,
+                cpp_metrics.ds_read,
+            )
+        )
+        lines.append(
+            row(
+                "  ds_write*",
+                llvm_metrics.ds_write,
+                asm_metrics.ds_write,
+                cpp_metrics.ds_write,
+            )
+        )
+        lines.append(
+            row(
+                "  M0 setup (s_mov m0)",
+                llvm_metrics.m0_setup,
+                asm_metrics.m0_setup,
+                cpp_metrics.m0_setup,
+            )
+        )
+        lines.append(
+            row(
+                "  v_readfirstlane",
+                llvm_metrics.readfirstlane,
+                asm_metrics.readfirstlane,
+                cpp_metrics.readfirstlane,
+            )
+        )
+    else:
+        lines.append(
+            f"{'Category':<25} {'LLVM':>10} {'ASM':>10} {'Diff':>10} {'Ratio':>10}"
+        )
+        lines.append("-" * 70)
+
+        def row(name, llvm_val, asm_val):
+            diff = asm_val - llvm_val
+            ratio = f"{asm_val/llvm_val:.2f}x" if llvm_val > 0 else "N/A"
+            diff_str = f"+{diff}" if diff > 0 else str(diff)
+            return f"{name:<25} {llvm_val:>10} {asm_val:>10} {diff_str:>10} {ratio:>10}"
+
+        lines.append(row("Total Instructions", llvm_metrics.total, asm_metrics.total))
+        lines.append("-" * 70)
+        lines.append(row("Scalar ALU (SALU)", llvm_metrics.salu, asm_metrics.salu))
+        lines.append(row("Vector ALU (VALU)", llvm_metrics.valu, asm_metrics.valu))
+        lines.append(row("Vector Memory (VMEM)", llvm_metrics.vmem, asm_metrics.vmem))
+        lines.append(row("Scalar Memory (SMEM)", llvm_metrics.smem, asm_metrics.smem))
+        lines.append(row("LDS/GDS (DS)", llvm_metrics.ds, asm_metrics.ds))
+        lines.append(row("Matrix Ops (MFMA)", llvm_metrics.mfma, asm_metrics.mfma))
+        lines.append(row("Branch/Control", llvm_metrics.branch, asm_metrics.branch))
+        lines.append(row("Waits (s_waitcnt)", llvm_metrics.wait, asm_metrics.wait))
+        lines.append(
+            row("Barriers (s_barrier)", llvm_metrics.barrier, asm_metrics.barrier)
+        )
+        lines.append(row("NOPs (s_nop)", llvm_metrics.nop, asm_metrics.nop))
+        lines.append(row("Other", llvm_metrics.other, asm_metrics.other))
+        lines.append("-" * 70)
+        lines.append("Specific Patterns:")
+        lines.append(
+            row(
+                "  buffer_load...lds",
+                llvm_metrics.buffer_load_lds,
+                asm_metrics.buffer_load_lds,
+            )
+        )
+        lines.append(row("  ds_read*", llvm_metrics.ds_read, asm_metrics.ds_read))
+        lines.append(row("  ds_write*", llvm_metrics.ds_write, asm_metrics.ds_write))
+        lines.append(
+            row("  M0 setup (s_mov m0)", llvm_metrics.m0_setup, asm_metrics.m0_setup)
+        )
+        lines.append(
+            row(
+                "  v_readfirstlane",
+                llvm_metrics.readfirstlane,
+                asm_metrics.readfirstlane,
+            )
+        )
+    lines.append("=" * 90)
 
     return "\n".join(lines)
 
 
 def format_resource_comparison(
-    llvm_result: BackendResult, asm_result: BackendResult
+    llvm_result: BackendResult,
+    asm_result: BackendResult,
+    cpp_result: Optional[BackendResult] = None,
 ) -> str:
     """Format resource usage comparison."""
     lines = []
     lines.append("=" * 70)
     lines.append("Resource Usage Comparison")
     lines.append("=" * 70)
-    lines.append(f"{'Resource':<25} {'LLVM':>10} {'ASM':>10} {'Diff':>10}")
-    lines.append("-" * 70)
 
-    def row(name, llvm_val, asm_val):
-        diff = asm_val - llvm_val
-        diff_str = f"+{diff}" if diff > 0 else str(diff)
-        return f"{name:<25} {llvm_val:>10} {asm_val:>10} {diff_str:>10}"
+    if cpp_result:
+        lines.append(f"{'Resource':<25} {'LLVM':>10} {'ASM':>10} {'C++':>10}")
+        lines.append("-" * 70)
 
-    lines.append(row("VGPRs", llvm_result.vgpr_count, asm_result.vgpr_count))
-    lines.append(row("SGPRs", llvm_result.sgpr_count, asm_result.sgpr_count))
-    lines.append(row("LDS (bytes)", llvm_result.lds_size, asm_result.lds_size))
+        def row(name, llvm_val, asm_val, cpp_val):
+            return f"{name:<25} {llvm_val:>10} {asm_val:>10} {cpp_val:>10}"
+
+        lines.append(
+            row(
+                "VGPRs",
+                llvm_result.vgpr_count,
+                asm_result.vgpr_count,
+                cpp_result.vgpr_count,
+            )
+        )
+        lines.append(
+            row(
+                "SGPRs",
+                llvm_result.sgpr_count,
+                asm_result.sgpr_count,
+                cpp_result.sgpr_count,
+            )
+        )
+        lines.append(
+            row(
+                "LDS (bytes)",
+                llvm_result.lds_size,
+                asm_result.lds_size,
+                cpp_result.lds_size,
+            )
+        )
+    else:
+        lines.append(f"{'Resource':<25} {'LLVM':>10} {'ASM':>10} {'Diff':>10}")
+        lines.append("-" * 70)
+
+        def row(name, llvm_val, asm_val):
+            diff = asm_val - llvm_val
+            diff_str = f"+{diff}" if diff > 0 else str(diff)
+            return f"{name:<25} {llvm_val:>10} {asm_val:>10} {diff_str:>10}"
+
+        lines.append(row("VGPRs", llvm_result.vgpr_count, asm_result.vgpr_count))
+        lines.append(row("SGPRs", llvm_result.sgpr_count, asm_result.sgpr_count))
+        lines.append(row("LDS (bytes)", llvm_result.lds_size, asm_result.lds_size))
     lines.append("=" * 70)
 
     return "\n".join(lines)
@@ -531,13 +1002,20 @@ def generate_report(
     asm_metrics: InstructionMetrics,
     use_global_to_shared: bool,
     use_schedule: bool = False,
+    cpp_result: Optional[BackendResult] = None,
+    cpp_metrics: Optional[InstructionMetrics] = None,
 ) -> str:
     """Generate a comprehensive comparison report."""
     lines = []
 
     # Header
     lines.append("=" * 80)
-    lines.append("LLVM vs ASM Backend Assembly Comparison Report")
+    title = (
+        "LLVM vs ASM"
+        + (" vs C++" if cpp_metrics else "")
+        + " Backend Assembly Comparison Report"
+    )
+    lines.append(title)
     lines.append("=" * 80)
     lines.append("")
 
@@ -555,15 +1033,17 @@ def generate_report(
     lines.append(f"  global_to_shared: {use_global_to_shared}")
     lines.append(f"  LLVM schedule: False (always best config)")
     lines.append(f"  ASM schedule: {use_schedule}")
+    if cpp_metrics:
+        lines.append(f"  C++ backend: included")
     lines.append(f"  Architecture: {get_default_arch()}")
     lines.append("")
 
     # Metrics comparison
-    lines.append(format_metrics_comparison(llvm_metrics, asm_metrics))
+    lines.append(format_metrics_comparison(llvm_metrics, asm_metrics, cpp_metrics))
     lines.append("")
 
     # Resource comparison
-    lines.append(format_resource_comparison(llvm_result, asm_result))
+    lines.append(format_resource_comparison(llvm_result, asm_result, cpp_result))
     lines.append("")
 
     # Analysis summary
@@ -571,7 +1051,7 @@ def generate_report(
     lines.append("Preliminary Analysis")
     lines.append("=" * 70)
 
-    # Compute derived metrics
+    # Compute derived metrics for ASM vs LLVM
     overhead_ratio = (
         asm_metrics.total / llvm_metrics.total if llvm_metrics.total > 0 else 0
     )
@@ -584,45 +1064,84 @@ def generate_report(
     extra_readfirstlane = asm_metrics.readfirstlane - llvm_metrics.readfirstlane
     extra_vgpr = asm_result.vgpr_count - llvm_result.vgpr_count
 
+    lines.append("ASM vs LLVM:")
     lines.append(
-        f"Instruction overhead: {overhead_ratio:.2f}x ({asm_metrics.total - llvm_metrics.total:+d} instructions)"
+        f"  Instruction overhead: {overhead_ratio:.2f}x ({asm_metrics.total - llvm_metrics.total:+d} instructions)"
     )
-    lines.append("")
 
-    # Identify likely causes
+    # Identify likely causes for ASM
     causes = []
     if extra_waits > 0:
         causes.append(
-            f"- Extra waits: +{extra_waits} s_waitcnt (conservative scheduling?)"
+            f"  - Extra waits: +{extra_waits} s_waitcnt (conservative scheduling?)"
         )
     if extra_barriers > 0:
-        causes.append(f"- Extra barriers: +{extra_barriers} s_barrier")
+        causes.append(f"  - Extra barriers: +{extra_barriers} s_barrier")
     if extra_nops > 0:
         causes.append(
-            f"- Extra NOPs: +{extra_nops} s_nop (hazard mitigation on gfx950?)"
+            f"  - Extra NOPs: +{extra_nops} s_nop (hazard mitigation on gfx950?)"
         )
     if extra_salu > 10:
         causes.append(
-            f"- Extra SALU: +{extra_salu} (addressing overhead / missed CSE?)"
+            f"  - Extra SALU: +{extra_salu} (addressing overhead / missed CSE?)"
         )
     if extra_valu > 10:
-        causes.append(f"- Extra VALU: +{extra_valu} (index computation overhead?)")
+        causes.append(f"  - Extra VALU: +{extra_valu} (index computation overhead?)")
     if extra_m0 > 0:
         causes.append(
-            f"- Extra M0 setup: +{extra_m0} (per-operation M0 vs. precomputed?)"
+            f"  - Extra M0 setup: +{extra_m0} (per-operation M0 vs. precomputed?)"
         )
     if extra_readfirstlane > 0:
         causes.append(
-            f"- Extra readfirstlane: +{extra_readfirstlane} (scalar extraction overhead?)"
+            f"  - Extra readfirstlane: +{extra_readfirstlane} (scalar extraction overhead?)"
         )
     if extra_vgpr > 0:
-        causes.append(f"- Higher VGPR usage: +{extra_vgpr} (may reduce occupancy)")
+        causes.append(f"  - Higher VGPR usage: +{extra_vgpr} (may reduce occupancy)")
 
     if causes:
-        lines.append("Likely causes of overhead:")
+        lines.append("  Likely causes of overhead:")
         lines.extend(causes)
     else:
-        lines.append("No obvious overhead sources identified from static analysis.")
+        lines.append("  No obvious overhead sources identified from static analysis.")
+
+    # Add C++ analysis if available
+    if cpp_metrics:
+        lines.append("")
+        lines.append("C++ vs LLVM:")
+        cpp_overhead_ratio = (
+            cpp_metrics.total / llvm_metrics.total if llvm_metrics.total > 0 else 0
+        )
+        cpp_extra_waits = cpp_metrics.wait - llvm_metrics.wait
+        cpp_extra_nops = cpp_metrics.nop - llvm_metrics.nop
+        cpp_extra_vgpr = (
+            cpp_result.vgpr_count - llvm_result.vgpr_count if cpp_result else 0
+        )
+
+        lines.append(
+            f"  Instruction overhead: {cpp_overhead_ratio:.2f}x ({cpp_metrics.total - llvm_metrics.total:+d} instructions)"
+        )
+
+        cpp_causes = []
+        if cpp_extra_waits > 0:
+            cpp_causes.append(f"  - Extra waits: +{cpp_extra_waits} s_waitcnt")
+        if cpp_extra_nops > 0:
+            cpp_causes.append(f"  - Extra NOPs: +{cpp_extra_nops} s_nop")
+        if cpp_extra_vgpr > 0:
+            cpp_causes.append(f"  - Higher VGPR usage: +{cpp_extra_vgpr}")
+
+        if cpp_causes:
+            lines.append("  Notable differences:")
+            lines.extend(cpp_causes)
+
+        # Compare C++ to ASM (Python)
+        lines.append("")
+        lines.append("C++ vs ASM (Python):")
+        cpp_vs_asm_ratio = (
+            cpp_metrics.total / asm_metrics.total if asm_metrics.total > 0 else 0
+        )
+        lines.append(
+            f"  Instruction ratio: {cpp_vs_asm_ratio:.2f}x ({cpp_metrics.total - asm_metrics.total:+d} instructions)"
+        )
 
     lines.append("")
     lines.append("=" * 70)
@@ -676,6 +1195,11 @@ Examples:
     parser.add_argument(
         "--show-context", action="store_true", help="Show context around key patterns"
     )
+    parser.add_argument(
+        "--cpp",
+        action="store_true",
+        help="Include C++ waveasm-translate backend in comparison",
+    )
     args = parser.parse_args()
 
     # Determine configuration
@@ -694,9 +1218,16 @@ Examples:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    include_cpp = args.cpp
+
     # Print configuration
     print("=" * 80)
-    print(f"LLVM vs ASM Backend Comparison - Config: {config_name}")
+    title = (
+        f"LLVM vs ASM"
+        + (" vs C++" if include_cpp else "")
+        + f" Backend Comparison - Config: {config_name}"
+    )
+    print(title)
     print("=" * 80)
     print(f"Shape: M={config['m']}, N={config['n']}, K={config['k']}")
     print(
@@ -754,6 +1285,70 @@ Examples:
         f"  Resources: VGPR={asm_result.vgpr_count}, SGPR={asm_result.sgpr_count}, LDS={asm_result.lds_size}"
     )
 
+    # Compile C++ backend if requested
+    cpp_result = None
+    if include_cpp:
+        print("\n>>> Compiling C++ waveasm-translate backend...")
+        from wave_lang.kernel.wave.compile import (
+            _trace_launchable_and_get_kernel_signature,
+        )
+        from wave_lang.kernel._support.indexing import IndexingContext
+
+        # Create kernel and capture MLIR using the internal trace function
+        kernel_mlir, symbols_mlir = create_gemm_kernel(
+            config["block_m"], config["block_n"], config["wave_m"], config["wave_n"]
+        )
+
+        cpp_intermediates = output_dir / "cpp_intermediates"
+        cpp_intermediates.mkdir(parents=True, exist_ok=True)
+
+        mlir_options = create_compile_options(
+            symbols_mlir,
+            config,
+            "asm",  # Use ASM backend config to get the right MLIR
+            use_global_to_shared=use_global_to_shared,
+            use_schedule=False,
+        )
+
+        # Capture MLIR using the trace function
+        mlir_text = None
+        try:
+            with IndexingContext() as idxc:
+                idxc.set_subs(mlir_options.subs)
+                kernel_mlir.initialize_wave_constraints()
+                kernel_mlir.initialize_symbolic_constraints()
+                kernel_mlir.initialize_workgroup_constraints()
+
+                result = _trace_launchable_and_get_kernel_signature(
+                    kernel_mlir, mlir_options
+                )
+                mb = result[0]
+                mlir_text = mb.module_op.get_asm(enable_debug_info=False)
+        except Exception as e:
+            print(f"  Error capturing MLIR: {e}")
+
+        if mlir_text:
+            # Save MLIR for reference
+            mlir_path = cpp_intermediates / "input.mlir"
+            mlir_path.write_text(mlir_text)
+
+            cpp_result = compile_cpp_backend(
+                mlir_text,
+                target=get_default_arch(),
+                output_dir=cpp_intermediates,
+            )
+            if cpp_result.raw_asm.startswith("C++ backend error"):
+                print(f"  Error: {cpp_result.raw_asm}")
+            else:
+                print(f"  Raw ASM: {len(cpp_result.raw_asm)} chars")
+                print(f"  HSACO: {cpp_result.hsaco_path or 'N/A'}")
+                print(f"  Disasm: {len(cpp_result.disasm or '')} chars")
+                print(
+                    f"  Resources: VGPR={cpp_result.vgpr_count}, SGPR={cpp_result.sgpr_count}, LDS={cpp_result.lds_size}"
+                )
+        else:
+            print("  Error: Failed to generate MLIR from wave_compile")
+
     # Save raw assembly
     llvm_asm_path = output_dir / "llvm_asm.s"
     asm_asm_path = output_dir / "asm_asm.s"
@@ -761,7 +1356,15 @@ Examples:
         f.write(llvm_result.raw_asm or llvm_result.disasm or "")
     with open(asm_asm_path, "w") as f:
         f.write(asm_result.raw_asm)
-    print(f"\nSaved: {llvm_asm_path}, {asm_asm_path}")
+    saved_files = [str(llvm_asm_path), str(asm_asm_path)]
+
+    if cpp_result and not cpp_result.raw_asm.startswith("C++ backend error"):
+        cpp_asm_path = output_dir / "cpp_asm.s"
+        with open(cpp_asm_path, "w") as f:
+            f.write(cpp_result.raw_asm)
+        saved_files.append(str(cpp_asm_path))
+
+    print(f"\nSaved: {', '.join(saved_files)}")
 
     # Save disassembly if different
     if llvm_result.disasm:
@@ -777,16 +1380,27 @@ Examples:
 
     # Compute metrics
     print("\n>>> Computing metrics...")
-    # Use disasm if available (more accurate), otherwise raw_asm
-    llvm_text = llvm_result.disasm or llvm_result.raw_asm or ""
+    # For LLVM: prefer raw_asm (rocmasm source) over disasm because disasm includes padding NOPs
+    # For ASM: use raw_asm which is the actual assembly
+    llvm_text = llvm_result.raw_asm or llvm_result.disasm or ""
     asm_text = asm_result.raw_asm  # ASM backend's raw_asm is the actual assembly
 
     llvm_metrics = compute_metrics(llvm_text)
     asm_metrics = compute_metrics(asm_text)
 
+    cpp_metrics = None
+    if cpp_result and not cpp_result.raw_asm.startswith("C++ backend error"):
+        cpp_text = cpp_result.raw_asm
+        cpp_metrics = compute_metrics(cpp_text)
+
     # Print metrics comparison
-    print("\n" + format_metrics_comparison(llvm_metrics, asm_metrics))
-    print("\n" + format_resource_comparison(llvm_result, asm_result))
+    print("\n" + format_metrics_comparison(llvm_metrics, asm_metrics, cpp_metrics))
+    print(
+        "\n"
+        + format_resource_comparison(
+            llvm_result, asm_result, cpp_result if cpp_metrics else None
+        )
+    )
 
     # Generate and save report
     report = generate_report(
@@ -798,6 +1412,8 @@ Examples:
         asm_metrics,
         use_global_to_shared,
         use_schedule,
+        cpp_result=cpp_result if cpp_metrics else None,
+        cpp_metrics=cpp_metrics,
     )
     report_path = output_dir / "comparison_report.txt"
     with open(report_path, "w") as f:

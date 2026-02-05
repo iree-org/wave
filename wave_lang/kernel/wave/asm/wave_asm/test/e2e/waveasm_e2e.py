@@ -30,12 +30,20 @@ Usage:
 
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Tuple
 
 import torch
+
+# Add wave_lang to path if needed
+wave_root = Path(__file__).parent.parent.parent.parent.parent.parent
+if str(wave_root) not in sys.path:
+    sys.path.insert(0, str(wave_root))
+
+from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
 
 
 @dataclass
@@ -362,49 +370,6 @@ class WaveASMCompiler:
             except Exception:
                 pass
             self._temp_dir = None
-
-
-def extract_func_from_stream_mlir(mlir_text: str) -> str:
-    """
-    Extract func.func operations from IREE stream.executable wrapped MLIR.
-
-    The wave_lang compiler wraps kernels in stream.executable, but waveasm-translate
-    expects plain func.func or gpu.func operations. This function extracts the
-    inner function using the Python MLIR bindings which can handle stream dialect.
-
-    The extracted MLIR is printed in generic op form so it can be parsed by
-    waveasm-translate with allowUnregisteredDialects.
-    """
-    from wave_lang.support.ir_imports import Context, Module, func_d
-
-    def walk_ops_recursively(operation):
-        for region in operation.regions:
-            for block in region.blocks:
-                for inner_op in block.operations:
-                    yield inner_op
-                    yield from walk_ops_recursively(inner_op)
-
-    with Context() as ctx:
-        ctx.allow_unregistered_dialects = True
-        module = Module.parse(mlir_text)
-
-        # Find all func.func operations
-        funcs = []
-        for op in walk_ops_recursively(module.operation):
-            if isinstance(op, func_d.FuncOp):
-                # Skip wrapper functions (async, benchmark scaffolding)
-                name = op.sym_name.value
-                if name.startswith("isolated_benchmark") or name.endswith("$async"):
-                    continue
-                # Use print_generic_op_form=True so stream ops use generic syntax
-                # that can be parsed with allowUnregisteredDialects
-                funcs.append(op.get_asm(print_generic_op_form=True))
-
-        if not funcs:
-            raise ValueError("No kernel func.func found in MLIR")
-
-        # Wrap extracted functions in a module
-        return "module {\n" + "\n".join(funcs) + "\n}\n"
 
 
 @dataclass

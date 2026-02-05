@@ -45,6 +45,7 @@ Environment variables:
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -338,12 +339,6 @@ def test_mma_kernel_cpp_backend(mma_type, k_size, load_elems, compiler):
     result = compiler.compile_full(kernel_info.mlir_text, kernel_info.workgroup_size)
     if not result.success:
         pytest.fail(f"Compilation failed: {result.error_message}")
-
-    # Debug: save MLIR and assembly for debugging
-    with open("/tmp/mma_debug_mlir.txt", "w") as f:
-        f.write(kernel_info.mlir_text)
-    with open("/tmp/mma_debug_asm.s", "w") as f:
-        f.write(result.asm_text)
 
     # Extract launch parameters - use Wave compiler's values for accuracy
     kernel_name = result.get_kernel_name() or kernel_info.kernel_name
@@ -715,6 +710,9 @@ def _global_to_shared_params():
         # Non-square block configurations with BLOCK_K=64
         ((128, 64, 64), 64, (64, 32, 16, 16)),  # 4x2 = 8 waves per WG, non-square
         ((64, 128, 64), 64, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, non-square
+        # Larger wave tile configurations (WAVE_M=32, WAVE_N=32)
+        # Each wave does 2x2 MMA ops to cover 32x32 tile with 16x16 MMA intrinsic
+        ((256, 256, 128), 64, (64, 64, 32, 32)),  # 2x2 = 4 waves per WG, WAVE=32x32
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
@@ -868,7 +866,8 @@ def test_gemm_cpp_backend(
             if backend == "python":
                 pytest.fail(f"Python compilation failed: {e}")
             else:
-                print(f"Python backend compilation failed: {e}")
+                # Log warning if Python backend fails in "both" mode
+                warnings.warn(f"Python backend compilation failed: {e}")
 
     # Dump assemblies if requested
     if dump_asm:
@@ -880,14 +879,6 @@ def test_gemm_cpp_backend(
         if python_asm:
             with open(f"/tmp/{test_id}_python.s", "w") as f:
                 f.write(python_asm)
-
-        print(f"\n=== Dumped files for {test_id} ===")
-        print(f"  MLIR:       /tmp/{test_id}_mlir.txt")
-        if cpp_asm:
-            print(f"  C++ ASM:    /tmp/{test_id}_cpp.s")
-        if python_asm:
-            print(f"  Python ASM: /tmp/{test_id}_python.s")
-        print("=" * 40)
 
     # Determine which binary to execute
     if backend == "python":
@@ -912,6 +903,198 @@ def test_gemm_cpp_backend(
     # Execute on GPU
     run_with_wave_runtime(
         binary_path=binary_path,
+        inputs=[a, b],
+        outputs=[c],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Validate: C = A @ B^T
+    expected = torch.matmul(a.float(), b.float().T)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
+
+
+# =============================================================================
+# Test: GEMM with K-loop Unrolling (Postprocess)
+# =============================================================================
+
+# Postprocess transform to unroll K-loop by factor of 2
+K_LOOP_UNROLL_POSTPROCESS = """
+module attributes {transform.with_named_sequence} {
+    transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+        %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+        transform.loop.unroll %0 { factor = 2 } : !transform.any_op
+        transform.yield
+    }
+}
+"""
+
+
+@pytest.mark.run_e2e
+@pytest.mark.parametrize(
+    "shape,block_k,config",
+    [
+        # Test configuration with K-loop that can be unrolled
+        # K=128, BLOCK_K=64 means 2 iterations -> fully unrollable by factor 2
+        ((64, 64, 128), 64, (16, 16, 16, 16)),  # 1 wave per WG
+        ((256, 256, 128), 64, (64, 64, 32, 32)),  # 2x2 waves per WG, WAVE=32x32
+    ],
+)
+@pytest.mark.parametrize("use_global_to_shared", [True])  # Only test with g2s=True
+def test_gemm_cpp_backend_with_k_unroll(
+    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+):
+    """End-to-end test for GEMM with K-loop UNROLLING using C++ backend.
+
+    This test verifies that the C++ backend correctly handles MLIR where
+    the K-loop has been unrolled via postprocess transform.
+
+    The postprocess unrolls the scf.for loop by factor of 2, which for
+    K=128, BLOCK_K=64 results in full unrolling (0 scf.for loops remaining).
+    """
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    import wave_lang.kernel.wave as tkw
+
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M_SYM = tkl.sym.BLOCK_M
+    BLOCK_N_SYM = tkl.sym.BLOCK_N
+    BLOCK_K_SYM = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    block_m, block_n, WAVE_M, WAVE_N = config
+    wave_size = 64
+
+    # Verify configuration
+    assert block_m % WAVE_M == 0
+    assert block_n % WAVE_N == 0
+
+    # Use MMA type that works with our test configuration
+    mma_type = tkw.MMAType.F32_16x16x32_F16
+
+    # Calculate waves per workgroup
+    waves_per_wg_m = block_m // WAVE_M
+    waves_per_wg_n = block_n // WAVE_N
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N_SYM, 1),
+        tkw.TilingConstraint(K, BLOCK_K_SYM),
+        tkw.WaveConstraint(M, WAVE_M),
+        tkw.WaveConstraint(N, WAVE_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            mma_type=mma_type,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_kernel(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    m, n, k = shape
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    # Calculate grid dimensions
+    grid_x = m // block_m
+    grid_y = n // block_n
+
+    # Create options WITH postprocess (K-loop unrolling)
+    options = WaveCompileOptions(
+        subs={
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M_SYM: block_m,
+            BLOCK_N_SYM: block_n,
+            BLOCK_K_SYM: block_k,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
+    )
+    options = set_default_run_config(options)
+
+    # Apply K-loop unrolling postprocess
+    options.postprocess = K_LOOP_UNROLL_POSTPROCESS
+
+    # Capture MLIR and kernel info
+    kernel_info = capture_wave_kernel_info(options, gemm_kernel)
+
+    # Verify that the K-loop was unrolled (scf.for count should be 0)
+    scf_for_count = kernel_info.mlir_text.count("scf.for")
+    assert (
+        scf_for_count == 0
+    ), f"Expected K-loop to be fully unrolled, but found {scf_for_count} scf.for ops"
+
+    # Test ID for file naming
+    test_id = f"gemm_k_unroll_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}"
+
+    # Compile with C++ backend
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    # Dump assembly if requested
+    if dump_asm and cpp_result.asm_text:
+        asm_file = Path("/tmp") / f"{test_id}_cpp.s"
+        asm_file.write_text(cpp_result.asm_text)
+        mlir_file = Path("/tmp") / f"{test_id}.mlir"
+        mlir_file.write_text(kernel_info.mlir_text)
+
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+
+    # Use Wave compiler's launch info
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = (
+        kernel_info.grid_size
+        if kernel_info.grid_size != (1, 1, 1)
+        else (grid_x, grid_y, 1)
+    )
+
+    # Execute on GPU
+    run_with_wave_runtime(
+        binary_path=cpp_result.binary_path,
         inputs=[a, b],
         outputs=[c],
         grid=grid,
@@ -1000,9 +1183,6 @@ def test_compare_backends_copy_kernel(shape, compiler):
 
     cpp_stats = count_instructions(cpp_asm)
     python_stats = count_instructions(python_asm)
-
-    print(f"\nC++ Backend Stats: {cpp_stats}")
-    print(f"Python Backend Stats: {python_stats}")
 
     # Both should have similar instruction counts
     if cpp_stats and python_stats:

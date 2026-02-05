@@ -206,6 +206,7 @@ void computeCFGLiveness(CFG &cfg, llvm::ArrayRef<Operation *> instructions) {
   // Iterate to fixed point with safety limit
   // The algorithm is guaranteed to converge in at most O(n) iterations where
   // n is the number of blocks, but we add a safety limit to catch bugs.
+  // TODO: Use a better estimate of the maximum number of iterations.
   constexpr int kMaxIterations = 10000;
   bool changed = true;
   int iterations = 0;

@@ -213,9 +213,6 @@ bool isLDSMemRef(mlir::MemRefType memrefType);
 /// Get element size in bytes
 int64_t getElementBytes(mlir::Type type);
 
-/// Get vector size in bytes
-int64_t getVectorBytes(mlir::VectorType vecType);
-
 /// Compute buffer size from memref type
 int64_t computeBufferSizeFromMemRef(mlir::MemRefType memrefType);
 

@@ -62,10 +62,12 @@ private:
   int64_t maxVGPRs = 256;
   int64_t maxSGPRs = 104;
 
-  /// Get the accumulator operand from an MFMA op (always operand index 2)
+  /// Get the accumulator operand from an MFMA op (always operand index 2).
+  /// Returns nullptr if the operation doesn't have enough operands.
   Value getMFMAAccumulator(Operation *op) {
-    assert(op->getNumOperands() >= 3 &&
-           "MFMA op must have at least 3 operands");
+    if (op->getNumOperands() < 3) {
+      return nullptr;
+    }
     return op->getOperand(2); // acc is the third operand
   }
 
@@ -85,7 +87,10 @@ private:
     // generates v_mov_b32 v15, <literal> before such instructions.
     reservedVGPRs.insert(15);
 
+    bool collectFailed = false;
     program.walk([&](Operation *op) {
+      if (collectFailed)
+        return;
       if (auto precoloredVReg = dyn_cast<PrecoloredVRegOp>(op)) {
         int64_t physIdx = precoloredVReg.getIndex();
         int64_t size = precoloredVReg.getSize();
@@ -103,12 +108,22 @@ private:
       } else if (op->hasTrait<OpTrait::MFMAOp>() && op->getNumResults() > 0) {
         // For MFMA with VGPR accumulator, tie result to accumulator
         Value acc = getMFMAAccumulator(op);
-        if (acc && isVGPRType(acc.getType())) {
+        if (!acc) {
+          op->emitError() << "MFMA operation must have at least 3 operands "
+                          << "(A, B, accumulator), but found "
+                          << op->getNumOperands();
+          collectFailed = true;
+          return;
+        }
+        if (isVGPRType(acc.getType())) {
           // Result should be allocated to same physical register as accumulator
           tiedPairs[op->getResult(0)] = acc;
         }
       }
     });
+
+    if (collectFailed)
+      return failure();
 
     // Create allocator with precolored values and tied operands
     LinearScanRegAlloc allocator(maxVGPRs, maxSGPRs, reservedVGPRs,

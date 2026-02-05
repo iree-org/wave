@@ -58,35 +58,6 @@ def get_waveasm_translate_path() -> Path:
     raise FileNotFoundError(f"waveasm-translate not found at {default_path}")
 
 
-def extract_func_from_stream(mlir_text: str) -> str:
-    """Extract func.func from stream.executable wrapper using Python MLIR bindings."""
-    from wave_lang.support.ir_imports import Context, Module, func_d
-
-    def walk_ops_recursively(operation):
-        for region in operation.regions:
-            for block in region.blocks:
-                for inner_op in block.operations:
-                    yield inner_op
-                    yield from walk_ops_recursively(inner_op)
-
-    with Context() as ctx:
-        ctx.allow_unregistered_dialects = True
-        module = Module.parse(mlir_text)
-
-        funcs = []
-        for op in walk_ops_recursively(module.operation):
-            if isinstance(op, func_d.FuncOp):
-                name = op.sym_name.value
-                if name.startswith("isolated_benchmark") or name.endswith("$async"):
-                    continue
-                funcs.append(op.get_asm(print_generic_op_form=True))
-
-        if not funcs:
-            raise ValueError("No kernel func.func found in MLIR")
-
-        return "module {\n" + "\n".join(funcs) + "\n}\n"
-
-
 def compile_with_cpp_backend(mlir_text: str, target: str = "gfx942") -> str:
     """Compile MLIR using C++ backend via waveasm-translate."""
     waveasm_translate = get_waveasm_translate_path()

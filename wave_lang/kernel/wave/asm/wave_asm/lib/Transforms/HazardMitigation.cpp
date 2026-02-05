@@ -125,10 +125,12 @@ struct HazardMitigationPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HazardMitigationPass)
 
   HazardMitigationPass() = default;
-  HazardMitigationPass(StringRef target) {
+  HazardMitigationPass(StringRef target) : targetArch(target.str()) {
     std::optional<TargetKind> parsed = symbolizeTargetKind(target);
-    assert(parsed && "Invalid target");
-    this->targetKindEnum = *parsed;
+    if (parsed) {
+      this->targetKindEnum = *parsed;
+      this->validTarget = true;
+    }
   }
 
   StringRef getArgument() const override { return "waveasm-hazard-mitigation"; }
@@ -140,12 +142,21 @@ struct HazardMitigationPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
+    // Check for invalid target architecture
+    if (!validTarget) {
+      module.emitError() << "Invalid target architecture: '" << targetArch
+                         << "'. Supported targets: gfx942, gfx950, gfx1250";
+      return signalPassFailure();
+    }
+
     // Process each program
     module.walk([&](ProgramOp program) { processProgram(program); });
   }
 
 private:
   TargetKind targetKindEnum = TargetKind::GFX942;
+  std::string targetArch;
+  bool validTarget = true; // Default constructor uses default target
   unsigned numNopsInserted = 0;
 
   void processProgram(ProgramOp program) {
