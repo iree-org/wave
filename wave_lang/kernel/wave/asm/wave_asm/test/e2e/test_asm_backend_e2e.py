@@ -738,8 +738,6 @@ def test_gemm_cpp_backend(
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
 
-    # Note: 16x16x32-no_g2s with large problem size previously had intermittent failures
-    # but is now fixed
     from wave_lang.kernel.lang.global_symbols import (
         GLOBAL_ADDRESS_SPACE,
         SHARED_ADDRESS_SPACE,

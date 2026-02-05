@@ -3636,7 +3636,7 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
           // Fallback: assume row index is already in bytes
           m0Const = ldsBaseOffsetConst + rowIdxConst;
         }
-        canUseImmediateM0 = hasConstCol || (colIdxConst == 0);
+        canUseImmediateM0 = (op->getNumOperands() <= 4) || hasConstCol;
       } else {
         // Row index is not a constant, need to compute dynamically
         canUseImmediateM0 = false;
