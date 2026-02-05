@@ -40,6 +40,13 @@ if TYPE_CHECKING:
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
+from wave_lang.kernel.wave.mlir_converter.diagnostics import (
+    FileLocation,
+    LocationFrame,
+    MLIRDiagnostic,
+    NameLocation,
+    WaterError,
+)
 from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.lang.wave_types import Memory, Register
 from wave_lang.kernel._support.tracing import CapturedTrace
@@ -755,54 +762,66 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
-def _serialize_location(loc: ir.Location) -> list[dict]:
-    """Convert ir.Location to serializable list of location frames (stack trace).
+def _serialize_location(loc: ir.Location) -> list[LocationFrame]:
+    """Convert ir.Location to a serializable list of location frames (stack trace).
 
-    Parses the string representation of the location to extract file/line/column
-    information, since direct attribute access may not be available in all bindings.
+    Uses the MLIR Python binding properties to extract structured location
+    information.
 
     Handles:
-    - Simple file locations: loc("file.py":10:5)
-    - Callsite locations: loc(callsite("file1.py":10 at "file2.py":20))
-    - Nested callsites: loc(callsite("f1":1 at callsite("f2":2 at "f3":3)))
+    - File locations (FileLineColLoc / FileLineColRange) via ``is_a_file``
+      → ``filename``, ``start_line``, ``start_col``, ``end_line``, ``end_col``
+    - Callsite locations via ``is_a_callsite`` → ``caller``, ``callee``
+    - Fused locations via ``is_a_fused`` → ``locations``
+    - Name locations via ``is_a_name`` → ``name_str``, ``child_loc``
 
     Returns frames from outermost (caller) to innermost (callee).
     """
-    import re
 
-    loc_str = str(loc)
+    def _collect_frames(
+        loc: ir.Location,
+    ) -> list[LocationFrame]:
+        # Note: is_a_file / is_a_callsite / is_a_name / is_a_fused are
+        # methods (not properties) in the nanobind bindings and must be called.
+        if loc.is_a_file():
+            return [
+                FileLocation(
+                    filename=str(loc.filename),
+                    start_line=loc.start_line,
+                    start_col=loc.start_col,
+                    end_line=loc.end_line,
+                    end_col=loc.end_col,
+                )
+            ]
+        if loc.is_a_callsite():
+            # Callsite: caller (outermost) first, then callee (innermost)
+            caller_frames = _collect_frames(loc.caller)
+            callee_frames = _collect_frames(loc.callee)
+            return caller_frames + callee_frames
+        if loc.is_a_name():
+            child_frames = _collect_frames(loc.child_loc)
+            first_child = child_frames[0] if child_frames else None
+            remaining = child_frames[1:] if len(child_frames) > 1 else []
+            return [
+                NameLocation(
+                    name=str(loc.name_str),
+                    child_location=first_child,
+                )
+            ] + remaining
+        if loc.is_a_fused():
+            frames: list[LocationFrame] = []
+            for sub_loc in loc.locations:
+                frames.extend(_collect_frames(sub_loc))
+            return frames
 
-    # Pattern to match file locations: "filename":line or "filename":line:col
-    file_pattern = r'"([^"]+)":(\d+)(?::(\d+))?'
+        return [None]
 
-    # Find all file locations in the string
-    matches = list(re.finditer(file_pattern, loc_str))
-
-    if not matches:
-        # No file locations found, return raw string
-        return [{"type": "unknown", "repr": loc_str}]
-
-    # For callsite locations, the order in the string is:
-    # callsite(callee at caller) - so callee comes first, caller comes last
-    # We want to return frames from outermost (caller) to innermost (callee)
-    # So we reverse the order
-    frames = []
-    for match in reversed(matches):
-        frames.append(
-            {
-                "type": "file",
-                "filename": match.group(1),
-                "line": int(match.group(2)),
-                "column": int(match.group(3)) if match.group(3) else 0,
-            }
-        )
-
-    return frames
+    return _collect_frames(loc)
 
 
 def _flush_output(
     module_str: str,
-    diagnostics: list[dict],
+    diagnostics: list[MLIRDiagnostic | WaterError],
     inferred_attributes: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     output = dill.dumps(
@@ -839,17 +858,16 @@ def _create_kernel_module(
         - List of diagnostic messages.
         - Set of known water IDs if options require checking water analysis.
     """
-    diagnostics: list[dict] = []
+    diagnostics: list[MLIRDiagnostic | WaterError] = []
     known_ids: set[str] | None = set() if options.check_water_analysis else None
 
     def diagnostics_handler(d):
         diagnostics.append(
-            {
-                "type": "MLIRDiagnostic",
-                "message": d.message,
-                "location": _serialize_location(d.location),
-                "severity": str(d.severity),
-            }
+            MLIRDiagnostic(
+                message=d.message,
+                location=_serialize_location(d.location),
+                severity=d.severity.name,
+            )
         )
         return True
 
@@ -859,13 +877,7 @@ def _create_kernel_module(
         try:
             module = ir.Module.parse(options.override_mlir, context=ctx)
         except ir.MLIRError as e:
-            diagnostics.append(
-                {
-                    "type": "MLIRError",
-                    "message": e.message,
-                    "error_diagnostics": [str(d) for d in e.errorDiagnostics],
-                }
-            )
+            diagnostics.append(WaterError(message=e.message))
             return None, diagnostics, known_ids
         else:
             return module, diagnostics, known_ids
@@ -981,24 +993,30 @@ def _emit_from_captured_trace(
     test_diagnostics=False,
 ) -> int:
 
-    diagnostics = []
+    diagnostics: list[MLIRDiagnostic | WaterError] = []
+
+    def diagnostics_handler(d):
+        diagnostics.append(
+            MLIRDiagnostic(
+                message=d.message,
+                location=_serialize_location(d.location),
+                severity=d.severity.name,
+            )
+        )
+        return True
 
     enable_debug_info = (
         options.location_capture_config.level is not LocationCaptureLevel.NONE
     )
 
     if enable_debug_info and not trace.location:
-        diagnostics.append(
-            {
-                "type": "Error",
-                "message": "Missing debug location for wave trace",
-            }
-        )
+        diagnostics.append(WaterError(message="Missing debug location for wave trace"))
 
     with (
         ir.Context() as ctx,
         trace.location.to_water() if trace.location else ir.Location.unknown(),
     ):
+        ctx.attach_diagnostic_handler(diagnostics_handler)
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
         wave.register_passes()
@@ -1006,7 +1024,7 @@ def _emit_from_captured_trace(
         module, creation_diagnostics, known_ids = _create_kernel_module(
             ctx, trace, constraints, options, test_diagnostics
         )
-        diagnostics.extend(creation_diagnostics)
+        diagnostics += creation_diagnostics
         if module is None:
             _flush_output("", diagnostics, None)
             return 0
@@ -1015,13 +1033,7 @@ def _emit_from_captured_trace(
         try:
             module.operation.verify()
         except ir.MLIRError as e:
-            diagnostics.append(
-                {
-                    "type": "MLIRError",
-                    "message": e.message,
-                    "error_diagnostics": [str(d) for d in e.errorDiagnostics],
-                }
-            )
+            diagnostics.append(WaterError(message=e.message))
             # Print in generic form if verification fails, this form should be
             # robust to that.
             _flush_output(
@@ -1057,10 +1069,7 @@ def _emit_from_captured_trace(
                 )
             except Exception as e:
                 diagnostics.append(
-                    {
-                        "type": "Exception",
-                        "message": f"Failed to apply transform script: {e}",
-                    }
+                    WaterError(message=f"Failed to apply transform script: {e}")
                 )
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
