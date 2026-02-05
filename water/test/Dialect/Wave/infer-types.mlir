@@ -1,6 +1,6 @@
-// RUN: water-opt %s --water-wave-infer-types --split-input-file --verify-diagnostics | FileCheck %s
+// RUN: water-opt %s --water-wave-infer-types='partial=true' --split-input-file --verify-diagnostics | FileCheck %s
 
-// CHECK: #wave.normal_form<full_types>
+// CHECK: #wave.normal_form<full_func_boundary>
 normalform.module [#wave.normal_form<full_func_boundary>] {
 
 // CHECK-LABEL: @propagate_forward
@@ -127,6 +127,38 @@ func.func @propagate_structured_control_backward() {
   return
 }
 
+// CHECK-LABEL: @propagate_reduction_input_to_others
+func.func @propagate_reduction_input_to_others() {
+  %input = water_test.wave_tensor : !wave.tensor<[@M, @N, @K, @L] of f32>
+  %init = water_test.wave_tensor : !wave.tensor<any of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
+  wave.sum %input init(%init) <warp>
+    : (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return
+}
+
+// CHECK-LABEL: @propagate_reduction_init_to_result
+func.func @propagate_reduction_init_to_result() {
+  %input = water_test.wave_tensor : !wave.tensor<any of f32>
+  %init = water_test.wave_tensor : !wave.tensor<[@M, @N, @K] of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<[@M, @N, @K, @L] of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<[@M, @N, @K] of f32>
+  wave.sum %input init(%init) along @L <warp>
+    : (!wave.tensor<any of f32>, !wave.tensor<[@M, @N, @K] of f32>) -> !wave.tensor<any of f32>
+  return
+}
+
+func.func @propagate_reduction_result_to_init() {
+  %input = water_test.wave_tensor : !wave.tensor<any of f32>
+  %init = water_test.wave_tensor : !wave.tensor<any of f32>
+  // CHECK: wave.sum
+  // CHECK-SAME: (!wave.tensor<[@N, @M, @L, @K] of f32>, !wave.tensor<[@N, @M, @L] of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
+  wave.sum %input init(%init) along @K <warp>
+    : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M, @L] of f32>
+  return
+}
+
 } // normalform.module
 
 // -----
@@ -206,8 +238,7 @@ normalform.module [] {
 normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @iterate_mismatching_results(%arg0: !wave.tensor<[@A] of f32>, %arg1: !wave.tensor<[@B] of f32>) {
     %read = wave.read %arg1 : (!wave.tensor<[@B] of f32>) -> !wave.tensor<any of f32>
-    // expected-error @below {{along control flow edge from parent to Region #0: successor operand type #0 '!wave.tensor<[@A] of f32>' should match successor input type #0 '!wave.tensor<[@B] of f32>'}}
-    // expected-note @below {{region branch point}}
+    // expected-error @below {{expected iter arg #0 dimension #0 (#wave.symbol<"A">) to match block iter arg #0 dimension #0 (#wave.symbol<"B">)}}
     wave.iterate @I iter_args(%arg0, %read) {
     ^bb0(%arg2: !wave.tensor<[@B] of f32>, %arg3: !wave.tensor<any of f32>):
       wave.yield %arg2, %arg3 : !wave.tensor<[@B] of f32>, !wave.tensor<any of f32>

@@ -1,5 +1,5 @@
 // RUN: rm -rf %t
-// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t" | FileCheck %s
+// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t lld-path=%llvm_tools_dir/ld.lld" | FileCheck %s
 // RUN: test -f %t/kernel_module_original.ll
 // RUN: test -f %t/kernel_module_linked.ll
 // RUN: test -f %t/kernel_module_optimized.ll

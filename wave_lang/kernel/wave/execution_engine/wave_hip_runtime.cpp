@@ -25,6 +25,7 @@ using module_handle_t = HMODULE;
 
 // Global function pointers
 static hipModuleLaunchKernel_t hipModuleLaunchKernel = nullptr;
+static hipDrvLaunchKernelEx_t hipDrvLaunchKernelEx = nullptr;
 static hipGetErrorName_t hipGetErrorName = nullptr;
 static hipGetErrorString_t hipGetErrorString = nullptr;
 static hipModuleUnload_t hipModuleUnload = nullptr;
@@ -79,6 +80,10 @@ extern "C" void load_functions() {
   GET_FUNC(module, hipModuleUnload);
   GET_FUNC(module, hipModuleLoadData);
   GET_FUNC(module, hipModuleGetFunction);
+
+  // hipDrvLaunchKernelEx may not be available on all platforms.
+  hipDrvLaunchKernelEx = reinterpret_cast<hipDrvLaunchKernelEx_t>(
+      get_symbol_address(module, "hipDrvLaunchKernelEx"));
 }
 
 #undef GET_FUNC
@@ -118,9 +123,39 @@ extern "C" void *wave_load_kernel(void * /*stream*/,
 extern "C" void wave_launch_kernel(void *stream, void *function,
                                    int shared_memory_bytes, int grid_x,
                                    int grid_y, int grid_z, int block_x,
-                                   int block_y, int block_z, void **args,
+                                   int block_y, int block_z, int cluster_x,
+                                   int cluster_y, int cluster_z, void **args,
                                    int /*num_args*/) {
-  HIP_CHECK_EXC(hipModuleLaunchKernel(function, grid_x, grid_y, grid_z, block_x,
-                                      block_y, block_z, shared_memory_bytes,
-                                      stream, args, nullptr));
+  // Use cluster launch if cluster dims are specified.
+  if (cluster_x * cluster_y * cluster_z > 1) {
+    if (!hipDrvLaunchKernelEx)
+      throw std::runtime_error("hipDrvLaunchKernelEx is not available");
+
+    hipLaunchAttribute attributes[1];
+    // Attribute: Cluster dimensions.
+    attributes[0].id = static_cast<hipLaunchAttributeID>(4);
+    int *cluster_dims = reinterpret_cast<int *>(attributes[0].val.pad);
+    cluster_dims[0] = cluster_x;
+    cluster_dims[1] = cluster_y;
+    cluster_dims[2] = cluster_z;
+
+    HIP_LAUNCH_CONFIG config = {
+        static_cast<unsigned>(grid_x),
+        static_cast<unsigned>(grid_y),
+        static_cast<unsigned>(grid_z),
+        static_cast<unsigned>(block_x),
+        static_cast<unsigned>(block_y),
+        static_cast<unsigned>(block_z),
+        static_cast<unsigned>(shared_memory_bytes),
+        stream,
+        attributes,
+        1 // Number of attributes.
+    };
+
+    HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, args, nullptr));
+  } else {
+    HIP_CHECK_EXC(hipModuleLaunchKernel(
+        function, grid_x, grid_y, grid_z, block_x, block_y, block_z,
+        shared_memory_bytes, stream, args, nullptr));
+  }
 }

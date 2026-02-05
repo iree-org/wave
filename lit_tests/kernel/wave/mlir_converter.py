@@ -254,8 +254,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -265,8 +265,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -276,20 +276,20 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -309,6 +309,87 @@ def mlir_converter_matrix_add():
     # CHECK: arith.addf
     # CHECK-NOT: wave.write
     # CHECK: vector.maskedstore
+
+
+@run_test
+def mlir_converter_sum():
+    """Test MLIR converter with sum kernel."""
+
+    permute_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @tkw.wave(permute_constraints)
+    def sum(
+        a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
+        c: tkl.Memory[M, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        res = tkw.read(a)
+        init = tkw.read(c)
+        res = tkw.sum(res, init, dim=N)
+        tkw.write(res, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, sum)
+
+    # Get the trace from the compiled kernel
+    trace = compiled_kernel.compiled_graph
+
+    constraints = sum.constraints
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    # Print to stdout for FileCheck.
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_sum
+    # CHECK: wave.read
+    # CHECK: wave.read
+    # CHECK: wave.extract
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.add
+    # CHECK: wave.write
 
 
 @run_test
@@ -450,7 +531,7 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
-    # CHECK-SAME: K = #wave<index_mapping
+    # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
     # CHECK-SAME: offset =
     #
@@ -477,20 +558,20 @@ def mlir_converter_matmul():
     # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[MMA_0:.*]] = wave.mma %[[READ_SHARED_B_0]], %[[READ_SHARED_A_0]], %[[ARG3]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_1:.*]] = wave.mma %[[READ_SHARED_B_1]], %[[READ_SHARED_A_1]], %[[MMA_0]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_2:.*]] = wave.mma %[[READ_SHARED_B_2]], %[[READ_SHARED_A_2]], %[[MMA_1]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_3:.*]] = wave.mma %[[READ_SHARED_B_3]], %[[READ_SHARED_A_3]], %[[MMA_2]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     wave.yield %[[MMA_3]] : !wave.tensor<[@M, @N] of f32, <register>>
     # CHECK-NEXT: }

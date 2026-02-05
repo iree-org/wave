@@ -50,7 +50,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: llvm-mlir/_mlir_install/**
           key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
@@ -147,7 +147,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         if: ${{ env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true' }}
         with:
           path: llvm-mlir/_mlir_install/**
@@ -288,7 +288,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             llvm-mlir/_mlir_install/**

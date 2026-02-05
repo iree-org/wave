@@ -56,6 +56,14 @@ class DataType:
     def __repr__(self):
         return f"DataType({self._ir_type_asm})"
 
+    def __eq__(self, other):
+        if not isinstance(other, DataType):
+            return False
+        return self.ir_type_asm() == other.ir_type_asm()
+
+    def __hash__(self):
+        return hash(self.ir_type_asm())
+
     def is_int_asm(self):
         return self._name in _INT_TYPES
 

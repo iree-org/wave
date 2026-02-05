@@ -19,7 +19,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include <cstdint>
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
@@ -101,8 +101,8 @@ ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
       StringRef symbolName;
       if (parser.parseKeyword(&symbolName) || parser.parseColon())
         return failure();
-      Attribute mapping = wave::WaveIndexMappingAttr::parse(parser, Type{});
-      if (!mapping)
+      WaveIndexMappingAttr mapping;
+      if (failed(parser.parseCustomAttributeWithFallback(mapping)))
         return failure();
       entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
                            mapping);
@@ -156,22 +156,38 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
 // WaveInferTypeOpInterface helpers
 //-----------------------------------------------------------------------------
 
-// Return `true` if two tensor types have the same shape. Null types are
-// considered to have different shapes.
-static bool hasSameShape(wave::WaveTensorType lhs, wave::WaveTensorType rhs) {
-  // TODO: this may require more advanced checking if shapes are more complex
-  // than a single symbol.
-  return lhs && rhs && lhs.getShape() == rhs.getShape();
+// Check whether the shape of the `to` tensor is reconcilable with the shape
+// provided in the `from` array and print error messages to errs otherwise. The
+// error message uses toName and fromName to describe from and to tensors. If
+// shapes are reconcilable, returns an indicator whether the to type will have
+// to be updated. This version avoids constructing a tensor type, which may
+// be expensive.
+static FailureOr<ChangeResult>
+checkPropagateShapeConflict(ArrayRef<wave::WaveSymbolAttr> from,
+                            wave::WaveTensorType to, llvm::StringRef fromName,
+                            llvm::StringRef toName, llvm::raw_ostream &errs) {
+  if (!to || from == to.getShape())
+    return ChangeResult::NoChange;
+
+  if (!to.getFullySpecified())
+    return ChangeResult::Change;
+
+  errs << "irreconcilable types during type inference from " << fromName << "(";
+  llvm::interleaveComma(from, errs);
+  errs << ") to " << toName << "(" << to << ")";
+  return failure();
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
     wave::WaveTensorType from, wave::WaveTensorType to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
-  if (!from || !to || hasSameShape(from, to))
+  if (!from)
     return ChangeResult::NoChange;
 
-  if (!to.getFullySpecified())
-    return ChangeResult::Change;
+  FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      from.getShape(), to, fromName, toName, llvm::nulls());
+  if (succeeded(res))
+    return res;
 
   errs << "irreconcilable types during type inference from " << fromName << "("
        << from << ") to " << toName << "(" << to << ")";
@@ -181,6 +197,8 @@ llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
 llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
     wave::WaveTensorType from, wave::WaveTensorType &to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  if (!from || !from.getFullySpecified())
+    return ChangeResult::NoChange;
   llvm::FailureOr<ChangeResult> res =
       checkPropagateShapeConflict(from, to, fromName, toName, errs);
   if (failed(res) || *res == ChangeResult::NoChange)
@@ -222,6 +240,133 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     changeResult |= *res;
   }
   return changeResult;
+}
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
+                                         FailureOr<ChangeResult> rhs) {
+  if (failed(lhs) || failed(rhs))
+    return failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
+
+// Propagate type information from the reduction input type by removing the
+// reduction axis from it to the given type. Report errors to `errs` using
+// `toName` to identify the target type.
+static FailureOr<ChangeResult>
+propagateFromReductionInput(wave::WaveTensorType inputType,
+                            wave::WaveSymbolAttr axis, wave::WaveTensorType &to,
+                            StringRef toName, raw_ostream &errs) {
+  if (!inputType || !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  SmallVector<wave::WaveSymbolAttr> filteredShape = llvm::filter_to_vector(
+      inputType.getShape(),
+      [&](wave::WaveSymbolAttr dim) { return dim != axis; });
+  assert(inputType.getRank() - 1 == filteredShape.size() &&
+         "expected rank to be reduced by 1 in reduction");
+  auto inferredType = wave::WaveTensorType::get(
+      inputType.getContext(), filteredShape, /*fully_specified=*/true,
+      inputType.getElementType(), inputType.getAddressSpace());
+
+  return wave::detail::propagateShapeInformation(inferredType, to, "input",
+                                                 toName, errs);
+}
+
+FailureOr<ChangeResult> wave::detail::propagateShapeDropTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    StringRef sourceName, StringRef targetName, unsigned n,
+    llvm::raw_ostream &errs) {
+  if (!source || !source.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  ArrayRef<wave::WaveSymbolAttr> expectedShape = source.getShape().drop_back(n);
+  FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      expectedShape, target, sourceName, targetName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+
+  target = target.copyShapeFrom(expectedShape);
+  return ChangeResult::Change;
+}
+
+FailureOr<ChangeResult> wave::detail::propagateShapeAddTrailingDims(
+    wave::WaveTensorType source, wave::WaveTensorType &target,
+    StringRef sourceName, StringRef targetName,
+    llvm::ArrayRef<wave::WaveSymbolAttr> newDims, llvm::raw_ostream &errs) {
+  if (!source || !source.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  SmallVector<wave::WaveSymbolAttr> resultShape(source.getShape());
+  llvm::append_range(resultShape, newDims);
+  llvm::FailureOr<ChangeResult> res = ::checkPropagateShapeConflict(
+      resultShape, target, sourceName, targetName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+  target = target.copyShapeFrom(resultShape);
+  return ChangeResult::Change;
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesForward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum, llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  // If init is present, we can propagate from it directly,
+  // otherwise propagate from input after removing the axis.
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          operandTypes[initOperandNum], resultTypes[0], "init", "result", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  maybeChangeResult =
+      maybeChangeResult | propagateFromReductionInput(
+                              inputType, axis, resultTypes[0], "result", errs);
+  maybeChangeResult = maybeChangeResult | propagateShapeDropTrailingDims(
+                                              inputType, resultTypes[0],
+                                              "input", "result", 1, errs);
+  return maybeChangeResult;
+}
+
+llvm::FailureOr<ChangeResult> wave::detail::propagateReductionTypesBackward(
+    wave::WaveSymbolAttr axis, unsigned initOperandNum,
+    unsigned inputOperandNum,
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  FailureOr<ChangeResult> maybeChangeResult =
+      wave::detail::propagateShapeInformation(
+          resultTypes[0], operandTypes[initOperandNum], "result", "init", errs);
+  if (failed(maybeChangeResult))
+    return failure();
+
+  // Propagate "sideways" from input to init operand.
+  wave::WaveTensorType inputType = operandTypes[inputOperandNum];
+  maybeChangeResult =
+      maybeChangeResult |
+      propagateFromReductionInput(inputType, axis, operandTypes[initOperandNum],
+                                  "init", errs);
+
+  // Since we only reduce trailing dimensions, we can infer the operand shape by
+  // adding the reduction axis back to the result.
+  maybeChangeResult =
+      maybeChangeResult | propagateShapeAddTrailingDims(
+                              resultTypes[0], operandTypes[inputOperandNum],
+                              "result", "input", {axis}, errs);
+
+  return maybeChangeResult;
+}
+
+bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
+                                                    Value result) {
+  return llvm::all_of(
+      llvm::ArrayRef<Value>{input, init, result}, [&](Value value) {
+        return llvm::cast<WaveTensorType>(value.getType()).getFullySpecified();
+      });
 }
 
 //-----------------------------------------------------------------------------
@@ -274,6 +419,48 @@ wave::detail::checkAndPropagateElementsPerThreadFromConstant(
     }
   }
   return changeResult;
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadForward(
+    wave::WaveSymbolAttr axis,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: not sure about that, it feels more like one element in general, not
+    // per thread.
+    wave::ElementsPerThreadLatticeValue expectedResult(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedResult, {}, resultElements,
+        "reduction along thread X dimension", "", "result", errs);
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      operandElements, resultElements, "operands", "results", errs);
+}
+
+FailureOr<ChangeResult>
+wave::detail::propagateReductionElementsPerThreadBackward(
+    wave::WaveSymbolAttr axis, unsigned int initOperandNum,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  if (init.threadXDimension == axis) {
+    // Reducing along the thread X, so mapped to lanes, means we will have one
+    // element per thread.
+    // TODO: same as above.
+    wave::ElementsPerThreadLatticeValue expectedOperand(1);
+    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+        expectedOperand, {}, operandElements.slice(initOperandNum, 1),
+        "reduction along thread X dimension", "", "operands", errs);
+
+    // TODO: do we need to have elements per thread attribute here so we can set
+    // it as lattice value for input?
+  }
+  return wave::detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "operands", "results", errs);
 }
 
 llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
@@ -358,25 +545,25 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
   return success();
 }
 
-llvm::LogicalResult wave::detail::verifyElementTypesMatch(
-    std::optional<Location> loc, llvm::StringRef lhsName,
-    wave::WaveTensorType lhs, llvm::StringRef rhsName,
-    wave::WaveTensorType rhs) {
-  if (lhs.getElementType() == rhs.getElementType())
+llvm::LogicalResult
+wave::detail::verifyElementTypesMatch(std::optional<Location> loc,
+                                      llvm::StringRef lhsName, Type lhs,
+                                      llvm::StringRef rhsName, Type rhs) {
+  if (getElementType(lhs) == getElementType(rhs))
     return success();
 
   if (loc) {
     emitError(*loc) << "expected " << lhsName << " and " << rhsName
-                    << " elemental types to match, got " << lhs.getElementType()
-                    << ", " << rhs.getElementType();
+                    << " elemental types to match, got " << getElementType(lhs)
+                    << ", " << getElementType(rhs);
   }
   return failure();
 }
 
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
-    wave::WaveTensorType lhs, wave::WaveTensorType rhs,
-    bool includeAddressSpace, std::optional<Location> errorLocation,
-    llvm::StringRef lhsName, llvm::StringRef rhsName) {
+    Type lhs, Type rhs, bool includeAddressSpace,
+    std::optional<Location> errorLocation, llvm::StringRef lhsName,
+    llvm::StringRef rhsName) {
   // Fast and cheap path.
   if (lhs == rhs)
     return success();
@@ -386,10 +573,21 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
            "expected names when location is provided");
   }
 
+  if (failed(
+          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
+    return failure();
+
+  auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
+  auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
+  if (!lhsTensor || !rhsTensor)
+    return success();
+
   if (includeAddressSpace) {
-    if (lhs.getAddressSpaceValue() != rhs.getAddressSpaceValue() &&
-        lhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified &&
-        rhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified) {
+    if (lhsTensor.getAddressSpaceValue() != rhsTensor.getAddressSpaceValue() &&
+        lhsTensor.getAddressSpaceValue() !=
+            wave::WaveAddressSpace::Unspecified &&
+        rhsTensor.getAddressSpaceValue() !=
+            wave::WaveAddressSpace::Unspecified) {
       if (errorLocation) {
         emitError(*errorLocation) << "address space mismatch between "
                                   << lhsName << " and " << rhsName;
@@ -398,14 +596,10 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
     }
   }
 
-  if (failed(
-          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
-    return failure();
-
-  if (!lhs.getFullySpecified() || !rhs.getFullySpecified())
+  if (!lhsTensor.getFullySpecified() || !rhsTensor.getFullySpecified())
     return success();
 
-  if (lhs.getRank() != rhs.getRank()) {
+  if (lhsTensor.getRank() != rhsTensor.getRank()) {
     if (errorLocation) {
       emitError(*errorLocation)
           << "rank mismatch between " << lhsName << " and " << rhsName;
@@ -413,29 +607,25 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
     return failure();
   }
 
-  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhs.getRank(),
+  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhsTensor.getRank(),
                                                        /*Inclusive=*/false));
-  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhs, allDims,
-                                       rhsName, rhs, allDims);
+  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhsTensor,
+                                       allDims, rhsName, rhsTensor, allDims);
 }
 
 static llvm::LogicalResult
-verifyTypeRange(Location loc, TypeRange range,
-                wave::WaveTensorType referenceType, bool includeAddressSpace,
+verifyTypeRange(Location loc, TypeRange range, Type referenceType,
+                bool includeAddressSpace,
                 llvm::StringRef rangeDescriptionPrefix,
                 llvm::StringRef referenceDescription) {
   llvm::SmallString<16> rangeDescription(rangeDescriptionPrefix);
   for (auto &&[i, type] : llvm::enumerate(range)) {
-    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
-    if (!tensorType)
-      continue;
-
     rangeDescription.resize(rangeDescriptionPrefix.size());
     llvm::raw_svector_ostream os(rangeDescription);
     os << i;
 
     if (failed(wave::detail::verifyTypesCompatible(
-            tensorType, referenceType, includeAddressSpace, loc, os.str(),
+            type, referenceType, includeAddressSpace, loc, os.str(),
             referenceDescription))) {
       return llvm::failure();
     }
@@ -449,24 +639,27 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
   const llvm::StringLiteral kResultNamePrefix = "result #";
   std::string referenceDescription;
   llvm::raw_string_ostream os(referenceDescription);
-  wave::WaveTensorType referenceType;
+  Type referenceType;
   auto it =
       llvm::find_if(op->getOperandTypes(), llvm::IsaPred<wave::WaveTensorType>);
+  auto it2 =
+      llvm::find_if(op->getResultTypes(), llvm::IsaPred<wave::WaveTensorType>);
   if (it != op->getOperandTypes().end()) {
-    referenceType = llvm::cast<wave::WaveTensorType>(*it);
+    referenceType = *it;
     os << kOperandNamePrefix
        << std::distance(op->getOperandTypes().begin(), it);
-  } else {
-    auto it2 = llvm::find_if(op->getResultTypes(),
-                             llvm::IsaPred<wave::WaveTensorType>);
-    // No tensor-typed operands or results, nothing to verify.
-    if (it2 == op->getResultTypes().end())
-      return llvm::success();
-
-    referenceType = llvm::cast<wave::WaveTensorType>(*it2);
+  } else if (it2 != op->getResultTypes().end()) {
+    referenceType = *it2;
     os << kResultNamePrefix << std::distance(op->getResultTypes().begin(), it2);
+  } else if (op->getNumOperands() > 0) {
+    referenceType = op->getOperandTypes()[0];
+    os << kOperandNamePrefix << 0;
+  } else if (op->getNumResults() > 0) {
+    referenceType = op->getResultTypes()[0];
+    os << kResultNamePrefix << 0;
+  } else {
+    return llvm::success();
   }
-  assert(referenceType);
 
   if (llvm::failed(verifyTypeRange(op->getLoc(), op->getOperandTypes(),
                                    referenceType, includeAddressSpace,
@@ -1106,6 +1299,99 @@ llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
   op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
               ArrayAttr::get(op->getContext(), indexExprs));
   return llvm::success();
+}
+
+// ----------------------------------------------------------------------------
+// Reduction operation traits
+// ----------------------------------------------------------------------------
+
+wave::WaveSymbolAttr
+wave::detail::getReducedSymbol(Operation *op, wave::WaveSymbolAttr axisAttr,
+                               Type inputType) {
+  if (axisAttr)
+    return axisAttr;
+
+  auto tensor = dyn_cast<wave::WaveTensorType>(inputType);
+  if (tensor && tensor.getFullySpecified()) {
+    return tensor.getShape().back();
+  }
+  return {};
+}
+
+LogicalResult wave::detail::verifyReductionOperation(Operation *op,
+                                                     Type inputTypeBase,
+                                                     Type initTypeBase,
+                                                     Type resultTypeBase,
+                                                     Attribute axisAttr) {
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "input", inputTypeBase, "init", initTypeBase))) {
+    return failure();
+  }
+  if (failed(wave::detail::verifyTypesCompatible(
+          initTypeBase, resultTypeBase, /*includeAddressSpace=*/true,
+          op->getLoc(), "init", "result"))) {
+    return failure();
+  }
+
+  auto inputType = dyn_cast<WaveTensorType>(inputTypeBase);
+  auto initType = dyn_cast<WaveTensorType>(initTypeBase);
+  auto resultType = dyn_cast<WaveTensorType>(resultTypeBase);
+
+  if (inputType && !inputType.getFullySpecified() && !axisAttr) {
+    return op->emitOpError() << "expected axis attribute when input type is "
+                             << "not fully specified";
+  }
+
+  if (inputType && inputType.getFullySpecified()) {
+    if (axisAttr) {
+      return op->emitOpError() << "did not expect axis attribute when input "
+                                  "type is fully specified";
+    }
+
+    if (initType && initType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != initType.getRank()) {
+        return op->emitOpError()
+               << "init tensor rank (" << initType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(initType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "init", initType, leadingDims, "input", inputType,
+              leadingDims)))
+        return failure();
+    }
+
+    if (resultType && resultType.getFullySpecified()) {
+      if (inputType.getRank() - 1 != resultType.getRank()) {
+        return op->emitOpError()
+               << "result tensor rank (" << resultType.getRank()
+               << ") must be one less than input tensor rank ("
+               << inputType.getRank() << ")";
+      }
+      auto leadingDims = llvm::to_vector(llvm::seq<int>(resultType.getRank()));
+      if (failed(wave::detail::verifyTypesMatchingDimensions(
+              op->getLoc(), "input", inputType, leadingDims, "result",
+              resultType, leadingDims)))
+        return failure();
+    }
+  }
+
+  if (initType && initType.getFullySpecified()) {
+    if (axisAttr && llvm::is_contained(initType.getShape(), axisAttr)) {
+      return op->emitOpError()
+             << "init tensor shape must not contain the reduced axis";
+    }
+  }
+
+  if (resultType && resultType.getFullySpecified()) {
+    if (axisAttr && llvm::is_contained(resultType.getShape(), axisAttr)) {
+      return op->emitOpError()
+             << "result tensor shape must not contain the reduced axis";
+    }
+  }
+
+  return success();
 }
 
 #include "water/Dialect/Wave/IR/WaveOpInterfaces.cpp.inc"

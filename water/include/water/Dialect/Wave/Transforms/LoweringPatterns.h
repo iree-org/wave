@@ -68,6 +68,11 @@ void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
 void populateWaveUnaryFPOpLoweringPatterns(WaveTypeConverter &typeConverter,
                                            mlir::RewritePatternSet &patterns);
 
+// Adds pattern that lowers wave reduction ops (sum, max_element) to upstream
+// MLIR ops.
+void populateWaveReductionOpLoweringPatterns(WaveTypeConverter &typeConverter,
+                                             mlir::RewritePatternSet &patterns);
+
 /// Materialize affine.apply for expressions inside a `map` with `symbols`.
 /// Each symbol is either a GPU id (thread/block), a constant from `hyper`,
 /// or an iteration symbol resolved from a parent scf.for loop.

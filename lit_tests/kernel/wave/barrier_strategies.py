@@ -466,38 +466,61 @@ def test_manual_barriers_prevent_sync_regions():
 
         # Get sync regions with manual barriers
         logger.debug("Getting sync regions with manual barriers")
-        sync_regions = get_barriers_analysis(
-            trace, target_arch, check_existing_barriers=True
+        sync_regions_raw = get_barriers_analysis(trace, target_arch)
+
+        from wave_lang.kernel.wave.utils.barriers_utils import (
+            find_disjoint_interval_strategy,
+            minimize_placement_strategy,
         )
 
-        # Assertion: should have fewer sync regions (0) because manual barriers are detected
-        logger.info(
-            f"Sync regions without barrier vs with barrier: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
-        )
+        # Test both strategies
+        sync_regions_disjoint = find_disjoint_interval_strategy(sync_regions_raw)
+        sync_regions_minimize = minimize_placement_strategy(sync_regions_raw)
 
         print(f"Sync regions without manual barriers: {len(sync_regions_no_barriers)}")
         print("Manual barriers inserted: 1 signal + 1 wait")
-        print(f"Sync regions with manual barriers: {len(sync_regions)}")
 
-        if len(sync_regions) < len(sync_regions_no_barriers):
-            print(f"VALIDATION SUCCESS: Manual barriers prevented sync region creation")
+        # Validate find_disjoint_interval_strategy
+        print(
+            f"Sync regions with manual barriers (find_disjoint_interval_strategy): {len(sync_regions_disjoint)}"
+        )
+        if len(sync_regions_disjoint) < len(sync_regions_no_barriers):
+            print(
+                "VALIDATION SUCCESS (find_disjoint_interval_strategy): Manual barriers prevented sync region creation"
+            )
         else:
             print(
-                f"VALIDATION FAIL - Manual barriers did NOT prevent sync region creation"
-            )
-            print(
-                f"Expected fewer sync regions, but got: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
+                "VALIDATION FAIL (find_disjoint_interval_strategy) - Manual barriers did NOT prevent sync region creation"
             )
             assert False, (
-                f"Manual barriers were NOT respected! "
-                f"Sync regions should be 0 with manual barriers, but got {len(sync_regions)}. "
+                f"Manual barriers were NOT respected by find_disjoint_interval_strategy! "
+                f"Sync regions should be fewer with manual barriers, but got {len(sync_regions_disjoint)}."
+            )
+
+        # Validate minimize_placement_strategy
+        print(
+            f"Sync regions with manual barriers (minimize_placement_strategy): {len(sync_regions_minimize)}"
+        )
+        if len(sync_regions_minimize) < len(sync_regions_no_barriers):
+            print(
+                "VALIDATION SUCCESS (minimize_placement_strategy): Manual barriers prevented sync region creation"
+            )
+        else:
+            print(
+                "VALIDATION FAIL (minimize_placement_strategy) - Manual barriers did NOT prevent sync region creation"
+            )
+            assert False, (
+                f"Manual barriers were NOT respected by minimize_placement_strategy! "
+                f"Sync regions should be fewer with manual barriers, but got {len(sync_regions_minimize)}."
             )
 
     # CHECK-LABEL: test_manual_barriers_prevent_sync_regions
     # CHECK: Sync regions without manual barriers: {{[1-9]}}
     # CHECK: Manual barriers inserted: 1 signal + 1 wait
-    # CHECK: Sync regions with manual barriers: {{[0-9]}}
-    # CHECK: VALIDATION SUCCESS: Manual barriers prevented sync region creation
+    # CHECK: Sync regions with manual barriers (find_disjoint_interval_strategy): {{[0-9]}}
+    # CHECK: VALIDATION SUCCESS (find_disjoint_interval_strategy): Manual barriers prevented sync region creation
+    # CHECK: Sync regions with manual barriers (minimize_placement_strategy): {{[0-9]}}
+    # CHECK: VALIDATION SUCCESS (minimize_placement_strategy): Manual barriers prevented sync region creation
     # CHECK-NOT: VALIDATION FAIL
 
 

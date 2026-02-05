@@ -296,11 +296,10 @@ public:
     return success();
   }
 
-  void visitNonControlFlowArguments(Operation *op,
-                                    const RegionSuccessor &successor,
-                                    ValueRange successorInputs,
-                                    llvm::ArrayRef<InferTypeLattice *> lattices,
-                                    unsigned firstIndex) override {
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<InferTypeLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -308,8 +307,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
@@ -322,7 +319,7 @@ public:
       for (auto &&[terminatorOperand, iterArg, lattice] : llvm::zip_equal(
                yieldOp.getOperands(), iterateOp.getIterArgs(),
                lattices.take_front(iterateOp.getIterArgs().size()))) {
-        // Fetch the lattice and create a dependecy to re-visit the program
+        // Fetch the lattice and create a dependency to re-visit the program
         // point at the start of the loop body block when the lattice changes
         // since we know we are processing a branch into the loop body. Taking
         // the program point before the block / first operation will call
@@ -424,6 +421,11 @@ public:
       return failure();
 
     top->walk([this](Operation *op) {
+      // Enable "sideways" propagation between operands for ops that require it.
+      if (op->hasTrait<wave::RequiresSidewaysBackwardPropagationOpTrait>())
+        for (Value operand : op->getOperands())
+          addDependency(getLatticeElement(operand), getProgramPointAfter(op));
+
       if (!op->hasTrait<OpTrait::ReturnLike>())
         return;
       if (!llvm::isa<FunctionOpInterface>(op->getParentOp()))
@@ -668,10 +670,21 @@ public:
     if (llvm::failed(updateValueTypes(getOperation(), updateType)))
       return signalPassFailure();
 
-    llvm::LogicalResult result = setNormalFormPassPostcondition(
-        wave::WaveNormalForm::AllTypesSpecified, getOperation());
-    if (llvm::failed(result) && !force)
+    WalkResult walkResult =
+        getOperation()->walk([&](wave::WaveInferTypeOpInterface iface) {
+          if (failed(iface.finalizeTypeInference()))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
+    if (walkResult.wasInterrupted())
       return signalPassFailure();
+
+    if (!partial) {
+      llvm::LogicalResult result = setNormalFormPassPostcondition(
+          wave::WaveNormalForm::AllTypesSpecified, getOperation());
+      if (llvm::failed(result) && !force)
+        return signalPassFailure();
+    }
   }
 };
 
@@ -723,7 +736,9 @@ handleNonInterfaceOpElementsPerThread(Operation *op) {
 class ElementsPerThreadForwardAnalysis
     : public dataflow::SparseForwardDataFlowAnalysis<ElementsPerThreadLattice> {
 public:
-  using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
+  ElementsPerThreadForwardAnalysis(DataFlowSolver &solver,
+                                   const wave::ElementsPerThreadInit &init)
+      : SparseForwardDataFlowAnalysis(solver), init(init) {}
 
   // Basic initialization and configuration filtering.
   LogicalResult initialize(Operation *top) override {
@@ -773,7 +788,7 @@ public:
     llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
             .propagateElementsPerThreadForward(operandElements, resultElements,
-                                               errs);
+                                               errs, init);
     if (llvm::failed(result)) {
       return op->emitError()
              << "failed to propagate elements per thread forward: "
@@ -791,9 +806,8 @@ public:
 
   void visitNonControlFlowArguments(
       Operation *op, const RegionSuccessor &successor,
-      ValueRange successorInputs,
-      llvm::ArrayRef<ElementsPerThreadLattice *> lattices,
-      unsigned firstIndex) override {
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<ElementsPerThreadLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -801,8 +815,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
@@ -851,6 +863,9 @@ public:
       }
     }
   }
+
+private:
+  wave::ElementsPerThreadInit init;
 };
 
 // Dataflow analysis propagating elements-per-thread information from results
@@ -872,7 +887,10 @@ class ElementsPerThreadBackwardAnalysis
     : public dataflow::SparseBackwardDataFlowAnalysis<
           ElementsPerThreadLattice> {
 public:
-  using SparseBackwardDataFlowAnalysis::SparseBackwardDataFlowAnalysis;
+  ElementsPerThreadBackwardAnalysis(DataFlowSolver &solver,
+                                    SymbolTableCollection &symbolTable,
+                                    const wave::ElementsPerThreadInit &init)
+      : SparseBackwardDataFlowAnalysis(solver, symbolTable), init(init) {}
 
   // Basic initialization and configuration filtering.
   LogicalResult initialize(Operation *top) override {
@@ -881,6 +899,16 @@ public:
 
     if (failed(SparseBackwardDataFlowAnalysis::initialize(top)))
       return failure();
+
+    // Enable "sideways" propagation between operands for ops that require it.
+    top->walk([&](Operation *op) {
+      if (!op->hasTrait<wave::RequiresSidewaysBackwardPropagationOpTrait>())
+        return WalkResult::advance();
+
+      for (Value operand : op->getOperands())
+        addDependency(getLatticeElement(operand), getProgramPointAfter(op));
+      return WalkResult::advance();
+    });
 
     return success();
   }
@@ -974,7 +1002,7 @@ public:
     llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
             .propagateElementsPerThreadBackward(operandElements, resultElements,
-                                                errs);
+                                                errs, init);
     if (llvm::failed(result)) {
       return op->emitError()
              << "failed to propagate elements per thread backward: "
@@ -999,6 +1027,9 @@ public:
     // This is called for induction variables of an IterateOp, which is handled
     // by the forward analysis.
   }
+
+private:
+  wave::ElementsPerThreadInit init;
 };
 
 // Elements-per-thread propagation pass implementation.
@@ -1010,48 +1041,72 @@ public:
       WaterWavePropagateElementsPerThreadPassBase;
 
   void runOnOperation() override {
-    // Configure the analyses. The dead code and SCP analyses are required by
-    // the logic of the solver currently.
-    SymbolTableCollection symbolTable;
-    DataFlowConfig dataFlowConfig;
-    dataFlowConfig.setInterprocedural(false);
-    DataFlowSolver solver(dataFlowConfig);
-    solver.load<dataflow::DeadCodeAnalysis>();
-    solver.load<dataflow::SparseConstantPropagation>();
-    solver.load<ElementsPerThreadForwardAnalysis>();
-    solver.load<ElementsPerThreadBackwardAnalysis>(symbolTable);
-
-    if (llvm::failed(
-            wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
+    llvm::DenseMap<Operation *, Attribute> constraints;
+    if (failed(wave::collectWaveConstraints(getOperation(), constraints)))
       return signalPassFailure();
 
-    auto updateType = [&](Value value, llvm::StringRef description) {
-      auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(value.getType());
-      if (!tensorType ||
-          tensorType.getAddressSpaceValue() != wave::WaveAddressSpace::Register)
+    // TODO: consider generalizing this logic with other passes.
+    for (auto &&[parent, attr] : constraints) {
+
+      wave::ElementsPerThreadInit init;
+      init.threadXDimension = nullptr;
+      for (Attribute constraint : cast<ArrayAttr>(attr)) {
+        auto workgroupConstraint =
+            dyn_cast<wave::WorkgroupConstraintAttr>(constraint);
+        if (!workgroupConstraint)
+          continue;
+        if (workgroupConstraint.getWorkgroupDim().getValue() !=
+            wave::WaveWorkgroupDim::X)
+          continue;
+        assert(!init.threadXDimension &&
+               "expected only one dimension to be mapped to workgroup x");
+        init.threadXDimension = workgroupConstraint.getDim();
+      }
+
+      // Configure the analyses. The dead code and SCP analyses are required by
+      // the logic of the solver currently.
+      SymbolTableCollection symbolTable;
+      DataFlowConfig dataFlowConfig;
+      dataFlowConfig.setInterprocedural(false);
+      DataFlowSolver solver(dataFlowConfig);
+      solver.load<dataflow::DeadCodeAnalysis>();
+      solver.load<dataflow::SparseConstantPropagation>();
+      solver.load<ElementsPerThreadForwardAnalysis>(init);
+      solver.load<ElementsPerThreadBackwardAnalysis>(symbolTable, init);
+
+      if (llvm::failed(wave::runSolverAndCaptureErrors(solver, parent, false)))
+        return signalPassFailure();
+
+      auto updateType = [&](Value value, llvm::StringRef description) {
+        auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(value.getType());
+        if (!tensorType || tensorType.getAddressSpaceValue() !=
+                               wave::WaveAddressSpace::Register)
+          return llvm::success();
+
+        const auto *lattice =
+            solver.lookupState<ElementsPerThreadLattice>(value);
+        if (!lattice || lattice->getValue().isBottom()) {
+          emitError(value.getLoc())
+              << "couldn't identify elements per thread for " << description;
+          return llvm::failure();
+        }
+        if (lattice->getValue().isTop()) {
+          emitError(value.getLoc())
+              << "elements per thread conflict was detected for "
+              << description;
+          return llvm::failure();
+        }
+
+        auto vectorType = VectorType::get(
+            {static_cast<int64_t>(lattice->getValue().getValue())},
+            tensorType.getElementType());
+        value.setType(vectorType);
         return llvm::success();
+      };
 
-      const auto *lattice = solver.lookupState<ElementsPerThreadLattice>(value);
-      if (!lattice || lattice->getValue().isBottom()) {
-        emitError(value.getLoc())
-            << "couldn't identify elements per thread for " << description;
-        return llvm::failure();
-      }
-      if (lattice->getValue().isTop()) {
-        emitError(value.getLoc())
-            << "elements per thread conflict was detected for " << description;
-        return llvm::failure();
-      }
-
-      auto vectorType = VectorType::get(
-          {static_cast<int64_t>(lattice->getValue().getValue())},
-          tensorType.getElementType());
-      value.setType(vectorType);
-      return llvm::success();
-    };
-
-    if (llvm::failed(updateValueTypes(getOperation(), updateType)))
-      return signalPassFailure();
+      if (llvm::failed(updateValueTypes(parent, updateType)))
+        return signalPassFailure();
+    }
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
             wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
@@ -1319,11 +1374,10 @@ public:
     return llvm::success();
   }
 
-  void
-  visitNonControlFlowArguments(Operation *op, const RegionSuccessor &successor,
-                               ValueRange successorInputs,
-                               llvm::ArrayRef<IndexExprsLattice *> lattices,
-                               unsigned firstIndex) override {
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ValueRange nonSuccessorInputs,
+      llvm::ArrayRef<IndexExprsLattice *> lattices) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
@@ -1331,8 +1385,6 @@ public:
     // Technically, the non-captured arguments can be seen as forwarded from
     // operands or results, but they need special handling to remove
     // loop-specific parts of the index.
-    assert(firstIndex == 0 &&
-           "expected all arguments to be marked as non-control flow");
     assert((successor.isParent() ||
             successor.getSuccessor()->getRegionNumber() == 0) &&
            "unexpected control flow");
@@ -1451,8 +1503,7 @@ public:
         return llvm::failure();
 
       parent->walk([&](Operation *op) -> WalkResult {
-        if (op->hasTrait<
-                wave::RequiresIndexExprsSidewaysBackwardPropagationOpTrait>()) {
+        if (op->hasTrait<wave::RequiresSidewaysBackwardPropagationOpTrait>()) {
           for (Value operand : op->getOperands())
             addDependency(getLatticeElement(operand), getProgramPointAfter(op));
         }

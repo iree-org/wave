@@ -12,6 +12,7 @@ build:
 python:
   install:
     - requirements: pytorch-cpu-requirements.txt
+    - requirements: requirements-iree-pinned.txt
     - method: pip
       path: .
       extra_requirements:

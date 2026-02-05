@@ -100,6 +100,47 @@ class BinaryWaveOp<string mnemonic>
     "functional-type(operands, results)";
 }
 
+class ReductionWaveOp<string mnemonic>
+    : WaveOp<mnemonic,
+        [WaveInferTypeOpInterface, ReductionTypeInferenceOpTrait,
+         WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
+         RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
+      WaveArithmeticOpDoc {
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
+    Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
+    Arg<WaveReductionScopeAttr, "Scope of the reduction">:$scope,
+    Arg<OptionalAttr<WaveSymbolAttr>, "Reduction axis">:$axis
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Reduced result">:$result
+  );
+
+  let assemblyFormat =
+      "$input `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
+      "$scope " # commonArgumentsSyntax # " attr-dict `:`"
+      "functional-type(operands, results)";
+}
+
+def SumOp : ReductionWaveOp<"sum"> {
+  let summary = "Reduce a tensor by summing along a specified axis";
+  let description = [{
+    Reduces the input tensor by summing its elements along the specified
+    symbolic axis. The initial value is used as the starting point for the
+    reduction.
+  }] # baseDescription;
+}
+
+def MaxElementOp : ReductionWaveOp<"max_element"> {
+  let summary = "Reduce a tensor by taking the maximum along a specified axis";
+  let description = [{
+    Reduces the input tensor by taking the maximum of its elements along the
+    specified symbolic axis. The initial value is used as the starting point
+    for the reduction.
+  }] # baseDescription;
+}
+
 //-----------------------------------------------------------------------------
 // Arithmetic operations
 //-----------------------------------------------------------------------------
@@ -173,7 +214,7 @@ def MmaOp : WaveOp<"mma",
 def IterateOp : Op<WaveDialect, "iterate", [
     AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<RegionBranchOpInterface,
-        ["areTypesCompatible", "getEntrySuccessorOperands", "getSuccessorInputs"]>,
+        ["areTypesCompatible", "getEntrySuccessorOperands"]>,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Executes the body repeatedly";
   let description = [{
@@ -290,23 +331,39 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
-def ExtractOp : WaveOp<"extract", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
+def ExtractOp : WaveOp<"extract",
+    [DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
   let summary = "Extracts a single element from a vector at the given index";
   let description = [{
-    Extracts a single element from a 1-D vector at the specified index position,
-    producing a 1-element vector.
+    This is an internal operation that appears during expansion/lowering and
+    is not intended for use in user code. As such, it intentionally does not
+    implement the interfaces for type and index dataflow analyses as it only
+    appears after those. It does, however, implement the elements per thread
+    interface as it is needed for lowering to vectors.
+
+    When lowered, extracts a single element from the vector that corresponds
+    to lowered register-resident tensor, producing a 1-element vector.
+    Therefore, the result tensor is always indexed by one dimension.
+
+    TODO: we don't have a good way of verifying this, but the indexing symbol
+    of the result must be the indexing symbol for which the size
+    (second element of the index expression) is greater than 1 when such a
+    symbol exists (and presumably the last / the one mapped to thread X
+    otherwise).
   }];
 
-  let arguments = (ins
+  let arguments = !con((ins
     Arg<WaveTensorInRegister, "Vector to extract from">:$source,
     Arg<WaveExprListAttr, "Index position to extract">:$position
-  );
+  ), commonArguments);
 
   let results = (outs
     Res<WaveTensorInRegister, "Extracted 1-element vector">:$result
   );
 
-  let assemblyFormat = "$source `[` $position `]` attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat =
+    "$source `[` $position `]` " # commonArgumentsSyntax # "attr-dict "
+    "`:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
@@ -402,7 +459,7 @@ def WriteOp : WaveOp<"write", [
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
-    RequiresIndexExprsSidewaysBackwardPropagationOpTrait]> {
+    RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor

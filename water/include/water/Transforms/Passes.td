@@ -132,10 +132,12 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
     tailored for the Wave project. Currently supports ROCDL targets only.
   }];
   let options = [
-    Option<"toolkitPath", "toolkit", "std::string", [{""}],
-           "Toolkit path.">,
+    Option<"lldPath", "lld-path", "std::string", [{""}],
+           "Path to ld.lld.">,
     ListOption<"linkFiles", "l", "std::string",
            "Extra bitcode files to link to.">,
+    Option<"ignoreSystemROCm", "ignore-system-rocm", "bool", /*default=*/"false",
+           "Ignore system ROCm installation and use only the provided lld path.">,
     Option<"dumpIntermediates", "dump-intermediates", "std::string", [{""}],
            "Directory to dump intermediate compilation files (LLVM IR, ISA).">,
     Option<"overrideIntermediates", "override-intermediates", "std::string", [{""}],

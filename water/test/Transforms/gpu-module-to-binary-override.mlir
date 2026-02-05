@@ -1,8 +1,8 @@
 // RUN: rm -rf %t && mkdir -p %t/dump1 %t/dump2 %t/override
-// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t/dump1" | FileCheck %s
+// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t/dump1 lld-path=%llvm_tools_dir/ld.lld" | FileCheck %s
 // RUN: cp %t/dump1/kernel_module_linked.ll %t/override/kernel_module_linked.ll
 // RUN: sed -i 's/i32/i64/g' %t/override/kernel_module_linked.ll
-// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t/dump2 override-intermediates=%t/override" | FileCheck %s
+// RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t/dump2 override-intermediates=%t/override lld-path=%llvm_tools_dir/ld.lld" | FileCheck %s
 // RUN: grep "define.*i64" %t/dump2/kernel_module_optimized.ll
 
 // Test that override-intermediates works by:

@@ -818,3 +818,116 @@ void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
                                            RewritePatternSet &patterns) {
   patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
 }
+
+//===----------------------------------------------------------------------===//
+// Reduction ops (SumOp, MaxElementOp)
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Convert vector::CombiningKind to gpu::AllReduceOperation.
+constexpr gpu::AllReduceOperation
+combiningKindToAllReduceOp(vector::CombiningKind kind) {
+  switch (kind) {
+  case vector::CombiningKind::ADD:
+    return gpu::AllReduceOperation::ADD;
+  case vector::CombiningKind::MAXIMUMF:
+    return gpu::AllReduceOperation::MAXIMUMF;
+  default:
+    llvm_unreachable("unsupported reduction kind");
+  }
+}
+
+/// Emit a warning if the block reduction setting is inconsistent with the
+/// hardware constraint's waves_per_block.
+static void warnIfReductionScopeMismatch(Operation *op, bool isBlockReduction) {
+  func::FuncOp parentFunc = op->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return;
+  ArrayAttr constraints = parentFunc->getAttrOfType<ArrayAttr>(
+      wave::WaveDialect::kWaveConstraintsAttrName);
+  if (!constraints)
+    return;
+  for (Attribute constraint : constraints) {
+    auto hwConstraint =
+        llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint);
+    if (!hwConstraint)
+      continue;
+    ArrayRef<unsigned> wavesPerBlock = hwConstraint.getWavesPerBlock();
+    unsigned totalWaves = 1;
+    for (unsigned w : wavesPerBlock)
+      totalWaves *= w;
+    if (isBlockReduction && totalWaves == 1) {
+      op->emitWarning()
+          << "block reduction requested but hardware constraint "
+             "specifies only one wave per block (waves_per_block = ["
+          << wavesPerBlock[0] << ", " << wavesPerBlock[1] << ", "
+          << wavesPerBlock[2]
+          << "]); consider using wave-level reduction instead";
+    } else if (!isBlockReduction && totalWaves > 1) {
+      op->emitWarning()
+          << "wave-level reduction requested but hardware constraint "
+             "specifies multiple waves per block (waves_per_block = ["
+          << wavesPerBlock[0] << ", " << wavesPerBlock[1] << ", "
+          << wavesPerBlock[2]
+          << "]); consider using block reduction to reduce across all waves";
+    }
+    return;
+  }
+}
+
+template <typename WaveOp, vector::CombiningKind Kind>
+class ReductionOpLoweringPattern : public OpConversionPattern<WaveOp> {
+public:
+  using OpConversionPattern<WaveOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WaveOp op, typename WaveOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    static_assert(Kind == vector::CombiningKind::ADD ||
+                      Kind == vector::CombiningKind::MAXIMUMF,
+                  "unsupported reduction kind");
+    // Expect PropagateElementsPerThread pass to have run, converting
+    // WaveTensorType results to VectorType.
+    Location loc = op.getLoc();
+
+    Value input = adaptor.getInput();
+    Value init = adaptor.getInit();
+    bool isBlockReduction = op.getScope() == wave::WaveReductionScope::Block;
+
+    // Warn if reduction scope is inconsistent with hardware constraints.
+    warnIfReductionScopeMismatch(op, isBlockReduction);
+
+    Value initElement = vector::ExtractOp::create(rewriter, loc, init, 0);
+    Value threadReduce =
+        vector::ReductionOp::create(rewriter, loc, Kind, input, initElement);
+
+    constexpr gpu::AllReduceOperation gpuReduceOp =
+        combiningKindToAllReduceOp(Kind);
+
+    Value result;
+    if (isBlockReduction) {
+      auto opAttr =
+          gpu::AllReduceOperationAttr::get(rewriter.getContext(), gpuReduceOp);
+      result =
+          gpu::AllReduceOp::create(rewriter, loc, threadReduce, opAttr, false);
+    } else {
+      result = gpu::SubgroupReduceOp::create(rewriter, loc, threadReduce,
+                                             gpuReduceOp, false);
+    }
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveReductionOpLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns
+      .add<ReductionOpLoweringPattern<wave::SumOp, vector::CombiningKind::ADD>,
+           ReductionOpLoweringPattern<wave::MaxElementOp,
+                                      vector::CombiningKind::MAXIMUMF>>(
+          typeConverter, patterns.getContext());
+}

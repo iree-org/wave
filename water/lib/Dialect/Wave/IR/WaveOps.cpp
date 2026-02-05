@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -22,7 +24,9 @@
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -219,29 +223,15 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
 }
 
 OperandRange wave::IterateOp::getEntrySuccessorOperands(RegionSuccessor) {
-  // Return iter_args as the entry operands (values that flow into the region).
-  return getIterArgs();
+  return getOperands().drop_back(getNumOperands());
 }
 
 void wave::IterateOp::getSuccessorRegions(
     RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  // Exit to parent with loop results.
   regions.emplace_back(RegionSuccessor::parent());
-  // Branch into the loop body with iter_args mapped to block arguments.
-  // Note: captures are also block arguments but come after iter_args.
   regions.emplace_back(RegionSuccessor(&getBody()));
-}
-
-ValueRange wave::IterateOp::getSuccessorInputs(RegionSuccessor successor) {
-  // When branching to the parent (exiting the loop), the successor inputs are
-  // the op results.
-  if (successor.isParent())
-    return getResults();
-  // When branching to the region, the successor inputs are the block arguments
-  // corresponding to iter_args (not captures).
-  return getLoopBody()->getArguments().drop_back(getCaptures().size());
 }
 
 llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsForward(
@@ -273,8 +263,6 @@ LogicalResult wave::IterateOp::verify() {
   TypeRange blockIterArgTypes = getIterArgs().getTypes();
   TypeRange iterArgTypes =
       getOperands().drop_back(getCaptures().size()).getTypes();
-  TypeRange captureTypes = getCaptures().getTypes();
-  TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
   TypeRange resultTypes = getResultTypes();
   if (iterArgTypes.size() != blockIterArgTypes.size()) {
     return emitOpError() << "expects the same number if iter_args ("
@@ -438,6 +426,8 @@ llvm::FailureOr<ChangeResult> wave::MmaOp::propagateBackward(
                                            "result", "accumulator", errs);
 }
 
+LogicalResult wave::MmaOp::finalizeTypeInference() { return success(); }
+
 // Set the value of `lattice` to `newLattice` and return whether a change
 // happened. Note that this does NOT verify whether the lattice change goes into
 // the direction of top or bottom.
@@ -449,17 +439,6 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   lattice = newLattice;
   return ChangeResult::Change;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                  FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Update index expressions of the result of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
@@ -845,9 +824,15 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
   return *this;
 }
 
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() {
+  return parent.m();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() {
+  return parent.n();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() {
+  return parent.k();
+}
 void MmaSingleIndexExprBuilder::populate(
     llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
   parent.populate(attributes);
@@ -1277,7 +1262,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
       computeElementsPerThreadForOperand(
           getAccumulatorMutable().getOperandNumber());
@@ -1296,7 +1281,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // For MMA, the accumulator should have the same elements per thread as the
   // result. The LHS and RHS operands may have different constraints based on
   // their dimensions.
@@ -1529,7 +1514,13 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        Type memoryType, Type valueType,
                                        WaveReadWriteBoundsAttr bounds,
                                        ArrayAttr orderedSyms) {
-  // Skip verification if memory is already resolved to MemRefType.
+
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "memory", memoryType, "register", valueType)))
+    return failure();
+
+  // Skip the rest of the verification if memory is already resolved to
+  // MemRefType.
   auto tensorType = dyn_cast<WaveTensorType>(memoryType);
   if (!tensorType)
     return success();
@@ -1575,7 +1566,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // ReadOp only propagates elements_per_thread attribute to result (register).
   // Memory operand is ignored for propagation - you can read any number of
   // elements from memory regardless of how many were written.
@@ -1593,7 +1584,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &) {
+    llvm::raw_ostream &, const wave::ElementsPerThreadInit &) {
   // ReadOp doesn't propagate backward to memory operand.
   // Memory is decoupled from register dataflow for elements_per_thread.
   return mlir::ChangeResult::NoChange;
@@ -1626,6 +1617,24 @@ LogicalResult wave::RegisterOp::verify() {
 // ExtractOp
 //-----------------------------------------------------------------------------
 
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+
+  return detail::checkAndPropagateElementsPerThreadFromConstant(
+      wave::ElementsPerThreadLatticeValue(1), /*immutableValues=*/{},
+      resultElements, "op semantics", "", "result", errs);
+}
+
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // We don't have enough information to propagate backwards here.
+  return ChangeResult::NoChange;
+}
+
 LogicalResult ExtractOp::verify() {
   wave::WaveExprListAttr position = getPosition();
   if (position.getRank() != 1) {
@@ -1633,6 +1642,42 @@ LogicalResult ExtractOp::verify() {
                             "got "
                          << position.getRank();
   }
+
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
+                                             getSource().getType(), "result",
+                                             getResult().getType()))) {
+    return failure();
+  }
+
+  if (auto resultVectorType = dyn_cast<VectorType>(getResult().getType())) {
+    if (resultVectorType.getShape()[0] != 1) {
+      return emitOpError() << "result must be a 1-element vector, got "
+                           << resultVectorType;
+    }
+    return success();
+  }
+
+  auto resultTensorType = cast<WaveTensorType>(getResult().getType());
+  if (!resultTensorType.getFullySpecified() ||
+      resultTensorType.getRank() != 1) {
+    return emitOpError() << "result must be a 1-dimensional tensor, got "
+                         << resultTensorType;
+  }
+
+  auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
+  // For mixed types, cannot do anything here.
+  if (!sourceTensorType)
+    return success();
+
+  if (!sourceTensorType.getFullySpecified())
+    return emitOpError() << "source tensor type must be fully specified";
+
+  if (!llvm::is_contained(sourceTensorType.getShape(),
+                          resultTensorType.getShape()[0])) {
+    return emitOpError() << "source tensor type dimensions must contain the "
+                            "result tensor type dimension";
+  }
+
   return success();
 }
 
@@ -1688,7 +1733,7 @@ LogicalResult WriteOp::verify() {
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only validates that elements_per_thread attribute matches register
   // operand. Memory operand is ignored for propagation - you can write to
   // memory with any layout.
@@ -1710,7 +1755,7 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only propagates backward to register operand (value_to_store).
   // Memory operand is ignored - you can write any layout to memory.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
@@ -1795,8 +1840,8 @@ llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
 
 MutableOperandRange
 wave::YieldOp::getMutableSuccessorOperands(RegionSuccessor) {
-  // Return all yielded values - these flow back to the parent IterateOp.
-  return getValuesMutable();
+  // Create an empty mutable operand range (it has no default constructor).
+  return getValuesMutable().slice(/*subStart=*/0, /*subLen=*/0);
 }
 
 //-----------------------------------------------------------------------------
@@ -1836,12 +1881,7 @@ LogicalResult wave::CastOp::verify() {
 
 LogicalResult wave::ReciprocalOp::verify() {
   Type argType = getArgument().getType();
-  Type elementType =
-      llvm::TypeSwitch<Type, Type>(argType)
-          .Case<WaveTensorType, VectorType>(
-              [](auto containerType) { return containerType.getElementType(); })
-          .Default([](Type type) { return type; });
-
+  Type elementType = wave::getElementType(argType);
   if (!isa<FloatType>(elementType))
     return emitOpError("requires float element type, but got ") << elementType;
 

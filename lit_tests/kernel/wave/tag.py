@@ -26,7 +26,9 @@ def print_tags(trace):
     for node in graph.nodes:
         tag = getattr(node, "tag", None)
         if tag is not None:
-            print(f"  {node.name}: tag={tag}")
+            # Format set as comma-separated string for readable output
+            tag_str = ",".join(sorted(tag)) if isinstance(tag, set) else str(tag)
+            print(f"  {node.name}: tag={tag_str}")
 
 
 @run_test

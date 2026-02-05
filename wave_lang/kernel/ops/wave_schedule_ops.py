@@ -143,11 +143,11 @@ def _insert_cond_barrier(
 
 # Stubs to enable type checking of the custom schedule ops - decorated with @define_op for dispatch
 @define_schedule_op
-def get_node_by_tag(tag: str): ...
+def get_node_by_tag(tag: str | set[str]): ...
 
 
 @define_schedule_op
-def get_node_by_tag_and_type(tag: str, node_type: Any): ...
+def get_node_by_tag_and_type(tag: str | set[str], node_type: Any): ...
 
 
 @define_schedule_op
@@ -207,7 +207,7 @@ def filter_nodes(nodes: Any, subgraph: Any = None, node_type: Any = None): ...
 
 
 @define_schedule_op
-def get_node_by_tag_and_iteration(tag: str, iteration: int): ...
+def get_node_by_tag_and_iteration(tag: str | set[str], iteration: int): ...
 
 
 @define_schedule_op
@@ -270,9 +270,31 @@ class PipelineStageRef:
     stage: Any
 
 
-def get_node_by_tag_helper(kernel_trace, tag: str):
+def get_node_by_tag_helper(kernel_trace, tag: str | set[str]):
+    """
+    Get nodes by tag.
+
+    Args:
+        kernel_trace: The kernel trace to search.
+        tag: Either a string or a set of strings.
+            - If a string: matches nodes where the tag is in the node's tag set.
+            - If a set: matches nodes where the node's tag set equals exactly.
+    """
     logger.info(f"Getting node by tag: {tag}")
-    nodes = kernel_trace.walk(lambda x: get_custom(x).tag == tag)
+
+    def matches_tag(node_tag: set[str] | str | None) -> bool:
+        if node_tag is None:
+            return False
+        # Normalize node_tag to a set for comparison
+        node_tag_set = {node_tag} if isinstance(node_tag, str) else node_tag
+        if isinstance(tag, str):
+            # Single string: check if it's in the node's tag set
+            return tag in node_tag_set
+        else:
+            # Set of strings: must match exactly
+            return node_tag_set == tag
+
+    nodes = kernel_trace.walk(lambda x: matches_tag(get_custom(x).tag))
     logger.info(f"Found {len(nodes)} nodes by tag: {tag}")
     return nodes
 
@@ -286,12 +308,16 @@ class CustomScheduleOp:
 
 @dataclass
 class GetNodeByTag(CustomScheduleOp):
-    tag: str
+    tag: str | set[str]
     schedule_op_name = "get_node_by_tag"
 
     @classmethod
     def handle(
-        cls, region_graph, kernel_trace, constraints: list[Constraint], tag: str
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        tag: str | set[str],
     ):
         # Always execute the real logic during tracing to apply scheduling
         real_result = get_node_by_tag_helper(kernel_trace, tag)
@@ -302,7 +328,7 @@ class GetNodeByTag(CustomScheduleOp):
 
 @dataclass
 class GetNodeByTagAndType(CustomScheduleOp):
-    tag: str
+    tag: str | set[str]
     node_type: Any
     schedule_op_name = "get_node_by_tag_and_type"
 
@@ -312,7 +338,7 @@ class GetNodeByTagAndType(CustomScheduleOp):
         region_graph,
         kernel_trace,
         constraints: list[Constraint],
-        tag: str,
+        tag: str | set[str],
         node_type: Any,
     ):
         assert constraints is not None, "Constraints are required"
@@ -351,7 +377,7 @@ class GetNodeByTagAndIteration(CustomScheduleOp):
         List of nodes matching the tag that belong to the specified iteration
     """
 
-    tag: str
+    tag: str | set[str]
     iteration: int
     schedule_op_name = "get_node_by_tag_and_iteration"
 
@@ -361,7 +387,7 @@ class GetNodeByTagAndIteration(CustomScheduleOp):
         region_graph,
         kernel_trace,
         constraints: list[Constraint],
-        tag: str,
+        tag: str | set[str],
         iteration: int,
     ):
         assert constraints is not None, "Constraints are required"

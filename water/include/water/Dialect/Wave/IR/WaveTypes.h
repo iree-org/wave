@@ -23,6 +23,10 @@ namespace wave {
   return tensorType &&
          tensorType.getAddressSpaceValue() == wave::WaveAddressSpace::Register;
 }
+
+// Return the element type of a Wave tensor or builtin shaped type, or nullptr
+// for other types.
+mlir::Type getElementType(mlir::Type type);
 }; // namespace wave
 
 #endif // WATER_DIALECT_WAVE_IR_WAVETYPES_H

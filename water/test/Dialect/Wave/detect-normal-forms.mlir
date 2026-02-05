@@ -46,8 +46,8 @@ module @index_exprs_satisfied_module {
     %c = arith.constant 0.0 : f32
     %0 = wave.register %c
       index [{
-        M : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1),
-        N : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)
+        M : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1)>,
+        N : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)>
       }]
       : !wave.tensor<[@M, @N] of f32, <register>>
     return
@@ -116,10 +116,10 @@ module @multiple_ops_with_index_module {
   func.func @multiple_ops_with_index() {
     %c = arith.constant 0.0 : f32
     %0 = wave.register %c
-      index [{M : [] -> (0, 1, 1)}]
+      index [{M : <[] -> (0, 1, 1)>}]
       : !wave.tensor<[@M] of f32, <register>>
     %1 = wave.register %c
-      index [{N : [] -> (0, 1, 1)}]
+      index [{N : <[] -> (0, 1, 1)>}]
       : !wave.tensor<[@N] of f32, <register>>
     return
   }
@@ -189,4 +189,59 @@ module @resolved_allocations_not_satisfied_module {
       : !wave.tensor<[@M] of f32, <shared>>
     return
   }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: func.func @foo
+module {
+    module {
+    func.func @foo() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+    }
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: normalform.module
+// CHECK-NEXT: func.func @foo
+// CHECK: func.func @bar
+module {
+    module {
+      func.func @foo() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+      }
+    }
+
+    func.func @bar() {
+        %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+          : !wave.tensor<[@M] of f32, <shared>>
+        return
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+module {
+    normalform.module [] {
+    }
+}
+
+// -----
+
+// CHECK: module
+// CHECK-NEXT: normalform.module
+normalform.module [] {
+
 }

@@ -41,7 +41,7 @@ def propagate_tag(source_node: fx.Node, target_node: fx.Node) -> None:
         target_node.tag = tag
 
 
-def set_tag(node: fx.Node, tag: Optional[str]) -> None:
+def set_tag(node: fx.Node, tag: Optional[str | set[str]]) -> None:
     """
     Set tag on node if tag is provided.
 
@@ -50,7 +50,10 @@ def set_tag(node: fx.Node, tag: Optional[str]) -> None:
 
     Args:
         node: The node to set the tag on
-        tag: The tag string, or None to skip setting
+        tag: The tag string or set of strings, or None to skip setting.
+            If a string is provided, it will be converted to a single-element set.
     """
     if tag is not None and node is not None:
+        if isinstance(tag, str):
+            tag = {tag}
         node.tag = tag

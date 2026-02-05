@@ -637,10 +637,11 @@ def tag(expr: fx.Proxy, tag_name: str) -> fx.Proxy:
     Returns:
         The same fx.Proxy, allowing chained expressions
     """
+    tag_set = {tag_name} if isinstance(tag_name, str) else tag_name
     if isinstance(expr, fx.Proxy):
-        expr.node.tag = tag_name
+        expr.node.tag = tag_set
     elif isinstance(expr, fx.Node):
-        expr.tag = tag_name
+        expr.tag = tag_set
     else:
         raise ValueError(
             f"tkw.tag expects an fx.Proxy or fx.Node, got {type(expr)}. "
@@ -676,8 +677,20 @@ class CustomOp(ABC):
             setattr(self.fx_node, "location", value)
 
     @property
-    def tag(self) -> Optional[str]:
-        return getattr(self.fx_node, "tag", None)
+    def tag(self) -> Optional[set[str]]:
+        tag = getattr(self.fx_node, "tag", None)
+        # Normalize legacy string tags to sets
+        if isinstance(tag, str):
+            return {tag}
+        return tag
+
+    @tag.setter
+    def tag(self, value: Optional[str | set[str]]):
+        if value is None:
+            return
+        if isinstance(value, str):
+            value = {value}
+        setattr(self.fx_node, "tag", value)
 
     @property
     def unroll_iteration(self) -> Optional[int]:

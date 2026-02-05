@@ -94,7 +94,7 @@ class TestWaterLoweringIntegration:
         # Test with simple Wave dialect operations - just register and add
         wave_mlir = """
          normalform.module [#wave.normal_form<full_types,memory_only_types>] {
-          func.func @test_kernel() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+          func.func @test_kernel() attributes {wave.hyperparameters = #wave.hyperparameters<{}>, wave.constraints = []} {
             %cst = arith.constant 0.0 : f32
             %lhs = wave.register %cst : vector<4xf32>
             %cst1 = arith.constant 1.0 : f32
