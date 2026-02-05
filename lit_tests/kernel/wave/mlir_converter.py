@@ -528,7 +528,7 @@ def mlir_converter_matmul():
     # Symbols related to induction variables must be dropped from the mapping. This is a bug in the
     # Python propagation algorithm that is immediately caught by the verifier on construction.
     #
-    # CHECK-NEXT: %[[VIEW_1:.*]] = wave.view %[[ALLOCATE]][{{.*}}]
+    # CHECK-NEXT: %[[VIEW_1:.*]] = wave.view %[[ALLOCATE]][{{[0-9]+}}]
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
     # CHECK-SAME: K = #wave.index_mapping<
@@ -536,10 +536,9 @@ def mlir_converter_matmul():
     #
     # Another view into parent allocation with offset.
     #
-    # CHECK-NEXT: %[[VIEW_2:.*]] = wave.view %[[ALLOCATE]][{{.*}}]
+    # CHECK-NEXT: %[[VIEW_2:.*]] = wave.view %[[ALLOCATE]][{{[0-9]+}}]
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
-    # CHECK-SAME: offset =
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]

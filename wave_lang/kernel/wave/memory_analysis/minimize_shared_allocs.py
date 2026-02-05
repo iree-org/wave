@@ -214,6 +214,9 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
                 padding=custom_alloc.padding,
             )
             view_node = view.add_to_graph(alloc.graph, loc=custom_alloc.location)
+            # Copy the index from the original allocate node to the new view node
+            if custom_alloc.index is not None:
+                get_custom(view_node).index = custom_alloc.index
             alloc.replace_all_uses_with(view_node)
         alloc.graph.erase_node(alloc)
 
