@@ -203,10 +203,15 @@ void computeCFGLiveness(CFG &cfg, llvm::ArrayRef<Operation *> instructions) {
     computeBlockLocalInfo(block, instructions);
   }
 
-  // Iterate to fixed point
+  // Iterate to fixed point with safety limit
+  // The algorithm is guaranteed to converge in at most O(n) iterations where
+  // n is the number of blocks, but we add a safety limit to catch bugs.
+  constexpr int kMaxIterations = 10000;
   bool changed = true;
-  while (changed) {
+  int iterations = 0;
+  while (changed && iterations < kMaxIterations) {
     changed = false;
+    ++iterations;
 
     // Process blocks in reverse order (more efficient for backward analysis)
     for (int64_t i = cfg.size() - 1; i >= 0; --i) {
@@ -236,6 +241,9 @@ void computeCFGLiveness(CFG &cfg, llvm::ArrayRef<Operation *> instructions) {
       }
     }
   }
+
+  assert(iterations < kMaxIterations &&
+         "Liveness analysis did not converge - possible bug in CFG");
 }
 
 //===----------------------------------------------------------------------===//
@@ -265,8 +273,18 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
   int64_t currentPressure = 0;
   int64_t maxPressure = 0;
 
+  // Reasonable upper bound for register pressure (no GPU has this many regs)
+  constexpr int64_t kMaxReasonablePressure = 1000000;
+
   for (const auto &[point, delta, isStart] : events) {
     currentPressure += delta;
+
+    // Sanity check for overflow or computation errors
+    assert(currentPressure >= 0 &&
+           "Negative register pressure - possible overflow or bug");
+    assert(currentPressure < kMaxReasonablePressure &&
+           "Register pressure exceeds reasonable bounds - possible overflow");
+
     maxPressure = std::max(maxPressure, currentPressure);
   }
 

@@ -26,6 +26,279 @@ using namespace waveasm;
 // Custom verification can be added here if needed.
 
 //===----------------------------------------------------------------------===//
+// MFMA Operation Verifiers
+//===----------------------------------------------------------------------===//
+
+/// Helper to get expected accumulator size from MFMA mnemonic.
+/// Returns the expected number of 32-bit registers for the accumulator.
+static int64_t getMFMAAccumulatorSize(llvm::StringRef mnemonic) {
+  // Parse mnemonic to extract dimensions: v_mfma_f32_MxNxK_type
+  // Accumulator size is typically M*N/64 for wave64
+  // Common MFMA variants:
+  if (mnemonic.contains("16x16x16") || mnemonic.contains("16x16x32") ||
+      mnemonic.contains("16x16x4_f32") || mnemonic.contains("4x4x4") ||
+      mnemonic.contains("4x4x1"))
+    return 4;
+  if (mnemonic.contains("32x32x8") || mnemonic.contains("32x32x16") ||
+      mnemonic.contains("16x16x4_f16") || mnemonic.contains("16x16x4_bf16") ||
+      mnemonic.contains("16x16x4_i8"))
+    return 16;
+  if (mnemonic.contains("32x32x4") || mnemonic.contains("32x32x2"))
+    return 32;
+  if (mnemonic.contains("16x16x4_f64"))
+    return 8;
+  if (mnemonic.contains("4x4x4_f64"))
+    return 2;
+  // Default fallback
+  return 4;
+}
+
+/// Verifier for MFMA operations - validates accumulator size matches expected.
+/// This is a template that works for all MFMAOp subclasses.
+template <typename MFMAOpType>
+static LogicalResult verifyMFMAOp(MFMAOpType op) {
+  // Get the accumulator operand
+  Value acc = op.getAcc();
+  Type accType = acc.getType();
+
+  // If accumulator is an immediate (constant 0 for initialization), skip check
+  if (isa<ImmType>(accType))
+    return success();
+
+  // Get register size from type
+  int64_t accSize = 1;
+  if (auto vregType = dyn_cast<VRegType>(accType)) {
+    accSize = vregType.getSize();
+  } else if (auto pvregType = dyn_cast<PVRegType>(accType)) {
+    accSize = pvregType.getSize();
+  }
+
+  // Get expected accumulator size from the operation name
+  llvm::StringRef mnemonic = op->getName().getStringRef();
+  int64_t expectedSize = getMFMAAccumulatorSize(mnemonic);
+
+  // Verify accumulator size matches expected
+  if (accSize != expectedSize && accSize != 1) {
+    // Size 1 is allowed (will be broadcast or is a placeholder)
+    return op.emitOpError()
+           << "accumulator size mismatch: expected " << expectedSize
+           << " registers but got " << accSize << " for " << mnemonic;
+  }
+
+  // Verify result type matches accumulator type (tied operand constraint)
+  Value dst = op.getDst();
+  Type dstType = dst.getType();
+  int64_t dstSize = 1;
+  if (auto vregType = dyn_cast<VRegType>(dstType)) {
+    dstSize = vregType.getSize();
+  } else if (auto pvregType = dyn_cast<PVRegType>(dstType)) {
+    dstSize = pvregType.getSize();
+  }
+
+  if (dstSize != expectedSize) {
+    return op.emitOpError()
+           << "result size mismatch: expected " << expectedSize
+           << " registers but got " << dstSize << " for " << mnemonic;
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VMEM Load Operation Verifiers
+//===----------------------------------------------------------------------===//
+
+/// Verifier for VMEM load operations - validates SRD size and result count.
+template <typename VMEMLoadOpType>
+static LogicalResult verifyVMEMLoadOp(VMEMLoadOpType op) {
+  // Verify SRD (saddr) is a 4-SGPR quad for buffer operations
+  Value saddr = op.getSaddr();
+  Type saddrType = saddr.getType();
+
+  int64_t srdSize = 1;
+  if (auto sregType = dyn_cast<SRegType>(saddrType)) {
+    srdSize = sregType.getSize();
+  } else if (auto psregType = dyn_cast<PSRegType>(saddrType)) {
+    srdSize = psregType.getSize();
+  }
+
+  // Buffer operations require a 4-SGPR SRD
+  llvm::StringRef mnemonic = op->getName().getStringRef();
+  if (mnemonic.contains("buffer_") && srdSize != 4) {
+    return op.emitOpError()
+           << "buffer load requires 4-SGPR SRD but got " << srdSize << " SGPRs";
+  }
+
+  // Verify instruction offset is within valid range (0-4095 for AMDGCN)
+  int64_t instOffset = op.getInstOffset();
+  if (instOffset < 0 || instOffset > 4095) {
+    return op.emitOpError() << "instruction offset " << instOffset
+                            << " is out of valid range [0, 4095]";
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// VMEM Store Operation Verifiers
+//===----------------------------------------------------------------------===//
+
+/// Verifier for VMEM store operations - validates SRD size.
+template <typename VMEMStoreOpType>
+static LogicalResult verifyVMEMStoreOp(VMEMStoreOpType op) {
+  // Verify SRD (saddr) is a 4-SGPR quad for buffer operations
+  Value saddr = op.getSaddr();
+  Type saddrType = saddr.getType();
+
+  int64_t srdSize = 1;
+  if (auto sregType = dyn_cast<SRegType>(saddrType)) {
+    srdSize = sregType.getSize();
+  } else if (auto psregType = dyn_cast<PSRegType>(saddrType)) {
+    srdSize = psregType.getSize();
+  }
+
+  // Buffer operations require a 4-SGPR SRD
+  llvm::StringRef mnemonic = op->getName().getStringRef();
+  if (mnemonic.contains("buffer_") && srdSize != 4) {
+    return op.emitOpError() << "buffer store requires 4-SGPR SRD but got "
+                            << srdSize << " SGPRs";
+  }
+
+  // Verify instruction offset is within valid range (0-4095 for AMDGCN)
+  int64_t instOffset = op.getInstOffset();
+  if (instOffset < 0 || instOffset > 4095) {
+    return op.emitOpError() << "instruction offset " << instOffset
+                            << " is out of valid range [0, 4095]";
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Explicit Verifier Definitions for MFMA Operations
+//===----------------------------------------------------------------------===//
+
+// F32 output, F16 input
+LogicalResult V_MFMA_F32_16X16X16_F16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_16X16X32_F16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_32X32X8_F16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_16X16X4_F16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_32X32X4_F16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_4X4X4_F16::verify() { return verifyMFMAOp(*this); }
+
+// F32 output, BF16 input
+LogicalResult V_MFMA_F32_16X16X16_BF16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_16X16X32_BF16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_32X32X8_BF16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_16X16X4_BF16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_32X32X4_BF16::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_4X4X4_BF16::verify() { return verifyMFMAOp(*this); }
+
+// I32 output, I8 input
+LogicalResult V_MFMA_I32_16X16X16_I8::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_I32_32X32X8_I8::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_I32_16X16X4_I8::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_I32_32X32X4_I8::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_I32_4X4X4_I8::verify() { return verifyMFMAOp(*this); }
+
+// F32 output, F32 input
+LogicalResult V_MFMA_F32_16X16X4_F32::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_32X32X2_F32::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F32_4X4X1_F32::verify() { return verifyMFMAOp(*this); }
+
+// F64 output, F64 input
+LogicalResult V_MFMA_F64_16X16X4_F64::verify() { return verifyMFMAOp(*this); }
+LogicalResult V_MFMA_F64_4X4X4_F64::verify() { return verifyMFMAOp(*this); }
+
+// FP8 variants
+LogicalResult V_MFMA_F32_16X16X32_FP8_FP8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_32X32X16_FP8_FP8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_16X16X32_FP8_BF8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_32X32X16_FP8_BF8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_16X16X32_BF8_FP8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_32X32X16_BF8_FP8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_16X16X32_BF8_BF8::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_F32_32X32X16_BF8_BF8::verify() {
+  return verifyMFMAOp(*this);
+}
+
+//===----------------------------------------------------------------------===//
+// Explicit Verifier Definitions for VMEM Load Operations
+//===----------------------------------------------------------------------===//
+
+// Buffer loads
+LogicalResult BUFFER_LOAD_DWORD::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_DWORDX2::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_DWORDX3::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_DWORDX4::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_UBYTE::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_SBYTE::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_USHORT::verify() { return verifyVMEMLoadOp(*this); }
+LogicalResult BUFFER_LOAD_SSHORT::verify() { return verifyVMEMLoadOp(*this); }
+
+// Global loads (no SRD requirement)
+LogicalResult GLOBAL_LOAD_DWORD::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_DWORDX2::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_DWORDX3::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_DWORDX4::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_UBYTE::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_SBYTE::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_USHORT::verify() { return success(); }
+LogicalResult GLOBAL_LOAD_SSHORT::verify() { return success(); }
+
+// Flat loads (no SRD requirement)
+LogicalResult FLAT_LOAD_DWORD::verify() { return success(); }
+LogicalResult FLAT_LOAD_DWORDX2::verify() { return success(); }
+LogicalResult FLAT_LOAD_DWORDX3::verify() { return success(); }
+LogicalResult FLAT_LOAD_DWORDX4::verify() { return success(); }
+
+//===----------------------------------------------------------------------===//
+// Explicit Verifier Definitions for VMEM Store Operations
+//===----------------------------------------------------------------------===//
+
+// Buffer stores
+LogicalResult BUFFER_STORE_DWORD::verify() { return verifyVMEMStoreOp(*this); }
+LogicalResult BUFFER_STORE_DWORDX2::verify() {
+  return verifyVMEMStoreOp(*this);
+}
+LogicalResult BUFFER_STORE_DWORDX3::verify() {
+  return verifyVMEMStoreOp(*this);
+}
+LogicalResult BUFFER_STORE_DWORDX4::verify() {
+  return verifyVMEMStoreOp(*this);
+}
+LogicalResult BUFFER_STORE_BYTE::verify() { return verifyVMEMStoreOp(*this); }
+LogicalResult BUFFER_STORE_SHORT::verify() { return verifyVMEMStoreOp(*this); }
+
+// Global stores (no SRD requirement)
+LogicalResult GLOBAL_STORE_DWORD::verify() { return success(); }
+LogicalResult GLOBAL_STORE_DWORDX2::verify() { return success(); }
+LogicalResult GLOBAL_STORE_DWORDX3::verify() { return success(); }
+LogicalResult GLOBAL_STORE_DWORDX4::verify() { return success(); }
+LogicalResult GLOBAL_STORE_BYTE::verify() { return success(); }
+LogicalResult GLOBAL_STORE_SHORT::verify() { return success(); }
+
+// Flat stores (no SRD requirement)
+LogicalResult FLAT_STORE_DWORD::verify() { return success(); }
+LogicalResult FLAT_STORE_DWORDX2::verify() { return success(); }
+LogicalResult FLAT_STORE_DWORDX3::verify() { return success(); }
+LogicalResult FLAT_STORE_DWORDX4::verify() { return success(); }
+
+//===----------------------------------------------------------------------===//
 // TableGen'd Operation Definitions
 //===----------------------------------------------------------------------===//
 

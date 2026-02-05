@@ -121,6 +121,9 @@ class MFMAOp<string mnemonic, int accSize, list<Trait> traits = []>
 
   // Store accumulator size for verification
   int AccumulatorSize = accSize;
+
+  // Custom verifier for accumulator size matching
+  let hasVerifier = 1;
 }
 
 // VMEM Load: results = load(saddr, voffset) with optional instruction offset
@@ -134,6 +137,9 @@ class VMEMLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
   let assemblyFormat = "$saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($saddr) `,` type($voffset) `->` type($results)";
 
   int NumResults = numResults;
+
+  // Custom verifier for result count and SRD size
+  let hasVerifier = 1;
 }
 
 // VMEM Store: store(data, saddr, voffset) with optional instruction offset
@@ -144,6 +150,9 @@ class VMEMStoreOp<string mnemonic, list<Trait> traits = []>
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
                        DefaultValuedAttr<I64Attr, "0">:$instOffset);
   let assemblyFormat = "$data `,` $saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($data) `,` type($saddr) `,` type($voffset)";
+
+  // Custom verifier for SRD size validation
+  let hasVerifier = 1;
 }
 
 // SMEM Load: results = load(saddr, offset)

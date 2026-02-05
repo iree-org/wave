@@ -126,9 +126,9 @@ struct HazardMitigationPass
 
   HazardMitigationPass() = default;
   HazardMitigationPass(StringRef target) {
-    std::optional<TargetKind> targetKindEnum = symbolizeTargetKind(target);
-    assert(targetKindEnum && "Invalid target");
-    targetKindEnum = *targetKindEnum;
+    std::optional<TargetKind> parsed = symbolizeTargetKind(target);
+    assert(parsed && "Invalid target");
+    this->targetKindEnum = *parsed;
   }
 
   StringRef getArgument() const override { return "waveasm-hazard-mitigation"; }

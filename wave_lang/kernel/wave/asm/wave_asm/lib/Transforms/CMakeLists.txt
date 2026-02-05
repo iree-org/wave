@@ -4,6 +4,15 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+# Include handler subdirectory to get HANDLERS_SRCS
+add_subdirectory(handlers)
+
+# Prepend handlers/ path to each handler source file
+set(HANDLERS_FULL_PATHS)
+foreach(src ${HANDLERS_SRCS})
+  list(APPEND HANDLERS_FULL_PATHS handlers/${src})
+endforeach()
+
 add_mlir_dialect_library(MLIRWaveASMTransforms
   Liveness.cpp
   LinearScanRegAlloc.cpp
@@ -14,6 +23,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   TranslateFromMLIR.cpp
   ScopedCSE.cpp
   Peephole.cpp
+  ${HANDLERS_FULL_PATHS}
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/waveasm
@@ -32,6 +42,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRMemRefDialect
   MLIRSCFDialect
   MLIRVectorDialect
+  MLIRMathDialect
   MLIRIR
   MLIRSupport
 )

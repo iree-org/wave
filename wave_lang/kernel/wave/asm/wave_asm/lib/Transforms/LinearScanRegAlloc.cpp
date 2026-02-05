@@ -29,6 +29,8 @@ void LinearScanRegAlloc::expireRanges(
                               [&](const auto &entry) {
                                 auto [endPoint, range, physReg] = entry;
                                 if (endPoint < currentPoint) {
+                                  assert(range.size > 0 &&
+                                         "Cannot free zero-sized range");
                                   pool.freeRange(physReg, range.size);
                                   stats.rangesExpired++;
                                   return true;

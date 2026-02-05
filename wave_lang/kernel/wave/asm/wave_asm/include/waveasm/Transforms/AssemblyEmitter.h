@@ -109,7 +109,7 @@ private:
   /// Returns (isLiteral, value) pair
   std::pair<bool, int64_t> getLiteralValue(mlir::Value value);
 
-  /// Generate code for a single operation
+  /// Generate code for a single operation using TypeSwitch dispatch
   /// Returns (instruction_lines, needs_literal_load)
   std::optional<std::string> generateOp(mlir::Operation *op);
 
@@ -126,6 +126,31 @@ private:
 
   /// Generate code for a raw op
   std::string generateRaw(RawOp rawOp);
+
+  //===--------------------------------------------------------------------===//
+  // Helper methods for TypeSwitch-based code generation
+  //===--------------------------------------------------------------------===//
+
+  /// Emit buffer load instruction (buffer_load_dword, etc.)
+  std::string emitBufferLoad(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit buffer store instruction (buffer_store_dword, etc.)
+  std::string emitBufferStore(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit global load instruction (global_load_dword, etc.)
+  std::string emitGlobalLoad(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit global store instruction (global_store_dword, etc.)
+  std::string emitGlobalStore(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit LDS read instruction (ds_read_b32, etc.)
+  std::string emitLDSRead(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit LDS write instruction (ds_write_b32, etc.)
+  std::string emitLDSWrite(mlir::Operation *op, llvm::StringRef mnemonic);
+
+  /// Emit default instruction format (results then operands)
+  std::string emitDefaultFormat(mlir::Operation *op, llvm::StringRef mnemonic);
 
   ProgramOp program;
   const PhysicalMapping &mapping;

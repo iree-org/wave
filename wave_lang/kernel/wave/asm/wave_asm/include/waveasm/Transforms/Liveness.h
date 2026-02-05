@@ -50,6 +50,16 @@ struct LiveRange {
 
   /// Get the duration of this range
   int64_t length() const { return end - start + 1; }
+
+  /// Validate invariants: end >= start, size > 0, alignment > 0
+  bool isValid() const { return end >= start && size > 0 && alignment > 0; }
+
+  /// Assert that invariants hold (for debugging)
+  void assertValid() const {
+    assert(end >= start && "Invalid live range: end < start");
+    assert(size > 0 && "Invalid live range: size must be positive");
+    assert(alignment > 0 && "Invalid live range: alignment must be positive");
+  }
 };
 
 //===----------------------------------------------------------------------===//

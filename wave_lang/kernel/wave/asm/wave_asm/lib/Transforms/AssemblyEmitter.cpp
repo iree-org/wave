@@ -10,6 +10,7 @@
 #include "waveasm/Target/AMDGCN/RegisterInfo.h"
 #include "waveasm/Transforms/RegAlloc.h"
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -473,301 +474,323 @@ std::pair<bool, int64_t> KernelGenerator::getLiteralValue(Value value) {
   return {false, 0};
 }
 
-std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
-  // Get the operation name and extract the instruction mnemonic
-  llvm::StringRef opName = op->getName().getStringRef();
+//===----------------------------------------------------------------------===//
+// TypeSwitch-based Operation Code Generation
+//===----------------------------------------------------------------------===//
 
-  // Skip non-instruction ops
-  if (opName == "waveasm.program" || opName == "waveasm.label" ||
-      opName == "waveasm.comment" || opName == "waveasm.raw" ||
-      opName == "waveasm.precolored.vreg" ||
-      opName == "waveasm.precolored.sreg" || opName == "waveasm.constant" ||
-      opName == "waveasm.pack" || opName == "waveasm.extract") {
-    return std::nullopt;
+// Helper for emitting buffer load instructions
+std::string KernelGenerator::emitBufferLoad(Operation *op,
+                                            llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  std::string vdata;
+  for (Value res : op->getResults()) {
+    vdata = resolveValue(res);
   }
-
-  // Extract instruction mnemonic from op name (e.g., "waveasm.v_add_u32" ->
-  // "v_add_u32")
-  llvm::StringRef mnemonic = opName;
-  if (opName.starts_with("waveasm.")) {
-    mnemonic = opName.drop_front(8); // "waveasm." is 8 characters
-  }
-
-  // Handle S_WAITCNT specially - uses attributes not operands
-  if (auto waitcntOp = dyn_cast<S_WAITCNT>(op)) {
-    std::optional<int64_t> vmcnt, lgkmcnt, expcnt;
-    if (auto vmAttr = waitcntOp.getVmcntAttr())
-      vmcnt = vmAttr.getInt();
-    if (auto lgkmAttr = waitcntOp.getLgkmcntAttr())
-      lgkmcnt = lgkmAttr.getInt();
-    if (auto expAttr = waitcntOp.getExpcntAttr())
-      expcnt = expAttr.getInt();
-    // If no counts specified, default to vmcnt(0) lgkmcnt(0)
-    if (!vmcnt && !lgkmcnt && !expcnt) {
-      vmcnt = 0;
-      lgkmcnt = 0;
-    }
-    return formatter.formatWaitcnt(vmcnt, lgkmcnt, expcnt);
-  }
-
-  // Handle S_WAITCNT_VMCNT specially
-  if (auto waitcntOp = dyn_cast<S_WAITCNT_VMCNT>(op)) {
-    return formatter.formatWaitcnt(waitcntOp.getCount(), std::nullopt,
-                                   std::nullopt);
-  }
-
-  // Handle S_WAITCNT_LGKMCNT specially
-  if (auto waitcntOp = dyn_cast<S_WAITCNT_LGKMCNT>(op)) {
-    return formatter.formatWaitcnt(std::nullopt, waitcntOp.getCount(),
-                                   std::nullopt);
-  }
-
-  // Handle buffer_load instructions (not LDS variant)
-  // Format: buffer_load_dwordx4 vdata, voffset, srd, soffset offen [offset:N]
-  // The "offen" modifier is required when using a VGPR for the offset
-  if (mnemonic.starts_with("buffer_load") && !mnemonic.contains("lds")) {
-    std::string result = "  " + mnemonic.str();
-    // Result (vdata) first
-    std::string vdata;
-    for (Value res : op->getResults()) {
-      vdata = resolveValue(res);
-    }
-    // Op order is (srd, voffset) but assembly order is (vdata, voffset, srd,
-    // soffset offen)
-    if (op->getNumOperands() >= 2) {
-      std::string voffset = resolveValue(op->getOperand(1));
-      std::string srd = resolveValue(op->getOperand(0));
-      result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
-      // Check for instruction offset attribute
-      if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
-        int64_t offset = instOffsetAttr.getInt();
-        if (offset > 0) {
-          result += " offset:" + std::to_string(offset);
-        }
-      }
-    }
-    return result;
-  }
-
-  // Handle buffer_load_*_lds instructions (gather-to-LDS)
-  // Format: buffer_load_dword voffset, srd, soffset offen lds
-  // Note: mnemonic has _lds suffix, need to emit without _lds but with lds
-  // modifier
-  if (mnemonic.starts_with("buffer_load") && mnemonic.contains("lds")) {
-    // Remove _lds suffix from mnemonic
-    std::string baseMnemonic = mnemonic.str();
-    size_t ldsPos = baseMnemonic.find("_lds");
-    if (ldsPos != std::string::npos) {
-      baseMnemonic = baseMnemonic.substr(0, ldsPos);
-    }
-    std::string result = "  " + baseMnemonic;
-    // VMEMToLDSLoadOp: (voffset, srd, soffset)
-    if (op->getNumOperands() >= 3) {
-      std::string voffset = resolveValue(op->getOperand(0));
-      std::string srd = resolveValue(op->getOperand(1));
-      std::string soffset = resolveValue(op->getOperand(2));
-      result += " " + voffset + ", " + srd + ", " + soffset + " offen lds";
-    } else if (op->getNumOperands() >= 2) {
-      std::string voffset = resolveValue(op->getOperand(0));
-      std::string srd = resolveValue(op->getOperand(1));
-      result += " " + voffset + ", " + srd + ", 0 offen lds";
-    }
-    return result;
-  }
-
-  // Handle buffer_store instructions
-  // Format: buffer_store_dwordx4 vdata, voffset, srd, soffset offen [offset:N]
-  if (mnemonic.starts_with("buffer_store")) {
-    std::string result = "  " + mnemonic.str();
-    // Op order is (data, srd, voffset) but assembly order is (vdata, voffset,
-    // srd, soffset offen)
-    if (op->getNumOperands() >= 3) {
-      std::string vdata = resolveValue(op->getOperand(0));
-      std::string voffset = resolveValue(op->getOperand(2));
-      std::string srd = resolveValue(op->getOperand(1));
-      result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
-      // Check for instruction offset attribute
-      if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
-        int64_t offset = instOffsetAttr.getInt();
-        if (offset > 0) {
-          result += " offset:" + std::to_string(offset);
-        }
-      }
-    }
-    return result;
-  }
-
-  // Handle global_load instructions
-  // Format: global_load_dwordx4 vdata, vaddr, off
-  // vaddr is a VGPR pair for 64-bit address, off is scalar offset (usually
-  // "off" for no offset)
-  if (mnemonic.starts_with("global_load")) {
-    std::string result = "  " + mnemonic.str();
-    std::string vdata;
-    for (Value res : op->getResults()) {
-      vdata = resolveValue(res);
-    }
-    // Op order is (saddr, voffset) - saddr is SGPR pair, voffset is VGPR
-    if (op->getNumOperands() >= 2) {
-      std::string vaddr = resolveValue(op->getOperand(1));
-      std::string saddr = resolveValue(op->getOperand(0));
-      // Use saddr as scalar offset, vaddr as vector address
-      result += " " + vdata + ", " + vaddr + ", " + saddr;
-    } else if (op->getNumOperands() >= 1) {
-      std::string vaddr = resolveValue(op->getOperand(0));
-      result += " " + vdata + ", " + vaddr + ", off";
-    }
-    return result;
-  }
-
-  // Handle global_store instructions
-  // Format: global_store_dwordx4 vaddr, vdata, off
-  if (mnemonic.starts_with("global_store")) {
-    std::string result = "  " + mnemonic.str();
-    // Op order is (data, saddr, voffset)
-    if (op->getNumOperands() >= 3) {
-      std::string vdata = resolveValue(op->getOperand(0));
-      std::string vaddr = resolveValue(op->getOperand(2));
-      std::string saddr = resolveValue(op->getOperand(1));
-      result += " " + vaddr + ", " + vdata + ", " + saddr;
-    }
-    return result;
-  }
-
-  // Handle flat_load instructions
-  // Format: flat_load_dwordx4 vdata, vaddr
-  if (mnemonic.starts_with("flat_load")) {
-    std::string result = "  " + mnemonic.str();
-    std::string vdata;
-    for (Value res : op->getResults()) {
-      vdata = resolveValue(res);
-    }
-    if (op->getNumOperands() >= 1) {
-      std::string vaddr = resolveValue(op->getOperand(0));
-      result += " " + vdata + ", " + vaddr;
-    }
-    return result;
-  }
-
-  // Handle flat_store instructions
-  // Format: flat_store_dwordx4 vaddr, vdata
-  if (mnemonic.starts_with("flat_store")) {
-    std::string result = "  " + mnemonic.str();
-    if (op->getNumOperands() >= 2) {
-      std::string vdata = resolveValue(op->getOperand(0));
-      std::string vaddr = resolveValue(op->getOperand(1));
-      result += " " + vaddr + ", " + vdata;
-    }
-    return result;
-  }
-
-  // Handle LDS read operations
-  // Format: ds_read_b32 vdst, vaddr [offset:N]
-  if (mnemonic.starts_with("ds_read")) {
-    std::string result = "  " + mnemonic.str();
-    std::string vdst;
-    for (Value res : op->getResults()) {
-      vdst = resolveValue(res);
-    }
-    if (op->getNumOperands() >= 1) {
-      std::string vaddr = resolveValue(op->getOperand(0));
-      result += " " + vdst + ", " + vaddr;
-    }
-    // Add offset:N if present
-    if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
-      int64_t offset = offsetAttr.getInt();
-      if (offset != 0) {
+  if (op->getNumOperands() >= 2) {
+    std::string voffset = resolveValue(op->getOperand(1));
+    std::string srd = resolveValue(op->getOperand(0));
+    result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
+    if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
+      int64_t offset = instOffsetAttr.getInt();
+      if (offset > 0) {
         result += " offset:" + std::to_string(offset);
       }
     }
-    return result;
   }
+  return result;
+}
 
-  // Handle LDS write operations
-  // Format: ds_write_b32 vaddr, vdata [offset:N]
-  if (mnemonic.starts_with("ds_write")) {
-    std::string result = "  " + mnemonic.str();
-    if (op->getNumOperands() >= 2) {
-      std::string vaddr = resolveValue(op->getOperand(1));
-      std::string vdata = resolveValue(op->getOperand(0));
-      result += " " + vaddr + ", " + vdata;
-    }
-    return result;
-  }
-
-  // Handle s_mov_b32_m0 - move to M0 special register
-  // Format: s_mov_b32 m0, value
-  if (mnemonic == "s_mov_b32_m0") {
-    std::string result = "  s_mov_b32 m0";
-    if (op->getNumOperands() >= 1) {
-      result += ", " + resolveValue(op->getOperand(0));
-    }
-    return result;
-  }
-
-  // Handle conditional branches (s_cbranch_scc0, s_cbranch_scc1, etc.)
-  // These take a SymbolRefAttr target, not a regular operand
-  if (mnemonic.starts_with("s_cbranch_")) {
-    std::string result = "  " + mnemonic.str();
-    if (auto targetAttr = op->getAttrOfType<SymbolRefAttr>("target")) {
-      result += " " + targetAttr.getRootReference().str();
-    }
-    return result;
-  }
-
-  // Handle s_nop - takes a count attribute
-  if (mnemonic == "s_nop") {
-    std::string result = "  s_nop";
-    if (auto countAttr = op->getAttrOfType<IntegerAttr>("count")) {
-      result += " " + std::to_string(countAttr.getInt());
-    } else {
-      result += " 0"; // Default to 0 wait states
-    }
-    return result;
-  }
-
-  // Handle v_mov_b32 with multi-element results (used for accumulator
-  // initialization) v_mov_b32 only operates on single 32-bit registers, so we
-  // need to emit multiple instructions for multi-element results
-  if (mnemonic == "v_mov_b32" && op->getNumResults() == 1) {
-    Value result = op->getResult(0);
-    int64_t size = getRegSize(result.getType());
-    if (size > 1) {
-      // Multi-element result - emit multiple v_mov_b32 instructions
-      int64_t baseIdx = mapping.getPhysReg(result);
-      if (baseIdx < 0) {
-        // Try PVRegType
-        if (auto pvreg = dyn_cast<PVRegType>(result.getType())) {
-          baseIdx = pvreg.getIndex();
-        }
-      }
-      if (baseIdx >= 0 && op->getNumOperands() >= 1) {
-        std::string src = resolveValue(op->getOperand(0));
-        std::string lines;
-        for (int64_t i = 0; i < size; ++i) {
-          if (i > 0)
-            lines += "\n";
-          lines += "  v_mov_b32 v" + std::to_string(baseIdx + i) + ", " + src;
-        }
-        return lines;
+// Helper for emitting buffer store instructions
+std::string KernelGenerator::emitBufferStore(Operation *op,
+                                             llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  if (op->getNumOperands() >= 3) {
+    std::string vdata = resolveValue(op->getOperand(0));
+    std::string voffset = resolveValue(op->getOperand(2));
+    std::string srd = resolveValue(op->getOperand(1));
+    result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
+    if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
+      int64_t offset = instOffsetAttr.getInt();
+      if (offset > 0) {
+        result += " offset:" + std::to_string(offset);
       }
     }
   }
+  return result;
+}
 
-  // Collect operands (results first, then operands)
+// Helper for emitting global load instructions
+std::string KernelGenerator::emitGlobalLoad(Operation *op,
+                                            llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  std::string vdata;
+  for (Value res : op->getResults()) {
+    vdata = resolveValue(res);
+  }
+  if (op->getNumOperands() >= 2) {
+    std::string vaddr = resolveValue(op->getOperand(1));
+    std::string saddr = resolveValue(op->getOperand(0));
+    result += " " + vdata + ", " + vaddr + ", " + saddr;
+  } else if (op->getNumOperands() >= 1) {
+    std::string vaddr = resolveValue(op->getOperand(0));
+    result += " " + vdata + ", " + vaddr + ", off";
+  }
+  return result;
+}
+
+// Helper for emitting global store instructions
+std::string KernelGenerator::emitGlobalStore(Operation *op,
+                                             llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  if (op->getNumOperands() >= 3) {
+    std::string vdata = resolveValue(op->getOperand(0));
+    std::string vaddr = resolveValue(op->getOperand(2));
+    std::string saddr = resolveValue(op->getOperand(1));
+    result += " " + vaddr + ", " + vdata + ", " + saddr;
+  }
+  return result;
+}
+
+// Helper for emitting LDS read instructions
+std::string KernelGenerator::emitLDSRead(Operation *op,
+                                         llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  std::string vdst;
+  for (Value res : op->getResults()) {
+    vdst = resolveValue(res);
+  }
+  if (op->getNumOperands() >= 1) {
+    std::string vaddr = resolveValue(op->getOperand(0));
+    result += " " + vdst + ", " + vaddr;
+  }
+  if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
+    int64_t offset = offsetAttr.getInt();
+    if (offset != 0) {
+      result += " offset:" + std::to_string(offset);
+    }
+  }
+  return result;
+}
+
+// Helper for emitting LDS write instructions
+std::string KernelGenerator::emitLDSWrite(Operation *op,
+                                          llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  if (op->getNumOperands() >= 2) {
+    std::string vaddr = resolveValue(op->getOperand(1));
+    std::string vdata = resolveValue(op->getOperand(0));
+    result += " " + vaddr + ", " + vdata;
+  }
+  return result;
+}
+
+// Helper for emitting default instruction format
+std::string KernelGenerator::emitDefaultFormat(Operation *op,
+                                               llvm::StringRef mnemonic) {
   llvm::SmallVector<std::string> operands;
-
-  // Results come first in assembly output
   for (Value result : op->getResults()) {
     operands.push_back(resolveValue(result));
   }
-
-  // Then input operands
   for (Value operand : op->getOperands()) {
     operands.push_back(resolveValue(operand));
   }
-
   return formatter.format(mnemonic, operands);
+}
+
+std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
+  // Use TypeSwitch for type-safe dispatch
+  // This replaces the string-based mnemonic matching with proper type dispatch
+  return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
+      // Skip non-instruction ops
+      .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
+            PrecoloredSRegOp, ConstantOp, PackOp, ExtractOp>(
+          [](auto) { return std::nullopt; })
+
+      // Wait count operations
+      .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
+        std::optional<int64_t> vmcnt, lgkmcnt, expcnt;
+        if (auto vmAttr = waitcntOp.getVmcntAttr())
+          vmcnt = vmAttr.getInt();
+        if (auto lgkmAttr = waitcntOp.getLgkmcntAttr())
+          lgkmcnt = lgkmAttr.getInt();
+        if (auto expAttr = waitcntOp.getExpcntAttr())
+          expcnt = expAttr.getInt();
+        if (!vmcnt && !lgkmcnt && !expcnt) {
+          vmcnt = 0;
+          lgkmcnt = 0;
+        }
+        return formatter.formatWaitcnt(vmcnt, lgkmcnt, expcnt);
+      })
+      .Case<S_WAITCNT_VMCNT>([&](S_WAITCNT_VMCNT waitcntOp) {
+        return formatter.formatWaitcnt(waitcntOp.getCount(), std::nullopt,
+                                       std::nullopt);
+      })
+      .Case<S_WAITCNT_LGKMCNT>([&](S_WAITCNT_LGKMCNT waitcntOp) {
+        return formatter.formatWaitcnt(std::nullopt, waitcntOp.getCount(),
+                                       std::nullopt);
+      })
+
+      // Buffer load operations
+      .Case<BUFFER_LOAD_DWORD>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_dword");
+      })
+      .Case<BUFFER_LOAD_DWORDX2>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_dwordx2");
+      })
+      .Case<BUFFER_LOAD_DWORDX3>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_dwordx3");
+      })
+      .Case<BUFFER_LOAD_DWORDX4>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_dwordx4");
+      })
+
+      // Buffer load to LDS (gather-to-LDS)
+      .Case<BUFFER_LOAD_DWORD_LDS>([&](auto loadOp) {
+        std::string result = "  buffer_load_dword";
+        if (loadOp->getNumOperands() >= 3) {
+          std::string voffset = resolveValue(loadOp->getOperand(0));
+          std::string srd = resolveValue(loadOp->getOperand(1));
+          std::string soffset = resolveValue(loadOp->getOperand(2));
+          result += " " + voffset + ", " + srd + ", " + soffset + " offen lds";
+        }
+        return result;
+      })
+      .Case<BUFFER_LOAD_DWORDX4_LDS>([&](auto loadOp) {
+        std::string result = "  buffer_load_dwordx4";
+        if (loadOp->getNumOperands() >= 3) {
+          std::string voffset = resolveValue(loadOp->getOperand(0));
+          std::string srd = resolveValue(loadOp->getOperand(1));
+          std::string soffset = resolveValue(loadOp->getOperand(2));
+          result += " " + voffset + ", " + srd + ", " + soffset + " offen lds";
+        }
+        return result;
+      })
+
+      // Buffer store operations
+      .Case<BUFFER_STORE_DWORD>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_dword");
+      })
+      .Case<BUFFER_STORE_DWORDX2>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_dwordx2");
+      })
+      .Case<BUFFER_STORE_DWORDX3>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_dwordx3");
+      })
+      .Case<BUFFER_STORE_DWORDX4>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_dwordx4");
+      })
+
+      // Global load operations
+      .Case<GLOBAL_LOAD_DWORD>([&](auto loadOp) {
+        return emitGlobalLoad(loadOp, "global_load_dword");
+      })
+      .Case<GLOBAL_LOAD_DWORDX2>([&](auto loadOp) {
+        return emitGlobalLoad(loadOp, "global_load_dwordx2");
+      })
+      .Case<GLOBAL_LOAD_DWORDX3>([&](auto loadOp) {
+        return emitGlobalLoad(loadOp, "global_load_dwordx3");
+      })
+      .Case<GLOBAL_LOAD_DWORDX4>([&](auto loadOp) {
+        return emitGlobalLoad(loadOp, "global_load_dwordx4");
+      })
+
+      // Global store operations
+      .Case<GLOBAL_STORE_DWORD>([&](auto storeOp) {
+        return emitGlobalStore(storeOp, "global_store_dword");
+      })
+      .Case<GLOBAL_STORE_DWORDX2>([&](auto storeOp) {
+        return emitGlobalStore(storeOp, "global_store_dwordx2");
+      })
+      .Case<GLOBAL_STORE_DWORDX3>([&](auto storeOp) {
+        return emitGlobalStore(storeOp, "global_store_dwordx3");
+      })
+      .Case<GLOBAL_STORE_DWORDX4>([&](auto storeOp) {
+        return emitGlobalStore(storeOp, "global_store_dwordx4");
+      })
+
+      // LDS read operations
+      .Case<DS_READ_B32>(
+          [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b32"); })
+      .Case<DS_READ_B64>(
+          [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b64"); })
+      .Case<DS_READ_B128>(
+          [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b128"); })
+
+      // LDS write operations
+      .Case<DS_WRITE_B32>(
+          [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b32"); })
+      .Case<DS_WRITE_B64>(
+          [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b64"); })
+      .Case<DS_WRITE_B128>(
+          [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b128"); })
+
+      // M0 register operations
+      .Case<S_MOV_B32_M0>([&](S_MOV_B32_M0 movOp) {
+        std::string result = "  s_mov_b32 m0";
+        if (movOp->getNumOperands() >= 1) {
+          result += ", " + resolveValue(movOp->getOperand(0));
+        }
+        return result;
+      })
+
+      // Branch operations
+      .Case<S_BRANCH>([&](S_BRANCH branchOp) {
+        return std::string("  s_branch ") +
+               branchOp.getTarget().getRootReference().str();
+      })
+      .Case<S_CBRANCH_SCC0>([&](S_CBRANCH_SCC0 branchOp) {
+        return std::string("  s_cbranch_scc0 ") +
+               branchOp.getTarget().getRootReference().str();
+      })
+      .Case<S_CBRANCH_SCC1>([&](S_CBRANCH_SCC1 branchOp) {
+        return std::string("  s_cbranch_scc1 ") +
+               branchOp.getTarget().getRootReference().str();
+      })
+
+      // NOP operation
+      .Case<S_NOP>([&](S_NOP nopOp) {
+        return std::string("  s_nop ") + std::to_string(nopOp.getCount());
+      })
+
+      // Barrier and endpgm
+      .Case<S_BARRIER>([](auto) { return std::string("  s_barrier"); })
+      .Case<S_ENDPGM>([](auto) { return std::string("  s_endpgm"); })
+
+      // V_MOV_B32 with multi-element handling
+      .Case<V_MOV_B32>([&](V_MOV_B32 movOp) -> std::optional<std::string> {
+        Value result = movOp.getDst();
+        int64_t size = getRegSize(result.getType());
+        if (size > 1) {
+          int64_t baseIdx = mapping.getPhysReg(result);
+          if (baseIdx < 0) {
+            if (auto pvreg = dyn_cast<PVRegType>(result.getType())) {
+              baseIdx = pvreg.getIndex();
+            }
+          }
+          if (baseIdx >= 0) {
+            std::string src = resolveValue(movOp.getSrc());
+            std::string lines;
+            for (int64_t i = 0; i < size; ++i) {
+              if (i > 0)
+                lines += "\n";
+              lines +=
+                  "  v_mov_b32 v" + std::to_string(baseIdx + i) + ", " + src;
+            }
+            return lines;
+          }
+        }
+        return emitDefaultFormat(movOp, "v_mov_b32");
+      })
+
+      // Default: use the operation's mnemonic with standard format
+      .Default([&](Operation *defaultOp) -> std::optional<std::string> {
+        llvm::StringRef opName = defaultOp->getName().getStringRef();
+        llvm::StringRef mnemonic = opName;
+        if (opName.starts_with("waveasm.")) {
+          mnemonic = opName.drop_front(8);
+        }
+        return emitDefaultFormat(defaultOp, mnemonic);
+      });
 }
 
 std::string KernelGenerator::generateLabel(LabelOp labelOp) {
