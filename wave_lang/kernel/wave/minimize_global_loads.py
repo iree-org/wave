@@ -332,6 +332,9 @@ def update_write_dependencies(
     Update all read shared nodes that have write dependencies on the unoptimized writes to
     the new optimized writes.
     """
+    # Collect all replaceable writes for manual deletion
+    replaceable_writes = []
+
     for memory, writes in optimized_writes.items():
 
         def is_replaceable_write(node: fx.Node) -> bool:
@@ -348,6 +351,8 @@ def update_write_dependencies(
             return False
 
         for replaceable_write in trace.walk(is_replaceable_write):
+            replaceable_writes.append(replaceable_write)
+            # Update all users of this replaceable write
             for user in list(replaceable_write.users):
                 custom_user = get_custom(user)
                 assert isinstance(custom_user, Read), f"Expected write user to be Read"
@@ -363,6 +368,15 @@ def update_write_dependencies(
 
                 if is_shared_read(custom_user) and shared_read_metadata:
                     update_shared_memory_read(writes, shared_read_metadata, custom_user)
+
+    # Explicitly erase old writes that have been replaced, even if they have side effects
+    # This is necessary because DCE won't remove nodes with has_side_effects=True
+    # After updating all dependencies, these writes should have no users left
+    for old_write in replaceable_writes:
+        # Check that it has no users before erasing
+        # Note: users may be empty because we've updated all write_dependencies
+        if not old_write.users:
+            get_custom(old_write).erase()
 
     DCE(trace)
 
