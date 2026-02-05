@@ -596,6 +596,7 @@ def gather_to_shared_swizzling(
         return
 
     for gathers in id_to_gather.values():
+
         mem = gathers[0].dst
         reads = [
             get_custom(read) for read in mem.users if isinstance(get_custom(read), Read)
@@ -677,6 +678,8 @@ def gather_to_shared_swizzling(
             logger.info(f"read.index={read.index} -> {index}")
 
         for gather in gathers:
+            # Only apply swizzling to the thread part of the index and keep the
+            # global part of the index unchanged.
 
             index = dict(gather.src_index)
             global_index = remove_thread_indexing(index)
