@@ -37,7 +37,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 normalform.module [#wave.normal_form<full_types>] {
-  // expected-error @below {{expected a waves_per_block entry with three elements in the hardware constraint}}
+  // expected-error @below {{expected either waves_per_block in the hardware constraint or wave constraints on an ancestor op}}
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
                         %c: !wave.tensor<[@M, @N] of f32>)

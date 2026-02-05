@@ -10,6 +10,7 @@
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -19,7 +20,6 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
@@ -733,6 +733,9 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
     } else if (auto tiling =
                    llvm::dyn_cast<wave::TilingConstraintAttr>(constraint)) {
       symbolConstraints[tiling.getDim()].push_back(tiling);
+    } else if (auto waveConstraint =
+                   llvm::dyn_cast<wave::WaveConstraintAttr>(constraint)) {
+      symbolConstraints[waveConstraint.getDim()].push_back(waveConstraint);
     } else if (auto hardware =
                    llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint)) {
       assert(hardwareConstraint == nullptr &&
@@ -748,28 +751,64 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
     emitError(loc) << "expected a hardware constraint";
     return nullptr;
   }
-  // TODO: compute waves_per_block from wave constraints; this should be
-  // done in the attribute itself. Maybe move this to the attribute
-  // verifier.
-  llvm::ArrayRef<unsigned> wavesPerBlock =
-      hardwareConstraint.getWavesPerBlock();
-  if (wavesPerBlock.size() != 3) {
-    emitError(loc) << "expected a waves_per_block entry with three "
-                      "elements in the hardware constraint";
-    return nullptr;
-  }
 
   return hardwareConstraint;
 }
 
 llvm::FailureOr<wave::IndexExprsAnalysisInit>
-wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr) {
+wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
+                                     wave::WaveHyperparameterAttr hyperparams) {
   wave::IndexExprsAnalysisInit initObject;
   initObject.hardwareConstraint =
       parseWaveConstraints(loc, constraintsAttr, initObject.symbolConstraints);
   if (initObject.hardwareConstraint == nullptr)
     return llvm::failure();
-  initObject.wavesPerBlock = initObject.hardwareConstraint.getWavesPerBlock();
+
+  // If waves_per_block is explicitly provided, copy it to storage. Note that we
+  // have verified they match the result of dividing block tiles with wave tiles
+  // previously.
+  if (!initObject.hardwareConstraint.getWavesPerBlock().empty()) {
+    assert(initObject.hardwareConstraint.getWavesPerBlock().size() == 3 &&
+           "expected waves_per_block to have 3 elements");
+    llvm::ArrayRef<unsigned> explicitWpb =
+        initObject.hardwareConstraint.getWavesPerBlock();
+    initObject.wavesPerBlock.assign(explicitWpb.begin(), explicitWpb.end());
+    return initObject;
+  }
+
+  // Otherwise, compute waves_per_block from wave constraints.
+  // First, extract wave and workgroup constraints from symbolConstraints.
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WorkgroupConstraintAttr>
+      workgroupConstraints;
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WaveConstraintAttr>
+      waveConstraints;
+
+  for (auto &&[symbol, constraints] : initObject.symbolConstraints) {
+    for (Attribute constraint : constraints) {
+      if (auto wg = llvm::dyn_cast<wave::WorkgroupConstraintAttr>(constraint))
+        workgroupConstraints[symbol] = wg;
+      else if (auto wv = llvm::dyn_cast<wave::WaveConstraintAttr>(constraint))
+        waveConstraints[symbol] = wv;
+    }
+  }
+
+  // If there are no wave constraints, default to [1, 1, 1].
+  if (waveConstraints.empty()) {
+    return emitError(loc) << "expected either waves_per_block in the hardware "
+                             "constraint or wave constraints on an ancestor op";
+  }
+
+  if (!hyperparams) {
+    return emitError(loc) << "cannot compute waves_per_block: missing "
+                             "hyperparameters attribute";
+  }
+
+  if (failed(wave::computeWavesPerBlockFromConstraints(
+          workgroupConstraints, waveConstraints, hyperparams,
+          initObject.wavesPerBlock))) {
+    return emitError(loc)
+           << "failed to compute waves_per_block from wave constraints";
+  }
   return initObject;
 }
 

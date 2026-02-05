@@ -509,9 +509,11 @@ private:
 
 public:
   // Create an initialization object from the constraints attribute, report
-  // errors as diagnostics at the given location.
+  // errors as diagnostics at the given location. The hyperparameters are
+  // used for computing waves_per_block from wave constraints.
   static llvm::FailureOr<IndexExprsAnalysisInit>
-  create(mlir::Location loc, mlir::Attribute constraintsAttr);
+  create(mlir::Location loc, mlir::Attribute constraintsAttr,
+         wave::WaveHyperparameterAttr hyperparams = nullptr);
 
   // Hardware constraint.
   wave::HardwareConstraintAttr hardwareConstraint;
@@ -520,9 +522,9 @@ public:
   llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<mlir::Attribute>>
       symbolConstraints;
 
-  // Cached waves-per-block extracted from the hardware constraint and
-  // potentially wave constraints.
-  llvm::ArrayRef<unsigned> wavesPerBlock;
+  // Waves-per-block extracted from the hardware constraint or computed from
+  // wave constraints. Always stored here, even if copied from an attribute.
+  llvm::SmallVector<unsigned> wavesPerBlock;
 };
 
 // Lattice for propagating index expressions across wave dialect operations.

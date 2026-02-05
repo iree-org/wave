@@ -51,6 +51,18 @@ std::optional<llvm::SmallVector<int64_t>>
 evaluateMapWithHyperparams(mlir::AffineMap map,
                            llvm::ArrayRef<mlir::Attribute> symbols,
                            wave::WaveHyperparameterAttr hyperparams);
+
+/// Compute waves per block from wave constraints and workgroup constraints.
+/// Returns failure if the computation fails.
+llvm::LogicalResult computeWavesPerBlockFromConstraints(
+    const llvm::SmallDenseMap<wave::WaveSymbolAttr,
+                              wave::WorkgroupConstraintAttr>
+        &workgroupConstraints,
+    const llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WaveConstraintAttr>
+        &waveConstraints,
+    wave::WaveHyperparameterAttr hyperparams,
+    llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
+
 } // namespace wave
 
 #endif // WATER_DIALECT_WAVE_IR_WAVEUTILS_H

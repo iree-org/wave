@@ -1183,8 +1183,10 @@ public:
       return llvm::failure();
 
     for (auto &&[parent, attr] : constraints) {
-      auto initObject =
-          wave::IndexExprsAnalysisInit::create(parent->getLoc(), attr);
+      wave::WaveHyperparameterAttr hyperparams =
+          wave::getHyperparameters(parent);
+      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
+                                                             attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
       WalkResult walkResult = parent->walk([&](Operation *op) -> WalkResult {
@@ -1497,8 +1499,10 @@ public:
     if (llvm::failed(wave::collectWaveConstraints(top, constraints)))
       return llvm::failure();
     for (auto &&[parent, attr] : constraints) {
-      auto initObject =
-          wave::IndexExprsAnalysisInit::create(parent->getLoc(), attr);
+      wave::WaveHyperparameterAttr hyperparams =
+          wave::getHyperparameters(parent);
+      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
+                                                             attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
 
