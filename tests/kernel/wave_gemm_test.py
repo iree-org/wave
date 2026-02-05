@@ -3440,9 +3440,9 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     metadata = extract_kernel_metadata(text)
     # print(",\n".join(f'            "{i}"' for i in metadata.readfirstlane_ops))
     if use_water_backend:
-        vgpr_count = 456
+        vgpr_count = 458
         vgpr_spill_count = 0
-        sgpr_count = 46
+        sgpr_count = 42
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
@@ -3464,33 +3464,22 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-            "v_readfirstlane_b32 s0, v0",
-            "v_readfirstlane_b32 s22, v1",
-            "v_readfirstlane_b32 s7, v11",
-            "v_readfirstlane_b32 s25, v1",
-            "v_readfirstlane_b32 s4, v2",
-            "v_readfirstlane_b32 s28, v8",
-            "v_readfirstlane_b32 s30, v4",
-            "v_readfirstlane_b32 s31, v9",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s41, v5",
-            "v_readfirstlane_b32 s42, v6",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s29, v1",
-            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s0, v3",
+            "v_readfirstlane_b32 s4, v7 /*v263*/",
+            "v_readfirstlane_b32 s7, v3",
             "v_readfirstlane_b32 s36, v6",
-            "v_readfirstlane_b32 s40, v4",
-            "v_readfirstlane_b32 s28, v10",
-            "v_readfirstlane_b32 s42, v8",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s29, v1",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s30, v4",
-            "v_readfirstlane_b32 s31, v5",
-            "v_readfirstlane_b32 s11, v16",
-            "v_readfirstlane_b32 s13, v17",
+            "v_readfirstlane_b32 s38, v4",
+            "v_readfirstlane_b32 s37, v3",
+            "v_readfirstlane_b32 s39, v5",
+            "v_readfirstlane_b32 s36, v4",
+            "v_readfirstlane_b32 s38, v6",
+            "v_readfirstlane_b32 s37, v3",
+            "v_readfirstlane_b32 s39, v5",
+            "v_readfirstlane_b32 s1, v7 /*v263*/",
+            "v_readfirstlane_b32 s36, v0 /*v256*/",
+            "v_readfirstlane_b32 s38, v10 /*v266*/",
+            "v_readfirstlane_b32 s37, v11 /*v267*/",
+            "v_readfirstlane_b32 s39, v13 /*v269*/",
         ]
     else:
         vgpr_count = 458
