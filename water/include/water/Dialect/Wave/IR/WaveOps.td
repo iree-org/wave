@@ -569,18 +569,16 @@ def BroadcastOp : WaveOp<"broadcast", [
   let summary = "Broadcast a tensor to a larger shape by replicating values";
   let description = [{
     Broadcasts the source tensor to the result shape by replicating values
-    along the broadcast dimensions. The source shape symbols must be a subset
-    of the result shape symbols.
+    along the broadcast dimensions, which must be the trailing dimensions
+    of the result shape.
 
-    The broadcast dimensions are inferred from the difference between the
-    result shape and source shape (result_shape - source_shape).
+    When either operand or result are underspecified, the broadcast dimension
+    must be explicitly provided. Otherwise, it is inferred from the difference
+    between their respective symbolic shapes.
 
-    Example:
-    ```mlir
-    // Broadcast from [@M] to [@M, @N] by adding dimension @N
-    %result = wave.broadcast %src :
-        !wave.tensor<[@M] of f32, <register>> -> !wave.tensor<[@M, @N] of f32, <register>>
-    ```
+    Developer remark: unless one of the dimensions introduced by broadcasting
+    is indexed by a symbol that is mapped to thread X, this operation does not
+    change elements-per-thread.
   }];
 
   let arguments = !con((ins
