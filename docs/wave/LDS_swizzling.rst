@@ -14,9 +14,6 @@ LDS is the high-speed "scratchpad" memory within each CU.
   every cycle with a total throughput of **256B/clock**.
 
 - **Execution Phases**:
-
-..
-
    When a wavefront of 64 threads performs a read or write operation to
    LDS, the hardware typically processes the request in multiple
    execution phases. The specific number of phases required, and which
@@ -802,7 +799,7 @@ elements = 4 banks)
 .. [1]
    https://arxiv.org/pdf/2511.08083v1
 
-.. |image1| image:: ./LDS_ops_phases.png
+.. |image1| image:: ./LDSOpsPhases.png
    :width: 3.63287in
    :height: 2.64664in
 .. |image2| image:: ./GlobalMemoryLayout.png
@@ -814,6 +811,6 @@ elements = 4 banks)
 .. |image4| image:: ./LDSBankConflict.png
    :width: 6.21277in
    :height: 3.45154in
-.. |image5| image:: ./LDS_Bank_ConflictFree.png
+.. |image5| image:: ./LDSBankConflictFree.png
    :width: 6.3617in
    :height: 3.53428in
