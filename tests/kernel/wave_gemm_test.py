@@ -3440,9 +3440,9 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     metadata = extract_kernel_metadata(text)
     # print(",\n".join(f'            "{i}"' for i in metadata.readfirstlane_ops))
     if use_water_backend:
-        vgpr_count = 458
+        vgpr_count = 454
         vgpr_spill_count = 0
-        sgpr_count = 42
+        sgpr_count = 40
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
@@ -3463,24 +3463,7 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
         ]
-        readfirstlane_ops = [
-            "v_readfirstlane_b32 s0, v3",
-            "v_readfirstlane_b32 s4, v7 /*v263*/",
-            "v_readfirstlane_b32 s7, v3",
-            "v_readfirstlane_b32 s36, v6",
-            "v_readfirstlane_b32 s38, v4",
-            "v_readfirstlane_b32 s37, v3",
-            "v_readfirstlane_b32 s39, v5",
-            "v_readfirstlane_b32 s36, v4",
-            "v_readfirstlane_b32 s38, v6",
-            "v_readfirstlane_b32 s37, v3",
-            "v_readfirstlane_b32 s39, v5",
-            "v_readfirstlane_b32 s1, v7 /*v263*/",
-            "v_readfirstlane_b32 s36, v0 /*v256*/",
-            "v_readfirstlane_b32 s38, v10 /*v266*/",
-            "v_readfirstlane_b32 s37, v11 /*v267*/",
-            "v_readfirstlane_b32 s39, v13 /*v269*/",
-        ]
+        readfirstlane_ops = []
     else:
         vgpr_count = 458
         vgpr_spill_count = 0
