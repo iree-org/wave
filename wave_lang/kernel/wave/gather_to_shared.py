@@ -616,7 +616,8 @@ def gather_to_shared_swizzling(
         distributed_shape = mem_custom.distributed_shape
         col_size = subs_idxc(distributed_shape[-1])
 
-        # Make sure swizzling logic respects elements_per_thread in gather and read. Take the maximum value to prevent swizzling of smaller chunks which could break order of elements
+        # Make sure swizzling logic respects elements_per_thread in gather and read.
+        # Take the maximum value to prevent swizzling of smaller chunks which could break order of elements
         # Ensure swizzling granularity matches the largest access (typically the 128 bit Read).
         # We use the max elements_per_thread to prevent "shattering" 128 bit blocks,
         # ensuring that smaller Gather writes stay contiguous within a swizzled bucket.
