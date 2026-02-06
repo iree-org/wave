@@ -83,7 +83,9 @@ def determine_shuffle_config(
     ] + induction_vars
     offset = safe_subs(access_pattern.start, {k: 0 for k in ignore})
     offset = subs_idxc(offset)
-    offset_table = [safe_subs(offset, {THREAD_0: i}) for i in range(subgroup_size)]
+    offset_table = [
+        safe_subs(offset, {THREAD_0: i, LANE_ID: i}) for i in range(subgroup_size)
+    ]
     unique_offsets = list(dict.fromkeys(offset_table))
     # The cluster size represents the number of unique threads that are participating in a shuffle.
     # We can obtain this information by just computing the number of unique entries in the offset table.

@@ -72,7 +72,7 @@ def construct_min_global_access_pattern(
     It takes a 1-D global offset and delinearizes it to a multi-dimensional offset
     and updates the access pattern accordingly.
     """
-    thread_ids = [THREAD_0, THREAD_1, THREAD_2, GPR_NUM]
+    thread_ids = [THREAD_0, THREAD_1, THREAD_2, GPR_NUM, WAVE_ID, LANE_ID]
     new_index = {key: index[key].subs({t: 0 for t in thread_ids}) for key in index}
     nd_index = delinearize_index(thread_id, shape)
     for i, key in enumerate(index.keys()):
