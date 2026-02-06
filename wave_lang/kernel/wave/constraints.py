@@ -492,7 +492,7 @@ class HardwareConstraint(Constraint):
             self.threads_per_block[0],
             self.threads_per_block[0] * self.threads_per_block[1],
         ]
-        return sum([x * y for x, y in zip(thread_ids, threads_per_block)])
+        return sum(x * y for x, y in zip(thread_ids, threads_per_block))
 
     @property
     def wave_id(self) -> IndexExpr:
