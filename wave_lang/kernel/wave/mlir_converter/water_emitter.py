@@ -113,6 +113,10 @@ try:
         WaveMmaKindAttr,
         WaveWorkgroupDimAttr,
         WorkgroupConstraintAttr,
+        WaveAddressSpace,
+        WaveAddressSpaceAttr,
+        WaveSymbolAttr,
+        WaveTensorType,
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
@@ -177,38 +181,36 @@ def _dtype_to_mlir_scalar_type(t: dtype.Datatype) -> ir.Type:
     raise RuntimeError(f"Unsupported scalar dtype: {t}")
 
 
-def _map_address_space(addr: str) -> str:
-    # TODO: Use WaveAddressSpaceAttr bindings when they exist
+def _map_address_space(addr: str) -> WaveAddressSpaceAttr:
     if not addr:
-        return ""
+        return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
     a = str(addr).lower()
     if "global" in a:
-        return "global"
+        return WaveAddressSpaceAttr.get(WaveAddressSpace.Global)
     if "shared" in a:
-        return "shared"
+        return WaveAddressSpaceAttr.get(WaveAddressSpace.Shared)
     if "register" in a:
-        return "register"
+        return WaveAddressSpaceAttr.get(WaveAddressSpace.Register)
     # If we can't determine the address space, use unspecified for now
     # TODO: Sometimes the address space is determined in the hyperparameters
     #       Check whether a mapping for `addr` is defined there.
-    return "unspecified"
+    return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
 
 
 def _type_to_wave_mlir(
     ctx: ir.Context, type_: type[Register] | type[Memory]
 ) -> ir.Type:
-    # TODO: Use WaveTensorType bindings when they exist
-
-    # Map Python Wave types to MLIR types
+    # Map Python Wave types to MLIR types using WaveTensorType bindings
     if issubclass(type_, Register):
         if not type_.symbolic_shape or type_.dtype is None:
             raise RuntimeError(
                 "Register type must have concrete symbolic_shape and dtype"
             )
-        shape_txt = ", ".join([f"@{s}" for s in type_.symbolic_shape])
-        return ir.Type.parse(
-            f"!wave.tensor<[{shape_txt}] of {type_.dtype}, <register>>", context=ctx
-        )
+        # Convert symbolic shape to WaveSymbolAttr list
+        shape_attrs = [WaveSymbolAttr.get(str(s)) for s in type_.symbolic_shape]
+        element_type = _dtype_to_mlir(ctx, type_.dtype)
+        address_space_attr = WaveAddressSpaceAttr.get(WaveAddressSpace.Register)
+        return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
     if issubclass(type_, Memory):
         if (
             not type_.symbolic_shape
@@ -218,11 +220,11 @@ def _type_to_wave_mlir(
             raise RuntimeError(
                 "Memory type must have concrete symbolic_shape, dtype, and address_space"
             )
-        addr_txt = _map_address_space(type_.address_space)
-        shape_txt = ", ".join([f"@{s}" for s in type_.symbolic_shape])
-        return ir.Type.parse(
-            f"!wave.tensor<[{shape_txt}] of {type_.dtype}, <{addr_txt}>>", context=ctx
-        )
+        # Convert symbolic shape to WaveSymbolAttr list
+        shape_attrs = [WaveSymbolAttr.get(str(s)) for s in type_.symbolic_shape]
+        element_type = _dtype_to_mlir(ctx, type_.dtype)
+        address_space_attr = _map_address_space(type_.address_space)
+        return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
 
 
