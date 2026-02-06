@@ -403,9 +403,9 @@ def capture_copy_kernel(
 
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
-        copy_kernel.initialize_wave_constraints()
-        copy_kernel.initialize_symbolic_constraints()
-        copy_kernel.initialize_workgroup_constraints()
+
+        # Initialize constraints
+        copy_kernel.initalize_all_constraints(options)
 
         result = _trace_launchable_and_get_kernel_signature(copy_kernel, options)
         mb = result[0]
