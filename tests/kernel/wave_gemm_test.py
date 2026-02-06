@@ -3374,6 +3374,8 @@ def testSpecializeGemm(
     )
     options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
+    # TODO: Wave specialization doesnt work with wave_id yet
+    gemm.hardware_constraints[0].use_wave_id = False
     gemm = wave_compile(options, gemm)
 
     a = device_randn(shape[0], shape[2], dtype=datatype)
