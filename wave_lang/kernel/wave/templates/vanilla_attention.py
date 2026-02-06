@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import math
+from typing import Sequence
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -16,7 +17,7 @@ from .attention_common import AttentionShape
 
 def get_vanilla_attention_kernel(
     shape: AttentionShape,
-    mfma_variant: MMAType,
+    mfma_variant: Sequence[MMAType],
     dynamic_dims: bool,
     is_causal: bool = False,
     is_v_transposed: bool = False,
@@ -27,6 +28,8 @@ def get_vanilla_attention_kernel(
         raise NotImplementedError(
             "Sliding window is only supported for causal attention."
         )
+
+    assert len(mfma_variant) == 2, "mfma_variant must be a sequence of two MMATypes"
 
     scale = scale or (1.0 / math.sqrt(shape.head_size))
     scale *= math.log2(math.e)
@@ -50,7 +53,7 @@ def get_vanilla_attention_kernel(
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(M, sympy.ceiling(BLOCK_M / 4))]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
