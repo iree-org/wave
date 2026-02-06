@@ -5,16 +5,16 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """
-MLIR Converter for Wave Dialect
+Bidirectional converter between Wave FX traces and Wave MLIR.
 
-This provides functionality to convert Wave traces into MLIR code
-using the Wave dialect. It serializes the trace data and spawns a separate water emitter
-process that uses Water Python bindings to generate the MLIR output.
+Both directions run in a subprocess to isolate the Water MLIR Python bindings
+from the host process.
 
-The converter handles:
-- Serialization of Wave kernel traces using the dill library
-- Spawning the water emitter as a subprocess
-- Triggering operation type inference and some simple wave type mapping
+``emit_wave_dialect`` serializes a CapturedTrace via dill, spawns
+``water_emitter.py``, and returns the MLIR module text.
+
+``mlir_to_fx`` sends MLIR text to ``fx_emitter.py`` and returns a
+reconstructed CapturedTrace with constraints and compile options.
 """
 
 import linecache
@@ -295,3 +295,65 @@ module attributes {transform.with_named_sequence} {
         diagnostics,
         inferred_attributes,
     )
+
+
+def mlir_to_fx(
+    mlir_text: str,
+) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[str]]:
+    """Convert Wave MLIR text back into a Wave FX trace via subprocess."""
+    if not isinstance(mlir_text, str):
+        raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
+    child = Path(__file__).with_name("fx_emitter.py")
+    if not child.exists():
+        raise RuntimeError(f"fx_emitter helper not found: {child}")
+    proc = subprocess.Popen(
+        [sys.executable, str(child)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output, err = proc.communicate(dill.dumps({"mlir": mlir_text}))
+    if proc.returncode != 0:
+        diagnostics = None
+        try:
+            unpickled = dill.loads(output)
+            diagnostics = (
+                unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
+            )
+        except Exception:
+            diagnostics = None
+        diag_text = f"\nDiagnostics: {diagnostics}" if diagnostics else ""
+        raise RuntimeError(
+            f"fx_emitter failed (code {proc.returncode}):\n"
+            f"{err.decode('utf-8', errors='replace')}{diag_text}"
+        )
+    try:
+        unpickled = dill.loads(output)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to unpickle output from fx_emitter (code {proc.returncode}):\n"
+            f"Output: {output!r}\n"
+            f"Exception: {e}"
+        ) from e
+    if not isinstance(unpickled, dict):
+        raise RuntimeError(f"fx_emitter output has unexpected type: {type(unpickled)}")
+    trace = unpickled.get("trace")
+    constraints = unpickled.get("constraints")
+    options = unpickled.get("options")
+    diagnostics = unpickled.get("diagnostics")
+    if not isinstance(trace, CapturedTrace):
+        raise RuntimeError(f"fx_emitter trace has unexpected type: {type(trace)}")
+    if not isinstance(constraints, list) or not all(
+        isinstance(c, Constraint) for c in constraints
+    ):
+        raise RuntimeError(
+            f"fx_emitter constraints have unexpected type: {type(constraints)}"
+        )
+    if not isinstance(options, WaveCompileOptions):
+        raise RuntimeError(f"fx_emitter options has unexpected type: {type(options)}")
+    if not isinstance(diagnostics, list):
+        raise RuntimeError(
+            f"fx_emitter diagnostics have unexpected type: {type(diagnostics)}"
+        )
+    trace.restore_node_state()
+    return trace, constraints, options, diagnostics

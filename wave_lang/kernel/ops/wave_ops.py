@@ -660,12 +660,77 @@ def has_same_custom_type(lhs_type: Memory, rhs_type: Memory) -> bool:
 class CustomOp(ABC):
     """
     Base class for all custom fx nodes.
+
+    Fields with ``compare=False`` are infrastructure or scheduling artifacts
+    and do not participate in semantic equality used for trace equivalence.
     """
 
-    graph: Optional[fx.Graph] = field(default=None, init=False)
-    fx_node: Optional[fx.Node] = field(default=None, init=False)
+    graph: Optional[fx.Graph] = field(default=None, init=False, compare=False)
+    fx_node: Optional[fx.Node] = field(default=None, init=False, compare=False)
     tkw_op_name: str = field(default="unknown", init=False)
     _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
+
+    @classmethod
+    def create(
+        cls: Type[CustomOpT],
+        graph: fx.Graph,
+        *init_args,
+        type: Any = None,
+        **extra_attrs,
+    ) -> CustomOpT:
+        """
+        Create a CustomOp instance and its FX node together.
+
+        This classmethod properly instantiates the CustomOp with its semantic fields,
+        creates the FX node, and links them together. Useful when building FX graphs
+        programmatically (e.g., from MLIR).
+
+        Args:
+            graph: FX graph to add the node to
+            *init_args: Arguments to pass to the CustomOp's __init__ (the dataclass fields)
+            type: Optional type to set on the node
+            **extra_attrs: Additional attributes to set on the fx_node (e.g., index, vector_shapes)
+
+        Returns:
+            The created CustomOp instance with fx_node and graph fields populated
+
+        Example:
+            register = NewRegister.create(
+                graph, dims, dtype, init_value,
+                type=Register[(M, N, f32)],
+                vector_shapes={M: 16, N: 16}
+            )
+        """
+        assert cls._tracing_function is not None, (
+            f"{cls.__name__} has no _tracing_function; "
+            f"ensure @define_op decorates the class"
+        )
+
+        # Create the CustomOp instance with its semantic fields
+        instance = cls(*init_args)
+
+        # Create the FX node
+        fx_node = graph.create_node(
+            "call_function",
+            target=cls._tracing_function,
+            args=init_args,
+            kwargs={},
+        )
+        fx_node.tkw_op = cls
+        fx_node.tkw_op_name = cls.tkw_op_name
+        if type is not None:
+            fx_node.type = type
+
+        # Link the instance and node
+        instance.fx_node = fx_node
+        instance.graph = graph
+
+        # Set any extra attributes on the fx_node
+        for attr_name, attr_value in extra_attrs.items():
+            if attr_value is not None:  # Skip None values
+                setattr(fx_node, attr_name, attr_value)
+
+        return instance
 
     @property
     def location(self) -> Optional[CapturedLocation]:
@@ -1381,7 +1446,7 @@ class Placeholder(CustomOp):
     Represents a placeholder node in the graph, i.e. an input to a function.
     """
 
-    _name: str
+    _name: str = field(compare=False)
     _type: Optional[Type[DataType] | Type[Memory]] = None
     tkw_op_name: str = field(default="placeholder", init=False)
 
@@ -1511,10 +1576,10 @@ class Allocate(CustomOp):
     distributed_shape: tuple[IndexExpr]
     dtype: DataType
     address_space: AddressSpace = SHARED_ADDRESS_SPACE
-    padding: int = 0
+    padding: int = field(default=0, compare=False)
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
-    tail_padding: int = 0  # Padding after the array end
+    tail_padding: int = field(default=0, compare=False)
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1889,7 +1954,7 @@ class MMA(MMABase):
     @property
     def acc_index(self) -> dict[IndexSymbol, IndexSequence]:
         operand_map = {MMA_LHS: 0, MMA_RHS: 0, MMA_ACC: 1}
-        if self.acc_type is None:
+        if self.acc_type is None or self.index is None:
             return None
         return self.operand_index(operand_map, self.acc_type.symbolic_shape)
 
@@ -2022,7 +2087,7 @@ class ScaledMMA(MMABase):
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
         }
-        if self.acc_type is None:
+        if self.acc_type is None or self.index is None:
             return None
         return self.operand_index(operand_map, self.acc_type.symbolic_shape)
 
@@ -2078,7 +2143,7 @@ class Read(CustomOp):
     flags: MemoryAccessFlags = MemoryAccessFlags.NONE
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
-    _write_dependency: Optional[list[fx.Node]] = None
+    _write_dependency: Optional[list[fx.Node]] = field(default=None, compare=False)
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2366,8 +2431,8 @@ class Conditional(NestedRegionOp):
     """
 
     condition: fx.Proxy | IndexExpr
-    subgraph_name: str
-    implicit_captures: Sequence[fx.Proxy]
+    subgraph_name: str = field(compare=False)
+    implicit_captures: Sequence[fx.Proxy] = field(compare=False)
     else_return: Optional[Sequence["Register"]] = None
 
     @property
@@ -2408,8 +2473,8 @@ class Conditional(NestedRegionOp):
 class Iterate(NestedRegionOp):
     axis: IndexSymbol
     init_args: Sequence[Any]
-    subgraph_name: str
-    implicit_captures: Sequence[fx.Proxy]
+    subgraph_name: str = field(compare=False)
+    implicit_captures: Sequence[fx.Proxy] = field(compare=False)
     step: int = 1
     start: Optional[IndexExpr] = None
     condition: Optional[IndexExpr] = None
@@ -2432,23 +2497,29 @@ class Iterate(NestedRegionOp):
         return expand_dims
 
     @property
-    def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
+    def index(self) -> list[dict[IndexSymbol, IndexSequence] | None]:
+        """Collect indices from the subgraph's output return values.
+
+        Always returns a list with one entry per return value.  Uses
+        getattr with a None default so this is safe to call on
+        partially-populated graphs where indices have not been propagated
+        yet.
+        """
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         output = get_custom(subgraph.output_node())
         assert isinstance(output, Output)
         return_vals = output.return_vals[0]
-        return (
-            [
-                (
-                    get_custom(val).acc_index
-                    if isinstance(get_custom(val), (MMA, ScaledMMA))
-                    else val.index
-                )
-                for val in return_vals
-            ]
-            if isinstance(return_vals, (Sequence))
-            else return_vals.index
-        )
+        if not isinstance(return_vals, Sequence):
+            return_vals = [return_vals]
+        result = []
+        for val in return_vals:
+            custom_val = get_custom(val)
+            if isinstance(custom_val, (MMA, ScaledMMA)):
+                idx = getattr(custom_val, "acc_index", None)
+            else:
+                idx = getattr(val, "index", None)
+            result.append(idx)
+        return result
 
     @index.setter
     def index(self, value: Any):

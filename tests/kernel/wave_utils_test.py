@@ -18,7 +18,8 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.graph_utils import assert_traces_equivalent
-from wave_lang.kernel.ops.wave_ops import MMA, get_custom
+from wave_lang.kernel.ops.wave_ops import Allocate, MMA, get_custom
+from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 from wave_lang.support.indexing import IndexSequence
 import sympy
 import numpy as np
@@ -241,8 +242,88 @@ def test_traced_attr_removed_detected():
     assert hasattr(mma_node, "index"), "MMA node missing index attribute"
     delattr(mma_node, "index")
 
-    with pytest.raises(AssertionError, match="index presence mismatch"):
+    with pytest.raises(AssertionError, match="index lost"):
         assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
+
+
+def test_directional_lhs_missing_attrs_ok():
+    """Directional comparison: lhs (reference) missing semantic attrs is OK.
+
+    The comparison is directional -- the reference trace may come from an
+    earlier pipeline stage where vector_shapes or indices have not been
+    populated yet. This should not fail even if the rhs has them.
+    """
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    # Strip vector_shapes from every node in the reference (lhs).
+    for node in trace_a.walk():
+        if hasattr(node, "vector_shapes"):
+            delattr(node, "vector_shapes")
+
+    # lhs missing, rhs present → should still pass.
+    assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
+
+
+def test_directional_rhs_missing_attrs_detected():
+    """Directional comparison: rhs (actual) missing semantic attrs is detected.
+
+    If the reference has vector_shapes but the actual lost them, this is an
+    error -- information was lost during the roundtrip.
+    """
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    # Strip vector_shapes from every node in the actual (rhs).
+    for node in trace_b.walk():
+        if hasattr(node, "vector_shapes"):
+            delattr(node, "vector_shapes")
+
+    with pytest.raises(AssertionError, match="attr 'vector_shapes' lost"):
+        assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
+
+
+def _get_first_allocate_node(trace):
+    """Helper to find first Allocate node in trace."""
+    for node in trace.walk():
+        if isinstance(get_custom(node), Allocate):
+            return node
+    raise AssertionError("No Allocate node found in trace")
+
+
+def test_allocate_out_of_scope_induction_symbols_stripped():
+    """Allocate index with out-of-scope induction symbols still matches.
+
+    Backward index propagation (set_derived_index) can place $ARG-prefixed
+    induction symbols on Allocate nodes that live outside the corresponding
+    Iterate loop.  The comparison strips these before checking.
+    """
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    alloc_a = _get_first_allocate_node(trace_a)
+    alloc_b = _get_first_allocate_node(trace_b)
+
+    # Give both Allocate nodes a clean index, so only one will be bugged.
+    clean_index = {sym.M: IndexSequence(0, 16, 1), sym.N: IndexSequence(0, 16, 1)}
+    alloc_a.index = {
+        k: IndexSequence(v.start, v.size, v.stride) for k, v in clean_index.items()
+    }
+    alloc_b.index = {
+        k: IndexSequence(v.start, v.size, v.stride) for k, v in clean_index.items()
+    }
+
+    # Inject a bogus out-of-scope induction symbol into one side.
+    # The Allocate lives in the root graph (outside any Iterate), so $ARGK
+    # is out of scope and should be stripped before comparison.
+    bogus_sym = get_induction_symbol(sym.K)
+    seq = alloc_b.index[sym.M]
+    alloc_b.index[sym.M] = IndexSequence(
+        seq.start + bogus_sym * sympy.Symbol("BLOCK_K"), seq.size, seq.stride
+    )
+
+    # Should still pass because the comparison strips out-of-scope $ARG symbols.
+    assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
 
 
 @pytest.mark.parametrize(

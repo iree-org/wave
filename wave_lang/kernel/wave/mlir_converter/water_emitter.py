@@ -10,7 +10,7 @@ from __future__ import annotations
 import dill
 import torch.fx as fx
 import sys
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Sequence
 import sympy
 import argparse
 from pathlib import Path
@@ -28,16 +28,15 @@ if __name__ == "__main__":
         sys.path.append(_current_dir)
 
 from mlir_to_wave import (
-    INDEX_SYMBOL_MAP,
-    ITER_SYMBOL_NAME_WATER_PREFIX,
     convert_index_mapping_array_to_sympy,
-    ITER_SYMBOL_NAME_WAVE_PREFIX,
+    dtype_to_mlir_scalar_type,
+    preprocess_symbols,
+    symbol_name_to_attribute,
 )
 
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
-    from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
 from wave_lang.kernel.wave.mlir_converter.diagnostics import (
@@ -52,8 +51,10 @@ from wave_lang.kernel.lang.wave_types import Memory, Register
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
-from wave_lang.kernel._support.indexing import safe_subs
-from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+from wave_lang.kernel.wave.utils.symbol_utils import (
+    collect_allowed_induction_symbols,
+    strip_out_of_scope_induction_symbols,
+)
 
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
@@ -342,49 +343,6 @@ def _convert_sympy_expr_to_affine_map(
     )
 
 
-def _preprocess_symbols(
-    symbols: Sequence[sympy.Symbol],
-) -> dict[sympy.Symbol, sympy.Symbol]:
-    """
-    Preprocess symbols by:
-
-      1. adding assumptions about all symbols being positive to later enable
-         more simplifications.
-      2. replacing ITER_SYMBOL_NAME_WAVE_PREFIX (`$ARG`) prefix of argument
-         symbols (e.g. `ARG0`) by ITER_SYMBOL_NAME_WATER_PREFIX (`_Iter_`) to
-         match dialect expectations.
-    """
-    result = {}
-    for sym in symbols:
-        # Special case: rename $ARG* symbols to _Iter_*.
-        if sym.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX):
-            new_name = sym.name.replace(
-                ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
-            )
-            result[sym] = sympy.Symbol(new_name, positive=True)
-        else:
-            result[sym] = sympy.Symbol(sym.name, positive=True)
-    return result
-
-
-def _symbol_name_to_attribute(name: str) -> ir.Attribute:
-    """
-    Convert a symbol name to either a WaveSymbolAttr or WaveIndexSymbolAttr.
-
-    Special symbols starting with $ are converted to WaveIndexSymbolAttr,
-    while regular symbols are converted to WaveSymbolAttr.
-    """
-
-    if name in INDEX_SYMBOL_MAP:
-        return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
-    if name.startswith(ITER_SYMBOL_NAME_WATER_PREFIX):
-        return wave.WaveIterSymbolAttr.get(
-            name.replace(ITER_SYMBOL_NAME_WATER_PREFIX, "")
-        )
-    else:
-        return wave.WaveSymbolAttr.get(name)
-
-
 def _build_index_mapping_dict(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
@@ -395,46 +353,22 @@ def _build_index_mapping_dict(
     For MMA, multiple DictAttr objects are assembled into an ArrayAttr (one per
     operand). For all other nodes a single-element ArrayAttr is used.
 
-    The `allowed_induction_symbols` argument lists induction variable-related
-    symbols that are allowed to be present in the expressions. Other symbols
-    will be removed and a warning will be generated if it is the case.
+    Out-of-scope induction symbols are stripped before conversion.
     """
+    index = strip_out_of_scope_induction_symbols(index, allowed_induction_symbols)
 
     index_mappings: dict[str, ir.Attribute] = {}
     for dim, exprs in index.items():
-        all_symbols_set = set().union(
-            *[
-                expr.free_symbols
-                for expr in [exprs.start, exprs.size, exprs.stride]
-                if isinstance(expr, sympy.Expr)
-            ]
-        )
-        induction_symbols_to_remove = {
-            symbol
-            for symbol in all_symbols_set
-            if symbol.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX)
-            and symbol not in allowed_induction_symbols
-        }
-        if induction_symbols_to_remove:
-            induction_symbols_subs = {
-                symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
-            }
-            # TODO: can we wrap this into a diagnostic?
-            print(
-                f"WARNING: Removing invalid induction symbols {induction_symbols_to_remove} from {index}",
-                file=sys.stderr,
-            )
-            exprs.start = safe_subs(exprs.start, induction_symbols_subs)
-            exprs.size = safe_subs(exprs.size, induction_symbols_subs)
-            exprs.stride = safe_subs(exprs.stride, induction_symbols_subs)
-
-        all_symbols = list(all_symbols_set - induction_symbols_to_remove)
-        symbol_mapping = _preprocess_symbols(all_symbols)
+        all_symbols = set()
+        for component in (exprs.start, exprs.size, exprs.stride):
+            if isinstance(component, sympy.Expr):
+                all_symbols |= component.free_symbols
+        symbol_mapping = preprocess_symbols(list(all_symbols))
         start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
         size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
         stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
         symbol_attrs = [
-            _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+            symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
         ]
         index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
             symbol_attrs, start, size, stride
@@ -448,19 +382,12 @@ def _attach_attributes(
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
 
-        # XXX: Collect induction-related symbols that make sense in the current
-        # context; the frontend is buggy and may have these symbols outside of
-        # the respective loops.
-        parent_fx_node = node.fx_node
-        allowed_induction_symbols: set[IndexSymbol] = set()
-        while parent_fx_node := getattr(parent_fx_node.graph, "parent_op", None):
-            parent_custom = get_custom(parent_fx_node)
-            if isinstance(parent_custom, Iterate):
-                induction_symbol = get_induction_symbol(parent_custom.axis)
-                allowed_induction_symbols.add(induction_symbol)
+        allowed_induction_symbols = collect_allowed_induction_symbols(node.fx_node)
 
         if isinstance(node, MMA):
-            # Build one index mapping dict per operand for MMA nodes
+            # Build one index mapping dict per operand plus the result for
+            # MMA nodes (lhs, rhs, acc, result), matching the C++ InferTypes
+            # pass which stores operandExprs + resultExprs in that order.
             if lhs_index := getattr(node, "lhs_index", None):
                 dict_attrs.append(
                     _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
@@ -470,6 +397,10 @@ def _attach_attributes(
                     _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
                 )
             if acc_index := getattr(node, "acc_index", None):
+                dict_attrs.append(
+                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                )
+                # Result index equals acc_index (MMA result type == acc type).
                 dict_attrs.append(
                     _build_index_mapping_dict(acc_index, allowed_induction_symbols)
                 )
@@ -488,12 +419,12 @@ def _attach_attributes(
     if getattr(node, "bounds", None):
         bounds = {}
         for dim, expr in node.bounds.items():
-            symbol_mapping = _preprocess_symbols(
+            symbol_mapping = preprocess_symbols(
                 list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
             )
             result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
             symbol_attrs = [
-                _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+                symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
@@ -520,7 +451,7 @@ def _convert_to_wave_expr_list_tuple(
             all_symbols.update(expr.free_symbols)
 
     # Preprocess symbols and create mapping
-    symbol_mapping = _preprocess_symbols(list(all_symbols))
+    symbol_mapping = preprocess_symbols(list(all_symbols))
 
     # Convert each expression to an affine expression
     affine_exprs = []
@@ -534,7 +465,7 @@ def _convert_to_wave_expr_list_tuple(
 
     # Convert symbol names to attributes
     symbol_attrs = [
-        _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+        symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
     ]
 
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
@@ -667,7 +598,7 @@ def _emit_ops_from_graph(
                     dtype = getattr(node, "dtype", None)
                     if dtype is None:
                         raise RuntimeError("Register op missing dtype")
-                    element_type = _dtype_to_mlir_scalar_type(dtype)
+                    element_type = dtype_to_mlir_scalar_type(dtype)
                     constant_op = arith.ConstantOp(
                         result=element_type, value=node.value
                     )

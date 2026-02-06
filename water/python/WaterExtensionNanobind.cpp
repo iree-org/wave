@@ -876,6 +876,18 @@ NB_MODULE(_waterDialects, m) {
       "register_passes", []() { mlirWaveDialectRegisterPasses(); },
       "Registers the wave dialect passes.");
 
+  // Wave operation methods
+  d.def(
+      "iterate_make_isolated",
+      [](MlirOperation op) { mlirWaveIterateOpMakeIsolated(op); },
+      nb::arg("op"),
+      "Makes a wave.iterate operation's region isolated from above.");
+  d.def(
+      "iterate_make_non_isolated",
+      [](MlirOperation op) { mlirWaveIterateOpMakeNonIsolated(op); },
+      nb::arg("op"),
+      "Makes a wave.iterate operation's region non-isolated from above.");
+
   // Export dialect constants
   d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;
 

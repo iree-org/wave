@@ -3,6 +3,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from dataclasses import fields as dataclass_fields, is_dataclass
 from typing import (
     Callable,
     Optional,
@@ -26,6 +27,7 @@ from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_R
 from ...lang.wave_types import Memory, Register
 from ...ops.wave_ops import (
     MMA,
+    Allocate,
     Conditional,
     CustomOp,
     ExtractSlice,
@@ -43,7 +45,11 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
-from .symbol_utils import subs_idxc
+from .symbol_utils import (
+    collect_allowed_induction_symbols,
+    strip_out_of_scope_induction_symbols,
+    subs_idxc,
+)
 
 
 class CheckResult(NamedTuple):
@@ -66,29 +72,28 @@ Payload: TypeAlias = (
 )
 ResultType: TypeAlias = DataType | Memory | Register | Sequence["ResultType"] | None
 
+# Semantic attributes stored on fx.Node (via setattr) rather than declared as
+# dataclass fields.  These complement the dataclass field introspection in
+# _check_nodes_equivalent: dataclass fields are compared automatically via
+# fields(), while these must be checked explicitly because they live on the
+# fx.Node, not on the CustomOp dataclass.
+#
+# Excluded from comparison (non-semantic / scheduling artifacts):
+#   location, expanded_dims, scheduling_parameters
+_ADDITIONAL_NODE_ATTRS = ("vector_shapes", "reduction_dim", "iter_idx")
 
-# Attributes compared for trace equivalence.
-# Excluded on purpose:
-# - "index": compared via _index_equivalent.
-# - "location": non-semantic and unstable across runs.
-# - "expanded_dims" and "scheduling_parameters": scheduling artifacts.
-# TODO: Ideally, we would have a canonical list of core attributes on the CustomOp
-# definition in wave_ops. They should also inform how to clone an an operation.
-# The current behavior of also cloning everything that's attached in
-# the meta field of a node makes this information unconstrained and distributed across the codebase.
-# across the codebase.
-CORE_ATTR_NAMES = (
-    "vector_shapes",
-    "reduction_dim",
-    "iter_idx",
-    "elements_per_thread",
-    "bounds",
-    "mma_type",
-    "offset",
-    "size",
-    "stride",
-    "value",
-)
+
+def _is_effectively_none(val: Any) -> bool:
+    """Return True for None or list/tuple containers of all-None values.
+
+    During graph construction, an unset index can surface as either ``None``
+    or ``[None]`` depending on the op.  Treat both as "not yet populated".
+    """
+    if val is None:
+        return True
+    if isinstance(val, (list, tuple)) and all(v is None for v in val):
+        return True
+    return False
 
 
 def DCE(trace: CapturedTrace) -> None:
@@ -325,8 +330,14 @@ def _check_result_types_equivalent(lhs: ResultType, rhs: ResultType) -> CheckRes
     """Compare result types by shape, dtype, and address space."""
     if lhs == rhs:
         return CheckResult(True, None)
-    if lhs is None or rhs is None:
-        return CheckResult(False, f"type presence mismatch: {lhs} vs {rhs}")
+    # Directional: reference absent is OK (type may not yet be set),
+    # but reference present and actual absent means type was lost.
+    if lhs is None:
+        return CheckResult(True, None)
+    if rhs is None:
+        return CheckResult(
+            False, "type lost: present in reference but absent in actual"
+        )
 
     # Compare attributes that define type equivalence
     for attr in ("symbolic_shape", "dtype", "address_space"):
@@ -346,6 +357,10 @@ def _check_index_equivalent(
     """Compare index mappings or sequences for equivalence."""
     if lhs == rhs:
         return CheckResult(True, None)
+
+    if _is_effectively_none(lhs) and _is_effectively_none(rhs):
+        return CheckResult(True, None)
+
     if lhs is None or rhs is None:
         return CheckResult(False, f"index presence mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, dict) and isinstance(rhs, dict):
@@ -369,48 +384,303 @@ def _check_index_equivalent(
 def _check_nodes_equivalent(
     lhs_custom: CustomOp,
     rhs_custom: CustomOp,
+    lhs_trace: CapturedTrace,
+    rhs_trace: CapturedTrace,
     subs: Optional[dict[IndexSymbol, int]],
     node_map: dict[fx.Node, fx.Node],
 ) -> CheckResult:
-    """Compare node identity, result type, index, and core attributes."""
+    """
+    Compare two CustomOp nodes for equivalence across traces.
+
+    Performs a field-by-field comparison in the following order:
+
+    1. Type identity
+    2. Result types (directional; skipped for structural nodes)
+    3. Dataclass fields with compare=True
+    4. Index mappings (directional; skipped for structural nodes)
+    5. Semantic attrs: vector_shapes, reduction_dim, iter_idx (directional)
+    6. Subgraph equivalence (for NestedRegionOps)
+
+    "Directional" means the reference (lhs) may be absent but the actual (rhs)
+    must not lose information that the reference has. Particular nodes
+    (Placeholder, Output -- but not IterArg) are exempt from checks
+    2/4/5 as they don't participate in verify_nodes.
+    """
+    # Check type identity
     if type(lhs_custom) is not type(rhs_custom):
         return CheckResult(
             False,
             f"op mismatch: {type(lhs_custom).__name__} vs {type(rhs_custom).__name__}",
         )
 
+    # Placeholder equivalence is handled by _match_root_placeholders (root
+    # graphs) and _reconcile_lifted_placeholders (subgraphs).  Output nodes
+    # don't carry types, indices, or semantic attrs; their return_vals field
+    # is compared via the dataclass field check below.  IterArg is a
+    # Placeholder subclass but is compared normally.
+    _skip_node_types = isinstance(lhs_custom, (Placeholder, Output)) and not isinstance(
+        lhs_custom, IterArg
+    )
+
     # Check result types
-    if not (
-        check_result := _check_result_types_equivalent(lhs_custom.type, rhs_custom.type)
-    ).success:
-        return check_result
-
-    # Check indices
-    if not (
-        check_result := _check_index_equivalent(
-            lhs_custom.index, rhs_custom.index, subs
-        )
-    ).success:
-        return check_result
-
-    # Check core attributes
-    for attr_name in CORE_ATTR_NAMES:
-        lhs_val = getattr(lhs_custom, attr_name, None)
-        rhs_val = getattr(rhs_custom, attr_name, None)
-
-        if (lhs_val is None) != (rhs_val is None):
-            return CheckResult(False, f"attr '{attr_name}' presence mismatch")
-
-        if lhs_val is None:
-            continue
-
+    if not _skip_node_types:
         if not (
-            check_result := _check_payloads_equivalent(lhs_val, rhs_val, subs, node_map)
+            check_result := _check_result_types_equivalent(
+                lhs_custom.type, rhs_custom.type
+            )
         ).success:
             return CheckResult(
-                False, f"attr '{attr_name}' mismatch: {check_result.reason}"
+                False,
+                f"{type(lhs_custom).__name__}: {check_result.reason}",
             )
 
+    # Check dataclass fields (automatically skips compare=False fields)
+    if is_dataclass(lhs_custom):
+        for f in dataclass_fields(lhs_custom):
+            if not f.compare:
+                continue
+
+            lhs_val = getattr(lhs_custom, f.name, None)
+            rhs_val = getattr(rhs_custom, f.name, None)
+
+            if not (
+                check_result := _check_payloads_equivalent(
+                    lhs_val, rhs_val, subs, node_map
+                )
+            ).success:
+                return CheckResult(
+                    False,
+                    f"field '{f.name}' mismatch: {check_result.reason}",
+                )
+
+    # Check dynamically-set index attribute.
+    # Directional: reference absent is OK (index may not yet be set in early
+    # pipeline stages), but reference present and actual absent means loss.
+    if not _skip_node_types:
+        lhs_index = getattr(lhs_custom, "index", None)
+        rhs_index = getattr(rhs_custom, "index", None)
+
+        # Allocate indices are derived via backward propagation
+        # (set_derived_index) and may contain induction symbols that belong
+        # to a nested Iterate scope rather than the Allocate's own scope.
+        # The wave to MLIR conversion strips these before emitting (see
+        # strip_out_of_scope_induction_symbols in symbol_utils.py).
+        # Apply the same cleanup to both sides before comparing.
+        if isinstance(lhs_custom, Allocate):
+            if isinstance(lhs_index, dict):
+                allowed = collect_allowed_induction_symbols(lhs_custom.fx_node)
+                lhs_index = strip_out_of_scope_induction_symbols(lhs_index, allowed)
+            if isinstance(rhs_index, dict):
+                allowed = collect_allowed_induction_symbols(rhs_custom.fx_node)
+                rhs_index = strip_out_of_scope_induction_symbols(rhs_index, allowed)
+
+        if lhs_index is not None:
+            if rhs_index is None:
+                return CheckResult(
+                    False,
+                    f"index lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
+                )
+            if not (
+                check_result := _check_index_equivalent(lhs_index, rhs_index, subs)
+            ).success:
+                return check_result
+
+    # Check node-attached semantic attributes (see _NODE_SEMANTIC_ATTRS).
+    # Directional: lhs (reference) absent is OK (rhs may have enriched info),
+    # but lhs present and rhs absent means information was lost.
+    if not _skip_node_types:
+        for attr_name in _ADDITIONAL_NODE_ATTRS:
+            lhs_val = getattr(lhs_custom, attr_name, None)
+            rhs_val = getattr(rhs_custom, attr_name, None)
+            if lhs_val is None:
+                continue
+            if rhs_val is None:
+                return CheckResult(
+                    False,
+                    f"attr '{attr_name}' lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
+                )
+            if not (
+                check_result := _check_payloads_equivalent(
+                    lhs_val, rhs_val, subs, node_map
+                )
+            ).success:
+                return CheckResult(
+                    False, f"attr '{attr_name}' mismatch: {check_result.reason}"
+                )
+
+    # implicit_captures has compare=False: captures can differ between
+    # equivalent graphs (e.g. lifted placeholders).
+    # Semantic equivalence is verified by comparing subgraph operations.
+
+    # Check subgraphs for NestedRegionOps
+    lhs_subgraph = getattr(lhs_custom, "subgraph_name", None)
+    rhs_subgraph = getattr(rhs_custom, "subgraph_name", None)
+    if (lhs_subgraph is None) != (rhs_subgraph is None):
+        return CheckResult(False, "subgraph presence mismatch")
+    if lhs_subgraph is not None:
+        if not (
+            check_result := _check_graphs_equivalent(
+                lhs_trace, rhs_trace, subs, node_map, lhs_subgraph, rhs_subgraph
+            )
+        ).success:
+            return CheckResult(
+                False, f"subgraph '{lhs_subgraph}' mismatch: {check_result.reason}"
+            )
+
+    return CheckResult(True, None)
+
+
+def _reconcile_lifted_placeholders(
+    lhs_nodes: list[fx.Node],
+    rhs_nodes: list[fx.Node],
+    node_map: dict[fx.Node, fx.Node],
+) -> tuple[list[fx.Node], list[fx.Node]]:
+    """Reconcile lifted placeholders between two subgraphs.
+
+    "Lifted" placeholders represent captured values from outer scopes.
+    The fx_emitter calls `makeIsolated` on every Iterate node,
+    which ensures captured values become explicit block arguments. They are
+    reconstructed as placeholder nodes in the FX graph.  However,
+    the source FX graph may have had them transformed away (e.g. by hoisting),
+    so the two sides can differ in whether a lifted placeholder exists.
+    This function updates `node_map` so that references resolve correctly
+    regardless of which form each side uses, and returns the non-lifted nodes
+    from each side for positional comparison.
+
+    Three cases are handled:
+    1. Both sides have a lifted placeholder for the same outer value --
+       the two placeholders are mapped to each other.
+    2. Only rhs has a lifted placeholder -- the lhs outer node is remapped
+       to the rhs placeholder within this subgraph scope.
+    3. Only lhs has a lifted placeholder -- it is mapped to the rhs outer node.
+    """
+    lhs_lifted_map = {
+        n.meta["lifted"]: n
+        for n in lhs_nodes
+        if isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
+    }
+    rhs_lifted_map = {
+        n.meta["lifted"]: n
+        for n in rhs_nodes
+        if isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
+    }
+
+    # Case 1: both sides have a lifted placeholder for equivalent outer values.
+    for lhs_outer, lhs_ph in lhs_lifted_map.items():
+        rhs_outer = node_map.get(lhs_outer)
+        if rhs_outer is not None and rhs_outer in rhs_lifted_map:
+            node_map[lhs_ph] = rhs_lifted_map[rhs_outer]
+
+    # Case 2: rhs has a lifted placeholder but lhs references the outer directly.
+    for rhs_outer, rhs_ph in rhs_lifted_map.items():
+        lhs_outer = next((ln for ln, rn in node_map.items() if rn == rhs_outer), None)
+        if lhs_outer is not None and lhs_outer not in lhs_lifted_map:
+            node_map[lhs_outer] = rhs_ph
+
+    # Case 3: lhs has a lifted placeholder but rhs references the outer directly.
+    for lhs_outer, lhs_ph in lhs_lifted_map.items():
+        rhs_outer = node_map.get(lhs_outer)
+        if rhs_outer is not None and rhs_outer not in rhs_lifted_map:
+            node_map[lhs_ph] = rhs_outer
+
+    # Return non-lifted nodes for positional comparison.
+    is_lifted = lambda n: isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
+    lhs_non_lifted = [n for n in lhs_nodes if not is_lifted(n)]
+    rhs_non_lifted = [n for n in rhs_nodes if not is_lifted(n)]
+    return lhs_non_lifted, rhs_non_lifted
+
+
+def _match_root_placeholders(
+    lhs_nodes: list[fx.Node],
+    rhs_nodes: list[fx.Node],
+    lhs_trace: CapturedTrace,
+    rhs_trace: CapturedTrace,
+    subs: Optional[dict[IndexSymbol, int]],
+    node_map: dict[fx.Node, fx.Node],
+) -> tuple[list[fx.Node], list[fx.Node], CheckResult | None]:
+    """Match root-graph placeholders by order and return non-placeholder nodes.
+
+    Placeholder names may differ (e.g. ``a`` vs ``arg0``), but their order as
+    function parameters is what matters semantically.  Each matched pair is
+    checked for equivalence via ``_check_nodes_equivalent``.  Returns the
+    non-placeholder nodes from each side, or a ``CheckResult`` on failure.
+    """
+    lhs_phs = [
+        (i, n)
+        for i, n in enumerate(lhs_nodes)
+        if isinstance(get_custom(n), Placeholder)
+    ]
+    rhs_phs = [
+        (i, n)
+        for i, n in enumerate(rhs_nodes)
+        if isinstance(get_custom(n), Placeholder)
+    ]
+
+    if len(lhs_phs) != len(rhs_phs):
+        return (
+            [],
+            [],
+            CheckResult(
+                False,
+                f"placeholder count mismatch: {len(lhs_phs)} vs {len(rhs_phs)}",
+            ),
+        )
+
+    lhs_ph_positions = set()
+    rhs_ph_positions = set()
+    for (lhs_pos, lhs_node), (rhs_pos, rhs_node) in zip(lhs_phs, rhs_phs):
+        node_map[lhs_node] = rhs_node
+        lhs_ph_positions.add(lhs_pos)
+        rhs_ph_positions.add(rhs_pos)
+
+        if not (
+            check_result := _check_nodes_equivalent(
+                get_custom(lhs_node),
+                get_custom(rhs_node),
+                lhs_trace,
+                rhs_trace,
+                subs,
+                node_map,
+            )
+        ).success:
+            return (
+                [],
+                [],
+                CheckResult(False, f"placeholder mismatch: {check_result.reason}"),
+            )
+
+    lhs_non_ph = [n for i, n in enumerate(lhs_nodes) if i not in lhs_ph_positions]
+    rhs_non_ph = [n for i, n in enumerate(rhs_nodes) if i not in rhs_ph_positions]
+    return lhs_non_ph, rhs_non_ph, None
+
+
+def _compare_node_lists(
+    lhs_nodes: list[fx.Node],
+    rhs_nodes: list[fx.Node],
+    lhs_trace: CapturedTrace,
+    rhs_trace: CapturedTrace,
+    subs: Optional[dict[IndexSymbol, int]],
+    node_map: dict[fx.Node, fx.Node],
+) -> CheckResult:
+    """Compare two node lists positionally using _check_nodes_equivalent."""
+    if len(lhs_nodes) != len(rhs_nodes):
+        return CheckResult(
+            False,
+            f"node count mismatch: {len(lhs_nodes)} vs {len(rhs_nodes)}",
+        )
+    for lhs_node, rhs_node in zip(lhs_nodes, rhs_nodes):
+        node_map[lhs_node] = rhs_node
+        if not (
+            check_result := _check_nodes_equivalent(
+                get_custom(lhs_node),
+                get_custom(rhs_node),
+                lhs_trace,
+                rhs_trace,
+                subs,
+                node_map,
+            )
+        ).success:
+            return check_result
     return CheckResult(True, None)
 
 
@@ -424,9 +694,12 @@ def _check_graphs_equivalent(
 ) -> CheckResult:
     """Compare two graphs node-by-node with shared node_map.
 
-    If no graph names are provided, the root graphs of the traces are compared.
-    This comparison is order-sensitive: nodes are paired by position in the
-    graph, not solely by their use-def relationships.
+    Placeholder handling is delegated to helper functions:
+    - Subgraphs: ``_reconcile_lifted_placeholders`` maps captured values.
+    - Root graphs: ``_match_root_placeholders`` pairs parameters by order.
+
+    After placeholders are resolved, non-placeholder nodes are compared
+    positionally via ``_compare_node_lists``.
     """
     lhs = (
         lhs_trace.get_root_graph()
@@ -441,60 +714,25 @@ def _check_graphs_equivalent(
 
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
-    if len(lhs_nodes) != len(rhs_nodes):
-        return CheckResult(False, f"node count mismatch")
 
-    # Compare nodes, args/kwargs, then recurse into nested regions.
-    for lhs_node, rhs_node in zip(lhs_nodes, rhs_nodes):
-        lhs_custom = get_custom(lhs_node)
-        rhs_custom = get_custom(rhs_node)
-        node_map[lhs_node] = rhs_node
-        if not (
-            check_result := _check_nodes_equivalent(
-                lhs_custom, rhs_custom, subs, node_map
-            )
-        ).success:
-            return CheckResult(
-                False,
-                f"node mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
-            )
-        if not (
-            check_result := _check_payloads_equivalent(
-                lhs_node.args, rhs_node.args, subs, node_map
-            )
-        ).success:
-            return CheckResult(
-                False,
-                f"args mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
-            )
-        if not (
-            check_result := _check_payloads_equivalent(
-                lhs_node.kwargs, rhs_node.kwargs, subs, node_map
-            )
-        ).success:
-            return CheckResult(
-                False,
-                f"kwargs mismatch at '{type(lhs_custom).__name__}': {check_result.reason}",
-            )
-        lhs_subgraph = getattr(lhs_custom, "subgraph_name", None)
-        rhs_subgraph = getattr(rhs_custom, "subgraph_name", None)
-        if (lhs_subgraph is None) != (rhs_subgraph is None):
-            return CheckResult(False, "subgraph presence mismatch")
-        if lhs_subgraph is not None:
-            if not (
-                check_result := _check_graphs_equivalent(
-                    lhs_trace,
-                    rhs_trace,
-                    subs,
-                    node_map,
-                    lhs_subgraph,
-                    rhs_subgraph,
-                )
-            ).success:
-                return CheckResult(
-                    False, f"subgraph '{lhs_subgraph}' mismatch: {check_result.reason}"
-                )
-    return CheckResult(True, None)
+    if lhs_graph_name is not None:
+        # Subgraph: reconcile lifted placeholders, then compare non-lifted.
+        lhs_compare, rhs_compare = _reconcile_lifted_placeholders(
+            lhs_nodes, rhs_nodes, node_map
+        )
+    else:
+        # Root graph: match placeholders by order, then compare the rest.
+        if len(lhs_nodes) != len(rhs_nodes):
+            return CheckResult(False, "node count mismatch")
+        lhs_compare, rhs_compare, err = _match_root_placeholders(
+            lhs_nodes, rhs_nodes, lhs_trace, rhs_trace, subs, node_map
+        )
+        if err is not None:
+            return err
+
+    return _compare_node_lists(
+        lhs_compare, rhs_compare, lhs_trace, rhs_trace, subs, node_map
+    )
 
 
 def assert_traces_equivalent(
@@ -502,11 +740,68 @@ def assert_traces_equivalent(
     rhs: CapturedTrace,
     subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> None:
-    """Assert structural equivalence between two traces."""
+    """Assert structural equivalence between two traces.
+
+    Designed for MLIR roundtrip validation where ``lhs`` is the reference
+    (source trace, possibly sparsely populated in early pipeline stages) and
+    ``rhs`` is the actual (roundtrip result, eagerly populated from MLIR).
+
+    The comparison is directional: ``rhs`` may carry additional information
+    (e.g. indices or vector_shapes derived from constraints) that ``lhs`` does
+    not yet have, but any information present in ``lhs`` must also appear in
+    ``rhs``.
+    """
     node_map: dict[fx.Node, fx.Node] = {}
     check_result = _check_graphs_equivalent(lhs, rhs, subs, node_map)
     if not check_result.success:
         raise AssertionError(f"Traces are not equivalent: {check_result.reason}")
+
+
+def assert_constraints_equivalent(
+    lhs_constraints: Sequence[Any],
+    rhs_constraints: Sequence[Any],
+    custom_comparators: Optional[dict[type, callable]] = None,
+) -> None:
+    """
+    Assert that two lists of constraints are equivalent (order-independent).
+
+    Constraints use custom __eq__ methods that only compare semantically significant
+    fields, making this suitable for testing MLIR roundtrip fidelity. Order does not
+    matter as constraints form an unordered set.
+
+    Args:
+        lhs_constraints: First list of constraints
+        rhs_constraints: Second list of constraints
+        custom_comparators: Optional dict mapping constraint types to custom comparison
+            functions. Each function should take (lhs, rhs) and return bool.
+            If a constraint type is in this dict, its comparator is used instead of ==.
+
+    Raises:
+        AssertionError: If constraints are not equivalent
+    """
+    if len(lhs_constraints) != len(rhs_constraints):
+        raise AssertionError(
+            f"Constraint count mismatch: {len(lhs_constraints)} vs {len(rhs_constraints)}"
+        )
+
+    def constraints_equal(lhs_c, rhs_c) -> bool:
+        """Check if two constraints are equal, using custom comparator if available."""
+        if custom_comparators:
+            for constraint_type, comparator in custom_comparators.items():
+                if isinstance(lhs_c, constraint_type) and isinstance(
+                    rhs_c, constraint_type
+                ):
+                    return comparator(lhs_c, rhs_c)
+        return lhs_c == rhs_c
+
+    # Check each LHS constraint has a matching RHS constraint (order-independent)
+    for lhs_c in lhs_constraints:
+        if not any(constraints_equal(lhs_c, rhs_c) for rhs_c in rhs_constraints):
+            raise AssertionError(
+                f"No matching constraint found for:\n  {lhs_c}\n"
+                f"Available constraints:\n  "
+                + "\n  ".join(str(c) for c in rhs_constraints)
+            )
 
 
 def move_node_after(src_node: fx.Node, anchor: fx.Node):

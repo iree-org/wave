@@ -508,6 +508,19 @@ mlirTilingConstraintAttrGetDim(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirTilingConstraintAttrGetTileSize(MlirAttribute attr);
 
+//===---------------------------------------------------------------------===//
+// Wave Operations
+//===---------------------------------------------------------------------===//
+
+/// Makes a wave.iterate operation's region isolated from above.
+/// This transforms the region to not capture values from outer scopes,
+/// instead passing them explicitly as operands.
+MLIR_CAPI_EXPORTED void mlirWaveIterateOpMakeIsolated(MlirOperation op);
+
+/// Makes a wave.iterate operation's region non-isolated from above.
+/// This allows the region to capture values from outer scopes implicitly.
+MLIR_CAPI_EXPORTED void mlirWaveIterateOpMakeNonIsolated(MlirOperation op);
+
 #ifdef __cplusplus
 }
 #endif

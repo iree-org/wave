@@ -4,6 +4,14 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+"""
+Shared utilities for converting between Wave MLIR attributes and Python types.
+
+Used by both the FX-to-MLIR emitter (water_emitter.py) and the MLIR-to-FX
+converter (fx_emitter.py). Provides element-type mapping, symbol attribute
+conversion, and AffineExpr-to-sympy translation.
+"""
+
 import sys
 
 if "iree" in sys.modules:
@@ -23,6 +31,7 @@ from wave_lang.support.indexing import (
     index_symbol,
     IndexSymbol,
 )
+from wave_lang.kernel._support import dtype
 
 assert (
     "iree" not in sys.modules
@@ -49,6 +58,126 @@ INDEX_SYMBOL_REVERSE_MAP: dict[wave.WaveIndexSymbol, str] = {
     value: key for key, value in INDEX_SYMBOL_MAP.items()
 }
 
+_ELEMENT_TYPE_HANDLERS: list[tuple[type[ir.Type], dtype.DataType]] = [
+    (ir.BF16Type, dtype.bf16),
+    (ir.F16Type, dtype.f16),
+    (ir.F32Type, dtype.f32),
+    (ir.F64Type, dtype.f64),
+    (ir.Float8E5M2Type, dtype.f8e5m2),
+    (ir.Float8E5M2FNUZType, dtype.f8e5m2fnuz),
+    (ir.Float8E4M3FNType, dtype.f8e4m3fn),
+    (ir.Float8E4M3FNUZType, dtype.f8e4m3fnuz),
+    (ir.Float8E8M0FNUType, dtype.f8e8m0fnu),
+    (ir.Float6E2M3FNType, dtype.f6e2m3fn),
+    (ir.Float4E2M1FNType, dtype.f4e2m1fn),
+    (ir.IndexType, dtype.index),
+]
+
+_INTEGER_TYPE_WIDTH_TO_dtype: dict[int, dtype.DataType] = {
+    1: dtype.i1,
+    4: dtype.i4,
+    8: dtype.i8,
+    16: dtype.i16,
+    32: dtype.i32,
+    64: dtype.i64,
+}
+
+
+def mlir_element_type_to_dtype(element_type: ir.Type) -> dtype.DataType:
+    """Map an MLIR element type to the corresponding Wave DataType."""
+    for type_cls, dtype_value in _ELEMENT_TYPE_HANDLERS:
+        if isinstance(element_type, type_cls):
+            return dtype_value
+    if isinstance(element_type, ir.IntegerType):
+        width = int(element_type.width)
+        if width in _INTEGER_TYPE_WIDTH_TO_dtype:
+            return _INTEGER_TYPE_WIDTH_TO_dtype[width]
+    raise ValueError(f"Unsupported element type: {element_type}")
+
+
+def dtype_to_mlir_scalar_type(t: dtype.DataType) -> ir.Type:
+    """Map a Wave DataType to the corresponding MLIR scalar type."""
+    for type_cls, dtype_value in _ELEMENT_TYPE_HANDLERS:
+        if dtype_value == t:
+            return type_cls.get()
+    for width, dtype_value in _INTEGER_TYPE_WIDTH_TO_dtype.items():
+        if dtype_value == t:
+            return ir.IntegerType.get_signless(width)
+    raise RuntimeError(f"Unsupported scalar dtype: {t}")
+
+
+def symbol_attr_to_name(symbol_attr: ir.Attribute) -> str:
+    """Extract the Python-side symbol name from a Wave symbol attribute.
+
+    Handles WaveSymbolAttr (plain names), WaveIterSymbolAttr (prefixed with
+    ``$ARG``), and WaveIndexSymbolAttr (mapped via INDEX_SYMBOL_REVERSE_MAP).
+    """
+    if isinstance(symbol_attr, wave.WaveSymbolAttr):
+        return symbol_attr.name
+    if isinstance(symbol_attr, wave.WaveIterSymbolAttr):
+        return ITER_SYMBOL_NAME_WAVE_PREFIX + symbol_attr.name
+    if isinstance(symbol_attr, wave.WaveIndexSymbolAttr):
+        name = INDEX_SYMBOL_REVERSE_MAP.get(symbol_attr.value, None)
+        if name is None:
+            raise ValueError(f"Unsupported index symbol: {symbol_attr.value}")
+        return name
+    raise ValueError(f"Unsupported symbol attribute: {symbol_attr}")
+
+
+def symbol_attr_to_sympy(symbol_attr: ir.Attribute) -> sympy.Symbol:
+    """Convert a Wave symbol attribute to a sympy Symbol."""
+    return index_symbol(symbol_attr_to_name(symbol_attr))
+
+
+def preprocess_symbols(
+    symbols: Sequence[sympy.Symbol],
+) -> dict[sympy.Symbol, sympy.Symbol]:
+    """
+    Preprocess symbols by:
+
+      1. adding assumptions about all symbols being positive to later enable
+         more simplifications.
+      2. replacing ITER_SYMBOL_NAME_WAVE_PREFIX (`$ARG`) prefix of argument
+         symbols (e.g. `ARG0`) by ITER_SYMBOL_NAME_WATER_PREFIX (`_Iter_`) to
+         match dialect expectations.
+    """
+    result = {}
+    for sym in symbols:
+        if sym.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX):
+            new_name = sym.name.replace(
+                ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
+            )
+            result[sym] = sympy.Symbol(new_name, positive=True)
+        else:
+            result[sym] = sympy.Symbol(sym.name, positive=True)
+    return result
+
+
+def symbol_name_to_attribute(name: str) -> ir.Attribute:
+    """
+    Convert a symbol name to either a WaveSymbolAttr or WaveIndexSymbolAttr.
+
+    Special symbols starting with $ are converted to WaveIndexSymbolAttr,
+    while regular symbols are converted to WaveSymbolAttr.
+    """
+    if name in INDEX_SYMBOL_MAP:
+        return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
+    if name.startswith(ITER_SYMBOL_NAME_WATER_PREFIX):
+        return wave.WaveIterSymbolAttr.get(
+            name.replace(ITER_SYMBOL_NAME_WATER_PREFIX, "")
+        )
+    return wave.WaveSymbolAttr.get(name)
+
+
+def expr_list_attr_to_exprs(
+    attr: wave.WaveExprListAttr,
+) -> list[sympy.Expr | int]:
+    """Convert a WaveExprListAttr to a list of sympy expressions."""
+    symbols = [symbol_attr_to_sympy(s) for s in list(attr.symbols)]
+    return [
+        _convert_affine_expr_to_sympy_expr(expr, symbols) for expr in attr.map.results
+    ]
+
 
 def _convert_affine_expr_to_sympy_expr(
     expr: ir.AffineExpr,
@@ -68,9 +197,11 @@ def _convert_affine_expr_to_sympy_expr(
         ValueError: If the expression is not supported.
     """
     if isinstance(expr, ir.AffineConstantExpr):
-        return sympy.Integer(ir.AffineConstantExpr(expr).value)
+        return sympy.Integer(int(ir.AffineConstantExpr(expr).value))
     if isinstance(expr, ir.AffineSymbolExpr):
         return symbol_mapping[ir.AffineSymbolExpr(expr).position]
+    if isinstance(expr, ir.AffineDimExpr):
+        return symbol_mapping[ir.AffineDimExpr(expr).position]
     if isinstance(expr, ir.AffineAddExpr):
         add_expr = ir.AffineAddExpr(expr)
         return _convert_affine_expr_to_sympy_expr(
@@ -116,20 +247,7 @@ def _convert_index_mapping_attr_to_sympy(
         ValueError: If any subexpression in the mapping is not supported.
     """
 
-    def wrap_symbol(symbol_name: ir.Attribute) -> sympy.Symbol:
-        if isinstance(symbol_name, wave.WaveSymbolAttr):
-            return index_symbol(symbol_name.name)
-        elif isinstance(symbol_name, wave.WaveIterSymbolAttr):
-            return index_symbol(ITER_SYMBOL_NAME_WAVE_PREFIX + symbol_name.name)
-        elif isinstance(symbol_name, wave.WaveIndexSymbolAttr):
-            index_symbol_var = INDEX_SYMBOL_REVERSE_MAP.get(symbol_name.value, None)
-            if index_symbol_var is None:
-                raise ValueError(f"Unsupported index symbol: {symbol_name.value}")
-            return index_symbol(index_symbol_var)
-        else:
-            raise ValueError(f"Unsupported symbol attribute: {symbol_name}")
-
-    symbols = list(map(wrap_symbol, attr.symbols))
+    symbols = [symbol_attr_to_sympy(s) for s in attr.symbols]
 
     def convert_map(map: ir.AffineMap | None) -> sympy.Expr | None:
         if map is None:

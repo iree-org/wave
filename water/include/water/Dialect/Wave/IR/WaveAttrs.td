@@ -211,6 +211,13 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
 
     `max_bits_per_load` specifies the maximum number of bits that can
     be loaded with a single load instruction.
+
+    Note: The Python-based Wave compiler supports additional configuration
+    options (e.g., cluster dimensions for multicast operations, service wave
+    counts for wave specialization) that control optimization passes and
+    kernel launch parameters. These are intentionally not included in the
+    MLIR representation, as they represent scheduling decisions and runtime
+    configuration rather than fundamental hardware constraints.
   }];
   let parameters = (ins "unsigned":$threads_per_wave,
                         OptionalArrayRefParameter<"unsigned">:$waves_per_block,
