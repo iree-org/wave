@@ -63,7 +63,7 @@ def test_wmma_specialize():
     # CHECK-DAG:                %[[TIDX:.*]] = gpu.thread_id  x upper_bound 64
     # CHECK-DAG:                %[[TIDY:.*]] = gpu.thread_id  y upper_bound 3
 
-    # CHECK-DAG:                %[[WAVE_INDEX:.*]] = affine.apply #map()[%[[TIDX]], %[[TIDY]]]
+    # CHECK-DAG:                %[[WAVE_INDEX:.*]] = gpu.subgroup_id upper_bound 6 : index
     # CHECK-DAG:                %[[WAVE_ID:.*]] = arith.index_cast %[[WAVE_INDEX]] : index to i32
 
     # CHECK-DAG:                %[[LOAD_COND:.*]] = arith.cmpi sge, %[[WAVE_ID]]
@@ -76,7 +76,7 @@ def test_wmma_specialize():
     # CHECK-DAG:                    scf.if %[[LOAD_COND]] {
     # CHECK-COUNT-4:                    vector.load
     # CHECK-DAG:                        %[[FIRST_ITER:.*]] = arith.cmpi ne, %[[K]], %c0 : index
-    # CHECK-DAG:                        %[[WAVE_MAP:.*]] = affine.apply #{{.*}}()[%[[TIDX]]
+    # CHECK-DAG:                        %[[WAVE_MAP:.*]] = affine.apply #{{.*}}()[%[[WAVE_INDEX]]
 
     # CHECK-COUNT-2:                    arith.cmpi eq, %[[WAVE_MAP]]
     # CHECK-NEXT:                       arith.andi %[[FIRST_ITER]]
