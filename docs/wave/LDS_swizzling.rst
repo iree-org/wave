@@ -202,6 +202,16 @@ Bank Formula: (Row \* 32 + Col // 2) % 64 = (1 \* 32 + 8 // 2) % 64 =
 Final Result: Thread 1 now accesses Banks 36, 37, 38, 39 (8 bf16
 elements = 4 banks)
 
+
+**Visual example of an 8x8 Tile before and after swizzling:**
+
+In this example, we use max_phase of 8 and swizzle_unit of 1.
+
+|image6|
+
+
+
+
 **Reference Wave Kernel**
 
 .. code-block:: mlir
@@ -677,3 +687,6 @@ elements = 4 banks)
 .. |image5| image:: ./LDSBankConflictFree.png
    :width: 6.3617in
    :height: 3.53428in
+.. |image6| image:: ./swizzling_8x8_matrix.png
+   :width: 6.23534in
+   :height: 3.11767in
