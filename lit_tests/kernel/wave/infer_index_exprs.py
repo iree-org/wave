@@ -17,6 +17,16 @@ from wave_lang.kernel.wave.constraints import MMAType
 
 
 def testGemm():
+    relevant_hyperparams = [
+        tkl.sym.M,
+        tkl.sym.N,
+        tkl.sym.K,
+        tkl.sym.BLOCK_M,
+        tkl.sym.BLOCK_N,
+        tkl.sym.BLOCK_K,
+        tkl.sym.ADDRESS_SPACE,
+    ]
+
     for use_shmem in [True, False]:
         for mfma_variant, target in [
             (MMAType.F32_32x32x16_F16, "gfx950"),
@@ -32,18 +42,7 @@ def testGemm():
                 hyperparams[tkl.sym.ADDRESS_SPACE] = GLOBAL_ADDRESS_SPACE
             # Avoid unused hyperparameter warnings
             hyperparams = {
-                s: v
-                for s, v in hyperparams.items()
-                if s
-                in [
-                    tkl.sym.M,
-                    tkl.sym.N,
-                    tkl.sym.K,
-                    tkl.sym.BLOCK_M,
-                    tkl.sym.BLOCK_N,
-                    tkl.sym.BLOCK_K,
-                    tkl.sym.ADDRESS_SPACE,
-                ]
+                s: v for s, v in hyperparams.items() if s in relevant_hyperparams
             }
             options = WaveCompileOptions(
                 subs=hyperparams,
