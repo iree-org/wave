@@ -529,6 +529,12 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         if isinstance(expr, Mod):
             return self._emit_mod(expr, cache_key, is_invariant)
 
+        # Handle bitwise XOR from gather_to_shared swizzling
+        from wave_lang.kernel._support.indexing import xor as sympy_xor
+
+        if isinstance(expr, sympy_xor):
+            return self._emit_xor(expr, cache_key, is_invariant)
+
         if isinstance(expr, sympy.Rational) and not isinstance(expr, Integer):
             return self._emit_rational(expr)
 
@@ -994,6 +1000,26 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         else:
             raise NotImplementedError(f"modulo by {n_val} not yet implemented")
 
+        self._insert_cache(cache_key, result, global_scope=is_invariant)
+        return result
+
+    def _emit_xor(self, expr, cache_key: tuple, is_invariant: bool) -> KVReg:
+        """Emit v_xor_b32 for bitwise XOR expressions (used by LDS swizzling)."""
+        assert (
+            len(expr.args) == 2
+        ), f"XOR must have exactly 2 args, got {len(expr.args)}"
+        lhs_reg = self.get_or_emit(expr.args[0])
+        rhs_reg = self.get_or_emit(expr.args[1])
+
+        result = self.ctx.vreg()
+        self.ctx.program.emit(
+            KInstr(
+                Instruction.V_XOR_B32,
+                (result,),
+                (lhs_reg, rhs_reg),
+                comment="xor (LDS swizzle)",
+            )
+        )
         self._insert_cache(cache_key, result, global_scope=is_invariant)
         return result
 

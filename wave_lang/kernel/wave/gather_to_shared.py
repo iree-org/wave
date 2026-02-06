@@ -654,22 +654,6 @@ def gather_to_shared_swizzling(
         # column but read from a different column, causing incorrect results.
         gather_local_index = remove_global_indexing(gather.src_index, constraints)
         read_local_index = remove_global_indexing(read.index, constraints)
-        gather_row_expr = sympy.simplify(
-            subs_idxc(gather_local_index[row_dim].start) % max_phase
-        )
-        read_row_expr = sympy.simplify(
-            subs_idxc(read_local_index[row_dim].start) % max_phase
-        )
-        # The ASM backend requires matching row expressions for correct swizzling.
-        # The default LLVM backend handles mismatched expressions correctly.
-        if options.backend == "asm" and gather_row_expr != read_row_expr:
-            logger.info(
-                f"row phase inconsistency between reads and gathers: "
-                f"{gather_row_expr} != {read_row_expr}. "
-                f"Skipping swizzling for ASM backend."
-            )
-            continue
-
         for read in reads:
             index = remove_global_indexing(read.index, constraints)
             col_seq = index[col_dim]
