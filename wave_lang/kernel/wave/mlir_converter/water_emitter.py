@@ -163,6 +163,7 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    "i8": lambda: ir.IntegerType.get_signless(8),
     "i32": lambda: ir.IntegerType.get_signless(32),
     "i64": lambda: ir.IntegerType.get_signless(64),
 }
