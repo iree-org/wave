@@ -34,8 +34,10 @@ from iree.compiler.dialects.transform.extras import insert_transform_script, OpH
 
 M = tkl.sym.M
 N = tkl.sym.N
+K = tkl.sym.K
 BLOCK_M = tkl.sym.BLOCK_M
 BLOCK_N = tkl.sym.BLOCK_N
+BLOCK_K = tkl.sym.BLOCK_K
 ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
 ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
 ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
@@ -309,6 +311,71 @@ def mlir_converter_matrix_add():
     # CHECK: arith.addf
     # CHECK-NOT: wave.write
     # CHECK: vector.maskedstore
+
+
+@run_test
+def multi_result_handling():
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def multi_result_iteration(
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        d: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        init_a = tkl.Register[M, N, tkl.f32](0.0)
+        init_b = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[init_a, init_b])
+        def repeat(
+            acc_a: tkl.Register[M, N, tkl.f32],
+            acc_b: tkl.Register[M, N, tkl.f32],
+        ):
+            return acc_a, acc_b
+
+        r1, r2 = repeat
+        tkw.write(r2, d)
+        tkw.write(r1, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 32,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 32,
+        },
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, multi_result_iteration)
+    trace = compiled_kernel.compiled_graph
+    constraints = multi_result_iteration.constraints
+
+    with Context(), Location.unknown():
+        asm, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, "No diagnostics should be produced."
+    print(asm)
+
+    # CHECK-LABEL: multi_result_handling
+    # CHECK: %[[ITER:.+]]:2 = wave.iterate
+    # CHECK: wave.write %[[ITER]]#1
+    # CHECK: wave.write %[[ITER]]#0
 
 
 @run_test

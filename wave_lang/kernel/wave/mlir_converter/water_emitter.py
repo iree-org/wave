@@ -56,6 +56,7 @@ from wave_lang.kernel.ops.wave_ops import (
     IterArg,
     Iterate,
     MMA,
+    NestedRegionOp,
     NewRegister,
     Output,
     Placeholder,
@@ -502,7 +503,7 @@ def _convert_to_wave_expr_list_tuple(
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
-    value_map: dict[fx.Node | fx.Proxy, ir.Value],
+    value_map: dict[fx.Node | fx.Proxy, tuple[ir.Value, ...]],
     implicit_captures: dict[fx.Node, fx.Node],
     ctx: ir.Context,
     known_ids: set[str] | None = None,
@@ -531,25 +532,36 @@ def _emit_ops_from_graph(
             if isinstance(node, Output):
                 continue
 
-            # Collect already emitted mlir values for the args of this node
-            mlir_operands = [
-                mlir_arg
-                for arg in fx_node.args
-                if (mlir_arg := value_map.get(arg)) is not None
-            ]
+            def get_single_mapped_value(
+                node: fx.Node | fx.Proxy,
+            ) -> ir.Value | None:
+                """Get the single mapped value for the given node."""
+                if (mlir_args := value_map.get(node)) is not None:
+                    assert (
+                        len(mlir_args) == 1
+                    ), "Only single-result nodes are supported."
+                    return mlir_args[0]
+                return None
+
+            def create_mlir_operands():
+                """Create a list of MLIR operands from the arguments of the current node.
+
+                Do so lazily as most explicitly handled nodes don't use these.
+                """
+                mlir_operands = []
+                for arg in fx_node.args:
+                    if (mlir_arg := get_single_mapped_value(arg)) is not None:
+                        mlir_operands.append(mlir_arg)
+                return mlir_operands
+
             if isinstance(node, GetResult):
-                # Map to correct result of the corresponding iterate node
-                iterate_op = value_map[node.value].owner
-                # Create mapping to correct result
-                if node.res_idx >= len(iterate_op.results):
-                    raise RuntimeError(
-                        f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
-                    )
-                value_map[fx_node] = iterate_op.results[node.res_idx]
+                value_map[fx_node] = [value_map[node.value][node.res_idx]]
 
                 # Attach IDs of `get_result` to the loop instead so we can recover them
-                # later because `get_result` doesn't exist in the dialect.
-                if known_ids is not None:
+                # later because `get_result` doesn't exist in the dialect. Only do so when
+                # there are some results.
+                if known_ids is not None and len(value_map[node.value]) > 0:
+                    iterate_op = get_single_mapped_value(node.value).owner
                     water_id = getattr(fx_node, "_water_id", None)
                     if water_id is None:
                         raise RuntimeError(
@@ -577,7 +589,14 @@ def _emit_ops_from_graph(
                 # additional handling for this op is not needed, skip rest
                 continue
 
-            result_type = _type_to_wave_mlir(ctx, node.type)
+            result_type: ir.Type | list[ir.Type] = (
+                _type_to_wave_mlir(ctx, node.type)
+                if not isinstance(node.type, Sequence)
+                else [_type_to_wave_mlir(ctx, t) for t in node.type]
+            )
+            assert isinstance(result_type, ir.Type) or isinstance(
+                node, NestedRegionOp
+            ), "Only nested region ops can have multiple result types."
 
             mlir_op = None
             if node.tkw_op_name in WAVE_OP_CONSTRUCTORS:
@@ -590,7 +609,8 @@ def _emit_ops_from_graph(
                 # TODO: Add special handling for Iterate node
                 if isinstance(node, Write):
                     mlir_op = op_builder(
-                        value_map[node.register_], value_map[node.memory]
+                        get_single_mapped_value(node.register_),
+                        get_single_mapped_value(node.memory),
                     )
                 elif isinstance(node, NewRegister):
                     dtype = getattr(node, "dtype", None)
@@ -603,7 +623,9 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(result_type, constant_op.results[0])
                 elif isinstance(node, Iterate):
                     axis = wave.WaveSymbolAttr.get(node.axis.name)
-                    carried_values = [value_map.get(arg) for arg in node.init_args]
+                    carried_values = [
+                        get_single_mapped_value(arg) for arg in node.init_args
+                    ]
 
                     result_types = []
                     result_locs = []
@@ -630,7 +652,7 @@ def _emit_ops_from_graph(
 
                     # add mapping for iter args
                     for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
-                        value_map[wave_arg] = mlir_arg
+                        value_map[wave_arg] = (mlir_arg,)
 
                     # Emit subgraph of the iterate node
                     with ir.InsertionPoint(body):
@@ -644,7 +666,7 @@ def _emit_ops_from_graph(
                         )
 
                         # create YieldOp
-                        YieldOp([value_map[output] for output in outputs])
+                        YieldOp([get_single_mapped_value(output) for output in outputs])
                 elif isinstance(node, MMA):
                     mma_kind = (
                         ir.Attribute.parse(
@@ -653,13 +675,15 @@ def _emit_ops_from_graph(
                         if node.mma_type is not None
                         else None
                     )
-                    mlir_op = op_builder(result_type, *mlir_operands, kind=mma_kind)
+                    mlir_op = op_builder(
+                        result_type, *create_mlir_operands(), kind=mma_kind
+                    )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.
                     parent_value = None
                     offset_attr = None
                     if node.parent is not None:
-                        parent_value = value_map.get(node.parent)
+                        parent_value = get_single_mapped_value(node.parent)
                         if parent_value is None:
                             raise RuntimeError(
                                 f"Parent node {node.parent} not found in value_map for Allocate op"
@@ -685,12 +709,12 @@ def _emit_ops_from_graph(
                     stride = _convert_to_wave_expr_list_tuple(node.stride)
                     offset = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(
-                        result_type, *mlir_operands, offset, size, stride
+                        result_type, *create_mlir_operands(), offset, size, stride
                     )
                 elif isinstance(node, Extract):
                     assert len(node.offset) == 1
                     position = _convert_to_wave_expr_list_tuple(node.offset)
-                    mlir_op = op_builder(result_type, *mlir_operands, position)
+                    mlir_op = op_builder(result_type, *create_mlir_operands(), position)
                 elif isinstance(node, Shuffle):
                     offset = ir.IntegerAttr.get(
                         ir.IntegerType.get_signless(32), node.offset
@@ -700,11 +724,11 @@ def _emit_ops_from_graph(
                     )
                     mode = wave.WaveShuffleModeAttr.get(node.mode.value)
                     mlir_op = op_builder(
-                        result_type, *mlir_operands, offset, width, mode
+                        result_type, *create_mlir_operands(), offset, width, mode
                     )
                 else:
                     try:
-                        mlir_op = op_builder(result_type, *mlir_operands)
+                        mlir_op = op_builder(result_type, *create_mlir_operands())
                     except Exception:
                         raise RuntimeError(
                             f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
@@ -719,13 +743,7 @@ def _emit_ops_from_graph(
 
             # Add results to the value map in case they are used as
             # operands later
-            if len(mlir_op.results) > 1:
-                # TODO: rework value_map to always map to a sequence of results
-                raise NotImplementedError(
-                    f"Missing support for operations with multiple results"
-                )
-            for result in mlir_op.results:
-                value_map[fx_node] = result
+            value_map[fx_node] = tuple(mlir_op.results)
 
 
 def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
@@ -838,7 +856,7 @@ def _create_kernel_module(
 
     # Keep track of which emitted value stems from what node to wire
     # arguments correctly.
-    value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
+    value_map: dict[fx.Node | fx.Proxy, tuple[ir.Value, ...]] = {}
 
     module = ir.Module.create()
 
@@ -905,7 +923,7 @@ def _create_kernel_module(
 
         # Map placeholders to function arguments
         for i, fx_node in enumerate(top_level_placeholders):
-            value_map[fx_node] = entry_block.arguments[i]
+            value_map[fx_node] = (entry_block.arguments[i],)
 
         # Subgraphs duplicate the placeholders of surrounding graphs so there
         # are multiple placeholders representing the same values.
