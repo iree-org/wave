@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel.lang.kernel_buffer import AddressSpace
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel._support.indexing import safe_subs
@@ -181,20 +182,31 @@ def _dtype_to_mlir_scalar_type(t: dtype.Datatype) -> ir.Type:
     raise RuntimeError(f"Unsupported scalar dtype: {t}")
 
 
-def _map_address_space(addr: str) -> WaveAddressSpaceAttr:
-    if not addr:
-        return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
-    a = str(addr).lower()
-    if "global" in a:
+def _map_address_space(addr: int) -> WaveAddressSpaceAttr:
+    """Map Python AddressSpace enum to MLIR WaveAddressSpaceAttr."""
+    if addr == AddressSpace.GLOBAL_MEMORY.value:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Global)
-    if "shared" in a:
+    elif addr == AddressSpace.SHARED_MEMORY.value:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Shared)
-    if "register" in a:
+    elif addr == AddressSpace.REGISTER.value:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Register)
-    # If we can't determine the address space, use unspecified for now
-    # TODO: Sometimes the address space is determined in the hyperparameters
-    #       Check whether a mapping for `addr` is defined there.
-    return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
+    else:
+        # If we can't determine the address space, use unspecified for now
+        # TODO: Sometimes the address space is determined in the hyperparameters
+        #       Check whether a mapping for `addr` is defined there.
+        return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
+
+
+def _create_wave_tensor_type(
+    ctx: ir.Context,
+    symbolic_shape: tuple,
+    dtype,
+    address_space_attr: WaveAddressSpaceAttr,
+) -> ir.Type:
+    """Helper function to create a WaveTensorType from shape, dtype, and address space."""
+    shape_attrs = [WaveSymbolAttr.get(str(s)) for s in symbolic_shape]
+    element_type = _dtype_to_mlir_scalar_type(dtype)
+    return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
 
 
 def _type_to_wave_mlir(
@@ -206,11 +218,10 @@ def _type_to_wave_mlir(
             raise RuntimeError(
                 "Register type must have concrete symbolic_shape and dtype"
             )
-        # Convert symbolic shape to WaveSymbolAttr list
-        shape_attrs = [WaveSymbolAttr.get(str(s)) for s in type_.symbolic_shape]
-        element_type = _dtype_to_mlir(ctx, type_.dtype)
         address_space_attr = WaveAddressSpaceAttr.get(WaveAddressSpace.Register)
-        return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
+        return _create_wave_tensor_type(
+            ctx, type_.symbolic_shape, type_.dtype, address_space_attr
+        )
     if issubclass(type_, Memory):
         if (
             not type_.symbolic_shape
@@ -220,11 +231,10 @@ def _type_to_wave_mlir(
             raise RuntimeError(
                 "Memory type must have concrete symbolic_shape, dtype, and address_space"
             )
-        # Convert symbolic shape to WaveSymbolAttr list
-        shape_attrs = [WaveSymbolAttr.get(str(s)) for s in type_.symbolic_shape]
-        element_type = _dtype_to_mlir(ctx, type_.dtype)
         address_space_attr = _map_address_space(type_.address_space)
-        return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
+        return _create_wave_tensor_type(
+            ctx, type_.symbolic_shape, type_.dtype, address_space_attr
+        )
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
 
 
