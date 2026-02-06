@@ -134,8 +134,7 @@ WaveIndexMappingAttr applyConstraint(WaveConstraintAttr constraint,
                                      WaveWorkgroupDim dim,
                                      uint64_t threadsPerWave,
                                      WaveIndexMappingAttr baseMapping) {
-  llvm::SmallVector<mlir::Attribute> symbols =
-      llvm::to_vector(constraint.getTileSize().getSymbols());
+  llvm::SmallVector<Attribute> symbols(constraint.getTileSize().getSymbols());
 
   MLIRContext *context = constraint.getContext();
   WaveIndexSymbol symbol = getWaveIndexThreadSymbol(dim);
