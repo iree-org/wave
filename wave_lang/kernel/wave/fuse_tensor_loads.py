@@ -13,7 +13,7 @@ import torch.fx as fx
 
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
-from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2
+from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2, WAVE_ID
 from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
@@ -161,9 +161,11 @@ def compute_fused_parameters(
     else:
         raise ValueError(f"Invalid waves_per_block: {waves_per_block}")
 
+    wave_offset_subs = (wave_offset_subs, (WAVE_ID, WAVE_ID - 1))
+
     adjusted_load2_global_tile_index = {}
     for dim, idx_seq in load2.global_tile_index.items():
-        adjusted_start = idx_seq.start.subs(*wave_offset_subs, simultaneous=True)
+        adjusted_start = idx_seq.start.subs(wave_offset_subs, simultaneous=True)
 
         adjusted_load2_global_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
@@ -172,7 +174,7 @@ def compute_fused_parameters(
     # Adjust shared_tile_index for load2 if it depends on thread IDs
     adjusted_load2_shared_tile_index = {}
     for dim, idx_seq in load2.shared_tile_index.items():
-        adjusted_start = idx_seq.start.subs(*wave_offset_subs, simultaneous=True)
+        adjusted_start = idx_seq.start.subs(wave_offset_subs, simultaneous=True)
 
         adjusted_load2_shared_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
