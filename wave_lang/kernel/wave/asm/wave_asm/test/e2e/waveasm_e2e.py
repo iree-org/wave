@@ -407,7 +407,7 @@ def capture_wave_mlir(options, kernel_func) -> str:
         idxc.set_subs(options.subs)
 
         # Initialize kernel constraints (same as wave_compile)
-        kernel_func.initalize_all_constraints(options)
+        kernel_func.initialize_all_constraints(options)
 
         # Trace and get MLIR
         result = _trace_launchable_and_get_kernel_signature(kernel_func, options)
@@ -456,7 +456,7 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
         idxc.set_subs(options.subs)
 
         # Initialize kernel constraints (same as wave_compile)
-        kernel_func.initalize_all_constraints(options)
+        kernel_func.initialize_all_constraints(options)
 
         # Trace and get MLIR - this populates options.kernel_launch_info
         result = _trace_launchable_and_get_kernel_signature(kernel_func, options)

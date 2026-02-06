@@ -455,7 +455,7 @@ class LaunchableWave(Launchable):
             # TODO: remove after everything is verified to be working with wave_id.
             hw_constraint.use_wave_id = options.target == "gfx1250"
 
-    def initalize_all_constraints(self, options: "WaveCompileOptions") -> None:
+    def initialize_all_constraints(self, options: "WaveCompileOptions") -> None:
         self.initialize_wave_constraints()
         self.initialize_symbolic_constraints()
         self.initialize_workgroup_constraints()

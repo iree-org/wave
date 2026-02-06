@@ -405,7 +405,7 @@ def capture_copy_kernel(
         idxc.set_subs(options.subs)
 
         # Initialize constraints
-        copy_kernel.initalize_all_constraints(options)
+        copy_kernel.initialize_all_constraints(options)
 
         result = _trace_launchable_and_get_kernel_signature(copy_kernel, options)
         mb = result[0]
@@ -485,9 +485,7 @@ def capture_mma_kernel(
 
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
-        mma_kernel.initialize_wave_constraints()
-        mma_kernel.initialize_symbolic_constraints()
-        mma_kernel.initialize_workgroup_constraints()
+        mma_kernel.initialize_all_constraints(options)
 
         result = _trace_launchable_and_get_kernel_signature(mma_kernel, options)
         mb = result[0]
@@ -576,9 +574,7 @@ def capture_gemm_kernel(
 
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
-        gemm_kernel.initialize_wave_constraints()
-        gemm_kernel.initialize_symbolic_constraints()
-        gemm_kernel.initialize_workgroup_constraints()
+        gemm_kernel.initialize_all_constraints(options)
 
         result = _trace_launchable_and_get_kernel_signature(gemm_kernel, options)
         mb = result[0]
