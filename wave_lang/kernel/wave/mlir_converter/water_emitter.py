@@ -494,6 +494,7 @@ def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
     value_map: dict[fx.Node | fx.Proxy, ir.Value],
+    implicit_captures: dict[fx.Node, fx.Node],
     ctx: ir.Context,
     known_ids: set[str] | None = None,
 ):
@@ -504,8 +505,21 @@ def _emit_ops_from_graph(
         node.infer_type()
 
         with node.location.to_water() if node.location else ir.Location.current:
-            # No MLIR ops are emitted for placeholder and output nodes
-            if isinstance(node, Placeholder | Output):
+            # Remap implicit captures to the captured values, MLIR modeling supports
+            # implicit captures without additional constructs.
+            if isinstance(node, Placeholder):
+                if fx_node not in implicit_captures:
+                    continue
+
+                assert (
+                    implicit_captures[fx_node] in value_map
+                ), f"{node} implicitly captures a value that was not translated."
+
+                value_map[fx_node] = value_map[implicit_captures[fx_node]]
+                continue
+
+            # No MLIR ops are emitted for output nodes.
+            if isinstance(node, Output):
                 continue
 
             # Collect already emitted mlir values for the args of this node
@@ -615,6 +629,7 @@ def _emit_ops_from_graph(
                             trace.get_subgraph(node.subgraph_name),
                             trace,
                             value_map,
+                            implicit_captures,
                             ctx,
                             known_ids,
                         )
@@ -885,26 +900,40 @@ def _create_kernel_module(
 
         # Subgraphs duplicate the placeholders of surrounding graphs so there
         # are multiple placeholders representing the same values.
-        # Add mapping for these repeated placeholders as well
+        # Add mapping for these repeated placeholders as well. In addition,
+        # subgraphs have implicit capture placeholders that refer to nodes in
+        # the outer graph, store those separately.
+        implicit_captures: dict[fx.Node, fx.Node] = {}
         for nested_placeholder in placeholders:
             if nested_placeholder in top_level_placeholders:
                 continue
             if isinstance(get_custom(nested_placeholder), IterArg):
                 continue
-            # With top-level placeholders and iterargs filtered out the remaining
-            # placeholders are duplicates. Find the original one by name
+            # See if this placeholder is an implicit capture.
+            captured_node: fx.Node | None = get_custom(
+                nested_placeholder
+            ).get_captured_fx_node()
             if not nested_placeholder.name in top_level_names:
-                raise RuntimeError(
-                    f"Incorrectly structured placeholders in trace: "
-                    f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
-                )
+                if captured_node is None:
+                    raise RuntimeError(
+                        f"Incorrectly structured placeholders in trace: "
+                        f"placeholder '{nested_placeholder.name}' not found in top-level "
+                        f"names {top_level_names} and does not capture another node."
+                    )
+                implicit_captures[nested_placeholder] = captured_node
+                continue
             value_map[nested_placeholder] = value_map[
                 top_level_placeholders[top_level_names.index(nested_placeholder.name)]
             ]
 
         with ir.InsertionPoint(entry_block):
             _emit_ops_from_graph(
-                trace.get_root_graph(), trace, value_map, ctx, known_ids
+                trace.get_root_graph(),
+                trace,
+                value_map,
+                implicit_captures,
+                ctx,
+                known_ids,
             )
             func.ReturnOp(operands_=[])
 

@@ -393,6 +393,89 @@ def mlir_converter_sum():
 
 
 @run_test
+def mlir_converter_emit_wave_dialect_loop_implicit_capture():
+    """Test emit_wave_dialect with a kernel that has a loop using registers defined in the
+    kernel as implicit captures.
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints_loop: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=MMAType.F32_32x32x8_F16,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N, K: BLOCK_K},
+        ),
+    ]
+
+    @tkw.wave(constraints_loop)
+    def kernel_loop_implicit_capture(
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        # Registers defined in the kernel body (not function args)
+        acc = tkl.Register[M, N, tkl.f32](0.0)
+        bias = tkl.Register[M, N, tkl.f32](0.0)  # kernel-defined, captured by loop
+
+        # Loop body implicitly captures bias (kernel-defined register); acc is iter arg
+        @tkw.iterate(K, init_args=[acc])
+        def k_loop(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            acc = acc + bias
+            return acc
+
+        tkw.write(k_loop, c)
+
+    subs_loop = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 16,
+        M: 64,
+        N: 64,
+        K: 32,
+    }
+    options_loop = WaveCompileOptions(
+        subs=subs_loop,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options_loop = set_default_run_config(options_loop)
+
+    compiled = wave_compile(options_loop, kernel_loop_implicit_capture)
+    trace = compiled.compiled_graph
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(
+        trace, kernel_loop_implicit_capture.constraints, options_loop
+    )
+
+    if diagnostics:
+        for d in diagnostics:
+            print(d, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "emit_wave_dialect should succeed for loop with implicit captures"
+
+    print(mlir_output)
+    # CHECK-LABEL: mlir_converter_emit_wave_dialect_loop_implicit_capture
+    # CHECK: func.func
+    # CHECK: %[[ACC:.+]] = wave.register
+    # CHECK: %[[BIAS:.+]] = wave.register
+    # CHECK: wave.iterate @K iter_args(%[[ACC]])
+    # CHECK: ^{{.*}}(%[[INNER:.+]]: !wave.tensor
+    # CHECK:   wave.add %[[INNER]], %[[BIAS]]
+
+
+@run_test
 def mlir_converter_matmul():
     """Test MLIR converter with matmul kernel."""
 
