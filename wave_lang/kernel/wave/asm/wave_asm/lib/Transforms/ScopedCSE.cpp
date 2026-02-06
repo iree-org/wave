@@ -46,6 +46,7 @@ struct ExpressionKey {
   StringRef opName;
   SmallVector<Value, 4> operands;
   SmallVector<Attribute, 2> attrs;
+  SmallVector<Type, 2> resultTypes;
 
   ExpressionKey() : opName("") {}
 
@@ -64,11 +65,16 @@ struct ExpressionKey {
         continue;
       attrs.push_back(attr.getValue());
     }
+    // Include result types to prevent merging ops with different result sizes
+    // (e.g., v_mov_b32 -> vreg vs v_mov_b32 -> vreg<4,4>)
+    for (Type ty : op->getResultTypes()) {
+      resultTypes.push_back(ty);
+    }
   }
 
   bool operator==(const ExpressionKey &rhs) const {
     return opName == rhs.opName && operands == rhs.operands &&
-           attrs == rhs.attrs;
+           attrs == rhs.attrs && resultTypes == rhs.resultTypes;
   }
 
   bool isEmpty() const { return opName.empty(); }
@@ -96,6 +102,9 @@ template <> struct DenseMapInfo<ExpressionKey> {
     }
     for (Attribute a : key.attrs) {
       hash = llvm::hash_combine(hash, mlir::hash_value(a));
+    }
+    for (Type t : key.resultTypes) {
+      hash = llvm::hash_combine(hash, mlir::hash_value(t));
     }
     return hash;
   }
@@ -135,10 +144,6 @@ bool isCSEEligible(Operation *op) {
 
   // Control flow operations are not eligible
   if (op->hasTrait<OpTrait::ControlFlowOp>())
-    return false;
-
-  // Labels are not eligible
-  if (isa<LabelOp>(op))
     return false;
 
   // Special register operations are not eligible (M0, exec, vcc)

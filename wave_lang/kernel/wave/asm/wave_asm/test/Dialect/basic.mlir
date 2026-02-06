@@ -12,14 +12,8 @@ waveasm.program @simple_kernel
   // Pure SSA instructions - each instruction is its own op
   %sum = waveasm.v_add_u32 %tid, %tid : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
 
-  // Label
-  waveasm.label @loop_start
-
   // Comment
-  waveasm.comment "Loop body begins here"
-
-  // Conditional branch
-  waveasm.s_cbranch_scc1 @loop_start
+  waveasm.comment "Basic kernel body"
 
   // End program
   waveasm.s_endpgm

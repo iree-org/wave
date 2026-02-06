@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 
 using namespace mlir;
 
@@ -87,15 +88,13 @@ int64_t log2(int64_t val) {
 }
 
 //===----------------------------------------------------------------------===//
-// getConstantValue
+// getArithConstantValue
 //===----------------------------------------------------------------------===//
 
-std::optional<int64_t> getConstantValue(Value val) {
-  if (auto constOp = val.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-      return intAttr.getInt();
-    }
-  }
+std::optional<int64_t> getArithConstantValue(Value val) {
+  IntegerAttr attr;
+  if (mlir::matchPattern(val, mlir::m_Constant(&attr)))
+    return attr.getInt();
   return std::nullopt;
 }
 

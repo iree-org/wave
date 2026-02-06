@@ -26,6 +26,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -43,9 +44,10 @@ namespace waveasm {
 //===----------------------------------------------------------------------===//
 
 TranslationContext::TranslationContext(OpBuilder &builder, ProgramOp program,
-                                       TargetAttrInterface target)
+                                       TargetAttrInterface target,
+                                       const TranslationOptions &options)
     : builder(builder), registry(builder.getContext()), program(program),
-      target(target) {}
+      target(target), options(options) {}
 
 VRegType TranslationContext::createVRegType(int64_t size, int64_t alignment) {
   return VRegType::get(builder.getContext(), size, alignment);
@@ -59,9 +61,10 @@ ImmType TranslationContext::createImmType(int64_t value) {
   return ImmType::get(builder.getContext(), value);
 }
 
-LabelOp TranslationContext::emitLabel(StringRef name) {
-  return LabelOp::create(builder, builder.getUnknownLoc(), name);
-}
+//===----------------------------------------------------------------------===//
+// Utility Functions
+//===----------------------------------------------------------------------===//
+// Note: Utility functions have been moved to handlers/HandlerUtils.cpp
 
 CommentOp TranslationContext::emitComment(StringRef text) {
   return CommentOp::create(builder, builder.getUnknownLoc(), text);
@@ -107,10 +110,6 @@ void TranslationContext::cacheExpr(StringRef opName, ValueRange operands,
     os << "_c" << c;
   }
   exprCache[os.str()] = result;
-}
-
-std::string TranslationContext::generateLabel(StringRef prefix) {
-  return (prefix + "_" + std::to_string(labelCounter++)).str();
 }
 
 void TranslationContext::queueSRDSetup(Value memref, int64_t argIndex,
@@ -170,6 +169,29 @@ void TranslationContext::emitSRDPrologue() {
 
   // Emit comment for prologue
   CommentOp::create(builder, loc, "SRD setup prologue");
+
+  // Emit precolored SGPR ops for ABI registers used by the raw assembly
+  // prologue below. This makes the implicit physical-register usage visible
+  // to the register allocator so it won't allocate over these indices.
+  //
+  // s[0:1] = kernarg segment pointer (used as source in s_load_dwordx2).
+  auto kernargPtrType = createSRegType(2, 2);
+  PrecoloredSRegOp::create(builder, loc, kernargPtrType, /*index=*/0,
+                           /*size=*/2);
+
+  if (isGFX95) {
+    // On gfx95*, the prologue loads kernarg data into preload locations
+    // s[2:3], s[4:5], etc. Reserve those pairs so regalloc doesn't use them.
+    llvm::DenseSet<int64_t> reservedPreloadBases;
+    for (const auto &pending : pendingSRDs) {
+      int64_t preloadBase = 2 + pending.argIndex * 2;
+      if (reservedPreloadBases.insert(preloadBase).second) {
+        auto preloadType = createSRegType(2, 2);
+        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
+                                 /*size=*/2);
+      }
+    }
+  }
 
   if (isGFX95) {
     // GFX95* path: Use preload pattern with intermediate locations and
@@ -381,20 +403,6 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
 //===----------------------------------------------------------------------===//
 
 namespace {
-
-/// Compute buffer size from memref type
-static int64_t computeBufferSizeFromMemRef(MemRefType memrefType) {
-  int64_t numElements = 1;
-  for (int64_t dim : memrefType.getShape()) {
-    if (dim == ShapedType::kDynamic)
-      dim = 1; // Conservative estimate for dynamic dims
-    numElements *= dim;
-  }
-  int64_t elementBytes = memrefType.getElementTypeBitWidth() / 8;
-  if (elementBytes == 0)
-    elementBytes = 1; // Minimum 1 byte
-  return numElements * elementBytes;
-}
 
 /// Check if a memref has LDS address space
 bool isLDSMemRef(MemRefType memrefType) {
@@ -728,7 +736,7 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     if (auto baseOffset = ctx.getLDSBaseOffset(loadOp.getBase())) {
       // If the base offset is a constant, fold it into instOffset instead of
       // emitting VALU instructions. This saves 2 VALU ops per LDS read.
-      if (auto constVal = getConstantValue(*baseOffset)) {
+      if (auto constVal = getArithConstantValue(*baseOffset)) {
         instOffset += *constVal;
       } else {
         // Non-constant base offset: must use VALU
@@ -1023,7 +1031,7 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     if (auto baseOffset = ctx.getLDSBaseOffset(storeOp.getBase())) {
       // If the base offset is a constant, fold it into ldsInstOffset instead
       // of emitting VALU instructions. This saves 2 VALU ops per LDS write.
-      if (auto constVal = getConstantValue(*baseOffset)) {
+      if (auto constVal = getArithConstantValue(*baseOffset)) {
         ldsInstOffset += *constVal;
       } else {
         // Non-constant base offset: must use VALU

@@ -194,17 +194,33 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
-// Loop Context for scf.for with iter_args
+// Translation Options
 //===----------------------------------------------------------------------===//
 
-/// Context for tracking loop state during translation
-struct LoopContext {
-  mlir::Value inductionVar;                   // Current loop counter
-  llvm::SmallVector<mlir::Value, 4> iterArgs; // Loop-carried values
-  llvm::StringRef labelName;                  // Loop label for branching
-  int64_t depth;                              // Nesting depth
+/// Options for MLIR to waveasm translation
+struct TranslationOptions {
+  /// Target architecture (gfx942, gfx950, gfx1250)
+  std::string targetId = "gfx942";
 
-  LoopContext() : depth(0) {}
+  /// Workgroup size (x, y, z). If any dimension is 0, use defaults.
+  int64_t workgroupSizeX = 0;
+  int64_t workgroupSizeY = 0;
+  int64_t workgroupSizeZ = 0;
+
+  /// Subgroup (wavefront) size
+  int64_t subgroupSize = 64;
+
+  /// Check if workgroup size is explicitly specified
+  bool hasExplicitWorkgroupSize() const {
+    return workgroupSizeX > 0 || workgroupSizeY > 0 || workgroupSizeZ > 0;
+  }
+
+  /// Get normalized workgroup size (with defaults for 0 values)
+  std::tuple<int64_t, int64_t, int64_t> getWorkgroupSize() const {
+    return {workgroupSizeX > 0 ? workgroupSizeX : 64,
+            workgroupSizeY > 0 ? workgroupSizeY : 1,
+            workgroupSizeZ > 0 ? workgroupSizeZ : 1};
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -215,7 +231,8 @@ struct LoopContext {
 class TranslationContext {
 public:
   TranslationContext(mlir::OpBuilder &builder, ProgramOp program,
-                     TargetAttrInterface target);
+                     TargetAttrInterface target,
+                     const TranslationOptions &options = TranslationOptions());
 
   /// Get the MLIR builder
   mlir::OpBuilder &getBuilder() { return builder; }
@@ -237,9 +254,6 @@ public:
 
   /// Create an immediate type with a value
   ImmType createImmType(int64_t value);
-
-  /// Emit a label
-  LabelOp emitLabel(llvm::StringRef name);
 
   /// Emit a comment
   CommentOp emitComment(llvm::StringRef text);
@@ -297,29 +311,6 @@ public:
   bool hasSRD(mlir::Value memref) const { return srdMap.contains(memref); }
 
   //===--------------------------------------------------------------------===//
-  // Loop Context Management
-  //===--------------------------------------------------------------------===//
-
-  /// Push a new loop context
-  void pushLoopContext(const LoopContext &ctx) { loopStack.push_back(ctx); }
-
-  /// Pop the current loop context
-  void popLoopContext() {
-    if (!loopStack.empty())
-      loopStack.pop_back();
-  }
-
-  /// Get the current loop context (innermost loop)
-  std::optional<LoopContext> getCurrentLoop() const {
-    if (loopStack.empty())
-      return std::nullopt;
-    return loopStack.back();
-  }
-
-  /// Get loop nesting depth
-  int64_t getLoopDepth() const { return loopStack.size(); }
-
-  //===--------------------------------------------------------------------===//
   // Expression CSE (Common Subexpression Elimination)
   //===--------------------------------------------------------------------===//
 
@@ -334,9 +325,6 @@ public:
 
   /// Clear expression cache (e.g., at loop boundaries)
   void clearExprCache() { exprCache.clear(); }
-
-  /// Generate a unique label name
-  std::string generateLabel(llvm::StringRef prefix);
 
   //===--------------------------------------------------------------------===//
   // Pending SRD Setup (Deferred to Prologue)
@@ -624,11 +612,14 @@ public:
 
   const OpHandlerRegistry &getRegistry() const { return registry; }
 
+  const TranslationOptions &getOptions() const { return options; }
+
 private:
   mlir::OpBuilder &builder;
   OpHandlerRegistry registry;
   ProgramOp program;
   TargetAttrInterface target;
+  TranslationOptions options;
   ValueMapper mapper;
   llvm::DenseMap<mlir::Value, int64_t> bindingMap;
   llvm::DenseMap<mlir::Value, int64_t> cacheSwizzleMap;
@@ -645,10 +636,8 @@ private:
       constOffsetMap; // value -> constant offset (for buffer store offset:N)
   llvm::DenseMap<mlir::Value, mlir::Value>
       ldsBaseOffsetMap; // memref -> LDS byte offset from memref.view
-  llvm::SmallVector<LoopContext, 4> loopStack;
   llvm::SmallVector<PendingSRD, 4> pendingSRDs;
   llvm::StringMap<mlir::Value> exprCache;
-  int64_t labelCounter = 0;
   int64_t nextSRDIndex =
       -1; // Will be computed lazily, starts after user+system SGPRs
   int64_t nextSwizzleSRDIndex =
@@ -663,34 +652,23 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
-// Translation Options
+// Utility Functions
 //===----------------------------------------------------------------------===//
 
-/// Options for MLIR to waveasm translation
-struct TranslationOptions {
-  /// Target architecture (gfx942, gfx950, gfx1250)
-  std::string targetId = "gfx942";
+/// Check if a memref type represents LDS memory
+bool isLDSMemRef(mlir::MemRefType memrefType);
 
-  /// Workgroup size (x, y, z). If any dimension is 0, use defaults.
-  int64_t workgroupSizeX = 0;
-  int64_t workgroupSizeY = 0;
-  int64_t workgroupSizeZ = 0;
+/// Compute buffer size from memref type
+int64_t computeBufferSizeFromMemRef(mlir::MemRefType memrefType);
 
-  /// Subgroup (wavefront) size
-  int64_t subgroupSize = 64;
+/// Get constant value from an MLIR value if it's a constant
+std::optional<int64_t> getArithConstantValue(mlir::Value value);
 
-  /// Check if workgroup size is explicitly specified
-  bool hasExplicitWorkgroupSize() const {
-    return workgroupSizeX > 0 || workgroupSizeY > 0 || workgroupSizeZ > 0;
-  }
+/// Check if a value is a power of 2
+bool isPowerOf2(int64_t value);
 
-  /// Get normalized workgroup size (with defaults for 0 values)
-  std::tuple<int64_t, int64_t, int64_t> getWorkgroupSize() const {
-    return {workgroupSizeX > 0 ? workgroupSizeX : 64,
-            workgroupSizeY > 0 ? workgroupSizeY : 1,
-            workgroupSizeZ > 0 ? workgroupSizeZ : 1};
-  }
-};
+/// Compute log2 of a value (assumes value is a power of 2)
+int64_t log2(int64_t value);
 
 //===----------------------------------------------------------------------===//
 // Translation Functions

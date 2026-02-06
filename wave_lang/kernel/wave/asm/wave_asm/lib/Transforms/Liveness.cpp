@@ -9,7 +9,6 @@
 #include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/IR/Builders.h"
-#include "llvm/ADT/SetVector.h"
 #include <algorithm>
 
 using namespace mlir;
@@ -17,234 +16,19 @@ using namespace mlir;
 namespace waveasm {
 
 //===----------------------------------------------------------------------===//
-// Helper: Check if operation is a branch
+// Region Utilities
 //===----------------------------------------------------------------------===//
 
-static bool isBranchOp(Operation *op) {
-  // Check for branch ops by operation name
-  llvm::StringRef name = op->getName().getStringRef();
-  return name.contains("s_branch") || name.contains("s_cbranch") ||
-         name.contains("s_setpc") || name.contains("s_swappc");
-}
-
-static bool isConditionalBranchOp(Operation *op) {
-  llvm::StringRef name = op->getName().getStringRef();
-  return name.contains("s_cbranch");
-}
-
-//===----------------------------------------------------------------------===//
-// CFG Construction
-//===----------------------------------------------------------------------===//
-
-CFG CFG::build(ProgramOp program) {
-  CFG cfg;
-
-  // Collect all operations in order
-  llvm::SmallVector<Operation *> ops;
-  for (Operation &op : program.getBodyBlock()) {
+void collectOpsRecursive(Block &block,
+                         llvm::SmallVectorImpl<Operation *> &ops) {
+  for (Operation &op : block) {
     ops.push_back(&op);
-  }
-
-  if (ops.empty())
-    return cfg;
-
-  // Pass 1: Find block start points (labels and after branches)
-  llvm::SetVector<int64_t> blockStarts;
-  blockStarts.insert(0); // First instruction starts a block
-
-  for (int64_t i = 0; i < static_cast<int64_t>(ops.size()); ++i) {
-    Operation *op = ops[i];
-
-    // Labels start a new block
-    if (isa<LabelOp>(op)) {
-      blockStarts.insert(i);
-    }
-
-    // Instruction after a branch starts a new block
-    if (isBranchOp(op) && i + 1 < static_cast<int64_t>(ops.size())) {
-      blockStarts.insert(i + 1);
-    }
-  }
-
-  // Sort block starts
-  llvm::SmallVector<int64_t> sortedStarts(blockStarts.begin(),
-                                          blockStarts.end());
-  llvm::sort(sortedStarts);
-
-  // Pass 2: Create basic blocks
-  for (size_t i = 0; i < sortedStarts.size(); ++i) {
-    BasicBlock block;
-    block.id = i;
-    block.startIdx = sortedStarts[i];
-    block.endIdx = (i + 1 < sortedStarts.size())
-                       ? sortedStarts[i + 1] - 1
-                       : static_cast<int64_t>(ops.size()) - 1;
-
-    // Check if this block starts with a label
-    if (auto labelOp = dyn_cast<LabelOp>(ops[block.startIdx])) {
-      block.label = labelOp.getName();
-    }
-
-    cfg.blocks.push_back(block);
-  }
-
-  // Fix up label->block mapping after blocks are in place
-  cfg.labelToBlock.clear();
-  for (auto &block : cfg.blocks) {
-    if (block.label) {
-      cfg.labelToBlock[*block.label] = &block;
-    }
-  }
-
-  // Pass 3: Connect edges based on control flow
-  for (size_t i = 0; i < cfg.blocks.size(); ++i) {
-    BasicBlock &block = cfg.blocks[i];
-    Operation *lastOp = ops[block.endIdx];
-
-    bool isBranch = isBranchOp(lastOp);
-    bool isConditional = isConditionalBranchOp(lastOp);
-
-    if (isBranch) {
-      // Get target from label operand if present
-      // Check both StringAttr and SymbolRefAttr (branches use SymbolRefAttr)
-      llvm::StringRef targetLabel;
-      if (auto targetAttr = lastOp->getAttrOfType<StringAttr>("target")) {
-        targetLabel = targetAttr.getValue();
-      } else if (auto targetAttr =
-                     lastOp->getAttrOfType<SymbolRefAttr>("target")) {
-        targetLabel = targetAttr.getRootReference().getValue();
-      }
-      if (!targetLabel.empty()) {
-        if (BasicBlock *targetBlock = cfg.getBlockForLabel(targetLabel)) {
-          block.successors.push_back(targetBlock);
-          targetBlock->predecessors.push_back(&block);
-        }
-      }
-
-      // Conditional branches also fall through
-      if (isConditional && i + 1 < cfg.blocks.size()) {
-        BasicBlock *nextBlock = &cfg.blocks[i + 1];
-        block.successors.push_back(nextBlock);
-        nextBlock->predecessors.push_back(&block);
-      }
-    } else {
-      // Non-branch: fall through to next block
-      if (i + 1 < cfg.blocks.size()) {
-        BasicBlock *nextBlock = &cfg.blocks[i + 1];
-        block.successors.push_back(nextBlock);
-        nextBlock->predecessors.push_back(&block);
+    for (Region &region : op.getRegions()) {
+      for (Block &nestedBlock : region) {
+        collectOpsRecursive(nestedBlock, ops);
       }
     }
   }
-
-  return cfg;
-}
-
-BasicBlock *CFG::getBlockForLabel(llvm::StringRef label) {
-  auto it = labelToBlock.find(label);
-  return it != labelToBlock.end() ? it->second : nullptr;
-}
-
-bool CFG::hasLoops() const {
-  // Simple cycle detection: check if any block is reachable from itself
-  for (const auto &block : blocks) {
-    if (!block.predecessors.empty()) {
-      // Check if any predecessor has a higher index (back edge)
-      for (const BasicBlock *pred : block.predecessors) {
-        if (pred->id >= block.id) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-//===----------------------------------------------------------------------===//
-// Local Use/Def Computation (Pure SSA)
-//===----------------------------------------------------------------------===//
-
-void computeBlockLocalInfo(BasicBlock &block,
-                           llvm::ArrayRef<Operation *> instructions) {
-  block.useSet.clear();
-  block.defSet.clear();
-
-  for (int64_t i = block.startIdx; i <= block.endIdx; ++i) {
-    Operation *op = instructions[i];
-
-    // In pure SSA, operands are uses and results are defs
-    // Process uses: add to use set if not already defined in this block
-    for (Value use : op->getOperands()) {
-      if (isVirtualRegType(use.getType())) {
-        if (!block.defSet.contains(use)) {
-          block.useSet.insert(use);
-        }
-      }
-    }
-
-    // Process defs: results are definitions
-    for (Value def : op->getResults()) {
-      if (isVirtualRegType(def.getType())) {
-        block.defSet.insert(def);
-      }
-    }
-  }
-}
-
-//===----------------------------------------------------------------------===//
-// Backward Dataflow Analysis
-//===----------------------------------------------------------------------===//
-
-void computeCFGLiveness(CFG &cfg, llvm::ArrayRef<Operation *> instructions) {
-  auto &blocks = cfg.getMutableBlocks();
-
-  // Compute local use/def sets for each block
-  for (auto &block : blocks) {
-    computeBlockLocalInfo(block, instructions);
-  }
-
-  // Iterate to fixed point with safety limit
-  // The algorithm is guaranteed to converge in at most O(n) iterations where
-  // n is the number of blocks, but we add a safety limit to catch bugs.
-  // TODO: Use a better estimate of the maximum number of iterations.
-  constexpr int kMaxIterations = 10000;
-  bool changed = true;
-  int iterations = 0;
-  while (changed && iterations < kMaxIterations) {
-    changed = false;
-    ++iterations;
-
-    // Process blocks in reverse order (more efficient for backward analysis)
-    for (int64_t i = cfg.size() - 1; i >= 0; --i) {
-      BasicBlock &block = blocks[i];
-
-      // Compute live_out = union of live_in of all successors
-      llvm::DenseSet<Value> newLiveOut;
-      for (BasicBlock *succ : block.successors) {
-        for (Value v : succ->liveIn) {
-          newLiveOut.insert(v);
-        }
-      }
-
-      // Compute live_in = use union (live_out - def)
-      llvm::DenseSet<Value> newLiveIn = block.useSet;
-      for (Value v : newLiveOut) {
-        if (!block.defSet.contains(v)) {
-          newLiveIn.insert(v);
-        }
-      }
-
-      // Check for changes
-      if (newLiveIn != block.liveIn || newLiveOut != block.liveOut) {
-        block.liveIn = std::move(newLiveIn);
-        block.liveOut = std::move(newLiveOut);
-        changed = true;
-      }
-    }
-  }
-
-  assert(iterations < kMaxIterations &&
-         "Liveness analysis did not converge - possible bug in CFG");
 }
 
 //===----------------------------------------------------------------------===//
@@ -296,27 +80,30 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
 // Main Liveness Computation (Pure SSA)
 //===----------------------------------------------------------------------===//
 
-LivenessInfo computeLiveness(ProgramOp program, bool useCFG) {
+LivenessInfo computeLiveness(ProgramOp program) {
   LivenessInfo info;
 
-  // Collect all operations in order
+  // Collect all operations in order, recursively walking into regions
   llvm::SmallVector<Operation *> ops;
-  for (Operation &op : program.getBodyBlock()) {
-    ops.push_back(&op);
-  }
+  collectOpsRecursive(program.getBodyBlock(), ops);
 
   if (ops.empty())
     return info;
 
-  // Pass 1: Collect def and use points from instructions
-  // In pure SSA, results are defs and operands are uses
+  // Build op-to-index map for range extension
+  llvm::DenseMap<Operation *, int64_t> opToIdx;
+  for (int64_t idx = 0; idx < static_cast<int64_t>(ops.size()); ++idx) {
+    opToIdx[ops[idx]] = idx;
+  }
+
+  // Pass 1: Collect def and use points from instructions.
+  // Also include block arguments of loop ops as definitions.
   for (int64_t idx = 0; idx < static_cast<int64_t>(ops.size()); ++idx) {
     Operation *op = ops[idx];
 
     // Process defs: results are definitions
     for (Value def : op->getResults()) {
       if (isVirtualRegType(def.getType())) {
-        // First definition wins (SSA guarantees single def)
         if (!info.defPoints.contains(def)) {
           info.defPoints[def] = idx;
         }
@@ -327,6 +114,19 @@ LivenessInfo computeLiveness(ProgramOp program, bool useCFG) {
     for (Value use : op->getOperands()) {
       if (isVirtualRegType(use.getType())) {
         info.usePoints[use].push_back(idx);
+      }
+    }
+
+    // Block arguments of while ops are defs at the loop op index
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region) {
+        for (BlockArgument arg : block.getArguments()) {
+          if (isVirtualRegType(arg.getType())) {
+            if (!info.defPoints.contains(arg)) {
+              info.defPoints[arg] = idx;
+            }
+          }
+        }
       }
     }
   }
@@ -346,6 +146,21 @@ LivenessInfo computeLiveness(ProgramOp program, bool useCFG) {
       range.end = defPoint;
     }
 
+    // For loop op block args, extend live range to cover entire loop body
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      if (parentOp && isa<LoopOp>(parentOp)) {
+        Block *body = blockArg.getOwner();
+        Operation *terminator = body->getTerminator();
+        if (terminator) {
+          auto termIt = opToIdx.find(terminator);
+          if (termIt != opToIdx.end()) {
+            range.end = std::max(range.end, termIt->second);
+          }
+        }
+      }
+    }
+
     // Get size and alignment from type
     Type ty = value.getType();
     range.size = getRegSize(ty);
@@ -357,35 +172,77 @@ LivenessInfo computeLiveness(ProgramOp program, bool useCFG) {
     info.ranges[value] = range;
   }
 
-  // Pass 3: Extend ranges using CFG analysis (for loops)
-  if (useCFG) {
-    CFG cfg = CFG::build(program);
+  // Pass 2b: Extend live ranges for values used inside loop bodies.
+  // Any value used inside a loop body is used on EVERY iteration, so its
+  // live range must extend from its definition to the end of the loop body.
+  for (const auto &[value, defPoint] : info.defPoints) {
+    auto it = info.ranges.find(value);
+    if (it == info.ranges.end())
+      continue;
 
-    if (cfg.hasLoops()) {
-      computeCFGLiveness(cfg, ops);
+    // Check all use points for this value. If any use is inside a loop body,
+    // extend the range to cover the entire loop body.
+    auto useIt = info.usePoints.find(value);
+    if (useIt == info.usePoints.end())
+      continue;
 
-      // Extend ranges based on CFG liveness
-      for (const auto &block : cfg.getBlocks()) {
-        // For each value live at block entry, extend its range to cover the
-        // block
-        for (Value v : block.liveIn) {
-          auto it = info.ranges.find(v);
-          if (it != info.ranges.end()) {
-            // Extend end to at least cover this block
-            it->second.end = std::max(it->second.end, block.endIdx);
+    for (int64_t useIdx : useIt->second) {
+      if (useIdx >= static_cast<int64_t>(ops.size()))
+        continue;
+      Operation *useOp = ops[useIdx];
+
+      // Walk up parent chain to find enclosing loop ops
+      Operation *parent = useOp->getParentOp();
+      while (parent && !isa<ProgramOp>(parent)) {
+        if (auto loopOp = dyn_cast<LoopOp>(parent)) {
+          // Check if the value is defined inside the loop body
+          // (at any nesting depth). Values defined inside are recomputed
+          // each iteration and should keep their natural live ranges
+          // within the iteration. Only values defined OUTSIDE need
+          // extension across the loop.
+          bool definedInside = false;
+          if (auto defOp = value.getDefiningOp()) {
+            // Check if defOp is anywhere inside the loop's region,
+            // not just a direct child. This handles values defined
+            // inside nested if/loop ops within the loop body.
+            definedInside = loopOp->isProperAncestor(defOp);
+          } else if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+            // BlockArguments don't have a defining op. Check if the
+            // block argument's parent op is the loop or nested inside it.
+            Operation *argParentOp = blockArg.getOwner()->getParentOp();
+            definedInside = (argParentOp == loopOp.getOperation()) ||
+                            loopOp->isProperAncestor(argParentOp);
+          }
+
+          if (!definedInside) {
+            // Extend end to cover the entire loop body (value is
+            // used every iteration, must survive until loop exits)
+            Block &body = loopOp.getBodyBlock();
+            Operation *terminator = body.getTerminator();
+            if (terminator) {
+              auto termIt = opToIdx.find(terminator);
+              if (termIt != opToIdx.end()) {
+                it->second.end = std::max(it->second.end, termIt->second);
+              }
+            }
+            // Extend start back to the loop op
+            auto loopIt = opToIdx.find(loopOp.getOperation());
+            if (loopIt != opToIdx.end()) {
+              it->second.start = std::min(it->second.start, loopIt->second);
+            }
           }
         }
-
-        // For each value live at block exit, extend its range
-        for (Value v : block.liveOut) {
-          auto it = info.ranges.find(v);
-          if (it != info.ranges.end()) {
-            it->second.end = std::max(it->second.end, block.endIdx);
-          }
-        }
+        parent = parent->getParentOp();
       }
     }
   }
+
+  // Note: Pass 3 (CFG-based backward dataflow liveness extension) has been
+  // removed. It was needed for the old label-based control flow path where
+  // loop back-edges were represented as explicit branch instructions. With
+  // region-based control flow (LoopOp/IfOp), Pass 2 and Pass 2b above
+  // already handle all necessary live range extensions by directly inspecting
+  // the region structure.
 
   // Pass 4: Categorize ranges by register class and sort by start
   for (const auto &[value, range] : info.ranges) {

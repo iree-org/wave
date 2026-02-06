@@ -104,6 +104,7 @@ public:
 private:
   /// Resolve an SSA Value to its physical register string
   std::string resolveValue(mlir::Value value);
+  std::string resolveScalarValue(mlir::Value value);
 
   /// Get the literal value if the operand is an immediate constant
   /// Returns (isLiteral, value) pair
@@ -166,6 +167,9 @@ private:
 
   int64_t peakVGPRs = 0;
   int64_t peakSGPRs = 0;
+
+  /// Counter for generating unique loop labels in assembly
+  int loopLabelCounter = 0;
 
   /// Scratch VGPR for loading non-inline literals
   /// We use a lower VGPR (v15) to avoid excessive VGPR allocation.

@@ -21,6 +21,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   HazardMitigation.cpp
   AssemblyEmitter.cpp
   TranslateFromMLIR.cpp
+  RegionBuilder.cpp
   ScopedCSE.cpp
   Peephole.cpp
   MemoryOffsetOptimization.cpp

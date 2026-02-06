@@ -227,7 +227,7 @@ bool isPowerOf2(int64_t val);
 int64_t log2(int64_t val);
 
 /// Extract constant value from a Value if it is a constant
-std::optional<int64_t> getConstantValue(mlir::Value val);
+std::optional<int64_t> getArithConstantValue(mlir::Value val);
 
 //===----------------------------------------------------------------------===//
 // Type-safe bit casting (replaces C-style memcpy for type punning)

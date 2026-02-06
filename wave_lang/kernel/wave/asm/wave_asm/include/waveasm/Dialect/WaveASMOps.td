@@ -98,12 +98,20 @@ class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst)";
 }
 
-// SALU Compare: sets scc, no explicit result
+// SALU Compare: returns condition in SCC.
+// NOTE: On hardware, s_cmp sets the implicit SCC flag with no destination
+// register. We model SCC as an explicit sreg result so that ConditionOp
+// (the while-loop terminator) can reference it as an SSA Value. The
+// assembly emitter special-cases all S_CMP ops to emit only the two
+// source operands (no destination). The register allocator treats the
+// result as a regular sreg; this wastes one SGPR slot but is harmless
+// since the live range is very short (s_cmp -> condition terminator).
+// TODO: Consider a dedicated SCCType to avoid the wasted register slot.
 class SALUCmpOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, traits> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
-  let results = (outs);  // implicitly sets scc
-  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1)";
+  let results = (outs WaveASM_AnySReg:$result);  // SCC result (see note above)
+  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($result)";
 }
 
 // MFMA: Matrix multiply-accumulate with tied accumulator
@@ -185,6 +193,12 @@ class LDSStoreOp<string mnemonic, list<Trait> traits = []>
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_VRegOrImm:$vaddr);
   let assemblyFormat = "$data `,` $vaddr attr-dict `:` type($data) `,` type($vaddr)";
 }
+
+//===----------------------------------------------------------------------===//
+// Control Flow Operations
+//===----------------------------------------------------------------------===//
+
+include "waveasm/Dialect/WaveASMControlFlowOps.td"
 
 //===----------------------------------------------------------------------===//
 // Program Container

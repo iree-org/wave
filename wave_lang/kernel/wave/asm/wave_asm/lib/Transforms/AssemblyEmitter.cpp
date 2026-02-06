@@ -612,14 +612,56 @@ std::string KernelGenerator::emitLDSWrite(Operation *op,
 }
 
 // Helper for emitting default instruction format
+/// Resolve a value to assembly, using only the first register if the value
+/// is a multi-register type but the instruction expects a scalar operand.
+std::string KernelGenerator::resolveScalarValue(Value value) {
+  Type ty = value.getType();
+  // For multi-register physical VGPRs, use only the first register
+  if (auto pvreg = dyn_cast<PVRegType>(ty)) {
+    if (pvreg.getSize() > 1) {
+      return formatVGPRRange(pvreg.getIndex(), 1);
+    }
+  }
+  // For multi-register physical SGPRs, use only the first register
+  if (auto psreg = dyn_cast<PSRegType>(ty)) {
+    if (psreg.getSize() > 1) {
+      return formatSGPRRange(psreg.getIndex(), 1);
+    }
+  }
+  return resolveValue(value);
+}
+
 std::string KernelGenerator::emitDefaultFormat(Operation *op,
                                                llvm::StringRef mnemonic) {
   llvm::SmallVector<std::string> operands;
+
+  // Check if this instruction produces a single scalar result
+  // (VALU/SALU ops with 1-register results)
+  bool isScalarOp = false;
+  if (op->getNumResults() == 1) {
+    Type resTy = op->getResult(0).getType();
+    if (auto pvreg = dyn_cast<PVRegType>(resTy)) {
+      isScalarOp = (pvreg.getSize() == 1);
+    } else if (auto psreg = dyn_cast<PSRegType>(resTy)) {
+      isScalarOp = (psreg.getSize() == 1);
+    } else if (auto vreg = dyn_cast<VRegType>(resTy)) {
+      isScalarOp = (vreg.getSize() == 1);
+    } else if (auto sreg = dyn_cast<SRegType>(resTy)) {
+      isScalarOp = (sreg.getSize() == 1);
+    }
+  }
+
   for (Value result : op->getResults()) {
     operands.push_back(resolveValue(result));
   }
   for (Value operand : op->getOperands()) {
-    operands.push_back(resolveValue(operand));
+    // For scalar ops, if an operand is a multi-reg value (e.g., CSE folded
+    // a scalar zero with a vector zero), use only the first register
+    if (isScalarOp) {
+      operands.push_back(resolveScalarValue(operand));
+    } else {
+      operands.push_back(resolveValue(operand));
+    }
   }
   return formatter.format(mnemonic, operands);
 }
@@ -831,6 +873,116 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return emitScaledMFMA(scaledOp, "v_mfma_scale_f32_32x32x64_f8f6f4");
           })
 
+      // Region-based control flow: loops are emitted as
+      // label + body + conditional branch (label-based loop at assembly level)
+      .Case<LoopOp>([&](LoopOp loopOp) -> std::optional<std::string> {
+        // Generate a unique loop label (per-kernel counter)
+        std::string labelName = "L_loop_" + std::to_string(loopLabelCounter++);
+
+        std::string buf;
+        llvm::raw_string_ostream os(buf);
+        os << labelName << ":\n";
+
+        // Emit all operations in the loop body
+        Block &body = loopOp.getBodyBlock();
+        for (Operation &bodyOp : body) {
+          // Skip the terminator (ConditionOp) - handle it specially
+          if (isa<ConditionOp>(&bodyOp)) {
+            // ConditionOp: emit conditional branch back to loop label.
+            // INVARIANT: The SCC flag must be set by the s_cmp immediately
+            // preceding this ConditionOp. No SCC-clobbering instructions
+            // (s_add, s_and, s_waitcnt, etc.) may be inserted between the
+            // s_cmp and this branch. Hazard mitigation and waitcnt insertion
+            // passes must respect this constraint (s_waitcnt and s_nop do
+            // not clobber SCC and are safe).
+            os << "  s_cbranch_scc1 " << labelName;
+            break;
+          }
+
+          // Recursively generate assembly for body operations
+          auto instrLines = generateOpWithLiteralHandling(&bodyOp);
+          for (const auto &line : instrLines) {
+            os << line << "\n";
+          }
+        }
+
+        return os.str();
+      })
+      .Case<IfOp>([&](IfOp ifOp) -> std::optional<std::string> {
+        // Structured if-then-else emission:
+        // s_cbranch_scc0 L_else / L_endif
+        // <then body>
+        // s_branch L_endif (if else exists)
+        // L_else: (if else exists)
+        // <else body>
+        // L_endif:
+        int labelId = loopLabelCounter++;
+        std::string elseLabel = "L_if_else_" + std::to_string(labelId);
+        std::string endLabel = "L_if_end_" + std::to_string(labelId);
+
+        std::string buf;
+        llvm::raw_string_ostream os(buf);
+
+        // Branch to else/end if condition is false
+        if (ifOp.hasElse()) {
+          os << "  s_cbranch_scc0 " << elseLabel << "\n";
+        } else {
+          os << "  s_cbranch_scc0 " << endLabel << "\n";
+        }
+
+        // Emit then region
+        for (Operation &thenOp : ifOp.getThenBlock()) {
+          if (isa<YieldOp>(&thenOp))
+            continue;
+          auto instrLines = generateOpWithLiteralHandling(&thenOp);
+          for (const auto &line : instrLines) {
+            os << line << "\n";
+          }
+        }
+
+        // Emit else region if present
+        if (ifOp.hasElse()) {
+          os << "  s_branch " << endLabel << "\n";
+          os << elseLabel << ":\n";
+          for (Operation &elseOp : *ifOp.getElseBlock()) {
+            if (isa<YieldOp>(&elseOp))
+              continue;
+            auto instrLines = generateOpWithLiteralHandling(&elseOp);
+            for (const auto &line : instrLines) {
+              os << line << "\n";
+            }
+          }
+        }
+
+        os << endLabel << ":";
+        return os.str();
+      })
+      .Case<ConditionOp>([&](ConditionOp) -> std::optional<std::string> {
+        return std::nullopt; // Handled by parent LoopOp
+      })
+      .Case<YieldOp>([&](YieldOp) -> std::optional<std::string> {
+        return std::nullopt; // Handled by parent IfOp
+      })
+      // S_CMP operations: set SCC (no destination register)
+      // The IR has a result (SCC value) but the assembly only has 2 source
+      // operands
+      .Case<S_CMP_LT_U32, S_CMP_EQ_U32, S_CMP_LE_U32, S_CMP_GT_U32,
+            S_CMP_GE_U32, S_CMP_LT_I32, S_CMP_EQ_I32, S_CMP_LE_I32,
+            S_CMP_GT_I32, S_CMP_GE_I32>(
+          [&](auto cmpOp) -> std::optional<std::string> {
+            llvm::StringRef opName = cmpOp->getName().getStringRef();
+            llvm::StringRef mnemonic = opName;
+            if (opName.starts_with("waveasm.")) {
+              mnemonic = opName.drop_front(8);
+            }
+            // Emit only the 2 source operands (skip the SCC result)
+            llvm::SmallVector<std::string> operands;
+            for (Value operand : cmpOp->getOperands()) {
+              operands.push_back(resolveValue(operand));
+            }
+            return formatter.format(mnemonic, operands);
+          })
+
       // Default: use the operation's mnemonic with standard format
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
         llvm::StringRef opName = defaultOp->getName().getStringRef();
@@ -972,7 +1124,7 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
     auto instrLines = generateOpWithLiteralHandling(&op);
     lines.append(instrLines.begin(), instrLines.end());
 
-    // Track register usage for VGPR/SGPR accounting
+    // Track register usage for VGPR/SGPR accounting (top-level ops)
     for (Value result : op.getResults()) {
       Type ty = result.getType();
       int64_t size = getRegSize(ty);
@@ -994,6 +1146,27 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
       }
     }
   }
+
+  // Also track registers inside loop/if bodies (nested regions)
+  program.walk([&](Operation *nestedOp) {
+    for (Value result : nestedOp->getResults()) {
+      Type ty = result.getType();
+      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
+        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
+      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
+        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      }
+    }
+    // Also check operands (block arguments have physical types too)
+    for (Value operand : nestedOp->getOperands()) {
+      Type ty = operand.getType();
+      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
+        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
+      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
+        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      }
+    }
+  });
 
   // Ensure minimums
   peakVGPRs = std::max(peakVGPRs, int64_t(1));

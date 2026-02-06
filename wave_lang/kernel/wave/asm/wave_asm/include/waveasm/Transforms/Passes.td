@@ -81,25 +81,18 @@ def WAVEASMValidateSSA : Pass<"waveasm-validate-ssa"> {
 def WAVEASMLiveness : Pass<"waveasm-liveness"> {
   let summary = "Compute liveness information for virtual registers";
   let description = [{
-    Runs CFG-based backward dataflow analysis to compute live ranges
-    for all virtual registers. The analysis:
+    Computes live ranges for all virtual registers using the region
+    structure (LoopOp, IfOp) to determine loop-carried liveness.
 
-    1. Builds a control flow graph from labels and branches
-    2. Computes local use/def sets for each basic block
-    3. Iterates to fixed point using backward dataflow equations:
-       - live_out[B] = union of live_in[S] for all successors S
-       - live_in[B] = use[B] union (live_out[B] - def[B])
-    4. Computes live ranges from definition to last use
-    5. Extends ranges based on CFG liveness for loops
+    The analysis:
+    1. Collects def/use points from the flattened instruction stream
+    2. Builds initial live ranges from definition to last use
+    3. Extends ranges for values used inside loop bodies (LoopOp)
+    4. Computes register pressure using sweep algorithm
 
     The results are stored as an analysis and can be queried by
     subsequent passes (e.g., register allocation).
   }];
-
-  let options = [
-    Option<"useCFG", "use-cfg", "bool", "true",
-           "Use CFG-based analysis (required for loops)">
-  ];
 
   let statistics = [
     Statistic<"numVRegs", "Number of virtual VGPRs", "count">,

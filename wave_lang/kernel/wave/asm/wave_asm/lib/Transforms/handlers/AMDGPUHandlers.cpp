@@ -298,7 +298,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   bool hasCacheSwizzle = false;
   int64_t swizzleStride = 0;
   if (op->getNumOperands() >= 3) {
-    if (auto swizzleVal = getConstantValue(op->getOperand(2))) {
+    if (auto swizzleVal = getArithConstantValue(op->getOperand(2))) {
       swizzleStride = *swizzleVal;
       hasCacheSwizzle = (swizzleStride > 0);
     }

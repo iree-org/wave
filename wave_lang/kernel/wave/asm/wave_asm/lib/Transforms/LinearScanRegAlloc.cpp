@@ -107,11 +107,9 @@ static LogicalResult allocateRegClass(
 
     std::optional<int64_t> physReg;
 
-    // Check if this value is tied to another (MFMA accumulator case for VGPRs).
-    // Note: Tied operands only occur for VGPRs because MFMA instructions have
-    // tied accumulator operands (the result must use the same register as the
-    // input accumulator). SGPRs don't have this constraint on AMD GPUs.
-    if (isVGPR) {
+    // Check if this value is tied to another value (must share same phys reg).
+    // This handles MFMA accumulator tying AND while loop block arg coalescing.
+    {
       auto tiedIt = tiedOperands.find(range.reg);
       if (tiedIt != tiedOperands.end()) {
         Value tiedTo = tiedIt->second;
@@ -187,7 +185,7 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
   }
 
   // Step 2: Compute liveness
-  LivenessInfo liveness = computeLiveness(program, /*useCFG=*/true);
+  LivenessInfo liveness = computeLiveness(program);
 
   stats.totalVRegs = liveness.vregRanges.size();
   stats.totalSRegs = liveness.sregRanges.size();

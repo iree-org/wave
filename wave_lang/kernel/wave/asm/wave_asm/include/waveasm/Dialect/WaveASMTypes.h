@@ -10,6 +10,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Types.h"
 
 // Include the generated enum declarations
@@ -81,6 +82,58 @@ inline int64_t getRegAlignment(mlir::Type type) {
 
 /// Check if type is an immediate
 inline bool isImmType(mlir::Type type) { return mlir::isa<ImmType>(type); }
+
+/// Check if two types are structurally compatible for control flow.
+/// After register allocation, virtual types (vreg, sreg) become physical
+/// types (pvreg, psreg) which include a register index. For control flow
+/// verification, we only care that the register class and size match,
+/// not the specific physical register index.
+inline bool typesCompatible(mlir::Type a, mlir::Type b) {
+  if (a == b)
+    return true;
+
+  // Both are VReg types (virtual)
+  if (auto va = mlir::dyn_cast<VRegType>(a))
+    if (auto vb = mlir::dyn_cast<VRegType>(b))
+      return va.getSize() == vb.getSize();
+
+  // Both are PVReg types (physical) - compare size only, not index
+  if (auto pa = mlir::dyn_cast<PVRegType>(a))
+    if (auto pb = mlir::dyn_cast<PVRegType>(b))
+      return pa.getSize() == pb.getSize();
+
+  // Both are SReg types (virtual)
+  if (auto sa = mlir::dyn_cast<SRegType>(a))
+    if (auto sb = mlir::dyn_cast<SRegType>(b))
+      return sa.getSize() == sb.getSize();
+
+  // Both are PSReg types (physical) - compare size only, not index
+  if (auto pa = mlir::dyn_cast<PSRegType>(a))
+    if (auto pb = mlir::dyn_cast<PSRegType>(b))
+      return pa.getSize() == pb.getSize();
+
+  // Cross virtual/physical: vreg vs pvreg (same register class)
+  if ((mlir::isa<VRegType>(a) && mlir::isa<PVRegType>(b)) ||
+      (mlir::isa<PVRegType>(a) && mlir::isa<VRegType>(b)))
+    return true; // Allow during mixed states (mid-regalloc)
+
+  if ((mlir::isa<SRegType>(a) && mlir::isa<PSRegType>(b)) ||
+      (mlir::isa<PSRegType>(a) && mlir::isa<SRegType>(b)))
+    return true; // Allow during mixed states (mid-regalloc)
+
+  return false;
+}
+
+/// Check that two type ranges are pairwise compatible (same size and each
+/// element pair passes typesCompatible).
+inline bool typesCompatible(mlir::TypeRange a, mlir::TypeRange b) {
+  if (a.size() != b.size())
+    return false;
+  for (auto [ta, tb] : llvm::zip(a, b))
+    if (!typesCompatible(ta, tb))
+      return false;
+  return true;
+}
 
 } // namespace waveasm
 
