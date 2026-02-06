@@ -772,7 +772,7 @@ wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
            "expected waves_per_block to have 3 elements");
     llvm::ArrayRef<unsigned> explicitWpb =
         initObject.hardwareConstraint.getWavesPerBlock();
-    initObject.wavesPerBlock.assign(explicitWpb.begin(), explicitWpb.end());
+    initObject.wavesPerBlock.assign(explicitWpb);
     return initObject;
   }
 

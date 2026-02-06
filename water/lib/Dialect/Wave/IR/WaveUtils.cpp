@@ -132,6 +132,8 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
         &waveConstraints,
     wave::WaveHyperparameterAttr hyperparams,
     SmallVectorImpl<unsigned> &wavesPerBlock) {
+  // Default to 1 wave per block for each dimension, this may be recomputed
+  // later if the corresponding constraints are provided.
   wavesPerBlock.assign(/*NumElts=*/3, /*Elt=*/1);
 
   for (auto &&[symbol, waveConstraint] : waveConstraints) {
