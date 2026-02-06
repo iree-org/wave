@@ -437,6 +437,38 @@ def get_instruction_category(
     return instr_def.category
 
 
+def _resolve_instruction(name: str, architecture: str = "common"):
+    """
+    Resolve an instruction definition, trying fallback architectures if needed.
+
+    Args:
+        name: Instruction name (e.g., "s_cbranch_scc0")
+        architecture: Target architecture (default "common")
+
+    Returns:
+        The instruction definition
+
+    Raises:
+        ValueError: If instruction is not found in any registry
+    """
+    registry = get_registry(architecture)
+    instr_def = registry.get(name)
+    if instr_def is None:
+        # Try fallback architectures if not found
+        for fallback_arch in ["gfx950", "gfx942"]:
+            if fallback_arch != architecture:
+                fallback_registry = get_registry(fallback_arch)
+                instr_def = fallback_registry.get(name)
+                if instr_def is not None:
+                    break
+    if instr_def is None:
+        raise ValueError(
+            f"Unknown instruction '{name}' not found in registry for "
+            f"architecture '{architecture}'. Please add it to the YAML definitions."
+        )
+    return instr_def
+
+
 def is_conditional_branch(name: str, architecture: str = "common") -> bool:
     """
     Check if instruction is a conditional branch.
@@ -451,14 +483,7 @@ def is_conditional_branch(name: str, architecture: str = "common") -> bool:
     Raises:
         ValueError: If instruction is not found in registry
     """
-    registry = get_registry(architecture)
-    instr_def = registry.get(name)
-    if instr_def is None:
-        raise ValueError(
-            f"Unknown instruction '{name}' not found in registry for "
-            f"architecture '{architecture}'. Please add it to the YAML definitions."
-        )
-    return instr_def.is_conditional
+    return _resolve_instruction(name, architecture).is_conditional
 
 
 def is_branch_instruction(name: str, architecture: str = "common") -> bool:
@@ -475,14 +500,7 @@ def is_branch_instruction(name: str, architecture: str = "common") -> bool:
     Raises:
         ValueError: If instruction is not found in registry
     """
-    registry = get_registry(architecture)
-    instr_def = registry.get(name)
-    if instr_def is None:
-        raise ValueError(
-            f"Unknown instruction '{name}' not found in registry for "
-            f"architecture '{architecture}'. Please add it to the YAML definitions."
-        )
-    return instr_def.is_branch
+    return _resolve_instruction(name, architecture).is_branch
 
 
 # ==============================================================================

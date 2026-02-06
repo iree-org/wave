@@ -139,3 +139,112 @@ class _MFMASupport:
             )
 
         return result_regs
+
+    # Scaled MFMA format codes (cbsz/blgp values):
+    #   0 = FP8 (E4M3FN), 1 = BF8 (E5M2), 2 = FP6 (E2M3FN),
+    #   3 = FP6 (E3M2FN), 4 = FP4 (E2M1FN)
+    SCALED_MFMA_FORMAT_CODES = {
+        "f4e2m1fn": 4,
+        "f4E2M1FN": 4,
+        "Float4E2M1FN": 4,
+        "f6e2m3fn": 2,
+        "f6E2M3FN": 2,
+        "Float6E2M3FN": 2,
+        "f6e3m2fn": 3,
+        "f6E3M2FN": 3,
+        "Float6E3M2FN": 3,
+        "f8e4m3fn": 0,
+        "f8E4M3FN": 0,
+        "Float8E4M3FN": 0,
+        "f8e5m2": 1,
+        "f8E5M2": 1,
+        "Float8E5M2": 1,
+    }
+
+    @staticmethod
+    def _get_scaled_mfma_format_code(type_str: str) -> int:
+        """Get the scaled MFMA format code (cbsz/blgp) from a type string.
+
+        Matches the C++ backend's getScaledMFMAFormatCode() logic.
+        Returns 4 (FP4) as default for unrecognized types.
+        """
+        for key, code in _MFMASupport.SCALED_MFMA_FORMAT_CODES.items():
+            if key in type_str:
+                return code
+        return 4  # Default to FP4
+
+    def emit_mfma_f32_16x16x128_f8f6f4(
+        self,
+        a_regs: Tuple[KReg, ...],
+        b_regs: Tuple[KReg, ...],
+        a_scale_reg: KReg,
+        b_scale_reg: KReg,
+        acc_regs: Optional[Tuple[KReg, ...]] = None,
+        cbsz: int = 4,
+        blgp: int = 4,
+    ) -> Tuple[KReg, ...]:
+        """
+        Emit scaled MFMA instruction for MXFP4 (16x16x128 F8F6F4).
+
+        This instruction supports FP4, FP6, or FP8 independently for A and B matrices
+        with per-group E8M0 scaling factors.
+
+        For FP4: Each operand is 32 x 4-bit elements = 16 bytes = 4 VGPRs
+
+        Args:
+            a_regs: Tuple of 4 VGPRs for A operand (32 x f4E2M1FN packed as i8)
+            b_regs: Tuple of 4 VGPRs for B operand (32 x f4E2M1FN packed as i8)
+            a_scale_reg: Single VGPR for A scale factor (f8E8M0FNU)
+            b_scale_reg: Single VGPR for B scale factor (f8E8M0FNU)
+            acc_regs: Optional tuple of 4 VGPRs for accumulator (f32x4)
+                      If None, allocates new result registers
+            cbsz: Format code for A source data (0=FP8, 1=BF8, 2=FP6_E2M3,
+                   3=FP6_E3M2, 4=FP4). Default 4 (FP4).
+            blgp: Format code for B source data. Same encoding as cbsz.
+                   Default 4 (FP4).
+
+        Returns:
+            Tuple of 4 VGPRs containing the result
+        """
+        modifiers = f"cbsz:{cbsz} blgp:{blgp}"
+
+        # Build operand ranges - For FP4: 32 elements = 16 bytes = 4 VGPRs
+        a_range = KRegRange(a_regs[0], len(a_regs), alignment=4)
+        b_range = KRegRange(b_regs[0], len(b_regs), alignment=4)
+
+        # Determine result/accumulator
+        if acc_regs is not None and len(acc_regs) == 4:
+            # Use provided accumulator as both input and output
+            result_regs = acc_regs
+            acc_range = KRegRange(acc_regs[0], 4, alignment=4)
+            if isinstance(acc_range.base_reg, KVReg):
+                self.program.register_accumulator_vreg_range(acc_range)
+
+            # Scaled MFMA with accumulator: v_mfma_scale dst, a, b, acc, a_scale, b_scale
+            self.program.emit(
+                KInstr(
+                    "v_mfma_scale_f32_16x16x128_f8f6f4",
+                    (acc_range,),  # def: accumulator range (RMW)
+                    (acc_range, a_range, b_range, a_scale_reg, b_scale_reg),
+                    comment="Scaled MFMA 16x16x128 F8F6F4 with accumulator (in-place)",
+                    modifiers=modifiers,
+                )
+            )
+        else:
+            # Allocate new quad for result, use 0 as accumulator
+            result_range = self.vreg_quad()
+            self.program.register_accumulator_vreg_range(result_range)
+            result_regs = tuple(KVReg(result_range.base_reg.id + i) for i in range(4))
+
+            # Scaled MFMA with zero accumulator
+            self.program.emit(
+                KInstr(
+                    "v_mfma_scale_f32_16x16x128_f8f6f4",
+                    (result_range,),
+                    (a_range, b_range, KImm(0), a_scale_reg, b_scale_reg),
+                    comment="Scaled MFMA 16x16x128 F8F6F4 with zero accumulator",
+                    modifiers=modifiers,
+                )
+            )
+
+        return result_regs

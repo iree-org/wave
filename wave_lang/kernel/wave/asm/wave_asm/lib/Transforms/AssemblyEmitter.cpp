@@ -624,6 +624,22 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
   return formatter.format(mnemonic, operands);
 }
 
+/// Helper to emit scaled MFMA instructions with cbsz/blgp format modifiers.
+/// Shared between 16x16x128 and 32x32x64 variants to avoid code duplication.
+std::optional<std::string>
+KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
+  std::string line = emitDefaultFormat(scaledOp, mnemonic);
+  // Read cbsz/blgp from attributes set by the MLIR handler
+  int32_t cbsz = 4; // Default to FP4
+  int32_t blgp = 4;
+  if (auto cbszAttr = scaledOp->getAttrOfType<IntegerAttr>("cbsz"))
+    cbsz = cbszAttr.getInt();
+  if (auto blgpAttr = scaledOp->getAttrOfType<IntegerAttr>("blgp"))
+    blgp = blgpAttr.getInt();
+  line += " cbsz:" + std::to_string(cbsz) + " blgp:" + std::to_string(blgp);
+  return line;
+}
+
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
   // Use TypeSwitch for type-safe dispatch
   // This replaces the string-based mnemonic matching with proper type dispatch
@@ -728,6 +744,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b64"); })
       .Case<DS_READ_B128>(
           [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b128"); })
+      .Case<DS_READ_U8>(
+          [&](auto readOp) { return emitLDSRead(readOp, "ds_read_u8"); })
+      .Case<DS_READ_U16>(
+          [&](auto readOp) { return emitLDSRead(readOp, "ds_read_u16"); })
 
       // LDS write operations
       .Case<DS_WRITE_B32>(
@@ -736,6 +756,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b64"); })
       .Case<DS_WRITE_B128>(
           [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b128"); })
+      .Case<DS_WRITE_B8>(
+          [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b8"); })
+      .Case<DS_WRITE_B16>(
+          [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b16"); })
 
       // M0 register operations
       .Case<S_MOV_B32_M0>([&](S_MOV_B32_M0 movOp) {
@@ -794,6 +818,18 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         }
         return emitDefaultFormat(movOp, "v_mov_b32");
       })
+
+      // Scaled MFMA: append cbsz and blgp modifiers for data format.
+      // Shared lambda to avoid duplication between 16x16x128 and 32x32x64.
+      .Case<V_MFMA_SCALE_F32_16X16X128_F8F6F4>(
+          [&](auto scaledOp) -> std::optional<std::string> {
+            return emitScaledMFMA(scaledOp,
+                                  "v_mfma_scale_f32_16x16x128_f8f6f4");
+          })
+      .Case<V_MFMA_SCALE_F32_32X32X64_F8F6F4>(
+          [&](auto scaledOp) -> std::optional<std::string> {
+            return emitScaledMFMA(scaledOp, "v_mfma_scale_f32_32x32x64_f8f6f4");
+          })
 
       // Default: use the operation's mnemonic with standard format
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {

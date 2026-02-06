@@ -137,6 +137,8 @@ mlir::LogicalResult handleVectorInsert(mlir::Operation *op,
                                        TranslationContext &ctx);
 mlir::LogicalResult handleVectorShapeCast(mlir::Operation *op,
                                           TranslationContext &ctx);
+mlir::LogicalResult handleVectorBitCast(mlir::Operation *op,
+                                        TranslationContext &ctx);
 mlir::LogicalResult handleVectorFma(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleVectorReduction(mlir::Operation *op,
@@ -150,6 +152,8 @@ mlir::LogicalResult handleAMDGPULdsBarrier(mlir::Operation *op,
                                            TranslationContext &ctx);
 mlir::LogicalResult handleAMDGPUMfma(mlir::Operation *op,
                                      TranslationContext &ctx);
+mlir::LogicalResult handleAMDGPUScaledMfma(mlir::Operation *op,
+                                           TranslationContext &ctx);
 mlir::LogicalResult handleFatRawBufferCast(mlir::Operation *op,
                                            TranslationContext &ctx);
 mlir::LogicalResult handleGatherToLds(mlir::Operation *op,

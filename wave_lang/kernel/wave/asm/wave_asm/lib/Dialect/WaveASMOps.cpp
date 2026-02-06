@@ -43,6 +43,13 @@ static int64_t getMFMAAccumulatorSize(llvm::StringRef mnemonic) {
   if (mnemonic.contains("16x16x4_f64"))
     return 8;
 
+  // Scaled MFMA variants (gfx950+) - check before generic dimension patterns
+  // to avoid false matches (e.g., "16x16x128" should not match "16x16x16")
+  if (mnemonic.contains("16x16x128"))
+    return 4;
+  if (mnemonic.contains("32x32x64"))
+    return 16;
+
   // 4-register accumulators
   if (mnemonic.contains("16x16x16") || mnemonic.contains("16x16x32") ||
       mnemonic.contains("16x16x4_f32") || mnemonic.contains("4x4x4") ||
@@ -243,6 +250,14 @@ LogicalResult V_MFMA_F32_16X16X32_BF8_BF8::verify() {
   return verifyMFMAOp(*this);
 }
 LogicalResult V_MFMA_F32_32X32X16_BF8_BF8::verify() {
+  return verifyMFMAOp(*this);
+}
+
+// Scaled MFMA variants (MXFP4/FP6/FP8 with per-group scales)
+LogicalResult V_MFMA_SCALE_F32_16X16X128_F8F6F4::verify() {
+  return verifyMFMAOp(*this);
+}
+LogicalResult V_MFMA_SCALE_F32_32X32X64_F8F6F4::verify() {
   return verifyMFMAOp(*this);
 }
 

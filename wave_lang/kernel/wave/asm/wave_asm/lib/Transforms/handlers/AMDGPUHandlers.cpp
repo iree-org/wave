@@ -15,6 +15,11 @@
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "waveasm-amdgpu-handlers"
 
 using namespace mlir;
 using namespace waveasm;
@@ -191,6 +196,89 @@ LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx) {
   }
 
   ctx.getMapper().mapValue(mfmaOp.getDestD(), result);
+  return success();
+}
+
+/// Get the scaled MFMA format code from an MLIR element type.
+/// These codes map to the cbsz/blgp fields on the hardware instruction:
+///   0 = fp8 (E4M3FN), 1 = bf8 (E5M2), 2 = fp6 (E2M3FN),
+///   3 = fp6 (E3M2FN), 4 = fp4 (E2M1FN)
+static int32_t getScaledMFMAFormatCode(Type type) {
+  Type elemType = getElementTypeOrSelf(type);
+  if (isa<Float4E2M1FNType>(elemType))
+    return 4;
+  if (isa<Float6E2M3FNType>(elemType))
+    return 2;
+  if (isa<Float6E3M2FNType>(elemType))
+    return 3;
+  if (isa<Float8E4M3FNType>(elemType))
+    return 0;
+  if (isa<Float8E5M2Type>(elemType))
+    return 1;
+  // Default to FP4 if type is unknown (e.g., after bitcast to i-type).
+  // This is a fallback - if you add a new float type, add an explicit case
+  // above.
+  LLVM_DEBUG(llvm::dbgs() << "getScaledMFMAFormatCode: unrecognized type, "
+                          << "defaulting to FP4 (code 4)\n");
+  return 4;
+}
+
+LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
+  auto scaledMfmaOp = cast<amdgpu::ScaledMFMAOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  // Extract M, N, K dimensions from attributes
+  int64_t m = scaledMfmaOp.getM();
+  int64_t n = scaledMfmaOp.getN();
+  int64_t k = scaledMfmaOp.getK();
+
+  // Map operands: sourceA (data), sourceB (data), destC (acc), scaleA, scaleB
+  // Note: In amdgpu.scaled_mfma, operands are ordered differently than in the
+  // IR The Python implementation showed that operands come in this order: 0:
+  // sourceA (data), 1: sourceB (data), 2: destC (acc), 3: scaleA, 4: scaleB
+  auto srcA = ctx.getMapper().getMapped(scaledMfmaOp.getSourceA());
+  auto srcB = ctx.getMapper().getMapped(scaledMfmaOp.getSourceB());
+  auto srcC = ctx.getMapper().getMapped(scaledMfmaOp.getDestC());
+  auto scaleA = ctx.getMapper().getMapped(scaledMfmaOp.getScalesA());
+  auto scaleB = ctx.getMapper().getMapped(scaledMfmaOp.getScalesB());
+
+  if (!srcA || !srcB || !srcC || !scaleA || !scaleB) {
+    return op->emitError("Scaled MFMA operands not mapped");
+  }
+
+  // For MXFP4 16x16x128: accumulator is 4 VGPRs
+  int64_t accSize = 4;
+  if (m == 32 && n == 32) {
+    accSize = 16;
+  }
+
+  auto vregType = ctx.createVRegType(accSize, 4);
+  Value result;
+
+  // Generate the appropriate scaled MFMA instruction based on dimensions
+  if (m == 16 && n == 16 && k == 128) {
+    result = V_MFMA_SCALE_F32_16X16X128_F8F6F4::create(
+        builder, loc, vregType, *srcA, *srcB, *srcC, *scaleA, *scaleB);
+  } else if (m == 32 && n == 32 && k == 64) {
+    result = V_MFMA_SCALE_F32_32X32X64_F8F6F4::create(
+        builder, loc, vregType, *srcA, *srcB, *srcC, *scaleA, *scaleB);
+  } else {
+    return op->emitError("Unsupported scaled MFMA dimensions: ")
+           << m << "x" << n << "x" << k;
+  }
+
+  // Set cbsz/blgp format code attributes based on source data types
+  // These determine the data format: FP4=4, FP6_E2M3=2, FP6_E3M2=3, FP8=0,
+  // BF8=1
+  int32_t aTypeCode =
+      getScaledMFMAFormatCode(scaledMfmaOp.getSourceA().getType());
+  int32_t bTypeCode =
+      getScaledMFMAFormatCode(scaledMfmaOp.getSourceB().getType());
+  result.getDefiningOp()->setAttr("cbsz", builder.getI32IntegerAttr(aTypeCode));
+  result.getDefiningOp()->setAttr("blgp", builder.getI32IntegerAttr(bTypeCode));
+
+  ctx.getMapper().mapValue(scaledMfmaOp.getDestD(), result);
   return success();
 }
 

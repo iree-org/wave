@@ -301,6 +301,9 @@ class KInstr:
     constraints: KInstrConstraints = field(default_factory=KInstrConstraints)
     comment: Optional[str] = None
     target: Optional[str] = None  # Branch target label (cleaner than using comment)
+    modifiers: Optional[str] = (
+        None  # Extra instruction modifiers (e.g., "cbsz:4 blgp:4")
+    )
 
     def get_virtual_defs(self) -> List[KVirtualReg]:
         """Get all virtual registers defined by this instruction."""

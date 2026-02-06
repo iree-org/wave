@@ -108,6 +108,18 @@ LogicalResult handleVectorShapeCast(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleVectorBitCast(Operation *op, TranslationContext &ctx) {
+  auto castOp = cast<vector::BitCastOp>(op);
+
+  // Bit cast is a no-op at the register level (reinterpret cast)
+  // The data stays in the same registers, just interpreted differently
+  auto src = ctx.getMapper().getMapped(castOp.getSource());
+  if (src) {
+    ctx.getMapper().mapValue(castOp.getResult(), *src);
+  }
+  return success();
+}
+
 LogicalResult handleVectorFma(Operation *op, TranslationContext &ctx) {
   auto fmaOp = cast<vector::FMAOp>(op);
   auto &builder = ctx.getBuilder();

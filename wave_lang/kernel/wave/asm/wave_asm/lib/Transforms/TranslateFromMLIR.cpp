@@ -163,6 +163,11 @@ void TranslationContext::emitSRDPrologue() {
     srdIndexMap[pendingSRDs[i].memref] = newSrdBase;
   }
 
+  // Update nextSwizzleSRDIndex to start after all regular SRDs.
+  // This ensures cache-swizzle SRDs don't overlap with regular arg SRDs.
+  int64_t afterLastSrd = srdStartIndex + pendingSRDs.size() * 4;
+  nextSwizzleSRDIndex = (afterLastSrd + 3) & ~3; // Align to 4
+
   // Emit comment for prologue
   CommentOp::create(builder, loc, "SRD setup prologue");
 
@@ -363,6 +368,7 @@ LogicalResult handleVectorBroadcast(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorExtract(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorInsert(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorShapeCast(Operation *op, TranslationContext &ctx);
+LogicalResult handleVectorBitCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorFma(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorReduction(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorExtractStridedSlice(Operation *op,
@@ -559,12 +565,21 @@ LogicalResult handleVectorTransferWrite(Operation *op,
       vaddr = ConstantOp::create(builder, loc, immType, 0);
     }
 
-    if (numBytes == 8) {
+    if (numBytes == 0) {
+      return op->emitError("zero-byte LDS write is invalid");
+    } else if (numBytes == 1) {
+      DS_WRITE_B8::create(builder, loc, *data, vaddr);
+    } else if (numBytes == 2) {
+      DS_WRITE_B16::create(builder, loc, *data, vaddr);
+    } else if (numBytes <= 4) {
+      DS_WRITE_B32::create(builder, loc, *data, vaddr);
+    } else if (numBytes <= 8) {
       DS_WRITE_B64::create(builder, loc, *data, vaddr);
-    } else if (numBytes == 16) {
+    } else if (numBytes <= 16) {
       DS_WRITE_B128::create(builder, loc, *data, vaddr);
     } else {
-      DS_WRITE_B32::create(builder, loc, *data, vaddr);
+      return op->emitError("LDS write of ")
+             << numBytes << " bytes exceeds maximum (16)";
     }
   } else {
     // Global write - buffer store
@@ -1020,12 +1035,21 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     }
 
     Operation *writeOp;
-    if (numBytes == 8) {
+    if (numBytes == 0) {
+      return op->emitError("zero-byte LDS write is invalid");
+    } else if (numBytes == 1) {
+      writeOp = DS_WRITE_B8::create(builder, loc, *data, vaddr);
+    } else if (numBytes == 2) {
+      writeOp = DS_WRITE_B16::create(builder, loc, *data, vaddr);
+    } else if (numBytes <= 4) {
+      writeOp = DS_WRITE_B32::create(builder, loc, *data, vaddr);
+    } else if (numBytes <= 8) {
       writeOp = DS_WRITE_B64::create(builder, loc, *data, vaddr);
-    } else if (numBytes == 16) {
+    } else if (numBytes <= 16) {
       writeOp = DS_WRITE_B128::create(builder, loc, *data, vaddr);
     } else {
-      writeOp = DS_WRITE_B32::create(builder, loc, *data, vaddr);
+      return op->emitError("LDS write of ")
+             << numBytes << " bytes exceeds maximum (16)";
     }
 
     // Add offset attribute if we have a non-zero LDS instruction offset
@@ -1220,6 +1244,7 @@ LogicalResult handleSCFYield(Operation *op, TranslationContext &ctx);
 // From AMDGPUHandlers.cpp
 LogicalResult handleAMDGPULdsBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx);
+LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx);
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx);
@@ -1359,6 +1384,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(vector::ExtractOp, handleVectorExtract);
   REGISTER_HANDLER(vector::InsertOp, handleVectorInsert);
   REGISTER_HANDLER(vector::ShapeCastOp, handleVectorShapeCast);
+  REGISTER_HANDLER(vector::BitCastOp, handleVectorBitCast);
   REGISTER_HANDLER(vector::TransferReadOp, handleVectorTransferRead);
   REGISTER_HANDLER(vector::TransferWriteOp, handleVectorTransferWrite);
   REGISTER_HANDLER(vector::FMAOp, handleVectorFma);
@@ -1367,6 +1393,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   // AMDGPU dialect
   REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
   REGISTER_HANDLER(amdgpu::MFMAOp, handleAMDGPUMfma);
+  REGISTER_HANDLER(amdgpu::ScaledMFMAOp, handleAMDGPUScaledMfma);
   REGISTER_HANDLER(amdgpu::FatRawBufferCastOp, handleFatRawBufferCast);
   REGISTER_HANDLER(amdgpu::GatherToLDSOp, handleGatherToLds);
   REGISTER_HANDLER(amdgpu::RawBufferLoadOp, handleRawBufferLoad);

@@ -214,7 +214,9 @@ class KernelGenerator:
         defs = [self._resolve_def(d) for d in instr.defs]
         uses = [self._resolve_operand(u) for u in instr.uses]
 
-        return self._formatter.format(name, defs=defs, uses=uses, comment=instr.comment)
+        return self._formatter.format(
+            name, defs=defs, uses=uses, comment=instr.comment, modifiers=instr.modifiers
+        )
 
     def _resolve_def(self, d: KOperand) -> str:
         """Resolve a definition operand."""

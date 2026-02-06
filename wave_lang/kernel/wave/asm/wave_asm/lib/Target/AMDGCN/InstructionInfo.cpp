@@ -188,6 +188,48 @@ InstructionRegistry::InstructionRegistry() {
       .incrementsLgkmcnt = true,
   });
 
+  registerInstruction(InstrDesc{
+      .name = "ds_write_b8",
+      .category = InstrCategory::LDS,
+      .defs = {},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR},
+               {.name = "vdata", .type = OperandType::VGPR}},
+      .latency = 20,
+      .mayStore = true,
+      .incrementsLgkmcnt = true,
+  });
+
+  registerInstruction(InstrDesc{
+      .name = "ds_write_b16",
+      .category = InstrCategory::LDS,
+      .defs = {},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR},
+               {.name = "vdata", .type = OperandType::VGPR}},
+      .latency = 20,
+      .mayStore = true,
+      .incrementsLgkmcnt = true,
+  });
+
+  registerInstruction(InstrDesc{
+      .name = "ds_read_u8",
+      .category = InstrCategory::LDS,
+      .defs = {{.name = "vdst", .type = OperandType::VGPR, .isDef = true}},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR}},
+      .latency = 20,
+      .mayLoad = true,
+      .incrementsLgkmcnt = true,
+  });
+
+  registerInstruction(InstrDesc{
+      .name = "ds_read_u16",
+      .category = InstrCategory::LDS,
+      .defs = {{.name = "vdst", .type = OperandType::VGPR, .isDef = true}},
+      .uses = {{.name = "vaddr", .type = OperandType::VGPR}},
+      .latency = 20,
+      .mayLoad = true,
+      .incrementsLgkmcnt = true,
+  });
+
   // MFMA instructions
   registerInstruction(InstrDesc{
       .name = "v_mfma_f32_32x32x8_f16",

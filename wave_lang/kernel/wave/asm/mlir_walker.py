@@ -130,6 +130,8 @@ class IRWalker:
             self.handlers.handle_vector_store_op(operation, kernel_info)
         elif isinstance(operation, amdgpu_d.MFMAOp):
             self.handlers.handle_mfma_op(operation, kernel_info)
+        elif isinstance(operation, amdgpu_d.ScaledMFMAOp):
+            self.handlers.handle_scaled_mfma_op(operation, kernel_info)
         elif isinstance(operation, amdgpu_d.LDSBarrierOp):
             self.handlers.handle_lds_barrier_op(operation, kernel_info)
         elif isinstance(operation, memref_d.ViewOp):
@@ -146,6 +148,10 @@ class IRWalker:
             self.handlers.handle_scf_for_op(operation, kernel_info)
         elif isinstance(operation, vector_d.ExtractStridedSliceOp):
             self.handlers.handle_vector_extract_strided_slice_op(operation, kernel_info)
+        elif isinstance(operation, vector_d.ExtractOp):
+            self.handlers.handle_vector_extract_op(operation, kernel_info)
+        elif isinstance(operation, vector_d.BitCastOp):
+            self.handlers.handle_vector_bitcast_op(operation, kernel_info)
         # Critical operations for gather_to_lds support
         elif isinstance(operation, amdgpu_d.GatherToLDSOp):
             self.handlers.g2s.handle_gather_to_lds_op(operation, kernel_info)

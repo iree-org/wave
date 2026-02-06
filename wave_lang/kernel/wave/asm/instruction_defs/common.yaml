@@ -691,6 +691,34 @@ instructions:
   # ===========================================================================
   # LDS Operations
   # ===========================================================================
+  ds_read_u8:
+    mnemonic: ds_read_u8
+    category: lds
+    format: ds
+    defs:
+      - {name: dst, type: vgpr}
+    uses:
+      - {name: addr, type: vgpr}
+      - {name: offset, type: offset, optional: true}
+    latency: 20
+    special:
+      memory: true
+      offset_format: space_separated
+
+  ds_read_u16:
+    mnemonic: ds_read_u16
+    category: lds
+    format: ds
+    defs:
+      - {name: dst, type: vgpr}
+    uses:
+      - {name: addr, type: vgpr}
+      - {name: offset, type: offset, optional: true}
+    latency: 20
+    special:
+      memory: true
+      offset_format: space_separated
+
   ds_read_b32:
     mnemonic: ds_read_b32
     category: lds
@@ -729,6 +757,34 @@ instructions:
       - {name: addr, type: vgpr}
       - {name: offset, type: offset, optional: true}
     latency: 20
+    special:
+      memory: true
+      offset_format: space_separated
+
+  ds_write_b8:
+    mnemonic: ds_write_b8
+    category: lds
+    format: ds
+    defs: []
+    uses:
+      - {name: addr, type: vgpr}
+      - {name: src, type: vgpr}
+      - {name: offset, type: offset, optional: true}
+    latency: 1
+    special:
+      memory: true
+      offset_format: space_separated
+
+  ds_write_b16:
+    mnemonic: ds_write_b16
+    category: lds
+    format: ds
+    defs: []
+    uses:
+      - {name: addr, type: vgpr}
+      - {name: src, type: vgpr}
+      - {name: offset, type: offset, optional: true}
+    latency: 1
     special:
       memory: true
       offset_format: space_separated

@@ -16,6 +16,7 @@ Tests included:
 3. test_mma_multi_workgroup_single_wave_cpp_backend - Multi-workgroup MMA
 4. test_mma_multi_wave_cpp_backend - Multi-wave MMA
 5. test_gemm_cpp_backend - Full GEMM with K-loop
+6. test_mxfp4_scaled_gemm_cpp_backend - MXFP4 scaled GEMM (gfx950+ only)
 
 Run with:
     # Run all e2e tests with C++ backend (default, requires GPU)
@@ -1106,6 +1107,278 @@ def test_gemm_cpp_backend_with_k_unroll(
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
     assert_close(c, expected, atol=1e-4, rtol=1e-4)
+
+
+# =============================================================================
+# Test: MXFP4 Scaled GEMM
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (64, 64, 512),  # Small MXFP4 GEMM
+        (128, 128, 512),  # Medium MXFP4 GEMM
+    ],
+)
+@pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
+def test_mxfp4_scaled_gemm_cpp_backend(
+    shape, use_global_to_shared, compiler, backend, dump_asm
+):
+    """End-to-end test for MXFP4 (4-bit float) scaled GEMM using C++ or Python ASM backend.
+
+    MXFP4 uses:
+    - FP4 (f4E2M1FN) data format - 4 bits per element
+    - E8M0 (f8E8M0FNU) scale factors - 1 byte per scale
+    - Scale group size of 32 elements (hardware-defined)
+    - Scaled MFMA instruction: v_mfma_scale_f32_16x16x128_f8f6f4
+
+    This test requires CDNA4 (gfx950+) architecture with MI350X support.
+
+    Note: This test validates basic functionality (kernel compiles and runs)
+    but does not perform exact numerical validation as that would require:
+    1. Proper FP4 packing implementation (2 elements per byte)
+    2. E8M0 scale factor calculation
+    3. Software reference implementation of scaled MFMA
+    """
+    # Skip if not CDNA4 (gfx950+)
+    if not is_cdna4():
+        pytest.skip("MXFP4 scaled MFMA only supported on gfx950+ (CDNA4/MI350X)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+
+    import wave_lang.kernel.lang as tkl
+    import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    from wave_lang.kernel.wave.utils.torch_utils import (
+        device_randint,
+        device_zeros,
+    )
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M_SYM = tkl.sym.BLOCK_M
+    BLOCK_N_SYM = tkl.sym.BLOCK_N
+    BLOCK_K_SYM = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # MXFP4 configuration
+    SCALE_GROUP_SIZE = 32  # Hardware-defined for MXFP4
+    BLOCK_M = 32
+    BLOCK_N = 32
+    BLOCK_K = 128
+    WAVE_M = 16
+    WAVE_N = 16
+    wave_size = 64
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N_SYM, 1),
+        tkw.TilingConstraint(K, BLOCK_K_SYM),
+        tkw.WaveConstraint(M, WAVE_M),
+        tkw.WaveConstraint(N, WAVE_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            mma_type=tkw.ScaledMMAType.F32_16x16x128_F8F6F4,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def mxfp4_gemm_kernel(
+        a: tkl.Memory[
+            M, K / 2, ADDRESS_SPACE, tkl.i8
+        ],  # Packed FP4 data (2 elements per byte)
+        a_scale: tkl.Memory[
+            M, K / SCALE_GROUP_SIZE, ADDRESS_SPACE, tkl.i8
+        ],  # E8M0 scales
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],  # Packed FP4 data
+        b_scale: tkl.Memory[
+            N, K / SCALE_GROUP_SIZE, ADDRESS_SPACE, tkl.i8
+        ],  # E8M0 scales
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            # Load packed FP4 data
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            # Bitcast i8 -> f4e2m1fn
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+
+            # Load scale factors
+            a_scale_reg = tkw.read(a_scale)
+            b_scale_reg = tkw.read(b_scale)
+            # Bitcast i8 -> f8e8m0fnu
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+
+            # Scaled MMA: C += (A * scaleA) @ (B * scaleB)^T
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    m, n, k = shape
+
+    # Create input tensors
+    # Note: These are placeholder values - proper FP4 packing would be needed for real validation
+    a = device_randint(-128, 127, (m, k // 2), dtype=torch.int8)  # Packed FP4
+    a_scale = device_randint(
+        -128, 127, (m, k // SCALE_GROUP_SIZE), dtype=torch.int8
+    )  # E8M0 scales
+    b = device_randint(-128, 127, (n, k // 2), dtype=torch.int8)  # Packed FP4
+    b_scale = device_randint(
+        -128, 127, (n, k // SCALE_GROUP_SIZE), dtype=torch.int8
+    )  # E8M0 scales
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    # Calculate grid dimensions
+    grid_x = m // BLOCK_M
+    grid_y = n // BLOCK_N
+
+    options = WaveCompileOptions(
+        subs={
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M_SYM: BLOCK_M,
+            BLOCK_N_SYM: BLOCK_N,
+            BLOCK_K_SYM: BLOCK_K,
+            SCALE_GROUP_SIZE: SCALE_GROUP_SIZE,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
+    )
+    options = set_default_run_config(options)
+
+    # Capture MLIR and kernel info
+    kernel_info = capture_wave_kernel_info(options, mxfp4_gemm_kernel)
+
+    # Verify MLIR contains scaled_mfma operation
+    assert (
+        "amdgpu.scaled_mfma" in kernel_info.mlir_text
+    ), "Expected amdgpu.scaled_mfma operation in MLIR"
+
+    # Test ID for file naming
+    g2s_str = "g2s" if use_global_to_shared else "no_g2s"
+    test_id = f"mxfp4_gemm_{m}x{n}x{k}_{g2s_str}"
+
+    # Compile with C++ backend if requested
+    cpp_result = None
+    cpp_asm = None
+    if backend in ("cpp", "both"):
+        cpp_result = compiler.compile_full(
+            kernel_info.mlir_text, kernel_info.workgroup_size
+        )
+        if not cpp_result.success:
+            pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+        cpp_asm = cpp_result.asm_text
+
+        # Verify assembly contains scaled MFMA instruction
+        assert (
+            "v_mfma_scale_f32_16x16x128_f8f6f4" in cpp_asm
+        ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
+
+    # Compile with Python backend if requested
+    python_asm = None
+    python_binary_path = None
+    if backend in ("python", "both"):
+        try:
+            python_compiler = KernelModuleCompiler(
+                targetid=get_target_arch(), codeobj="5"
+            )
+            python_asm = python_compiler.compile_mlir_string(kernel_info.mlir_text)
+
+            # Verify assembly contains scaled MFMA instruction
+            assert (
+                "v_mfma_scale_f32_16x16x128_f8f6f4" in python_asm
+            ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
+
+            # Also assemble to binary for execution using the same assembler as C++ backend
+            if backend == "python":
+                success, binary_path, error = compiler.assemble_to_binary(python_asm)
+                if not success:
+                    pytest.fail(f"Python ASM->Binary failed: {error}")
+                python_binary_path = binary_path
+        except Exception as e:
+            if backend == "python":
+                pytest.fail(f"Python compilation failed: {e}")
+            else:
+                # Log warning if Python backend fails in "both" mode
+                import warnings
+
+                warnings.warn(f"Python backend compilation failed: {e}")
+
+    # Dump assemblies if requested
+    if dump_asm:
+        with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+            f.write(kernel_info.mlir_text)
+        if cpp_asm:
+            with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+                f.write(cpp_asm)
+        if python_asm:
+            with open(f"/tmp/{test_id}_python.s", "w") as f:
+                f.write(python_asm)
+
+    # Determine which binary to execute
+    if backend == "python":
+        if python_binary_path is None:
+            pytest.fail("Python backend did not produce a binary")
+        binary_path = python_binary_path
+        kernel_name = kernel_info.kernel_name
+    else:
+        # Use C++ backend (for both "cpp" and "both" modes)
+        binary_path = cpp_result.binary_path
+        kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+
+    # Use Wave compiler's launch info
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = (
+        kernel_info.grid_size
+        if kernel_info.grid_size != (1, 1, 1)
+        else (grid_x, grid_y, 1)
+    )
+
+    # Execute on GPU
+    run_with_wave_runtime(
+        binary_path=binary_path,
+        inputs=[a, a_scale, b, b_scale],
+        outputs=[c],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Basic sanity checks (not exact numerical validation)
+    # We can't compute expected result without proper FP4 packing/unpacking
+    assert c.shape == (m, n), f"Output shape mismatch: expected {(m, n)}, got {c.shape}"
+
+    # Check that kernel ran and produced non-zero output (sanity check)
+    # Note: This is a weak test but validates the execution pipeline
+    assert not torch.all(
+        c == 0
+    ), "Output is all zeros - kernel may not have executed correctly"
 
 
 # =============================================================================

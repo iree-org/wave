@@ -155,6 +155,10 @@ private:
   /// Emit default instruction format (results then operands)
   std::string emitDefaultFormat(mlir::Operation *op, llvm::StringRef mnemonic);
 
+  /// Emit scaled MFMA instruction with cbsz/blgp format modifiers
+  std::optional<std::string> emitScaledMFMA(mlir::Operation *op,
+                                            llvm::StringRef mnemonic);
+
   ProgramOp program;
   const PhysicalMapping &mapping;
   TargetAttrInterface target;

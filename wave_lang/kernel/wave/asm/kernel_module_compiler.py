@@ -193,6 +193,7 @@ class KernelModuleCompiler:
                     use_kernarg_preloading=use_preloading,
                     num_kernargs=num_args,
                     kernel_name=kernel_name,
+                    architecture=self.targetid,
                 )
 
                 # Emit kernarg loading at the start of kernel IR

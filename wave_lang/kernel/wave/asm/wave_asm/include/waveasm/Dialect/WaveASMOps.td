@@ -740,6 +740,30 @@ def WaveASM_V_MFMA_F32_32X32X16_BF8_FP8 : MFMAOp<"v_mfma_f32_32x32x16_bf8_fp8", 
 def WaveASM_V_MFMA_F32_16X16X32_BF8_BF8 : MFMAOp<"v_mfma_f32_16x16x32_bf8_bf8", 4>;
 def WaveASM_V_MFMA_F32_32X32X16_BF8_BF8 : MFMAOp<"v_mfma_f32_32x32x16_bf8_bf8", 16>;
 
+// Scaled MFMA: Matrix multiply with per-group scale factors (gfx950+)
+// These instructions take additional scale operands for MXFP4/FP6/FP8 support
+class ScaledMFMAOp<string mnemonic, int accSize, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_MFMAOp], traits)> {
+  // Operands: a_data, b_data, acc, a_scale, b_scale
+  let arguments = (ins WaveASM_VALUSrc:$a, WaveASM_VALUSrc:$b, WaveASM_VALUSrc:$acc,
+                       WaveASM_VALUSrc:$a_scale, WaveASM_VALUSrc:$b_scale);
+  let results = (outs WaveASM_AnyVGPR:$dst);
+  let assemblyFormat = "$a `,` $b `,` $acc `,` $a_scale `,` $b_scale attr-dict `:` type($a) `,` type($b) `,` type($acc) `,` type($a_scale) `,` type($b_scale) `->` type($dst)";
+
+  // Tied operand: result 0 is tied to operand 2 (accumulator) when acc is VGPR
+  int TiedOperandIndex = 2;
+
+  // Store accumulator size for verification
+  int AccumulatorSize = accSize;
+
+  // Custom verifier for accumulator size matching
+  let hasVerifier = 1;
+}
+
+// MXFP4/FP6/FP8 variants (gfx950+)
+def WaveASM_V_MFMA_SCALE_F32_16X16X128_F8F6F4 : ScaledMFMAOp<"v_mfma_scale_f32_16x16x128_f8f6f4", 4>;
+def WaveASM_V_MFMA_SCALE_F32_32X32X64_F8F6F4 : ScaledMFMAOp<"v_mfma_scale_f32_32x32x64_f8f6f4", 16>;
+
 //===----------------------------------------------------------------------===//
 // VMEM Load Instructions
 //===----------------------------------------------------------------------===//

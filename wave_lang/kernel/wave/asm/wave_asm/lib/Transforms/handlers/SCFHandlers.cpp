@@ -90,11 +90,12 @@ LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx) {
 
   // Initialize loop counter in a FIXED physical SGPR
   // Using a fixed register ensures the counter value persists across loop
-  // iterations Reserve s32+ for loop counters (avoiding s0-s31 which may be
-  // used for arguments/SRDs/cache-swizzle) Note: s[24:31] may be used for cache
-  // swizzle SRDs in g2s kernels
+  // iterations. The counter must start AFTER all SRD registers to avoid
+  // conflicts. With N kernel arguments, SRDs occupy s[srdStart:srdStart+N*4-1],
+  // so we start loop counters after that range.
+  int64_t loopCounterBase = ctx.getFirstFreeSgprAfterSRDs();
   int64_t loopCounterPhysReg =
-      32 + ctx.getLoopDepth(); // Use s32, s33, etc. for nested loops
+      loopCounterBase + ctx.getLoopDepth(); // Use s[base], s[base+1], etc.
   auto counterType =
       PSRegType::get(builder.getContext(), loopCounterPhysReg, 1);
 

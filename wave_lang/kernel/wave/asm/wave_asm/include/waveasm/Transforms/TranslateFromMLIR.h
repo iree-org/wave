@@ -365,9 +365,37 @@ public:
   /// Get next available SRD index
   int64_t getNextSRDIndex();
 
+  /// Get the first SGPR index that is free after all SRDs (both regular and
+  /// swizzle). This accounts for the actual number of kernel arguments and SRD
+  /// layout. Used by loop counter allocation to avoid conflicting with SRD
+  /// registers.
+  int64_t getFirstFreeSgprAfterSRDs() const {
+    int64_t maxSrdEnd = 32; // Default fallback
+    // Consider regular SRDs
+    for (const auto &pending : pendingSRDs) {
+      int64_t srdEnd = pending.srdBaseIndex + 4; // Each SRD is 4 SGPRs
+      maxSrdEnd = std::max(maxSrdEnd, srdEnd);
+    }
+    // Also consider swizzle SRDs (nextSwizzleSRDIndex tracks the next free
+    // slot after all allocated swizzle SRDs)
+    maxSrdEnd = std::max(maxSrdEnd, nextSwizzleSRDIndex);
+    // Align to 4 for good measure
+    return (maxSrdEnd + 3) & ~3;
+  }
+
   /// Get next available swizzle SRD index (for cache swizzle SRDs)
-  /// These are allocated after the regular SRDs, starting at s24
+  /// These are allocated after all regular SRDs, computed in emitSRDPrologue()
   int64_t getNextSwizzleSRDIndex() {
+    // If nextSwizzleSRDIndex hasn't been computed yet (emitSRDPrologue not
+    // called), compute it from pendingSRDs.
+    if (nextSwizzleSRDIndex < 0) {
+      int64_t maxSrdEnd = 24; // Minimum fallback
+      for (const auto &pending : pendingSRDs) {
+        int64_t srdEnd = pending.srdBaseIndex + 4;
+        maxSrdEnd = std::max(maxSrdEnd, srdEnd);
+      }
+      nextSwizzleSRDIndex = (maxSrdEnd + 3) & ~3; // Align to 4
+    }
     int64_t idx = nextSwizzleSRDIndex;
     nextSwizzleSRDIndex += 4; // Each SRD uses 4 consecutive SGPRs
     return idx;
@@ -624,7 +652,7 @@ private:
   int64_t nextSRDIndex =
       -1; // Will be computed lazily, starts after user+system SGPRs
   int64_t nextSwizzleSRDIndex =
-      24; // Swizzle SRDs start at s24 (after regular arg SRDs)
+      -1; // Will be computed in emitSRDPrologue(), after all regular SRDs
   int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
   bool srdPrologueEmitted = false;
   // System register usage tracking
