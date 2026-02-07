@@ -214,6 +214,66 @@ private:
       if (isa<ProgramOp>(op))
         return;
 
+      // Observe pre-existing waitcnt instructions (from translation or prior
+      // passes) This prevents emitting redundant waits
+      if (auto waitcnt = dyn_cast<S_WAITCNT>(op)) {
+        auto vmcntAttr = waitcnt.getVmcntAttr();
+        auto lgkmcntAttr = waitcnt.getLgkmcntAttr();
+        if (vmcntAttr) {
+          ticketing.observeVmemWait(vmcntAttr.getValue().getSExtValue());
+        }
+        if (lgkmcntAttr) {
+          ticketing.observeLgkmWait(lgkmcntAttr.getValue().getSExtValue());
+        }
+        return;
+      }
+
+      if (auto waitcnt = dyn_cast<S_WAITCNT_VMCNT>(op)) {
+        auto countAttr = waitcnt.getCountAttr();
+        if (countAttr) {
+          ticketing.observeVmemWait(countAttr.getValue().getSExtValue());
+        }
+        return;
+      }
+
+      if (auto waitcnt = dyn_cast<S_WAITCNT_LGKMCNT>(op)) {
+        auto countAttr = waitcnt.getCountAttr();
+        if (countAttr) {
+          ticketing.observeLgkmWait(countAttr.getValue().getSExtValue());
+        }
+        return;
+      }
+
+      // Barriers require all memory to be synchronized before execution.
+      // Insert waits for any outstanding VMEM/LGKM operations before the
+      // barrier.
+      if (isa<S_BARRIER>(op)) {
+        // Check if we need waits before this barrier
+        auto vmemWait = ticketing.computeVmemWait(0);
+        auto lgkmWait = ticketing.computeLgkmWait(0);
+
+        if (vmemWait.has_value() || lgkmWait.has_value()) {
+          OpBuilder builder(op->getContext());
+          builder.setInsertionPoint(op);
+
+          if (vmemWait.has_value() && lgkmWait.has_value()) {
+            S_WAITCNT::create(builder, op->getLoc(),
+                              builder.getI32IntegerAttr(0),
+                              builder.getI32IntegerAttr(0), IntegerAttr());
+          } else if (vmemWait.has_value()) {
+            S_WAITCNT_VMCNT::create(builder, op->getLoc(), 0);
+          } else {
+            S_WAITCNT_LGKMCNT::create(builder, op->getLoc(), 0);
+          }
+          numWaitcntInserted++;
+        }
+
+        // Observe that a full drain occurred
+        ticketing.observeVmemWait(0);
+        ticketing.observeLgkmWait(0);
+        return;
+      }
+
       // Check if this is a memory operation
       MemOpKind kind = classifyMemOp(op);
 

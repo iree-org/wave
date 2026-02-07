@@ -192,8 +192,10 @@ class WaveASMCompiler:
         cmd = [
             str(self.waveasm_translate),
             f"--target={self.target}",
+            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
             "--waveasm-scoped-cse",  # Run CSE
             "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
+            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-linear-scan",  # Run register allocation
             "--waveasm-insert-waitcnt",  # Insert wait instructions
             "--waveasm-hazard-mitigation",  # Handle hazards

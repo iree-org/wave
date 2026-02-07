@@ -478,6 +478,27 @@ std::pair<bool, int64_t> KernelGenerator::getLiteralValue(Value value) {
 // TypeSwitch-based Operation Code Generation
 //===----------------------------------------------------------------------===//
 
+// Helper for emitting buffer load to LDS (gather-to-LDS) instructions.
+// Layout: (voffset, srd, soffset) with optional instOffset and 'lds' modifier.
+std::string KernelGenerator::emitBufferLoadLDS(Operation *op,
+                                               llvm::StringRef mnemonic) {
+  std::string result = "  " + mnemonic.str();
+  if (op->getNumOperands() >= 3) {
+    std::string voffset = resolveValue(op->getOperand(0));
+    std::string srd = resolveValue(op->getOperand(1));
+    std::string soffset = resolveValue(op->getOperand(2));
+    result += " " + voffset + ", " + srd + ", " + soffset + " offen";
+    if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
+      int64_t offset = instOffsetAttr.getInt();
+      if (offset > 0) {
+        result += " offset:" + std::to_string(offset);
+      }
+    }
+    result += " lds";
+  }
+  return result;
+}
+
 // Helper for emitting buffer load instructions
 std::string KernelGenerator::emitBufferLoad(Operation *op,
                                             llvm::StringRef mnemonic) {
@@ -581,6 +602,12 @@ std::string KernelGenerator::emitLDSWrite(Operation *op,
     std::string vdata = resolveValue(op->getOperand(0));
     result += " " + vaddr + ", " + vdata;
   }
+  if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
+    int64_t offset = offsetAttr.getInt();
+    if (offset != 0) {
+      result += " offset:" + std::to_string(offset);
+    }
+  }
   return result;
 }
 
@@ -644,26 +671,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoad(loadOp, "buffer_load_dwordx4");
       })
 
-      // Buffer load to LDS (gather-to-LDS)
+      // Buffer load to LDS (gather-to-LDS) — shared helper avoids duplication
       .Case<BUFFER_LOAD_DWORD_LDS>([&](auto loadOp) {
-        std::string result = "  buffer_load_dword";
-        if (loadOp->getNumOperands() >= 3) {
-          std::string voffset = resolveValue(loadOp->getOperand(0));
-          std::string srd = resolveValue(loadOp->getOperand(1));
-          std::string soffset = resolveValue(loadOp->getOperand(2));
-          result += " " + voffset + ", " + srd + ", " + soffset + " offen lds";
-        }
-        return result;
+        return emitBufferLoadLDS(loadOp, "buffer_load_dword");
       })
       .Case<BUFFER_LOAD_DWORDX4_LDS>([&](auto loadOp) {
-        std::string result = "  buffer_load_dwordx4";
-        if (loadOp->getNumOperands() >= 3) {
-          std::string voffset = resolveValue(loadOp->getOperand(0));
-          std::string srd = resolveValue(loadOp->getOperand(1));
-          std::string soffset = resolveValue(loadOp->getOperand(2));
-          result += " " + voffset + ", " + srd + ", " + soffset + " offen lds";
-        }
-        return result;
+        return emitBufferLoadLDS(loadOp, "buffer_load_dwordx4");
       })
 
       // Buffer store operations

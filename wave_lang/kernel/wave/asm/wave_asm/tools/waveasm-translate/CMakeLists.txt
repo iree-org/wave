@@ -22,6 +22,7 @@ target_link_libraries(waveasm-translate
   MLIRGPUDialect
   MLIRMemRefDialect
   MLIRSCFDialect
+  MLIRTransforms
   MLIRVectorDialect
   MLIRParser
   MLIRPass

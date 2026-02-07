@@ -298,28 +298,72 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
   }
 
   // Create voffset for global memory access
+  // When the srcIndex is base + constant, we compute the byte-scaled voffset
+  // as base_voff + (constant * elemBytes) to enable CSE of base_voff across
+  // multiple gathers that share the same base index.
   Value voff;
   if (op->getNumOperands() > 1) {
     Value srcIndex = op->getOperand(1);
     auto srcIndexMapped = ctx.getMapper().getMapped(srcIndex);
     if (srcIndexMapped) {
       auto vregType = ctx.createVRegType();
-      if (elemBytes != 1) {
-        if (llvm::isPowerOf2_64(elemBytes)) {
-          int64_t shiftAmt = llvm::Log2_64(elemBytes);
+      if (elemBytes != 1 && llvm::isPowerOf2_64(elemBytes)) {
+        int64_t shiftAmt = llvm::Log2_64(elemBytes);
+
+        // Check if srcIndex is V_ADD_U32(base, constant) - if so, distribute
+        // the byte scaling: (base + K) * elemBytes = base * elemBytes + K *
+        // elemBytes This enables CSE of base*elemBytes across gathers.
+        Value idxVal = *srcIndexMapped;
+        auto addOp = idxVal.getDefiningOp<V_ADD_U32>();
+        Value baseOperand;
+        int64_t constVal = 0;
+        bool hasConstAdd = false;
+
+        if (addOp) {
+          // Check if either operand is a constant
+          if (auto constOp = addOp.getSrc1().getDefiningOp<ConstantOp>()) {
+            constVal = constOp.getValue();
+            baseOperand = addOp.getSrc0();
+            hasConstAdd = true;
+          } else if (auto constOp =
+                         addOp.getSrc0().getDefiningOp<ConstantOp>()) {
+            constVal = constOp.getValue();
+            baseOperand = addOp.getSrc1();
+            hasConstAdd = true;
+          }
+        }
+
+        if (hasConstAdd) {
+          // Distribute: (base + K) << shift = (base << shift) + (K << shift)
+          auto shiftImm = ctx.createImmType(shiftAmt);
+          auto shiftConst =
+              ConstantOp::create(builder, loc, shiftImm, shiftAmt);
+          Value baseVoff = V_LSHLREV_B32::create(builder, loc, vregType,
+                                                 shiftConst, baseOperand);
+          int64_t scaledConst = constVal * elemBytes;
+          auto scaledImm = ctx.createImmType(scaledConst);
+          auto scaledConstOp =
+              ConstantOp::create(builder, loc, scaledImm, scaledConst);
+          // NOTE: constant must be src0 (first operand) for VOP2 encoding.
+          // src1 must be a VGPR on AMDGCN.
+          voff = V_ADD_U32::create(builder, loc, vregType, scaledConstOp,
+                                   baseVoff);
+        } else {
+          // Simple case: just shift
           auto shiftImm = ctx.createImmType(shiftAmt);
           auto shiftConst =
               ConstantOp::create(builder, loc, shiftImm, shiftAmt);
           voff = V_LSHLREV_B32::create(builder, loc, vregType, shiftConst,
                                        *srcIndexMapped);
-        } else {
-          auto scaleImm = ctx.createImmType(elemBytes);
-          auto scaleConst =
-              ConstantOp::create(builder, loc, scaleImm, elemBytes);
-          voff = V_MUL_LO_U32::create(builder, loc, vregType, scaleConst,
-                                      *srcIndexMapped);
         }
+      } else if (elemBytes != 1) {
+        auto vregType = ctx.createVRegType();
+        auto scaleImm = ctx.createImmType(elemBytes);
+        auto scaleConst = ConstantOp::create(builder, loc, scaleImm, elemBytes);
+        voff = V_MUL_LO_U32::create(builder, loc, vregType, scaleConst,
+                                    *srcIndexMapped);
       } else {
+        auto vregType = ctx.createVRegType();
         voff = V_MOV_B32::create(builder, loc, vregType, *srcIndexMapped);
       }
     }
@@ -524,7 +568,10 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
                          std::to_string(transferBytes) + " bytes");
   }
 
-  S_WAITCNT_VMCNT::create(builder, loc, 0);
+  // NOTE: We do NOT emit s_waitcnt here. The Ticketing pass handles
+  // synchronization by inserting s_waitcnt vmcnt(0) before every s_barrier.
+  // Since gather-to-lds is always followed by a barrier before any ds_read,
+  // this ensures correctness without redundant per-gather waits.
 
   return success();
 }

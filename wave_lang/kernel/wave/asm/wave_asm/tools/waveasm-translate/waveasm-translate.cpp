@@ -34,6 +34,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -85,10 +86,22 @@ static llvm::cl::opt<bool>
                 llvm::cl::desc("Run peephole optimizations"),
                 llvm::cl::init(false));
 
+static llvm::cl::opt<bool> runMemoryOffsetOpt(
+    "waveasm-memory-offset-opt",
+    llvm::cl::desc("Fold constant address components into memory instruction "
+                   "offset fields"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool>
     emitAssembly("emit-assembly",
                  llvm::cl::desc("Emit AMDGCN assembly instead of MLIR"),
                  llvm::cl::init(false));
+
+static llvm::cl::opt<bool> runPreTranslationCSE(
+    "mlir-cse",
+    llvm::cl::desc("Run MLIR CSE before translation (reduces redundant index "
+                   "computations)"),
+    llvm::cl::init(false));
 
 static llvm::cl::opt<int64_t>
     workgroupSizeX("workgroup-size-x",
@@ -158,6 +171,17 @@ int main(int argc, char **argv) {
 
   // If not already WAVEASM IR, translate from MLIR
   if (!hasWaveASMPrograms) {
+    // Run pre-translation MLIR passes (e.g., CSE to reduce redundant
+    // computations)
+    if (runPreTranslationCSE) {
+      PassManager prePm(&context);
+      prePm.addPass(mlir::createCSEPass());
+      if (failed(prePm.run(*module))) {
+        llvm::errs() << "Pre-translation CSE failed\n";
+        return 1;
+      }
+    }
+
     // Use TranslationOptions if workgroup size is specified
     if (workgroupSizeX > 0 || workgroupSizeY > 0 || workgroupSizeZ > 0) {
       waveasm::TranslationOptions options;
@@ -186,21 +210,43 @@ int main(int argc, char **argv) {
     pm.addPass(waveasm::createWAVEASMScopedCSEPass());
   }
 
-  // Peephole optimizations run after CSE but before register allocation
+  // Peephole optimizations run after CSE but before waitcnt/hazard
   if (runPeephole) {
     pm.addPass(waveasm::createWAVEASMPeepholePass());
   }
 
-  if (runHazardMitigation) {
-    pm.addPass(waveasm::createWAVEASMHazardMitigationPass(targetId));
+  // Memory offset optimization: fold constant address components into
+  // memory instruction offset fields (saves VALU instructions)
+  if (runMemoryOffsetOpt) {
+    pm.addPass(waveasm::createWAVEASMMemoryOffsetOptPass());
+
+    // Clean up any dead instructions left by the optimization
+    pm.addPass(mlir::createCanonicalizerPass());
+
+    // Re-run ScopedCSE after memory offset optimization, because folding
+    // constants into offsets may expose identical base address computations
+    // that can now be deduplicated.
+    if (runScopedCSE) {
+      pm.addPass(waveasm::createWAVEASMScopedCSEPass());
+    }
   }
 
+  // Register allocation must run before waitcnt/hazard so that those passes
+  // see the final register assignments.  Matches compare_backends.py order:
+  // LinearScan -> Waitcnt -> Hazard.
+  if (runLinearScan) {
+    pm.addPass(waveasm::createWAVEASMLinearScanPass());
+  }
+
+  // Waitcnt insertion should run before hazard mitigation
+  // (matching Python pipeline order for better wait coalescing)
   if (runWaitcntInsertion) {
     pm.addPass(waveasm::createWAVEASMInsertWaitcntPass());
   }
 
-  if (runLinearScan) {
-    pm.addPass(waveasm::createWAVEASMLinearScanPass());
+  // Hazard mitigation runs after waitcnt (NOPs don't affect wait coalescing)
+  if (runHazardMitigation) {
+    pm.addPass(waveasm::createWAVEASMHazardMitigationPass(targetId));
   }
 
   if (pm.size() > 0) {

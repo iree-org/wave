@@ -267,6 +267,45 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
       }
 
       case AffineExprKind::Mul: {
+        // PATTERN: floor(x / N) * N = x & ~(N-1)  when N is power of 2
+        // Detect Mul(FloorDiv(expr, N), N) and emit AND directly.
+        // This saves 1 instruction vs (x >> log2(N)) << log2(N).
+        auto tryFloorMulToAnd =
+            [&](AffineExpr divExpr,
+                AffineExpr constExpr) -> std::optional<ExprResult> {
+          auto floorDiv = dyn_cast<AffineBinaryOpExpr>(divExpr);
+          if (!floorDiv || floorDiv.getKind() != AffineExprKind::FloorDiv)
+            return std::nullopt;
+          auto mulConst = dyn_cast<AffineConstantExpr>(constExpr);
+          auto divConst = dyn_cast<AffineConstantExpr>(floorDiv.getRHS());
+          if (!mulConst || !divConst)
+            return std::nullopt;
+          if (mulConst.getValue() != divConst.getValue())
+            return std::nullopt;
+          int64_t N = mulConst.getValue();
+          if (N <= 0 || !isPowerOf2(N))
+            return std::nullopt;
+          // Compile the inner expression (the x in floor(x/N)*N)
+          ExprResult innerResult = compileExpr(floorDiv.getLHS());
+          int64_t mask = ~(N - 1) & 0xFFFFFFFF;
+          auto maskImm = ctx.createImmType(mask);
+          auto maskConst = ConstantOp::create(builder, loc, maskImm, mask);
+          // NOTE: constant must be src0 (first operand) for VOP2 encoding.
+          // src1 must be a VGPR on AMDGCN.
+          Value andResult = V_AND_B32::create(builder, loc, vregType, maskConst,
+                                              innerResult.value);
+          // Result has same bit range as inner, but low bits cleared
+          BitRange resultRange = innerResult.range;
+          // Clear bits below log2(N) -- conservative: use inner range
+          ctx.setBitRange(andResult, resultRange);
+          return ExprResult(andResult, resultRange);
+        };
+
+        if (auto result = tryFloorMulToAnd(binExpr.getLHS(), binExpr.getRHS()))
+          return *result;
+        if (auto result = tryFloorMulToAnd(binExpr.getRHS(), binExpr.getLHS()))
+          return *result;
+
         // Constant folding: if either operand is constant 0, result is 0
         if (auto constLhs = dyn_cast<AffineConstantExpr>(binExpr.getLHS())) {
           if (constLhs.getValue() == 0) {

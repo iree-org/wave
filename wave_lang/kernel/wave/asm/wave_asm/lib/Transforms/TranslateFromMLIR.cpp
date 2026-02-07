@@ -9,6 +9,7 @@
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/Utils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -709,14 +710,19 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     }
 
     // Add the LDS base offset from memref.view (if any)
-    // This handles cases like memref.view with byte_shift = 640
+    // This handles cases like memref.view with byte_shift = 8192
     if (auto baseOffset = ctx.getLDSBaseOffset(loadOp.getBase())) {
-      // Need to move the base offset to a VGPR first since v_add_u32 requires
-      // src1 to be a VGPR, and the base offset may be an immediate
-      Value baseOffsetVgpr =
-          V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
-      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
-                                baseOffsetVgpr);
+      // If the base offset is a constant, fold it into instOffset instead of
+      // emitting VALU instructions. This saves 2 VALU ops per LDS read.
+      if (auto constVal = getConstantValue(*baseOffset)) {
+        instOffset += *constVal;
+      } else {
+        // Non-constant base offset: must use VALU
+        Value baseOffsetVgpr =
+            V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+        vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                  baseOffsetVgpr);
+      }
     }
 
     // Create the DS_READ operation with optional offset attribute
@@ -999,22 +1005,34 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     }
 
     // Add the LDS base offset from memref.view (if any)
-    // This handles cases like memref.view with byte_shift = 640
+    // This handles cases like memref.view with byte_shift = 8192
+    int64_t ldsInstOffset = 0;
     if (auto baseOffset = ctx.getLDSBaseOffset(storeOp.getBase())) {
-      // Need to move the base offset to a VGPR first since v_add_u32 requires
-      // src1 to be a VGPR, and the base offset may be an immediate
-      Value baseOffsetVgpr =
-          V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
-      vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
-                                baseOffsetVgpr);
+      // If the base offset is a constant, fold it into ldsInstOffset instead
+      // of emitting VALU instructions. This saves 2 VALU ops per LDS write.
+      if (auto constVal = getConstantValue(*baseOffset)) {
+        ldsInstOffset += *constVal;
+      } else {
+        // Non-constant base offset: must use VALU
+        Value baseOffsetVgpr =
+            V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+        vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
+                                  baseOffsetVgpr);
+      }
     }
 
+    Operation *writeOp;
     if (numBytes == 8) {
-      DS_WRITE_B64::create(builder, loc, *data, vaddr);
+      writeOp = DS_WRITE_B64::create(builder, loc, *data, vaddr);
     } else if (numBytes == 16) {
-      DS_WRITE_B128::create(builder, loc, *data, vaddr);
+      writeOp = DS_WRITE_B128::create(builder, loc, *data, vaddr);
     } else {
-      DS_WRITE_B32::create(builder, loc, *data, vaddr);
+      writeOp = DS_WRITE_B32::create(builder, loc, *data, vaddr);
+    }
+
+    // Add offset attribute if we have a non-zero LDS instruction offset
+    if (ldsInstOffset != 0) {
+      writeOp->setAttr("offset", builder.getI64IntegerAttr(ldsInstOffset));
     }
   } else {
     // Global store - buffer_store_dwordx* with splitting for large vectors

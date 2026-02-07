@@ -437,16 +437,16 @@ def WaveASM_V_ABS_I32 : VALUUnaryOp<"v_abs_i32">;
 // VALU Binary Instructions
 //===----------------------------------------------------------------------===//
 
-// Integer arithmetic
-def WaveASM_V_ADD_U32 : VALUBinaryOp<"v_add_u32">;
-def WaveASM_V_ADD_I32 : VALUBinaryOp<"v_add_i32">;
+// Integer arithmetic (commutative: add, mul)
+def WaveASM_V_ADD_U32 : VALUBinaryOp<"v_add_u32", [Commutative]>;
+def WaveASM_V_ADD_I32 : VALUBinaryOp<"v_add_i32", [Commutative]>;
 def WaveASM_V_SUB_U32 : VALUBinaryOp<"v_sub_u32">;
 def WaveASM_V_SUB_I32 : VALUBinaryOp<"v_sub_i32">;
 def WaveASM_V_SUBREV_U32 : VALUBinaryOp<"v_subrev_u32">;
-def WaveASM_V_MUL_LO_U32 : VALUBinaryOp<"v_mul_lo_u32">;
-def WaveASM_V_MUL_HI_U32 : VALUBinaryOp<"v_mul_hi_u32">;
-def WaveASM_V_MUL_LO_I32 : VALUBinaryOp<"v_mul_lo_i32">;
-def WaveASM_V_MUL_HI_I32 : VALUBinaryOp<"v_mul_hi_i32">;
+def WaveASM_V_MUL_LO_U32 : VALUBinaryOp<"v_mul_lo_u32", [Commutative]>;
+def WaveASM_V_MUL_HI_U32 : VALUBinaryOp<"v_mul_hi_u32", [Commutative]>;
+def WaveASM_V_MUL_LO_I32 : VALUBinaryOp<"v_mul_lo_i32", [Commutative]>;
+def WaveASM_V_MUL_HI_I32 : VALUBinaryOp<"v_mul_hi_i32", [Commutative]>;
 
 // Floating point arithmetic
 def WaveASM_V_ADD_F32 : VALUBinaryOp<"v_add_f32">;
@@ -471,13 +471,13 @@ def WaveASM_V_MAX_F64 : VALUBinaryOp<"v_max_f64">;
 def WaveASM_V_MAX_I32 : VALUBinaryOp<"v_max_i32">;
 def WaveASM_V_MAX_U32 : VALUBinaryOp<"v_max_u32">;
 
-// Bitwise
-def WaveASM_V_AND_B32 : VALUBinaryOp<"v_and_b32">;
-def WaveASM_V_AND_B64 : VALUBinaryOp<"v_and_b64">;
-def WaveASM_V_OR_B32 : VALUBinaryOp<"v_or_b32">;
-def WaveASM_V_OR_B64 : VALUBinaryOp<"v_or_b64">;
-def WaveASM_V_XOR_B32 : VALUBinaryOp<"v_xor_b32">;
-def WaveASM_V_XOR_B64 : VALUBinaryOp<"v_xor_b64">;
+// Bitwise (commutative: and, or, xor)
+def WaveASM_V_AND_B32 : VALUBinaryOp<"v_and_b32", [Commutative]>;
+def WaveASM_V_AND_B64 : VALUBinaryOp<"v_and_b64", [Commutative]>;
+def WaveASM_V_OR_B32 : VALUBinaryOp<"v_or_b32", [Commutative]>;
+def WaveASM_V_OR_B64 : VALUBinaryOp<"v_or_b64", [Commutative]>;
+def WaveASM_V_XOR_B32 : VALUBinaryOp<"v_xor_b32", [Commutative]>;
+def WaveASM_V_XOR_B64 : VALUBinaryOp<"v_xor_b64", [Commutative]>;
 
 // Shifts
 def WaveASM_V_LSHLREV_B32 : VALUBinaryOp<"v_lshlrev_b32">;

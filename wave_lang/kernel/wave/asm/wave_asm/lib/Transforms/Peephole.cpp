@@ -17,6 +17,7 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 #include "waveasm/Transforms/Passes.h"
+#include "waveasm/Transforms/Utils.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -24,6 +25,9 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
+
+#include <limits>
 
 using namespace mlir;
 using namespace waveasm;
@@ -198,20 +202,18 @@ struct MulPow2ToShiftPattern : public OpRewritePattern<V_MUL_LO_U32> {
   LogicalResult matchAndRewrite(V_MUL_LO_U32 mulOp,
                                 PatternRewriter &rewriter) const override {
     auto checkOperand = [&](Value constVal, Value other) -> LogicalResult {
-      auto constOp = constVal.getDefiningOp<ConstantOp>();
-      if (!constOp)
+      auto valueOpt = getConstantValue(constVal);
+      if (!valueOpt)
         return failure();
 
-      int64_t value = constOp.getValue();
+      int64_t value = *valueOpt;
 
-      // Check if value is a power of 2
+      // Check if value is a positive power of 2
       if (value <= 0 || (value & (value - 1)) != 0)
         return failure();
 
-      // Calculate log2
-      int64_t shiftAmount = 0;
-      while ((1LL << shiftAmount) < value)
-        ++shiftAmount;
+      int64_t shiftAmount =
+          static_cast<int64_t>(llvm::Log2_64(static_cast<uint64_t>(value)));
 
       // Create the shift constant
       auto loc = mulOp.getLoc();
@@ -224,6 +226,78 @@ struct MulPow2ToShiftPattern : public OpRewritePattern<V_MUL_LO_U32> {
           V_LSHLREV_B32::create(rewriter, loc, resultType, shiftConst, other);
 
       rewriter.replaceOp(mulOp, lshlOp.getResult());
+      return success();
+    };
+
+    // Try both operand orderings
+    if (succeeded(checkOperand(mulOp.getSrc0(), mulOp.getSrc1())))
+      return success();
+    if (succeeded(checkOperand(mulOp.getSrc1(), mulOp.getSrc0())))
+      return success();
+
+    return failure();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: Multiply by negative power of 2 -> shift + negate
+//
+// Transforms:
+//   %dst = v_mul_lo_u32 %src, %const  (where const is negative power of 2)
+// Into:
+//   %shifted = v_lshlrev_b32 log2(-const), %src
+//   %dst = v_sub_u32 0, %shifted
+//
+// This is common in index calculations where negative strides appear.
+//===----------------------------------------------------------------------===//
+
+struct MulNegPow2ToShiftNegPattern : public OpRewritePattern<V_MUL_LO_U32> {
+  using OpRewritePattern<V_MUL_LO_U32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_MUL_LO_U32 mulOp,
+                                PatternRewriter &rewriter) const override {
+    auto checkOperand = [&](Value constVal, Value other) -> LogicalResult {
+      auto valueOpt = getConstantValue(constVal);
+      if (!valueOpt)
+        return failure();
+
+      int64_t value = *valueOpt;
+
+      // Check if value is a negative power of 2
+      if (value >= 0)
+        return failure();
+
+      // Guard against INT64_MIN (negation would overflow)
+      if (value == std::numeric_limits<int64_t>::min())
+        return failure();
+
+      int64_t absValue = -value;
+      if ((absValue & (absValue - 1)) != 0)
+        return failure(); // Not a power of 2
+
+      int64_t shiftAmount =
+          static_cast<int64_t>(llvm::Log2_64(static_cast<uint64_t>(absValue)));
+
+      auto loc = mulOp.getLoc();
+
+      // Create shift constant
+      auto immType = rewriter.getType<ImmType>(shiftAmount);
+      auto shiftConst = ConstantOp::create(rewriter, loc, immType, shiftAmount);
+
+      // Create zero constant for negation
+      auto zeroImm = rewriter.getType<ImmType>(0);
+      auto zeroConst = ConstantOp::create(rewriter, loc, zeroImm, 0);
+
+      // Shift the value: shifted = src << log2(abs(const))
+      auto resultType = mulOp.getResult().getType();
+      auto lshlOp =
+          V_LSHLREV_B32::create(rewriter, loc, resultType, shiftConst, other);
+
+      // Negate the result: dst = 0 - shifted
+      auto subOp =
+          V_SUB_U32::create(rewriter, loc, resultType, zeroConst, lshlOp);
+
+      rewriter.replaceOp(mulOp, subOp.getResult());
       return success();
     };
 
@@ -340,6 +414,110 @@ struct MulZeroPattern : public OpRewritePattern<V_MUL_LO_U32> {
 };
 
 //===----------------------------------------------------------------------===//
+// Pattern: (x >> N) << N -> x & ~((1 << N) - 1)
+//
+// The affine handler compiles floor(x / 2^N) * 2^N as:
+//   %shr = v_lshrrev_b32 N, x
+//   %shl = v_lshlrev_b32 N, %shr
+// This is equivalent to masking off the low N bits:
+//   %result = v_and_b32 x, ~((1 << N) - 1)
+// Saves 1 VALU instruction per occurrence.
+//===----------------------------------------------------------------------===//
+
+struct ShiftRightLeftToAndPattern : public OpRewritePattern<V_LSHLREV_B32> {
+  using OpRewritePattern<V_LSHLREV_B32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_LSHLREV_B32 lshlOp,
+                                PatternRewriter &rewriter) const override {
+    // Check if src1 (value being shifted left) comes from a right shift
+    auto lshrOp = lshlOp.getSrc1().getDefiningOp<V_LSHRREV_B32>();
+    if (!lshrOp)
+      return failure();
+
+    // Both shift amounts must be the same constant
+    auto lshlAmt = getConstantValue(lshlOp.getSrc0());
+    auto lshrAmt = getConstantValue(lshrOp.getSrc0());
+    if (!lshlAmt || !lshrAmt || *lshlAmt != *lshrAmt)
+      return failure();
+
+    // Shift amount must be valid
+    if (*lshlAmt <= 0 || *lshlAmt >= 32)
+      return failure();
+
+    // Compute the AND mask: ~((1 << N) - 1) = all bits set except low N
+    int64_t mask = ~((1LL << *lshlAmt) - 1) & 0xFFFFFFFF;
+
+    auto loc = lshlOp.getLoc();
+    auto resultType = lshlOp.getResult().getType();
+
+    // Create the mask constant
+    auto maskImm = rewriter.getType<ImmType>(mask);
+    auto maskConst = ConstantOp::create(rewriter, loc, maskImm, mask);
+
+    // Create: result = x & mask
+    // NOTE: constant must be src0 (first operand) for VOP2 encoding.
+    // src1 must be a VGPR on AMDGCN.
+    auto andOp = V_AND_B32::create(rewriter, loc, resultType, maskConst,
+                                   lshrOp.getSrc1());
+
+    rewriter.replaceOp(lshlOp, andOp.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: a + (0 - b) -> a - b
+//
+// The affine handler produces negate-then-add sequences:
+//   %neg = v_sub_u32 0, %val
+//   %result = v_add_u32 %other, %neg
+// This simplifies to:
+//   %result = v_sub_u32 %other, %val
+// Saves 1 VALU instruction per occurrence.
+//===----------------------------------------------------------------------===//
+
+struct AddNegToSubPattern : public OpRewritePattern<V_ADD_U32> {
+  using OpRewritePattern<V_ADD_U32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_ADD_U32 addOp,
+                                PatternRewriter &rewriter) const override {
+    auto checkOperand = [&](Value negated, Value other) -> LogicalResult {
+      auto subOp = negated.getDefiningOp<V_SUB_U32>();
+      if (!subOp)
+        return failure();
+
+      // Check that src0 is constant 0 (i.e., this is 0 - x = -x)
+      auto zeroVal = getConstantValue(subOp.getSrc0());
+      if (!zeroVal || *zeroVal != 0)
+        return failure();
+
+      // No single-use constraint: if the negation has multiple uses that are
+      // all add(y, neg) patterns, the greedy rewriter will fire this pattern
+      // for each use. Once all uses are rewritten, the negation becomes dead
+      // and is cleaned up by DCE or the next CSE pass.
+
+      auto loc = addOp.getLoc();
+      auto resultType = addOp.getResult().getType();
+
+      // Replace a + (0 - b) with a - b
+      auto newSub =
+          V_SUB_U32::create(rewriter, loc, resultType, other, subOp.getSrc1());
+
+      rewriter.replaceOp(addOp, newSub.getResult());
+      return success();
+    };
+
+    // Try both operand orderings
+    if (succeeded(checkOperand(addOp.getSrc0(), addOp.getSrc1())))
+      return success();
+    if (succeeded(checkOperand(addOp.getSrc1(), addOp.getSrc0())))
+      return success();
+
+    return failure();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pattern: MFMA with zeroed accumulator -> MFMA with inline 0
 //
 // When the accumulator input to an MFMA is a zero constant (via v_mov_b32),
@@ -423,14 +601,17 @@ struct PeepholePass
     // Add all peephole patterns
     patterns.add<
         // clang-format off
+        AddNegToSubPattern,
         AddZeroPattern,
         LshlAddPattern,
         LshlOrFusePattern,
         MFMAZeroAccumPattern,
+        MulNegPow2ToShiftNegPattern,
         MulOnePattern,
         MulPow2ToShiftPattern,
         MulZeroPattern,
-        RedundantMovePattern
+        RedundantMovePattern,
+        ShiftRightLeftToAndPattern
         // clang-format on
         >(ctx);
 

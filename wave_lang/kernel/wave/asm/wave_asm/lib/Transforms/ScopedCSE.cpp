@@ -26,6 +26,9 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "waveasm-scoped-cse"
 
 using namespace mlir;
 using namespace waveasm;
@@ -38,6 +41,7 @@ namespace {
 
 /// Key for identifying equivalent operations for CSE purposes.
 /// Two operations are equivalent if they have the same opcode and operands.
+/// For commutative ops, operands are sorted to canonicalize ordering.
 struct ExpressionKey {
   StringRef opName;
   SmallVector<Value, 4> operands;
@@ -47,6 +51,12 @@ struct ExpressionKey {
 
   ExpressionKey(Operation *op) : opName(op->getName().getStringRef()) {
     operands.append(op->operand_begin(), op->operand_end());
+    // For commutative binary ops, sort operands so that
+    // v_add_u32(a, b) and v_add_u32(b, a) have the same key.
+    if (operands.size() == 2 && op->hasTrait<OpTrait::IsCommutative>()) {
+      if (operands[0].getAsOpaquePointer() > operands[1].getAsOpaquePointer())
+        std::swap(operands[0], operands[1]);
+    }
     // Include relevant attributes (e.g., immediate values)
     for (auto attr : op->getAttrs()) {
       // Skip unimportant attributes
@@ -273,11 +283,10 @@ struct ScopedCSEPass
       totalRemoved += driver.getOpsRemoved();
     });
 
-    // Report statistics (only if verbose)
-    if (totalRemoved > 0) {
-      llvm::errs() << "ScopedCSE: removed " << totalRemoved
+    LLVM_DEBUG(if (totalRemoved > 0) {
+      llvm::dbgs() << "ScopedCSE: removed " << totalRemoved
                    << " redundant operations\n";
-    }
+    });
   }
 };
 

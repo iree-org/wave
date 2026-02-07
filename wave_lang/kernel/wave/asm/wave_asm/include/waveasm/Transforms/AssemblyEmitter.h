@@ -134,6 +134,9 @@ private:
   /// Emit buffer load instruction (buffer_load_dword, etc.)
   std::string emitBufferLoad(mlir::Operation *op, llvm::StringRef mnemonic);
 
+  /// Emit buffer load to LDS (gather-to-LDS) instruction
+  std::string emitBufferLoadLDS(mlir::Operation *op, llvm::StringRef mnemonic);
+
   /// Emit buffer store instruction (buffer_store_dword, etc.)
   std::string emitBufferStore(mlir::Operation *op, llvm::StringRef mnemonic);
 

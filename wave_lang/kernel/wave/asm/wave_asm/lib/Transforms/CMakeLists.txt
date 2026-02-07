@@ -23,6 +23,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   TranslateFromMLIR.cpp
   ScopedCSE.cpp
   Peephole.cpp
+  MemoryOffsetOptimization.cpp
   ${HANDLERS_FULL_PATHS}
 
   ADDITIONAL_HEADER_DIRS

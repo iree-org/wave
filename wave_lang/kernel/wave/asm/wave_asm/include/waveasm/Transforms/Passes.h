@@ -54,6 +54,9 @@ std::unique_ptr<mlir::Pass> createWAVEASMScopedCSEPass();
 /// Create the peephole optimization pass
 std::unique_ptr<mlir::Pass> createWAVEASMPeepholePass();
 
+/// Create the memory offset optimization pass
+std::unique_ptr<mlir::Pass> createWAVEASMMemoryOffsetOptPass();
+
 //===----------------------------------------------------------------------===//
 // Pass Registration
 //===----------------------------------------------------------------------===//
