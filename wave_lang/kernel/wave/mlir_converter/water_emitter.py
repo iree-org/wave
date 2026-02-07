@@ -159,11 +159,13 @@ WAVE_OP_CONSTRUCTORS = {
 # This maps to a lambda to create the respective MLIR type. An MLIR context
 # is required to invoke the lambda.
 DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
+    "bf16": ir.BF16Type.get,
     "f16": ir.F16Type.get,
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
+    "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
     "i64": lambda: ir.IntegerType.get_signless(64),
 }
