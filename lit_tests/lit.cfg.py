@@ -73,3 +73,7 @@ project_root = os.path.dirname(os.path.dirname(__file__))
 lit.llvm.llvm_config.with_environment("PYTHONPATH", project_root, append_path=True)
 config.environment["FILECHECK_OPTS"] = "--dump-input=fail"
 config.environment["WAVE_CACHE_ON"] = "0"
+
+# Pin hash seed for deterministic test behavior (scheduling algorithms
+# use data structures whose iteration order depends on hash randomization).
+config.environment["PYTHONHASHSEED"] = "0"
