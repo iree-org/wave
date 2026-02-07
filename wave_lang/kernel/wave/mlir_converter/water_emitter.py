@@ -186,7 +186,8 @@ def _dtype_to_mlir_scalar_type(t: dtype.Datatype) -> ir.Type:
 def _map_address_space(addr) -> WaveAddressSpaceAttr:
     """Map Python AddressSpace (int, enum, or IndexSymbol) to MLIR WaveAddressSpaceAttr."""
     # Handle IndexSymbol (sympy.Symbol) - convert to string and match
-    if hasattr(addr, 'name'):  # IndexSymbol is a sympy.Symbol with a name attribute
+    # IndexSymbol is a sympy.Symbol with a name attribute
+    if hasattr(addr, "name"):
         addr_str = str(addr).lower()
         if "global" in addr_str:
             return WaveAddressSpaceAttr.get(WaveAddressSpace.Global)
@@ -196,11 +197,11 @@ def _map_address_space(addr) -> WaveAddressSpaceAttr:
             return WaveAddressSpaceAttr.get(WaveAddressSpace.Register)
         else:
             return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
-    
+
     # Handle AddressSpace enum
     if isinstance(addr, AddressSpace):
         addr = addr.value
-    
+
     # Handle int values
     if addr == AddressSpace.GLOBAL_MEMORY.value:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Global)
