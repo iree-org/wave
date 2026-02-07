@@ -11,7 +11,10 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    SHARED_ADDRESS_SPACE,
+)
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import (
@@ -105,7 +108,7 @@ def test_scatter_add(shape, elems_per_thread, request):
             BLOCK_N: n_size,
             LOAD_ELEMS_PER_THREAD: elems_per_thread,
             STORE_ELEMS_PER_THREAD: elems_per_thread,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -204,7 +207,7 @@ def test_topk(shape, k, allow_duplicates, threads_per_wave, run_bench):
             M: shape[0],
             N: shape[1],
             K: k,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -276,7 +279,7 @@ def test_fused_softmax(shape, use_buffer_ops, threads_per_wave):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=False,

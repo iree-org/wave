@@ -150,6 +150,7 @@ def test_copy_kernel_cpp_backend(shape, compiler):
 
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
@@ -188,7 +189,7 @@ def test_copy_kernel_cpp_backend(shape, compiler):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         backend="asm",
@@ -1393,6 +1394,7 @@ def test_compare_backends_copy_kernel(shape, compiler):
 
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
@@ -1423,7 +1425,7 @@ def test_compare_backends_copy_kernel(shape, compiler):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         backend="asm",

@@ -60,7 +60,7 @@ def get_broadcast_scaled_add(shape):
     hyperparams = {
         M: shape[0],
         N: shape[1],
-        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
 
     return broadcast_scaled_add, hyperparams

@@ -67,7 +67,7 @@ def test_reduce_sum(is_debug=False):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         print_ir_after="all" if is_debug else [],
@@ -129,7 +129,7 @@ def test_broadcast_reduce_sum(is_debug=False):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         print_ir_after="all" if is_debug else [],
@@ -207,7 +207,7 @@ def test_moe_weighted_sum(is_debug=False):
             B: shape[0],
             K: shape[1],
             D: shape[2],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         print_ir_after="all" if is_debug else [],
