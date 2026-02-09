@@ -138,3 +138,27 @@ func.func @mixed_mfma_wmma(
   %3 = rocdl.mfma.f32.16x16x16f16 %ma, %mb, %mc, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
   return %0, %1, %2, %3 : vector<32xf32>, vector<4xf32>, vector<32xf32>, vector<4xf32>
 }
+
+// Test: Scaled MFMA ops get reordered for operand locality.
+// CHECK-LABEL: func.func @scaled_mfma_reorder
+// CHECK-SAME:    (%[[A0:.*]]: vector<8xi32>, %[[A1:.*]]: vector<8xi32>, %[[B0:.*]]: vector<8xi32>, %[[B1:.*]]: vector<8xi32>, %[[C:.*]]: vector<16xf32>, %[[S:.*]]: i32)
+func.func @scaled_mfma_reorder(
+    %a0: vector<8xi32>, %a1: vector<8xi32>,
+    %b0: vector<8xi32>, %b1: vector<8xi32>,
+    %c: vector<16xf32>, %s: i32)
+    -> (vector<16xf32>, vector<16xf32>, vector<16xf32>, vector<16xf32>) {
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.scale.f32.32x32x64.f8f6f4 %[[A0]], %[[B0]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.scale.f32.32x32x64.f8f6f4 %[[A1]], %[[B0]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.scale.f32.32x32x64.f8f6f4 %[[A1]], %[[B1]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.scale.f32.32x32x64.f8f6f4 %[[A0]], %[[B1]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.mfma.scale.f32.32x32x64.f8f6f4 %a0, %b0, %c, 0, 0, 0, %s, 0, %s : (vector<8xi32>, vector<8xi32>, vector<16xf32>, i32, i32) -> vector<16xf32>
+  %1 = rocdl.mfma.scale.f32.32x32x64.f8f6f4 %a1, %b0, %c, 0, 0, 0, %s, 0, %s : (vector<8xi32>, vector<8xi32>, vector<16xf32>, i32, i32) -> vector<16xf32>
+  %2 = rocdl.mfma.scale.f32.32x32x64.f8f6f4 %a0, %b1, %c, 0, 0, 0, %s, 0, %s : (vector<8xi32>, vector<8xi32>, vector<16xf32>, i32, i32) -> vector<16xf32>
+  %3 = rocdl.mfma.scale.f32.32x32x64.f8f6f4 %a1, %b1, %c, 0, 0, 0, %s, 0, %s : (vector<8xi32>, vector<8xi32>, vector<16xf32>, i32, i32) -> vector<16xf32>
+  return %0, %1, %2, %3 : vector<16xf32>, vector<16xf32>, vector<16xf32>, vector<16xf32>
+}
