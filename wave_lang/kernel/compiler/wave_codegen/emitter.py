@@ -11,6 +11,7 @@ from typing import Any, Callable, ClassVar, List, Optional, Type
 
 import sympy
 import torch.fx as fx
+import math
 
 from .ir_utils import (
     is_float_type,
@@ -123,7 +124,8 @@ class WaveEmitter:
             ),
         ]
 
-        threads_per_block = self.hardware_constraint.threads_per_block
+        hw_constraint = self.hardware_constraint
+        threads_per_block = hw_constraint.threads_per_block
         self.thread_ids = [
             gpu_d.thread_id(
                 gpu_d.Dimension.x, upper_bound=_get_upper_bound(threads_per_block[0])
@@ -135,6 +137,12 @@ class WaveEmitter:
                 gpu_d.Dimension.z, upper_bound=_get_upper_bound(threads_per_block[2])
             ),
         ]
+
+        total_waves = math.prod(threads_per_block) // hw_constraint.threads_per_wave
+        self.wave_id = gpu_d.subgroup_id(upper_bound=_get_upper_bound(total_waves))
+        self.lane_id = gpu_d.lane_id(
+            upper_bound=_get_upper_bound(hw_constraint.threads_per_wave)
+        )
 
     def emit_func(self) -> Operation:
         bindings = self.root_sig.sig.linear_bindings
@@ -574,7 +582,11 @@ def add_emitter_subs(
         arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_2
     ]
     all_symbols = (
-        emitter.thread_ids + emitter.workgroup_ids + device_zeros + induction_vars
+        emitter.thread_ids
+        + emitter.workgroup_ids
+        + device_zeros
+        + [emitter.wave_id, emitter.lane_id]
+        + induction_vars
     )
     dynamics = dict(
         zip(
@@ -588,6 +600,8 @@ def add_emitter_subs(
                 DEVICE_DIM_0,
                 DEVICE_DIM_1,
                 DEVICE_DIM_2,
+                WAVE_ID,
+                LANE_ID,
             ]
             + induction_var_syms,
             all_symbols,

@@ -1410,6 +1410,10 @@ def test_gemm_four_stage_global_to_lds():
     gemm_four_stage_global_to_lds = wave_compile(options, gemm)
     print(gemm_four_stage_global_to_lds.asm)
     # CHECK-LABEL: test_gemm_four_stage_global_to_lds
+
+    # CHECK-DAG: %[[thread_id_y:.*]] = gpu.thread_id  y upper_bound 2
+    # CHECK-DAG: %[[lane_id:.*]] = gpu.lane_id upper_bound 64
+
     # Test multibuffering: verify shared memory views are correctly allocated
     # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<270336xi8
     # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<270336xi8
@@ -1427,8 +1431,8 @@ def test_gemm_four_stage_global_to_lds():
     # CHECK: rocdl.s.barrier.wait id = -1
 
     # Verify prologue loads from shared memory
-    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
-    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%[[lane_id]], %[[thread_id_y]]]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%[[lane_id]]]
     # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
 
     # CHECK: amdgpu.tensor_load_to_lds

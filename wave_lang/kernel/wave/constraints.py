@@ -239,6 +239,9 @@ class HardwareConstraint(Constraint):
     max_bits_per_load: int = 128
     n_service_waves: int = 0
 
+    # TODO: remove after everything is verified to be working with wave_id.
+    use_wave_id: Optional[bool] = None
+
     def max_elems_per_load(self, element_type: DataType) -> int:
         return self.max_bits_per_load // element_type.bitwidth()
 
@@ -300,7 +303,7 @@ class HardwareConstraint(Constraint):
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
     def mma_index_offset(self, mma_type: Optional[MMAType | ScaledMMAType]):
-        lane = self.linearized_thread_id % self.threads_per_wave
+        lane = self.lane_id
         if mma_type is None:
             mma_type = self.mma_type
 
@@ -489,17 +492,21 @@ class HardwareConstraint(Constraint):
             self.threads_per_block[0],
             self.threads_per_block[0] * self.threads_per_block[1],
         ]
-        return sum([x * y for x, y in zip(thread_ids, threads_per_block)])
+        return sum(x * y for x, y in zip(thread_ids, threads_per_block))
 
     @property
-    def wave_id(self) -> tuple[int]:
-        # threads_per_block is set in initialize_wave_constraints method
-        return self.linearized_thread_id // self.threads_per_wave
+    def wave_id(self) -> IndexExpr:
+        if self.use_wave_id:
+            return WAVE_ID
+        else:
+            return self.linearized_thread_id // self.threads_per_wave
 
     @property
-    def lane_id(self) -> tuple[int]:
-        # threads_per_block is set in initialize_wave_constraints method
-        return self.linearized_thread_id % self.threads_per_wave
+    def lane_id(self) -> IndexExpr:
+        if self.use_wave_id:
+            return LANE_ID
+        else:
+            return self.linearized_thread_id % self.threads_per_wave
 
     # Inline substitution for vector_size given index map. In the future we can add support for other members.
     def subs_vector_shapes(self, index_map: dict[IndexSymbol, int]):

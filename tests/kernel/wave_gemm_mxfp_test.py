@@ -794,10 +794,12 @@ def testGFX1250ScaledGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
         SchedulingType.NONE,
     ],
 )
+@use_water_backend_bool("use_water_backend")
 def testGFX1250ScaledGemmMXFP4(
     shape: tuple[int],
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
+    use_water_backend: bool,
 ):
     """End-to-end test for GFX1250 scaled WMMA with MXFP4."""
     # Input sizes
@@ -806,6 +808,7 @@ def testGFX1250ScaledGemmMXFP4(
     )
     options = set_default_run_config(options)
     options.wave_runtime = True
+    options.use_water_backend = use_water_backend
     gemm = wave_compile(options, gemm)
 
     # Generate inputs and compute reference on CPU.

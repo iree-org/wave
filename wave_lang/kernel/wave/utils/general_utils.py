@@ -199,7 +199,7 @@ def remove_thread_indexing(
     This function takes the index sequence for a global read and removes all
     thread level indexing.
     """
-    subs = {t: 0 for t in [THREAD_0, THREAD_1, THREAD_2, GPR_NUM]}
+    subs = {t: 0 for t in [THREAD_0, THREAD_1, THREAD_2, GPR_NUM, WAVE_ID, LANE_ID]}
     return {key: safe_subs(index[key], subs) for key in index}
 
 

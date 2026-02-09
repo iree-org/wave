@@ -1315,9 +1315,7 @@ Examples:
         try:
             with IndexingContext() as idxc:
                 idxc.set_subs(mlir_options.subs)
-                kernel_mlir.initialize_wave_constraints()
-                kernel_mlir.initialize_symbolic_constraints()
-                kernel_mlir.initialize_workgroup_constraints()
+                kernel_mlir.initialize_all_constraints(mlir_options)
 
                 result = _trace_launchable_and_get_kernel_signature(
                     kernel_mlir, mlir_options

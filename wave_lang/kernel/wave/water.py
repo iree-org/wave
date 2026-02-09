@@ -438,7 +438,11 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         add_transform(alloca_to_global, "__transform_alloca_to_global"),
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
-        ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
+        (
+            "convert-gpu-to-rocdl",
+            {"use-bare-ptr-memref-call-conv": "1", "chipset": target_chip},
+            "gpu.module",
+        ),
         ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "convert-vector-to-llvm",

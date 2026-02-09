@@ -935,9 +935,7 @@ def wave_compile(
 
         # Since constraints are used to lookup the compiled kernel in the cache,
         # we initialize/update the constraints _before_ the cache lookup.
-        kernel.initialize_wave_constraints()
-        kernel.initialize_symbolic_constraints()
-        kernel.initialize_workgroup_constraints()
+        kernel.initialize_all_constraints(options)
 
         bound_scalar_symbols = kernel.bound_scalar_symbols
         symbols_args_map = kernel.symbols_args_map

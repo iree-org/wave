@@ -150,8 +150,7 @@ def set_specialized_conditions(
     compute_wid = math.prod(map(lambda c: c.waves_per_block, wave_constraints))
 
     # calculate physical wid
-    flat_id = hardware_constraint.linearized_thread_id
-    wave_id = flat_id // hardware_constraint.threads_per_wave
+    wave_id = hardware_constraint.wave_id
 
     anchor = next(iter(graph.nodes))
     with graph.inserting_before(anchor):

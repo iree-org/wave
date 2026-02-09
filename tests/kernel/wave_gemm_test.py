@@ -3374,6 +3374,8 @@ def testSpecializeGemm(
     )
     options = set_default_benchmark_options(run_bench, perf_filename_tk, options)
     options = set_default_run_config(options)
+    # TODO: Wave specialization doesn't work with wave_id yet.
+    gemm.hardware_constraints[0].use_wave_id = False
     gemm = wave_compile(options, gemm)
 
     a = device_randn(shape[0], shape[2], dtype=datatype)
@@ -3440,9 +3442,9 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     metadata = extract_kernel_metadata(text)
     # print(",\n".join(f'            "{i}"' for i in metadata.readfirstlane_ops))
     if use_water_backend:
-        vgpr_count = 456
+        vgpr_count = 454
         vgpr_spill_count = 0
-        sgpr_count = 46
+        sgpr_count = 40
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
@@ -3463,39 +3465,11 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
         ]
-        readfirstlane_ops = [
-            "v_readfirstlane_b32 s0, v0",
-            "v_readfirstlane_b32 s22, v1",
-            "v_readfirstlane_b32 s7, v11",
-            "v_readfirstlane_b32 s25, v1",
-            "v_readfirstlane_b32 s4, v2",
-            "v_readfirstlane_b32 s28, v8",
-            "v_readfirstlane_b32 s30, v4",
-            "v_readfirstlane_b32 s31, v9",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s41, v5",
-            "v_readfirstlane_b32 s42, v6",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s29, v1",
-            "v_readfirstlane_b32 s41, v5",
-            "v_readfirstlane_b32 s36, v6",
-            "v_readfirstlane_b32 s40, v4",
-            "v_readfirstlane_b32 s28, v10",
-            "v_readfirstlane_b32 s42, v8",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s29, v1",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s30, v4",
-            "v_readfirstlane_b32 s31, v5",
-            "v_readfirstlane_b32 s11, v16",
-            "v_readfirstlane_b32 s13, v17",
-        ]
+        readfirstlane_ops = []
     else:
-        vgpr_count = 458
+        vgpr_count = 466
         vgpr_spill_count = 0
-        sgpr_count = 46
+        sgpr_count = 34
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
@@ -3504,9 +3478,7 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_tensorcnt 0x1",
-            "s_wait_dscnt 0xe",
-            "s_wait_dscnt 0xa",
-            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x12",
             "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
             "s_wait_tensorcnt 0x0",
@@ -3517,34 +3489,42 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-            "v_readfirstlane_b32 s24, v1",
+            "v_readfirstlane_b32 s12, v0",
+            "v_readfirstlane_b32 s5, v5",
+            "v_readfirstlane_b32 s6, v8",
+            "v_readfirstlane_b32 s7, v7",
+            "v_readfirstlane_b32 s21, v3",
             "v_readfirstlane_b32 s0, v7",
-            "v_readfirstlane_b32 s26, v1",
-            "v_readfirstlane_b32 s0, v4",
-            "v_readfirstlane_b32 s16, v8",
-            "v_readfirstlane_b32 s18, v4",
-            "v_readfirstlane_b32 s19, v9",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s41, v5",
-            "v_readfirstlane_b32 s42, v6",
-            "v_readfirstlane_b32 s17, v1",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s36, v6",
-            "v_readfirstlane_b32 s41, v5",
-            "v_readfirstlane_b32 s40, v4",
-            "v_readfirstlane_b32 s16, v10",
-            "v_readfirstlane_b32 s42, v8",
-            "v_readfirstlane_b32 s43, v7",
-            "v_readfirstlane_b32 s17, v1",
-            "v_readfirstlane_b32 s38, v2",
-            "v_readfirstlane_b32 s39, v3",
-            "v_readfirstlane_b32 s18, v4",
-            "v_readfirstlane_b32 s19, v5",
-            "v_readfirstlane_b32 s6, v12",
-            "v_readfirstlane_b32 s7, v13",
-            "v_readfirstlane_b32 s14, v14",
-            "v_readfirstlane_b32 s15, v15",
+            "v_readfirstlane_b32 s1, v7",
+            "v_readfirstlane_b32 s9, v3",
+            "v_readfirstlane_b32 s13, v7",
+            "v_readfirstlane_b32 s14, v10",
+            "v_readfirstlane_b32 s2, v8",
+            "v_readfirstlane_b32 s3, v3",
+            "v_readfirstlane_b32 s15, v9",
+            "v_readfirstlane_b32 s12, v16",
+            "v_readfirstlane_b32 s5, v7",
+            "v_readfirstlane_b32 s7, v9",
+            "v_readfirstlane_b32 s6, v10",
+            "v_readfirstlane_b32 s0, v12",
+            "v_readfirstlane_b32 s4, v14",
+            "v_readfirstlane_b32 s2, v8",
+            "v_readfirstlane_b32 s13, v7",
+            "v_readfirstlane_b32 s3, v3",
+            "v_readfirstlane_b32 s14, v10",
+            "v_readfirstlane_b32 s15, v9",
+            "v_readfirstlane_b32 s24, v4 /*v260*/",
+            "v_readfirstlane_b32 s27, v1 /*v257*/",
+            "v_readfirstlane_b32 s28, v2 /*v258*/",
+            "v_readfirstlane_b32 s29, v3 /*v259*/",
+            "v_readfirstlane_b32 s30, v0 /*v256*/",
+            "v_readfirstlane_b32 s12, v22 /*v278*/",
+            "v_readfirstlane_b32 s13, v25 /*v281*/",
+            "v_readfirstlane_b32 s14, v20 /*v276*/",
+            "v_readfirstlane_b32 s15, v23 /*v279*/",
+            "v_readfirstlane_b32 s25, v19 /*v275*/",
+            "v_readfirstlane_b32 s26, v18 /*v274*/",
+            "v_readfirstlane_b32 s31, v21 /*v277*/",
         ]
 
     assert (

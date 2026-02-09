@@ -120,9 +120,7 @@ def emit_global_scan(
 
     TODO: Can we make it more efficient?
     """
-    lane_id = (
-        hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
-    )
+    lane_id = hardware_constraint.lane_id
 
     scanop_result = local_scan[-1][-1]
     last_local_scan_node = get_custom(scanop_result)
@@ -278,13 +276,10 @@ def emit_interwave_scan(
 
     # Identify lane_id and wave_id-along-scan-dim
     # Here, lane_id: the id of the lane within the wave
-    lane_id = (
-        hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
-    )
+    lane_id = hardware_constraint.lane_id
     # Here, wave_id: the id of the wave within the workgroup
     wave_id = delinearize_index(
-        hardware_constraint.linearized_thread_id
-        // hardware_constraint.threads_per_wave,
+        hardware_constraint.wave_id,
         hardware_constraint.waves_per_block,
     )
     scan_wg_dim = wg_constraint_map[scan_dim].workgroup_dim

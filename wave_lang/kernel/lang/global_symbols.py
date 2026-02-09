@@ -41,6 +41,10 @@ THREAD_0 = index_symbol(THREAD_SYMBOL_NAMES[0])
 THREAD_1 = index_symbol(THREAD_SYMBOL_NAMES[1])
 THREAD_2 = index_symbol(THREAD_SYMBOL_NAMES[2])
 
+# Wave/lane identification symbols.
+WAVE_ID = index_symbol("$WAVE_ID")
+LANE_ID = index_symbol("$LANE_ID")
+
 # Input selector symbol for selecting input from different tensors.
 INPUT_SELECTOR = index_symbol("$INPUT_SELECTOR")
 
