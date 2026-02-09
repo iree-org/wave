@@ -333,7 +333,6 @@ def emit_global_to_lds(
         for bound_expr, idx in zip(read.indexing_dims, nd_index):
             last = bound_expr == read.indexing_dims[-1]
             dim = infer_dim(bound_expr)
-
             size = elements_per_thread if last else 1
             stride = 1
             write_index[dim] = IndexSequence(idx, size, stride)
