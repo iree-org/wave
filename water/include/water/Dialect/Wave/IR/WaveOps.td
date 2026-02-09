@@ -186,6 +186,29 @@ def ReciprocalOp : UnaryWaveOp<"reciprocal"> {
   let hasVerifier = 1;
 }
 
+def SelectOp : WaveOp<"select",
+    [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Select between two values based on a condition";
+  let description = [{
+    Selects between two values based on a condition. The selection is element-wise, that is,
+    the condition is a tensor co-indexed with the two values.
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Condition">:$condition,
+    Arg<WaveTensorInRegister, "First value">:$lhs,
+    Arg<WaveTensorInRegister, "Second value">:$rhs
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Result">:$result
+  );
+  let assemblyFormat =
+    "$condition `,` $lhs `,` $rhs " # commonArgumentsSyntax # "attr-dict `:` "
+    "functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def MmaOp : WaveOp<"mma",
     [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
      DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,

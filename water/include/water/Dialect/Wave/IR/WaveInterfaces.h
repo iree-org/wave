@@ -241,6 +241,14 @@ llvm::LogicalResult verifyTypesCompatible(
     std::optional<mlir::Location> errorLocation = std::nullopt,
     llvm::StringRef lhsName = "", llvm::StringRef rhsName = "");
 
+// Verify that the shapes of two Wave tensor types are compatible, i.e., they
+// have the same rank and the corresponding dimensions are equal. Emit
+// diagnostic errors and return failure when it is not the case.
+llvm::LogicalResult
+verifyTensorShapesCompatible(wave::WaveTensorType lhs, wave::WaveTensorType rhs,
+                             std::optional<mlir::Location> errorLocation,
+                             llvm::StringRef lhsName, llvm::StringRef rhsName);
+
 // Verify that specified dimensions match between LHS and RHS, the lists of
 // dimensions are expected to be co-indexed. Emit diagnostic errors and
 // return failure when it is not the case.

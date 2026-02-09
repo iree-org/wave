@@ -59,6 +59,8 @@ from wave_lang.kernel.ops.wave_ops import (
     NewRegister,
     Output,
     Placeholder,
+    Placeholder,
+    SelectOp,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
     Write,
@@ -153,6 +155,7 @@ WAVE_OP_CONSTRUCTORS = {
     "permute": PermuteOp,
     "max_element": MaxElementOp,
     "sum": SumOp,
+    "select": SelectOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
 }
 

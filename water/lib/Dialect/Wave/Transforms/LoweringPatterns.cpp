@@ -382,6 +382,29 @@ public:
   }
 };
 
+//===----------------------------------------------------------------------===//
+// SelectOp
+//===----------------------------------------------------------------------===//
+
+class SelectOpLoweringPattern : public OpConversionPattern<wave::SelectOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::SelectOp op, wave::SelectOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto arithSelectOp =
+        arith::SelectOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
+                                adaptor.getLhs(), adaptor.getRhs());
+    rewriter.replaceOp(op, arithSelectOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// CastOp
+//===----------------------------------------------------------------------===//
+
 class CastOpLoweringPattern : public OpConversionPattern<wave::CastOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -784,10 +807,18 @@ public:
 
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<CastOpLoweringPattern, ExtractOpLoweringPattern,
-               ExtractSliceOpLoweringPattern, IterateOpLoweringPattern,
-               PermuteOpLoweringPattern, RegisterOpLoweringPattern,
-               ShuffleOpLoweringPattern>(typeConverter, patterns.getContext());
+  patterns.add<
+      // clang-format off
+      CastOpLoweringPattern,
+      ExtractOpLoweringPattern,
+      ExtractSliceOpLoweringPattern,
+      IterateOpLoweringPattern,
+      PermuteOpLoweringPattern,
+      RegisterOpLoweringPattern,
+      SelectOpLoweringPattern,
+      ShuffleOpLoweringPattern
+      // clang-format on
+      >(typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

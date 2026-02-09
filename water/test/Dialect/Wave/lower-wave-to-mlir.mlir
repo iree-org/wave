@@ -408,6 +408,26 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_select
+  func.func @lower_select() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.select
+    // CHECK:     %[[COND:.*]] = arith.constant dense<true> : vector<4xi1>
+    // CHECK:     %[[LHS:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK:     %[[RHS:.*]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK:     arith.select %[[COND]], %[[LHS]], %[[RHS]] : vector<4xi1>, vector<4xf32>
+    %cond_a = arith.constant 1 : i1
+    %cond = wave.register %cond_a : vector<4xi1>
+    %cst = arith.constant 0.0 : f32
+    %lhs = wave.register %cst : vector<4xf32>
+    %cst1 = arith.constant 1.0 : f32
+    %rhs = wave.register %cst1 : vector<4xf32>
+    %select = wave.select %cond, %lhs, %rhs : (vector<4xi1>, vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
 // CHECK-LABEL: func.func @lower_alloc_view
 func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28}>}  {
   // CHECK: %[[BUFF:.*]] = memref.alloc() : memref<256xi8, #gpu.address_space<workgroup>>

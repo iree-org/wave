@@ -1955,6 +1955,64 @@ LogicalResult wave::ReciprocalOp::verify() {
 
   return success();
 }
+
+//-----------------------------------------------------------------------------
+// SelectOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::SelectOp::verify() {
+  if (failed(detail::verifyTypesCompatible(
+          getLhs().getType(), getRhs().getType(), /*includeAddressSpace=*/false,
+          getLoc(), "LHS", "RHS")))
+    return failure();
+
+  if (failed(detail::verifyTypesCompatible(
+          getLhs().getType(), getResult().getType(),
+          /*includeAddressSpace=*/false, getLoc(), "LHS", "result")))
+    return failure();
+
+  auto intType =
+      dyn_cast<IntegerType>(getElementType(getCondition().getType()));
+  if (!intType || intType.getWidth() != 1)
+    return emitOpError("condition must be a tensor or vector of i1");
+
+  SmallVector<int64_t> vecShapes;
+  if (auto conditionVec = dyn_cast<VectorType>(getCondition().getType()))
+    vecShapes.push_back(conditionVec.getNumElements());
+  if (auto lhsVec = dyn_cast<VectorType>(getLhs().getType()))
+    vecShapes.push_back(lhsVec.getNumElements());
+  if (auto rhsVec = dyn_cast<VectorType>(getRhs().getType()))
+    vecShapes.push_back(rhsVec.getNumElements());
+  if (auto resultVec = dyn_cast<VectorType>(getResult().getType()))
+    vecShapes.push_back(resultVec.getNumElements());
+
+  for (int64_t i = 0, e = vecShapes.size(); i < e; ++i) {
+    for (int64_t j = i + 1; j < e; ++j) {
+      if (vecShapes[i] == vecShapes[j])
+        continue;
+
+      emitError() << "expects all vector shapes to be equal, got "
+                  << vecShapes[i] << " and " << vecShapes[j];
+    }
+  }
+
+  auto conditionTensor = dyn_cast<WaveTensorType>(getCondition().getType());
+  auto lhsTensor = dyn_cast<WaveTensorType>(getLhs().getType());
+  auto rhsTensor = dyn_cast<WaveTensorType>(getRhs().getType());
+  auto resultTensor = dyn_cast<WaveTensorType>(getResult().getType());
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, lhsTensor, getLoc(), "condition", "LHS")))
+    return failure();
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, rhsTensor, getLoc(), "condition", "RHS")))
+    return failure();
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, resultTensor, getLoc(), "condition", "result")))
+    return failure();
+
+  return success();
+}
+
 //-----------------------------------------------------------------------------
 // BroadcastOp
 //-----------------------------------------------------------------------------

@@ -560,6 +560,30 @@ wave::detail::verifyElementTypesMatch(std::optional<Location> loc,
   return failure();
 }
 
+llvm::LogicalResult wave::detail::verifyTensorShapesCompatible(
+    wave::WaveTensorType lhs, wave::WaveTensorType rhs,
+    std::optional<Location> errorLocation, llvm::StringRef lhsName,
+    llvm::StringRef rhsName) {
+  if (lhs == rhs)
+    return success();
+
+  if (!lhs || !rhs || !lhs.getFullySpecified() || !rhs.getFullySpecified())
+    return success();
+
+  if (lhs.getRank() != rhs.getRank()) {
+    if (errorLocation) {
+      emitError(*errorLocation)
+          << "rank mismatch between " << lhsName << " and " << rhsName;
+    }
+    return failure();
+  }
+
+  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhs.getRank(),
+                                                       /*Inclusive=*/false));
+  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhs, allDims,
+                                       rhsName, rhs, allDims);
+}
+
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
     Type lhs, Type rhs, bool includeAddressSpace,
     std::optional<Location> errorLocation, llvm::StringRef lhsName,
@@ -596,21 +620,8 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
     }
   }
 
-  if (!lhsTensor.getFullySpecified() || !rhsTensor.getFullySpecified())
-    return success();
-
-  if (lhsTensor.getRank() != rhsTensor.getRank()) {
-    if (errorLocation) {
-      emitError(*errorLocation)
-          << "rank mismatch between " << lhsName << " and " << rhsName;
-    }
-    return failure();
-  }
-
-  auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhsTensor.getRank(),
-                                                       /*Inclusive=*/false));
-  return verifyTypesMatchingDimensions(errorLocation, lhsName, lhsTensor,
-                                       allDims, rhsName, rhsTensor, allDims);
+  return verifyTensorShapesCompatible(lhsTensor, rhsTensor, errorLocation,
+                                      lhsName, rhsName);
 }
 
 static llvm::LogicalResult
