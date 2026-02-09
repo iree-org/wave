@@ -879,18 +879,6 @@ def _create_kernel_module(
     diagnostics: list[MLIRDiagnostic | WaterError] = []
     known_ids: set[str] | None = set() if options.check_water_analysis else None
 
-    def diagnostics_handler(d):
-        diagnostics.append(
-            MLIRDiagnostic(
-                message=d.message,
-                location=_serialize_location(d.location),
-                severity=d.severity.name,
-            )
-        )
-        return True
-
-    ctx.attach_diagnostic_handler(diagnostics_handler)
-
     if options.override_mlir:
         try:
             module = ir.Module.parse(options.override_mlir, context=ctx)
