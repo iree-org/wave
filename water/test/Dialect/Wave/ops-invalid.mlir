@@ -479,6 +479,14 @@ func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
 
 // -----
 
+func.func @bounds_wrong_rank(%mem: !wave.tensor<[@N] of f32>) {
+  // expected-error @below {{'bounds' must only contain single-result expressions}}
+  wave.read %mem { bounds = #wave.read_write_bounds<{ N = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64, BLOCK_M * 64)>}> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+  return
+}
+
+// -----
+
 func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{'index' has more than one entry with non-unit step}}
   // expected-note @below {{second non-unit step dimension: 1}}

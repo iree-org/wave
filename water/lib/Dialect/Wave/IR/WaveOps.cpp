@@ -1554,9 +1554,14 @@ static LogicalResult verifyReadWriteBounds(Location loc,
     }
 
     // Value type must be WaveExprListAttr.
-    if (!isa<wave::WaveExprListAttr>(value.getValue()))
+    auto exprListAttr = dyn_cast<wave::WaveExprListAttr>(value.getValue());
+    if (!exprListAttr)
       return emitError(loc) << "'bounds' values must be WaveExprListAttr, got "
                             << value.getValue();
+    if (exprListAttr.getRank() != 1) {
+      return emitError(loc)
+             << "'bounds' must only contain single-result expressions";
+    }
 
     knownSymbolNames.insert(value.getName().strref());
   }
