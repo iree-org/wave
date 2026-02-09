@@ -437,13 +437,26 @@ def filter_regions_with_barriers(
     """
     Filter out regions that already have barriers between producer and consumer.
     This is done AFTER optimization to ensure global optimization sees all hazards.
+
+    NOTE: Regions whose producer is an async memory operation (GatherToLDS,
+    TensorLoadToLDS) are never filtered because SharedMemoryBarrier alone
+    does not guarantee the DMA has completed — a MemoryCounterWait is also
+    required. is_barrier_between does not distinguish between these cases,
+    so we conservatively keep these regions.
     """
     filtered_results = []
     for region in sync_regions:
         if region.producer is not None and region.consumer is not None:
-            existing_barrier = is_barrier_between(region.producer, region.consumer)
-            if existing_barrier is not None:
-                continue
+            # Don't filter regions with async memory producers — a
+            # SharedMemoryBarrier does not wait for DMA completion.
+            if not isinstance(
+                get_custom(region.producer), (GatherToLDS, TensorLoadToLDS)
+            ):
+                existing_barrier = is_barrier_between(
+                    region.producer, region.consumer
+                )
+                if existing_barrier is not None:
+                    continue
         filtered_results.append(region)
 
     return filtered_results
