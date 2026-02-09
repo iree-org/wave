@@ -843,7 +843,7 @@ def _create_kernel_module(
     constraints: list[Constraint],
     options: WaveCompileOptions,
     test_diagnostics: bool = False,
-) -> tuple[ir.Module | None, list[dict], set[str]]:
+) -> tuple[ir.Module | None, list[MLIRDiagnostic | WaterError], set[str] | None]:
     """Creates an MLIR module containing the kernel function from the captured trace.
 
     Args:
@@ -854,9 +854,10 @@ def _create_kernel_module(
         test_diagnostics: Whether to emit a test diagnostic
 
     Returns:
+        A tuple containing:
         - The created MLIR module, or None if creation failed.
-        - List of diagnostic messages.
-        - Set of known water IDs if options require checking water analysis.
+        - List of diagnostic messages (MLIRDiagnostic or WaterError instances).
+        - Set of known water IDs if options.check_water_analysis is True, otherwise None.
     """
     diagnostics: list[MLIRDiagnostic | WaterError] = []
     known_ids: set[str] | None = set() if options.check_water_analysis else None
