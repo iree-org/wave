@@ -16,7 +16,12 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
     format_diagnostics,
 )
-from wave_lang.kernel.wave.mlir_converter.diagnostics import FileLocation, NameLocation
+from wave_lang.kernel.wave.mlir_converter.diagnostics import (
+    FileLocation,
+    NameLocation,
+    MLIRDiagnostic,
+    WaterError,
+)
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
@@ -78,7 +83,7 @@ SUBS: dict[str | IndexSymbol, Any] = {
 def compile_and_emit_diagnostics(
     location_level: LocationCaptureLevel,
     test_diagnostic_emission: bool = True,
-):
+) -> list[MLIRDiagnostic | WaterError]:
     """Helper to compile kernel and emit diagnostics with given location level.
 
     Args:
@@ -86,7 +91,7 @@ def compile_and_emit_diagnostics(
         test_diagnostic_emission: Whether to emit a test diagnostic for verification.
 
     Returns:
-        List of diagnostic dicts.
+        List of MLIRDiagnostic or WaterError objects.
     """
     # When location capture is disabled, we must also disable location enforcement
     enforce_locations = location_level != LocationCaptureLevel.NONE
