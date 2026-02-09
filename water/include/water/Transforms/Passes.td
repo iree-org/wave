@@ -171,7 +171,7 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
-def WaterWMMAMatrixReusePass : Pass<"water-wmma-matrix-reuse"> {
+def WaterMMAReorderPass : Pass<"water-mma-reorder"> {
   let summary = "Reorder matrix multiply intrinsics to maximize operand reuse";
   let description = [{
     This pass reorders ROCDL matrix multiply intrinsics (WMMA, MFMA, scaled

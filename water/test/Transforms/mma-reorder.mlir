@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-wmma-matrix-reuse | FileCheck %s
+// RUN: water-opt %s --water-mma-reorder | FileCheck %s
 
 // Test: Consecutive ops with same B get reuseB, then same A gets reuseA.
 // CHECK-LABEL: func.func @reorder_for_reuse

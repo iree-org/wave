@@ -16,7 +16,7 @@
 using namespace mlir;
 
 namespace mlir::water {
-#define GEN_PASS_DEF_WATERWMMAMATRIXREUSEPASS
+#define GEN_PASS_DEF_WATERMMAREORDERPASS
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
@@ -86,8 +86,8 @@ static void setReuseB(Operation *op, bool reuse) {
       [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
 }
 
-class WMMAMatrixReusePass
-    : public water::impl::WaterWMMAMatrixReusePassBase<WMMAMatrixReusePass> {
+class MMAReorderPass
+    : public water::impl::WaterMMAReorderPassBase<MMAReorderPass> {
 public:
   void runOnOperation() override {
     Operation *rootOp = getOperation();
