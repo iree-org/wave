@@ -16,7 +16,10 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import Constraint, MMAType
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostics,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -85,7 +88,7 @@ def failure_to_parse_override_mlir():
 
     assert len(diagnostics) == 1
     # CHECK: Unable to parse module assembly
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: failure_to_parse_pipeline
@@ -98,7 +101,7 @@ def failure_to_parse_pipeline():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Unable to parse module assembly
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: pipeline_is_empty
@@ -111,7 +114,7 @@ def pipeline_is_empty():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Transform module is empty
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: pipeline_is_not_a_named_sequence
@@ -124,7 +127,7 @@ def pipeline_is_not_a_named_sequence():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Expected first op to be "transform.named_sequence", got "builtin.module"
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # This script is guaranteed to fail unless we somehow have a root op called
@@ -150,7 +153,7 @@ def failure_in_pipeline():
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script:
     # CHECK: incompatible payload operation name expected foo.bar vs builtin.module
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: override_mlir
@@ -226,8 +229,7 @@ def mlir_converter_matrix_add():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -363,8 +365,7 @@ def mlir_converter_sum():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -487,8 +488,7 @@ def mlir_converter_matmul():
     )
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
