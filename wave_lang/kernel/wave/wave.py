@@ -449,7 +449,7 @@ class LaunchableWave(Launchable):
                     subs_idxc(constraint.source_to_target(constraint.target)),
                 )
 
-    def inititialize_hardware_constraints(self, options: "WaveCompileOptions") -> None:
+    def initialize_hardware_constraints(self, options: "WaveCompileOptions") -> None:
         hw_constraint = self.hardware_constraints[0]
         if hw_constraint.use_wave_id is None:
             # TODO: remove after everything is verified to be working with wave_id.
@@ -459,7 +459,7 @@ class LaunchableWave(Launchable):
         self.initialize_wave_constraints()
         self.initialize_symbolic_constraints()
         self.initialize_workgroup_constraints()
-        self.inititialize_hardware_constraints(options)
+        self.initialize_hardware_constraints(options)
 
     def infer_grid_shape(self, idxc: IndexingContext):
         self.grid_type.dims = [1, 1, 1]
