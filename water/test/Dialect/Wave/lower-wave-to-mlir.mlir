@@ -288,6 +288,42 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_max
+  func.func @lower_max() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.max
+    // CHECK:     %[[LHS:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK:     %[[RHS:.*]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK:     arith.maximumf %[[LHS]], %[[RHS]] : vector<4xf32>
+    %cst = arith.constant 0.0 : f32
+    %lhs = wave.register %cst : vector<4xf32>
+    %cst1 = arith.constant 1.0 : f32
+    %rhs = wave.register %cst1 : vector<4xf32>
+    %maxf = wave.max %lhs, %rhs : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_min
+  func.func @lower_min() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.min
+    // CHECK:     %[[LHS:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK:     %[[RHS:.*]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK:     arith.minimumf %[[LHS]], %[[RHS]] : vector<4xf32>
+    %cst = arith.constant 0.0 : f32
+    %lhs = wave.register %cst : vector<4xf32>
+    %cst1 = arith.constant 1.0 : f32
+    %rhs = wave.register %cst1 : vector<4xf32>
+    %minf = wave.min %lhs, %rhs : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @lower_sub
   func.func @lower_sub() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.sub

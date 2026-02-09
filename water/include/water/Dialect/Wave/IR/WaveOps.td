@@ -165,6 +165,16 @@ def DivOp : BinaryWaveOp<"div"> {
   let description = baseDescription;
 }
 
+def MaxOp : BinaryWaveOp<"max"> {
+  let summary = "Get the maximum of two values";
+  let description = baseDescription;
+}
+
+def MinOp : BinaryWaveOp<"min"> {
+  let summary = "Get the minimum of two values";
+  let description = baseDescription;
+}
+
 def Exp2Op : UnaryWaveOp<"exp2"> {
   let summary = "Compute 2 to the power of the argument";
   let description = baseDescription;

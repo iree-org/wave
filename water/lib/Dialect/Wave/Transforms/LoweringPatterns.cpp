@@ -241,12 +241,14 @@ public:
 
 void wave::populateWaveBinaryOpLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns
-      .add<BinaryOpLoweringPattern<wave::AddOp, arith::AddFOp, arith::AddIOp>,
-           BinaryOpLoweringPattern<wave::SubOp, arith::SubFOp, arith::SubIOp>,
-           BinaryOpLoweringPattern<wave::MulOp, arith::MulFOp, arith::MulIOp>,
-           BinaryOpLoweringPattern<wave::DivOp, arith::DivFOp, arith::DivSIOp>>(
-          typeConverter, patterns.getContext());
+  patterns.add<
+      BinaryOpLoweringPattern<wave::AddOp, arith::AddFOp, arith::AddIOp>,
+      BinaryOpLoweringPattern<wave::SubOp, arith::SubFOp, arith::SubIOp>,
+      BinaryOpLoweringPattern<wave::MulOp, arith::MulFOp, arith::MulIOp>,
+      BinaryOpLoweringPattern<wave::DivOp, arith::DivFOp, arith::DivSIOp>,
+      BinaryOpLoweringPattern<wave::MaxOp, arith::MaximumFOp, arith::MaxSIOp>,
+      BinaryOpLoweringPattern<wave::MinOp, arith::MinimumFOp, arith::MinSIOp>>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
