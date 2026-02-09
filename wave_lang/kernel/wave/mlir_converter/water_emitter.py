@@ -560,9 +560,10 @@ def _emit_ops_from_graph(
                 return mlir_operands
 
             if isinstance(node, GetResult):
-                if node.res_idx >= len(iterate_op.results):
+                if node.res_idx >= len(value_map[node.value]):
                     raise RuntimeError(
-                        f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
+                        f"GetResult index ({node.res_idx}) is higher than the "
+                        f"number of mapped values ({len(value_map[node.value])})."
                     )
                 value_map[fx_node] = (value_map[node.value][node.res_idx],)
 
@@ -570,7 +571,7 @@ def _emit_ops_from_graph(
                 # later because `get_result` doesn't exist in the dialect. Only do so when
                 # there are some results.
                 if known_ids is not None and len(value_map[node.value]) > 0:
-                    iterate_op = get_single_mapped_value(value_map[fx_node]).owner
+                    iterate_op = get_single_mapped_value(fx_node).owner
                     water_id = getattr(fx_node, "_water_id", None)
                     if water_id is None:
                         raise RuntimeError(
