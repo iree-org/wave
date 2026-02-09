@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import itertools
 import sys
 from typing import Optional, Sequence
 from dataclasses import dataclass, field
@@ -29,8 +30,10 @@ try:
         WaveReadWriteBoundsAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
+        iterate_make_isolated,
     )
-    from water_mlir.water_mlir.dialects.func import FuncOp, ReturnOp as FuncReturnOp
+    from water_mlir.dialects.func import FuncOp, ReturnOp as FuncReturnOp
+
 except Exception as e:
     # Keep import-time errors explicit so callers can act on missing deps.
     raise ImportError(f"Failed to import water_mlir bindings: {e}") from e
@@ -111,24 +114,32 @@ class AttrNames(Enum):
         return self.value[1]
 
 
-def _address_space_to_symbol(addr_space_attr: WaveAddressSpaceAttr) -> IndexSymbol:
+def _address_space_to_symbol(
+    addr_space_attr: WaveAddressSpaceAttr,
+    parse_ctx: _OpParseContext,
+) -> IndexSymbol:
     """Map a WaveAddressSpaceAttr to the IndexSymbol used in Memory type constructors.
 
-    Only Global and Shared are supported. Register types are constructed without
-    an address space parameter and should be handled separately by the caller.
+    Global and Shared map to the well-known symbols GLOBAL_ADDRESS_SPACE and
+    SHARED_ADDRESS_SPACE.  Unspecified produces a fresh unique symbol each time
+    so that distinct unresolved address spaces are never accidentally conflated.
     """
     match addr_space_attr.value:
         case wave.WaveAddressSpace.Global:
             return GLOBAL_ADDRESS_SPACE
         case wave.WaveAddressSpace.Shared:
             return SHARED_ADDRESS_SPACE
+        case wave.WaveAddressSpace.Unspecified:
+            idx = next(parse_ctx.unspecified_addr_counter)
+            return index_symbol(f"$UNSPECIFIED_ADDRESS_SPACE_{idx}")
         case _:
-            raise ValueError(
-                f"Unsupported address space to symbol conversion: {addr_space_attr.value}"
-            )
+            raise ValueError(f"Unsupported address space: {addr_space_attr.value}")
 
 
-def _convert_wave_tensor_type(type_: WaveTensorType) -> type[Memory] | type[Register]:
+def _convert_wave_tensor_type(
+    type_: WaveTensorType,
+    parse_ctx: _OpParseContext,
+) -> type[Memory] | type[Register]:
     """Converts a WaveTensorType to Memory or Register, dispatching on address space."""
     dims: list[IndexExpr | int] = [
         index_symbol(symbol_attr_to_name(attr)) for attr in type_.shape
@@ -136,7 +147,7 @@ def _convert_wave_tensor_type(type_: WaveTensorType) -> type[Memory] | type[Regi
     dtype = mlir_element_type_to_dtype(type_.element_type)
     if type_.address_space.value == wave.WaveAddressSpace.Register:
         return Register[(*dims, dtype)]
-    address_space = _address_space_to_symbol(type_.address_space)
+    address_space = _address_space_to_symbol(type_.address_space, parse_ctx)
     return Memory[(*dims, address_space, dtype)]
 
 
@@ -485,12 +496,16 @@ class _OpParseContext:
         region_graph: Container for managing multiple subgraphs.
         default_mma_type: Default MMA type from hardware constraints.
         value_map: Maps MLIR ir.Value to FX nodes/scalars in the current scope.
+        unspecified_addr_counter: Shared counter for generating unique symbols
+            for Unspecified address spaces (so distinct unresolved spaces are
+            never conflated).
     """
 
     graph: fx.Graph
     region_graph: RegionGraph
     default_mma_type: MMAType | ScaledMMAType | None = None
     value_map: dict[ir.Value, fx.Node | int | float] = field(default_factory=dict)
+    unspecified_addr_counter: itertools.count = field(default_factory=itertools.count)
 
     def resolve_operand(self, value: ir.Value) -> fx.Node | int | float:
         """Resolve MLIR value to its corresponding FX node or scalar."""
@@ -555,7 +570,7 @@ def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
 
     if result_type.address_space.value == wave.WaveAddressSpace.Register:
         raise ValueError("Allocate cannot target Register address space")
-    address_space = _address_space_to_symbol(result_type.address_space)
+    address_space = _address_space_to_symbol(result_type.address_space, parse_ctx)
 
     distributed_shape = tuple(expr_list_attr_to_exprs(op.distributed_shape))
     parent_node = (
@@ -612,7 +627,7 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
         None,  # source
         None,  # target
         None,  # _write_dependency (not serialized to MLIR)
-        type=_convert_wave_tensor_type(op.result.type),
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
     _apply_mlir_attrs_to_fx_node(read_op.fx_node, converted_attrs)
     parse_ctx.add_mapping(op.result, read_op.fx_node)
@@ -665,7 +680,7 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
         rhs_node,
         acc_node,
         *([mma_type] if mma_type is not None else []),
-        type=_convert_wave_tensor_type(op.result.type),
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
 
     _apply_mlir_attrs_to_fx_node(mma_op.fx_node, converted_attrs)
@@ -704,7 +719,7 @@ def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> 
         offset,
         size,
         stride,
-        type=_convert_wave_tensor_type(op.result.type),
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
     _apply_mlir_attrs_to_fx_node(slice_op.fx_node, converted_attrs)
     parse_ctx.add_mapping(op.result, slice_op.fx_node)
@@ -771,7 +786,6 @@ def _create_get_result_nodes(
                 iterate_node,
                 idx,
                 type=result_types[idx],
-                res_idx=idx,
             )
 
             # Prefer the explicit iterate index from MLIR (present after index
@@ -820,8 +834,6 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     # Always call makeIsolated() to standardize the MLIR format. This converts any
     # implicit captures to explicit operands and block arguments, making parsing
     # predictable and eliminating the need to track outer values.
-    from water_mlir.water_mlir.dialects.wave import iterate_make_isolated
-
     iterate_make_isolated(op.operation)
 
     # After makeIsolated, refresh the body and capture list.
@@ -859,10 +871,13 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     # Parse the body operations. All values now resolve within local_map.
     _convert_ops(
         list(body.operations),
-        subgraph,
-        parse_ctx.region_graph,
-        initial_value_map=local_map,
-        default_mma_type=parse_ctx.default_mma_type,
+        _OpParseContext(
+            graph=subgraph,
+            region_graph=parse_ctx.region_graph,
+            default_mma_type=parse_ctx.default_mma_type,
+            value_map=local_map,
+            unspecified_addr_counter=parse_ctx.unspecified_addr_counter,
+        ),
     )
 
     # The YieldOp handler always creates an output node, so we can directly access it
@@ -918,7 +933,9 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
         elif all(idx is not None for idx in output_indices) and output_indices:
             iter_index = output_indices
 
-    result_types = [_convert_wave_tensor_type(result.type) for result in results]
+    result_types = [
+        _convert_wave_tensor_type(result.type, parse_ctx) for result in results
+    ]
     if len(result_types) == 1:
         iterate_op.fx_node.type = result_types[0]
     else:
@@ -936,25 +953,14 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     )
 
 
-def _convert_ops(
-    ops: Sequence[ir.Operation],
-    graph: fx.Graph,
-    region_graph: RegionGraph,
-    initial_value_map: dict[ir.Value, fx.Node | int | float] | None = None,
-    default_mma_type: MMAType | ScaledMMAType | None = None,
-) -> None:
+def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> None:
     """Dispatches MLIR operations to type-specific handlers, building FX graph nodes.
 
     Each handler updates the parse context's value_map so that later operations can
     resolve their operands. Called once for the top-level function body and recursively
-    for nested regions (e.g. iterate bodies) with their own initial_value_map.
+    for nested regions (e.g. iterate bodies) with a fresh parse_ctx sharing the same
+    counters.
     """
-    parse_ctx = _OpParseContext(
-        graph=graph,
-        region_graph=region_graph,
-        default_mma_type=default_mma_type,
-        value_map=initial_value_map or {},
-    )
 
     for op in ops:
         match op:
@@ -1033,21 +1039,20 @@ def convert_mlir_to_trace(
         entry_block = func_op.regions[0].blocks[0]
         region_graph: RegionGraph = KernelRegionGraph()
         root_graph = fx.Graph()
-        value_map: dict[ir.Value, fx.Node] = {}
+
+        parse_ctx = _OpParseContext(
+            graph=root_graph,
+            region_graph=region_graph,
+            default_mma_type=default_mma_type,
+        )
 
         # Create placeholders for function arguments
         for idx, arg in enumerate(entry_block.arguments):
             node = root_graph.placeholder(f"arg{idx}")
-            node.type = _convert_wave_tensor_type(arg.type)
-            value_map[arg] = node
+            node.type = _convert_wave_tensor_type(arg.type, parse_ctx)
+            parse_ctx.value_map[arg] = node
 
-        _convert_ops(
-            entry_block.operations,
-            root_graph,
-            region_graph,
-            initial_value_map=value_map,
-            default_mma_type=default_mma_type,
-        )
+        _convert_ops(entry_block.operations, parse_ctx)
 
         # Add an output node to the root graph. This is required for the FX graph
         root_graph.output(None)

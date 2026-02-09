@@ -877,6 +877,9 @@ NB_MODULE(_waterDialects, m) {
       "Registers the wave dialect passes.");
 
   // Wave operation methods
+  // TODO: These should be methods on a Python IterateOp class rather than
+  // free functions on the dialect module.  Requires per-operation Python
+  // class bindings which we don't currently generate.
   d.def(
       "iterate_make_isolated",
       [](MlirOperation op) { mlirWaveIterateOpMakeIsolated(op); },

@@ -27,6 +27,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
     assert_constraints_equivalent,
 )
+from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
 
 
 M = tkl.sym.M
@@ -337,3 +338,94 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
 
     # CHECK: OK: pipelined gemm roundtrip
     print("OK: pipelined gemm roundtrip")
+
+
+# CHECK-LABEL: mlir_to_fx_unspecified_address_space
+@run_test
+def mlir_to_fx_unspecified_address_space():
+    """Test that Unspecified address spaces are converted to unique Memory symbols.
+
+    Wave infers concrete address spaces during compilation, so MLIR inputs
+    earlier compilation stages may still carry `#wave.address_space<unspecified>`.
+    The converter must handle these gracefully, assigning a fresh unique symbol to
+    each occurrence so that distinct unresolved spaces are never accidentally conflated.
+    """
+    # Start from the matmul kernel (which has multiple Memory arguments)
+    # and emit its MLIR.
+    K = tkl.sym.K
+    BLOCK_K = tkl.sym.BLOCK_K
+
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.TilingConstraint(K, BLOCK_K),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_16x16x16_F16),
+    ]
+
+    @wave.wave(constraints)
+    def matmul_for_addr_test(
+        a: tkl.Memory[M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @wave.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = wave.read(a, bounds={M: M, K: K})
+            b_reg = wave.read(b, bounds={N: N, K: K})
+            acc = wave.mma(a_reg, b_reg, acc)
+            return acc
+
+        wave.write(repeat, c)
+
+    subs = {M: 128, N: 128, K: 16, BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16}
+    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+
+    compiled_kernel = wave_compile(options, matmul_for_addr_test)
+    trace = compiled_kernel.get_compiled_graph()
+    mlir_text, diagnostics, _ = emit_wave_dialect(
+        trace, matmul_for_addr_test.constraints, options
+    )
+    assert diagnostics == [], f"unexpected diagnostics: {diagnostics}"
+
+    # Replace all concrete address spaces with unspecified to simulate
+    # an MLIR module where address spaces have not been resolved yet.
+    # It would be better to do this using proper MLIR manipulation APIs,
+    # but we never have the module here, only the text.
+    mlir_unspecified = mlir_text.replace("<global>", "<unspecified>").replace(
+        "<shared>", "<unspecified>"
+    )
+
+    fx_trace, _, _, fx_diags = mlir_to_fx(mlir_unspecified)
+    assert fx_diags == [], f"unexpected diagnostics: {fx_diags}"
+
+    # Collect address space symbols from Memory-typed placeholders (each
+    # corresponds to a distinct function argument).
+    placeholder_addrs = [
+        node.type.address_space
+        for node in fx_trace.walk(lambda n: n)
+        if isinstance(get_custom(node), Placeholder)
+        and node.type is not None
+        and issubclass(node.type, Memory)
+    ]
+
+    assert (
+        len(placeholder_addrs) >= 2
+    ), f"expected at least two Memory placeholders, got {len(placeholder_addrs)}"
+    for addr in placeholder_addrs:
+        assert str(addr).startswith(
+            "$UNSPECIFIED_ADDRESS_SPACE_"
+        ), f"Expected $UNSPECIFIED_ADDRESS_SPACE_* symbol, got {addr}"
+
+    # Each function argument must receive its own unique symbol so that two
+    # independently unresolved address spaces are never conflated.
+    assert len(placeholder_addrs) == len(set(placeholder_addrs)), (
+        f"Unspecified address space symbols must be unique across arguments, "
+        f"got: {placeholder_addrs}"
+    )
+
+    # CHECK: OK: unspecified address space
+    print("OK: unspecified address space")

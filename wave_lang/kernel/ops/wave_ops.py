@@ -668,15 +668,18 @@ class CustomOp(ABC):
     graph: Optional[fx.Graph] = field(default=None, init=False, compare=False)
     fx_node: Optional[fx.Node] = field(default=None, init=False, compare=False)
     tkw_op_name: str = field(default="unknown", init=False)
-    _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
+    _tracing_function: Optional[Callable[..., Any]] = field(
+        default=None, init=False, compare=False
+    )
 
     @classmethod
     def create(
         cls: Type[CustomOpT],
         graph: fx.Graph,
-        *init_args,
+        *args,
         type: Any = None,
-        **extra_attrs,
+        extra_attrs: dict[str, Any] | None = None,
+        **kwargs,
     ) -> CustomOpT:
         """
         Create a CustomOp instance and its FX node together.
@@ -686,19 +689,23 @@ class CustomOp(ABC):
         programmatically (e.g., from MLIR).
 
         Args:
-            graph: FX graph to add the node to
-            *init_args: Arguments to pass to the CustomOp's __init__ (the dataclass fields)
-            type: Optional type to set on the node
-            **extra_attrs: Additional attributes to set on the fx_node (e.g., index, vector_shapes)
+            graph: FX graph to add the node to.
+            *args: Positional arguments for the dataclass constructor.
+            type: Optional type to set on the node.
+            extra_attrs: Additional attributes to set on the fx_node after
+                creation (e.g., index, vector_shapes).  These are not passed
+                to the dataclass constructor.
+            **kwargs: Keyword arguments forwarded to the dataclass
+                constructor.
 
         Returns:
-            The created CustomOp instance with fx_node and graph fields populated
+            The created CustomOp instance with fx_node and graph fields populated.
 
         Example:
             register = NewRegister.create(
                 graph, dims, dtype, init_value,
                 type=Register[(M, N, f32)],
-                vector_shapes={M: 16, N: 16}
+                extra_attrs={"vector_shapes": {M: 16, N: 16}},
             )
         """
         assert cls._tracing_function is not None, (
@@ -707,14 +714,14 @@ class CustomOp(ABC):
         )
 
         # Create the CustomOp instance with its semantic fields
-        instance = cls(*init_args)
+        instance = cls(*args, **kwargs)
 
         # Create the FX node
         fx_node = graph.create_node(
             "call_function",
             target=cls._tracing_function,
-            args=init_args,
-            kwargs={},
+            args=args,
+            kwargs=kwargs,
         )
         fx_node.tkw_op = cls
         fx_node.tkw_op_name = cls.tkw_op_name
@@ -726,7 +733,7 @@ class CustomOp(ABC):
         instance.graph = graph
 
         # Set any extra attributes on the fx_node
-        for attr_name, attr_value in extra_attrs.items():
+        for attr_name, attr_value in (extra_attrs or {}).items():
             if attr_value is not None:  # Skip None values
                 setattr(fx_node, attr_name, attr_value)
 
@@ -769,7 +776,7 @@ class CustomOp(ABC):
 
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
-        instance = cls(*node.args)
+        instance = cls(*node.args, **node.kwargs)
         instance.fx_node = node
         instance.graph = node.graph
         if hasattr(node, "index"):
