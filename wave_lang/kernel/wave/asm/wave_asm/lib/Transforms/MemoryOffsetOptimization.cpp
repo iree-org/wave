@@ -65,24 +65,90 @@ struct AddrAnalysis {
 /// overlap).
 ///
 /// INVARIANT: The AffineHandlers only emit V_OR_B32 when bit ranges provably
-/// don't overlap (via BitRange tracking). If this invariant is violated,
-/// treating OR as ADD will silently produce incorrect offsets.  The shift
-/// distribution `(a|K)<<N = (a<<N)|(K<<N)` is always correct for OR, but
-/// the extracted constant is only a valid *additive* offset when bits don't
-/// overlap.
+/// don't overlap (via BitRange tracking).  The shift distribution
+/// `(a|K)<<N = (a<<N)|(K<<N)` is always correct for OR, but the extracted
+/// constant is only a valid *additive* offset when bits don't overlap.
+///
+/// This invariant is enforced at runtime by `checkOrOverlap()`:
+///   - Proven safe   -> proceed with the fold
+///   - Proven overlap -> emit a warning (upstream bug) and skip
+///   - Unknown        -> conservatively skip the fold
 struct BinaryAddLike {
   Value src0, src1;
   Type resultType;
+  bool isOr; // true if this came from V_OR_B32 (not V_ADD_U32)
 };
 
 static std::optional<BinaryAddLike> getAddLikeOp(Value v) {
   if (auto addOp = v.getDefiningOp<V_ADD_U32>())
     return BinaryAddLike{addOp.getSrc0(), addOp.getSrc1(),
-                         addOp.getResult().getType()};
+                         addOp.getResult().getType(), /*isOr=*/false};
   if (auto orOp = v.getDefiningOp<V_OR_B32>())
     return BinaryAddLike{orOp.getSrc0(), orOp.getSrc1(),
-                         orOp.getResult().getType()};
+                         orOp.getResult().getType(), /*isOr=*/true};
   return std::nullopt;
+}
+
+/// Result of checking bit overlap for V_OR_B32 treated as addition.
+enum class OrOverlapCheck { Safe, Overlap, Unknown };
+
+/// Check whether treating V_OR_B32(nonConst, K) as V_ADD_U32(nonConst, K) is
+/// safe - i.e., the constant K only sets bits that are provably zero in the
+/// non-constant operand.
+///
+/// Returns:
+///   Safe    - non-overlap proven (e.g., nonConst is left-shifted by N and
+///             K fits entirely within the low N bits)
+///   Overlap - bits definitely overlap (upstream invariant violated)
+///   Unknown - cannot determine locally; caller should conservatively skip
+static OrOverlapCheck checkOrOverlap(Value nonConstOperand, int64_t constVal) {
+  if (constVal == 0)
+    return OrOverlapCheck::Safe;
+
+  // If the non-constant operand is a left shift by N, its low N bits are zero.
+  if (auto shiftOp = nonConstOperand.getDefiningOp<V_LSHLREV_B32>()) {
+    if (auto shiftAmt = getConstantValue(shiftOp.getSrc0())) {
+      if (*shiftAmt > 0 && *shiftAmt < 32) {
+        int64_t lowMask = (1LL << *shiftAmt) - 1;
+        if ((constVal & ~lowMask) == 0)
+          return OrOverlapCheck::Safe;  // K only uses low N bits
+        return OrOverlapCheck::Overlap; // K sets bits above shift range
+      }
+    }
+  }
+
+  return OrOverlapCheck::Unknown;
+}
+
+//===----------------------------------------------------------------------===//
+// Overflow-safe arithmetic helpers
+//===----------------------------------------------------------------------===//
+
+/// Shift left with overflow check. Returns std::nullopt if the result would
+/// not be representable as int64_t.
+static std::optional<int64_t> safeShiftLeft(int64_t val, int64_t amt) {
+  if (val == 0)
+    return int64_t(0);
+  if (amt <= 0)
+    return (amt == 0) ? std::optional<int64_t>(val) : std::nullopt;
+  if (amt >= 63)
+    return std::nullopt;
+  // val must fit in (64 - amt) signed bits, i.e. lie in [-limit, limit).
+  int64_t limit = int64_t(1) << (63 - amt);
+  if (val >= limit || val < -limit)
+    return std::nullopt;
+  // Use unsigned shift to avoid C++17 UB on signed left-shift of negatives.
+  return static_cast<int64_t>(static_cast<uint64_t>(val) << amt);
+}
+
+/// Add with overflow check. Returns std::nullopt if the result would not be
+/// representable as int64_t.
+static std::optional<int64_t> safeAdd(int64_t a, int64_t b) {
+  if (b > 0 && a > INT64_MAX - b)
+    return std::nullopt;
+  if (b < 0 && a < INT64_MIN - b)
+    return std::nullopt;
+  return a + b;
 }
 
 /// Recursively extract constant components from an address expression tree.
@@ -100,14 +166,54 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
   if (auto addLike = getAddLikeOp(addr)) {
     // Check src1 for constant
     if (auto c = getConstantValue(addLike->src1)) {
+      // For V_OR_B32, verify bit non-overlap before treating as addition
+      if (addLike->isOr) {
+        auto check = checkOrOverlap(addLike->src0, *c);
+        if (check == OrOverlapCheck::Overlap) {
+          addr.getDefiningOp()->emitWarning()
+              << "V_OR_B32 treated as ADD but constant " << *c
+              << " overlaps with non-constant operand; "
+              << "skipping offset fold (upstream invariant violation)";
+          return {addr, 0};
+        }
+        if (check == OrOverlapCheck::Unknown) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
+                     << "non-overlapping bits for constant " << *c << "\n");
+          return {addr, 0};
+        }
+      }
       // Recurse on the non-constant operand to find deeper patterns
       auto inner = extractConstant(addLike->src0, builder, loc);
-      return {inner.base, inner.constOffset + *c};
+      auto sum = safeAdd(inner.constOffset, *c);
+      if (!sum)
+        return {addr, 0};
+      return {inner.base, *sum};
     }
     // Check src0 for constant (commutative)
     if (auto c = getConstantValue(addLike->src0)) {
+      // For V_OR_B32, verify bit non-overlap before treating as addition
+      if (addLike->isOr) {
+        auto check = checkOrOverlap(addLike->src1, *c);
+        if (check == OrOverlapCheck::Overlap) {
+          addr.getDefiningOp()->emitWarning()
+              << "V_OR_B32 treated as ADD but constant " << *c
+              << " overlaps with non-constant operand; "
+              << "skipping offset fold (upstream invariant violation)";
+          return {addr, 0};
+        }
+        if (check == OrOverlapCheck::Unknown) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
+                     << "non-overlapping bits for constant " << *c << "\n");
+          return {addr, 0};
+        }
+      }
       auto inner = extractConstant(addLike->src1, builder, loc);
-      return {inner.base, inner.constOffset + *c};
+      auto sum = safeAdd(inner.constOffset, *c);
+      if (!sum)
+        return {addr, 0};
+      return {inner.base, *sum};
     }
 
     // Neither operand is a direct constant, but check if either is a shift
@@ -125,6 +231,11 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
         if (inner.constOffset == 0)
           return std::nullopt;
 
+        // Check shift overflow before creating any new ops
+        auto shiftedConst = safeShiftLeft(inner.constOffset, *shiftAmt);
+        if (!shiftedConst)
+          return std::nullopt;
+
         // Create new shift of the stripped base
         auto newShift =
             V_LSHLREV_B32::create(builder, loc, shiftOp.getResult().getType(),
@@ -133,14 +244,17 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
         // Recurse on the other operand too
         auto otherAnalysis = extractConstant(otherVal, builder, loc);
 
+        // Check addition overflow
+        auto totalConst = safeAdd(*shiftedConst, otherAnalysis.constOffset);
+        if (!totalConst)
+          return std::nullopt;
+
         // Create new add with the stripped shift and other operand
         Value newBase =
             V_ADD_U32::create(builder, loc, addLike->resultType,
                               newShift.getResult(), otherAnalysis.base);
 
-        int64_t totalConst =
-            (inner.constOffset << *shiftAmt) + otherAnalysis.constOffset;
-        return AddrAnalysis{newBase, totalConst};
+        return AddrAnalysis{newBase, *totalConst};
       }
       return std::nullopt;
     };
@@ -161,11 +275,15 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
     if (shiftAmt && *shiftAmt >= 0 && *shiftAmt < 32) {
       auto inner = extractConstant(shiftOp.getSrc1(), builder, loc);
       if (inner.constOffset != 0) {
-        // Create new shift of the stripped base
-        auto newShift =
-            V_LSHLREV_B32::create(builder, loc, shiftOp.getResult().getType(),
-                                  shiftOp.getSrc0(), inner.base);
-        return {newShift.getResult(), inner.constOffset << *shiftAmt};
+        // Check shift overflow before creating any new ops
+        auto shiftedConst = safeShiftLeft(inner.constOffset, *shiftAmt);
+        if (shiftedConst) {
+          // Create new shift of the stripped base
+          auto newShift =
+              V_LSHLREV_B32::create(builder, loc, shiftOp.getResult().getType(),
+                                    shiftOp.getSrc0(), inner.base);
+          return {newShift.getResult(), *shiftedConst};
+        }
       }
     }
   }

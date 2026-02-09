@@ -710,7 +710,6 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     }
 
     // Add the LDS base offset from memref.view (if any)
-    // This handles cases like memref.view with byte_shift = 8192
     if (auto baseOffset = ctx.getLDSBaseOffset(loadOp.getBase())) {
       // If the base offset is a constant, fold it into instOffset instead of
       // emitting VALU instructions. This saves 2 VALU ops per LDS read.
@@ -1005,7 +1004,6 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     }
 
     // Add the LDS base offset from memref.view (if any)
-    // This handles cases like memref.view with byte_shift = 8192
     int64_t ldsInstOffset = 0;
     if (auto baseOffset = ctx.getLDSBaseOffset(storeOp.getBase())) {
       // If the base offset is a constant, fold it into ldsInstOffset instead
