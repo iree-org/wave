@@ -533,15 +533,18 @@ def _emit_ops_from_graph(
                 continue
 
             def get_single_mapped_value(
-                node: fx.Node | fx.Proxy,
+                node: fx.Node | fx.Proxy, *, allow_missing: bool = False
             ) -> ir.Value | None:
-                """Get the single mapped value for the given node."""
+                """Get the single mapped value for the given node.
+
+                Raises a RuntimeError if the value is not found and allow_missing is False.
+                """
                 if (mlir_args := value_map.get(node)) is not None:
-                    assert (
-                        len(mlir_args) == 1
-                    ), "Only single-result nodes are supported."
+                    assert len(mlir_args) == 1, "A single-result node is expected."
                     return mlir_args[0]
-                return None
+                if allow_missing:
+                    return None
+                raise RuntimeError(f"No mapped value found for node {node}")
 
             def create_mlir_operands():
                 """Create a list of MLIR operands from the arguments of the current node.
@@ -550,18 +553,24 @@ def _emit_ops_from_graph(
                 """
                 mlir_operands = []
                 for arg in fx_node.args:
-                    if (mlir_arg := get_single_mapped_value(arg)) is not None:
+                    if (
+                        mlir_arg := get_single_mapped_value(arg, allow_missing=True)
+                    ) is not None:
                         mlir_operands.append(mlir_arg)
                 return mlir_operands
 
             if isinstance(node, GetResult):
-                value_map[fx_node] = [value_map[node.value][node.res_idx]]
+                if node.res_idx >= len(iterate_op.results):
+                    raise RuntimeError(
+                        f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
+                    )
+                value_map[fx_node] = (value_map[node.value][node.res_idx],)
 
                 # Attach IDs of `get_result` to the loop instead so we can recover them
                 # later because `get_result` doesn't exist in the dialect. Only do so when
                 # there are some results.
                 if known_ids is not None and len(value_map[node.value]) > 0:
-                    iterate_op = get_single_mapped_value(node.value).owner
+                    iterate_op = get_single_mapped_value(value_map[fx_node]).owner
                     water_id = getattr(fx_node, "_water_id", None)
                     if water_id is None:
                         raise RuntimeError(
@@ -594,6 +603,7 @@ def _emit_ops_from_graph(
                 if not isinstance(node.type, Sequence)
                 else [_type_to_wave_mlir(ctx, t) for t in node.type]
             )
+            # TODO: relax this as needed, e.g., topK.
             assert isinstance(result_type, ir.Type) or isinstance(
                 node, NestedRegionOp
             ), "Only nested region ops can have multiple result types."
@@ -684,10 +694,6 @@ def _emit_ops_from_graph(
                     offset_attr = None
                     if node.parent is not None:
                         parent_value = get_single_mapped_value(node.parent)
-                        if parent_value is None:
-                            raise RuntimeError(
-                                f"Parent node {node.parent} not found in value_map for Allocate op"
-                            )
                         # Offset must be present when parent is present.
                         if node.offset is None:
                             raise RuntimeError(
