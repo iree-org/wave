@@ -65,19 +65,18 @@ func.func @single_wmma(
   return %0 : vector<32xf32>
 }
 
-// Test: Non-consecutive WMMA ops are processed as separate sequences.
-// CHECK-LABEL: func.func @non_consecutive_wmma
+// Test: Pure op between MMA ops gets hoisted, merging them into one sequence.
+// CHECK-LABEL: func.func @pure_op_hoisted
 // CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>, %[[X:.*]]: f32)
-func.func @non_consecutive_wmma(
+func.func @pure_op_hoisted(
     %a: vector<16xf16>, %b: vector<16xf16>, %c: vector<32xf32>,
     %x: f32) -> (vector<32xf32>, vector<32xf32>, f32) {
-  // Two separate sequences separated by arith.addf.
+  // arith.addf is pure and doesn't depend on any MMA, so it is hoisted.
+  // CHECK: arith.addf
   // CHECK: rocdl.sched.barrier 0
   // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
   // CHECK: rocdl.sched.barrier 0
-  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
-  // CHECK: rocdl.sched.barrier 0
-  // CHECK: arith.addf
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
   // CHECK: rocdl.sched.barrier 0
   // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
   // CHECK: rocdl.sched.barrier 0
@@ -89,6 +88,48 @@ func.func @non_consecutive_wmma(
   %2 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   %3 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   return %0, %2, %y : vector<32xf32>, vector<32xf32>, f32
+}
+
+// Test: Pure op that depends on an MMA result and feeds another MMA is trapped.
+// The sequence splits around it.
+// CHECK-LABEL: func.func @trapped_pure_op
+// CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>)
+func.func @trapped_pure_op(
+    %a: vector<16xf16>, %b: vector<16xf16>,
+    %c: vector<32xf32>) -> vector<32xf32> {
+  // The bitcast depends on mma0 and feeds mma1, so it cannot be moved out.
+  // The two MMA ops end up in separate (size-1) runs — no reordering.
+  // CHECK-NOT: rocdl.sched.barrier
+  // CHECK: %[[R0:.*]] = rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: %[[BC:.*]] = llvm.bitcast %[[R0]]
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[BC]]
+  // CHECK-NOT: rocdl.sched.barrier
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %bc = llvm.bitcast %0 : vector<32xf32> to vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %bc {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %1 : vector<32xf32>
+}
+
+// Test: Pure op depending on MMA result but not feeding another MMA is sunk.
+// CHECK-LABEL: func.func @pure_op_sunk
+// CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C:.*]]: vector<32xf32>)
+func.func @pure_op_sunk(
+    %a: vector<16xf16>, %b: vector<16xf16>,
+    %c: vector<32xf32>) -> (vector<32xf32>, vector<32xf32>, vector<32xf32>) {
+  // The bitcast depends on mma0 but is not used by mma1/mma2, so it is sunk.
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: %[[R0:.*]] = rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]] {reuseA = true, reuseB = true}
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: llvm.bitcast %[[R0]]
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %bc = llvm.bitcast %0 : vector<32xf32> to vector<32xf32>
+  %1 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %2 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  return %0, %1, %bc : vector<32xf32>, vector<32xf32>, vector<32xf32>
 }
 
 // Test: MFMA ops get reordered for operand locality (no reuse flags).

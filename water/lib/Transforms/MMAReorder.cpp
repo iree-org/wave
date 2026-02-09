@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -86,6 +87,43 @@ static void setReuseB(Operation *op, bool reuse) {
       [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
 }
 
+/// Returns true if op is pure (no side effects) and not a matrix multiply.
+static bool isPureOp(Operation *op) {
+  return !isMatrixMultiplyOp(op) && isPure(op);
+}
+
+/// Returns true if op can be moved just before insertionPoint without
+/// breaking dominance. All operands must already dominate the insertion point.
+static bool canMoveBefore(Operation *op, Operation *insertionPoint) {
+  Block *block = insertionPoint->getBlock();
+  for (Value operand : op->getOperands()) {
+    Operation *def = operand.getDefiningOp();
+    if (!def)
+      continue; // Block argument — always dominates.
+    if (def->getBlock() != block)
+      continue; // Different block — assumed to dominate.
+    if (!def->isBeforeInBlock(insertionPoint))
+      return false;
+  }
+  return true;
+}
+
+/// Returns true if op can be moved just after insertionPoint without
+/// breaking dominance. No user in the same block may precede the insertion
+/// point.
+static bool canMoveAfter(Operation *op, Operation *insertionPoint) {
+  Block *block = insertionPoint->getBlock();
+  for (Value result : op->getResults()) {
+    for (Operation *user : result.getUsers()) {
+      if (user->getBlock() != block)
+        continue; // Different block — not a constraint.
+      if (user->isBeforeInBlock(insertionPoint) || user == insertionPoint)
+        return false;
+    }
+  }
+  return true;
+}
+
 class MMAReorderPass
     : public water::impl::WaterMMAReorderPassBase<MMAReorderPass> {
 public:
@@ -97,24 +135,88 @@ public:
   }
 
 private:
-  /// Process a single basic block to find consecutive matrix multiply op
-  /// sequences.
+  /// Process a single basic block. Collects matrix multiply ops together
+  /// with interleaved pure ops into extended sequences, hoists/sinks the
+  /// pure ops out, then reorders the MMA ops for maximum operand reuse.
   void processBlock(Block *block) {
     SmallVector<Operation *> currentSequence;
 
     for (Operation &op : llvm::make_early_inc_range(*block)) {
       if (isMatrixMultiplyOp(&op)) {
         currentSequence.push_back(&op);
+      } else if (!currentSequence.empty() && isPureOp(&op)) {
+        // Pure op inside a sequence — include it.
+        currentSequence.push_back(&op);
       } else if (!currentSequence.empty()) {
-        // Non-matrix-multiply op encountered, process the current sequence.
-        processConsecutiveWMMAOps(currentSequence);
+        // Non-pure, non-MMA op ends the sequence.
+        processExtendedSequence(currentSequence);
         currentSequence.clear();
       }
     }
 
-    // Process any remaining sequence at the end of the block.
     if (!currentSequence.empty())
-      processConsecutiveWMMAOps(currentSequence);
+      processExtendedSequence(currentSequence);
+  }
+
+  /// Hoist and sink pure ops out of an MMA sequence, then reorder the
+  /// remaining consecutive MMA runs.
+  static void processExtendedSequence(MutableArrayRef<Operation *> ops) {
+    // Trim trailing non-MMA ops — they are after the last MMA and do not
+    // contribute to the reordering window.
+    while (!ops.empty() && !isMatrixMultiplyOp(ops.back()))
+      ops = ops.drop_back();
+
+    // Separate MMA and pure ops.
+    SmallVector<Operation *> mmaOps, pureOps;
+    for (Operation *op : ops) {
+      if (isMatrixMultiplyOp(op))
+        mmaOps.push_back(op);
+      else
+        pureOps.push_back(op);
+    }
+
+    if (mmaOps.size() < 2)
+      return;
+
+    // Hoist pure ops whose operands all dominate the first MMA.
+    // Processing in original order handles chains: an already-hoisted op
+    // is now before firstMMA, so dependents see it as dominating.
+    Operation *firstMMA = mmaOps.front();
+    llvm::SmallDenseSet<Operation *> hoisted;
+    for (Operation *pureOp : pureOps) {
+      if (canMoveBefore(pureOp, firstMMA)) {
+        pureOp->moveBefore(firstMMA);
+        hoisted.insert(pureOp);
+      }
+    }
+
+    // Sink remaining pure ops whose results have no users at-or-before
+    // the last MMA. Processing in reverse order handles chains.
+    Operation *lastMMA = mmaOps.back();
+    for (Operation *pureOp : llvm::reverse(pureOps)) {
+      if (hoisted.contains(pureOp))
+        continue;
+      if (canMoveAfter(pureOp, lastMMA)) {
+        pureOp->moveAfter(lastMMA);
+        // Update lastMMA to keep sunk ops in original relative order.
+        lastMMA = pureOp;
+      }
+    }
+
+    // Collect consecutive MMA runs between first and last MMA.
+    // Any remaining "trapped" pure op splits the run.
+    SmallVector<Operation *> consecutiveRun;
+    for (auto it = mmaOps.front()->getIterator(),
+              end = std::next(mmaOps.back()->getIterator());
+         it != end; ++it) {
+      if (isMatrixMultiplyOp(&*it)) {
+        consecutiveRun.push_back(&*it);
+      } else {
+        processConsecutiveWMMAOps(consecutiveRun);
+        consecutiveRun.clear();
+      }
+    }
+    processConsecutiveWMMAOps(consecutiveRun);
   }
 
   /// Check if candidate can be scheduled given already scheduled ops.
