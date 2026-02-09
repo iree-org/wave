@@ -90,3 +90,51 @@ func.func @non_consecutive_wmma(
   %3 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
   return %0, %2, %y : vector<32xf32>, vector<32xf32>, f32
 }
+
+// Test: MFMA ops get reordered for operand locality (no reuse flags).
+// CHECK-LABEL: func.func @mfma_reorder
+// CHECK-SAME:    (%[[A0:.*]]: vector<4xf16>, %[[A1:.*]]: vector<4xf16>, %[[B0:.*]]: vector<4xf16>, %[[B1:.*]]: vector<4xf16>, %[[C:.*]]: vector<4xf32>)
+func.func @mfma_reorder(
+    %a0: vector<4xf16>, %a1: vector<4xf16>,
+    %b0: vector<4xf16>, %b1: vector<4xf16>,
+    %c: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  // Reordering groups matching operands together.
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A0]], %[[B0]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A1]], %[[B0]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A1]], %[[B1]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[A0]], %[[B1]], %[[C]]
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.mfma.f32.16x16x16f16 %a0, %b0, %c, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  %1 = rocdl.mfma.f32.16x16x16f16 %a1, %b0, %c, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  %2 = rocdl.mfma.f32.16x16x16f16 %a0, %b1, %c, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  %3 = rocdl.mfma.f32.16x16x16f16 %a1, %b1, %c, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  return %0, %1, %2, %3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+// Test: Mixed MFMA and WMMA ops in the same sequence.
+// CHECK-LABEL: func.func @mixed_mfma_wmma
+// CHECK-SAME:    (%[[A:.*]]: vector<16xf16>, %[[B:.*]]: vector<16xf16>, %[[C32:.*]]: vector<32xf32>, %[[MA:.*]]: vector<4xf16>, %[[MB:.*]]: vector<4xf16>, %[[MC:.*]]: vector<4xf32>)
+func.func @mixed_mfma_wmma(
+    %a: vector<16xf16>, %b: vector<16xf16>, %c32: vector<32xf32>,
+    %ma: vector<4xf16>, %mb: vector<4xf16>, %mc: vector<4xf32>)
+    -> (vector<32xf32>, vector<4xf32>, vector<32xf32>, vector<4xf32>) {
+  // All four ops form one sequence since they are all matrix multiply ops.
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C32]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.wmma.f32.16x16x32.f16 %[[A]], %[[B]], %[[C32]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[MA]], %[[MB]], %[[MC]]
+  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.mfma.f32.16x16x16f16 %[[MA]], %[[MB]], %[[MC]]
+  // CHECK: rocdl.sched.barrier 0
+  %0 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c32 {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %1 = rocdl.mfma.f32.16x16x16f16 %ma, %mb, %mc, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  %2 = rocdl.wmma.f32.16x16x32.f16 %a, %b, %c32 {signA = false, signB = false, modC = 0 : i16} : (vector<16xf16>, vector<16xf16>, vector<32xf32>) -> vector<32xf32>
+  %3 = rocdl.mfma.f32.16x16x16f16 %ma, %mb, %mc, 0, 0, 0 : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+  return %0, %1, %2, %3 : vector<32xf32>, vector<4xf32>, vector<32xf32>, vector<4xf32>
+}

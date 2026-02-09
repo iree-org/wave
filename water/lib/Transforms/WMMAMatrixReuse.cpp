@@ -54,43 +54,33 @@ namespace {
     ROCDL::wmma_scale16_f32_32x16x128_f4
 // clang-format on
 
-/// Returns true if the operation is a ROCDL WMMA operation that supports
-/// reuseA/reuseB flags (gfx1250 variants).
-static bool isWMMAWithReuse(Operation *op) {
-  return isa<ROCDL_WMMA_OPS_WITH_REUSE>(op);
+/// Returns true if the operation is a ROCDL matrix multiply intrinsic
+/// (WMMA, MFMA, scaled MFMA, or SMFMAC).
+static bool isMatrixMultiplyOp(Operation *op) {
+  StringRef name = op->getName().getStringRef();
+  return name.starts_with("rocdl.wmma") || name.starts_with("rocdl.mfma") ||
+         name.starts_with("rocdl.smfmac");
 }
 
-/// Helper to get matrix A operand from any WMMA op with reuse support.
-static Value getMatrixA(Operation *op) {
-  return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
-          [](auto wmmaOp) { return wmmaOp.getA(); })
-      .Default([](Operation *) { return Value(); });
-}
+/// Helper to get matrix A operand from any matrix multiply op.
+/// All ROCDL matrix multiply ops have A as operand 0.
+static Value getMatrixA(Operation *op) { return op->getOperand(0); }
 
-/// Helper to get matrix B operand from any WMMA op with reuse support.
-static Value getMatrixB(Operation *op) {
-  return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
-          [](auto wmmaOp) { return wmmaOp.getB(); })
-      .Default([](Operation *) { return Value(); });
-}
+/// Helper to get matrix B operand from any matrix multiply op.
+/// All ROCDL matrix multiply ops have B as operand 1.
+static Value getMatrixB(Operation *op) { return op->getOperand(1); }
 
-/// Helper to get matrix C (accumulator) operand from any WMMA op.
-static Value getMatrixC(Operation *op) {
-  return llvm::TypeSwitch<Operation *, Value>(op)
-      .Case<ROCDL_WMMA_OPS_WITH_REUSE>(
-          [](auto wmmaOp) { return wmmaOp.getC(); })
-      .Default([](Operation *) { return Value(); });
-}
+/// Helper to get matrix C (accumulator) operand from any matrix multiply op.
+/// All ROCDL matrix multiply ops have C as operand 2.
+static Value getMatrixC(Operation *op) { return op->getOperand(2); }
 
-/// Sets the reuseA flag on a WMMA operation.
+/// Sets the reuseA flag on a WMMA operation. No-op for non-WMMA ops.
 static void setReuseA(Operation *op, bool reuse) {
   llvm::TypeSwitch<Operation *>(op).Case<ROCDL_WMMA_OPS_WITH_REUSE>(
       [reuse](auto wmmaOp) { wmmaOp.setReuseA(reuse); });
 }
 
-/// Sets the reuseB flag on a WMMA operation.
+/// Sets the reuseB flag on a WMMA operation. No-op for non-WMMA ops.
 static void setReuseB(Operation *op, bool reuse) {
   llvm::TypeSwitch<Operation *>(op).Case<ROCDL_WMMA_OPS_WITH_REUSE>(
       [reuse](auto wmmaOp) { wmmaOp.setReuseB(reuse); });
@@ -107,15 +97,16 @@ public:
   }
 
 private:
-  /// Process a single basic block to find consecutive WMMA op sequences.
+  /// Process a single basic block to find consecutive matrix multiply op
+  /// sequences.
   void processBlock(Block *block) {
     SmallVector<Operation *> currentSequence;
 
     for (Operation &op : llvm::make_early_inc_range(*block)) {
-      if (isWMMAWithReuse(&op)) {
+      if (isMatrixMultiplyOp(&op)) {
         currentSequence.push_back(&op);
       } else if (!currentSequence.empty()) {
-        // Non-WMMA op encountered, process the current sequence.
+        // Non-matrix-multiply op encountered, process the current sequence.
         processConsecutiveWMMAOps(currentSequence);
         currentSequence.clear();
       }
@@ -141,7 +132,7 @@ private:
     return true;
   }
 
-  /// Process a sequence of consecutive WMMA operations.
+  /// Process a sequence of consecutive matrix multiply operations.
   static void processConsecutiveWMMAOps(MutableArrayRef<Operation *> wmmaOps) {
     if (wmmaOps.size() < 2)
       return;
@@ -213,7 +204,7 @@ private:
     insertSchedBarriers(scheduled.getArrayRef());
   }
 
-  /// Insert rocdl.sched.barrier ops before, between, and after WMMA ops.
+  /// Insert rocdl.sched.barrier ops before, between, and after matrix ops.
   static void insertSchedBarriers(ArrayRef<Operation *> wmmaOps) {
     if (wmmaOps.empty())
       return;
