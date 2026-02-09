@@ -14,7 +14,10 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostics,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.support.location_config import (
@@ -98,7 +101,7 @@ def mlir_converter_location():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        print(diagnostics)
+        print(format_diagnostics(diagnostics, use_color=False))
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -213,7 +216,7 @@ def mlir_converter_location_iterate():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        print(diagnostics)
+        print(format_diagnostics(diagnostics, use_color=False))
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
