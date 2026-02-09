@@ -452,9 +452,7 @@ def filter_regions_with_barriers(
             if not isinstance(
                 get_custom(region.producer), (GatherToLDS, TensorLoadToLDS)
             ):
-                existing_barrier = is_barrier_between(
-                    region.producer, region.consumer
-                )
+                existing_barrier = is_barrier_between(region.producer, region.consumer)
                 if existing_barrier is not None:
                     continue
         filtered_results.append(region)
