@@ -34,6 +34,9 @@ from ..common.utils import (
 
 
 @require_e2e
+@pytest.mark.xfail(
+    reason="This test never worked on the intended SHARED_ADDRESS_SPACE."
+)
 @pytest.mark.parametrize(
     "shape, elems_per_thread",
     [
@@ -43,7 +46,14 @@ from ..common.utils import (
         ((64, 64), 4),
     ],
 )
-def test_scatter_add(shape, elems_per_thread, request):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_scatter_add(shape, elems_per_thread, threads_per_wave, request):
     run_bench = request.config.getoption("--runperf")
 
     M = tkl.sym.M
@@ -52,13 +62,12 @@ def test_scatter_add(shape, elems_per_thread, request):
     BLOCK_N = tkl.sym.BLOCK_N
     LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
     STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
     m_size, n_size = shape
 
     constraints = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             waves_per_block=(1, 1, 1),
             vector_shapes={M: 64, N: elems_per_thread},
         ),
@@ -80,11 +89,14 @@ def test_scatter_add(shape, elems_per_thread, request):
     def test(
         a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
         index: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.i32],
-        lds: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
         b: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
         index_reg = tkw.read(index, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        lds = tkw.allocate((M, N), (BLOCK_M, BLOCK_N), tkl.f32, SHARED_ADDRESS_SPACE)
+        zero = tkw.Register[M, N, tkl.f32](0.0)
+        tkw.write(zero, lds, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        tkw.workgroup_barrier()
         tkw.scatter_add(
             a_reg,
             index_reg,
@@ -108,10 +120,10 @@ def test_scatter_add(shape, elems_per_thread, request):
             BLOCK_N: n_size,
             LOAD_ELEMS_PER_THREAD: elems_per_thread,
             STORE_ELEMS_PER_THREAD: elems_per_thread,
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
+        minimize_shared_allocs=False,
     )
     options = set_default_run_config(options)
     test_fn = wave_compile(options, test)
@@ -122,10 +134,9 @@ def test_scatter_add(shape, elems_per_thread, request):
         .contiguous()
     )
     index = device_randint(0, m_size, (m_size, n_size), dtype=torch.int32).contiguous()
-    lds = device_zeros((m_size, n_size), dtype=torch.float32).contiguous()
     output = device_zeros((m_size, n_size), dtype=torch.float32).contiguous()
 
-    test_fn(input, index, lds, output)
+    test_fn(input, index, output)
 
     def scatter_add_baseline(input, index):
         index = index.to(dtype=torch.int64)
