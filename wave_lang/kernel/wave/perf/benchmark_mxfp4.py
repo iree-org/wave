@@ -11,13 +11,13 @@ Uses torch benchmarking (compile with wave_runtime, warmup + benchmark loop with
 torch.cuda.synchronize). When run without --_worker, the script invokes itself
 with --_worker wrapped in rocprofv3 so profiler output is still collected.
 
-Requires: torch, wave_lang, aiter (cf29be372d2ecd20102cc22b74a64d75f0c99512)
+Requires: torch, wave_lang, aiter
 
 Single shape:
-  python benchmark_mxfp4.py --shape <M> <N> <K> [--tiles <block_m> <block_n> <block_k>]
+  python benchmark_mxfp4.py --shape <M> <N> <K> [--tiles <mt_m> <mt_n> <mt_k>]
 
-Multiple shapes (CSV with M,N,K):
-  python benchmark_mxfp4.py --shapes <path/to/csv> -o <output_csv> [--tiles ...]
+Multiple shapes (CSV with M,N,K; optional columns MT_M, MT_N, MT_K for macrotile sizes):
+  python benchmark_mxfp4.py --shapes <path/to/csv> -o <output_csv>
 
 Optional env: ATT_LIBRARY_PATH=/path/to/rocprof-trace-decoder/rocm/lib. If set, passed to rocprofv3 (--att --att-library-path).
 Default dump dir: /tmp/bench_mxfp4_dump
@@ -47,15 +47,25 @@ from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 # Wave kernel template and compile options (edit here to change kernel/options)
 # ---------------------------------------------------------------------------
 
+# Default macrotile sizes (mt_m, mt_n, mt_k); used when not specified in CSV or when using single --shape without --tiles
+DEFAULT_TILES = (256, 256, 256)
+NUM_WAVES_DIM_M = 4
+NUM_WAVES_DIM_N = 2
+
 
 def get_mxfp4_gemm_wave(
     shape: tuple[int, int, int],
-    block_m: int,
-    block_n: int,
-    block_k: int,
+    mt_m: int,
+    mt_n: int,
+    mt_k: int,
     use_wave_runtime: bool = False,
     vmfb_path: Optional[Path] = None,
 ):
+    # Derive block sizes from macrotiles
+    block_m = mt_m // NUM_WAVES_DIM_M
+    block_n = mt_n // NUM_WAVES_DIM_N
+    block_k = mt_k
+
     mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
     c_wave_dtype = tkl.bf16
     # Input sizes and tile symbols (same as wave_gemm.get_mxfp4_gemm)
@@ -313,22 +323,19 @@ def _parse_worker_stdout_for_mean_us(stdout: str) -> tuple[float, bool]:
     return 0.0, False
 
 
-# Torch benchmark constants (worker mode)
-WARMUP_ITERS = 10
-BENCHMARK_ITERS = 100
-
-
 def _run_torch_benchmark(
     kernel_func,
     inputs: tuple,
-    warmup_iters: int = WARMUP_ITERS,
-    benchmark_iters: int = BENCHMARK_ITERS,
+    warmup_iters: int = 0,
+    benchmark_iters: int = 1,
 ) -> float:
     """Run warmup and benchmark loop with torch.cuda.synchronize; return mean runtime in microseconds."""
     for _ in range(warmup_iters):
         kernel_func(*inputs)
     torch.cuda.synchronize()
 
+    if benchmark_iters < 1:
+        return 0.0
     start_ev = torch.cuda.Event(enable_timing=True)
     end_ev = torch.cuda.Event(enable_timing=True)
     start_ev.record()
@@ -340,18 +347,23 @@ def _run_torch_benchmark(
     return mean_ms * 1000.0  # us
 
 
-def run_worker(shape: tuple[int, int, int], tiles: tuple[int, int, int]) -> None:
+def run_worker(
+    shape: tuple[int, int, int],
+    macrotiles: tuple[int, int, int],
+    warmup_iters: int = 0,
+    benchmark_iters: int = 1,
+) -> None:
     """Worker entry: compile GEMM with wave_runtime, run torch benchmark, print MEAN_US to stdout."""
     m, n, k = shape
-    block_m, block_n, block_k = tiles
-    gemm_rt = get_mxfp4_gemm_wave(
-        (m, n, k), block_m, block_n, block_k, use_wave_runtime=True
-    )
+    mt_m, mt_n, mt_k = macrotiles
+    gemm_rt = get_mxfp4_gemm_wave((m, n, k), mt_m, mt_n, mt_k, use_wave_runtime=True)
     x, w, x_scale, w_scale, wave_out = get_mxfp4_inputs(m, n, k)
     x_scale_u8 = x_scale.view(torch.uint8)
     w_scale_u8 = w_scale.view(torch.uint8)
     inputs = (x, x_scale_u8, w, w_scale_u8, wave_out)
-    mean_us = _run_torch_benchmark(gemm_rt, inputs)
+    mean_us = _run_torch_benchmark(
+        gemm_rt, inputs, warmup_iters=warmup_iters, benchmark_iters=benchmark_iters
+    )
     print(f"MEAN_US: {mean_us}")
 
 
@@ -373,13 +385,15 @@ def benchmark_mxfp4_gemm_rocprof(
     m: int,
     n: int,
     k: int,
-    block_m: int,
-    block_n: int,
-    block_k: int,
+    mt_m: int,
+    mt_n: int,
+    mt_k: int,
     profiler_dump_path: Path,
     att_library_path: Optional[str],
     kernel_regex: str = "gemm",
     timeout: Optional[float] = None,
+    warmup_iters: int = 0,
+    benchmark_iters: int = 1,
 ) -> tuple[float, bool]:
     """Run self as worker under rocprofv3 (torch benchmark); return mean runtime in microseconds."""
     _clear_dir(profiler_dump_path)
@@ -395,9 +409,13 @@ def benchmark_mxfp4_gemm_rocprof(
         str(n),
         str(k),
         "--tiles",
-        str(block_m),
-        str(block_n),
-        str(block_k),
+        str(mt_m),
+        str(mt_n),
+        str(mt_k),
+        "--warmup-iters",
+        str(warmup_iters),
+        "--benchmark-iters",
+        str(benchmark_iters),
     ]
     full_cmd = profile_prefix + worker_cmd
     try:
@@ -429,12 +447,14 @@ def run_validate_and_benchmark(
     m: int,
     n: int,
     k: int,
-    block_m: int,
-    block_n: int,
-    block_k: int,
+    mt_m: int,
+    mt_n: int,
+    mt_k: int,
     dump_dir: Path,
     att_library_path: Optional[str],
     kernel_regex: str = "gemm",
+    warmup_iters: int = 0,
+    benchmark_iters: int = 1,
 ) -> tuple[Optional[float], Optional[float], str]:
     """
     Compile with wave_runtime and validate; then benchmark via torch worker under rocprofv3.
@@ -442,12 +462,11 @@ def run_validate_and_benchmark(
     "compile_benchmark", or "benchmark_failed".
     """
     shape = (m, n, k)
+    gemm_id = f"gemm_{m}_{n}_{k}_MT_{mt_m}_{mt_n}_{mt_k}"
 
     # Compile for validation (wave_runtime=True)
     try:
-        gemm_rt = get_mxfp4_gemm_wave(
-            shape, block_m, block_n, block_k, use_wave_runtime=True
-        )
+        gemm_rt = get_mxfp4_gemm_wave(shape, mt_m, mt_n, mt_k, use_wave_runtime=True)
     except Exception as e:
         print(
             f"Compilation (wave_runtime) failed for ({m},{n},{k}): {e}",
@@ -458,26 +477,27 @@ def run_validate_and_benchmark(
     # Save MLIR to dump directory
     mlir_dir = dump_dir / "mlir"
     mlir_dir.mkdir(parents=True, exist_ok=True)
-    mlir_path = mlir_dir / f"gemm_{m}_{n}_{k}.mlir"
+    mlir_path = mlir_dir / f"{gemm_id}.mlir"
     mlir_path.write_text(gemm_rt.asm)
 
     # Validate numerics
     if not validate_mxfp4_gemm(m, n, k, gemm_rt):
-        print(f"Validation failed for ({m},{n},{k})", file=sys.stderr)
         return None, None, "validation_failed"
 
     # Benchmark via torch worker under rocprofv3
-    profiler_dump_path = dump_dir / "rocprof" / f"gemm_{m}_{n}_{k}"
+    profiler_dump_path = dump_dir / "rocprof" / gemm_id
     runtime_us, ok = benchmark_mxfp4_gemm_rocprof(
         m,
         n,
         k,
-        block_m,
-        block_n,
-        block_k,
+        mt_m,
+        mt_n,
+        mt_k,
         profiler_dump_path,
         att_library_path,
         kernel_regex=kernel_regex,
+        warmup_iters=warmup_iters,
+        benchmark_iters=benchmark_iters,
     )
     if not ok:
         print(f"Benchmark failed for ({m},{n},{k})", file=sys.stderr)
@@ -513,15 +533,29 @@ def parse_args():
         "--shapes",
         type=Path,
         metavar="CSV",
-        help="CSV path with header M,N,K (one shape per row)",
+        help="CSV path with header M,N,K (optional columns MT_M, MT_N, MT_K for macrotile sizes)",
     )
     p.add_argument(
         "--tiles",
         type=int,
         nargs=3,
-        default=[256, 256, 256],
-        metavar=("block_m", "block_n", "block_k"),
-        help="Tile sizes (default: 256 256 256)",
+        default=None,
+        metavar=("mt_m", "mt_n", "mt_k"),
+        help="Macrotile sizes (mt_m, mt_n, mt_k) for single-shape mode only (default: 256 256 256). Not allowed with --shapes.",
+    )
+    p.add_argument(
+        "--warmup-iters",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Warmup iterations for torch benchmark (default: 0)",
+    )
+    p.add_argument(
+        "--benchmark-iters",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Benchmark iterations for torch benchmark (default: 1)",
     )
     p.add_argument(
         "-o",
@@ -545,27 +579,45 @@ def parse_args():
     return p.parse_args()
 
 
-def load_shapes_csv(path: Path) -> list[tuple[int, int, int]]:
-    shapes = []
+def load_shapes_csv(
+    path: Path,
+) -> list[tuple[tuple[int, int, int], tuple[int, int, int]]]:
+    """Load (M,N,K) and optional (MT_M, MT_N, MT_K) from CSV. Returns list of ((M,N,K), (mt_m, mt_n, mt_k))."""
+    rows: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames or "M" not in reader.fieldnames:
-            # Allow headerless M,N,K
+            # Allow headerless M,N,K only (no per-row tiles)
             f.seek(0)
             for line in csv.reader(f):
                 if len(line) >= 3:
                     try:
-                        shapes.append((int(line[0]), int(line[1]), int(line[2])))
+                        shape = (int(line[0]), int(line[1]), int(line[2]))
+                        rows.append((shape, DEFAULT_TILES))
                     except ValueError:
                         if line[0].upper() != "M":
                             raise
-            return shapes
+            return rows
+        has_tiles = (
+            "MT_M" in reader.fieldnames
+            and "MT_N" in reader.fieldnames
+            and "MT_K" in reader.fieldnames
+        )
         for row in reader:
             M = int(row["M"])
             N = int(row["N"])
             K = int(row["K"])
-            shapes.append((M, N, K))
-    return shapes
+            if (
+                has_tiles
+                and row.get("MT_M", "").strip()
+                and row.get("MT_N", "").strip()
+                and row.get("MT_K", "").strip()
+            ):
+                tiles = (int(row["MT_M"]), int(row["MT_N"]), int(row["MT_K"]))
+            else:
+                tiles = DEFAULT_TILES
+            rows.append(((M, N, K), tiles))
+    return rows
 
 
 def main():
@@ -577,21 +629,38 @@ def main():
         if args.shape is None:
             print("--_worker requires --shape M N K.", file=sys.stderr)
             sys.exit(1)
+        if args.tiles is None:
+            print("--_worker requires --tiles mt_m mt_n mt_k.", file=sys.stderr)
+            sys.exit(1)
         m, n, k = args.shape
-        block_m, block_n, block_k = args.tiles
-        run_worker((m, n, k), (block_m, block_n, block_k))
+        mt_m, mt_n, mt_k = args.tiles
+        run_worker(
+            (m, n, k),
+            (mt_m, mt_n, mt_k),
+            warmup_iters=args.warmup_iters,
+            benchmark_iters=args.benchmark_iters,
+        )
         return
 
     if args.shape is None and args.shapes is None:
         print("One of --shape or --shapes is required.", file=sys.stderr)
         sys.exit(1)
 
-    block_m, block_n, block_k = args.tiles
+    if args.shapes is not None and args.tiles is not None:
+        print(
+            "Cannot use --tiles with --shapes; use MT_M, MT_N, MT_K columns in the CSV instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     dump_dir = Path(args.dump_dir)
     dump_dir.mkdir(parents=True, exist_ok=True)
     kernel_regex = args.kernel_regex
+    warmup_iters = args.warmup_iters
+    benchmark_iters = args.benchmark_iters
 
     if args.shape is not None:
+        mt_m, mt_n, mt_k = args.tiles if args.tiles is not None else DEFAULT_TILES
         M, N, K = args.shape
         if M < 4 or N < 4 or K < 4 or K % 2 != 0:
             print(
@@ -603,16 +672,18 @@ def main():
             M,
             N,
             K,
-            block_m,
-            block_n,
-            block_k,
+            mt_m,
+            mt_n,
+            mt_k,
             dump_dir,
             att_library_path,
             kernel_regex=kernel_regex,
+            warmup_iters=warmup_iters,
+            benchmark_iters=benchmark_iters,
         )
         if status != "ok":
             sys.exit(1)
-        print(f"Shape: {M} x {N} x {K}")
+        print(f"Shape: {M} x {N} x {K}  MT: {mt_m} x {mt_n} x {mt_k}")
         print(f"Average runtime: {runtime_us:.2f} us")
         print(f"TFLOPs: {tflops:.4f}")
         return
@@ -625,25 +696,27 @@ def main():
         print("--shapes requires -o/--output for the result CSV.", file=sys.stderr)
         sys.exit(1)
 
-    shapes = load_shapes_csv(args.shapes)
-    if not shapes:
+    shape_rows = load_shapes_csv(args.shapes)
+    if not shape_rows:
         print("No shapes found in CSV.", file=sys.stderr)
         sys.exit(1)
 
     results = []
     failed_validation = []
     failed_benchmark = []
-    for M, N, K in shapes:
+    for (M, N, K), (mt_m, mt_n, mt_k) in shape_rows:
         runtime_us, tflops, status = run_validate_and_benchmark(
             M,
             N,
             K,
-            block_m,
-            block_n,
-            block_k,
+            mt_m,
+            mt_n,
+            mt_k,
             dump_dir,
             att_library_path,
             kernel_regex=kernel_regex,
+            warmup_iters=warmup_iters,
+            benchmark_iters=benchmark_iters,
         )
         ok = status == "ok"
         if status in ("compile_validation", "validation_failed"):
@@ -657,6 +730,9 @@ def main():
                 "M": M,
                 "N": N,
                 "K": K,
+                "MT_M": mt_m,
+                "MT_N": mt_n,
+                "MT_K": mt_k,
                 "runtime_us": mean_us,
                 "tflops": tflops_val,
                 "ok": ok,
@@ -664,7 +740,7 @@ def main():
         )
         status_str = "ok" if ok else status
         print(
-            f"  ({M}, {N}, {K}): {mean_us:.2f} us, {tflops_val:.4f} TFLOPs [{status_str}]"
+            f"  ({M}, {N}, {K}) MT({mt_m},{mt_n},{mt_k}): {mean_us:.2f} us, {tflops_val:.4f} TFLOPs [{status_str}]"
         )
 
     if failed_validation:
@@ -686,13 +762,16 @@ def main():
         f"Average across {len(valid)} kernels: {avg_us:.2f} us, {avg_tflops:.4f} TFLOPs"
     )
     print(
-        f"Best kernel: M={best['M']}, N={best['N']}, K={best['K']} -> "
+        f"Best kernel: M={best['M']}, N={best['N']}, K={best['K']} MT({best['MT_M']},{best['MT_N']},{best['MT_K']}) -> "
         f"{best['runtime_us']:.2f} us, {best['tflops']:.4f} TFLOPs"
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["M", "N", "K", "runtime_us", "tflops"])
+        w = csv.DictWriter(
+            f,
+            fieldnames=["M", "N", "K", "MT_M", "MT_N", "MT_K", "runtime_us", "tflops"],
+        )
         w.writeheader()
         for r in results:
             w.writerow(
@@ -700,6 +779,9 @@ def main():
                     "M": r["M"],
                     "N": r["N"],
                     "K": r["K"],
+                    "MT_M": r["MT_M"],
+                    "MT_N": r["MT_N"],
+                    "MT_K": r["MT_K"],
                     "runtime_us": r["runtime_us"],
                     "tflops": r["tflops"],
                 }
