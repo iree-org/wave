@@ -34,8 +34,10 @@ from iree.compiler.dialects.transform.extras import insert_transform_script, OpH
 
 M = tkl.sym.M
 N = tkl.sym.N
+K = tkl.sym.K
 BLOCK_M = tkl.sym.BLOCK_M
 BLOCK_N = tkl.sym.BLOCK_N
+BLOCK_K = tkl.sym.BLOCK_K
 ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
 ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
 ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
@@ -254,8 +256,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -265,8 +267,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -276,20 +278,20 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
-    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
@@ -309,6 +311,235 @@ def mlir_converter_matrix_add():
     # CHECK: arith.addf
     # CHECK-NOT: wave.write
     # CHECK: vector.maskedstore
+
+
+@run_test
+def multi_result_handling():
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def multi_result_iteration(
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        d: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        init_a = tkl.Register[M, N, tkl.f32](0.0)
+        init_b = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[init_a, init_b])
+        def repeat(
+            acc_a: tkl.Register[M, N, tkl.f32],
+            acc_b: tkl.Register[M, N, tkl.f32],
+        ):
+            return acc_a, acc_b
+
+        r1, r2 = repeat
+        tkw.write(r2, d)
+        tkw.write(r1, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 32,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 32,
+        },
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, multi_result_iteration)
+    trace = compiled_kernel.compiled_graph
+    constraints = multi_result_iteration.constraints
+
+    with Context(), Location.unknown():
+        asm, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, "No diagnostics should be produced."
+    print(asm)
+
+    # CHECK-LABEL: multi_result_handling
+    # CHECK: %[[ITER:.+]]:2 = wave.iterate
+    # CHECK: wave.write %[[ITER]]#1
+    # CHECK: wave.write %[[ITER]]#0
+
+
+@run_test
+def mlir_converter_sum():
+    """Test MLIR converter with sum kernel."""
+
+    permute_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @tkw.wave(permute_constraints)
+    def sum(
+        a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
+        c: tkl.Memory[M, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        res = tkw.read(a)
+        init = tkw.read(c)
+        res = tkw.sum(res, init, dim=N)
+        tkw.write(res, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, sum)
+
+    # Get the trace from the compiled kernel
+    trace = compiled_kernel.compiled_graph
+
+    constraints = sum.constraints
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    # Print to stdout for FileCheck.
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_sum
+    # CHECK: wave.read
+    # CHECK: wave.read
+    # CHECK: wave.extract
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.shuffle
+    # CHECK: wave.add
+    # CHECK: wave.add
+    # CHECK: wave.write
+
+
+@run_test
+def mlir_converter_emit_wave_dialect_loop_implicit_capture():
+    """Test emit_wave_dialect with a kernel that has a loop using registers defined in the
+    kernel as implicit captures.
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints_loop: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=MMAType.F32_32x32x8_F16,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N, K: BLOCK_K},
+        ),
+    ]
+
+    @tkw.wave(constraints_loop)
+    def kernel_loop_implicit_capture(
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        # Registers defined in the kernel body (not function args)
+        acc = tkl.Register[M, N, tkl.f32](0.0)
+        bias = tkl.Register[M, N, tkl.f32](0.0)  # kernel-defined, captured by loop
+
+        # Loop body implicitly captures bias (kernel-defined register); acc is iter arg
+        @tkw.iterate(K, init_args=[acc])
+        def k_loop(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            acc = acc + bias
+            return acc
+
+        tkw.write(k_loop, c)
+
+    subs_loop = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 16,
+        M: 64,
+        N: 64,
+        K: 32,
+    }
+    options_loop = WaveCompileOptions(
+        subs=subs_loop,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options_loop = set_default_run_config(options_loop)
+
+    compiled = wave_compile(options_loop, kernel_loop_implicit_capture)
+    trace = compiled.compiled_graph
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(
+        trace, kernel_loop_implicit_capture.constraints, options_loop
+    )
+
+    if diagnostics:
+        for d in diagnostics:
+            print(d, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "emit_wave_dialect should succeed for loop with implicit captures"
+
+    print(mlir_output)
+    # CHECK-LABEL: mlir_converter_emit_wave_dialect_loop_implicit_capture
+    # CHECK: func.func
+    # CHECK: %[[ACC:.+]] = wave.register
+    # CHECK: %[[BIAS:.+]] = wave.register
+    # CHECK: wave.iterate @K iter_args(%[[ACC]])
+    # CHECK: ^{{.*}}(%[[INNER:.+]]: !wave.tensor
+    # CHECK:   wave.add %[[INNER]], %[[BIAS]]
 
 
 @run_test
@@ -450,7 +681,7 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
-    # CHECK-SAME: K = #wave<index_mapping
+    # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
     # CHECK-SAME: offset =
     #
@@ -477,20 +708,20 @@ def mlir_converter_matmul():
     # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[MMA_0:.*]] = wave.mma %[[READ_SHARED_B_0]], %[[READ_SHARED_A_0]], %[[ARG3]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_1:.*]] = wave.mma %[[READ_SHARED_B_1]], %[[READ_SHARED_A_1]], %[[MMA_0]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_2:.*]] = wave.mma %[[READ_SHARED_B_2]], %[[READ_SHARED_A_2]], %[[MMA_1]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_3:.*]] = wave.mma %[[READ_SHARED_B_3]], %[[READ_SHARED_A_3]], %[[MMA_2]]
-    # CHECK-COUNT-2:  {K : [
-    # CHECK-SAME:     {M : [
+    # CHECK-COUNT-2:  {K : <[
+    # CHECK-SAME:     {M : <[
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     wave.yield %[[MMA_3]] : !wave.tensor<[@M, @N] of f32, <register>>
     # CHECK-NEXT: }
@@ -644,3 +875,80 @@ def mlir_converter_invalid_non_int_hyperparameter():
         assert "Unexpected non-int mapping in hyperparameters" in str(e)
         assert "INVALID_SYMBOL -> invalid_string_value" in str(e)
         assert "Expected all non-int values to be address spaces" in str(e)
+
+
+@run_test
+def mlir_converter_permute():
+    """Test MLIR converter with permute operation."""
+
+    # Define constraints for the kernel
+    permute_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(permute_constraints)
+    def permute_kernel(
+        a: Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
+        c: Memory[N, M, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        # Load values from memory into registers
+        a_reg = wave.read(a, elements_per_thread=1)
+
+        # Permute dimensions from [M, N] to [N, M]
+        permuted = wave.permute(a_reg, target_shape=[N, M])
+
+        wave.write(permuted, c, elements_per_thread=1)
+
+    # Set parameters for compilation
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    # Compile the kernel to get the trace
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, permute_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    kernel_constraints = permute_kernel.constraints
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    # Print to stdout for FileCheck
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_permute
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @M] of f16, <global>>)
+
+    # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
+
+    # CHECK: %[[PERMUTE:.*]] = wave.permute %[[READ]]
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+
+    # CHECK: wave.write %[[PERMUTE]], %[[ARG1]]
+    # CHECK-SAME: !wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@N, @M] of f16, <global>>

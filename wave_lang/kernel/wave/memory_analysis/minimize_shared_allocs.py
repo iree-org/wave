@@ -13,7 +13,14 @@ from wave_lang.kernel._support.tracing import CapturedTrace
 
 from ..._support.dtype import i8
 from ...lang.global_symbols import *
-from ...ops.wave_ops import Allocate, IterArg, Iterate, SharedMemoryBarrier, get_custom
+from ...ops.wave_ops import (
+    Allocate,
+    IterArg,
+    Iterate,
+    SharedMemoryBarrier,
+    Conditional,
+    get_custom,
+)
 from ..utils.graph_utils import get_users, is_barrier_between, update_sort_keys
 from ..utils.symbol_utils import subs_idxc
 from .solver import (
@@ -136,6 +143,17 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     """
     if not minimize_shared_allocs:
         return
+
+    # Check if there are any Conditional nodes in the graph
+    # If so, skip optimization as it doesn't handle conditional control flow yet
+    root_graph = trace.get_root_graph()
+    has_conditionals = any(
+        isinstance(get_custom(node), Conditional) for node in root_graph.nodes
+    )
+    if has_conditionals:
+        # TODO: Make minimize_shared_allocs conditional-aware
+        return
+
     update_sort_keys(trace, trace.get_root_graph())
 
     allocs, live_intervals, alloc_info = get_alloc_info(trace)

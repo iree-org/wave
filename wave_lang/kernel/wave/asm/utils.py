@@ -4,24 +4,99 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Generator, List, Optional, Tuple, TYPE_CHECKING
 
 import sympy
 
 from wave_lang.support.ir_imports import (
     gpu_d,
+    func_d,
     VectorType,
     MemRefType,
     Context,
+    Module,
     IrType as Type,
     AffineMap,
     AffineMapAttr,
     IntegerAttr,
     Attribute,
+    Operation,
 )
 
 if TYPE_CHECKING:
     from .kernel_model import KernelInfo, MemRefInfo
+
+
+# =============================================================================
+# MLIR Extraction Utilities
+# =============================================================================
+
+
+def walk_ops_recursively(operation: Operation) -> Generator[Operation, None, None]:
+    """
+    Walk all operations in an MLIR module recursively.
+
+    Yields each operation in depth-first order, including nested operations
+    within regions and blocks.
+
+    Args:
+        operation: The root MLIR operation to walk from
+
+    Yields:
+        Each nested Operation in the module
+    """
+    for region in operation.regions:
+        for block in region.blocks:
+            for inner_op in block.operations:
+                yield inner_op
+                yield from walk_ops_recursively(inner_op)
+
+
+def extract_func_from_stream_mlir(mlir_text: str) -> str:
+    """
+    Extract func.func operations from IREE stream.executable wrapped MLIR.
+
+    The wave_lang compiler wraps kernels in stream.executable, but waveasm-translate
+    expects plain func.func or gpu.func operations. This function extracts the
+    inner function using the Python MLIR bindings which can handle stream dialect.
+
+    The extracted MLIR is printed in generic op form so it can be parsed by
+    waveasm-translate with allowUnregisteredDialects.
+
+    Args:
+        mlir_text: MLIR text that may contain stream.executable wrappers
+
+    Returns:
+        MLIR module text containing only the extracted func.func operations
+
+    Raises:
+        ValueError: If no kernel func.func is found in the input MLIR
+    """
+    with Context() as ctx:
+        ctx.allow_unregistered_dialects = True
+        module = Module.parse(mlir_text)
+
+        # Find all func.func operations
+        funcs = []
+        for op in walk_ops_recursively(module.operation):
+            if isinstance(op, func_d.FuncOp):
+                # Skip wrapper functions (async, benchmark scaffolding)
+                name = op.sym_name.value
+                if name.startswith("isolated_benchmark") or name.endswith("$async"):
+                    continue
+                # Use print_generic_op_form=True so stream ops use generic syntax
+                # that can be parsed with allowUnregisteredDialects
+                funcs.append(op.get_asm(print_generic_op_form=True))
+
+        if not funcs:
+            raise ValueError("No kernel func.func found in MLIR")
+
+        # Wrap extracted functions in a module
+        return "module {\n" + "\n".join(funcs) + "\n}\n"
+
+
+# Alias for backward compatibility
+extract_func_from_stream = extract_func_from_stream_mlir
 
 
 def normalize_wg_size(wg_size: tuple) -> Tuple[int, int, int]:

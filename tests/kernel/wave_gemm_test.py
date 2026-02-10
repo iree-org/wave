@@ -498,8 +498,8 @@ def testGemmGlobalToLDS(
     asm = gemm.asm
 
     assert (
-        "amdgpu.gather_to_lds" in asm or "tensor.load.to.lds" in asm
-    ), "gather_to_lds / tensor.load.to.lds not found in asm"
+        "amdgpu.gather_to_lds" in asm or "amdgpu.tensor_load_to_lds" in asm
+    ), "gather_to_lds / tensor_load_to_lds not found in asm"
 
     validate_gemm_result(a, b, c, options, run_bench, perf_filename_iree)
 
@@ -2793,12 +2793,14 @@ def test_gemm_two_async_cluster_pingpong(shape: tuple[int], mfma_variant: MMATyp
     "mfma_variant, threads_per_wave",
     [(MMAType.GFX1250_F32_16x16x32_F16, 32)],
 )
+@use_water_backend_bool("use_water_backend")
 def testTensorLoadToShared(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
     threads_per_wave,
     datatype: torch.dtype,
+    use_water_backend: bool,
 ):
     M = tkl.sym.M
     N = tkl.sym.N
@@ -2863,6 +2865,7 @@ def testTensorLoadToShared(
         wave_runtime=True,
         target="gfx1250",
         cluster_barrier_delay=1,
+        use_water_backend=use_water_backend,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -3385,7 +3388,10 @@ def testSpecializeGemm(
 @require_gfx1250
 @pytest.mark.parametrize("shape", [(1024, 1024, 1024)])
 @pytest.mark.parametrize("mfma_variant", [MMAType.GFX1250_F32_16x16x32_F16])
-def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
+@use_water_backend_bool("use_water_backend")
+def test_gfx1250_tbuf_gemm(
+    shape: tuple[int, int, int], mfma_variant: MMAType, use_water_backend: bool
+):
     gemm, options = get_tagged_BxA_T_gemm(
         shape=shape,
         block_shape=(256, 256, 64),
@@ -3397,6 +3403,7 @@ def test_gfx1250_tbuf_gemm(shape: tuple[int], mfma_variant: MMAType):
 
     schedule = get_gfx1250_tbuf_gemm_schedule()
     options = set_default_run_config(options)
+    options.use_water_backend = use_water_backend
     gemm = wave_compile(options, gemm, schedule)
 
     a = device_randn(shape[0], shape[2], dtype=torch.float16)
@@ -3433,86 +3440,119 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     metadata = extract_kernel_metadata(text)
     # print(",\n".join(f'            "{i}"' for i in metadata.readfirstlane_ops))
     if use_water_backend:
-        vgpr_count = 512
-        vgpr_spill_count = 9
+        vgpr_count = 456
+        vgpr_spill_count = 0
         sgpr_count = 46
         sgpr_spill_count = 0
         waitcounts = [
             "s_wait_xcnt 0x0",
             "s_wait_kmcnt 0x0",
-            "s_wait_xcnt 0x0",
+            "s_wait_tensorcnt 0x1",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x1",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_dscnt 0xe",
-            "s_wait_loadcnt 0x0",
-            "s_wait_dscnt 0x6",
-            "s_wait_dscnt 0x0",
-            "s_wait_xcnt 0x0",
-            "s_wait_dscnt 0x2",
-            "s_wait_dscnt 0x0",
-            "s_wait_dscnt 0x16",
-            "s_wait_dscnt 0x14",
-            "s_wait_dscnt 0x12",
-            "s_wait_dscnt 0x10",
-            "s_wait_dscnt 0xe",
-            "s_wait_dscnt 0xc",
             "s_wait_dscnt 0xa",
             "s_wait_dscnt 0x6",
-            "s_wait_dscnt 0x4",
             "s_wait_dscnt 0x2",
-            "s_wait_loadcnt 0x0",
+            "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0xe",
+            "s_wait_dscnt 0xa",
+            "s_wait_dscnt 0x6",
+            "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-            "v_readfirstlane_b32 s0, v4",
-            "v_readfirstlane_b32 s1, v3",
-            "v_readfirstlane_b32 s0, v4",
-            "v_readfirstlane_b32 s0, v2",
             "v_readfirstlane_b32 s0, v0",
+            "v_readfirstlane_b32 s22, v1",
+            "v_readfirstlane_b32 s7, v11",
+            "v_readfirstlane_b32 s25, v1",
+            "v_readfirstlane_b32 s4, v2",
+            "v_readfirstlane_b32 s28, v8",
+            "v_readfirstlane_b32 s30, v4",
+            "v_readfirstlane_b32 s31, v9",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s29, v1",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s36, v6",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s28, v10",
+            "v_readfirstlane_b32 s42, v8",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s29, v1",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s30, v4",
+            "v_readfirstlane_b32 s31, v5",
+            "v_readfirstlane_b32 s11, v16",
+            "v_readfirstlane_b32 s13, v17",
         ]
     else:
-        vgpr_count = 512
-        vgpr_spill_count = 9
+        vgpr_count = 458
+        vgpr_spill_count = 0
         sgpr_count = 46
         sgpr_spill_count = 0
         waitcounts = [
-            "s_wait_kmcnt 0x0",
             "s_wait_xcnt 0x0",
+            "s_wait_kmcnt 0x0",
+            "s_wait_tensorcnt 0x1",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x1",
             "s_wait_tensorcnt 0x0",
             "s_wait_dscnt 0x0",
             "s_wait_dscnt 0xe",
-            "s_wait_loadcnt 0x0",
-            "s_wait_dscnt 0xc",
-            "s_wait_kmcnt 0x0",
-            "s_wait_dscnt 0x8",
-            "s_wait_dscnt 0x8",
-            "s_wait_dscnt 0x0",
-            "s_wait_xcnt 0x0",
-            "s_wait_loadcnt 0x0",
-            "s_wait_dscnt 0x16",
-            "s_wait_dscnt 0x12",
-            "s_wait_dscnt 0x10",
-            "s_wait_dscnt 0xe",
-            "s_wait_dscnt 0xc",
             "s_wait_dscnt 0xa",
-            "s_wait_dscnt 0x8",
             "s_wait_dscnt 0x6",
-            "s_wait_dscnt 0x4",
+            "s_wait_dscnt 0x2",
+            "s_wait_dscnt 0x0",
+            "s_wait_tensorcnt 0x0",
+            "s_wait_dscnt 0xe",
+            "s_wait_dscnt 0xa",
+            "s_wait_dscnt 0x6",
             "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
         ]
         readfirstlane_ops = [
-            "v_readfirstlane_b32 s2, v4",
-            "v_readfirstlane_b32 s4, v3",
-            "v_readfirstlane_b32 s2, v4",
-            "v_readfirstlane_b32 s2, v2",
-            "v_readfirstlane_b32 s20, v3",
+            "v_readfirstlane_b32 s24, v1",
+            "v_readfirstlane_b32 s0, v7",
+            "v_readfirstlane_b32 s26, v1",
+            "v_readfirstlane_b32 s0, v4",
+            "v_readfirstlane_b32 s16, v8",
+            "v_readfirstlane_b32 s18, v4",
+            "v_readfirstlane_b32 s19, v9",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s42, v6",
+            "v_readfirstlane_b32 s17, v1",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s36, v6",
+            "v_readfirstlane_b32 s41, v5",
+            "v_readfirstlane_b32 s40, v4",
+            "v_readfirstlane_b32 s16, v10",
+            "v_readfirstlane_b32 s42, v8",
+            "v_readfirstlane_b32 s43, v7",
+            "v_readfirstlane_b32 s17, v1",
+            "v_readfirstlane_b32 s38, v2",
+            "v_readfirstlane_b32 s39, v3",
+            "v_readfirstlane_b32 s18, v4",
+            "v_readfirstlane_b32 s19, v5",
+            "v_readfirstlane_b32 s6, v12",
+            "v_readfirstlane_b32 s7, v13",
+            "v_readfirstlane_b32 s14, v14",
+            "v_readfirstlane_b32 s15, v15",
         ]
 
     assert (

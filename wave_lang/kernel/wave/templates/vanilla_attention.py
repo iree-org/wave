@@ -16,17 +16,34 @@ from .attention_common import AttentionShape
 
 def get_vanilla_attention_kernel(
     shape: AttentionShape,
-    mfma_variant: MMAType,
+    mfma_variants: tuple[MMAType, MMAType],
     dynamic_dims: bool,
     is_causal: bool = False,
     is_v_transposed: bool = False,
     sliding_window_size: int = -1,
-    scale: float = None,
+    scale: float | None = None,
 ):
+    """
+    Creates a Wave kernel for the attention mechanism with different options. Returns
+    the kernel itself, the hyperparameters to use and the dynamic symbols if requested.
+
+    Args:
+        shape: Shape of the attention kernel.
+        mfma_variants: The first MMAType is used for the Q*K product, the second is
+            used for scores*V product.
+        dynamic_dims: Whether to use dynamic dimensions (default False).
+        is_causal: Whether to apply the causal mask (default False).
+        is_v_transposed: Whether to treat the V tensor as transposed (default False).
+        sliding_window_size: The size of the sliding window for bounded causal
+            attention (default -1, meaning no sliding window).
+        scale: Explicit scale, otherwise will be derived from the head size.
+    """
     if sliding_window_size > 0 and not is_causal:
         raise NotImplementedError(
             "Sliding window is only supported for causal attention."
         )
+
+    assert len(mfma_variants) == 2, "mfma_variants must be a tuple of two MMATypes"
 
     scale = scale or (1.0 / math.sqrt(shape.head_size))
     scale *= math.log2(math.e)
@@ -50,18 +67,18 @@ def get_vanilla_attention_kernel(
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(M, sympy.ceiling(BLOCK_M / 4))]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
-    if mfma_variant[1] == MMAType.F32_16x16x16_F16:
+    if mfma_variants[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
         TPW = 64
-    if mfma_variant[1] == MMAType.F32_32x32x8_F16:
+    if mfma_variants[1] == MMAType.F32_32x32x8_F16:
         Mvec = 32
         Nvec = 32
         TPW = 64
-    if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+    if mfma_variants[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
         TPW = 32
@@ -69,7 +86,7 @@ def get_vanilla_attention_kernel(
     constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=TPW,
-            mma_type=mfma_variant[1],
+            mma_type=mfma_variants[1],
             vector_shapes={B: 0, M: Mvec, N: Nvec},
         )
     ]
@@ -110,7 +127,7 @@ def get_vanilla_attention_kernel(
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q)
             k_reg = tkw.read(k)
-            inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
+            inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variants[0])
             x_j = tkw.permute(inner_acc, target_shape=[B, M, K2])
             k2_index = tkw.self_index(K2, tkl.i64)
             mask = tkw.apply_expr(k2_index, lambda x: x < K2)
@@ -141,7 +158,7 @@ def get_vanilla_attention_kernel(
             else:
                 v_reg = tkw.read(v, mapping=v_mapping)
             new_acc = acc * e_delta_max
-            acc = tkw.mma(v_reg, imm_f16, new_acc, mfma_variant[1])
+            acc = tkw.mma(v_reg, imm_f16, new_acc, mfma_variants[1])
             return m_j, d_j, acc
 
         # repeat represents the results of the loop

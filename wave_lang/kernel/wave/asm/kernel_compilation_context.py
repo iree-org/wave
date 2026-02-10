@@ -106,6 +106,9 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     # MMA type for MFMA instruction selection
     mma_type: Optional["MMAType"] = None
 
+    # Target architecture (e.g., "gfx942", "gfx950")
+    architecture: str = "common"
+
     # Internal state
     program: KernelProgram = field(init=False)
     builder: KernelBuilder = field(init=False)
@@ -200,12 +203,12 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         self.builder = KernelBuilder(self.program)
 
         # Load instruction registry
-        self._registry = get_registry("common")
+        self._registry = get_registry(self.architecture)
 
         # Create unified emitter in KERNEL_IR mode
         # This allows callers to use kernel_ctx.unified.v_add_u32(...) syntax
         self._unified = UnifiedEmitter(
-            architecture="common",
+            architecture=self.architecture,
             mode=EmissionMode.KERNEL_IR,
             context=self,
         )
@@ -1254,6 +1257,22 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     # =========================================================================
     # LDS Read/Write Operations
     # =========================================================================
+
+    def emit_lds_read_b32(
+        self,
+        dst_vreg: "KVReg",
+        addr_vreg: "KVReg",
+        offset: int = 0,
+    ):
+        """Emit ds_read_b32 (LDS load of 4 bytes into a single VGPR)."""
+        self.program.emit(
+            KInstr(
+                "ds_read_b32",
+                (dst_vreg,),
+                (addr_vreg, KMemOffset(offset)),
+                comment=f"LDS load 4B @ offset {offset}",
+            )
+        )
 
     def emit_lds_read_b64(
         self,

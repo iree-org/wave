@@ -7,21 +7,33 @@
 import os
 
 import torch.fx as fx
+import sympy
 
-from wave_lang.kernel.compiler.base import CodegenError
+import wave_lang.kernel.lang as tkl
 from wave_lang.support.logging import get_logger
 
 from ..._support.tracing import CapturedTrace
-from ...ops.wave_ops import CustomOp, IterArg, Iterate, get_custom
+from ...ops.wave_ops import (
+    Allocate,
+    Conditional,
+    CustomOp,
+    Ge,
+    GetResult,
+    IterArg,
+    Iterate,
+    NewScalar,
+    Output,
+    get_custom,
+)
 from ..constraints import Constraint
 from ..utils.general_utils import (
-    evaluate_with_assumptions,
-    get_assumptions,
     get_tiling_constraint,
 )
 from ..utils.graph_utils import (
     erase_graph,
+    get_graph_node,
     graph_copy,
+    prepare_subgraph_for_conditional,
     update_sort_keys,
 )
 
@@ -191,6 +203,277 @@ def schedule_reduction(
     )
 
 
+def build_guarded_pipeline_with_remainder(
+    trace: CapturedTrace,
+    reduction: Iterate,
+    reduction_graph: fx.Graph,
+    constraints: list[Constraint],
+    num_stages: int,
+    initiation_interval: int,
+    max_induction_variable,
+    visualize: bool = False,
+    use_scheduling_barriers: bool = False,
+    multi_buffer_count: Optional[int] = None,
+):
+    """
+    Build conditional + pipelined loop + remainder loop for dynamic shapes.
+
+    Structure:
+        if (max_induction_variable >= num_stages):
+            pipelined_result = pipelined_loop_with_prologue_epilogue()
+        else:
+            pipelined_result = init_values
+        final_result = remainder_loop(init=pipelined_result)
+
+    The conditional ensures prologue/epilogue only run when there are enough iterations.
+    """
+    # Save properties before any transformations
+    original_index = reduction.index
+    original_init_args = reduction.init_args
+    main_graph = reduction.graph
+
+    # Create condition: max_induction_variable >= num_stages
+    with main_graph.inserting_before(reduction.fx_node):
+        num_stages_scalar = get_graph_node(
+            NewScalar(num_stages, tkl.i32), main_graph, reduction.location
+        )
+        num_iters_scalar = get_graph_node(
+            NewScalar(max_induction_variable, tkl.i32), main_graph, reduction.location
+        )
+        condition = get_graph_node(
+            Ge(num_iters_scalar, num_stages_scalar), main_graph, reduction.location
+        )
+
+    # Prepare conditional subgraph
+    captured_nodes = list(reduction.init_args) + list(reduction.implicit_captures)
+    memory_nodes = [
+        node for node in captured_nodes if isinstance(get_custom(node), Allocate)
+    ]
+
+    subgraph_name = f"pipelined_conditional_{reduction.fx_node.name}"
+    conditional_subgraph, implicit_captures, placeholders = (
+        prepare_subgraph_for_conditional(
+            subgraph_name, captured_nodes, memory_nodes=memory_nodes
+        )
+    )
+
+    # Compute the number of iterations the pipelined loop should process:
+    # This ensures the pipelined loop only processes complete pipeline stages
+    if isinstance(max_induction_variable, (int, float)):
+        pipelined_iterations = (int(max_induction_variable) // num_stages) * num_stages
+    else:
+        pipelined_iterations = (max_induction_variable // num_stages) * num_stages
+
+    conditional_body_graph, _ = graph_copy(reduction_graph)
+    placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
+    placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
+
+    # Register the body graph in the conditional subgraph
+    temp_body_name = f"{reduction.subgraph_name}_cond"
+    if not hasattr(conditional_subgraph, "subgraphs"):
+        conditional_subgraph.subgraphs = {}
+    conditional_subgraph.subgraphs[temp_body_name] = conditional_body_graph
+
+    # Create temporary reduction in conditional subgraph
+    temp_reduction = Iterate(
+        reduction.axis,
+        init_args=placeholder_init_args,
+        step=reduction.step,
+        subgraph_name=temp_body_name,
+        implicit_captures=placeholder_captures,
+    ).add_to_graph(conditional_subgraph, type=reduction.type, loc=reduction.location)
+
+    conditional_body_graph.parent_op = temp_reduction
+    get_custom(temp_reduction).index = original_index
+    get_custom(temp_reduction).count = pipelined_iterations
+
+    # Create GetResult nodes for the temp reduction
+    # These are required by construct_pipelined_loop's epilogue construction,
+    # which expects to find GetResult nodes as users of the pipelined reduction
+    for i in range(len(placeholder_init_args)):
+        GetResult(temp_reduction, i).add_to_graph(
+            conditional_subgraph,
+            type=(
+                placeholder_init_args[i].type
+                if hasattr(placeholder_init_args[i], "type")
+                else None
+            ),
+            loc=reduction.location,
+        )
+
+    pipelined_node, node_mapping, final_results = construct_pipelined_loop(
+        trace,
+        get_custom(temp_reduction),
+        conditional_body_graph,
+        constraints,
+        num_stages,
+        initiation_interval,
+        pipelined_iterations,  # Pass the actual number of iterations to process
+        visualize,
+        use_scheduling_barriers,
+        multi_buffer_count,
+    )
+
+    # Set the count for the pipelined loop
+    # With step > 1 (e.g., from unrolling), we need to reduce the count by more
+    # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
+    # data for the "next" iteration (offset by step), so we need to ensure
+    # that stays within bounds.
+    step = get_custom(pipelined_node).step
+    get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1) * step
+
+    # Verify we have the right number of results
+    assert len(final_results) == len(
+        original_init_args
+    ), f"Expected {len(original_init_args)} results but found {len(final_results)}"
+
+    # Add Output to the conditional subgraph using the final results from the epilogue
+    Output(final_results).add_to_graph(conditional_subgraph, loc=reduction.location)
+
+    # Create the Conditional node in the main graph
+    # Register the conditional subgraph
+    if not hasattr(main_graph, "subgraphs"):
+        main_graph.subgraphs = {}
+    main_graph.subgraphs[subgraph_name] = conditional_subgraph
+    trace.region_graph.subgraphs[subgraph_name] = conditional_subgraph
+
+    with main_graph.inserting_before(reduction.fx_node):
+        conditional_op = Conditional(
+            condition,
+            subgraph_name=subgraph_name,
+            implicit_captures=implicit_captures,
+            else_return=reduction.init_args,  # Else: return init values unchanged
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+
+    conditional_subgraph.parent_op = conditional_op
+
+    # Extract results from conditional
+    conditional_results = []
+    with main_graph.inserting_before(reduction.fx_node):
+        for i in range(len(original_init_args)):
+            result = GetResult(conditional_op, i).add_to_graph(
+                main_graph,
+                type=(
+                    original_init_args[i].type
+                    if hasattr(original_init_args[i], "type")
+                    else None
+                ),
+                loc=reduction.location,
+            )
+            conditional_results.append(result)
+
+    # Create remainder loop using a copy of the original body
+    # The remainder loop should start where the pipelined loop ended
+    remainder_graph, _ = graph_copy(reduction_graph)
+    remainder_subgraph_name = f"{reduction.subgraph_name}_remainder"
+
+    main_graph.subgraphs[remainder_subgraph_name] = remainder_graph
+    trace.region_graph.subgraphs[remainder_subgraph_name] = remainder_graph
+
+    # Create a scalar node for the starting iteration (where pipelined loop ended)
+    # This will be pipelined_iterations
+    with main_graph.inserting_before(reduction.fx_node):
+        start_iter = get_graph_node(
+            NewScalar(pipelined_iterations, tkl.index), main_graph, reduction.location
+        )
+
+        remainder_reduction = Iterate(
+            reduction.axis,
+            init_args=conditional_results,
+            step=reduction.step,
+            subgraph_name=remainder_subgraph_name,
+            implicit_captures=reduction.implicit_captures,
+            start=start_iter,  # Start where pipelined loop ended
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+
+    remainder_graph.parent_op = remainder_reduction
+    # Set the index and count for the remainder loop
+    # The start parameter already handles the offset, so index uses the original
+    get_custom(remainder_reduction).index = original_index
+    get_custom(remainder_reduction).count = max_induction_variable
+
+    # Replace all uses of the original reduction with the remainder loop
+    # This will update all GetResult nodes automatically
+    reduction.replace_all_uses_with(get_custom(remainder_reduction))
+
+    # Erase the original reduction (now safe since it has no users)
+    reduction.erase()
+
+    # Return the pipelined node and node mapping so manual schedules can reference it
+    return pipelined_node, node_mapping
+
+
+def construct_pipelined_loop_adaptive(
+    trace: CapturedTrace,
+    reduction: Iterate,
+    reduction_graph: fx.Graph,
+    constraints: list[Constraint],
+    num_stages: int,
+    initiation_interval: int,
+    max_induction_variable,
+    visualize: bool = False,
+    use_scheduling_barriers: bool = False,
+    multi_buffer_count: Optional[int] = None,
+):
+    """
+    Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
+
+    Structure:
+        if (num_iterations >= num_stages):
+            prologue
+            pipelined_loop
+            epilogue
+            return (iterations_done, result_values...)
+        else:
+            return (0, init_values...)
+        remainder_loop(start=iterations_done, end=total_iterations)
+    """
+    # Check if we have a dynamic shape (max_induction_variable is symbolic)
+    is_dynamic = not (
+        isinstance(max_induction_variable, (int, float))
+        or (
+            hasattr(max_induction_variable, "is_number")
+            and max_induction_variable.is_number
+        )
+    )
+
+    if not is_dynamic:
+        # For static shapes, use the old implementation
+        new_reduction, node_mapping, _ = construct_pipelined_loop(
+            trace,
+            reduction,
+            reduction_graph,
+            constraints,
+            num_stages,
+            initiation_interval,
+            int(max_induction_variable),
+            visualize,
+            use_scheduling_barriers,
+            multi_buffer_count,
+        )
+        if new_reduction:
+            step = get_custom(new_reduction).step
+            get_custom(new_reduction).count = (
+                max_induction_variable - (num_stages - 1) * step
+            )
+        return new_reduction, node_mapping
+
+    # For dynamic shapes, emit conditional + pipelined loop + remainder loop
+    # Call helper function to build the conditional structure
+    return build_guarded_pipeline_with_remainder(
+        trace,
+        reduction,
+        reduction_graph,
+        constraints,
+        num_stages,
+        initiation_interval,
+        max_induction_variable,
+        visualize,
+        use_scheduling_barriers,
+        multi_buffer_count,
+    )
+
+
 def apply_pipelined_schedule(
     reduction: Iterate,
     reduction_graph: fx.Graph,
@@ -211,32 +494,21 @@ def apply_pipelined_schedule(
     tiling_constraint = get_tiling_constraint(reduction, constraints)
     max_induction_variable = subs_idxc(tiling_constraint.count)
 
-    if max_induction_variable.is_number:
-        # We can only do a compile-time check if the induction variable
-        # is not dynamic.
-        max_induction_variable = int(max_induction_variable)
-        if max_induction_variable <= num_stages - 1:
-            raise CodegenError(
-                "Not enough iterations to pipeline the loop. Skipping pipelining."
-            )
-    else:
-        # Otherwise, we need to rely on assumptions provided by the author.
-        assumptions = get_assumptions(constraints)
-        if not assumptions:
-            logger.warning(
-                "No assumptions provided to determine if the loop can be pipelined. Skipping pipelining."
-            )
-            return None
+    # Try to evaluate the expression to a concrete number if possible
+    if isinstance(max_induction_variable, sympy.Basic):
+        # First simplify
+        max_induction_variable = max_induction_variable.simplify()
+        # If it's now a number, convert to int
+        if max_induction_variable.is_number:
+            max_induction_variable = int(max_induction_variable)
 
-        result = evaluate_with_assumptions(
-            constraints, max_induction_variable > num_stages - 1
-        )
-        if not result:
-            raise CodegenError(
-                "Not enough iterations to pipeline the loop. Skipping pipelining."
-            )
+    # For dynamic shapes, we emit a conditional that checks at runtime
+    # whether we have enough iterations to pipeline, and a remainder loop
+    # to handle any leftover iterations.
+    # For static shapes, the same structure is emitted and later compiler
+    # passes will optimize away the conditional or remainder loop as needed.
 
-    new_reduction, node_mapping = construct_pipelined_loop(
+    return construct_pipelined_loop_adaptive(
         trace,
         reduction,
         reduction_graph,
@@ -248,16 +520,6 @@ def apply_pipelined_schedule(
         use_scheduling_barriers,
         multi_buffer_count,
     )
-
-    # Update new reduction count.
-    # With step > 1 (e.g., from unrolling), we need to reduce the count by more
-    # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
-    # data for the "next" iteration (offset by step), so we need to ensure
-    # that stays within bounds.
-    step = get_custom(new_reduction).step
-    new_reduction.count = max_induction_variable - (num_stages - 1) * step
-
-    return new_reduction, node_mapping
 
 
 def propagate_scheduling_parameters_to_iter_args(

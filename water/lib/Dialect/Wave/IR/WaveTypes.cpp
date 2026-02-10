@@ -81,6 +81,12 @@ wave::WaveTensorType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "expected element type to be integer, index or "
                           "floating point scalar";
   }
+  llvm::SmallPtrSet<Attribute, 6> seenSymbols;
+  for (auto symbol : shape) {
+    if (!seenSymbols.insert(symbol).second) {
+      return emitError() << "duplicate symbol " << symbol << " in shape";
+    }
+  }
   return success();
 }
 
@@ -92,4 +98,11 @@ wave::WaveTensorType::getResolvedShape(
   }
   llvm::ArrayRef<mlir::Attribute> symbols(getShape().begin(), getShape().end());
   return wave::resolveSymbolNames(symbols, hyper);
+}
+
+Type wave::getElementType(Type type) {
+  return llvm::TypeSwitch<Type, Type>(type)
+      .Case<wave::WaveTensorType, ShapedType>(
+          [](auto containerType) { return containerType.getElementType(); })
+      .DefaultUnreachable("expected Wave tensor or vector type");
 }

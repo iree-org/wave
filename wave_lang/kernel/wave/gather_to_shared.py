@@ -576,6 +576,10 @@ def gather_to_shared_swizzling(
     new_col = xor(row % max_phase, col // elements_per_thread) * elements_per_thread
     ```
     """
+    if not options.enable_swizzle:
+        logger.info("gather_to_shared_swizzling disabled via enable_swizzle=False")
+        return
+
     if "gfx95" not in options.target:
         logger.info("gather_to_shared_swizzling not supported on this architecture")
         return
@@ -592,32 +596,13 @@ def gather_to_shared_swizzling(
         return
 
     for gathers in id_to_gather.values():
+
         mem = gathers[0].dst
         reads = [
             get_custom(read) for read in mem.users if isinstance(get_custom(read), Read)
         ]
         gather = gathers[0]
         read = reads[0]
-        if (
-            gather.dtype != read.dtype
-            or gather.elements_per_thread != read.elements_per_thread
-        ):
-            logger.info(
-                "mismatched gather and read thread shapes: "
-                f"gather.dtype={gather.dtype}, read.dtype={read.dtype}, "
-                f"gather.elements_per_thread={gather.elements_per_thread}, "
-                f"read.elements_per_thread={read.elements_per_thread}"
-            )
-            continue
-
-        elements_per_thread = gather.elements_per_thread
-        logger.info(f"elements_per_thread={elements_per_thread}")
-
-        if elements_per_thread * gather.dtype.bitwidth() != 128:
-            logger.info(
-                f"gather to shared swizzling only supported for 128-bit elements, got {elements_per_thread}x{gather.dtype}"
-            )
-            continue
 
         shape = get_custom(mem).type.symbolic_shape
         if len(shape) < 2:
@@ -627,46 +612,80 @@ def gather_to_shared_swizzling(
         col_dim = infer_dim(shape[-1])
         row_dim = infer_dim(shape[-2])
 
-        max_phase = 8
+        mem_custom = get_custom(mem)
+        distributed_shape = mem_custom.distributed_shape
+        col_size = subs_idxc(distributed_shape[-1])
 
-        # Check row phase inconsistency between reads and gathers.
-        gather_local_index = remove_global_indexing(gather.src_index, constraints)
-        read_local_index = remove_global_indexing(read.index, constraints)
-        gather_row_expr = sympy.simplify(
-            subs_idxc(gather_local_index[row_dim].start) % max_phase
-        )
-        read_row_expr = sympy.simplify(
-            subs_idxc(read_local_index[row_dim].start) % max_phase
-        )
-        if gather_row_expr != read_row_expr:
+        # Make sure swizzling logic respects elements_per_thread in gather and read.
+        # Take the maximum value to prevent swizzling of smaller chunks which could break order of elements
+        # Ensure swizzling granularity matches the largest access (typically the 128 bit Read).
+        # We use the max elements_per_thread to prevent "shattering" 128 bit blocks,
+        # ensuring that smaller Gather writes stay contiguous within a swizzled bucket.
+        swizzle_unit = max(read.elements_per_thread, gather.elements_per_thread)
+
+        num_swizzle_chunks = col_size // swizzle_unit
+
+        max_phase = min(8, num_swizzle_chunks)
+
+        if max_phase < 2:
             logger.info(
-                f"row phase inconsistency between reads and gathers: {gather_row_expr} != {read_row_expr}. Skipping swizzling as it is not supported."
+                f"max_phase={max_phase} is too small for effective swizzling, skipping"
             )
             continue
 
+        # Check row phase consistency between reads and gathers.
+        # For swizzling to work correctly, both gather (write to LDS) and read
+        # (read from LDS) must use the same row value modulo max_phase in the
+        # XOR swizzle formula. If they differ, data will be written to one
+        # column but read from a different column, causing incorrect results.
+        gather_local_index = remove_global_indexing(gather.src_index, constraints)
+        read_local_index = remove_global_indexing(read.index, constraints)
         for read in reads:
             index = remove_global_indexing(read.index, constraints)
+
             col_seq = index[col_dim]
             row_seq = index[row_dim]
-            col = col_seq.start // elements_per_thread
+
+            col = col_seq.start // swizzle_unit
             row = row_seq.start % max_phase
-            col = xor(row, col) * elements_per_thread
-            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
-            logger.info(f"read.index={read.index} -> {index}")
+
+            # internal_offset captures the thread's position inside the swizzle_unit.
+            # This is 0 when write/read granularities match.
+            internal_offset = (
+                col_seq.start - (col_seq.start // swizzle_unit) * swizzle_unit
+            )
+
+            # XOR the block then add back the internal offset
+            col_swizzled = xor(row, col) * swizzle_unit + internal_offset
+
+            index[col_dim] = IndexSequence(col_swizzled, col_seq.size, col_seq.stride)
             read.index = index
+            logger.info(f"read.index={read.index} -> {index}")
 
         for gather in gathers:
             # Only apply swizzling to the thread part of the index and keep the
             # global part of the index unchanged.
+
             index = dict(gather.src_index)
             global_index = remove_thread_indexing(index)
             local_index = remove_global_indexing(index, constraints)
+
             col_seq = local_index[col_dim]
             row_seq = local_index[row_dim]
-            col = col_seq.start // elements_per_thread
+
+            col = col_seq.start // swizzle_unit
             row = row_seq.start % max_phase
-            col = xor(row, col) * elements_per_thread
-            col = global_index[col_dim].start + col
-            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
-            logger.info(f"gather.src_index={gather.src_index} -> {index}")
+
+            # internal_offset captures the thread's position inside the swizzle_unit.
+            # This is 0 when write/read granularities match.
+            internal_offset = (
+                col_seq.start - (col_seq.start // swizzle_unit) * swizzle_unit
+            )
+
+            # XOR the block then add back the internal offset
+            col_swizzled = xor(row, col) * swizzle_unit + internal_offset
+            col_final = global_index[col_dim].start + col_swizzled
+
+            index[col_dim] = IndexSequence(col_final, col_seq.size, col_seq.stride)
             gather.update_arg("src_index", index)
+            logger.info(f"gather.src_index={gather.src_index} -> {index}")

@@ -56,8 +56,55 @@ func.func private @test_tiling() attributes { wave.hyperparameters = #tl_hyperpa
 #wv_hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
 func.func private @test_wave1() attributes { wave.hyperparameters = #wv_hyperparams, wave.constraints = [#wg_constraint1, #wv_constraint1] }
 
+// CHECK-LABEL: @test_wave_divisible_by_2
+// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
+#wv_constraint_div2 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
+#wv_hyperparams_div2 = #wave.hyperparameters<{M = 1024, BLOCK_M = 64}>
+func.func private @test_wave_divisible_by_2() attributes { wave.hyperparameters = #wv_hyperparams_div2, wave.constraints = [#wg_constraint1, #wv_constraint_div2] }
+
+// CHECK-LABEL: @test_wave_multiple_dims
+// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+// CHECK: #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N ceildiv 2)>>
+#wv_constraint_m = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#wv_constraint_n = #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N ceildiv 2)>>
+#wv_hyperparams_multi = #wave.hyperparameters<{M = 1024, N = 1024, BLOCK_M = 128, BLOCK_N = 64}>
+func.func private @test_wave_multiple_dims() attributes { wave.hyperparameters = #wv_hyperparams_multi, wave.constraints = [#wg_constraint2, #wg_constraint3, #wv_constraint_m, #wv_constraint_n] }
+
 // CHECK-LABEL: @test_device
 // CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 #dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 #dv_hyperparams = #wave.hyperparameters<{M = 1024, DEVICE_M = 512}>
 func.func private @test_device() attributes { wave.hyperparameters = #dv_hyperparams, wave.constraints = [#dv_constraint] }
+
+// CHECK-LABEL: @test_waves_per_block_match_single_dim
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [4, 1, 1]>
+#hyperparams_wpb_valid1 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_wpb_valid1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_wpb_valid1 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_wpb_valid1 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [4, 1, 1]>
+func.func private @test_waves_per_block_match_single_dim() attributes { wave.hyperparameters = #hyperparams_wpb_valid1, wave.constraints = [#wg_constraint_wpb_valid1, #wv_constraint_wpb_valid1, #hw_constraint_wpb_valid1] }
+
+// CHECK-LABEL: @test_waves_per_block_match_multi_dim
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 4, 1]>
+#hyperparams_wpb_valid2 = #wave.hyperparameters<{M = 1024, N = 512, BLOCK_M = 128, BLOCK_N = 64}>
+#wg_constraint_wpb_valid2_m = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wg_constraint_wpb_valid2_n = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+#wv_constraint_wpb_valid2_m = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
+#wv_constraint_wpb_valid2_n = #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 4)>>
+#hw_constraint_wpb_valid2 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 4, 1]>
+func.func private @test_waves_per_block_match_multi_dim() attributes { wave.hyperparameters = #hyperparams_wpb_valid2, wave.constraints = [#wg_constraint_wpb_valid2_m, #wg_constraint_wpb_valid2_n, #wv_constraint_wpb_valid2_m, #wv_constraint_wpb_valid2_n, #hw_constraint_wpb_valid2] }
+
+// CHECK-LABEL: @test_waves_per_block_no_wave_constraints
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 1, 1]>
+#hyperparams_wpb_valid3 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_wpb_valid3 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#hw_constraint_wpb_valid3 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 1, 1]>
+func.func private @test_waves_per_block_no_wave_constraints() attributes { wave.hyperparameters = #hyperparams_wpb_valid3, wave.constraints = [#wg_constraint_wpb_valid3, #hw_constraint_wpb_valid3] }
+
+// CHECK-LABEL: @test_wave_constraints_no_waves_per_block
+// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hyperparams_wpb_valid4 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_wpb_valid4 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_wpb_valid4 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_wpb_valid4 = #wave.hardware_constraint<threads_per_wave = 64>
+func.func private @test_wave_constraints_no_waves_per_block() attributes { wave.hyperparameters = #hyperparams_wpb_valid4, wave.constraints = [#wg_constraint_wpb_valid4, #wv_constraint_wpb_valid4, #hw_constraint_wpb_valid4] }

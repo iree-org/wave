@@ -425,7 +425,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     llvm_opt_level = 3 if options.optimization_level else 0
     dump_intermediates = options.dump_intermediates or ""
-    toolkit_path = get_water_mlir_pkg_path()
+    lld_path = get_water_mlir_pkg_path() / "llvm" / "bin" / "ld.lld"
 
     pipeline = [
         "water-memref-decomposition",
@@ -446,7 +446,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt(canonicalize_cse),
         (
             "water-gpu-module-to-binary",
-            {"dump-intermediates": dump_intermediates, "toolkit": toolkit_path},
+            {"dump-intermediates": dump_intermediates, "lld-path": lld_path},
         ),
         "water-gpu-to-gpu-runtime",
         "water-drop-transform-ops",

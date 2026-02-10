@@ -1,0 +1,205 @@
+
+
+
+
+
+=== mma_kernel ===
+
+=== MLIR IR (input to ASM backend) ===
+#map = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
+#map1 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
+#map2 = affine_map<()[s0] -> (s0 mod 16)>
+#map3 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+#map4 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+#map5 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+#map6 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
+#translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [64, 1, 1] subgroup_size = 64>
+module attributes {transform.with_named_sequence} {
+  stream.executable private @mma_kernel {
+    stream.executable.export public @mma_kernel workgroups() -> (index, index, index) {
+      %c1 = arith.constant 1 : index
+      stream.return %c1, %c1, %c1 : index, index, index
+    }
+    builtin.module {
+      func.func @mma_kernel(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding) attributes {translation_info = #translation} {
+        %cst = arith.constant dense<0.000000e+00> : vector<4xf32>
+        %c640 = arith.constant 640 : index
+        %c0 = arith.constant 0 : index
+        %0 = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<f16>
+        %1 = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<f16>
+        %2 = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<f32>
+        %thread_id_x = gpu.thread_id  x upper_bound 64
+        %reinterpret_cast = memref.reinterpret_cast %0 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
+        %reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
+        %reinterpret_cast_1 = memref.reinterpret_cast %2 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f32> to memref<16x16xf32, strided<[16, 1]>>
+        %alloc = memref.alloc() : memref<1280xi8, #gpu.address_space<workgroup>>
+        %view = memref.view %alloc[%c0][] : memref<1280xi8, #gpu.address_space<workgroup>> to memref<16x20xf16, #gpu.address_space<workgroup>>
+        %view_2 = memref.view %alloc[%c640][] : memref<1280xi8, #gpu.address_space<workgroup>> to memref<16x20xf16, #gpu.address_space<workgroup>>
+        %3 = affine.apply #map()[%thread_id_x]
+        %4 = affine.apply #map1()[%thread_id_x]
+        %5 = vector.load %reinterpret_cast[%3, %4] : memref<16x16xf16, strided<[16, 1]>>, vector<4xf16>
+        vector.store %5, %view_2[%3, %4] : memref<16x20xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+        %6 = affine.apply #map2()[%thread_id_x]
+        %7 = vector.load %reinterpret_cast_0[%6, %4] : memref<16x16xf16, strided<[16, 1]>>, vector<4xf16>
+        vector.store %7, %view[%6, %4] : memref<16x20xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+        amdgpu.lds_barrier
+        %8 = vector.load %view[%6, %4] : memref<16x20xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+        %9 = vector.load %view_2[%3, %4] : memref<16x20xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+        %10 = amdgpu.mfma 16x16x16 %9 * %8 + %cst blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+        %11 = vector.extract_strided_slice %10 {offsets = [0], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
+        %12 = affine.apply #map3()[%thread_id_x]
+        vector.store %11, %reinterpret_cast_1[%12, %6] : memref<16x16xf32, strided<[16, 1]>>, vector<1xf32>
+        %13 = vector.extract_strided_slice %10 {offsets = [1], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
+        %14 = affine.apply #map4()[%thread_id_x]
+        vector.store %13, %reinterpret_cast_1[%14, %6] : memref<16x16xf32, strided<[16, 1]>>, vector<1xf32>
+        %15 = vector.extract_strided_slice %10 {offsets = [2], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
+        %16 = affine.apply #map5()[%thread_id_x]
+        vector.store %15, %reinterpret_cast_1[%16, %6] : memref<16x16xf32, strided<[16, 1]>>, vector<1xf32>
+        %17 = vector.extract_strided_slice %10 {offsets = [3], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
+        %18 = affine.apply #map6()[%thread_id_x]
+        vector.store %17, %reinterpret_cast_1[%18, %6] : memref<16x16xf32, strided<[16, 1]>>, vector<1xf32>
+        return
+      }
+    }
+  }
+  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.fence, %arg4: !hal.fence) -> !hal.buffer_view {
+    %0 = hal.tensor.import wait(%arg3) => %arg0 : !hal.buffer_view -> tensor<16x16xf16>
+    %1 = hal.tensor.import wait(%arg3) => %arg1 : !hal.buffer_view -> tensor<16x16xf16>
+    %2 = hal.tensor.import wait(%arg3) => %arg2 : !hal.buffer_view -> tensor<16x16xf32>
+    %3 = flow.dispatch @mma_kernel::@mma_kernel(%0, %1, %2) : (tensor<16x16xf16>, tensor<16x16xf16>, tensor<16x16xf32>) -> %2
+    %4 = hal.tensor.barrier join(%3 : tensor<16x16xf32>) => %arg4 : !hal.fence
+    %5 = hal.tensor.export %4 : tensor<16x16xf32> -> !hal.buffer_view
+    return %5 : !hal.buffer_view
+  }
+}
+
+
+=== Generated Assembly ===
+.amdgcn_target "amdgcn-amd-amdhsa--gfx950"
+.text
+.protected mma_kernel
+.globl mma_kernel
+.p2align 8
+.type mma_kernel,@function
+
+.section .rodata,#alloc
+.p2align 6
+.amdhsa_kernel mma_kernel
+  .amdhsa_user_sgpr_count 8
+  .amdhsa_user_sgpr_dispatch_ptr 0
+  .amdhsa_user_sgpr_queue_ptr 0
+  .amdhsa_user_sgpr_kernarg_segment_ptr 1
+  .amdhsa_user_sgpr_dispatch_id 0
+  .amdhsa_user_sgpr_kernarg_preload_length 6
+  .amdhsa_user_sgpr_kernarg_preload_offset 0
+  .amdhsa_user_sgpr_private_segment_size 0
+  .amdhsa_uses_dynamic_stack 0
+  .amdhsa_enable_private_segment 0
+  .amdhsa_accum_offset 16
+  .amdhsa_next_free_vgpr 16
+  .amdhsa_next_free_sgpr 24
+  .amdhsa_group_segment_fixed_size 1280
+  .amdhsa_private_segment_fixed_size 0
+  .amdhsa_system_sgpr_workgroup_id_x 0
+  .amdhsa_system_sgpr_workgroup_id_y 0
+  .amdhsa_system_sgpr_workgroup_id_z 0
+  .amdhsa_system_vgpr_workitem_id 0
+  .amdhsa_float_denorm_mode_32 3
+  .amdhsa_float_denorm_mode_16_64 3
+.end_amdhsa_kernel
+.text
+
+# SRD upper word (gfx9xx): data_format=4 => 0x20000
+.set Srd127_96, 131072
+
+mma_kernel:
+    s_load_dwordx2 s[2:3], s[0:1], 0  // Load arg0 into preload location
+    s_load_dwordx2 s[4:5], s[0:1], 8  // Load arg1 into preload location
+    s_load_dwordx2 s[6:7], s[0:1], 16  // Load arg2 into preload location
+    s_waitcnt lgkmcnt(0)  // wait for preload loads
+    s_branch .L_mma_kernel_main
+.p2align 8
+.L_mma_kernel_main:
+    s_mov_b64 s[8:9], s[2:3]  // Copy arg0 to SRD base
+    s_mov_b64 s[12:13], s[4:5]  // Copy arg1 to SRD base
+    s_mov_b64 s[16:17], s[6:7]  // Copy arg2 to SRD base
+    s_mov_b32 s10, 0x200  // SRD size for arg0
+    s_mov_b32 s11, 0x20000  // SRD stride for arg0
+    s_mov_b32 s14, 0x200  // SRD size for arg1
+    s_mov_b32 s15, 0x20000  // SRD stride for arg1
+    s_mov_b32 s18, 0x400  // SRD size for arg2
+    s_mov_b32 s19, 0x20000  // SRD stride for arg2
+    s_load_dwordx2 s[2:3], s[0:1], 0  // Load kernarg at offset 0
+    s_load_dwordx2 s[4:5], s[0:1], 8  // Load kernarg at offset 8
+    s_load_dwordx2 s[6:7], s[0:1], 16  // Load kernarg at offset 16
+    s_waitcnt lgkmcnt(0)  // wait for all kernarg loads
+    v_mbcnt_lo_u32_b32 v1, -1, 0  // lane_id low
+    v_mbcnt_hi_u32_b32 v2, -1, v1  // lane_id = tid_x for single-wave
+    v_and_b32 v1, 63, v2  // mod 64 (and)
+    v_lshrrev_b32 v3, 4, v1  // floor div by 16 (shift)
+    v_lshlrev_b32 v1, 3, v3  // floor((Mod(tid_x, 64))/16) << 3
+    v_and_b32 v4, 15, v2  // mod 16 (and)
+    v_lshlrev_b32 v2, 5, v4  // Mod(tid_x, 16) << 5
+    v_or_b32 v5, v1, v2  // or (bits 3-4 + 5-8)
+    buffer_load_dwordx2 v[6:7], v5, s[8:11], 0 offen  // load 8B @ offset 0
+    v_mul_lo_u32 v2, v4, 40  // Mod(tid_x, 16) * 40
+    v_add_u32 v8, v1, v2  // add
+    v_add_u32 v1, 0x280, v8  // + 640 (inline literal)
+    s_waitcnt vmcnt(0)  // wait for VMEM before LDS store
+    ds_write_b64 v1, v[6:7]  // LDS store 8B @ offset 0
+    buffer_load_dwordx2 v[6:7], v5, s[12:15], 0 offen  // load 8B @ offset 0
+    s_waitcnt vmcnt(0)  // wait for VMEM before LDS store
+    ds_write_b64 v8, v[6:7]  // LDS store 8B @ offset 0
+    s_waitcnt lgkmcnt(0)
+    s_barrier  // LDS barrier
+    ds_read_b64 v[6:7], v8  // LDS load 8B @ offset 0
+    ds_read_b64 v[10:11], v8 offset:640  // LDS load 8B @ offset 640
+    s_waitcnt lgkmcnt(0)  // ticketing: wait for LGKM defs
+    v_mfma_f32_16x16x16_f16 v[12:15], v[10:11], v[6:7], 0  // MFMA with zero accumulator
+    v_lshlrev_b32 v1, 8, v3  // floor((Mod(tid_x, 64))/16) << 8
+    v_lshl_or_b32 v2, v4, 2, v1  // fused: (kv6 << 2) | kv27
+    buffer_store_dword v[12:12], v2, s[16:19], 0 offen  // store 4B @ offset 0
+    buffer_store_dword v[13:13], v2, s[16:19], 0 offen offset:64  // store 4B @ offset 64
+    buffer_store_dword v[14:14], v2, s[16:19], 0 offen offset:128  // store 4B @ offset 128
+    buffer_store_dword v[15:15], v2, s[16:19], 0 offen offset:192  // store 4B @ offset 192
+    s_endpgm
+
+
+.amdgpu_metadata
+---
+amdhsa.version:
+  - 1
+  - 2
+amdhsa.kernels:
+  - .name: mma_kernel
+    .symbol: 'mma_kernel.kd'
+    .language: OpenCL C
+    .language_version:
+      - 1
+      - 2
+    .kernarg_segment_size: 24
+    .group_segment_fixed_size: 1280
+    .private_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .wavefront_size: 64
+    .sgpr_count: 20
+    .vgpr_count: 16
+    .max_flat_workgroup_size: 64
+    .args:
+      - .name: arg0_ptr
+        .size: 8
+        .offset: 0
+        .value_kind: global_buffer
+        .value_type: i8*
+      - .name: arg1_ptr
+        .size: 8
+        .offset: 8
+        .value_kind: global_buffer
+        .value_type: i8*
+      - .name: arg2_ptr
+        .size: 8
+        .offset: 16
+        .value_kind: global_buffer
+        .value_type: i8*
+...
+.end_amdgpu_metadata

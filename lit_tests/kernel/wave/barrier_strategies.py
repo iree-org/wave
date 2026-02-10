@@ -86,6 +86,33 @@ def insert_barrier_before_first_shared_read(graph: fx.Graph):
     return False
 
 
+def insert_memory_counter_wait_barrier_before_first_shared_read(graph: fx.Graph):
+    """
+    Find the first read from shared memory and insert a MemoryCounterWaitBarrier before it.
+    This simulates a pre-existing combined barrier in the graph.
+    """
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, Read) and custom.write_dependency is not None:
+            # This is a read from shared memory (has write dependency)
+            with graph.inserting_before(node):
+                MemoryCounterWaitBarrier(load=0).add_to_graph(
+                    graph, loc=custom.location
+                )
+            return True
+    return False
+
+
+def count_memory_counter_wait_barriers(graph: fx.Graph) -> int:
+    """Count the number of MemoryCounterWaitBarrier nodes in the graph."""
+    count = 0
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, MemoryCounterWaitBarrier):
+            count += 1
+    return count
+
+
 # Input sizes
 M = tkl.sym.M
 N = tkl.sym.N
@@ -439,39 +466,144 @@ def test_manual_barriers_prevent_sync_regions():
 
         # Get sync regions with manual barriers
         logger.debug("Getting sync regions with manual barriers")
-        sync_regions = get_barriers_analysis(
-            trace, target_arch, check_existing_barriers=True
+        sync_regions_raw = get_barriers_analysis(trace, target_arch)
+
+        from wave_lang.kernel.wave.utils.barriers_utils import (
+            find_disjoint_interval_strategy,
+            minimize_placement_strategy,
         )
 
-        # Assertion: should have fewer sync regions (0) because manual barriers are detected
-        logger.info(
-            f"Sync regions without barrier vs with barrier: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
-        )
+        # Test both strategies
+        sync_regions_disjoint = find_disjoint_interval_strategy(sync_regions_raw)
+        sync_regions_minimize = minimize_placement_strategy(sync_regions_raw)
 
         print(f"Sync regions without manual barriers: {len(sync_regions_no_barriers)}")
         print("Manual barriers inserted: 1 signal + 1 wait")
-        print(f"Sync regions with manual barriers: {len(sync_regions)}")
 
-        if len(sync_regions) < len(sync_regions_no_barriers):
-            print(f"VALIDATION SUCCESS: Manual barriers prevented sync region creation")
+        # Validate find_disjoint_interval_strategy
+        print(
+            f"Sync regions with manual barriers (find_disjoint_interval_strategy): {len(sync_regions_disjoint)}"
+        )
+        if len(sync_regions_disjoint) < len(sync_regions_no_barriers):
+            print(
+                "VALIDATION SUCCESS (find_disjoint_interval_strategy): Manual barriers prevented sync region creation"
+            )
         else:
             print(
-                f"VALIDATION FAIL - Manual barriers did NOT prevent sync region creation"
-            )
-            print(
-                f"Expected fewer sync regions, but got: {len(sync_regions_no_barriers)} vs {len(sync_regions)}"
+                "VALIDATION FAIL (find_disjoint_interval_strategy) - Manual barriers did NOT prevent sync region creation"
             )
             assert False, (
-                f"Manual barriers were NOT respected! "
-                f"Sync regions should be 0 with manual barriers, but got {len(sync_regions)}. "
+                f"Manual barriers were NOT respected by find_disjoint_interval_strategy! "
+                f"Sync regions should be fewer with manual barriers, but got {len(sync_regions_disjoint)}."
+            )
+
+        # Validate minimize_placement_strategy
+        print(
+            f"Sync regions with manual barriers (minimize_placement_strategy): {len(sync_regions_minimize)}"
+        )
+        if len(sync_regions_minimize) < len(sync_regions_no_barriers):
+            print(
+                "VALIDATION SUCCESS (minimize_placement_strategy): Manual barriers prevented sync region creation"
+            )
+        else:
+            print(
+                "VALIDATION FAIL (minimize_placement_strategy) - Manual barriers did NOT prevent sync region creation"
+            )
+            assert False, (
+                f"Manual barriers were NOT respected by minimize_placement_strategy! "
+                f"Sync regions should be fewer with manual barriers, but got {len(sync_regions_minimize)}."
             )
 
     # CHECK-LABEL: test_manual_barriers_prevent_sync_regions
     # CHECK: Sync regions without manual barriers: {{[1-9]}}
     # CHECK: Manual barriers inserted: 1 signal + 1 wait
-    # CHECK: Sync regions with manual barriers: {{[0-9]}}
-    # CHECK: VALIDATION SUCCESS: Manual barriers prevented sync region creation
+    # CHECK: Sync regions with manual barriers (find_disjoint_interval_strategy): {{[0-9]}}
+    # CHECK: VALIDATION SUCCESS (find_disjoint_interval_strategy): Manual barriers prevented sync region creation
+    # CHECK: Sync regions with manual barriers (minimize_placement_strategy): {{[0-9]}}
+    # CHECK: VALIDATION SUCCESS (minimize_placement_strategy): Manual barriers prevented sync region creation
     # CHECK-NOT: VALIDATION FAIL
+
+
+@run_test
+def test_memory_counter_wait_barrier_prevents_redundant_barrier():
+    """
+    Test that when a MemoryCounterWaitBarrier already exists between producer and consumer,
+    the barrier placement pass does not insert an additional SharedMemoryBarrier.
+    This tests that MemoryCounterWaitBarrier (which emits amdgpu.memory_counter_wait + rocdl.s.barrier)
+    is correctly recognized as providing sufficient synchronization, preventing redundant barrier insertion.
+    """
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(1, 1, 1), vector_shapes={M: 16, N: 16}
+        )
+    ]
+
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        add_get_results(trace)
+        infer_types(trace)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        tweak_index(graph)
+
+        # Manually insert a MemoryCounterWaitBarrier before calling add_shared_memory_barriers
+        # This should be recognized and prevent duplicate barrier insertion
+        inserted = insert_memory_counter_wait_barrier_before_first_shared_read(graph)
+        assert inserted, "Failed to insert pre-existing MemoryCounterWaitBarrier"
+
+        # Count MemoryCounterWaitBarriers and SharedMemoryBarriers before
+        mcw_barriers_before = count_memory_counter_wait_barriers(graph)
+        shared_barriers_before = count_barriers(graph)
+
+        # Now run barrier placement - it should detect the existing MemoryCounterWaitBarrier
+        # and NOT insert an additional SharedMemoryBarrier (since synchronization is already provided)
+        add_shared_memory_barriers(trace)
+
+        # Count barriers after
+        mcw_barriers_after = count_memory_counter_wait_barriers(graph)
+        shared_barriers_after = count_barriers(graph)
+
+        print_trace(trace, False)
+
+        print(f"MemoryCounterWaitBarriers before: {mcw_barriers_before}")
+        print(f"MemoryCounterWaitBarriers after: {mcw_barriers_after}")
+        print(f"SharedMemoryBarriers before: {shared_barriers_before}")
+        print(f"SharedMemoryBarriers after: {shared_barriers_after}")
+
+    # The graph should have the manual MemoryCounterWaitBarrier
+    # and NO additional SharedMemoryBarrier (amdgpu.lds_barrier) should be added
+    # since the MemoryCounterWaitBarrier already provides synchronization
+    # CHECK-LABEL: test_memory_counter_wait_barrier_prevents_redundant_barrier
+    # CHECK: %allocate
+    # CHECK: %write_1_shared_M:0_N:0
+    # CHECK: %write_1_shared_M:0_N:1
+    # CHECK: %write_1_shared_M:1_N:0
+    # CHECK: %write_1_shared_M:1_N:1
+    # CHECK: %memory_counter_wait_barrier
+    # CHECK-NEXT: %read_1_shared_M:0_N:0
+    # CHECK: %read_1_shared_M:0_N:1
+    # CHECK: %read_1_shared_M:1_N:0
+    # CHECK: %read_1_shared_M:1_N:1
+
+    # Verify the MemoryCounterWaitBarrier remains (count: 1 before and after)
+    # and no redundant SharedMemoryBarrier was added (count: 0 before and after)
+    # CHECK: MemoryCounterWaitBarriers before: 1
+    # CHECK: MemoryCounterWaitBarriers after: 1
+    # CHECK: SharedMemoryBarriers before: 0
+    # CHECK: SharedMemoryBarriers after: 0
 
 
 if __name__ == "__main__":

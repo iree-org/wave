@@ -17,6 +17,7 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
 from ..ops.wave_ops import Extract, Read, Reshape, Write, get_custom
+from ..wave.utils.tag_utils import propagate_tag
 from ..wave.constraints import (
     Constraint,
     TilingConstraint,
@@ -313,11 +314,13 @@ def create_transpose_writes(
                 value = Extract(new_reads[j], [i]).add_to_graph(
                     write.graph, loc=write.location
                 )
+                propagate_tag(write.fx_node, value)
                 values.append(value)
 
             value = Reshape(values, store_elems_per_thread).add_to_graph(
                 write.graph, loc=write.location
             )
+            propagate_tag(write.fx_node, value)
             repacked.append(value)
 
     new_writes = defaultdict(list)

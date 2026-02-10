@@ -80,10 +80,8 @@ def test_gemm_prefetch_reorder_stagger():
     print(gemm.asm)
 
     # CHECK-LABEL:    func.func @gemm
-    # CHECK-DAG:       %[[C0:.+]] = arith.constant 0 : index
-    # CHECK-DAG:       %[[C34816:.+]] = arith.constant 34816 : index
-    # CHECK:           %[[VIEW_0:.*]] = memref.view %alloc[%[[C0]]][] : memref<52224xi8, #gpu.address_space<workgroup>> to memref<256x68xf16, #gpu.address_space<workgroup>>
-    # CHECK:           %[[VIEW_1:.*]] = memref.view %alloc[%[[C34816]]][] : memref<52224xi8, #gpu.address_space<workgroup>> to memref<128x68xf16, #gpu.address_space<workgroup>>
+    # CHECK:           %[[ALLOC_0:.*]] = memref.alloc() : memref<256x68xf16, #gpu.address_space<workgroup>>
+    # CHECK:           %[[ALLOC_1:.*]] = memref.alloc() : memref<128x68xf16, #gpu.address_space<workgroup>>
     # Prologue
     # CHECK-COUNT-6:  vector.load
     # CHECK-COUNT-6:  vector.store
@@ -106,10 +104,10 @@ def test_gemm_prefetch_reorder_stagger():
     # 1st cluster interleaved local and global reads.
 
     # 1st Cluster: First slice of Local read lhs and rhs
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K0:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K0:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
@@ -117,10 +115,10 @@ def test_gemm_prefetch_reorder_stagger():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
@@ -158,8 +156,8 @@ def test_gemm_prefetch_reorder_stagger():
     # CHECK-NEXT:       rocdl.s.barrier
     # CHECK-NEXT:     }
 
-    # CHECK-COUNT-32: vector.load %[[VIEW_0]]
-    # CHECK-COUNT-8:  vector.load %[[VIEW_1]]
+    # CHECK-COUNT-32: vector.load %[[ALLOC_0]]
+    # CHECK-COUNT-8:  vector.load %[[ALLOC_1]]
     # CHECK-COUNT-64: amdgpu.mfma
 
 

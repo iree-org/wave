@@ -23,7 +23,6 @@ from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
 from ..wave.utils.symbol_utils import is_literal, subs_idxc
-from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 
 logger = logging.getLogger(__name__)
 
@@ -343,10 +342,6 @@ def fuse_tensor_loads(
         )
         return
 
-    if options.schedule != SchedulingType.NONE:
-        logger.info("Skipping tensor load fusion: Scheduling is not supported yet.")
-        return
-
     # Check if we have an even number of waves (required for fusion)
     if (
         not is_literal(wave_count)
@@ -419,14 +414,14 @@ def fuse_tensor_loads(
         if hasattr(load1_node, "pre_expansion_id"):
             fused_load.pre_expansion_id = load1_node.pre_expansion_id
 
-        # Add tags to the fused load
-        tags = []
-        if hasattr(load1_node, "tag"):
-            tags.append(load1_node.tag)
-        if hasattr(load2_node, "tag"):
-            tags.append(load2_node.tag)
+        # Add tags to the fused load (merge tag sets)
+        tags: set[str] = set()
+        for node in (load1_node, load2_node):
+            tag = getattr(node, "tag", None)
+            if tag:
+                tags |= tag if isinstance(tag, set) else {tag}
         if tags:
-            fused_load.tag = ",".join(tags)
+            fused_load.tag = tags
 
         logger.debug(f"Created fused load: {fused_load.name}")
 

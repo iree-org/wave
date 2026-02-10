@@ -91,6 +91,65 @@ class _MemoryHandlers:
         result_ssa = str(operation.result)
         self.walker.kernel_ctx.ssa_to_reg[result_ssa] = result_regs
 
+    def handle_vector_extract_op(
+        self, operation: vector_d.ExtractOp, kernel_info: KernelInfo
+    ):
+        """
+        Handle vector.extract - extract a scalar element from a vector.
+
+        Example: %scalar = vector.extract %vec[0] : f8E8M0FNU from vector<1xf8E8M0FNU>
+        """
+        source_ssa = str(operation.operands[0])
+        result_ssa = str(operation.result)
+
+        ctx = self.walker.kernel_ctx
+        source_regs = ctx.ssa_to_reg.get(source_ssa)
+
+        if source_regs is None:
+            return
+
+        # Get the index from attributes
+        # vector.extract %vec[0] has static_position attribute
+        idx = 0
+        if "static_position" in operation.attributes:
+            position = operation.attributes["static_position"]
+            idx = (
+                int(position[0]) if hasattr(position, "__getitem__") else int(position)
+            )
+
+        if idx < 0:
+            raise ValueError(f"Invalid negative extract index: {idx} for {source_ssa}")
+
+        # Extract the single register at the given index
+        if isinstance(source_regs, (list, tuple)) and idx < len(source_regs):
+            result_reg = source_regs[idx]
+            ctx.ssa_to_reg[result_ssa] = result_reg
+        else:
+            # If source is already a scalar, just pass it through
+            ctx.ssa_to_reg[result_ssa] = source_regs
+
+    def handle_vector_bitcast_op(
+        self, operation: vector_d.BitCastOp, kernel_info: KernelInfo
+    ):
+        """
+        Handle vector.bitcast - reinterpret cast between vector types.
+
+        Example: %fp4_vec = vector.bitcast %i8_vec : vector<16xi8> to vector<32xf4E2M1FN>
+
+        Bitcast doesn't change the underlying registers, just reinterprets the type.
+        """
+        source_ssa = str(operation.operands[0])
+        result_ssa = str(operation.result)
+
+        ctx = self.walker.kernel_ctx
+        source_regs = ctx.ssa_to_reg.get(source_ssa)
+
+        if source_regs is None:
+            return
+
+        # Bitcast is a no-op for register allocation - same registers, different interpretation
+        ctx.ssa_to_reg[result_ssa] = source_regs
+
     def handle_vector_store_op(
         self, operation: vector_d.StoreOp, kernel_info: KernelInfo
     ):
@@ -258,6 +317,100 @@ class _MemoryHandlers:
                 f"lhs={lhs_ssa} ({lhs_regs}), rhs={rhs_ssa} ({rhs_regs})"
             )
 
+    def handle_scaled_mfma_op(
+        self, operation: amdgpu_d.ScaledMFMAOp, kernel_info: KernelInfo
+    ):
+        """Handle amdgpu.scaled_mfma operations - emit scaled MFMA instruction for MXFP4/FP6/FP8."""
+
+        # Scaled MFMA format: %result = amdgpu.scaled_mfma M x N x K
+        #                      (%scaleA * %dataA) * (%scaleB * %dataB) + %acc
+        # where scaleA and scaleB are scalar f8E8M0FNU values (often from vector.extract)
+        from .kernel_mfma import _MFMASupport
+
+        ctx = self.walker.kernel_ctx
+
+        # Extract M, N, K dimensions from attributes
+        # These are MLIR IntegerAttr, so we need to convert to int
+        m = int(operation.attributes["m"])
+        n = int(operation.attributes["n"])
+        k = int(operation.attributes["k"])
+
+        # Derive cbsz/blgp format codes from operand types
+        # This matches the C++ backend's getScaledMFMAFormatCode() logic
+        a_type_str = str(operation.operands[0].type)
+        b_type_str = str(operation.operands[1].type)
+        cbsz = _MFMASupport._get_scaled_mfma_format_code(a_type_str)
+        blgp = _MFMASupport._get_scaled_mfma_format_code(b_type_str)
+
+        # Get operands based on actual MLIR structure
+        # Operand order: sourceA, sourceB, destC, scaleA, scaleB
+        data_a_ssa = str(operation.operands[0])  # sourceA: vector<32xf4E2M1FN>
+        data_b_ssa = str(operation.operands[1])  # sourceB: vector<32xf4E2M1FN>
+        acc_ssa = str(operation.operands[2])  # destC: vector<4xf32>
+        scale_a_ssa = str(operation.operands[3])  # scaleA: f8E8M0FNU (scalar)
+        scale_b_ssa = str(operation.operands[4])  # scaleB: f8E8M0FNU (scalar)
+
+        # Get registers from kernel context
+        scale_a_reg = ctx.ssa_to_reg.get(scale_a_ssa)
+        data_a_regs = ctx.ssa_to_reg.get(data_a_ssa)
+        scale_b_reg = ctx.ssa_to_reg.get(scale_b_ssa)
+        data_b_regs = ctx.ssa_to_reg.get(data_b_ssa)
+        acc_regs = ctx.ssa_to_reg.get(acc_ssa)
+
+        if data_a_regs and data_b_regs and scale_a_reg and scale_b_reg:
+            # Currently only support 16x16x128 F8F6F4 (MXFP4)
+            if m == 16 and n == 16 and k == 128:
+                # For MXFP4: 32 elements of FP4 = 16 bytes = 4 VGPRs (4 bytes/VGPR)
+                # vector<32xf4E2M1FN> bitcast from vector<16xi8> -> 4 VGPRs
+
+                # Scale registers should be single VGPRs (extracted from vector<1xf8E8M0FNU>)
+                if isinstance(scale_a_reg, (list, tuple)):
+                    scale_a_vreg = scale_a_reg[0] if len(scale_a_reg) > 0 else None
+                else:
+                    scale_a_vreg = scale_a_reg
+
+                if isinstance(scale_b_reg, (list, tuple)):
+                    scale_b_vreg = scale_b_reg[0] if len(scale_b_reg) > 0 else None
+                else:
+                    scale_b_vreg = scale_b_reg
+
+                # Verify we have valid scale registers
+                if scale_a_vreg is None or scale_b_vreg is None:
+                    raise RuntimeError(
+                        f"Scaled MFMA scale registers not available. "
+                        f"scale_a={scale_a_ssa} -> {scale_a_vreg}, "
+                        f"scale_b={scale_b_ssa} -> {scale_b_vreg}"
+                    )
+
+                result_regs = ctx.emit_mfma_f32_16x16x128_f8f6f4(
+                    data_a_regs,
+                    data_b_regs,
+                    scale_a_vreg,
+                    scale_b_vreg,
+                    acc_regs if acc_regs and len(acc_regs) == 4 else None,
+                    cbsz=cbsz,
+                    blgp=blgp,
+                )
+
+                # Track result in SSA mapping
+                result_ssa = str(operation.result)
+                ctx.ssa_to_reg[result_ssa] = result_regs
+
+                return
+            else:
+                raise NotImplementedError(
+                    f"Unsupported scaled MFMA dimensions: {m}x{n}x{k}. "
+                    f"Currently only 16x16x128 F8F6F4 is supported."
+                )
+
+        raise RuntimeError(
+            f"Scaled MFMA operation inputs not available. "
+            f"data_a={data_a_ssa} ({data_a_regs}), "
+            f"data_b={data_b_ssa} ({data_b_regs}), "
+            f"scale_a={scale_a_ssa} ({scale_a_reg}), "
+            f"scale_b={scale_b_ssa} ({scale_b_reg})"
+        )
+
     def handle_barrier_op(self, operation: gpu_d.BarrierOp, kernel_info: KernelInfo):
         """Handle gpu.barrier operations - emit synchronization barrier."""
         self.walker.unified.s_barrier(comment="workgroup barrier")
@@ -365,7 +518,7 @@ class _MemoryHandlers:
         total_bytes = num_elements * element_bytes
 
         # Alignment depends on load size
-        DS_ALIGN = 16 if total_bytes == 16 else 8
+        DS_ALIGN = 16 if total_bytes == 16 else (8 if total_bytes == 8 else 4)
 
         if DEBUG_DS_OFFSET:
             print(f"[DS_OFFSET_DEBUG] memref={memref_ssa[:60]}...")
@@ -426,10 +579,18 @@ class _MemoryHandlers:
                 KVReg(dst_range.base_reg.id),
                 KVReg(dst_range.base_reg.id + 1),
             )
+        elif total_bytes <= 4:
+            # 32-bit or smaller load (1, 2, or 4 bytes)
+            # ds_read_b32 loads 4 bytes into a single VGPR.
+            # For sub-4-byte types (e.g., 1-byte i8/f8E8M0FNU scales),
+            # the needed data is in the low bits; upper bits are don't-care.
+            dst_vreg = ctx.vreg()
+            ctx.emit_lds_read_b32(dst_vreg, addr_vreg, lds_offset)
+            result_regs = (dst_vreg,)
         else:
             raise NotImplementedError(
                 f"LDS load of {total_bytes} bytes not supported. "
-                f"Expected 8 (ds_read_b64) or 16 (ds_read_b128) bytes."
+                f"Expected 4 (ds_read_b32), 8 (ds_read_b64), or 16 (ds_read_b128) bytes."
             )
 
         # Track in SSA mapping as tuple of KVReg
@@ -629,7 +790,31 @@ class _MemoryHandlers:
         src_regs = self._current_store_regs
 
         # Build a properly aligned KRegRange for the source
-        if vector_bytes == 4:
+        if vector_bytes <= 1:
+            # 1-byte store (e.g., i8 scale factors)
+            # ds_write_b8 writes the low byte of a VGPR to LDS
+            src_vreg = src_regs[0] if isinstance(src_regs, (tuple, list)) else src_regs
+            ctx.program.emit(
+                KInstr(
+                    "ds_write_b8",
+                    (),
+                    (addr_vreg, src_vreg),
+                    comment=f"LDS store 1B to {memref_ssa}",
+                )
+            )
+        elif vector_bytes <= 2:
+            # 2-byte store
+            # ds_write_b16 writes the low 16 bits of a VGPR to LDS
+            src_vreg = src_regs[0] if isinstance(src_regs, (tuple, list)) else src_regs
+            ctx.program.emit(
+                KInstr(
+                    "ds_write_b16",
+                    (),
+                    (addr_vreg, src_vreg),
+                    comment=f"LDS store 2B to {memref_ssa}",
+                )
+            )
+        elif vector_bytes <= 4:
             # Single register
             src_vreg = src_regs[0] if isinstance(src_regs, (tuple, list)) else src_regs
             ctx.program.emit(

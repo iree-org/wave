@@ -14,7 +14,9 @@
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 using namespace mlir;
 using namespace wave;
@@ -85,24 +87,38 @@ struct WaterWaveDetectNormalFormsPass
     Operation *rootOp = getOperation();
     MLIRContext *ctx = rootOp->getContext();
 
+    // update exisiting normalform Modules
+    rootOp->walk([&](normalform::ModuleOp nfModule) {
+      nfModule.inferNormalForms(collectWaveNormalForms(ctx));
+    });
+
+    // Run the pattern rewriter on any nested builtin modules.
+    RewritePatternSet patterns(&getContext());
+    patterns.add<DetectNormalFormsPattern>(&getContext());
+    walkAndApplyPatterns(getOperation(), std::move(patterns));
+
     // If the root operation is a ModuleOp, wrap its contents in a normalform
-    // module first.
+    // module. Only the root module can be a builtin module at this point.
+    // If all contained operations are already normalform module operations,
+    // we don't need to wrap the root modules body in another normalform.module.
     if (auto rootModule = dyn_cast<ModuleOp>(rootOp)) {
+      auto ops = rootModule.getBodyRegion().getOps();
+      if (!ops.empty() &&
+          llvm::all_of(ops, llvm::IsaPred<normalform::ModuleOp>))
+        return;
+
       normalform::ModuleOp nfModule =
           normalform::ModuleOp::create(rootModule.getLoc(), {});
 
-      Block &nfBody = nfModule.getBodyRegion().front();
-      for (Operation &op : llvm::make_early_inc_range(*rootModule.getBody()))
-        op.moveBefore(&nfBody, nfBody.end());
+      Block *currentBlock = rootModule.getBody();
+      Block *newBlock = nfModule.getBody();
+
+      newBlock->getOperations().splice(newBlock->getOperations().end(),
+                                       currentBlock->getOperations());
 
       rootModule.getBody()->push_back(nfModule);
       nfModule.inferNormalForms(collectWaveNormalForms(ctx));
     }
-
-    // Run the pattern rewriter on any nested modules.
-    RewritePatternSet patterns(&getContext());
-    patterns.add<DetectNormalFormsPattern>(&getContext());
-    walkAndApplyPatterns(getOperation(), std::move(patterns));
   }
 };
 

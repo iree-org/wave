@@ -43,6 +43,13 @@ mlir::AffineMap alignMapSymbols(mlir::AffineMap map,
                                 llvm::ArrayRef<mlir::Attribute> symbols,
                                 llvm::ArrayRef<mlir::Attribute> allSymbols);
 
+// Create an index mapping induced by the given wave constraint. Combine it with
+// the base index mapping if provided.
+WaveIndexMappingAttr
+applyConstraint(WaveConstraintAttr constraint, WaveWorkgroupDim dim,
+                uint64_t threadsPerWave,
+                WaveIndexMappingAttr baseMapping = nullptr);
+
 // Create an index mapping induced by the given workgroup constraint. Combine
 // it with the base index mapping if provided.
 WaveIndexMappingAttr
@@ -54,13 +61,6 @@ applyConstraint(WorkgroupConstraintAttr constraint,
 WaveIndexMappingAttr
 applyConstraint(TilingConstraintAttr constraint,
                 WaveIndexMappingAttr baseMapping = nullptr);
-
-// Create an index mapping induced by the given constraint. Combine it with the
-// base index mapping if provided. Call `applyConstraint` if the specific kind
-// of constraint is already known.
-WaveIndexMappingAttr
-applyConstraintGeneric(mlir::Attribute constraint,
-                       WaveIndexMappingAttr baseMapping = nullptr);
 
 } // namespace wave
 

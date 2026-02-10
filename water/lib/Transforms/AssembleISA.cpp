@@ -28,7 +28,7 @@ void initializeAMDGPUTarget() {
 
 FailureOr<SmallVector<char, 0>>
 assembleISAToHSACO(Operation *op, StringRef isa,
-                   llvm::TargetMachine &targetMachine, StringRef toolkitPath) {
+                   llvm::TargetMachine &targetMachine, StringRef lldPath) {
   initializeAMDGPUTarget();
   auto emitError = [&]() -> InFlightDiagnostic { return op->emitError(); };
 
@@ -38,7 +38,7 @@ assembleISAToHSACO(Operation *op, StringRef isa,
   if (failed(binary))
     return failure();
 
-  return ROCDL::linkObjectCode(*binary, toolkitPath, emitError);
+  return ROCDL::linkObjectCode(*binary, lldPath, emitError);
 }
 
 } // namespace mlir::water

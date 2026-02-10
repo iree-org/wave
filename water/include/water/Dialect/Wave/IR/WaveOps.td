@@ -100,6 +100,47 @@ class BinaryWaveOp<string mnemonic>
     "functional-type(operands, results)";
 }
 
+class ReductionWaveOp<string mnemonic>
+    : WaveOp<mnemonic,
+        [WaveInferTypeOpInterface, ReductionTypeInferenceOpTrait,
+         WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
+         RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
+      WaveArithmeticOpDoc {
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
+    Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
+    Arg<WaveReductionScopeAttr, "Scope of the reduction">:$scope,
+    Arg<OptionalAttr<WaveSymbolAttr>, "Reduction axis">:$axis
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Reduced result">:$result
+  );
+
+  let assemblyFormat =
+      "$input `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
+      "$scope " # commonArgumentsSyntax # " attr-dict `:`"
+      "functional-type(operands, results)";
+}
+
+def SumOp : ReductionWaveOp<"sum"> {
+  let summary = "Reduce a tensor by summing along a specified axis";
+  let description = [{
+    Reduces the input tensor by summing its elements along the specified
+    symbolic axis. The initial value is used as the starting point for the
+    reduction.
+  }] # baseDescription;
+}
+
+def MaxElementOp : ReductionWaveOp<"max_element"> {
+  let summary = "Reduce a tensor by taking the maximum along a specified axis";
+  let description = [{
+    Reduces the input tensor by taking the maximum of its elements along the
+    specified symbolic axis. The initial value is used as the starting point
+    for the reduction.
+  }] # baseDescription;
+}
+
 //-----------------------------------------------------------------------------
 // Arithmetic operations
 //-----------------------------------------------------------------------------
@@ -124,6 +165,16 @@ def DivOp : BinaryWaveOp<"div"> {
   let description = baseDescription;
 }
 
+def MaxOp : BinaryWaveOp<"max"> {
+  let summary = "Get the maximum of two values";
+  let description = baseDescription;
+}
+
+def MinOp : BinaryWaveOp<"min"> {
+  let summary = "Get the minimum of two values";
+  let description = baseDescription;
+}
+
 def Exp2Op : UnaryWaveOp<"exp2"> {
   let summary = "Compute 2 to the power of the argument";
   let description = baseDescription;
@@ -132,6 +183,29 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 def ReciprocalOp : UnaryWaveOp<"reciprocal"> {
   let summary = "Compute the reciprocal (1/x) of the argument";
   let description = baseDescription;
+  let hasVerifier = 1;
+}
+
+def SelectOp : WaveOp<"select",
+    [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Select between two values based on a condition";
+  let description = [{
+    Selects between two values based on a condition. The selection is element-wise, that is,
+    the condition is a tensor co-indexed with the two values.
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Condition">:$condition,
+    Arg<WaveTensorInRegister, "First value">:$lhs,
+    Arg<WaveTensorInRegister, "Second value">:$rhs
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Result">:$result
+  );
+  let assemblyFormat =
+    "$condition `,` $lhs `,` $rhs " # commonArgumentsSyntax # "attr-dict `:` "
+    "functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
@@ -290,23 +364,39 @@ def AllocateOp : WaveOp<"allocate", [
   let hasVerifier = 1;
 }
 
-def ExtractOp : WaveOp<"extract", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
+def ExtractOp : WaveOp<"extract",
+    [DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
   let summary = "Extracts a single element from a vector at the given index";
   let description = [{
-    Extracts a single element from a 1-D vector at the specified index position,
-    producing a 1-element vector.
+    This is an internal operation that appears during expansion/lowering and
+    is not intended for use in user code. As such, it intentionally does not
+    implement the interfaces for type and index dataflow analyses as it only
+    appears after those. It does, however, implement the elements per thread
+    interface as it is needed for lowering to vectors.
+
+    When lowered, extracts a single element from the vector that corresponds
+    to lowered register-resident tensor, producing a 1-element vector.
+    Therefore, the result tensor is always indexed by one dimension.
+
+    TODO: we don't have a good way of verifying this, but the indexing symbol
+    of the result must be the indexing symbol for which the size
+    (second element of the index expression) is greater than 1 when such a
+    symbol exists (and presumably the last / the one mapped to thread X
+    otherwise).
   }];
 
-  let arguments = (ins
+  let arguments = !con((ins
     Arg<WaveTensorInRegister, "Vector to extract from">:$source,
     Arg<WaveExprListAttr, "Index position to extract">:$position
-  );
+  ), commonArguments);
 
   let results = (outs
     Res<WaveTensorInRegister, "Extracted 1-element vector">:$result
   );
 
-  let assemblyFormat = "$source `[` $position `]` attr-dict `:` functional-type(operands, results)";
+  let assemblyFormat =
+    "$source `[` $position `]` " # commonArgumentsSyntax # "attr-dict "
+    "`:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
@@ -402,7 +492,7 @@ def WriteOp : WaveOp<"write", [
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
-    RequiresIndexExprsSidewaysBackwardPropagationOpTrait]> {
+    RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor
@@ -501,6 +591,84 @@ def CastOp : WaveOp<"cast", [
   let assemblyFormat =
     "$value_to_cast " # commonArgumentsSyntax # " attr-dict `:`"
     "qualified(type($value_to_cast)) `to` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
+def BroadcastOp : WaveOp<"broadcast", [
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Broadcast a tensor to a larger shape by replicating values";
+  let description = [{
+    Broadcasts the source tensor to the result shape by replicating values
+    along the broadcast dimensions, which must be the trailing dimensions
+    of the result shape.
+
+    When either operand or result are underspecified, the broadcast dimension
+    must be explicitly provided. Otherwise, it is inferred from the difference
+    between their respective symbolic shapes.
+
+    Developer remark: unless one of the dimensions introduced by broadcasting
+    is indexed by a symbol that is mapped to thread X, this operation does not
+    change elements-per-thread.
+  }];
+
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Source tensor to broadcast">:$source,
+    Arg<OptionalAttr<WaveSymbolArrayAttr>, "Dimensions being broadcast">:$broadcast_dims
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Broadcasted result">:$result
+  );
+
+  let assemblyFormat =
+    "$source (`dims` custom<SymbolArray>($broadcast_dims)^)?" #
+    commonArgumentsSyntax # "attr-dict `:`"
+    "functional-type(operands, results)";
+
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    // Infer broadcast dimensions from types. Expects both source and result
+    // types to be fully specified tensor types.
+    ::llvm::SmallVector<::wave::WaveSymbolAttr> inferBroadcastDims();
+  }];
+}
+
+def PermuteOp : WaveOp<"permute", [
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+  let summary = "Permute the dimensions of a register-resident tensor";
+  let description = [{
+    Reorders the symbolic dimensions of a register-resident tensor according
+    to the result type shape. This operation is primarily a semantic marker
+    that affects how index expressions are transformed during compilation.
+    At lowering time, the operation is a pass-through since the actual data
+    layout in registers remains unchanged - only the interpretation of which
+    dimension each element belongs to changes.
+
+    For example, permuting a tensor with shape [B, M, N] to [M, N, B] swaps
+    the strides associated with the symbolic dimensions in the index
+    expressions.
+
+    The result type, when fully-specified, must be a permutation of the input
+    shape (same symbols in a different order). If the result type is not
+    fully-specified, its shape will be inferred from the input type during
+    type inference.
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to permute">:$value
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Permuted value">:$result
+  );
+
+  let assemblyFormat =
+    "$value " # commonArgumentsSyntax # " attr-dict `:`"
+    "qualified(type($value)) `to` qualified(type($result))";
 
   let hasVerifier = 1;
 }

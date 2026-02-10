@@ -7,6 +7,7 @@ import functools
 import glob
 import math
 import os
+import sys
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
 
@@ -603,17 +604,20 @@ def check_leaks(f):
     Decorator to check for torch tesnors leaks.
     """
 
+    if "WAVE_CHECK_LEAKS" not in os.environ or int(os.environ["WAVE_CHECK_LEAKS"]) != 1:
+        return f
+
     @functools.wraps(f)
     def wrapper(*args, **kwds):
         before = {id(obj) for obj in get_live_tensors()}
         result = f(*args, **kwds)
         after = get_live_tensors()
         if len(after) > len(before):
-            print("Leaked tensors:")
+            print("Leaked tensors:", file=sys.stderr)
             for obj in after:
                 if id(obj) not in before:
                     print(hex(id(obj)), type(obj), obj.size())
-            print("--------------------------------")
+            print("--------------------------------", file=sys.stderr)
             raise RuntimeError("Leaks detected")
 
         return result

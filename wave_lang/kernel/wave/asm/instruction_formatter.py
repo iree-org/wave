@@ -187,6 +187,7 @@ class InstructionFormatter:
         defs: List[Any] = None,
         uses: List[Any] = None,
         comment: str = None,
+        modifiers: str = None,
     ) -> str:
         """
         Format an instruction to its assembly representation.
@@ -207,10 +208,10 @@ class InstructionFormatter:
         instr_def = self._registry.get(name)
 
         if instr_def:
-            return self._format_with_def(instr_def, defs, uses, comment)
+            return self._format_with_def(instr_def, defs, uses, comment, modifiers)
         else:
             # Fallback for instructions not in registry
-            return self._format_fallback(name, defs, uses, comment)
+            return self._format_fallback(name, defs, uses, comment, modifiers)
 
     def _format_with_def(
         self,
@@ -218,6 +219,7 @@ class InstructionFormatter:
         defs: List[Any],
         uses: List[Any],
         comment: str,
+        modifiers: str = None,
     ) -> str:
         """Format instruction using its definition."""
         # Handle pseudo-ops
@@ -280,6 +282,10 @@ class InstructionFormatter:
                 line = parts[0] + " lds  //" + parts[1]
             else:
                 line = line + " lds"
+
+        # Add extra modifiers (e.g., cbsz:4 blgp:4)
+        if modifiers:
+            line = line + " " + modifiers
 
         # Add comment
         if comment:
@@ -352,6 +358,7 @@ class InstructionFormatter:
         defs: List[Any],
         uses: List[Any],
         comment: str,
+        modifiers: str = None,
     ) -> str:
         """Format instruction not in registry (fallback)."""
         # Use name as mnemonic
@@ -364,6 +371,10 @@ class InstructionFormatter:
             line = f"    {mnemonic}"
         else:
             line = f"    {mnemonic} {', '.join(operands)}"
+
+        # Add extra modifiers (e.g., cbsz:4 blgp:4)
+        if modifiers:
+            line = line + " " + modifiers
 
         if comment:
             line += f"  // {comment}"

@@ -12,6 +12,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -121,4 +122,52 @@ wave::evaluateMapWithHyperparams(AffineMap map, ArrayRef<Attribute> symbols,
     return std::nullopt;
   }
   return out;
+}
+
+LogicalResult wave::computeWavesPerBlockFromConstraints(
+    const llvm::SmallDenseMap<wave::WaveSymbolAttr,
+                              wave::WorkgroupConstraintAttr>
+        &workgroupConstraints,
+    const llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WaveConstraintAttr>
+        &waveConstraints,
+    wave::WaveHyperparameterAttr hyperparams,
+    SmallVectorImpl<unsigned> &wavesPerBlock) {
+  // Default to 1 wave per block for each dimension, this may be recomputed
+  // later if the corresponding constraints are provided.
+  wavesPerBlock.assign(/*NumElts=*/3, /*Elt=*/1);
+
+  for (auto &&[symbol, waveConstraint] : waveConstraints) {
+    auto wgIt = workgroupConstraints.find(symbol);
+    if (wgIt == workgroupConstraints.end())
+      return failure();
+
+    wave::WorkgroupConstraintAttr wgConstraint = wgIt->second;
+
+    std::optional<llvm::SmallVector<int64_t>> wgEvaluated =
+        wave::evaluateMapWithHyperparams(
+            wgConstraint.getTileSize().getMap(),
+            wgConstraint.getTileSize().getSymbols(), hyperparams);
+    if (!wgEvaluated || wgEvaluated->size() != 1)
+      return failure();
+
+    std::optional<llvm::SmallVector<int64_t>> waveEvaluated =
+        wave::evaluateMapWithHyperparams(
+            waveConstraint.getTileSize().getMap(),
+            waveConstraint.getTileSize().getSymbols(), hyperparams);
+    if (!waveEvaluated || waveEvaluated->size() != 1)
+      return failure();
+
+    int64_t workgroupSize = wgEvaluated->front();
+    int64_t waveSize = waveEvaluated->front();
+
+    if (waveSize <= 0 || workgroupSize % waveSize != 0)
+      return failure();
+
+    int64_t numWaves = workgroupSize / waveSize;
+    unsigned wgDim =
+        static_cast<unsigned>(wgConstraint.getWorkgroupDim().getValue());
+    wavesPerBlock[wgDim] = static_cast<unsigned>(numWaves);
+  }
+
+  return success();
 }

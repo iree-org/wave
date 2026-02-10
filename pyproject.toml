@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools~=75.8.2",
+    "setuptools-scm~=9.2.2",
     "wheel~=0.45.1",
     "cmake~=3.31.6",
     "ninja~=1.11.1",
@@ -11,7 +12,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wave-lang"
-version = "3.9.1"
 description = "Wave Language for Machine Learning"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -30,13 +30,16 @@ classifiers = [
 
 dependencies = [
     "dill",
-    "iree-base-compiler",
-    "iree-base-runtime",
+    "iree-base-compiler~=3.11.0rc",
+    "iree-base-runtime~=3.11.0rc",
     "ml_dtypes",
     "numpy",
-    "torch",
+    "sympy",
+    "torch>=2.6,<2.10",
     "typing_extensions",
 ]
+
+dynamic = ["version"]
 
 [project.optional-dependencies]
 testing = [

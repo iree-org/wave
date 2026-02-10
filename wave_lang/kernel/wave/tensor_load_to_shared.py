@@ -146,8 +146,14 @@ def get_global_element_index(
     assert isinstance(node, Read), "Expect Read custom node as caller argument"
     index = remove_thread_indexing(node.index)
 
+    # Build a mapping from base dimensions to thread_index values
+    # thread_index may have scaled keys (K/2) while index has base keys (K)
+    base_to_thread_index = {infer_dim(k): v for k, v in thread_index.items()}
+
     return {
-        key: IndexSequence(index[key].start + thread_index[key], 1, 1)
+        key: IndexSequence(
+            index[key].start + base_to_thread_index[infer_dim(key)], 1, 1
+        )
         for key in index.keys()
     }
 
@@ -174,10 +180,11 @@ def get_tensor_load_descriptor_config(
         )
 
     # Descriptor always expect bounds for all dimensions so if no bounds are provided, set to full shape
+    # Use original symbolic shape dimensions as keys (e.g., K/2) since emitter looks up by these
     if bounds is None:
-        bounds = {infer_dim(v): v for v in symbolic_shape}
+        bounds = {v: v for v in symbolic_shape}
     else:
-        bounds = {infer_dim(v): bounds.get(infer_dim(v), v) for v in symbolic_shape}
+        bounds = {v: bounds.get(infer_dim(v), v) for v in symbolic_shape}
 
     distributed_shape = materialize_shape(
         constraint_tile_size, symbolic_shape, read.vector_shapes

@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -21,8 +23,11 @@
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -86,6 +91,37 @@ static ParseResult parseSingleSymbol(OpAsmParser &parser,
 static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
                               wave::WaveSymbolAttr symbolAttr) {
   printer.printSymbolName(symbolAttr.getName());
+}
+
+// Parse an array of wave symbols like [@M, @N, @K].
+// Custom parsing is required because MLIR's default parser creates
+// SymbolRefAttr for @Name syntax, but Wave requires WaveSymbolAttr for type
+// system consistency.
+static ParseResult parseSymbolArray(OpAsmParser &parser,
+                                    ArrayAttr &symbolArrayAttr) {
+  SmallVector<Attribute> symbols;
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square, [&]() {
+        StringAttr strAttr;
+        if (failed(parser.parseSymbolName(strAttr)))
+          return failure();
+        symbols.push_back(
+            wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue()));
+        return success();
+      }))
+    return failure();
+  symbolArrayAttr = parser.getBuilder().getArrayAttr(symbols);
+  return success();
+}
+
+// Print an array of wave symbols like [@M, @N, @K].
+static void printSymbolArray(OpAsmPrinter &printer, Operation *,
+                             ArrayAttr symbolArrayAttr) {
+  printer << "[";
+  llvm::interleaveComma(symbolArrayAttr, printer, [&](Attribute attr) {
+    auto sym = llvm::cast<wave::WaveSymbolAttr>(attr);
+    printer.printSymbolName(sym.getName());
+  });
+  printer << "]";
 }
 
 #define GET_OP_CLASSES
@@ -226,11 +262,8 @@ void wave::IterateOp::getSuccessorRegions(
     RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  regions.emplace_back(
-      RegionSuccessor(getOperation(), getResults().drop_back(getNumResults())));
-  regions.emplace_back(
-      RegionSuccessor(&getBody(), getLoopBody()->getArguments().drop_back(
-                                      getLoopBody()->getNumArguments())));
+  regions.emplace_back(RegionSuccessor::parent());
+  regions.emplace_back(RegionSuccessor(&getBody()));
 }
 
 llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsForward(
@@ -262,8 +295,6 @@ LogicalResult wave::IterateOp::verify() {
   TypeRange blockIterArgTypes = getIterArgs().getTypes();
   TypeRange iterArgTypes =
       getOperands().drop_back(getCaptures().size()).getTypes();
-  TypeRange captureTypes = getCaptures().getTypes();
-  TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
   TypeRange resultTypes = getResultTypes();
   if (iterArgTypes.size() != blockIterArgTypes.size()) {
     return emitOpError() << "expects the same number if iter_args ("
@@ -427,6 +458,8 @@ llvm::FailureOr<ChangeResult> wave::MmaOp::propagateBackward(
                                            "result", "accumulator", errs);
 }
 
+LogicalResult wave::MmaOp::finalizeTypeInference() { return success(); }
+
 // Set the value of `lattice` to `newLattice` and return whether a change
 // happened. Note that this does NOT verify whether the lattice change goes into
 // the direction of top or bottom.
@@ -438,17 +471,6 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   lattice = newLattice;
   return ChangeResult::Change;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                  FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Update index expressions of the result of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
@@ -834,9 +856,15 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
   return *this;
 }
 
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() {
+  return parent.m();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() {
+  return parent.n();
+}
+[[maybe_unused]] MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() {
+  return parent.k();
+}
 void MmaSingleIndexExprBuilder::populate(
     llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
   parent.populate(attributes);
@@ -997,7 +1025,8 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
 /// the constraints are being used, which is in particular necessary to only
 /// apply tiling constraints inside the relevant loops.
 static void mixInThreadIndependentConstraints(
-    Operation *where, llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
+    Operation *where, uint64_t threadsPerWave,
+    llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
     llvm::SmallVector<NamedAttribute> &symbolMappings) {
@@ -1013,15 +1042,30 @@ static void mixInThreadIndependentConstraints(
         mappingIt != symbolMappings.end()
             ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
             : nullptr;
+
+    // There is interaction between constraints of different kinds for the same
+    // symbol, find them all upfront.
+    wave::WorkgroupConstraintAttr workgroupConstraint;
+    wave::WaveConstraintAttr waveConstraint;
+    wave::TilingConstraintAttr tilingConstraint;
     for (Attribute constraint : it->second) {
+      if (auto maybeWorkgroupConstraint =
+              dyn_cast<wave::WorkgroupConstraintAttr>(constraint)) {
+        workgroupConstraint = maybeWorkgroupConstraint;
+      } else if (auto maybeWaveConstraint =
+                     dyn_cast<wave::WaveConstraintAttr>(constraint)) {
+        waveConstraint = maybeWaveConstraint;
+      } else if (auto maybeTilingConstraint =
+                     dyn_cast<wave::TilingConstraintAttr>(constraint)) {
+        tilingConstraint = maybeTilingConstraint;
+      } else {
+        llvm_unreachable("unsupported constraint type");
+      }
+    }
+
+    if (tilingConstraint) {
       // Tiling constraints should only be applied inside the corresponding
       // parent iterate op.
-      auto tilingConstraint = dyn_cast<wave::TilingConstraintAttr>(constraint);
-      if (!tilingConstraint) {
-        mapping = applyConstraintGeneric(constraint, mapping);
-        continue;
-      }
-
       for (Operation *parent = where->getParentOp(); parent;
            parent = parent->getParentOp()) {
         auto iterateOp = dyn_cast<wave::IterateOp>(parent);
@@ -1029,11 +1073,23 @@ static void mixInThreadIndependentConstraints(
           continue;
         wave::WaveSymbolAttr iterSymbol = iterateOp.getIterator();
         if (iterSymbol.getName() == symbol.getName()) {
-          mapping = wave::applyConstraint(tilingConstraint, mapping);
+          mapping = applyConstraint(tilingConstraint, mapping);
           break;
         }
       }
     }
+
+    if (workgroupConstraint)
+      mapping = applyConstraint(workgroupConstraint, mapping);
+
+    if (waveConstraint) {
+      assert(workgroupConstraint && "workgroup constraint must be present if a "
+                                    "wave constraint for the same symbol is");
+      mapping = applyConstraint(
+          waveConstraint, workgroupConstraint.getWorkgroupDim().getValue(),
+          threadsPerWave, mapping);
+    }
+
     if (mappingIt != symbolMappings.end())
       mappingIt->setValue(mapping);
     else if (mapping)
@@ -1070,7 +1126,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   }
 
   mixInThreadIndependentConstraints(
-      *this, indexingSymbols, initObject.symbolConstraints, symbolMappings);
+      *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
   resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
 
   return llvm::success();
@@ -1113,12 +1170,14 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol, kSymbol},
-                                    initObject.symbolConstraints,
-                                    operandSymbolMappings);
-  mixInThreadIndependentConstraints(*this, {mSymbol, nSymbol},
-                                    initObject.symbolConstraints,
-                                    accumulatorSymbolMappings);
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      {mSymbol, nSymbol, kSymbol}, initObject.symbolConstraints,
+      operandSymbolMappings);
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      {mSymbol, nSymbol}, initObject.symbolConstraints,
+      accumulatorSymbolMappings);
 
   // Create the LHS and RHS mappings that are not using symbols
   // irrelevant for them.
@@ -1266,7 +1325,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
       computeElementsPerThreadForOperand(
           getAccumulatorMutable().getOperandNumber());
@@ -1285,7 +1344,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::MmaOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // For MMA, the accumulator should have the same elements per thread as the
   // result. The LHS and RHS operands may have different constraints based on
   // their dimensions.
@@ -1495,9 +1554,14 @@ static LogicalResult verifyReadWriteBounds(Location loc,
     }
 
     // Value type must be WaveExprListAttr.
-    if (!isa<wave::WaveExprListAttr>(value.getValue()))
+    auto exprListAttr = dyn_cast<wave::WaveExprListAttr>(value.getValue());
+    if (!exprListAttr)
       return emitError(loc) << "'bounds' values must be WaveExprListAttr, got "
                             << value.getValue();
+    if (exprListAttr.getRank() != 1) {
+      return emitError(loc)
+             << "'bounds' must only contain single-result expressions";
+    }
 
     knownSymbolNames.insert(value.getName().strref());
   }
@@ -1518,7 +1582,13 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        Type memoryType, Type valueType,
                                        WaveReadWriteBoundsAttr bounds,
                                        ArrayAttr orderedSyms) {
-  // Skip verification if memory is already resolved to MemRefType.
+
+  if (failed(wave::detail::verifyElementTypesMatch(
+          op->getLoc(), "memory", memoryType, "register", valueType)))
+    return failure();
+
+  // Skip the rest of the verification if memory is already resolved to
+  // MemRefType.
   auto tensorType = dyn_cast<WaveTensorType>(memoryType);
   if (!tensorType)
     return success();
@@ -1564,7 +1634,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // ReadOp only propagates elements_per_thread attribute to result (register).
   // Memory operand is ignored for propagation - you can read any number of
   // elements from memory regardless of how many were written.
@@ -1582,7 +1652,7 @@ llvm::FailureOr<mlir::ChangeResult>
 wave::ReadOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
-    llvm::raw_ostream &) {
+    llvm::raw_ostream &, const wave::ElementsPerThreadInit &) {
   // ReadOp doesn't propagate backward to memory operand.
   // Memory is decoupled from register dataflow for elements_per_thread.
   return mlir::ChangeResult::NoChange;
@@ -1615,6 +1685,24 @@ LogicalResult wave::RegisterOp::verify() {
 // ExtractOp
 //-----------------------------------------------------------------------------
 
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+
+  return detail::checkAndPropagateElementsPerThreadFromConstant(
+      wave::ElementsPerThreadLatticeValue(1), /*immutableValues=*/{},
+      resultElements, "op semantics", "", "result", errs);
+}
+
+FailureOr<ChangeResult> wave::ExtractOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // We don't have enough information to propagate backwards here.
+  return ChangeResult::NoChange;
+}
+
 LogicalResult ExtractOp::verify() {
   wave::WaveExprListAttr position = getPosition();
   if (position.getRank() != 1) {
@@ -1622,6 +1710,42 @@ LogicalResult ExtractOp::verify() {
                             "got "
                          << position.getRank();
   }
+
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
+                                             getSource().getType(), "result",
+                                             getResult().getType()))) {
+    return failure();
+  }
+
+  if (auto resultVectorType = dyn_cast<VectorType>(getResult().getType())) {
+    if (resultVectorType.getShape()[0] != 1) {
+      return emitOpError() << "result must be a 1-element vector, got "
+                           << resultVectorType;
+    }
+    return success();
+  }
+
+  auto resultTensorType = cast<WaveTensorType>(getResult().getType());
+  if (!resultTensorType.getFullySpecified() ||
+      resultTensorType.getRank() != 1) {
+    return emitOpError() << "result must be a 1-dimensional tensor, got "
+                         << resultTensorType;
+  }
+
+  auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
+  // For mixed types, cannot do anything here.
+  if (!sourceTensorType)
+    return success();
+
+  if (!sourceTensorType.getFullySpecified())
+    return emitOpError() << "source tensor type must be fully specified";
+
+  if (!llvm::is_contained(sourceTensorType.getShape(),
+                          resultTensorType.getShape()[0])) {
+    return emitOpError() << "source tensor type dimensions must contain the "
+                            "result tensor type dimension";
+  }
+
   return success();
 }
 
@@ -1677,7 +1801,7 @@ LogicalResult WriteOp::verify() {
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only validates that elements_per_thread attribute matches register
   // operand. Memory operand is ignored for propagation - you can write to
   // memory with any layout.
@@ -1699,7 +1823,7 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
-    llvm::raw_ostream &errs) {
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
   // WriteOp only propagates backward to register operand (value_to_store).
   // Memory operand is ignored - you can write any layout to memory.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
@@ -1825,14 +1949,446 @@ LogicalResult wave::CastOp::verify() {
 
 LogicalResult wave::ReciprocalOp::verify() {
   Type argType = getArgument().getType();
-  Type elementType =
-      llvm::TypeSwitch<Type, Type>(argType)
-          .Case<WaveTensorType, VectorType>(
-              [](auto containerType) { return containerType.getElementType(); })
-          .Default([](Type type) { return type; });
-
+  Type elementType = wave::getElementType(argType);
   if (!isa<FloatType>(elementType))
     return emitOpError("requires float element type, but got ") << elementType;
 
   return success();
+}
+
+//-----------------------------------------------------------------------------
+// SelectOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::SelectOp::verify() {
+  if (failed(detail::verifyTypesCompatible(
+          getLhs().getType(), getRhs().getType(), /*includeAddressSpace=*/false,
+          getLoc(), "LHS", "RHS")))
+    return failure();
+
+  if (failed(detail::verifyTypesCompatible(
+          getLhs().getType(), getResult().getType(),
+          /*includeAddressSpace=*/false, getLoc(), "LHS", "result")))
+    return failure();
+
+  auto intType =
+      dyn_cast<IntegerType>(getElementType(getCondition().getType()));
+  if (!intType || intType.getWidth() != 1)
+    return emitOpError("condition must be a tensor or vector of i1");
+
+  SmallVector<int64_t> vecShapes;
+  if (auto conditionVec = dyn_cast<VectorType>(getCondition().getType()))
+    vecShapes.push_back(conditionVec.getNumElements());
+  if (auto lhsVec = dyn_cast<VectorType>(getLhs().getType()))
+    vecShapes.push_back(lhsVec.getNumElements());
+  if (auto rhsVec = dyn_cast<VectorType>(getRhs().getType()))
+    vecShapes.push_back(rhsVec.getNumElements());
+  if (auto resultVec = dyn_cast<VectorType>(getResult().getType()))
+    vecShapes.push_back(resultVec.getNumElements());
+
+  for (int64_t i = 0, e = vecShapes.size(); i < e; ++i) {
+    for (int64_t j = i + 1; j < e; ++j) {
+      if (vecShapes[i] == vecShapes[j])
+        continue;
+
+      emitError() << "expects all vector shapes to be equal, got "
+                  << vecShapes[i] << " and " << vecShapes[j];
+    }
+  }
+
+  auto conditionTensor = dyn_cast<WaveTensorType>(getCondition().getType());
+  auto lhsTensor = dyn_cast<WaveTensorType>(getLhs().getType());
+  auto rhsTensor = dyn_cast<WaveTensorType>(getRhs().getType());
+  auto resultTensor = dyn_cast<WaveTensorType>(getResult().getType());
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, lhsTensor, getLoc(), "condition", "LHS")))
+    return failure();
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, rhsTensor, getLoc(), "condition", "RHS")))
+    return failure();
+  if (failed(detail::verifyTensorShapesCompatible(
+          conditionTensor, resultTensor, getLoc(), "condition", "result")))
+    return failure();
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// BroadcastOp
+//-----------------------------------------------------------------------------
+
+llvm::SmallVector<WaveSymbolAttr> wave::BroadcastOp::inferBroadcastDims() {
+  if (auto dims = getBroadcastDims())
+    return llvm::to_vector(dims->getAsRange<WaveSymbolAttr>());
+
+  WaveTensorType sourceType = llvm::cast<WaveTensorType>(getSource().getType());
+  WaveTensorType resultType = llvm::cast<WaveTensorType>(getResult().getType());
+  assert(sourceType.getFullySpecified() && resultType.getFullySpecified() &&
+         "expected source and result types to be fully specified");
+
+  llvm::DenseSet<WaveSymbolAttr> sourceSymbols;
+  for (WaveSymbolAttr sym : sourceType.getShape())
+    sourceSymbols.insert(sym);
+
+  llvm::SmallVector<WaveSymbolAttr> broadcastDims;
+  for (WaveSymbolAttr sym : resultType.getShape()) {
+    if (!sourceSymbols.contains(sym))
+      broadcastDims.push_back(sym);
+  }
+  return broadcastDims;
+}
+
+LogicalResult wave::BroadcastOp::verify() {
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
+                                             getSource().getType(), "result",
+                                             getResult().getType())))
+    return failure();
+
+  auto sourceType = llvm::dyn_cast<WaveTensorType>(getSource().getType());
+  auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
+
+  if (!sourceType || !resultType)
+    return success();
+
+  if (!sourceType.getFullySpecified() || !resultType.getFullySpecified())
+    return success();
+
+  if (getBroadcastDims()) {
+    return emitOpError("does not expect explicit dims when source and result "
+                       "types are fully specified");
+  }
+
+  // Check all source symbols are in result.
+  for (WaveSymbolAttr sym : sourceType.getShape()) {
+    if (!llvm::is_contained(resultType.getShape(), sym))
+      return emitOpError("source dimension '")
+             << sym.getName() << "' not found in result shape";
+  }
+
+  return success();
+}
+
+llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateForward(
+    llvm::ArrayRef<WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  if (!getBroadcastDims())
+    return ChangeResult::NoChange;
+
+  unsigned operandNo = getSourceMutable().getOperandNumber();
+  WaveTensorType operandType = operandTypes[operandNo];
+  SmallVector<WaveSymbolAttr> broadcastDims =
+      llvm::to_vector(getBroadcastDims()->getAsRange<WaveSymbolAttr>());
+  return detail::propagateShapeAddTrailingDims(
+      operandType, resultTypes[0], "operand", "result", broadcastDims, errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::BroadcastOp::propagateBackward(
+    llvm::MutableArrayRef<WaveTensorType> operandTypes,
+    llvm::ArrayRef<WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  if (!getBroadcastDims())
+    return ChangeResult::NoChange;
+
+  WaveTensorType resultType = resultTypes[0];
+  unsigned operandNo = getSourceMutable().getOperandNumber();
+  return detail::propagateShapeDropTrailingDims(
+      resultType, operandTypes[operandNo], "result", "operand",
+      getBroadcastDims()->size(), errs);
+}
+
+LogicalResult wave::BroadcastOp::finalizeTypeInference() {
+  if (cast<WaveTensorType>(getOperand().getType()).getFullySpecified() &&
+      cast<WaveTensorType>(getResult().getType()).getFullySpecified())
+    removeBroadcastDimsAttr();
+  return success();
+}
+
+// Check if the broadcast operation is broadcasting along the thread X
+// dimension. Returns true if types are fully specified and one of the
+// broadcast dims matches the thread X dimension, meaning EPT propagation
+// should be blocked.
+static bool isBroadcastingAlongThreadX(wave::BroadcastOp op,
+                                       const ElementsPerThreadInit &init) {
+  auto sourceType = llvm::cast<WaveTensorType>(op.getSource().getType());
+  auto resultType = llvm::cast<WaveTensorType>(op.getResult().getType());
+  assert(sourceType.getFullySpecified() && resultType.getFullySpecified() &&
+         "expected source and result types to be fully specified");
+
+  SmallVector<WaveSymbolAttr> broadcastDims = op.inferBroadcastDims();
+  return llvm::any_of(broadcastDims, llvm::equal_to(init.threadXDimension));
+}
+
+llvm::FailureOr<ChangeResult>
+wave::BroadcastOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const ElementsPerThreadInit &init) {
+  if (isBroadcastingAlongThreadX(*this, init))
+    return ChangeResult::NoChange;
+  return detail::identityElementsPerThreadPropagate(
+      operandElements, resultElements, "operands", "results", errs);
+}
+
+llvm::FailureOr<ChangeResult>
+wave::BroadcastOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const ElementsPerThreadInit &init) {
+  if (isBroadcastingAlongThreadX(*this, init))
+    return ChangeResult::NoChange;
+  return detail::identityElementsPerThreadPropagate(
+      resultElements, operandElements, "results", "operands", errs);
+}
+
+//-----------------------------------------------------------------------------
+// PermuteOp
+//-----------------------------------------------------------------------------
+
+/// Helper to validate the input type of a permute operation.
+/// Checks if the input shape is a permutation of the result shape.
+static LogicalResult validatePermutationInput(WaveTensorType inputType,
+                                              WaveTensorType resultType,
+                                              llvm::raw_ostream &errs) {
+  // We cannot validate unspecified types.
+  if (!inputType.getFullySpecified() || !resultType.getFullySpecified())
+    return llvm::success();
+
+  if (inputType.getShape().size() != resultType.getShape().size()) {
+    errs << "input shape rank (" << inputType.getShape().size()
+         << ") does not match target shape rank ("
+         << resultType.getShape().size() << ")";
+    return failure();
+  }
+
+  llvm::SmallDenseSet<WaveSymbolAttr, 4> resultShapeSet;
+  resultShapeSet.insert_range(resultType.getShape());
+
+  for (auto inputDim : inputType.getShape()) {
+    if (!resultShapeSet.contains(inputDim)) {
+      errs << "input dimension '" << inputDim.getName()
+           << "' is not present in result shape";
+      return failure();
+    }
+  }
+
+  return llvm::success();
+}
+
+LogicalResult wave::PermuteOp::verify() {
+  Value input = getValue();
+  Value result = getResult();
+
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "input", input.getType(),
+                                             "result", result.getType())))
+    return failure();
+
+  auto inputType = dyn_cast<WaveTensorType>(input.getType());
+  auto resultType = dyn_cast<WaveTensorType>(result.getType());
+
+  // If result / input is a vector (post-lowering phase), skip wave tensor
+  // checks.
+  if (!resultType || !inputType)
+    return success();
+
+  if (!inputType.getFullySpecified() || !resultType.getFullySpecified())
+    return success();
+
+  std::string errorMessage;
+  llvm::raw_string_ostream errs(errorMessage);
+  if (failed(validatePermutationInput(inputType, resultType, errs))) {
+    return emitOpError() << errorMessage;
+  }
+
+  return success();
+}
+
+llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateForward(
+    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  unsigned inputOperandPosition = getValueMutable().getOperandNumber();
+  WaveTensorType inputType = operandTypes[inputOperandPosition];
+  WaveTensorType &resultType = resultTypes[0];
+
+  // Skip validation if either type is not fully specified.
+  if (!inputType || !inputType.getFullySpecified() || !resultType ||
+      !resultType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (failed(validatePermutationInput(inputType, resultType, errs)))
+    return llvm::failure();
+
+  return ChangeResult::NoChange;
+}
+
+llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateBackward(
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  unsigned inputOperandPosition = getValueMutable().getOperandNumber();
+  WaveTensorType inputType = operandTypes[inputOperandPosition];
+  WaveTensorType resultType = resultTypes[0];
+
+  if (!resultType || !resultType.getFullySpecified() || !inputType ||
+      !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (failed(validatePermutationInput(inputType, resultType, errs)))
+    return llvm::failure();
+
+  // Cannot propagate shape information backward for permute operations
+  // because the input shape ordering is not determined by the result.
+  return ChangeResult::NoChange;
+}
+
+// Helper to permute strides in an index expressions lattice according to
+// the permutation from source shape to target shape.
+//
+// The permute operation swaps the strides of the permuted indices.
+// For example, if we have a permute operation that swaps [B, M, N] to
+// [M, N, B], then for each dimension k, we keep its start and step,
+// but take the stride from the dimension at the same position in target_shape.
+static IndexExprsLatticeStorage
+permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
+                         llvm::ArrayRef<wave::WaveSymbolAttr> srcShape,
+                         llvm::ArrayRef<wave::WaveSymbolAttr> targetShape,
+                         MLIRContext *ctx, wave::EmitErrorFn emitError) {
+  if (inputLattice.isBottom() || inputLattice.isTop())
+    return inputLattice;
+
+  assert(srcShape.size() == targetShape.size() &&
+         "source shape rank does not match target shape rank");
+
+  DictionaryAttr inputDict = inputLattice.getConcreteValue();
+
+  llvm::StringMap<WaveIndexMappingAttr> symbolToMapping;
+  for (NamedAttribute namedAttr : inputDict) {
+    if (auto mapping =
+            llvm::dyn_cast<WaveIndexMappingAttr>(namedAttr.getValue())) {
+      symbolToMapping[namedAttr.getName().getValue()] = mapping;
+    }
+  }
+
+  // Create the permuted index expressions.
+  // For each dimension k in src_shape:
+  //   - Keep start and step from the original mapping for k
+  //   - Take stride from the mapping for src_to_target[k]
+  SmallVector<NamedAttribute> permutedMappings;
+  permutedMappings.reserve(srcShape.size());
+  for (auto [srcSymbol, targetSymbol] :
+       llvm::zip_equal(srcShape, targetShape)) {
+    llvm::StringRef srcName = srcSymbol.getName();
+    auto srcMappingIt = symbolToMapping.find(srcName);
+
+    llvm::StringRef targetName = targetSymbol.getName();
+    auto targetMappingIt = symbolToMapping.find(targetName);
+
+    assert(srcMappingIt != symbolToMapping.end() &&
+           "source mapping not found for symbol");
+    assert(targetMappingIt != symbolToMapping.end() &&
+           "target mapping not found for symbol");
+
+    WaveIndexMappingAttr srcMapping = srcMappingIt->second;
+    WaveIndexMappingAttr targetMapping = targetMappingIt->second;
+
+    SmallVector<Attribute> allSymbols(srcMapping.getSymbols());
+    for (Attribute sym : targetMapping.getSymbols()) {
+      if (!llvm::is_contained(allSymbols, sym))
+        allSymbols.push_back(sym);
+    }
+
+    AffineMap alignedStart = alignMapSymbols(
+        srcMapping.getStart(), srcMapping.getSymbols(), allSymbols);
+    AffineMap alignedStep = alignMapSymbols(
+        srcMapping.getStep(), srcMapping.getSymbols(), allSymbols);
+    AffineMap alignedStride = alignMapSymbols(
+        targetMapping.getStride(), targetMapping.getSymbols(), allSymbols);
+
+    auto newMapping = WaveIndexMappingAttr::get(ctx, allSymbols, alignedStart,
+                                                alignedStep, alignedStride);
+
+    permutedMappings.push_back(
+        NamedAttribute(StringAttr::get(ctx, srcName), newMapping));
+  }
+
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings));
+}
+
+llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  auto inputType = llvm::dyn_cast<WaveTensorType>(getValue().getType());
+  if (!inputType || !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  if (!resultType || !resultType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  ArrayRef<WaveSymbolAttr> targetShape = resultType.getShape();
+  ArrayRef<WaveSymbolAttr> srcShape = inputType.getShape();
+
+  IndexExprsLatticeStorage permuted = permuteIndexExprsStrides(
+      operandExprs[0], srcShape, targetShape, getContext(), emitError);
+
+  IndexExprsLatticeStorage newResultLattice =
+      IndexExprsLatticeStorage::join(resultExprs[0], permuted);
+
+  if (newResultLattice.isTop() && !resultExprs[0].isTop() &&
+      !permuted.isTop()) {
+    InFlightDiagnostic diag =
+        emitError()
+        << "conflict when propagating forward to the result lattice in "
+           "PermuteOp";
+    diag.attachNote() << "Result lattice: " << resultExprs[0];
+    diag.attachNote() << "Operand lattice: " << operandExprs[0];
+    return diag;
+  }
+
+  return updateIfChanged(resultExprs[0], newResultLattice);
+}
+
+llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  auto inputType = llvm::dyn_cast<WaveTensorType>(getValue().getType());
+  if (!inputType || !inputType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  if (!resultType || !resultType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  ArrayRef<WaveSymbolAttr> resultShape = resultType.getShape();
+  ArrayRef<WaveSymbolAttr> srcShape = inputType.getShape();
+
+  IndexExprsLatticeStorage permuted = permuteIndexExprsStrides(
+      resultExprs[0], resultShape, srcShape, getContext(), emitError);
+
+  IndexExprsLatticeStorage newOperandLattice =
+      IndexExprsLatticeStorage::join(operandExprs[0], permuted);
+
+  if (newOperandLattice.isTop() && !operandExprs[0].isTop() &&
+      !permuted.isTop()) {
+    InFlightDiagnostic diag =
+        emitError()
+        << "conflict when propagating backward to the operand lattice in "
+           "PermuteOp";
+    diag.attachNote() << "Operand lattice: " << operandExprs[0];
+    diag.attachNote() << "Result lattice: " << resultExprs[0];
+    return diag;
+  }
+
+  return updateIfChanged(operandExprs[0], newOperandLattice);
+}
+
+llvm::LogicalResult wave::PermuteOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  return detail::identitySetIndexFromLattices(*this, operandExprs, resultExprs);
+}
+
+llvm::LogicalResult wave::PermuteOp::finalizeTypeInference() {
+  return llvm::success();
 }

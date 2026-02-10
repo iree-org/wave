@@ -94,7 +94,7 @@ func.func @using_iter_symbol(%arg0: f32) {
   %0 = wave.register %arg0 : !wave.tensor<[@M] of f32, <register>>
   wave.iterate @M iter_args(%0) {
   ^bb0(%arg1: !wave.tensor<[@M] of f32, <register>>):
-    wave.register %arg0 index [{M : [#wave.iter<"M">] -> (0, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+    wave.register %arg0 index [{M : <[#wave.iter<"M">] -> (0, 1, 1)>}] : !wave.tensor<[@M] of f32, <register>>
     wave.yield %arg1 : !wave.tensor<[@M] of f32, <register>>
   } : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<any of f32>
   return
@@ -114,8 +114,8 @@ func.func @register_with_symbols() {
   // CHECK: wave.register
   %register = wave.register %0
     index [{
-      M : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1),
-      N : [#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)
+      M : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID floordiv BLOCK_SIZE, 1, 1)>,
+      N : <[#wave.symbol<"THREAD_ID">, #wave.symbol<"BLOCK_SIZE">] -> (THREAD_ID * BLOCK_SIZE + 42, 1, 1)>
     }]
     : !wave.tensor<[@M, @N] of f32, <register>>
   return
@@ -127,9 +127,9 @@ func.func @register_with_symbols_complex_index() {
   // CHECK: wave.register
   %register = wave.register %0
     index [{
-      B : [#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * (BLOCK_B+BLOCK_B), BLOCK_B * (WG2+WG2), WG2 * BLOCK_B),
-      M : [#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + BLOCK_M * ((T0 floordiv 64) floordiv 2) + T0 mod 32, 1, 1),
-      N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">, #wave.index_symbol<WG1>, #wave.index_symbol<GPR_NUM>, #wave.index_symbol<T0>] -> (T1 * (BLOCK_N floordiv 2) + BLOCK_N * WG1 + GPR_NUM mod 4 + ((GPR_NUM floordiv 4) mod 4) * 8 + ((T0 mod 64) floordiv 32) * 4, 1, 1)
+      B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * (BLOCK_B+BLOCK_B), BLOCK_B * (WG2+WG2), WG2 * BLOCK_B)>,
+      M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + BLOCK_M * ((T0 floordiv 64) floordiv 2) + T0 mod 32, 1, 1)>,
+      N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">, #wave.index_symbol<WG1>, #wave.index_symbol<GPR_NUM>, #wave.index_symbol<T0>] -> (T1 * (BLOCK_N floordiv 2) + BLOCK_N * WG1 + GPR_NUM mod 4 + ((GPR_NUM floordiv 4) mod 4) * 8 + ((T0 mod 64) floordiv 32) * 4, 1, 1)>
     }]
     : !wave.tensor<[@B, @N, @M] of f32, <register>>
   return
@@ -139,7 +139,7 @@ func.func @register_with_symbols_complex_index() {
 func.func @register_with_symbols_empty_symbol_list() {
   %0 = arith.constant 0.0 : f32
   // CHECK: wave.register
-  %register = wave.register %0 index [{B : [] -> (0, 1, 1)}]
+  %register = wave.register %0 index [{B : <[] -> (0, 1, 1)>}]
     : !wave.tensor<[@B] of f32, <register>>
   return
 }
@@ -331,8 +331,8 @@ attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N 
   // CHECK: #wave.index_symbol<WG0>
   // CHECK: #wave.index_symbol<T0>
   %0 = wave.read %mem index [{
-      M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-      N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+      M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+      N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
     : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
   return
 }
@@ -377,8 +377,8 @@ func.func @cast_wave_tensor_with_index(%arg0: !wave.tensor<[@M, @N] of f32>) -> 
   // CHECK: wave.cast
   // CHECK-SAME: index
   %0 = wave.cast %arg0 index [{
-    M : [#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1),
-    N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)>
   }] : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
   return %0 : !wave.tensor<[@M, @N] of f16>
 }
@@ -430,6 +430,25 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
   // CHECK: wave.cast
   %0 = wave.cast %arg0 : !wave.tensor<[@M, @N] of f32> to !wave.tensor<any of bf16>
   return %0 : !wave.tensor<any of bf16>
+}
+
+// CHECK-LABEL: @permute
+func.func @permute(%arg0: !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @B] of f32, <register>> {
+  // CHECK: wave.permute
+  // CHECK-SAME: !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  %0 = wave.permute %arg0 : !wave.tensor<[@B, @M, @N] of f32, <register>> to !wave.tensor<[@M, @N, @B] of f32, <register>>
+  return %0 : !wave.tensor<[@M, @N, @B] of f32, <register>>
+}
+
+// CHECK-LABEL: @permute_with_index
+func.func @permute_with_index(%arg0: !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@N, @M] of f16, <register>> {
+  // CHECK: wave.permute
+  // CHECK-SAME: index
+  %0 = wave.permute %arg0 index [{
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)>
+  }] : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  return %0 : !wave.tensor<[@N, @M] of f16, <register>>
 }
 
 // -----
@@ -503,4 +522,95 @@ func.func @shuffle_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
   // CHECK: wave.shuffle xor
   %0 = wave.shuffle xor %arg0, 16, 64 : (vector<4xf32>) -> vector<4xf32>
   return %0 : vector<4xf32>
+  }
+
+// -----
+
+// CHECK-LABEL: @sum_tensor
+func.func @sum_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @max_tensor
+func.func @max_tensor(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.max_element %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @sum_vector
+func.func @sum_vector(%input: vector<16xf32>, %init: vector<4xf32>) -> vector<4xf32> {
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @M <warp> : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
+  %result = wave.sum %input init(%init) along @M <warp> : (vector<16xf32>, vector<4xf32>) -> vector<4xf32>
+  return %result : vector<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @max_element_vector
+func.func @max_element_vector(%input: vector<8xf32>, %init: vector<2xf32>) -> vector<2xf32> {
+  // CHECK: wave.max_element %{{.*}} init(%{{.*}}) along @N <warp> : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
+  %result = wave.max_element %input init(%init) along @N <warp> : (vector<8xf32>, vector<2xf32>) -> vector<2xf32>
+  return %result : vector<2xf32>
+}
+
+// -----
+
+// Test 3D reduction
+// CHECK-LABEL: @sum_3d_reduction
+func.func @sum_3d_reduction(%input: !wave.tensor<[@A, @B, @C] of f32>, %init: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A, @B] of f32> {
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@A, @B, @C] of f32>, !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A, @B] of f32>
+  return %result : !wave.tensor<[@A, @B] of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @underspecified_reduction
+func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wave.tensor<any of f32>) -> !wave.tensor<any of f32> {
+  // CHECK: wave.sum %{{.*}} init(%{{.*}}) along @K <warp>
+  %result = wave.sum %input init(%init) along @K <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return %result : !wave.tensor<any of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @broadcast_1d_to_2d
+func.func @broadcast_1d_to_2d(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> {
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return %0 : !wave.tensor<[@M, @N] of f32, <register>>
+}
+
+// -----
+
+// CHECK-LABEL: @broadcast_2d_to_3d
+func.func @broadcast_2d_to_3d(%arg0: !wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>> {
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of bf16, <register>>) -> !wave.tensor<[@M, @N, @K] of bf16, <register>>
+  return %0 : !wave.tensor<[@M, @N, @K] of bf16, <register>>
+}
+
+// -----
+
+// CHECK-LABEL: @broadcast_multiple_dims
+func.func @broadcast_multiple_dims(%arg0: !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>> {
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
+  %0 = wave.broadcast %arg0 : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
+  return %0 : !wave.tensor<[@M, @N, @K] of f16, <register>>
+}
+
+// -----
+
+// CHECK-LABEL: @broadcast_explicit_dims
+func.func @broadcast_explicit_dims(%arg0: !wave.tensor<any of f32>) {
+  // CHECK: wave.broadcast %{{.*}} dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return
 }

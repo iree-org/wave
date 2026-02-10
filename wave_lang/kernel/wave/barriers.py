@@ -183,10 +183,7 @@ def add_shared_memory_barriers(
 
     target_arch = TargetConfig(target)
 
-    # Check for existing manual barriers to avoid duplicates
-    sync_regions = get_barriers_analysis(
-        trace, target_arch, check_existing_barriers=True
-    )
+    sync_regions = get_barriers_analysis(trace, target_arch)
 
     emitter = BarrierEmitter(target_arch)
     emitter.emit(sync_regions)

@@ -27,6 +27,7 @@ from ...ops.wave_ops import (
     MMA,
     MMABase,
     Output,
+    Placeholder,
     ReduceOp,
     TopkOp,
     ScatterAdd,
@@ -738,6 +739,62 @@ def _fixup_build_new_args_from_sorted_dict(
     return new_args
 
 
+def _fixup_init_arg_get_result(
+    i: int,
+    arg: fx.Node,
+    region_info: RegionOpInfo,
+    region_node: Iterate | Conditional,
+    expansion_context: ExpansionContext,
+) -> fx.Node | None:
+    """
+    Fix up a single init_arg that may be a GetResult with an invalid value.
+
+    Specifically handles cross-graph GetResults that point to Iterate/Conditional
+    nodes and need to be accessed via Placeholders.
+
+    Returns:
+        The node to use as the init_arg (either a Placeholder or the original arg)
+    """
+    custom_arg = get_custom(arg)
+    value_arg = arg.args[0] if len(arg.args) > 0 else None
+    exp_info = region_info.init_args.get(i)
+
+    # Check if this is a cross-graph GetResult that needs fixup
+    needs_fixup = (
+        isinstance(custom_arg, GetResult)
+        and value_arg is None
+        and exp_info is not None
+        and isinstance(exp_info.node, GetResult)
+        and exp_info.node.value is not None
+        and isinstance(get_custom(exp_info.node.value), (Iterate, Conditional))
+        and arg.graph != region_node.graph
+    )
+
+    if needs_fixup:
+        # GetResult is in a different graph (parent graph), so it should be
+        # accessed via a Placeholder. Look up the original node from region_info
+        # and find the Placeholder that captures it.
+        original_node = exp_info.node.fx_node
+
+        placeholder_node = None
+        for node in region_node.graph.nodes:
+            node_custom = get_custom(node)
+            if isinstance(node_custom, Placeholder):
+                captured = node_custom.get_captured_fx_node()
+                if captured == original_node:
+                    placeholder_node = node
+                    break
+        if placeholder_node is None:
+            raise RuntimeError(
+                f"Could not find Placeholder for cross-graph GetResult at init_arg index {i}. "
+                f"Original node: {original_node}, region: {region_node}"
+            )
+        return placeholder_node
+
+    # Default case: return arg unchanged
+    return arg
+
+
 def _fixup_region_node_common(
     region_node: Iterate | Conditional,
     region_info: RegionOpInfo,
@@ -772,7 +829,18 @@ def _fixup_region_node_common(
     new_init_args = _fixup_build_new_args_from_sorted_dict(
         region_info.init_args, expansion_context
     )
-    region_node.update_arg(init_args_field, new_init_args)
+
+    # Fix up any GetResult nodes in init_args that have value=None
+    # These GetResult nodes were copied during expansion but their value field
+    # wasn't updated to point to the expanded iterate/conditional.
+    fixed_init_args = []
+    for i, arg in enumerate(new_init_args):
+        fixed_arg = _fixup_init_arg_get_result(
+            i, arg, region_info, region_node, expansion_context
+        )
+        fixed_init_args.append(fixed_arg)
+
+    region_node.update_arg(init_args_field, fixed_init_args)
 
     for result_index, get_item in region_info.get_results.items():
         get_item.graph.inserting_before(get_item.fx_node)

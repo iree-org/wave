@@ -99,7 +99,16 @@ def read_meets_hw_transpose_requirements(
     if read.has_identity_mapping():
         return False
 
-    if len(list(read.index.keys())) != 2:
+    # Check effective dimensions (those with vector_shape > 0)
+    # This allows 4D attention tensors where B and H have vector_shape=0
+    # If vector_shapes is None, fall back to checking all index dimensions
+    if read.vector_shapes is not None:
+        effective_dims = [
+            dim for dim in read.index.keys() if read.vector_shapes.get(dim, 0) > 0
+        ]
+    else:
+        effective_dims = list(read.index.keys())
+    if len(effective_dims) != 2:
         return False
 
     bitwidth = read.type.dtype.bitwidth()
@@ -155,13 +164,21 @@ def set_wave_prio(priority: int): ...
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
-def shared_memory_barrier_signal(barId: int = 0, tensor_wait: bool = False): ...
+def shared_memory_barrier_signal(
+    barId: int = 0, tensor_wait: bool = False, ds_wait: bool = True
+): ...
 
 
 def shared_memory_barrier_wait(barId: int = 0): ...
 
 
 def memory_counter_wait(load=None, store=None, ds=None, exp=None): ...
+
+
+def memory_counter_wait_barrier(load=None, store=None, ds=None, exp=None): ...
+
+
+def tensor_counter_wait(count: int = 0): ...
 
 
 def workgroup_barrier(): ...
@@ -596,6 +613,43 @@ def get_custom(node: fx.Node) -> "CustomOp":
     return Unknown.from_fx_node(node)
 
 
+def tag(expr: fx.Proxy, tag_name: str) -> fx.Proxy:
+    """
+    Assign a tag to the result of a Python expression (e.g., arithmetic operators).
+
+    This function allows tagging operations that don't natively support the tag= keyword,
+    such as Python arithmetic operators (*, -, +, /).
+
+    Usage:
+        # Instead of:
+        result = a * b  # Cannot tag this directly
+
+        # Use:
+        result = tkw.tag(a * b, "multiply_ab")
+
+        # The tag can then be used in wave_schedule:
+        multiply_ops = tkw.get_node_by_tag("multiply_ab")
+
+    Args:
+        expr: The fx.Proxy result of an expression (e.g., a * b, x - y)
+        tag_name: The tag string to assign to the operation
+
+    Returns:
+        The same fx.Proxy, allowing chained expressions
+    """
+    tag_set = {tag_name} if isinstance(tag_name, str) else tag_name
+    if isinstance(expr, fx.Proxy):
+        expr.node.tag = tag_set
+    elif isinstance(expr, fx.Node):
+        expr.tag = tag_set
+    else:
+        raise ValueError(
+            f"tkw.tag expects an fx.Proxy or fx.Node, got {type(expr)}. "
+            "Make sure you're tagging the result of a traced operation."
+        )
+    return expr
+
+
 def has_same_custom_type(lhs_type: Memory, rhs_type: Memory) -> bool:
     same_shape = lhs_type.symbolic_shape == rhs_type.symbolic_shape
     same_dtype = lhs_type.dtype == rhs_type.dtype
@@ -623,8 +677,20 @@ class CustomOp(ABC):
             setattr(self.fx_node, "location", value)
 
     @property
-    def tag(self) -> Optional[str]:
-        return getattr(self.fx_node, "tag", None)
+    def tag(self) -> Optional[set[str]]:
+        tag = getattr(self.fx_node, "tag", None)
+        # Normalize legacy string tags to sets
+        if isinstance(tag, str):
+            return {tag}
+        return tag
+
+    @tag.setter
+    def tag(self, value: Optional[str | set[str]]):
+        if value is None:
+            return
+        if isinstance(value, str):
+            value = {value}
+        setattr(self.fx_node, "tag", value)
 
     @property
     def unroll_iteration(self) -> Optional[int]:
@@ -1491,8 +1557,13 @@ class Allocate(CustomOp):
 
     @property
     def unpadded_shape(self) -> tuple[IndexExpr]:
+        from ..wave.utils.general_utils import infer_dim, is_scaled_dim
+
         unpadded_dims = self.unpadded_dims
-        return tuple(unpadded_dims[s] for s in self.shape)
+        # Normalize scaled dimensions (like K/2) to base dimensions (like K) for lookup
+        return tuple(
+            unpadded_dims[infer_dim(s) if is_scaled_dim(s) else s] for s in self.shape
+        )
 
     def infer_type(self, *args):
         type_expr = Memory[(*self.shape, self.address_space, self.dtype)]
@@ -1557,10 +1628,16 @@ class SharedMemoryBarrierSignal(CustomOp):
     -1:     works as s_barrier
     -2:     trap barrier
     -3:     cluster barrier
+
+    Parameters:
+        barId: The barrier ID to signal
+        tensor_wait: If True, emit s_wait_tensorcnt(0) before signaling
+        ds_wait: If True, emit s_wait_dscnt(0) before signaling (for non-cluster barriers)
     """
 
     barId: int = 0
     tensor_wait: bool = False
+    ds_wait: bool = True
 
     @property
     def has_side_effects(self) -> bool:
@@ -1654,12 +1731,53 @@ class MemoryCounterWait(CustomOp):
     """
     Wait for the specified counters to be less-than or equal-to
     the provided values before continuing.
+
+    Emits: amdgpu.memory_counter_wait with specified counters
     """
 
     load: Optional[int] = None
     store: Optional[int] = None
     ds: Optional[int] = None
     exp: Optional[int] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("memory_counter_wait_barrier")
+@dataclass
+class MemoryCounterWaitBarrier(CustomOp):
+    """
+    Wait for the specified counters to be less-than or equal-to
+    the provided values before continuing, then perform a workgroup barrier.
+
+    Emits:
+    - amdgpu.memory_counter_wait with specified counters
+    - rocdl.s.barrier for workgroup synchronization
+    """
+
+    load: Optional[int] = None
+    store: Optional[int] = None
+    ds: Optional[int] = None
+    exp: Optional[int] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("tensor_counter_wait")
+@dataclass
+class TensorCounterWait(CustomOp):
+    """
+    Wait for the tensor counter to reach the specified value.
+    Generates rocdl.s.wait.tensorcnt instruction.
+
+    NOTE: This operation is only supported on gfx1250 targets.
+    """
+
+    count: int = 0
 
     @property
     def has_side_effects(self) -> bool:

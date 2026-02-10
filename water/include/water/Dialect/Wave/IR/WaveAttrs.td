@@ -161,6 +161,24 @@ def WaveWorkgroupDimAttr
 }
 
 //-----------------------------------------------------------------------------
+// Reduction scope enum and attribute
+//-----------------------------------------------------------------------------
+
+def WaveReductionScopeEnum
+    : I32EnumAttr<"WaveReductionScope", "Reduction scope", [
+  I32EnumAttrCase<"Block", 0, "block">,
+  I32EnumAttrCase<"Warp", 1, "warp">,
+]> {
+  let cppNamespace = "::wave";
+  let genSpecializedAttr = 0;
+}
+
+def WaveReductionScopeAttr
+    : EnumAttr<WaveDialect, WaveReductionScopeEnum, "reduction_scope"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+//-----------------------------------------------------------------------------
 // Constraint attributes
 //-----------------------------------------------------------------------------
 

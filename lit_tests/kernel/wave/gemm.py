@@ -1263,8 +1263,8 @@ def test_gemm_prefetch():
     # CHECK:          scf.for
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # Steady State Local Read
-    # CHECK-COUNT-4:    vector.load %[[VIEW_0]]
-    # CHECK-COUNT-4:    vector.load %[[VIEW_1]]
+    # CHECK-COUNT-4:    vector.load %[[ALLOC_0]]
+    # CHECK-COUNT-4:    vector.load %[[ALLOC_1]]
 
     # Steady State Global Read
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
@@ -1280,8 +1280,8 @@ def test_gemm_prefetch():
     # CHECK:          scf.yield
 
     # Prologue
-    # CHECK-COUNT-4:  vector.load %[[VIEW_0]]
-    # CHECK-COUNT-4:  vector.load %[[VIEW_1]]
+    # CHECK-COUNT-4:  vector.load %[[ALLOC_0]]
+    # CHECK-COUNT-4:  vector.load %[[ALLOC_1]]
     # CHECK-COUNT-8:  amdgpu.mfma
 
 
@@ -1411,15 +1411,15 @@ def test_gemm_four_stage_global_to_lds():
     print(gemm_four_stage_global_to_lds.asm)
     # CHECK-LABEL: test_gemm_four_stage_global_to_lds
     # Test multibuffering: verify shared memory views are correctly allocated
-    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<266240xi8
-    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<266240xi8
-    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c66560][] : memref<266240xi8
-    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c133120][] : memref<266240xi8
-    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c199680][] : memref<266240xi8
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<270336xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<270336xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c67584][] : memref<270336xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c135168][] : memref<270336xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c202752][] : memref<270336xi8
 
     # Prologue
     # Verify prologue stores to shared memory
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # CHECK: rocdl.s.wait.tensorcnt 0
     # CHECK: rocdl.s.wait.dscnt 0
@@ -1431,7 +1431,7 @@ def test_gemm_four_stage_global_to_lds():
     # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
     # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
 
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # Main Loop:
     # Verify Pipelined Loop, iter_args should contain vector values from prologue
@@ -1452,7 +1452,7 @@ def test_gemm_four_stage_global_to_lds():
     # CHECK: rocdl.s.barrier.signal id = -1
     # CHECK: rocdl.s.barrier.wait id = -1
 
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
 
@@ -1627,10 +1627,8 @@ def test_gemm_two_cluster_pingpong():
     gemm_two_cluster_pingpong = wave_compile(options, gemm_two_cluster_pingpong)
     print(gemm_two_cluster_pingpong.asm)
     # CHECK-LABEL:    func.func @gemm_two_cluster_pingpong
-    # CHECK-DAG:       %[[C0:.+]] = arith.constant 0 : index
-    # CHECK-DAG:       %[[C34816:.+]] = arith.constant 34816 : index
-    # CHECK:           %[[VIEW_0:.*]] = memref.view %alloc[%[[C0]]][] : memref<52224xi8, #gpu.address_space<workgroup>> to memref<256x68xf16, #gpu.address_space<workgroup>>
-    # CHECK:           %[[VIEW_1:.*]] = memref.view %alloc[%[[C34816]]][] : memref<52224xi8, #gpu.address_space<workgroup>> to memref<128x68xf16, #gpu.address_space<workgroup>>
+    # CHECK:           %[[ALLOC_0:.*]] = memref.alloc() : memref<256x68xf16, #gpu.address_space<workgroup>>
+    # CHECK:           %[[ALLOC_1:.*]] = memref.alloc() : memref<128x68xf16, #gpu.address_space<workgroup>>
     # Prologue
     # CHECK-COUNT-6:  vector.load
     # CHECK-COUNT-6:  vector.store
@@ -1653,10 +1651,10 @@ def test_gemm_two_cluster_pingpong():
     # 1st cluster interleaved local and global reads.
 
     # 1st Cluster: First slice of Local read lhs and rhs
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K0:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K0:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
@@ -1664,10 +1662,10 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[ALLOC_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[ALLOC_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
@@ -1705,8 +1703,8 @@ def test_gemm_two_cluster_pingpong():
     # CHECK-NEXT:       rocdl.s.barrier
     # CHECK-NEXT:     }
 
-    # CHECK-COUNT-32: vector.load %[[VIEW_0]]
-    # CHECK-COUNT-8:  vector.load %[[VIEW_1]]
+    # CHECK-COUNT-32: vector.load %[[ALLOC_0]]
+    # CHECK-COUNT-8:  vector.load %[[ALLOC_1]]
     # CHECK-COUNT-64: amdgpu.mfma
 
 

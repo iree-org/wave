@@ -26,13 +26,13 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
-from ..constraints import (
-    Constraint,
-)
+from ..constraints import Constraint
+from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
     get_fastest_index,
     get_largest_index_and_size,
+    infer_dim,
 )
 from ..utils.mma_utils import (
     simplify_index,
@@ -48,8 +48,9 @@ def get_vector_shape(
     vector_shapes: dict[IndexSymbol, int],
     symbolic_shape: list[IndexSymbol],
 ) -> list[int]:
-    vector_shapes = [max(vector_shapes[dim], 1) for dim in symbolic_shape]
-    return vector_shapes
+    # Normalize scaled dimensions (like K/2) to base dimensions (like K) for lookup
+    result = [max(vector_shapes.get(infer_dim(dim), 1), 1) for dim in symbolic_shape]
+    return result
 
 
 def _get_symbolic_shape_and_vector_shapes(
@@ -383,6 +384,10 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 )
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
+                propagate_tag(custom.fx_node, reshape)
+                # Also propagate tag to the underlying Read nodes
+                for op in ops_to_combine:
+                    propagate_tag(custom.fx_node, op)
 
                 # Save the original index on the reshape op so later we can
                 # detect if op was part of `gpr_offset` partition.
@@ -500,6 +505,10 @@ def partition_gather_like_ops(
                 )
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
+                propagate_tag(custom.fx_node, reshape)
+                # Also propagate tag to the underlying Read nodes
+                for op in ops_to_combine:
+                    propagate_tag(custom.fx_node, op)
 
                 reshape.index = index
                 custom.replace_all_uses_with(reshape)

@@ -74,6 +74,30 @@ class _ArithAffineHandlers:
         """Handle arith.muli - track integer multiplication in index_env."""
         self._handle_arith_binop(operation, kernel_info, operator.mul)
 
+    def handle_arith_xori_op(self, operation: arith_d.XOrIOp, kernel_info: KernelInfo):
+        """Handle arith.xori - track integer XOR in index_env."""
+        from wave_lang.kernel._support.indexing import xor as sympy_xor
+
+        lhs = kernel_info.index_env.get(str(operation.operands[0]))
+        rhs = kernel_info.index_env.get(str(operation.operands[1]))
+
+        # Operands not tracked - can't compute result
+        if lhs is None or rhs is None:
+            return
+
+        # Convert symbolic strings (tid_x, wgid_x, etc.) to SymPy symbols
+        if isinstance(lhs, str):
+            lhs = sympy.Symbol(lhs)
+        if isinstance(rhs, str):
+            rhs = sympy.Symbol(rhs)
+
+        if isinstance(lhs, int) and isinstance(rhs, int):
+            # Both operands are concrete integers - compute XOR directly
+            kernel_info.index_env[str(operation.result)] = lhs ^ rhs
+        elif isinstance(lhs, (int, sympy.Expr)) and isinstance(rhs, (int, sympy.Expr)):
+            # At least one operand is symbolic - use the custom xor function
+            kernel_info.index_env[str(operation.result)] = sympy_xor(lhs, rhs)
+
     def handle_arith_index_cast_op(
         self, operation: arith_d.IndexCastOp, kernel_info: KernelInfo
     ):

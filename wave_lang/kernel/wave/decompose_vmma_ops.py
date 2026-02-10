@@ -21,6 +21,7 @@ from ..wave.constraints import (
     MMAOperand,
     MMAType,
 )
+from ..wave.utils.tag_utils import propagate_tag
 
 VMMA_TO_NATIVE_MAP = {
     MMAType.F32_16x16x32_K8_F16: MMAType.F32_16x16x16_F16,
@@ -138,6 +139,8 @@ def decompose_vmma_ops(
                 slice_rhs = Reshape([mma_op.rhs], virtual_vector_shapes).add_to_graph(
                     mma_op.graph, loc=mma_op.location
                 )
+                propagate_tag(mma_op.fx_node, slice_lhs)
+                propagate_tag(mma_op.fx_node, slice_rhs)
 
             # Setting vector_shapes for num_partitions
             slice_lhs.vector_shapes = native_vector_shapes

@@ -249,7 +249,7 @@ func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<
 // must provide the full triple (start, step, stride)
 func.func @index_attr_wrong_attr_type(%arg0: f32) {
   // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr or WaveIterSymbolAtt}}
-  wave.register %arg0 index [{X : [#wave.workgroup_dim<x>] -> (WG0)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.workgroup_dim<x>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -259,7 +259,7 @@ func.func @index_attr_wrong_attr_type(%arg0: f32) {
 func.func @index_attr_missing_step_stride(%arg0: f32) {
   // expected-error @+2 {{expected ','}}
   // expected-error @+1 {{custom op 'wave.register' expected three affine expressions for '(start, step, stride)'}}
-  wave.register %arg0 index [{X : [#wave.index_symbol<WG0>] -> (WG0)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.index_symbol<WG0>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -269,7 +269,7 @@ func.func @index_attr_missing_step_stride(%arg0: f32) {
 func.func @index_attr_missing_stride(%arg0: f32) {
   // expected-error @+2 {{expected ','}}
   // expected-error @+1 {{custom op 'wave.register' expected three affine expressions for '(start, step, stride)'}}
-  wave.register %arg0 index [{X : [#wave.index_symbol<WG0>] -> (WG0, 1)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{X : <[#wave.index_symbol<WG0>] -> (WG0, 1)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -294,7 +294,7 @@ func.func @index_attr_wrong_value_type(%arg0: f32) {
 
 func.func @index_attr_iter_not_allowed(%arg0: f32) {
   // expected-error @below {{index expression uses iterator symbol M which is not defined by any parent op}}
-  wave.register %arg0 index [{M : [#wave.iter<"M">] -> (_Iter_M, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{M : <[#wave.iter<"M">] -> (_Iter_M, 1, 1)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 
@@ -303,6 +303,13 @@ func.func @index_attr_iter_not_allowed(%arg0: f32) {
 func.func @mismatch_shape_binary(%lhs: !wave.tensor<[@A, @B] of f32>, %rhs: !wave.tensor<[@B, @C] of f32>) {
   // expected-error @below {{expected operand #1 dimension #0 (#wave.symbol<"B">) to match operand #0 dimension #0 (#wave.symbol<"A">)}}
   wave.add %lhs, %rhs : (!wave.tensor<[@A, @B] of f32>, !wave.tensor<[@B, @C] of f32>) -> !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @mismatch_element_type_tensor_vector(%lhs: !wave.tensor<[@A, @B] of f32>, %rhs: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{expected result #0 and operand #0 elemental types to match, got 'f64', 'f32'}}
+  wave.add %lhs, %rhs : (!wave.tensor<[@A, @B] of f32>, !wave.tensor<[@A, @B] of f32>) -> vector<4xf64>
 }
 
 // -----
@@ -405,11 +412,19 @@ normalform.module [#wave.normal_form<full_types>] {
     // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
     // expected-note @below {{BLOCK_M, BLOCK_N, M}}
     %0 = wave.read %mem index [{
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-        N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+        M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+        N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
+}
+
+// -----
+
+func.func @read_element_type_mismatch(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>) {
+  // expected-error @below {{expected result #0 and operand #0 elemental types to match, got 'f32', 'f16'}}
+  %0 = wave.read %mem : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf32>
+  return
 }
 
 // -----
@@ -420,8 +435,8 @@ normalform.module [#wave.normal_form<full_types>] {
     // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
     // expected-note @below {{available symbols: M, N}}
     %0 = wave.read %mem index [{
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-        N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}]
+        M : <[#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+        N : <[#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
@@ -464,12 +479,20 @@ func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
 
 // -----
 
+func.func @bounds_wrong_rank(%mem: !wave.tensor<[@N] of f32>) {
+  // expected-error @below {{'bounds' must only contain single-result expressions}}
+  wave.read %mem { bounds = #wave.read_write_bounds<{ N = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64, BLOCK_M * 64)>}> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+  return
+}
+
+// -----
+
 func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{'index' has more than one entry with non-unit step}}
   // expected-note @below {{second non-unit step dimension: 1}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 2, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 2, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<any of f32, <register>>
   return
 }
@@ -479,8 +502,8 @@ func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
 func.func @read_index_elements_per_thread_mismatch(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{vectorized dimension step in the index expression with current hyperparameters (2) doesn't match the explicitly specified elements per thread value (4)}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 1, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 1, 1)>
   }]{
     elements_per_thread = 4
   } : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<any of f32, <register>>
@@ -493,8 +516,8 @@ func.func @read_index_elements_per_thread_mismatch(%mem: !wave.tensor<[@M, @N] o
 func.func @read_index_type_mismatch(%mem: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{vectorized dimension step in the index expression with current hyperparameters (2) doesn't match the vector size (4)}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>] -> (T0, 2, 1),
-    N : [#wave.index_symbol<T1>] -> (T1, 1, 1)
+    M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
+    N : <[#wave.index_symbol<T1>] -> (T1, 1, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
   return
 }
@@ -507,9 +530,51 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
   // expected-error @below {{'index' has more than one entry with non-unit step}}
   // expected-note @below {{second non-unit step dimension: 1}}
   wave.read %mem index [{
-    M : [#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1),
-    N : [#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @extract_invalid_position_rank(%src: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{position must contain exactly one expression, but got 2}}
+  wave.extract %src[#wave.expr_list<[] -> (0, 1)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_vector_result_not_one_element(%src: vector<4xf32>) {
+  // expected-error @below {{result must be a 1-element vector, got}}
+  wave.extract %src[#wave.expr_list<[] -> (0)>] : (vector<4xf32>) -> vector<3xf32>
+  return
+}
+
+// -----
+
+func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16}>
+} {
+  // expected-error @below {{result must be a 1-dimensional tensor, got}}
+  wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_source_not_fully_specified(%src: !wave.tensor<any of f32>) {
+  // expected-error @below {{source tensor type must be fully specified}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<any of f32>) -> !wave.tensor<[@X] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_dimension_mismatch(%src: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{source tensor type dimensions must contain the result tensor type dimension}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@X] of f32>
   return
 }
 
@@ -650,5 +715,179 @@ func.func @iterate_multidim_vectors_rejected() attributes {wave.hyperparameters 
   ^bb0(%in_arg: vector<4x8xf32>):
     wave.yield %in_arg : vector<4x8xf32>
   } : (vector<4x8xf32>) -> (vector<4x8xf32>)
+  return
+}
+
+// -----
+
+func.func @nonexistent_axis(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // expected-error @below {{did not expect axis attribute when input type is fully specified}}
+  %result = wave.sum %input init(%init) along @K <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
+  // expected-error @below {{init tensor rank (2) must be one less than input tensor rank (2)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return %result : !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  %init_any = wave.reciprocal %init: (!wave.tensor<[@N] of f32>) -> !wave.tensor<any of f32>
+  // expected-error @below {{result tensor rank (2) must be one less than input tensor rank (2)}}
+  %result = wave.sum %input init(%init_any) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @rank_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  // expected-error @below {{rank mismatch between init and result}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @symbol_mismatch(%input: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32> {
+  // expected-error @below {{expected init dimension #0 (#wave.symbol<"N">) to match result dimension #0 (#wave.symbol<"M">)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@M] of f32>
+  return %result : !wave.tensor<[@M] of f32>
+}
+
+// -----
+
+func.func @sum_along_first_dim(%input: !wave.tensor<[@M, @N] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // expected-error @below {{expected init dimension #0 (#wave.symbol<"N">) to match input dimension #0 (#wave.symbol<"M">)}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wave.tensor<any of f32>) -> !wave.tensor<any of f32> {
+  // expected-error @below {{expected axis attribute when input type is not fully specified}}
+  %result = wave.sum %input init(%init) <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+  return %result : !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @reduction_init_contains_axis_explicit(%input: !wave.tensor<any of f32>, %init: !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<any of f32> {
+  // Reducing along axis @M, but init tensor shape contains @M.
+  // expected-error @below {{init tensor shape must not contain the reduced axis}}
+  %result = wave.sum %input init(%init) along @M <warp> : (!wave.tensor<any of f32>, !wave.tensor<[@N, @M] of f32>) -> !wave.tensor<any of f32>
+  return %result : !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @reduction_result_contains_axis_explicit(%input: !wave.tensor<any of f32>, %init: !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32> {
+  // Reducing along axis @M, but result tensor shape contains @M.
+  // expected-error @below {{result tensor shape must not contain the reduced axis}}
+  %result = wave.sum %input init(%init) along @M <warp> : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<[@N, @M] of f32>
+  return %result : !wave.tensor<[@N, @M] of f32>
+}
+
+// -----
+
+func.func @reduction_init_and_result_contain_axis(%input: !wave.tensor<any of f32>, %init: !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32> {
+  // Reducing along axis @K, but both init and result shapes contain @K.
+  // expected-error @below {{init tensor shape must not contain the reduced axis}}
+  %result = wave.max_element %input init(%init) along @K <warp> : (!wave.tensor<any of f32>, !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32>
+  return %result : !wave.tensor<[@K] of f32>
+}
+
+// -----
+
+func.func @broadcast_source_dim_not_in_result(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // Source has [@M, @N], result has [@M, @P, @K] - N is missing (replaced by P).
+  // expected-error @below {{source dimension 'N' not found in result shape}}
+  wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @P, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_explicit_dims_with_fully_specified_types(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // When both source and result types are fully specified, explicit dims are not expected.
+  // expected-error @below {{does not expect explicit dims when source and result types are fully specified}}
+  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @broadcast_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // Source and result must have matching element types.
+  // expected-error @below {{expected source and result elemental types to match, got 'f32', 'f16'}}
+  wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape must not be empty
+func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (0)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute input and result element types must match
+func.func @permute_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{expected input and result elemental types to match, got 'f32', 'f16'}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape dimensions must exist in input shape
+func.func @permute_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@P, @Q] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape with one unknown dimension fails
+func.func @permute_partial_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @B] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape with extra dimension not in input fails
+func.func @permute_extra_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (3)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M, @K] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape rank must match input shape rank
+func.func @permute_result_rank_mismatch(%arg0: !wave.tensor<[@M, @N, @K] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input shape rank (3) does not match target shape rank (2)}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N, @K] of f32, <register>> to !wave.tensor<[@N, @M] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that permute result shape must be a permutation of input shape
+func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
+  wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @K] of f32, <register>>
   return
 }

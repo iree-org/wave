@@ -471,6 +471,7 @@ def _build_initial_pass_pipeline(
                 trace,
                 launchable.constraints,
                 options.reorder_allocs,
+                options.target,
             ),
         ]
         + (

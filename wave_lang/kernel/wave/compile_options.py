@@ -94,6 +94,7 @@ class WaveCompileOptions:
     linearize_shared_access: bool = False
     scalarize_packed_math: bool = False
     coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
+    enable_swizzle: bool = True
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

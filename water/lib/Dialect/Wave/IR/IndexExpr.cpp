@@ -83,6 +83,34 @@ static wave::WaveIndexMappingAttr createIndexMappingFromSymbolExpr(
                                          baseStride);
 }
 
+// Get the index symbol corresponding to the workgroup dimension.
+// TODO: we should just use workgroup attributes in expressions directly.
+static wave::WaveIndexSymbol
+getWaveIndexWorkgroupSymbol(wave::WaveWorkgroupDim dim) {
+  switch (dim) {
+  case wave::WaveWorkgroupDim::X:
+    return wave::WaveIndexSymbol::WORKGROUP_0;
+  case wave::WaveWorkgroupDim::Y:
+    return wave::WaveIndexSymbol::WORKGROUP_1;
+  case wave::WaveWorkgroupDim::Z:
+    return wave::WaveIndexSymbol::WORKGROUP_2;
+  }
+}
+
+// Get the index symbol corresponding to the thread dimension with the same
+// x/y/z index as the given workgroup.
+static wave::WaveIndexSymbol
+getWaveIndexThreadSymbol(wave::WaveWorkgroupDim dim) {
+  switch (dim) {
+  case wave::WaveWorkgroupDim::X:
+    return wave::WaveIndexSymbol::THREAD_0;
+  case wave::WaveWorkgroupDim::Y:
+    return wave::WaveIndexSymbol::THREAD_1;
+  case wave::WaveWorkgroupDim::Z:
+    return wave::WaveIndexSymbol::THREAD_2;
+  }
+}
+
 namespace wave {
 
 WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
@@ -92,20 +120,30 @@ WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
 
   MLIRContext *context = constraint.getContext();
 
-  // TODO: we should just use workgroup attributes in expressions directly.
-  WaveIndexSymbol symbol = [&] {
-    switch (constraint.getWorkgroupDim().getValue()) {
-    case WaveWorkgroupDim::X:
-      return WaveIndexSymbol::WORKGROUP_0;
-    case WaveWorkgroupDim::Y:
-      return WaveIndexSymbol::WORKGROUP_1;
-    case WaveWorkgroupDim::Z:
-      return WaveIndexSymbol::WORKGROUP_2;
-    }
-    llvm::report_fatal_error("unsupported workgroup dimension");
-  }();
+  WaveIndexSymbol symbol =
+      getWaveIndexWorkgroupSymbol(constraint.getWorkgroupDim().getValue());
   AffineExpr symbolExpr =
       getOrInsertSymbolExpr(WaveIndexSymbolAttr::get(context, symbol), symbols);
+
+  return createIndexMappingFromSymbolExpr(symbolExpr, symbols,
+                                          constraint.getTileSize().getMap(),
+                                          context, baseMapping);
+}
+
+WaveIndexMappingAttr applyConstraint(WaveConstraintAttr constraint,
+                                     WaveWorkgroupDim dim,
+                                     uint64_t threadsPerWave,
+                                     WaveIndexMappingAttr baseMapping) {
+  llvm::SmallVector<Attribute> symbols(constraint.getTileSize().getSymbols());
+
+  MLIRContext *context = constraint.getContext();
+  WaveIndexSymbol symbol = getWaveIndexThreadSymbol(dim);
+  AffineExpr symbolExpr =
+      getOrInsertSymbolExpr(WaveIndexSymbolAttr::get(context, symbol), symbols);
+
+  // Along x, waves are formed of threads-per-wave individual threads.
+  if (dim == WaveWorkgroupDim::X)
+    symbolExpr = symbolExpr.floorDiv(threadsPerWave);
 
   return createIndexMappingFromSymbolExpr(symbolExpr, symbols,
                                           constraint.getTileSize().getMap(),
@@ -125,18 +163,6 @@ WaveIndexMappingAttr applyConstraint(TilingConstraintAttr constraint,
   return createIndexMappingFromSymbolExpr(symbolExpr, symbols,
                                           constraint.getTileSize().getMap(),
                                           context, baseMapping);
-}
-
-WaveIndexMappingAttr applyConstraintGeneric(Attribute constraint,
-                                            WaveIndexMappingAttr baseMapping) {
-  return llvm::TypeSwitch<Attribute, WaveIndexMappingAttr>(constraint)
-      .Case<WorkgroupConstraintAttr, TilingConstraintAttr>(
-          [&](auto constraint) {
-            // This double dispatching is necessary in absence of interfaces to
-            // dispatch to a class method based on a specific type.
-            return applyConstraint(constraint, baseMapping);
-          })
-      .Default([&](Attribute constraint) { return nullptr; });
 }
 
 } // namespace wave

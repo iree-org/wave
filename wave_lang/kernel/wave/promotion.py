@@ -20,18 +20,19 @@ logger = get_logger("wave.promotion")
 
 
 def apply_padding(
-    shape: tuple[IndexSymbol | int], dtype: DataType
+    shape: tuple[IndexSymbol | int], dtype: DataType, padding_bits: int = 64
 ) -> tuple[int, tuple[IndexSymbol | int]]:
     """
     When accessing shared memory, we need to be cognizant of bank conflicts
     that can have a significant impact on performance. One way to mitigate
     these conflicts is by applying padding to the shared memory allocation.
-    This function applies padding of 64 bits to the shared memory allocation.
+    This function applies padding to the shared memory allocation based on
+    the provided padding_bits value.
     While this approach accomplishes the goal of reducing bank conflicts, it
     is inefficient in terms of memory usage. A more sophisticated approach
     would involve swizzling of the shared memory access patterns.
     """
-    padding = 64 // dtype.bitwidth()
+    padding = padding_bits // dtype.bitwidth()
     return padding, tuple(
         value + padding if i == len(shape) - 1 else value
         for i, value in enumerate(shape)
@@ -171,6 +172,7 @@ def promote_node(
     address_space: IndexSymbol,
     constraints: list[Constraint],
     reorder_allocs: bool = True,
+    padding_bits: int = 64,
 ):
     """Promotes the given operand in the provided graph
     to the specified address space.
@@ -191,7 +193,9 @@ def promote_node(
         memory_node = get_custom(node.memory)
         if isinstance(memory_node, Allocate) and memory_node.distributed_shape:
             constrained_shape = memory_node.distributed_shape
-        padding, padded_shape = apply_padding(constrained_shape, node.type.dtype)
+        padding, padded_shape = apply_padding(
+            constrained_shape, node.type.dtype, padding_bits
+        )
         allocate_node = Allocate(
             symbolic_shape, padded_shape, node.type.dtype, address_space, padding
         )
@@ -206,7 +210,11 @@ def promote_placeholders(
     graph: CapturedTrace,
     constraints: list[Constraint],
     reorder_allocs: bool = True,
+    target: str | None = None,
 ):
+    # Use 128-bit padding for gfx12* targets, 64-bit for others
+    padding_bits = 128 if target and target.startswith("gfx12") else 64
+
     read_or_write_nodes = graph.walk(
         lambda node: isinstance(get_custom(node), Read)
         or isinstance(get_custom(node), Write)
@@ -224,6 +232,7 @@ def promote_placeholders(
                 address_space,
                 constraints,
                 reorder_allocs,
+                padding_bits,
             )
 
     # Fix write dependencies for user-created allocations
