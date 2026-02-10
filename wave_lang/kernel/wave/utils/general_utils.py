@@ -548,7 +548,7 @@ def is_gather(custom: CustomOp) -> bool:
         return False
     assert custom.index, f"Read node {custom} does not have an index."
     return any(
-        custom.index[x].size > 1
+        subs_idxc(custom.index[x].size) > 1
         for x in custom.memory_type.symbolic_shape[:-1]
         if x in custom.index
     )
