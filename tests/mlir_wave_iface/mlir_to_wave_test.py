@@ -208,13 +208,12 @@ class TestConvertAffineExprToSympyExpr:
         result = _convert_affine_expr_to_sympy_expr(expr, symbol_mapping)
         assert result == sympy.floor((2 * x + y) / z)
 
-    def test_unsupported_expr_raises_error(self):
-        """Test that unsupported expression types raise ValueError."""
-        # Create a dimension expression (not supported by the function)
+    def test_dim_expr(self):
+        """Test that AffineDimExpr is resolved via symbol_mapping."""
+        x = sympy.Symbol("x")
         expr = ir.AffineDimExpr.get(0)
-
-        with pytest.raises(ValueError, match="Unsupported affine expression"):
-            _convert_affine_expr_to_sympy_expr(expr, [])
+        result = _convert_affine_expr_to_sympy_expr(expr, [x])
+        assert result == x
 
 
 class TestConvertIndexMappingAttrToSympy:
