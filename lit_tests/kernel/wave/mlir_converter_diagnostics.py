@@ -178,7 +178,7 @@ def test_location_capture_file_line_col():
     # CHECK-LABEL: test_location_capture_file_line_col
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 45
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
     # CHECK:     @wave.wave(constraints)
     # CHECK: location frame count: 1
     # CHECK: first frame type: file
@@ -208,10 +208,10 @@ def test_location_capture_stack_trace():
     # CHECK-LABEL: test_location_capture_stack_trace
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 45
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
     # CHECK:     @wave.wave(constraints)
     # CHECK: location frame count: 1
-    # CHECK: frame 0: {{.*}}mlir_converter_diagnostics.py:45
+    # CHECK: frame 0: {{.*}}mlir_converter_diagnostics.py:50
 
 
 @run_test
@@ -240,7 +240,7 @@ def test_location_capture_stack_trace_with_system():
     # CHECK-LABEL: test_location_capture_stack_trace_with_system
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 45
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
     # CHECK:     @wave.wave(constraints)
     # CHECK: location frame count: 1
-    # CHECK: frame 0: mlir_converter_diagnostics.py:45
+    # CHECK: frame 0: mlir_converter_diagnostics.py:50
