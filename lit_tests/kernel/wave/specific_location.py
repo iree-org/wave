@@ -5,7 +5,7 @@
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,

@@ -11,7 +11,7 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import (
