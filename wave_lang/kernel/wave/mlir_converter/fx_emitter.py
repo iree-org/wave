@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 import itertools
 import sys
-from typing import Optional, Sequence
+from typing import Sequence
 from dataclasses import dataclass, field
 
 import dill
@@ -32,7 +32,7 @@ try:
         WaveTensorType,
         iterate_make_isolated,
     )
-    from water_mlir.dialects.func import FuncOp, ReturnOp as FuncReturnOp
+    from water_mlir.dialects.func import ReturnOp as FuncReturnOp
 
 except Exception as e:
     # Keep import-time errors explicit so callers can act on missing deps.
@@ -54,6 +54,7 @@ from wave_lang.kernel.wave.constraints import (
     DeviceConstraint,
     HardwareConstraint,
 )
+from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 from wave_lang.support.indexing import index_symbol, IndexSequence, MMA_ACC_SYMBOL_NAME
 from wave_lang.kernel._support.indexing import IndexExpr, IndexSymbol, safe_subs
 from wave_lang.kernel.lang.wave_types import Memory, Register
@@ -65,8 +66,8 @@ from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     Read,
     Write,
-    MemoryAccessFlags,
     MMA,
+    MMABase,
     NewRegister,
     ExtractSlice,
     Iterate,
@@ -82,6 +83,17 @@ from mlir_to_wave import (
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
     symbol_attr_to_name,
+)
+
+# Converted attribute value: The union of all types that may be produced
+# for a single MLIR attribute.
+AttrValue = (
+    dict[IndexSymbol, IndexSequence]
+    | dict[IndexSymbol, IndexExpr]
+    | int
+    | MMAType
+    | ScaledMMAType
+    | str
 )
 
 
@@ -101,6 +113,7 @@ class AttrNames(Enum):
     OFFSET = ("offset", "offset")
     SIZE = ("size", "size")
     STRIDE = ("stride", "stride")
+    ORDERED_SYMS = ("ordered_syms", "ordered_syms")
     VALUE = ("value", "value")
 
     @property
@@ -178,32 +191,18 @@ def _convert_read_write_bounds(
 
     Bounds specify the iteration space for memory operations (read/write) along each dimension.
     """
-    # If wrapped in WaveReadWriteBoundsAttr, unwrap to get the DictAttr
-    if isinstance(attr, wave.WaveReadWriteBoundsAttr):
-        attr = attr.mapping
-
     bounds: dict[IndexSymbol, IndexExpr] = {}
-    for named in attr:
+    for named in attr.mapping:
         key = named.name
         value = named.attr
         exprs = expr_list_attr_to_exprs(value)
-        # TODO: MLIR WaveReadWriteBoundsAttr doesn't guarantee single-expression lists,
-        # but PyWave only generates single expressions. Harden the verifier to enforce this.
         bounds[index_symbol(key)] = exprs[0]
     return bounds
 
 
 def _convert_supported_attrs(
-    op: ir.OpView, ignore_attrs: Optional[set[str]] = None
-) -> dict[
-    str,
-    dict[IndexSymbol, IndexSequence]
-    | dict[IndexSymbol, IndexExpr]
-    | int
-    | MMAType
-    | ScaledMMAType
-    | str,
-]:
+    op: ir.OpView, ignore_attrs: set[str] | None = None
+) -> dict[str, AttrValue]:
     """Converts supported MLIR attributes of an operation into Python objects.
 
     Args:
@@ -230,15 +229,7 @@ def _convert_supported_attrs(
         AttrNames.KIND.mlir_name: _convert_mma_kind,
         AttrNames.WATER_INTERNAL_ID.mlir_name: lambda a: a.value,
     }
-    converted: dict[
-        str,
-        dict[IndexSymbol, IndexSequence]
-        | dict[IndexSymbol, IndexExpr]
-        | int
-        | MMAType
-        | ScaledMMAType
-        | str,
-    ] = {}
+    converted: dict[str, AttrValue] = {}
     for name in attrs:
         if name in ignore_attrs:
             continue
@@ -267,26 +258,21 @@ def _apply_mlir_attrs_to_fx_node(
             setattr(fx_node, attr.fx_property, converted_attrs[attr.mlir_name])
 
 
-def _convert_constraints_from_func(
-    func_op: FuncOp,
-) -> tuple[list[Constraint], list[str]]:
-    """Converts Wave constraints from a func.func operation's wave.constraints attribute.
+def _convert_constraints(op: ir.Operation) -> list[Constraint]:
+    """Converts Wave constraints from an operation's wave.constraints attribute.
 
     Reconstructs WorkgroupConstraint, WaveConstraint, TilingConstraint,
     DeviceConstraint, and HardwareConstraint objects. Also restores the
     wave_id back-reference on WaveConstraints from the HardwareConstraint
     and the matching WorkgroupConstraint on the same dimension.
 
-    Args:
-        func_op: MLIR func.func operation containing wave.constraints attribute
-
-    Returns:
-        Tuple of (list of converted Constraint objects, list of diagnostic messages)
+    Raises ValueError if the attribute is missing or contains unsupported
+    constraint types.
     """
     constraints: list[Constraint] = []
-    attrs = func_op.attributes
+    attrs = op.attributes
     if wave.WAVE_CONSTRAINTS_ATTR_NAME not in attrs:
-        raise ValueError("func.func missing wave.constraints attribute")
+        raise ValueError(f"{op.name} missing wave.constraints attribute")
     array_attr = attrs[wave.WAVE_CONSTRAINTS_ATTR_NAME]
 
     def _wg_dim_to_int(attr: WaveWorkgroupDimAttr) -> int:
@@ -300,29 +286,38 @@ def _convert_constraints_from_func(
             case _:
                 raise ValueError(f"Unsupported workgroup dim: {attr.value}")
 
+    def _get_tile_size(attr) -> IndexExpr:
+        """Extract the single tile-size expression from a constraint attribute."""
+        exprs = expr_list_attr_to_exprs(attr)
+        assert (
+            len(exprs) == 1
+        ), f"Expected exactly one tile-size expression, got {len(exprs)}"
+        return exprs[0]
+
+    hw: HardwareConstraint | None = None
+    wg_by_dim: dict[IndexSymbol, WorkgroupConstraint] = {}
+
     for entry in array_attr:
         c = entry
         match c:
             case wave.WorkgroupConstraintAttr():
                 dim = index_symbol(symbol_attr_to_name(c.dim))
-                tile_exprs = expr_list_attr_to_exprs(c.tile_size)
-                tile = tile_exprs[0] if tile_exprs else 1
+                tile = _get_tile_size(c.tile_size)
                 wg_dim = _wg_dim_to_int(c.workgroup_dim)
-                constraints.append(WorkgroupConstraint(dim, tile, wg_dim))
+                wg = WorkgroupConstraint(dim, tile, wg_dim)
+                wg_by_dim[dim] = wg
+                constraints.append(wg)
             case wave.WaveConstraintAttr():
                 dim = index_symbol(symbol_attr_to_name(c.dim))
-                tile_exprs = expr_list_attr_to_exprs(c.tile_size)
-                tile = tile_exprs[0] if tile_exprs else 1
+                tile = _get_tile_size(c.tile_size)
                 constraints.append(WaveConstraint(dim, tile))
             case wave.TilingConstraintAttr():
                 dim = index_symbol(symbol_attr_to_name(c.dim))
-                tile_exprs = expr_list_attr_to_exprs(c.tile_size)
-                tile = tile_exprs[0] if tile_exprs else 1
+                tile = _get_tile_size(c.tile_size)
                 constraints.append(TilingConstraint(dim, tile))
             case wave.DeviceConstraintAttr():
                 dim = index_symbol(symbol_attr_to_name(c.dim))
-                tile_exprs = expr_list_attr_to_exprs(c.tile_size)
-                tile = tile_exprs[0] if tile_exprs else 1
+                tile = _get_tile_size(c.tile_size)
                 device_dim = int(c.device_dim.value)
                 constraints.append(DeviceConstraint(dim, tile, device_dim))
             case wave.HardwareConstraintAttr():
@@ -333,44 +328,38 @@ def _convert_constraints_from_func(
                     else None
                 )
 
-                vector_shapes = (
-                    {
-                        index_symbol(named.name): int(named.attr.value)
-                        for named in c.vector_shapes
-                    }
-                    if isinstance(c.vector_shapes, ir.DictAttr)
-                    else {}
-                )
+                vector_shapes = {
+                    index_symbol(named.name): int(named.attr.value)
+                    for named in (c.vector_shapes or [])
+                }
 
                 max_bits_per_load = int(c.max_bits_per_load)
                 mma_type = (
                     _convert_mma_kind(c.mma_type) if c.mma_type is not None else None
                 )
 
-                hc = HardwareConstraint(
+                hw = HardwareConstraint(
                     threads_per_wave=threads_per_wave,
                     waves_per_block=waves_per_block_tuple,
                     mma_type=mma_type,
                     vector_shapes=vector_shapes if vector_shapes else None,
                     max_bits_per_load=max_bits_per_load,
                 )
-                constraints.append(hc)
+                constraints.append(hw)
             case _:
                 raise ValueError(f"Unsupported constraint attribute: {c}")
+
     # MLIR only stores dim and tile_size for WaveConstraints. Reconstruct the
-    # wave_id and wg_constraint back-reference from the HardwareConstraint and
-    # the WorkgroupConstraint on the same dimension.
-    hw = next((hc for hc in constraints if isinstance(hc, HardwareConstraint)), None)
+    # wave_id back-reference from the HardwareConstraint and the matching
+    # WorkgroupConstraint on the same dimension.
     if hw is not None:
-        wg_by_dim = {
-            wc.dim: wc for wc in constraints if isinstance(wc, WorkgroupConstraint)
-        }
         for con in constraints:
             if isinstance(con, WaveConstraint):
                 wg = wg_by_dim.get(con.dim)
                 if wg is not None:
                     con.set_wave_id_from_hardware_and_workgroup_constraint(hw, wg)
-    return constraints, []
+
+    return constraints
 
 
 def _derive_vector_shapes_from_constraints(
@@ -378,7 +367,7 @@ def _derive_vector_shapes_from_constraints(
 ) -> dict[IndexSymbol, int] | None:
     """Derive vector_shapes from constraint tile sizes for non-MMA kernels.
 
-    This is the fallback used when ``_derive_vector_shapes_from_graph`` found no
+    This is the fallback used when `_derive_vector_shapes_from_graph` found no
     MMA nodes.  It resolves concrete tile sizes from WorkgroupConstraint and
     TilingConstraint.
     """
@@ -395,18 +384,18 @@ def _derive_vector_shapes_from_constraints(
 def _derive_vector_shapes_from_graph(
     trace: CapturedTrace, hw: HardwareConstraint
 ) -> dict[IndexSymbol, int] | None:
-    """Derive vector_shapes by inspecting MMA nodes in the built FX graph.
+    """Derive vector_shapes by inspecting MMA/ScaledMMA nodes in the built FX graph.
 
-    Mirrors the core logic of ``get_mma_dimensional_mapping`` (mma_utils.py):
-    for the first MMA node found, determines M, N, K from the operand tensor
-    shapes and maps them to the intrinsic sizes via ``mma_matrix_shapes``.
+    Mirrors the core logic of `get_mma_dimensional_mapping` (mma_utils.py):
+    for the first MMA-like node found, determines M, N, K from the operand
+    tensor shapes and maps them to the intrinsic sizes via `mma_matrix_shapes`.
 
-    Returns ``None`` when the graph contains no MMA nodes (the caller should
-    fall back to ``_derive_vector_shapes_from_constraints``).
+    Returns None when the graph contains no MMA nodes (the caller should
+    fall back to `_derive_vector_shapes_from_constraints`).
     """
     for node in trace.walk(lambda n: n):
         custom = get_custom(node)
-        if not isinstance(custom, MMA):
+        if not isinstance(custom, MMABase):
             continue
         mma_type = getattr(custom, "mma_type", None) or hw.mma_type
         if mma_type is None:
@@ -428,7 +417,7 @@ def _derive_vector_shapes_from_graph(
 
 
 def _initialize_vector_shapes(
-    trace: CapturedTrace, hw: Optional[HardwareConstraint]
+    trace: CapturedTrace, hw: HardwareConstraint | None
 ) -> None:
     """
     Initializes vector_shapes on FX nodes from HardwareConstraint.
@@ -470,8 +459,6 @@ def _initialize_tiling_constraints(
     For each Iterate node with axis A, sets induction_var = $ARGA on all
     TilingConstraints with dim == A. Mirrors LaunchableWave.initialize_tiling_constraints.
     """
-    from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
-
     tiling_by_dim = {c.dim: c for c in constraints if isinstance(c, TilingConstraint)}
     if not tiling_by_dim:
         return
@@ -515,6 +502,9 @@ class _OpParseContext:
 
     def add_mapping(self, mlir_value: ir.Value, fx_node: fx.Node | int | float) -> None:
         """Add MLIR value → FX node mapping."""
+        assert (
+            mlir_value not in self.value_map
+        ), f"Duplicate mapping for MLIR value: {mlir_value}"
         self.value_map[mlir_value] = fx_node
 
 
@@ -530,20 +520,13 @@ def _handle_register_op(op: RegisterOp, parse_ctx: _OpParseContext) -> None:
     result_type = op.result.type
     dims = tuple(index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape)
     dtype = mlir_element_type_to_dtype(result_type.element_type)
-    converted_attrs = _convert_supported_attrs(
-        op,
-        ignore_attrs={
-            AttrNames.OFFSET.mlir_name,
-            AttrNames.SIZE.mlir_name,
-            AttrNames.STRIDE.mlir_name,
-        },
-    )
+    converted_attrs = _convert_supported_attrs(op)
 
     register_op = NewRegister.create(
         parse_ctx.graph,
-        dims,
-        dtype,
-        init_value,
+        shape=dims,
+        dtype=dtype,
+        value=init_value,
         type=Register[(*dims, dtype)],
     )
     _apply_mlir_attrs_to_fx_node(register_op.fx_node, converted_attrs)
@@ -556,8 +539,8 @@ def _handle_lds_barrier_op(op: amdgpu.LDSBarrierOp, parse_ctx: _OpParseContext) 
     # wait_async_ops and tensor_wait default to False
     barrier_op = SharedMemoryBarrier.create(
         parse_ctx.graph,
-        False,  # wait_async_ops
-        False,  # tensor_wait
+        wait_async_ops=False,
+        tensor_wait=False,
     )
     # Barriers don't produce values, so no value_map entry needed
 
@@ -591,14 +574,14 @@ def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
 
     allocate_op = Allocate.create(
         parse_ctx.graph,
-        shape,
-        distributed_shape,
-        dtype,
-        address_space,
-        padding,
-        parent_node,
-        offset,
-        tail_padding,
+        shape=shape,
+        distributed_shape=distributed_shape,
+        dtype=dtype,
+        address_space=address_space,
+        padding=padding,
+        parent=parent_node,
+        offset=offset,
+        tail_padding=tail_padding,
     )
     _apply_mlir_attrs_to_fx_node(allocate_op.fx_node, converted_attrs)
     parse_ctx.add_mapping(op.result, allocate_op.fx_node)
@@ -609,24 +592,16 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
     memory_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={
-            AttrNames.OFFSET.mlir_name,
-            AttrNames.SIZE.mlir_name,
-            AttrNames.STRIDE.mlir_name,
-        },
+        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name},
     )
 
     read_op = Read.create(
         parse_ctx.graph,
-        memory_node,
-        converted_attrs.get(AttrNames.ELEMENTS_PER_THREAD.mlir_name, None),
-        None,  # mapping
-        (),  # mapping_dynamic_vals
-        converted_attrs.get(AttrNames.BOUNDS.mlir_name, None),
-        MemoryAccessFlags.NONE,
-        None,  # source
-        None,  # target
-        None,  # _write_dependency (not serialized to MLIR)
+        memory=memory_node,
+        elements_per_thread=converted_attrs.pop(
+            AttrNames.ELEMENTS_PER_THREAD.mlir_name, None
+        ),
+        bounds=converted_attrs.pop(AttrNames.BOUNDS.mlir_name, None),
         type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
     _apply_mlir_attrs_to_fx_node(read_op.fx_node, converted_attrs)
@@ -639,24 +614,17 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
     mem_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={
-            AttrNames.OFFSET.mlir_name,
-            AttrNames.SIZE.mlir_name,
-            AttrNames.STRIDE.mlir_name,
-        },
+        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name},
     )
 
     write_op = Write.create(
         parse_ctx.graph,
-        reg_node,
-        mem_node,
-        converted_attrs.get(AttrNames.ELEMENTS_PER_THREAD.mlir_name, None),
-        None,  # mapping
-        (),  # offsets
-        converted_attrs.get(AttrNames.BOUNDS.mlir_name, None),
-        MemoryAccessFlags.NONE,
-        None,
-        None,
+        register_=reg_node,
+        memory=mem_node,
+        elements_per_thread=converted_attrs.pop(
+            AttrNames.ELEMENTS_PER_THREAD.mlir_name, None
+        ),
+        bounds=converted_attrs.pop(AttrNames.BOUNDS.mlir_name, None),
         type=get_custom(mem_node).type,
     )
     _apply_mlir_attrs_to_fx_node(write_op.fx_node, converted_attrs)
@@ -670,30 +638,30 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     acc_node = parse_ctx.resolve_operand(op.accumulator)
     converted_attrs = _convert_supported_attrs(op)
     mma_type = (
-        converted_attrs.get(AttrNames.KIND.mlir_name, None)
+        converted_attrs.pop(AttrNames.KIND.mlir_name, None)
         or parse_ctx.default_mma_type
     )
 
     mma_op = MMA.create(
         parse_ctx.graph,
-        lhs_node,
-        rhs_node,
-        acc_node,
-        *([mma_type] if mma_type is not None else []),
+        lhs=lhs_node,
+        rhs=rhs_node,
+        acc=acc_node,
+        mma_type=mma_type,
         type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
 
     _apply_mlir_attrs_to_fx_node(mma_op.fx_node, converted_attrs)
-    if getattr(mma_op.fx_node, "mma_type", None) is None and mma_type is not None:
-        mma_op.fx_node.mma_type = mma_type
 
     # Derive reduction_dim: the dimension shared by lhs and rhs but absent from acc.
     lhs_shape = get_custom(lhs_node).type.symbolic_shape
     rhs_shape = get_custom(rhs_node).type.symbolic_shape
     acc_shape = get_custom(acc_node).type.symbolic_shape
     reduction_dim = (set(lhs_shape) & set(rhs_shape)) - set(acc_shape)
-    if len(reduction_dim) == 1:
-        mma_op.fx_node.reduction_dim = next(iter(reduction_dim))
+    assert (
+        len(reduction_dim) == 1
+    ), f"Expected exactly one reduction dimension for MMA, got {reduction_dim}"
+    mma_op.fx_node.reduction_dim = reduction_dim.pop()
 
     parse_ctx.add_mapping(op.result, mma_op.fx_node)
 
@@ -715,10 +683,10 @@ def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> 
 
     slice_op = ExtractSlice.create(
         parse_ctx.graph,
-        src_node,
-        offset,
-        size,
-        stride,
+        register_=src_node,
+        offset=offset,
+        size=size,
+        stride=stride,
         type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
     _apply_mlir_attrs_to_fx_node(slice_op.fx_node, converted_attrs)
@@ -733,15 +701,8 @@ def _handle_yield_op(op: YieldOp, parse_ctx: _OpParseContext) -> None:
         return
 
     yield_values = [parse_ctx.resolve_operand(v) for v in operands]
-    # FX output nodes expect a single tuple of return values. If resolve_operand
-    # returned a sequence (e.g. from a multi-result op), unwrap it so the output
-    # node gets a flat list rather than a nested one.
-    if (
-        len(yield_values) == 1
-        and isinstance(yield_values[0], Sequence)
-        and not isinstance(yield_values[0], (fx.Node, str, bytes, dict))
-    ):
-        yield_values = list(yield_values[0])
+    # resolve_operand returns fx.Node | int | float, none of which are
+    # Sequence, so no unwrapping is needed.
     parse_ctx.graph.output((yield_values,))
 
 
@@ -759,8 +720,8 @@ def _create_get_result_nodes(
     Each iterate result gets a GetResult node that extracts its value from the
     iterate's output tuple. Two index transformations are applied:
 
-    1. The iterator axis is removed because the reduction dimension no longer
-       varies after the loop completes.
+    1. The iterator axis is removed from the result's index dictionary because
+       the reduction dimension no longer varies after the loop completes.
 
     2. The MMA_ACC selector symbol is substituted with 1. Index expressions use
        Piecewise functions parameterized by MMA_ACC to select between operand
@@ -783,8 +744,8 @@ def _create_get_result_nodes(
         for idx, result in enumerate(results):
             get_result_op = GetResult.create(
                 parse_ctx.graph,
-                iterate_node,
-                idx,
+                value=iterate_node,
+                res_idx=idx,
                 type=result_types[idx],
             )
 
@@ -802,9 +763,7 @@ def _create_get_result_nodes(
                 )
 
             if isinstance(result_index, dict):
-                get_result_op.fx_node.index = _specialize_result_index(
-                    result_index, axis
-                )
+                get_result_op.fx_node.index = result_index
 
             parse_ctx.add_mapping(result, get_result_op.fx_node)
 
@@ -905,13 +864,11 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
 
     iterate_op = Iterate.create(
         parse_ctx.graph,
-        axis,
-        init_args,
-        subgraph_name,
-        captures,  # After makeIsolated, these become implicit captures in FX
-        1,  # step
-        None,  # start
-        None,  # condition
+        axis=axis,
+        init_args=init_args,
+        subgraph_name=subgraph_name,
+        implicit_captures=captures,
+        step=1,
     )
     subgraph.parent_op = iterate_op.fx_node
 
@@ -1029,8 +986,7 @@ def convert_mlir_to_trace(
             for named in hyper.mapping:
                 subs[index_symbol(named.name)] = named.attr.value
             options.subs = subs
-        constraints, diag = _convert_constraints_from_func(func_op)
-        diagnostics.extend(diag)
+        constraints = _convert_constraints(func_op)
 
         # Get the hardware constraint
         hw = next((c for c in constraints if isinstance(c, HardwareConstraint)), None)
