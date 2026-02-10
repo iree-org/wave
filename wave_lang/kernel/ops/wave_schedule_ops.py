@@ -752,6 +752,11 @@ class PipelinedLoop:
         # Direct mapping from original nodes to their pipelined copies
         self._node_mapping = None
 
+        # Per-node prefetch depth: maps original nodes to their desired
+        # prefetch depth (number of prologue iterations for those nodes).
+        # Default depth is num_stages - 1 (the standard pipeline fill).
+        self._prefetch_depths: dict[fx.Node, int] = {}
+
     def __enter__(self):
         return self
 
@@ -780,6 +785,20 @@ class PipelinedLoop:
             self.initiation_interval,
         )
 
+        # Compute the max extra prefetch depth (beyond the default num_stages - 1)
+        max_extra_depth = 0
+        if self._prefetch_depths:
+            default_depth = self.num_stages - 1
+            max_extra_depth = max(
+                d - default_depth for d in self._prefetch_depths.values()
+            )
+            max_extra_depth = max(0, max_extra_depth)
+        logger.info(
+            f"PipelinedLoop: num_stages={self.num_stages}, "
+            f"prefetch_depths={self._prefetch_depths}, "
+            f"max_extra_depth={max_extra_depth}"
+        )
+
         # Get use_scheduling_barriers from options if available
         pipelining_result = apply_pipelined_schedule(
             custom_iterate,
@@ -792,6 +811,7 @@ class PipelinedLoop:
             scheduling_type=SchedulingType.MANUAL,
             visualize=False,
             multi_buffer_count=None,
+            max_extra_depth=max_extra_depth,
         )
 
         # Store the pipelined iterate node and node mapping, then create proxies for the stages
@@ -985,6 +1005,68 @@ class PipelinedLoop:
         self.num_stages += 1
         # Return None - no proxy needed
         return None
+
+    def set_prefetch_depth(self, nodes: Sequence[fx.Node], depth: int):
+        """
+        Set the prefetch depth for specific nodes, controlling how many
+        iterations of these nodes are prefetched in the prologue.
+
+        By default, the pipeline prologue performs `num_stages - 1` iterations
+        of stage-0 nodes. With `set_prefetch_depth(nodes, depth=2)`, the
+        specified nodes will have 2 iterations prefetched in the prologue
+        (e.g., filling both LDS double-buffer slots before the loop starts).
+
+        This enables schedules where some operands (e.g., matrix A) have both
+        buffers warm at loop start, allowing ds_load at the beginning of the
+        loop body and GatherToLDS at the end.
+
+        Args:
+            nodes: The nodes to set prefetch depth for. Must be stage-0 nodes
+                   (typically GatherToLDS or similar global-to-shared ops).
+                   Can be a list of fx.Node or a single fx.Node.
+            depth: The number of prologue iterations for these nodes.
+                   Must be >= 1. depth=1 is the default behavior.
+                   depth=2 means both double-buffer slots are filled.
+
+        Example:
+            with pipeline_loop as pl:
+                pl.set_stage([(g2s_a, g2s_b, ...), (), ()])
+                pl.set_stage([(shared_load_a, ...), (bitcast_a, ...), (mma,)])
+                # Prefetch A into both LDS buffers before loop starts
+                pl.set_prefetch_depth(global_to_shared_a, depth=2)
+        """
+        if depth < 1:
+            raise ValueError(
+                f"Prefetch depth must be >= 1, got {depth}. "
+                "depth=1 is the default (standard pipeline fill)."
+            )
+
+        # Normalize to list
+        if not isinstance(nodes, (list, tuple)):
+            nodes = [nodes]
+
+        for node in nodes:
+            custom = get_custom(node)
+            if custom.scheduling_parameters is None:
+                raise ValueError(
+                    f"Node {node} has no scheduling parameters. "
+                    "Call set_stage() before set_prefetch_depth()."
+                )
+            if custom.scheduling_parameters["stage"] != 0:
+                raise ValueError(
+                    f"Node {node} is in stage {custom.scheduling_parameters['stage']}, "
+                    "but set_prefetch_depth only applies to stage-0 nodes "
+                    "(e.g., GatherToLDS, global-to-shared ops)."
+                )
+            self._prefetch_depths[node] = depth
+            # Store the extra offset in scheduling parameters so it can be
+            # accessed during pipeline construction.
+            custom.scheduling_parameters["prefetch_extra_offset"] = depth - 1
+
+        logger.info(
+            f"Set prefetch depth={depth} for {len(nodes)} nodes "
+            f"(extra_offset={depth - 1})"
+        )
 
 
 @dataclass

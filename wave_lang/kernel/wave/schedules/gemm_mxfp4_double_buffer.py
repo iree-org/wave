@@ -105,6 +105,14 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
                 ],
             )
 
+            # Deep prefetch for 8-wave: fill both LDS buffers for A data
+            # and A scale in the prologue, so both are warm when the loop
+            # starts. This allows ds_load at the beginning of the loop body
+            # and GatherToLDS for A at the end (2 iterations ahead).
+            if use_stagger:
+                pl.set_prefetch_depth(global_to_shared_a, depth=2)
+                pl.set_prefetch_depth(global_to_shared_a_scale, depth=2)
+
         # =====================================================================
         # KERNEL: Main loop body with custom cluster ordering
         # =====================================================================
