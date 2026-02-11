@@ -1062,3 +1062,72 @@ def mlir_converter_permute():
 
     # CHECK: wave.write %[[PERMUTE]], %[[ARG1]]
     # CHECK-SAME: !wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@N, @M] of f16, <global>>
+
+
+@run_test
+def mlir_converter_apply_expr():
+    """Test MLIR converter with apply_expr operation."""
+
+    apply_expr_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(apply_expr_constraints)
+    def apply_expr_kernel(
+        a: Memory[M, N, ADDRESS_SPACE_A, tkl.i32],
+        c: Memory[M, N, ADDRESS_SPACE_C, tkl.i32],
+    ):
+        a_reg = wave.read(a)
+        # Single-operand apply_expr: increment each element by 1.
+        result = tkw.apply_expr(a_reg, lambda x: x + 1)
+        wave.write(result, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, apply_expr_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    kernel_constraints = apply_expr_kernel.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_apply_expr
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of i32, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of i32, <global>>)
+
+    # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <global>>) -> !wave.tensor<[@M, @N] of i32, <register>>
+
+    # CHECK: %[[APPLY:.*]] = wave.apply_expr(%[[READ]])
+    # CHECK-SAME: -> ({{.*}} + 1)
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
+
+    # CHECK: wave.write %[[APPLY]], %[[ARG1]]

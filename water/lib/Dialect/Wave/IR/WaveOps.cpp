@@ -2158,6 +2158,73 @@ LogicalResult wave::ReciprocalOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ApplyExprOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::ApplyExprOp::verify() {
+  if (getArguments().empty())
+    return emitOpError("requires at least one operand");
+
+  unsigned numResults = getExpr().getMap().getNumResults();
+  if (numResults != 1)
+    return emitOpError("expression must produce exactly one result, but got ")
+           << numResults;
+
+  // Number of symbols in the expression must be at least the number of
+  // operands.
+  unsigned numSymbols = getExpr().getNumSymbols();
+  unsigned numOperands = getArguments().size();
+  if (numSymbols < numOperands)
+    return emitOpError("expression has ")
+           << numSymbols << " symbols but there are " << numOperands
+           << " operands; expected at least as many symbols as operands";
+
+  ArrayRef<Attribute> symbols = getExpr().getSymbols();
+
+  // The first N symbols must be WaveSSAValueAttr (one per operand).
+  for (unsigned i = 0; i < numOperands; ++i) {
+    if (!isa<WaveSSAValueAttr>(symbols[i]))
+      return emitOpError("expression symbol #")
+             << i << " (" << symbols[i]
+             << ") must be a WaveSSAValueAttr because it corresponds to "
+                "operand #"
+             << i;
+  }
+
+  // Any remaining symbols (external symbolic constants) must not be
+  // WaveSSAValueAttr and must be valid hyperparameters.
+  if (numSymbols > numOperands) {
+    wave::WaveHyperparameterAttr hyper;
+    for (Operation *cur = getOperation(); cur != nullptr && !hyper;
+         cur = cur->getParentOp()) {
+      hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(
+          WaveDialect::kHyperparameterAttrName);
+    }
+
+    for (unsigned i = numOperands; i < numSymbols; ++i) {
+      if (isa<WaveSSAValueAttr>(symbols[i]))
+        return emitOpError("expression symbol #")
+               << i << " (" << symbols[i]
+               << ") is a WaveSSAValueAttr but appears after the operand "
+                  "symbols; only the first "
+               << numOperands << " symbols may be WaveSSAValueAttr";
+
+      auto sym = dyn_cast<WaveSymbolAttr>(symbols[i]);
+      if (!sym)
+        continue;
+      if (!hyper || !hyper.getMapping().contains(sym.getName())) {
+        return emitOpError("expression symbol #")
+               << i << " (" << sym
+               << ") is not an operand symbol and is not provided "
+                  "as a hyperparameter";
+      }
+    }
+  }
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // SelectOp
 //-----------------------------------------------------------------------------
 

@@ -136,6 +136,29 @@ MlirStringRef mlirWaveIterSymbolAttrGetName(MlirAttribute attr) {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveSSAValueAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveSSAValueAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveSSAValueAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveSSAValueAttrGet(MlirContext mlirCtx,
+                                      MlirStringRef symbolNameStrRef) {
+  MLIRContext *ctx = unwrap(mlirCtx);
+  llvm::StringRef symbolName = unwrap(symbolNameStrRef);
+  return wrap(wave::WaveSSAValueAttr::get(ctx, symbolName));
+}
+
+MlirTypeID mlirWaveSSAValueAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveSSAValueAttr>());
+}
+
+MlirStringRef mlirWaveSSAValueAttrGetName(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveSSAValueAttr>(unwrap(attr)).getName());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
 

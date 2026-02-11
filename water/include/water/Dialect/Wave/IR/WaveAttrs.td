@@ -439,6 +439,21 @@ def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
   let assemblyFormat = "`<` $name `>`";
 }
 
+def WaveSSAValueAttr : AttrDef<WaveDialect, "WaveSSAValue"> {
+  let mnemonic = "ssa_value";
+  let description = [{
+    Symbol representing an SSA value operand inside a symbolic expression
+    attribute. Each SSA value operand of the enclosing operation is bound to
+    one of these symbols positionally: the first `ssa_value` corresponds to
+    the first operand, the second to the second operand, and so on. This
+    attribute distinguishes operand symbols from external symbolic constants
+    (hyperparameters), which continue to use `WaveSymbolAttr`.
+  }];
+
+  let parameters = (ins StringRefParameter<"name of the operand symbol">:$name);
+  let assemblyFormat = "`<` $name `>`";
+}
+
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
   let mnemonic = "index_mapping";
   let description = [{

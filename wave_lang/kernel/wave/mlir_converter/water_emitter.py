@@ -60,6 +60,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import (
 
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
+    ApplyExpr,
     Extract,
     ExtractSlice,
     get_custom,
@@ -102,6 +103,7 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
+        ApplyExprOp,
         SubOp,
         AllocateOp,
         CastOp,
@@ -151,6 +153,7 @@ except Exception as e:
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
+    "apply_expr": ApplyExprOp,
     "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
@@ -781,6 +784,42 @@ def _emit_ops_from_graph(
                         logical_slice=node.logical_slice,
                         num_slices=node.num_slices,
                     )
+                elif isinstance(node, ApplyExpr):
+                    reg = node.register_
+                    if not isinstance(reg, Sequence):
+                        reg = [reg]
+                    mlir_args = [get_single_mapped_value(r) for r in reg]
+
+                    from wave_lang.kernel._support.indexing import index_symbol
+
+                    placeholders = [
+                        index_symbol(f"APPLY_EXPR_ARG_{i}") for i in range(len(reg))
+                    ]
+                    sympy_expr = node.expr(*placeholders)
+
+                    # Collect all free symbols; ensure operand placeholders
+                    # come first in the symbol list.
+                    placeholder_set = set(placeholders)
+                    extra_symbols = [
+                        s for s in sympy_expr.free_symbols if s not in placeholder_set
+                    ]
+                    ordered_symbols = list(placeholders) + extra_symbols
+
+                    symbol_mapping = preprocess_symbols(ordered_symbols)
+                    affine_map = _convert_sympy_expr_to_affine_map(
+                        sympy_expr, symbol_mapping
+                    )
+                    num_operands = len(reg)
+                    symbol_attrs = [
+                        (
+                            wave.WaveSSAValueAttr.get(sym.name)
+                            if i < num_operands
+                            else symbol_name_to_attribute(sym.name)
+                        )
+                        for i, sym in enumerate(symbol_mapping.values())
+                    ]
+                    expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
+                    mlir_op = op_builder(result_type, mlir_args, expr_attr)
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())

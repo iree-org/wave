@@ -717,7 +717,54 @@ def SelfIndexOp : WaveOp<"self_index", [
   let assemblyFormat =
     "custom<SingleSymbol>($dim) " # commonArgumentsSyntax # " attr-dict `:`"
     " type($result)";
+  let hasVerifier = 1;
+}
 
+def ApplyExprOp : WaveOp<"apply_expr",
+    [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+     CompatibleOperandsAndResultsOpTrait,
+     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
+    WaveArithmeticOpDoc {
+  let summary = "Apply a symbolic expression to one or more register values";
+  let description = [{
+    Applies a symbolic expression to one or more register-resident tensor
+    values. The expression is specified as a `WaveExprListAttr` containing an
+    affine map with a single result. Each symbol in the expression corresponds
+    to one of the operands or to an external symbolic constant. The first N
+    symbols correspond positionally to the N operands; the remaining symbols
+    (if any) are external symbolic constants such as hyperparameters.
+
+    All operands must have the same type and indexing dimensions. The result
+    type is the same as the operand types.
+
+    Operand symbols are represented using `WaveSSAValueAttr` (`#wave.ssa_value`)
+    while external symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
+
+    ```mlir
+    %0 = wave.apply_expr(%a) #wave.expr_list<[#wave.ssa_value<"a">] -> (a + 1)>
+        : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+    %1 = wave.apply_expr(%x, %y) #wave.expr_list<[#wave.ssa_value<"x">, #wave.ssa_value<"y">] -> (x + y)>
+        : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>)
+        -> !wave.tensor<[@M] of i32>
+    ```
+  }] # baseDescription;
+
+  // Accept both WaveTensorType (before PropagateElementsPerThread) and
+  // 1D vectors (after). We cannot use Variadic<WaveTensorInRegister> because
+  // Variadic requires a Type and not a TypeConstraint.
+  let arguments = !con((ins
+    Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,
+    Arg<WaveExprListAttr, "Expression to apply">:$expr
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Result">:$result
+  );
+
+  let assemblyFormat =
+    "`(` $arguments `)` $expr " # commonArgumentsSyntax # "attr-dict `:`"
+    "functional-type(operands, results)";
   let hasVerifier = 1;
 }
 
