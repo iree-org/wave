@@ -66,7 +66,7 @@ def test_scatter_add(shape, elems_per_thread, threads_per_wave, request):
         tkw.HardwareConstraint(
             threads_per_wave=threads_per_wave,
             waves_per_block=(1, 1, 1),
-            vector_shapes={M: 64, N: elems_per_thread},
+            vector_shapes={M: threads_per_wave, N: elems_per_thread},
         ),
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
