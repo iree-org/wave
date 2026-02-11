@@ -413,6 +413,11 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
   }
 """
 
+    merge_affine = "composite-fixed-point-pass", {
+        "name": "merge_affine",
+        "pipeline": "any(water-compose-affine-arith,canonicalize,cse)",
+    }
+
     canonicalize_cse = "composite-fixed-point-pass", {
         "name": "canonicalize_cse",
         "pipeline": "any(canonicalize,cse)",
@@ -429,7 +434,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     pipeline = [
         "water-memref-decomposition",
-        *add_opt(canonicalize_cse),
+        *add_opt(merge_affine),
         "lower-affine",
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
