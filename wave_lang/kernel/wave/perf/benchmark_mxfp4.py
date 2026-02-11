@@ -7,17 +7,13 @@
 """
 Standalone reproducible benchmark for MXFP4 Wave GEMM.
 
-Uses torch benchmarking (compile with wave_runtime, warmup + benchmark loop with
-torch.cuda.synchronize). When run without --_worker, the script invokes itself
-with --_worker wrapped in rocprofv3 so profiler output is still collected.
+Uses rocprof for benchmarking, invoking kernels with wave runtime.
 
-Requires: torch, wave_lang
+Shapes from CSV with required columns M, N, K, MT_M, MT_N, and MT_K:
 
-Shapes from CSV (header M,N,K; optional columns MT_M, MT_N, MT_K for macrotile sizes):
-  python benchmark_mxfp4.py --shapes <path/to/csv> -o <output_csv>
+  python -u wave_lang/kernel/wave/perf/benchmark_mxfp4.py --shapes wave_lang/kernel/wave/perf/mxfp4_shapes_macrotiles.csv -o results.csv
 
 Optional env: ATT_LIBRARY_PATH=/path/to/rocprof-trace-decoder/rocm/lib. If set, passed to rocprofv3 (--att --att-library-path).
-Default dump dir: /tmp/bench_mxfp4_dump; each run uses a timestamped subdir (e.g. 2025-02-11T14-30-45) so IRs and rocprof traces do not overwrite between runs.
 """
 
 import argparse
