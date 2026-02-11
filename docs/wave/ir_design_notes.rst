@@ -75,5 +75,15 @@ of the Wave compiler.
 
 The MLIR -> FX converter produces direct references (mapping capture block
 arguments to outer values).  The graph comparison infrastructure
-(``graph_utils._reconcile_lifted_placeholders``) handles both forms so
+(`graph_utils._reconcile_lifted_placeholders`) handles both forms so
 that traces can be compared regardless of which representation they use.
+
+Note that the `implicit_captures` field on `Iterate` / `Conditional`
+is **not a reliable source of truth** after hoisting.  When the hoisting
+pass erases a lifted placeholder, `Placeholder.erase()` runs a
+dead-capture cleanup that removes the corresponding entry from
+`implicit_captures` — even if the subgraph still references the outer
+node directly.  The MLIR side does not have this problem: `makeIsolated`
+walks the region and discovers all outer references regardless of how they
+are represented.  As a result, the MLIR-imported trace may list more
+captures than the source trace.

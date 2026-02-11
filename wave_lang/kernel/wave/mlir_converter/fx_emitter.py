@@ -15,7 +15,7 @@ import dill
 
 try:
     from water_mlir.water_mlir import ir
-    from water_mlir.water_mlir.dialects import wave, arith, amdgpu
+    from water_mlir.water_mlir.dialects import wave, arith, amdgpu, func
     from water_mlir.water_mlir.dialects.wave import (
         AllocateOp,
         ReadOp,

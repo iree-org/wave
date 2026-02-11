@@ -80,6 +80,8 @@ ResultType: TypeAlias = DataType | Memory | Register | Sequence["ResultType"] | 
 #
 # Excluded from comparison (non-semantic / scheduling artifacts):
 #   location, expanded_dims, scheduling_parameters
+#
+# See docs/wave/ir_design_notes.rst for background on this distinction.
 _ADDITIONAL_NODE_ATTRS = ("vector_shapes", "reduction_dim", "iter_idx")
 
 
@@ -91,9 +93,7 @@ def _is_effectively_none(val: Any) -> bool:
     """
     if val is None:
         return True
-    if isinstance(val, (list, tuple)) and all(v is None for v in val):
-        return True
-    return False
+    return isinstance(val, (list, tuple)) and all(v is None for v in val)
 
 
 def DCE(trace: CapturedTrace) -> None:
@@ -465,14 +465,12 @@ def _check_nodes_equivalent(
         # to a nested Iterate scope rather than the Allocate's own scope.
         # The wave to MLIR conversion strips these before emitting (see
         # strip_out_of_scope_induction_symbols in symbol_utils.py).
-        # Apply the same cleanup to both sides before comparing.
+        # Only the LHS (reference / source trace) needs cleanup; the RHS
+        # comes from MLIR import where scoping is enforced structurally.
         if isinstance(lhs_custom, Allocate):
             if isinstance(lhs_index, dict):
                 allowed = collect_allowed_induction_symbols(lhs_custom.fx_node)
                 lhs_index = strip_out_of_scope_induction_symbols(lhs_index, allowed)
-            if isinstance(rhs_index, dict):
-                allowed = collect_allowed_induction_symbols(rhs_custom.fx_node)
-                rhs_index = strip_out_of_scope_induction_symbols(rhs_index, allowed)
 
         if lhs_index is not None:
             if rhs_index is None:
@@ -508,9 +506,27 @@ def _check_nodes_equivalent(
                     False, f"attr '{attr_name}' mismatch: {check_result.reason}"
                 )
 
-    # implicit_captures has compare=False: captures can differ between
-    # equivalent graphs (e.g. lifted placeholders).
-    # Semantic equivalence is verified by comparing subgraph operations.
+    # implicit_captures (compare=False) may differ in order (makeIsolated
+    # can reorder) or length (the source trace may have pruned dead
+    # captures after hoisting, while the MLIR-imported trace includes all
+    # values that makeIsolated found referenced from the region).
+    # Check that every LHS capture maps to a capture on the RHS.
+    lhs_captures = getattr(lhs_custom, "implicit_captures", None)
+    rhs_captures = getattr(rhs_custom, "implicit_captures", None)
+    if lhs_captures is not None:
+        if rhs_captures is None:
+            return CheckResult(
+                False, "implicit_captures present in LHS but absent in RHS"
+            )
+        rhs_capture_set = set(rhs_captures)
+        for lc in lhs_captures:
+            mapped = node_map.get(lc)
+            if mapped is not None and mapped not in rhs_capture_set:
+                return CheckResult(
+                    False,
+                    f"implicit_captures mismatch: LHS capture {lc} "
+                    f"(mapped to {mapped}) not found in RHS captures",
+                )
 
     # Check subgraphs for NestedRegionOps
     lhs_subgraph = getattr(lhs_custom, "subgraph_name", None)
