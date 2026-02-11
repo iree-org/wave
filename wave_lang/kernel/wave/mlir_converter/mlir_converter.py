@@ -207,7 +207,7 @@ class FxEmitterResponse:
     trace: CapturedTrace | None = None
     constraints: list[Constraint] = field(default_factory=list)
     options: WaveCompileOptions = field(default_factory=WaveCompileOptions)
-    diagnostics: list[str] = field(default_factory=list)
+    diagnostics: list[MLIRDiagnostic] = field(default_factory=list)
 
 
 def emit_wave_dialect(
@@ -310,7 +310,7 @@ module attributes {transform.with_named_sequence} {
 
 def mlir_to_fx(
     mlir_text: str,
-) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[str]]:
+) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]]:
     """Convert Wave MLIR text back into a Wave FX trace via subprocess.
 
     Spawns `fx_emitter.py`, sends the MLIR text over stdin, and returns
@@ -327,8 +327,8 @@ def mlir_to_fx(
           (workgroup, wave, tiling, device, and hardware constraints).
         - options: `WaveCompileOptions` with hyperparameters recovered from
           the `wave.hyperparameters` function attribute.
-        - diagnostics: MLIR diagnostic messages (errors, warnings, remarks)
-          collected during parsing, verification, and conversion.
+        - diagnostics: List of `MLIRDiagnostic` instances (errors, warnings,
+          remarks) collected during parsing, verification, and conversion.
 
     Raises:
         RuntimeError: If the subprocess exits with a non-zero code or the
@@ -347,14 +347,18 @@ def mlir_to_fx(
     )
     output, err = proc.communicate(dill.dumps({"mlir": mlir_text}))
     if proc.returncode != 0:
-        diagnostics = None
+        diagnostics: list[MLIRDiagnostic] = []
         try:
             response = dill.loads(output)
             if isinstance(response, FxEmitterResponse):
                 diagnostics = response.diagnostics
         except Exception:
             pass
-        diag_text = f"\nDiagnostics: {diagnostics}" if diagnostics else ""
+        diag_text = (
+            f"\n{format_diagnostics(diagnostics, use_color=False)}"
+            if diagnostics
+            else ""
+        )
         raise RuntimeError(
             f"fx_emitter failed (code {proc.returncode}):\n"
             f"{err.decode('utf-8', errors='replace')}{diag_text}"

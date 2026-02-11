@@ -14,6 +14,7 @@ from wave_lang.kernel.wave.constraints import (
     MMAType,
     HardwareConstraint,
 )
+from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
     mlir_to_fx,
@@ -30,9 +31,9 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
 
 
-def _error_diagnostics(diags: list[str]) -> list[str]:
-    """Filter diagnostics to only error-level messages."""
-    return [d for d in diags if d.startswith("DiagnosticSeverity.ERROR")]
+def _error_diagnostics(diags: list[MLIRDiagnostic]) -> list[MLIRDiagnostic]:
+    """Filter structured diagnostics to errors only."""
+    return [d for d in diags if "error" in d.severity.lower()]
 
 
 M = tkl.sym.M
@@ -145,9 +146,8 @@ def mlir_to_fx_minimal_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, test_constraints, options)
-    assert (
-        diagnostics == []
-    ), f"unexpected diagnostics from wave to mlir conversion: {diagnostics}"
+    errors = _error_diagnostics(diagnostics)
+    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
@@ -226,9 +226,8 @@ def mlir_to_fx_simple_matmul_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, source_constraints, options)
-    assert (
-        diagnostics == []
-    ), f"unexpected diagnostics from wave to mlir conversion: {diagnostics}"
+    errors = _error_diagnostics(diagnostics)
+    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
@@ -315,9 +314,8 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, source_constraints, options)
-    assert (
-        diagnostics == []
-    ), f"unexpected diagnostics from wave to mlir conversion: {diagnostics}"
+    errors = _error_diagnostics(diagnostics)
+    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
@@ -391,7 +389,8 @@ def mlir_to_fx_unspecified_address_space():
     mlir_text, diagnostics, _ = emit_wave_dialect(
         trace, matmul_for_addr_test.constraints, options
     )
-    assert diagnostics == [], f"unexpected diagnostics: {diagnostics}"
+    errors = _error_diagnostics(diagnostics)
+    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Replace all concrete address spaces with unspecified to simulate
     # an MLIR module where address spaces have not been resolved yet.

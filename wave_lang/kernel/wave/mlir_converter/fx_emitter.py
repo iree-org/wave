@@ -53,7 +53,9 @@ from wave_lang.kernel.wave.constraints import (
     DeviceConstraint,
     HardwareConstraint,
 )
+from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import FxEmitterResponse
+from wave_lang.kernel.wave.mlir_converter.water_emitter import serialize_location
 from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 from wave_lang.support.indexing import index_symbol, IndexSequence
 from wave_lang.kernel._support.indexing import IndexExpr, IndexSymbol, safe_subs
@@ -920,7 +922,9 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
 
 def convert_mlir_to_trace(
     mlir_module_text: str,
-) -> tuple[CapturedTrace | None, list[Constraint], WaveCompileOptions, list[str]]:
+) -> tuple[
+    CapturedTrace | None, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]
+]:
     """Convert MLIR (Wave dialect) text into a CapturedTrace (FX graph).
 
     This is the main conversion entry point, called from the __main__ subprocess
@@ -928,12 +932,18 @@ def convert_mlir_to_trace(
     hyperparameters from func.func attributes, then converts each operation into
     the corresponding FX node.
     """
-    diagnostics: list[str] = []
+    diagnostics: list[MLIRDiagnostic] = []
     with ir.Context() as ctx:
         wave.register_dialect(ctx)
 
         def _diagnostics_handler(d: ir.Diagnostic) -> bool:
-            diagnostics.append(f"{d.severity}: {d.location}: {d.message}")
+            diagnostics.append(
+                MLIRDiagnostic(
+                    message=d.message,
+                    severity=d.severity.name,
+                    location=serialize_location(d.location),
+                )
+            )
             return True
 
         ctx.attach_diagnostic_handler(_diagnostics_handler)
@@ -1044,7 +1054,7 @@ if __name__ == "__main__":
         sys.stdout.flush()
         sys.exit(0)
     except Exception as e:
-        response.diagnostics.append(str(e))
+        response.diagnostics.append(MLIRDiagnostic(message=str(e), severity="ERROR"))
         try:
             sys.stdout.buffer.write(dill.dumps(response))
             sys.stdout.flush()

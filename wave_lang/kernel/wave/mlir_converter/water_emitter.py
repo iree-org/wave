@@ -95,8 +95,8 @@ assert "iree" not in sys.modules, (
 )
 
 try:
-    from water_mlir.water_mlir import ir
-    from water_mlir.water_mlir.dialects.wave import (
+    from water_mlir import ir
+    from water_mlir.dialects.wave import (
         AddOp,
         SubOp,
         AllocateOp,
@@ -133,14 +133,14 @@ try:
         WaveSymbolAttr,
         WaveTensorType,
     )
-    from water_mlir.water_mlir.sympy_to_affine_converter import (
+    from water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
-    from water_mlir.water_mlir.dialects import arith
-    from water_mlir.water_mlir.dialects import func
-    from water_mlir.water_mlir.dialects import wave
-    from water_mlir.water_mlir.dialects import amdgpu
-    from water_mlir.water_mlir.dialects.transform import interpreter
+    from water_mlir.dialects import arith
+    from water_mlir.dialects import func
+    from water_mlir.dialects import wave
+    from water_mlir.dialects import amdgpu
+    from water_mlir.dialects.transform import interpreter
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -799,7 +799,7 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
-def _serialize_location(loc: ir.Location) -> list[LocationFrame]:
+def serialize_location(loc: ir.Location) -> list[LocationFrame]:
     """Convert ir.Location to a serializable list of location frames (stack trace).
 
     Uses the MLIR Python binding properties to extract structured location
@@ -1039,7 +1039,7 @@ def _emit_from_captured_trace(
         diagnostics.append(
             MLIRDiagnostic(
                 message=d.message,
-                location=_serialize_location(d.location),
+                location=serialize_location(d.location),
                 severity=d.severity.name,
             )
         )
