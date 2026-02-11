@@ -41,6 +41,11 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
+from wave_lang.kernel.wave.perf.utils import (
+    find_rocprof_outputs,
+    get_rocprofv3_cmd,
+    parse_rocprof_kernel_stats,
+)
 
 # ---------------------------------------------------------------------------
 # Wave kernel template and compile options
@@ -96,57 +101,6 @@ def _clear_dir(dir_path: os.PathLike) -> None:
     if os.path.exists(dir_path):
         shutil.rmtree(dir_path)
     os.makedirs(dir_path, exist_ok=True)
-
-
-def _get_rocprofv3_cmd(
-    dump_path: os.PathLike,
-    att_library_path: Optional[str],
-    kernel_regex: str = "gemm",
-) -> list:
-    cmd = [
-        "rocprofv3",
-        "--kernel-trace",
-        "--kernel-include-regex",
-        kernel_regex,
-        "--stats",
-        "TRUE",
-        "-d",
-        f"{dump_path}",
-        "--output-format",
-        "csv",
-        "--",
-    ]
-    if att_library_path:
-        cmd = cmd[:4] + ["--att", "--att-library-path", att_library_path] + cmd[4:]
-    return cmd
-
-
-def _parse_rocprof_us(path: Path, kernel_regex: str = "gemm") -> dict:
-    try:
-        if path.is_dir():
-            kernel_stats_files = list(path.glob("**/*kernel_stats.csv"))
-            if not kernel_stats_files:
-                return {}
-            csv_path = kernel_stats_files[0]
-        else:
-            csv_path = path
-        if not csv_path.exists():
-            return {}
-        with open(csv_path, "r") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if "Name" in row and (not kernel_regex or kernel_regex in row["Name"]):
-                    if "AverageNs" not in row:
-                        return {}
-                    average_ns = float(row["AverageNs"])
-                    return {
-                        "kernel_name": row["Name"],
-                        "mean_duration_us": average_ns / 1000.0,
-                        "total_calls": int(row.get("Calls", 1)),
-                    }
-        return {}
-    except Exception as e:
-        raise RuntimeError(f"Failed to parse rocprof output from {path}: {e}") from e
 
 
 def _parse_worker_stdout_for_mean_us(stdout: str) -> tuple[float, bool]:
@@ -239,8 +193,8 @@ def benchmark_mxfp4_gemm_rocprof(
     m, n, k = shape
     mt_m, mt_n, mt_k = macrotiles
     _clear_dir(profiler_dump_path)
-    profile_prefix = _get_rocprofv3_cmd(
-        profiler_dump_path, att_library_path, kernel_regex
+    profile_prefix = get_rocprofv3_cmd(
+        profiler_dump_path, None, kernel_regex, att_library_path
     )
     worker_cmd = [
         sys.executable,
@@ -276,9 +230,11 @@ def benchmark_mxfp4_gemm_rocprof(
         return 0.0, False
     runtime_us, ok = _parse_worker_stdout_for_mean_us(proc.stdout)
     if ok:
-        rocprof_stats = _parse_rocprof_us(profiler_dump_path, kernel_regex)
-        if rocprof_stats and "mean_duration_us" in rocprof_stats:
-            runtime_us = rocprof_stats["mean_duration_us"]
+        stats_path, _ = find_rocprof_outputs(profiler_dump_path, None)
+        if stats_path is not None:
+            rocprof_stats = parse_rocprof_kernel_stats(stats_path, kernel_regex)
+            if rocprof_stats and "mean_duration_us" in rocprof_stats:
+                runtime_us = rocprof_stats["mean_duration_us"]
     return runtime_us, ok
 
 
