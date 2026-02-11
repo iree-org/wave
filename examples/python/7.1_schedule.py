@@ -16,12 +16,14 @@ import torch
 from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+from wave_lang.kernel.wave.schedules import (
+    get_mxfp4_dbuf_schedule,
+    get_mxfp4_dbuf_hipblaslt_schedule,
+)
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
-
 from utils import parse_args, list_tests, run_test
 
 
@@ -44,7 +46,7 @@ def test_dbuf_4wave_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 4 waves, no stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=4)
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(2, 2))
     schedule = get_mxfp4_dbuf_schedule(use_stagger=False)
 
     options.print_ir_after = "all" if is_debug else []
@@ -61,7 +63,7 @@ def test_dbuf_8wave_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=8)
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
     schedule = get_mxfp4_dbuf_schedule(use_stagger=True)
 
     options.print_ir_after = "all" if is_debug else []
@@ -88,3 +90,18 @@ if __name__ == "__main__":
         args.test, globals(), args.debug, args.repeat, args.shape, args.block
     )
     exit(0 if success else 1)
+
+
+def test_dbuf_4wave_mxfp_hipblaslt_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Double-buffered MXFP4 GEMM, 4 waves, with stagger."""
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(1, 4))
+    schedule = get_mxfp4_dbuf_hipblaslt_schedule(use_stagger=False)
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    _run_mxfp_gemm(gemm, shape)
+    print("MXFP GEMM double-buffer 4-wave HIPBLASLT test passed!")

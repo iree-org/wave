@@ -25,8 +25,8 @@ from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_par
 def get_tagged_mxfp4_gemm(
     shape: tuple[int, int, int] = (1024, 1024, 8192),
     block_shape: tuple[int, int, int] = (256, 256, 256),
+    wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
-    num_waves: int = 8,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -36,7 +36,7 @@ def get_tagged_mxfp4_gemm(
         shape: (M, N, K) problem dimensions.
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         mfma_variant: Scaled MMA instruction type.
-        num_waves: Waves per workgroup (4 or 8).
+        wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
 
     Returns:
         (kernel_function, WaveCompileOptions)
@@ -53,14 +53,8 @@ def get_tagged_mxfp4_gemm(
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
 
-    if num_waves == 8:
-        # 8 waves: 4 M-tiles x 2 N-tiles
-        constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-    else:
-        # 4 waves: 2 M-tiles x 2 N-tiles
-        constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / wave_shape[0])]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
