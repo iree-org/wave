@@ -432,6 +432,41 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
   return %0 : !wave.tensor<any of bf16>
 }
 
+// CHECK-LABEL: @self_index
+func.func @self_index() -> !wave.tensor<[@N] of i32, <register>> {
+  // CHECK: wave.self_index @N : !wave.tensor<[@N] of i32, <register>>
+  %0 = wave.self_index @N : !wave.tensor<[@N] of i32, <register>>
+  return %0 : !wave.tensor<[@N] of i32, <register>>
+}
+
+// CHECK-LABEL: @self_index_i64
+func.func @self_index_i64() -> !wave.tensor<[@M] of i64, <register>> {
+  // CHECK: wave.self_index @M : !wave.tensor<[@M] of i64, <register>>
+  %0 = wave.self_index @M : !wave.tensor<[@M] of i64, <register>>
+  return %0 : !wave.tensor<[@M] of i64, <register>>
+}
+
+// CHECK-LABEL: @self_index_with_index
+func.func @self_index_with_index() -> !wave.tensor<[@N] of i32, <register>> {
+  // CHECK: wave.self_index @N
+  // CHECK-SAME: index
+  // CHECK-SAME: #wave.index_symbol<T0>
+  %0 = wave.self_index @N index [{
+    N : <[#wave.index_symbol<T0>] -> (T0, 4, 1)>
+  }] : !wave.tensor<[@N] of i32, <register>>
+  return %0 : !wave.tensor<[@N] of i32, <register>>
+}
+
+// CHECK-LABEL: @self_index_with_complex_index
+func.func @self_index_with_complex_index() -> !wave.tensor<[@M] of i32, <register>> {
+  // CHECK: wave.self_index @M
+  // CHECK-SAME: index
+  %0 = wave.self_index @M index [{
+    M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0 mod 64, 4, 16)>
+  }] : !wave.tensor<[@M] of i32, <register>>
+  return %0 : !wave.tensor<[@M] of i32, <register>>
+}
+
 // CHECK-LABEL: @permute
 func.func @permute(%arg0: !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @B] of f32, <register>> {
   // CHECK: wave.permute

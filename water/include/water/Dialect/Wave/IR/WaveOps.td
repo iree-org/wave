@@ -637,6 +637,42 @@ def BroadcastOp : WaveOp<"broadcast", [
   }];
 }
 
+def SelfIndexOp : WaveOp<"self_index", [
+    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    NoOpElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Produce a vector of indices along a specified dimension";
+  let description = [{
+    Creates a register-resident tensor containing the index values for each
+    thread along the specified symbolic dimension. The index computation uses
+    the index mapping associated with the operation: for each element position
+    i, the value is `start + i * stride`, where start and stride come from
+    the index mapping for the specified dimension.
+
+    The result type must be a 1-dimensional tensor (or vector) with an integer
+    element type, indexed by the specified dimension.
+
+    Example:
+    ```mlir
+    %idx = wave.self_index @N index {...} : !wave.tensor<[N], i32, register>
+    ```
+  }];
+
+  let arguments = !con((ins
+    Arg<WaveSymbolAttr, "Dimension to index over">:$dim
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Index values">:$result
+  );
+
+  let assemblyFormat =
+    "custom<SingleSymbol>($dim) " # commonArgumentsSyntax # " attr-dict `:`"
+    " type($result)";
+
+  let hasVerifier = 1;
+}
+
 def PermuteOp : WaveOp<"permute", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,

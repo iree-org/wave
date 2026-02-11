@@ -831,6 +831,30 @@ func.func @broadcast_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, 
 
 // -----
 
+func.func @self_index_wrong_dim() -> !wave.tensor<[@M] of i32, <register>> {
+  // expected-error @below {{result dimension 'M' must match the specified dimension 'N'}}
+  %0 = wave.self_index @N : !wave.tensor<[@M] of i32, <register>>
+  return %0 : !wave.tensor<[@M] of i32, <register>>
+}
+
+// -----
+
+func.func @self_index_float_type() -> !wave.tensor<[@N] of f32, <register>> {
+  // expected-error @below {{result element type must be an integer type, got 'f32'}}
+  %0 = wave.self_index @N : !wave.tensor<[@N] of f32, <register>>
+  return %0 : !wave.tensor<[@N] of f32, <register>>
+}
+
+// -----
+
+func.func @self_index_multi_dim() -> !wave.tensor<[@M, @N] of i32, <register>> {
+  // expected-error @below {{result must be a 1-dimensional tensor, got rank 2}}
+  %0 = wave.self_index @N : !wave.tensor<[@M, @N] of i32, <register>>
+  return %0 : !wave.tensor<[@M, @N] of i32, <register>>
+}
+
+// -----
+
 // Test that permute result shape must not be empty
 func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
   // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (0)}}

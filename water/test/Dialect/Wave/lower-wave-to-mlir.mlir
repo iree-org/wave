@@ -1347,3 +1347,65 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return
   }
 }
+
+// -----
+
+// Test wave.self_index lowering with unit stride - produces start + iota.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_self_index_unit_stride
+  func.func @lower_self_index_unit_stride() -> vector<4xi32> attributes {wave.hyperparameters = #wave.hyperparameters<{N = 64}>} {
+    // CHECK-NOT: wave.self_index
+    // CHECK: %[[TID:.*]] = gpu.thread_id  x
+    // CHECK: %[[START:.*]] = affine.apply
+    // CHECK: %[[IOTA:.*]] = vector.step : vector<4xindex>
+    // CHECK: %[[START_VEC:.*]] = vector.broadcast %[[START]] : index to vector<4xindex>
+    // CHECK: %[[ADD:.*]] = arith.addi %[[START_VEC]], %[[IOTA]] : vector<4xindex>
+    // CHECK: %[[RESULT:.*]] = arith.index_cast %[[ADD]] : vector<4xindex> to vector<4xi32>
+    // CHECK: return %[[RESULT]]
+    %0 = wave.self_index @N index [{N : <[#wave.index_symbol<T0>] -> (T0, 4, 1)>}] : vector<4xi32>
+    return %0 : vector<4xi32>
+  }
+}
+
+// -----
+
+// Test wave.self_index lowering with non-unit stride - produces start + iota * stride.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_self_index_with_stride
+  func.func @lower_self_index_with_stride() -> vector<4xi64> attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+    // CHECK-NOT: wave.self_index
+    // CHECK: %[[TID:.*]] = gpu.thread_id  x
+    // CHECK: %[[START:.*]] = affine.apply
+    // CHECK: %[[IOTA:.*]] = vector.step : vector<4xindex>
+    // CHECK: %[[START_VEC:.*]] = vector.broadcast %[[START]] : index to vector<4xindex>
+    // CHECK: %[[C16:.*]] = arith.constant 16 : index
+    // CHECK: %[[STRIDE_VEC:.*]] = vector.broadcast %[[C16]] : index to vector<4xindex>
+    // CHECK: %[[SCALED:.*]] = arith.muli %[[IOTA]], %[[STRIDE_VEC]] : vector<4xindex>
+    // CHECK: %[[ADD:.*]] = arith.addi %[[START_VEC]], %[[SCALED]] : vector<4xindex>
+    // CHECK: %[[RESULT:.*]] = arith.index_cast %[[ADD]] : vector<4xindex> to vector<4xi64>
+    // CHECK: return %[[RESULT]]
+    %0 = wave.self_index @M index [{M : <[#wave.index_symbol<T0>] -> (T0 * 4, 4, 16)>}] : vector<4xi64>
+    return %0 : vector<4xi64>
+  }
+}
+
+// -----
+
+// Test wave.self_index lowering with complex start expression involving
+// workgroup and thread IDs.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_self_index_complex_start
+  func.func @lower_self_index_complex_start() -> vector<8xi32> attributes {wave.hyperparameters = #wave.hyperparameters<{M = 256, BLOCK_M = 64}>} {
+    // CHECK-NOT: wave.self_index
+    // CHECK-DAG: gpu.thread_id  x
+    // CHECK-DAG: gpu.block_id  x
+    // CHECK: affine.apply
+    // CHECK: vector.step : vector<8xindex>
+    // CHECK: arith.addi
+    // CHECK: arith.index_cast {{.*}} : vector<8xindex> to vector<8xi32>
+    %0 = wave.self_index @M index [{
+      M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 1)>
+    }] : vector<8xi32>
+    return %0 : vector<8xi32>
+  }
+}

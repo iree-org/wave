@@ -568,6 +568,108 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
+// SelfIndexOp
+//===----------------------------------------------------------------------===//
+
+/// Lowers `wave.self_index` to arithmetic on index vectors.
+/// Computes: start + iota(size) * stride, where start, size and stride come
+/// from the index mapping for the specified dimension.
+class SelfIndexOpLoweringPattern
+    : public OpConversionPattern<wave::SelfIndexOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::SelfIndexOp op, wave::SelfIndexOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+
+    auto resultVectorType = dyn_cast<VectorType>(convertedType);
+    if (!resultVectorType)
+      return rewriter.notifyMatchFailure(op, "expected vector result type");
+
+    // Get hyperparameters from the type converter.
+    auto *waveTypeConverter =
+        static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
+    wave::WaveHyperparameterAttr hyper =
+        waveTypeConverter->getHyperparameters();
+
+    // Get the index dictionary from the index attribute.
+    ArrayAttr indexArr = op.getIndexAttr();
+    if (!indexArr || indexArr.empty())
+      return rewriter.notifyMatchFailure(op, "missing index attribute");
+    DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+
+    // Look up the index mapping for the specified dimension.
+    StringRef dimName = op.getDim().getName();
+    Attribute mappingAttr = indexDict.get(dimName);
+    if (!mappingAttr)
+      return rewriter.notifyMatchFailure(
+          op, "index mapping not found for dimension '" + dimName + "'");
+    auto mapping = cast<wave::WaveIndexMappingAttr>(mappingAttr);
+
+    // Materialize the start expression.
+    FailureOr<SmallVector<Value>> startValues = wave::materializeAffine(
+        loc, mapping.getSymbols(), mapping.getStart(), rewriter, hyper);
+    if (failed(startValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize start expression");
+    assert(llvm::hasSingleElement(*startValues));
+    Value start = (*startValues)[0];
+
+    // Evaluate the step (number of elements) from hyperparameters.
+    std::optional<SmallVector<int64_t>> stepValues =
+        wave::evaluateMapWithHyperparams(mapping.getStep(),
+                                         mapping.getSymbols(), hyper);
+    if (!stepValues || stepValues->size() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate step to a constant");
+    int64_t size = (*stepValues)[0];
+
+    // Evaluate the stride from hyperparameters.
+    std::optional<SmallVector<int64_t>> strideValues =
+        wave::evaluateMapWithHyperparams(mapping.getStride(),
+                                         mapping.getSymbols(), hyper);
+    if (!strideValues || strideValues->size() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate stride to a constant");
+    int64_t stride = (*strideValues)[0];
+
+    // Build iota vector [0, 1, ..., size-1] of index type.
+    IndexType indexType = rewriter.getIndexType();
+    VectorType iotaVectorType = VectorType::get({size}, indexType);
+    Value iota = vector::StepOp::create(rewriter, loc, iotaVectorType);
+
+    // Broadcast start to a vector.
+    Value startVec =
+        vector::BroadcastOp::create(rewriter, loc, iotaVectorType, start);
+
+    Value result;
+    if (stride == 1) {
+      // result = start + iota.
+      result = arith::AddIOp::create(rewriter, loc, startVec, iota);
+    } else {
+      // result = start + iota * stride.
+      Value strideVal = arith::ConstantIndexOp::create(rewriter, loc, stride);
+      Value strideVec =
+          vector::BroadcastOp::create(rewriter, loc, iotaVectorType, strideVal);
+      Value iotaScaled = arith::MulIOp::create(rewriter, loc, iota, strideVec);
+      result = arith::AddIOp::create(rewriter, loc, startVec, iotaScaled);
+    }
+
+    // Cast from vector<index> to the target integer vector type.
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, resultVectorType,
+                                                    result);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // PermuteOp
 //===----------------------------------------------------------------------===//
 
@@ -816,6 +918,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
       PermuteOpLoweringPattern,
       RegisterOpLoweringPattern,
       SelectOpLoweringPattern,
+      SelfIndexOpLoweringPattern,
       ShuffleOpLoweringPattern
       // clang-format on
       >(typeConverter, patterns.getContext());
