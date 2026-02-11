@@ -684,6 +684,7 @@ def mlir_converter_matmul():
     # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
     # CHECK-SAME: offset =
+    # CHECK-SAME: padding = 4
     #
     # Another child allocation with parent reference and offset.
     #
@@ -691,6 +692,7 @@ def mlir_converter_matmul():
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
     # CHECK-SAME: offset =
+    # CHECK-SAME: padding = 4
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]

@@ -355,9 +355,12 @@ def AllocateOp : WaveOp<"allocate", [
     Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset,
     Arg<DefaultValuedAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
-      "Padding added to the last dimension of distributed shape">:$padding,
-    Arg<OptionalAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>>,
-      "Padding added to the end of an allocation, does not affect distributed shape">:$tail_padding
+      "Padding added to the last dimension of distributed shape in number of elements">:$padding,
+    Arg<OptionalAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>>, [{
+      Padding added to the end of an allocation in number of elements,
+      does not affect the distributed shape
+    }]
+    >:$tail_padding
   ), commonArguments);
 
   let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);

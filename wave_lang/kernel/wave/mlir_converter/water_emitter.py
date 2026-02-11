@@ -743,13 +743,34 @@ def _emit_ops_from_graph(
                         offset_attr = ir.IntegerAttr.get(
                             ir.IntegerType.get_signless(64), int(node.offset)
                         )
+                    i64 = ir.IntegerType.get_signless(64)
+                    padding_attr = (
+                        ir.IntegerAttr.get(i64, node.padding)
+                        if node.padding != 0
+                        else None
+                    )
+                    tail_padding_attr = (
+                        ir.IntegerAttr.get(i64, node.tail_padding)
+                        if node.tail_padding != 0
+                        else None
+                    )
+                    # Use unpadded_shape when distributed_shape matches
+                    # shape rank (standard allocation). For flattened
+                    # allocations (e.g. after minimize_shared_allocs),
+                    # use distributed_shape directly since the padding
+                    # is already baked into the flat size.
+                    dist_shape = (
+                        node.unpadded_shape
+                        if len(node.distributed_shape) == len(node.shape)
+                        else node.distributed_shape
+                    )
                     mlir_op = op_builder(
                         result_type,
                         parent=parent_value,
-                        distributed_shape=_convert_to_wave_expr_list_tuple(
-                            node.distributed_shape
-                        ),
+                        distributed_shape=_convert_to_wave_expr_list_tuple(dist_shape),
                         offset=offset_attr,
+                        padding=padding_attr,
+                        tail_padding=tail_padding_attr,
                     )
                 elif isinstance(node, ExtractSlice):
                     size = _convert_to_wave_expr_list_tuple(node.size)
