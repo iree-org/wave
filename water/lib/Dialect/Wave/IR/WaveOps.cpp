@@ -2018,16 +2018,19 @@ LogicalResult wave::SelectOp::verify() {
 //-----------------------------------------------------------------------------
 
 LogicalResult wave::SelfIndexOp::verify() {
+  Type elementType = getElementType(getResult().getType());
+
+  if (!isa<IntegerType>(elementType))
+    return emitOpError() << "result element type must be an integer type, got "
+                         << elementType;
+
   auto tensorType = dyn_cast<WaveTensorType>(getResult().getType());
-  // After PropagateElementsPerThread, the result may be a VectorType.
   if (!tensorType)
     return success();
 
   if (!tensorType.getFullySpecified())
     return success();
 
-  // The result must be a 1-dimensional tensor indexed by the specified
-  // dimension.
   if (tensorType.getRank() != 1)
     return emitOpError() << "result must be a 1-dimensional tensor, got rank "
                          << tensorType.getRank();
@@ -2037,11 +2040,6 @@ LogicalResult wave::SelfIndexOp::verify() {
                          << tensorType.getShape()[0].getName()
                          << "' must match the specified dimension '"
                          << getDim().getName() << "'";
-
-  // The element type must be an integer type.
-  if (!isa<IntegerType>(tensorType.getElementType()))
-    return emitOpError() << "result element type must be an integer type, got "
-                         << tensorType.getElementType();
 
   return success();
 }

@@ -855,6 +855,14 @@ func.func @self_index_multi_dim() -> !wave.tensor<[@M, @N] of i32, <register>> {
 
 // -----
 
+func.func @self_index_vector_float_type() -> vector<4xf32> {
+  // expected-error @below {{result element type must be an integer type, got 'f32'}}
+  %0 = wave.self_index @N : vector<4xf32>
+  return %0 : vector<4xf32>
+}
+
+// -----
+
 // Test that permute result shape must not be empty
 func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
   // expected-error @below {{'wave.permute' op input shape rank (2) does not match target shape rank (0)}}

@@ -593,13 +593,11 @@ public:
     if (!resultVectorType)
       return rewriter.notifyMatchFailure(op, "expected vector result type");
 
-    // Get hyperparameters from the type converter.
     auto *waveTypeConverter =
         static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
     wave::WaveHyperparameterAttr hyper =
         waveTypeConverter->getHyperparameters();
 
-    // Get the index dictionary from the index attribute.
     ArrayAttr indexArr = op.getIndexAttr();
     if (!indexArr || indexArr.empty())
       return rewriter.notifyMatchFailure(op, "missing index attribute");
@@ -645,16 +643,13 @@ public:
     VectorType iotaVectorType = VectorType::get({size}, indexType);
     Value iota = vector::StepOp::create(rewriter, loc, iotaVectorType);
 
-    // Broadcast start to a vector.
     Value startVec =
         vector::BroadcastOp::create(rewriter, loc, iotaVectorType, start);
 
     Value result;
     if (stride == 1) {
-      // result = start + iota.
       result = arith::AddIOp::create(rewriter, loc, startVec, iota);
     } else {
-      // result = start + iota * stride.
       Value strideVal = arith::ConstantIndexOp::create(rewriter, loc, stride);
       Value strideVec =
           vector::BroadcastOp::create(rewriter, loc, iotaVectorType, strideVal);
@@ -662,7 +657,6 @@ public:
       result = arith::AddIOp::create(rewriter, loc, startVec, iotaScaled);
     }
 
-    // Cast from vector<index> to the target integer vector type.
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, resultVectorType,
                                                     result);
     return success();
