@@ -68,7 +68,8 @@ def test_dbuf_8wave_mxfp_gemm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm(gemm, shape)
+    for i in range(100):
+        _run_mxfp_gemm(gemm, shape)
     print("MXFP GEMM double-buffer 8-wave test passed!")
 
 
