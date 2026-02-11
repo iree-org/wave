@@ -10,16 +10,17 @@ Bidirectional converter between Wave FX traces and Wave MLIR.
 Both directions run in a subprocess to isolate the Water MLIR Python bindings
 from the host process.
 
-``emit_wave_dialect`` serializes a CapturedTrace via dill, spawns
-``water_emitter.py``, and returns the MLIR module text.
+`emit_wave_dialect` serializes a CapturedTrace via dill, spawns
+`water_emitter.py`, and returns the MLIR module text.
 
-``mlir_to_fx`` sends MLIR text to ``fx_emitter.py`` and returns a
+`mlir_to_fx` sends MLIR text to `fx_emitter.py` and returns a
 reconstructed CapturedTrace with constraints and compile options.
 """
 
 import linecache
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import dill
@@ -199,6 +200,16 @@ def print_diagnostics(
         print(formatted, file=file)
 
 
+@dataclass
+class FxEmitterResponse:
+    """Structured response from the fx_emitter subprocess."""
+
+    trace: CapturedTrace | None = None
+    constraints: list[Constraint] = field(default_factory=list)
+    options: WaveCompileOptions = field(default_factory=WaveCompileOptions)
+    diagnostics: list[str] = field(default_factory=list)
+
+
 def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -300,7 +311,29 @@ module attributes {transform.with_named_sequence} {
 def mlir_to_fx(
     mlir_text: str,
 ) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[str]]:
-    """Convert Wave MLIR text back into a Wave FX trace via subprocess."""
+    """Convert Wave MLIR text back into a Wave FX trace via subprocess.
+
+    Spawns `fx_emitter.py`, sends the MLIR text over stdin, and returns
+    the reconstructed FX graph together with its associated metadata.
+
+    Args:
+        mlir_text: Textual representation of a Wave MLIR module containing a
+            single function with Wave dialect operations.
+
+    Returns:
+        A 4-tuple of:
+        - trace: The reconstructed `CapturedTrace` (FX graph with subgraphs).
+        - constraints: Wave constraints extracted from the function attributes
+          (workgroup, wave, tiling, device, and hardware constraints).
+        - options: `WaveCompileOptions` with hyperparameters recovered from
+          the `wave.hyperparameters` function attribute.
+        - diagnostics: MLIR diagnostic messages (errors, warnings, remarks)
+          collected during parsing, verification, and conversion.
+
+    Raises:
+        RuntimeError: If the subprocess exits with a non-zero code or the
+            response cannot be unpickled / validated.
+    """
     if not isinstance(mlir_text, str):
         raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
     child = Path(__file__).with_name("fx_emitter.py")
@@ -316,44 +349,29 @@ def mlir_to_fx(
     if proc.returncode != 0:
         diagnostics = None
         try:
-            unpickled = dill.loads(output)
-            diagnostics = (
-                unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
-            )
+            response = dill.loads(output)
+            if isinstance(response, FxEmitterResponse):
+                diagnostics = response.diagnostics
         except Exception:
-            diagnostics = None
+            pass
         diag_text = f"\nDiagnostics: {diagnostics}" if diagnostics else ""
         raise RuntimeError(
             f"fx_emitter failed (code {proc.returncode}):\n"
             f"{err.decode('utf-8', errors='replace')}{diag_text}"
         )
     try:
-        unpickled = dill.loads(output)
+        response = dill.loads(output)
     except Exception as e:
         raise RuntimeError(
             f"Failed to unpickle output from fx_emitter (code {proc.returncode}):\n"
             f"Output: {output!r}\n"
             f"Exception: {e}"
         ) from e
-    if not isinstance(unpickled, dict):
-        raise RuntimeError(f"fx_emitter output has unexpected type: {type(unpickled)}")
-    trace = unpickled.get("trace")
-    constraints = unpickled.get("constraints")
-    options = unpickled.get("options")
-    diagnostics = unpickled.get("diagnostics")
-    if not isinstance(trace, CapturedTrace):
-        raise RuntimeError(f"fx_emitter trace has unexpected type: {type(trace)}")
-    if not isinstance(constraints, list) or not all(
-        isinstance(c, Constraint) for c in constraints
-    ):
+    if not isinstance(response, FxEmitterResponse):
+        raise RuntimeError(f"fx_emitter output has unexpected type: {type(response)}")
+    if not isinstance(response.trace, CapturedTrace):
         raise RuntimeError(
-            f"fx_emitter constraints have unexpected type: {type(constraints)}"
+            f"fx_emitter trace has unexpected type: {type(response.trace)}"
         )
-    if not isinstance(options, WaveCompileOptions):
-        raise RuntimeError(f"fx_emitter options has unexpected type: {type(options)}")
-    if not isinstance(diagnostics, list):
-        raise RuntimeError(
-            f"fx_emitter diagnostics have unexpected type: {type(diagnostics)}"
-        )
-    trace.restore_node_state()
-    return trace, constraints, options, diagnostics
+    response.trace.restore_node_state()
+    return response.trace, response.constraints, response.options, response.diagnostics

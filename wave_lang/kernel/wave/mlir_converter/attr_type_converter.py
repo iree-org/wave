@@ -21,8 +21,8 @@ if "iree" in sys.modules:
 
 import sympy  # type: ignore
 from typing import Sequence
-from water_mlir.water_mlir import ir
-from water_mlir.water_mlir.dialects import wave
+from water_mlir import ir
+from water_mlir.dialects import wave
 
 # This is fine since it doesn't depend on IREE transitively.
 from wave_lang.support.indexing import (
@@ -197,11 +197,9 @@ def _convert_affine_expr_to_sympy_expr(
         ValueError: If the expression is not supported.
     """
     if isinstance(expr, ir.AffineConstantExpr):
-        return sympy.Integer(int(ir.AffineConstantExpr(expr).value))
+        return sympy.Integer(ir.AffineConstantExpr(expr).value)
     if isinstance(expr, ir.AffineSymbolExpr):
         return symbol_mapping[ir.AffineSymbolExpr(expr).position]
-    if isinstance(expr, ir.AffineDimExpr):
-        return symbol_mapping[ir.AffineDimExpr(expr).position]
     if isinstance(expr, ir.AffineAddExpr):
         add_expr = ir.AffineAddExpr(expr)
         return _convert_affine_expr_to_sympy_expr(

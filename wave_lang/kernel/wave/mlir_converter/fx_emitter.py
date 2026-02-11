@@ -32,7 +32,6 @@ try:
         WaveTensorType,
         iterate_make_isolated,
     )
-    from water_mlir.dialects.func import ReturnOp as FuncReturnOp
 
 except Exception as e:
     # Keep import-time errors explicit so callers can act on missing deps.
@@ -54,8 +53,9 @@ from wave_lang.kernel.wave.constraints import (
     DeviceConstraint,
     HardwareConstraint,
 )
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import FxEmitterResponse
 from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
-from wave_lang.support.indexing import index_symbol, IndexSequence, MMA_ACC_SYMBOL_NAME
+from wave_lang.support.indexing import index_symbol, IndexSequence
 from wave_lang.kernel._support.indexing import IndexExpr, IndexSymbol, safe_subs
 from wave_lang.kernel.lang.wave_types import Memory, Register
 from wave_lang.kernel.lang.global_symbols import (
@@ -78,12 +78,13 @@ from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
     get_custom,
 )
-from mlir_to_wave import (
+from attr_type_converter import (
     convert_index_mapping_array_to_sympy,
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
     symbol_attr_to_name,
 )
+
 
 # Converted attribute value: The union of all types that may be produced
 # for a single MLIR attribute.
@@ -701,9 +702,7 @@ def _handle_yield_op(op: YieldOp, parse_ctx: _OpParseContext) -> None:
         return
 
     yield_values = [parse_ctx.resolve_operand(v) for v in operands]
-    # resolve_operand returns fx.Node | int | float, none of which are
-    # Sequence, so no unwrapping is needed.
-    parse_ctx.graph.output((yield_values,))
+    parse_ctx.graph.output(yield_values)
 
 
 def _create_get_result_nodes(
@@ -711,35 +710,24 @@ def _create_get_result_nodes(
     iterate_node: fx.Node,
     results: Sequence[ir.Value],
     result_types: Sequence[type],
-    iter_index: dict | Sequence | None,
+    iter_index: (
+        dict[IndexSymbol, IndexSequence]
+        | Sequence[dict[IndexSymbol, IndexSequence]]
+        | None
+    ),
     output_values: Sequence[fx.Node],
     axis: IndexSymbol,
 ) -> None:
     """Creates GetResult nodes for each result of a wave.iterate operation.
 
     Each iterate result gets a GetResult node that extracts its value from the
-    iterate's output tuple. Two index transformations are applied:
+    iterate's output tuple.
 
-    1. The iterator axis is removed from the result's index dictionary because
-       the reduction dimension no longer varies after the loop completes.
-
-    2. The MMA_ACC selector symbol is substituted with 1. Index expressions use
-       Piecewise functions parameterized by MMA_ACC to select between operand
-       layouts (MMA_ACC=0) and accumulator layouts (MMA_ACC=1). Since iterate
-       results are always the accumulated values, the accumulator specialization
-       applies. This is a no-op when no MMA nodes are present, as the index
-       expressions won't contain MMA_ACC.
+    Note: the index is used as-is without cleanup. MLIR-side index propagation
+    (water-wave-infer-index-exprs) is expected to have already removed the
+    iterator axis and specialized MMA_ACC in the index expressions. If those
+    passes haven't run, the index may contain stale entries.
     """
-    mma_acc = index_symbol(MMA_ACC_SYMBOL_NAME)
-
-    def _specialize_result_index(index: dict, axis: IndexSymbol) -> dict:
-        """Remove iterator axis and specialize for accumulator layout."""
-        result = {k: v for k, v in index.items() if k != axis}
-        return {
-            k: v.subs({mma_acc: 1}) if hasattr(v, "subs") else v
-            for k, v in result.items()
-        }
-
     with parse_ctx.graph.inserting_after(iterate_node):
         for idx, result in enumerate(results):
             get_result_op = GetResult.create(
@@ -822,8 +810,8 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
             arg_node.vector_shapes = dict(init_node.vector_shapes)
         local_map[block_arg] = arg_node
 
-    # Map capture block arguments directly to their outer values
-    # This preserves the FX structure where subgraph operations reference outer values
+    # Map capture block arguments directly to their outer values rather than
+    # creating lifted placeholders (the graph comparison handles both forms).
     for block_arg, capture_node in zip(block_args[iter_count:], captures):
         local_map[block_arg] = capture_node
 
@@ -839,28 +827,11 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
         ),
     )
 
-    # The YieldOp handler always creates an output node, so we can directly access it
     output_node = next(node for node in subgraph.nodes if node.op == "output")
     output_custom = get_custom(output_node)
-    output_vals = output_custom.return_vals[0]
-
-    # Normalize output values to a flat list. The yield handler wraps values in a
-    # tuple for the FX output node, which may result in nested sequences when a
-    # single multi-result value is yielded. Unwrap until we have a flat list of
-    # FX nodes matching the iterate's MLIR results one-to-one.
-    if isinstance(output_vals, Sequence):
-        while (
-            len(output_vals) == 1
-            and isinstance(output_vals[0], Sequence)
-            and not isinstance(output_vals[0], (fx.Node, str))
-        ):
-            output_vals = output_vals[0]
-        output_vals = list(output_vals)
-        output_node.args = (output_vals,)
-        output_values = output_vals
-    else:
-        output_node.args = ([output_vals],)
-        output_values = (output_vals,)
+    output_values = output_custom.return_vals
+    if not isinstance(output_values, Sequence):
+        output_values = [output_values]
 
     iterate_op = Iterate.create(
         parse_ctx.graph,
@@ -939,7 +910,7 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_iterate_op(op, parse_ctx)
             case YieldOp():
                 _handle_yield_op(op, parse_ctx)
-            case FuncReturnOp():
+            case func.ReturnOp():
                 pass  # No FX node needed - produces no results.
             case amdgpu.LDSBarrierOp():
                 _handle_lds_barrier_op(op, parse_ctx)
@@ -949,7 +920,7 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
 
 def convert_mlir_to_trace(
     mlir_module_text: str,
-) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[str]]:
+) -> tuple[CapturedTrace | None, list[Constraint], WaveCompileOptions, list[str]]:
     """Convert MLIR (Wave dialect) text into a CapturedTrace (FX graph).
 
     This is the main conversion entry point, called from the __main__ subprocess
@@ -960,15 +931,22 @@ def convert_mlir_to_trace(
     diagnostics: list[str] = []
     with ir.Context() as ctx:
         wave.register_dialect(ctx)
+
+        def _diagnostics_handler(d: ir.Diagnostic) -> bool:
+            diagnostics.append(f"{d.severity}: {d.location}: {d.message}")
+            return True
+
+        ctx.attach_diagnostic_handler(_diagnostics_handler)
+
         try:
             module = ir.Module.parse(mlir_module_text, context=ctx)
-        except ir.MLIRError as e:
-            raise ValueError(f"Failed to parse MLIR module: {e}") from e
+        except ir.MLIRError:
+            return None, [], WaveCompileOptions(), diagnostics
 
         # Verify the MLIR module.
-        # We rely on verified MLIR throughout the converter
+        # We rely on verified MLIR throughout the converter.
         if not module.operation.verify():
-            raise ValueError("MLIR module failed verification")
+            return None, [], WaveCompileOptions(), diagnostics
 
         # Find the first func.func operation in the module
         func_op = None
@@ -1050,26 +1028,25 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    diagnostics: list[str] = []
+    response = FxEmitterResponse()
     try:
         trace, constraints, options, diagnostics = convert_mlir_to_trace(mlir_text)
-        # Snapshot supplemental fields for pickling back.
+        if trace is None:
+            raise ValueError("MLIR conversion/verification failed; see diagnostics")
         trace.snapshot_node_state()
-        response = {
-            "trace": trace,
-            "constraints": constraints,
-            "options": options,
-            "diagnostics": diagnostics,
-        }
+        response = FxEmitterResponse(
+            trace=trace,
+            constraints=constraints,
+            options=options,
+            diagnostics=diagnostics,
+        )
         sys.stdout.buffer.write(dill.dumps(response))
         sys.stdout.flush()
         sys.exit(0)
     except Exception as e:
-        diagnostics.append(str(e))
-        # Return diagnostics on stdout
-        # non-zero exit code indicates failure.
+        response.diagnostics.append(str(e))
         try:
-            sys.stdout.buffer.write(dill.dumps({"diagnostics": diagnostics}))
+            sys.stdout.buffer.write(dill.dumps(response))
             sys.stdout.flush()
         finally:
             sys.stderr.write(f"FATAL: fx_emitter failed: {e}\n")

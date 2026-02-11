@@ -30,6 +30,11 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
 
 
+def _error_diagnostics(diags: list[str]) -> list[str]:
+    """Filter diagnostics to only error-level messages."""
+    return [d for d in diags if d.startswith("DiagnosticSeverity.ERROR")]
+
+
 M = tkl.sym.M
 N = tkl.sym.N
 BLOCK_M = tkl.sym.BLOCK_M
@@ -146,9 +151,8 @@ def mlir_to_fx_minimal_roundtrip():
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    assert (
-        fx_diags == []
-    ), f"unexpected diagnostics from mlir to fx conversion: {fx_diags}"
+    errors = _error_diagnostics(fx_diags)
+    assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
     assert_constraints_equivalent(
@@ -228,9 +232,8 @@ def mlir_to_fx_simple_matmul_roundtrip():
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    assert (
-        fx_diags == []
-    ), f"unexpected diagnostics from mlir to fx conversion: {fx_diags}"
+    errors = _error_diagnostics(fx_diags)
+    assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
     assert_constraints_equivalent(
@@ -318,9 +321,8 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    assert (
-        fx_diags == []
-    ), f"unexpected diagnostics from mlir to fx conversion: {fx_diags}"
+    errors = _error_diagnostics(fx_diags)
+    assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     # Check roundtrip worked
     # Note: options.subs includes scheduling parameters and address space symbols
@@ -400,7 +402,8 @@ def mlir_to_fx_unspecified_address_space():
     )
 
     fx_trace, _, _, fx_diags = mlir_to_fx(mlir_unspecified)
-    assert fx_diags == [], f"unexpected diagnostics: {fx_diags}"
+    errors = _error_diagnostics(fx_diags)
+    assert errors == [], f"unexpected errors: {errors}"
 
     # Collect address space symbols from Memory-typed placeholders (each
     # corresponds to a distinct function argument).

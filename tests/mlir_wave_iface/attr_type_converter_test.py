@@ -43,7 +43,7 @@ if is_water_available():
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects import wave
 
-    from mlir_converter.mlir_to_wave import (
+    from mlir_converter.attr_type_converter import (
         _convert_affine_expr_to_sympy_expr,
         _convert_index_mapping_attr_to_sympy,
         _convert_index_mapping_dict_to_sympy,
@@ -208,12 +208,11 @@ class TestConvertAffineExprToSympyExpr:
         result = _convert_affine_expr_to_sympy_expr(expr, symbol_mapping)
         assert result == sympy.floor((2 * x + y) / z)
 
-    def test_dim_expr(self):
-        """Test that AffineDimExpr is resolved via symbol_mapping."""
-        x = sympy.Symbol("x")
+    def test_dim_expr_raises(self):
+        """AffineDimExpr is not expected in Wave maps (all use numDims=0)."""
         expr = ir.AffineDimExpr.get(0)
-        result = _convert_affine_expr_to_sympy_expr(expr, [x])
-        assert result == x
+        with pytest.raises(ValueError, match="Unsupported affine expression"):
+            _convert_affine_expr_to_sympy_expr(expr, [])
 
 
 class TestConvertIndexMappingAttrToSympy:

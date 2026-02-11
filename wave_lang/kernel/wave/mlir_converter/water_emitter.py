@@ -22,12 +22,12 @@ if __name__ == "__main__":
     _parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
     if _parent_dir not in sys.path:
         sys.path.append(_parent_dir)
-    # Add current directory to enable importing mlir_to_wave without full package path
+    # Add current directory to enable importing attr_type_converter without full package path
     _current_dir = str(_current_file.parent)
     if _current_dir not in sys.path:
         sys.path.append(_current_dir)
 
-from mlir_to_wave import (
+from attr_type_converter import (
     convert_index_mapping_array_to_sympy,
     dtype_to_mlir_scalar_type,
     preprocess_symbols,
@@ -385,9 +385,12 @@ def _attach_attributes(
         allowed_induction_symbols = collect_allowed_induction_symbols(node.fx_node)
 
         if isinstance(node, MMA):
-            # Build one index mapping dict per operand plus the result for
-            # MMA nodes (lhs, rhs, acc, result), matching the C++ InferTypes
-            # pass which stores operandExprs + resultExprs in that order.
+            # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
+            # match MmaOp::setIndexFromLattices which serialises
+            # operandExprs + resultExprs.  The Python-side index sequence
+            # analysis only tracks 3 (lhs, rhs, acc), so we emit acc_index
+            # twice: once for the accumulator operand and once for the
+            # result (MMA result type == acc type).
             if lhs_index := getattr(node, "lhs_index", None):
                 dict_attrs.append(
                     _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
@@ -397,13 +400,13 @@ def _attach_attributes(
                     _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
                 )
             if acc_index := getattr(node, "acc_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                acc_attr = _build_index_mapping_dict(
+                    acc_index, allowed_induction_symbols
                 )
-                # Result index equals acc_index (MMA result type == acc type).
-                dict_attrs.append(
-                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
-                )
+                # Append acc_index for both the accumulator operand and the
+                # result, since MMA result type == acc type.
+                dict_attrs.append(acc_attr)
+                dict_attrs.append(acc_attr)
         else:
             dict_attrs.append(
                 _build_index_mapping_dict(node.index, allowed_induction_symbols)
