@@ -13,14 +13,11 @@ with --_worker wrapped in rocprofv3 so profiler output is still collected.
 
 Requires: torch, wave_lang
 
-Single shape:
-  python benchmark_mxfp4.py --shape <M> <N> <K> [--tiles <mt_m> <mt_n> <mt_k>]
-
-Multiple shapes (CSV with M,N,K; optional columns MT_M, MT_N, MT_K for macrotile sizes):
+Shapes from CSV (header M,N,K; optional columns MT_M, MT_N, MT_K for macrotile sizes):
   python benchmark_mxfp4.py --shapes <path/to/csv> -o <output_csv>
 
 Optional env: ATT_LIBRARY_PATH=/path/to/rocprof-trace-decoder/rocm/lib. If set, passed to rocprofv3 (--att --att-library-path).
-Default dump dir: /tmp/bench_mxfp4_dump
+Default dump dir: /tmp/bench_mxfp4_dump; each run uses a timestamped subdir (e.g. 2025-02-11T14-30-45) so IRs and rocprof traces do not overwrite between runs.
 """
 
 import argparse
@@ -29,123 +26,50 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import torch
-import wave_lang.kernel.wave as tkw
-import wave_lang.kernel.lang as tkl
-from wave_lang.kernel.wave import ScaledMMAType
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
-from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+from wave_lang.kernel.wave.compile import wave_compile
+from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import get_tagged_mxfp4_gemm
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.utils.run_utils import (
-    get_default_arch,
-    set_default_run_config,
-)
+from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
 
 # ---------------------------------------------------------------------------
-# Wave kernel template and compile options (edit here to change kernel/options)
+# Wave kernel template and compile options
 # ---------------------------------------------------------------------------
-
-# Default macrotile sizes (mt_m, mt_n, mt_k); used when not specified in CSV or when using single --shape without --tiles
-NUM_WAVES_DIM_M = 4
-NUM_WAVES_DIM_N = 2
-DEFAULT_TILES = (256 * NUM_WAVES_DIM_M, 256 * NUM_WAVES_DIM_N, 256)
 
 
 def get_mxfp4_gemm_wave(
     shape: tuple[int, int, int],
-    mt_m: int,
-    mt_n: int,
-    mt_k: int,
-    use_wave_runtime: bool = False,
-    vmfb_path: Optional[Path] = None,
+    macrotiles: tuple[int, int, int],
 ):
-    # Derive block sizes from macrotiles
-    block_m = mt_m // NUM_WAVES_DIM_M
-    block_n = mt_n // NUM_WAVES_DIM_N
-    block_k = mt_k
+    gemm, options = get_tagged_mxfp4_gemm(shape, macrotiles)
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=True)
+    options = set_default_run_config(options)
 
-    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
-    c_wave_dtype = tkl.bf16
-    # Input sizes and tile symbols (same as wave_gemm.get_mxfp4_gemm)
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M // NUM_WAVES_DIM_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N // NUM_WAVES_DIM_N)]
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
-
-    @tkw.wave(constraints)
-    def gemm_afp4_wfp4_wave(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, c_wave_dtype],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
-            a_scale_reg = tkw.read(a_scale)
-            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
-            b_reg = tkw.read(b)
-            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
-            b_scale_reg = tkw.read(b_scale)
-            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
-            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
-            return acc
-
-        casted = tkw.cast(repeat, c_wave_dtype)
-        tkw.write(casted, c)
-
-    hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: block_m,
-        BLOCK_N: block_n,
-        BLOCK_K: block_k,
-        M: shape[0],
-        N: shape[1],
-        K: shape[2],
-    }
-    hyperparams.update(get_default_scheduling_params())
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-        schedule=SchedulingType.NONE,
-        use_global_to_shared=True,
-        target=get_default_arch(),
-        wave_runtime=use_wave_runtime,
-    )
-    if use_wave_runtime:
-        options = set_default_run_config(options)
-    if vmfb_path is not None:
-        options.create_vmfb_file = str(vmfb_path)
-
-    return wave_compile(options, gemm_afp4_wfp4_wave)
+    compiled_gemm = wave_compile(options, gemm, schedule)
+    return compiled_gemm
 
 
 # ---------------------------------------------------------------------------
 # Helpers (IREE/rocprof, validate, benchmark)
 # ---------------------------------------------------------------------------
+
+
+class BenchmarkError(RuntimeError):
+    """Raised when a benchmark step fails (compile, validation, or benchmark run)."""
+
+    def __init__(self, message: str, stage: str):
+        super().__init__(message)
+        self.stage = stage  # "compile_failed", "validation_failed", or "benchmark_failed"
 
 
 def get_flops(M: int, N: int, K: int) -> float:
@@ -221,8 +145,8 @@ def _parse_rocprof_us(path: Path, kernel_regex: str = "gemm") -> dict:
                         "total_calls": int(row.get("Calls", 1)),
                     }
         return {}
-    except Exception:
-        return {}
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse rocprof output from {path}: {e}") from e
 
 
 def _parse_worker_stdout_for_mean_us(stdout: str) -> tuple[float, bool]:
@@ -270,39 +194,40 @@ def run_worker(
 ) -> None:
     """Worker entry: compile GEMM with wave_runtime, run torch benchmark, print MEAN_US to stdout."""
     m, n, k = shape
-    mt_m, mt_n, mt_k = macrotiles
-    gemm_rt = get_mxfp4_gemm_wave((m, n, k), mt_m, mt_n, mt_k, use_wave_runtime=True)
+    gemm_rt = get_mxfp4_gemm_wave(shape, macrotiles)
+
     device = torch.device("cuda")
     x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k), device)
-    wave_out = torch.empty(m, n, device=device, dtype=torch.bfloat16)
-    inputs = (x, x_scale, w.T, w_scale, wave_out)
+    w_t = w.T.contiguous()
+    wave_out = torch.empty(m, n, device=device, dtype=torch.float32)
+    inputs = (x, x_scale, w_t, w_scale, wave_out)
+
     mean_us = _run_torch_benchmark(
         gemm_rt, inputs, warmup_iters=warmup_iters, benchmark_iters=benchmark_iters
     )
     print(f"MEAN_US: {mean_us}")
 
 
-def validate_mxfp4_gemm(m: int, n: int, k: int, compiled_gemm) -> bool:
+def validate_mxfp4_gemm(shape: tuple[int, int, int], compiled_gemm) -> bool:
     """Run compiled Wave GEMM (with wave_runtime=True) and compare to torch reference."""
+    m, n, k = shape
     try:
         device = torch.device("cuda")
-        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k), device)
-        wave_out = torch.empty(m, n, device=device, dtype=torch.bfloat16)
-        compiled_gemm(x, x_scale, w.T, w_scale, wave_out)
-        torch_ref = torchScaledGemmMXFP4(x, w, x_scale, w_scale).to(torch.bfloat16)
+        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs(shape, device)
+        w_t = w.T.contiguous()
+        wave_out = torch.zeros(m, n, device=device, dtype=torch.float32)
+
+        compiled_gemm(x, x_scale, w_t, w_scale, wave_out)
+        torch_ref = torchScaledGemmMXFP4(x, w, x_scale, w_scale)
         torch.testing.assert_close(wave_out, torch_ref, check_device=False)
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        raise RuntimeError(f"Validation failed for shape {shape}: {e}") from e
 
 
 def benchmark_mxfp4_gemm_rocprof(
-    m: int,
-    n: int,
-    k: int,
-    mt_m: int,
-    mt_n: int,
-    mt_k: int,
+    shape: tuple[int, int, int],
+    macrotiles: tuple[int, int, int],
     profiler_dump_path: Path,
     att_library_path: Optional[str],
     kernel_regex: str = "gemm",
@@ -311,6 +236,8 @@ def benchmark_mxfp4_gemm_rocprof(
     benchmark_iters: int = 1,
 ) -> tuple[float, bool]:
     """Run self as worker under rocprofv3 (torch benchmark); return mean runtime in microseconds."""
+    m, n, k = shape
+    mt_m, mt_n, mt_k = macrotiles
     _clear_dir(profiler_dump_path)
     profile_prefix = _get_rocprofv3_cmd(
         profiler_dump_path, att_library_path, kernel_regex
@@ -319,11 +246,11 @@ def benchmark_mxfp4_gemm_rocprof(
         sys.executable,
         str(Path(__file__).resolve()),
         "--_worker",
-        "--shape",
+        "--_shape",
         str(m),
         str(n),
         str(k),
-        "--tiles",
+        "--_tiles",
         str(mt_m),
         str(mt_n),
         str(mt_k),
@@ -349,22 +276,15 @@ def benchmark_mxfp4_gemm_rocprof(
         return 0.0, False
     runtime_us, ok = _parse_worker_stdout_for_mean_us(proc.stdout)
     if ok:
-        try:
-            rocprof_stats = _parse_rocprof_us(profiler_dump_path, kernel_regex)
-            if rocprof_stats and "mean_duration_us" in rocprof_stats:
-                runtime_us = rocprof_stats["mean_duration_us"]
-        except Exception:
-            pass
+        rocprof_stats = _parse_rocprof_us(profiler_dump_path, kernel_regex)
+        if rocprof_stats and "mean_duration_us" in rocprof_stats:
+            runtime_us = rocprof_stats["mean_duration_us"]
     return runtime_us, ok
 
 
 def run_validate_and_benchmark(
-    m: int,
-    n: int,
-    k: int,
-    mt_m: int,
-    mt_n: int,
-    mt_k: int,
+    shape: tuple[int, int, int],
+    macrotiles: tuple[int, int, int],
     dump_dir: Path,
     att_library_path: Optional[str],
     kernel_regex: str = "gemm",
@@ -376,18 +296,17 @@ def run_validate_and_benchmark(
     Returns (runtime_us, tflops, status) where status is "ok", "compile_failed", "validation_failed",
     or "benchmark_failed".
     """
-    shape = (m, n, k)
+    m, n, k = shape
+    mt_m, mt_n, mt_k = macrotiles
     gemm_id = f"gemm_{m}_{n}_{k}_MT_{mt_m}_{mt_n}_{mt_k}"
 
     # Compile for validation (wave_runtime=True)
     try:
-        gemm_rt = get_mxfp4_gemm_wave(shape, mt_m, mt_n, mt_k, use_wave_runtime=True)
+        gemm_rt = get_mxfp4_gemm_wave(shape, macrotiles)
     except Exception as e:
-        print(
-            f"Compilation (wave_runtime) failed for ({m},{n},{k}): {e}",
-            file=sys.stderr,
-        )
-        return None, None, "compile_failed"
+        raise BenchmarkError(
+            f"Compilation failed for shape {shape}: {e}", stage="compile_failed"
+        ) from e
 
     # Save MLIR to dump directory
     mlir_dir = dump_dir / "mlir"
@@ -396,18 +315,18 @@ def run_validate_and_benchmark(
     mlir_path.write_text(gemm_rt.asm)
 
     # Validate numerics
-    if not validate_mxfp4_gemm(m, n, k, gemm_rt):
-        return None, None, "validation_failed"
+    try:
+        validate_mxfp4_gemm(shape, gemm_rt)
+    except Exception as e:
+        raise BenchmarkError(
+            f"Validation failed for shape {shape}: {e}", stage="validation_failed"
+        ) from e
 
     # Benchmark via torch worker under rocprofv3
     profiler_dump_path = dump_dir / "rocprof" / gemm_id
     runtime_us, ok = benchmark_mxfp4_gemm_rocprof(
-        m,
-        n,
-        k,
-        mt_m,
-        mt_n,
-        mt_k,
+        shape,
+        macrotiles,
         profiler_dump_path,
         att_library_path,
         kernel_regex=kernel_regex,
@@ -415,8 +334,10 @@ def run_validate_and_benchmark(
         benchmark_iters=benchmark_iters,
     )
     if not ok:
-        print(f"Benchmark failed for ({m},{n},{k})", file=sys.stderr)
-        return None, None, "benchmark_failed"
+        raise BenchmarkError(
+            f"Benchmark failed for shape {shape}: worker did not report MEAN_US or exited non-zero",
+            stage="benchmark_failed",
+        )
 
     tflops = runtime_us_to_tflops(m, n, k, runtime_us)
     return runtime_us, tflops, "ok"
@@ -436,27 +357,25 @@ def parse_args():
         action="store_true",
         help=argparse.SUPPRESS,
     )
-    g = p.add_mutually_exclusive_group(required=False)
-    g.add_argument(
-        "--shape",
+    p.add_argument(
+        "--_shape",
         type=int,
         nargs=3,
         metavar=("M", "N", "K"),
-        help="Single shape: M N K",
+        help=argparse.SUPPRESS,
     )
-    g.add_argument(
+    p.add_argument(
+        "--_tiles",
+        type=int,
+        nargs=3,
+        metavar=("mt_m", "mt_n", "mt_k"),
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
         "--shapes",
         type=Path,
         metavar="CSV",
         help="CSV path with header M,N,K (optional columns MT_M, MT_N, MT_K for macrotile sizes)",
-    )
-    p.add_argument(
-        "--tiles",
-        type=int,
-        nargs=3,
-        default=None,
-        metavar=("mt_m", "mt_n", "mt_k"),
-        help="Macrotile sizes (mt_m, mt_n, mt_k) for single-shape mode only (default: 256 256 256). Not allowed with --shapes.",
     )
     p.add_argument(
         "--warmup-iters",
@@ -477,7 +396,7 @@ def parse_args():
         "--output",
         type=Path,
         default=None,
-        help="Output CSV for --shapes mode (required when using --shapes)",
+        help="Output CSV for results (required)",
     )
     p.add_argument(
         "--dump-dir",
@@ -494,44 +413,55 @@ def parse_args():
     return p.parse_args()
 
 
+def validate_shape_and_macrotiles(
+    shape: tuple[int, int, int],
+    macrotiles: tuple[int, int, int],
+) -> None:
+    """Validate shape and macrotile combination. Raises ValueError with a reason if invalid."""
+    M, N, K = shape
+    mt_m, mt_n, mt_k = macrotiles
+    if M <= 4 or N <= 4 or K <= 4:
+        raise ValueError(f"M, N, K must be > 4 (got M={M}, N={N}, K={K})")
+    if mt_m > M or mt_n > N or mt_k > K:
+        raise ValueError(
+            f"Macrotiles must not exceed shape dimensions: "
+            f"MT_M({mt_m})<=M({M}), MT_N({mt_n})<=N({N}), MT_K({mt_k})<=K({K})"
+        )
+    if K % 32 != 0:
+        raise ValueError(f"K must be divisible by 32 for scale matrix size (got K={K})")
+    if mt_m % 4 != 0:
+        raise ValueError(
+            f"MT_M must be divisible by 4 (wave constraint) (got MT_M={mt_m})"
+        )
+    if mt_n % 2 != 0:
+        raise ValueError(
+            f"MT_N must be divisible by 2 (wave constraint) (got MT_N={mt_n})"
+        )
+
+
 def load_shapes_csv(
     path: Path,
 ) -> list[tuple[tuple[int, int, int], tuple[int, int, int]]]:
-    """Load (M,N,K) and optional (MT_M, MT_N, MT_K) from CSV. Returns list of ((M,N,K), (mt_m, mt_n, mt_k))."""
+    """Load shape (M,N,K) and macrotile sizes (MT_M, MT_N, MT_K) from CSV.
+    Validates each row with validate_shape_and_macrotiles; raises ValueError on first invalid row.
+    """
     rows: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
-        if not reader.fieldnames or "M" not in reader.fieldnames:
-            # Allow headerless M,N,K only (no per-row tiles)
-            f.seek(0)
-            for line in csv.reader(f):
-                if len(line) >= 3:
-                    try:
-                        shape = (int(line[0]), int(line[1]), int(line[2]))
-                        rows.append((shape, DEFAULT_TILES))
-                    except ValueError:
-                        if line[0].upper() != "M":
-                            raise
-            return rows
-        has_tiles = (
-            "MT_M" in reader.fieldnames
-            and "MT_N" in reader.fieldnames
-            and "MT_K" in reader.fieldnames
-        )
-        for row in reader:
+        for row_idx, row in enumerate(reader, start=2):  # 2 = header is row 1
             M = int(row["M"])
             N = int(row["N"])
             K = int(row["K"])
-            if (
-                has_tiles
-                and row.get("MT_M", "").strip()
-                and row.get("MT_N", "").strip()
-                and row.get("MT_K", "").strip()
-            ):
-                tiles = (int(row["MT_M"]), int(row["MT_N"]), int(row["MT_K"]))
-            else:
-                tiles = DEFAULT_TILES
-            rows.append(((M, N, K), tiles))
+            MT_M = int(row["MT_M"])
+            MT_N = int(row["MT_N"])
+            MT_K = int(row["MT_K"])
+            shape = (M, N, K)
+            macrotiles = (MT_M, MT_N, MT_K)
+            try:
+                validate_shape_and_macrotiles(shape, macrotiles)
+            except ValueError as e:
+                raise ValueError(f"{path}: row {row_idx}: {e}") from e
+            rows.append((shape, macrotiles))
     return rows
 
 
@@ -541,67 +471,40 @@ def main():
     args = parse_args()
 
     if args._worker:
-        if args.shape is None:
-            print("--_worker requires --shape M N K.", file=sys.stderr)
+        if args._shape is None:
+            print("--_worker requires --_shape M N K.", file=sys.stderr)
             sys.exit(1)
-        if args.tiles is None:
-            print("--_worker requires --tiles mt_m mt_n mt_k.", file=sys.stderr)
+        if args._tiles is None:
+            print("--_worker requires --_tiles mt_m mt_n mt_k.", file=sys.stderr)
             sys.exit(1)
-        m, n, k = args.shape
-        mt_m, mt_n, mt_k = args.tiles
+        shape = tuple(args._shape)
+        macrotiles = tuple(args._tiles)
+        try:
+            validate_shape_and_macrotiles(shape, macrotiles)
+        except ValueError as e:
+            print(f"Invalid shape/macrotile: {e}", file=sys.stderr)
+            sys.exit(1)
         run_worker(
-            (m, n, k),
-            (mt_m, mt_n, mt_k),
+            shape,
+            macrotiles,
             warmup_iters=args.warmup_iters,
             benchmark_iters=args.benchmark_iters,
         )
         return
 
-    if args.shape is None and args.shapes is None:
-        print("One of --shape or --shapes is required.", file=sys.stderr)
-        sys.exit(1)
-
-    if args.shapes is not None and args.tiles is not None:
-        print(
-            "Cannot use --tiles with --shapes; use MT_M, MT_N, MT_K columns in the CSV instead.",
-            file=sys.stderr,
-        )
+    if args.shapes is None:
+        print("--shapes <path/to/csv> is required.", file=sys.stderr)
         sys.exit(1)
 
     dump_dir = Path(args.dump_dir)
     dump_dir.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    run_dump_dir = dump_dir / run_id
+    run_dump_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Dump directory for this run: {run_dump_dir}")
     kernel_regex = args.kernel_regex
     warmup_iters = args.warmup_iters
     benchmark_iters = args.benchmark_iters
-
-    if args.shape is not None:
-        mt_m, mt_n, mt_k = args.tiles if args.tiles is not None else DEFAULT_TILES
-        M, N, K = args.shape
-        if M < 4 or N < 4 or K < 4 or K % 2 != 0:
-            print(
-                f"Invalid shape ({M},{N},{K}): M,N,K>=4 and K even required.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        runtime_us, tflops, status = run_validate_and_benchmark(
-            M,
-            N,
-            K,
-            mt_m,
-            mt_n,
-            mt_k,
-            dump_dir,
-            att_library_path,
-            kernel_regex=kernel_regex,
-            warmup_iters=warmup_iters,
-            benchmark_iters=benchmark_iters,
-        )
-        if status != "ok":
-            sys.exit(1)
-        print(f"Shape: {M} x {N} x {K}  MT: {mt_m} x {mt_n} x {mt_k}")
-        print(f"Average runtime: {runtime_us:.2f} us")
-        print(f"TFLOPs: {tflops:.4f}")
-        return
 
     # --shapes mode
     if not args.shapes.exists():
@@ -611,32 +514,43 @@ def main():
         print("--shapes requires -o/--output for the result CSV.", file=sys.stderr)
         sys.exit(1)
 
-    shape_rows = load_shapes_csv(args.shapes)
+    try:
+        shape_rows = load_shapes_csv(args.shapes)
+    except ValueError as e:
+        print(f"Invalid shape/macrotile in CSV: {e}", file=sys.stderr)
+        sys.exit(1)
     if not shape_rows:
         print("No shapes found in CSV.", file=sys.stderr)
         sys.exit(1)
 
     results = []
+    failed_compilation = []
     failed_validation = []
     failed_benchmark = []
-    for (M, N, K), (mt_m, mt_n, mt_k) in shape_rows:
-        runtime_us, tflops, status = run_validate_and_benchmark(
-            M,
-            N,
-            K,
-            mt_m,
-            mt_n,
-            mt_k,
-            dump_dir,
-            att_library_path,
-            kernel_regex=kernel_regex,
-            warmup_iters=warmup_iters,
-            benchmark_iters=benchmark_iters,
-        )
+    for shape, macrotiles in shape_rows:
+        M, N, K = shape
+        mt_m, mt_n, mt_k = macrotiles
+        try:
+            runtime_us, tflops, status = run_validate_and_benchmark(
+                shape,
+                macrotiles,
+                run_dump_dir,
+                att_library_path,
+                kernel_regex=kernel_regex,
+                warmup_iters=warmup_iters,
+                benchmark_iters=benchmark_iters,
+            )
+        except BenchmarkError as e:
+            print(f"  {e}", file=sys.stderr)
+            traceback.print_exc()
+            status = e.stage
+            runtime_us, tflops = None, None
         ok = status == "ok"
-        if status in ("compile_failed", "validation_failed"):
+        if status == "compile_failed":
+            failed_compilation.append((M, N, K))
+        elif status == "validation_failed":
             failed_validation.append((M, N, K))
-        elif status in ("benchmark_failed"):
+        elif status == "benchmark_failed":
             failed_benchmark.append((M, N, K))
         mean_us = runtime_us if runtime_us is not None else 0.0
         tflops_val = tflops if tflops is not None else 0.0
@@ -658,8 +572,16 @@ def main():
             f"  ({M}, {N}, {K}) MT({mt_m},{mt_n},{mt_k}): {mean_us:.2f} us, {tflops_val:.4f} TFLOPs [{status_str}]"
         )
 
+    if failed_compilation:
+        print(
+            f"Kernels that failed compilation: {failed_compilation}",
+            file=sys.stderr,
+        )
     if failed_validation:
-        print(f"Kernels that failed validation: {failed_validation}", file=sys.stderr)
+        print(
+            f"Kernels that failed numerical validation: {failed_validation}",
+            file=sys.stderr,
+        )
     if failed_benchmark:
         print(f"Kernels that failed benchmarking: {failed_benchmark}", file=sys.stderr)
 
@@ -685,7 +607,17 @@ def main():
     with open(args.output, "w", newline="") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["M", "N", "K", "MT_M", "MT_N", "MT_K", "runtime_us", "tflops"],
+            fieldnames=[
+                "M",
+                "N",
+                "K",
+                "MT_M",
+                "MT_N",
+                "MT_K",
+                "runtime_us",
+                "tflops",
+                "ok",
+            ],
         )
         w.writeheader()
         for r in results:
@@ -699,6 +631,7 @@ def main():
                     "MT_K": r["MT_K"],
                     "runtime_us": r["runtime_us"],
                     "tflops": r["tflops"],
+                    "ok": r["ok"],
                 }
             )
     print(f"Results written to {args.output}")
