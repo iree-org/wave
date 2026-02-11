@@ -12,6 +12,8 @@
 #include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 
 #define DEBUG_TYPE "wave-resolve-distributed-allocations"
 
@@ -72,9 +74,22 @@ struct ResolveDistributedAllocations
         return;
 
       WaveExprListAttr distributedShape = allocateOp.getDistributedShape();
+      AffineMap shapeMap = distributedShape.getMap();
+
+      // Apply padding to the last dimension of the distributed shape.
+      int64_t padding = allocateOp.getPadding();
+      if (padding > 0 && shapeMap.getNumResults() > 0) {
+        llvm::SmallVector<AffineExpr> results(shapeMap.getResults());
+        AffineExpr &lastDim = results.back();
+        lastDim = lastDim + getAffineConstantExpr(padding, &getContext());
+        shapeMap =
+            AffineMap::get(shapeMap.getNumDims(), shapeMap.getNumSymbols(),
+                           results, &getContext());
+      }
+
       Type memrefType = typeConverter.convertTensorFromComponents(
-          distributedShape.getSymbols(), distributedShape.getMap(),
-          tensorType.getElementType(), tensorType.getAddressSpaceValue());
+          distributedShape.getSymbols(), shapeMap, tensorType.getElementType(),
+          tensorType.getAddressSpaceValue());
       if (!memrefType) {
         allocateOp.emitError("failed to create memref type");
         result = failure();

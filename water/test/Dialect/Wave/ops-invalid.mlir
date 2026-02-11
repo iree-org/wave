@@ -364,6 +364,17 @@ func.func @alloc_parent_no_offset() {
 
 // -----
 
+func.func @child_alloc_with_tail_padding() {
+  %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (8192)> }
+    : !wave.tensor<[@M] of i8, <shared>>
+  // expected-error @below {{only top-level allocations can have tail_padding}}
+  %buf = wave.allocate in %parent : !wave.tensor<[@M] of i8, <shared>>
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, offset = 0, tail_padding = 64 : i64 }
+    : !wave.tensor<[@M] of bf16, <shared>>
+}
+
+// -----
+
 module attributes { wave.hyperparameters = #wave.hyperparameters<{}> } {
   // expected-error @below {{defines hyperparameters when its ancestor already had}}
   // expected-note @above {{ancestor}}

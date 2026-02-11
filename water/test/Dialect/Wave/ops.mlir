@@ -323,6 +323,34 @@ func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
 }
 
+// CHECK-LABEL: @allocate_with_padding
+func.func @allocate_with_padding() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
+  // CHECK: wave.allocate
+  // CHECK-SAME: padding = 4 : i64
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64}
+    : !wave.tensor<[@M, @N] of bf16, <shared>>
+  return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
+}
+
+// CHECK-LABEL: @allocate_with_tail_padding
+func.func @allocate_with_tail_padding() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
+  // CHECK: wave.allocate
+  // CHECK-SAME: tail_padding = 128 : i64
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, tail_padding = 128 : i64}
+    : !wave.tensor<[@M, @N] of bf16, <shared>>
+  return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
+}
+
+// CHECK-LABEL: @allocate_with_both_padding
+func.func @allocate_with_both_padding() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
+  // CHECK: wave.allocate
+  // CHECK-SAME: padding = 4 : i64
+  // CHECK-SAME: tail_padding = 128 : i64
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64, tail_padding = 128 : i64}
+    : !wave.tensor<[@M, @N] of bf16, <shared>>
+  return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
+}
+
 // CHECK-LABEL: @index_magic_symbols
 func.func @index_magic_symbols(%mem: !wave.tensor<[@M] of f16, <global>>)
 attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N = 32, M = 128, N = 256}>}  {

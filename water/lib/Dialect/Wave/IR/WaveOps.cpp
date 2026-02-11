@@ -145,6 +145,9 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "distributed_shape must only contain WaveSymbolAttr";
   }
 
+  if (hasParent && getTailPadding())
+    return emitOpError() << "only top-level allocations can have tail_padding";
+
   return llvm::success();
 }
 

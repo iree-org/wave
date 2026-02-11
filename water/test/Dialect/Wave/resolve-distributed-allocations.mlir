@@ -51,6 +51,82 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// Test that padding increases last dimension of resolved memref.
+// BLOCK_K = 32, padding = 4, so last dim should be 32 + 4 = 36.
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
+// CHECK-LABEL: func.func @resolve_alloc_with_padding
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @resolve_alloc_with_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+    // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64}
+    // CHECK-SAME: memref<64x36xbf16, #gpu.address_space<workgroup>>
+    %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64}
+      : !wave.tensor<[@M, @K] of bf16, <shared>>
+    return
+  }
+}
+
+// -----
+
+// Test that tail_padding does NOT affect the resolved memref shape.
+// BLOCK_K = 32, tail_padding = 128, shape should still be 64x32.
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
+// CHECK-LABEL: func.func @resolve_alloc_with_tail_padding
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @resolve_alloc_with_tail_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+    // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, tail_padding = 128 : i64}
+    // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
+    %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, tail_padding = 128 : i64}
+      : !wave.tensor<[@M, @K] of bf16, <shared>>
+    return
+  }
+}
+
+// -----
+
+// Test both padding and tail_padding together.
+// BLOCK_K = 32, padding = 4 -> last dim = 36, tail_padding = 128 -> no shape change.
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
+// CHECK-LABEL: func.func @resolve_alloc_with_both_padding
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @resolve_alloc_with_both_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+    // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64, tail_padding = 128 : i64}
+    // CHECK-SAME: memref<64x36xbf16, #gpu.address_space<workgroup>>
+    %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64, tail_padding = 128 : i64}
+      : !wave.tensor<[@M, @K] of bf16, <shared>>
+    return
+  }
+}
+
+// -----
+
+// Test that padding = 0 (default) does not change the shape.
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
+// CHECK-LABEL: func.func @resolve_alloc_padding_zero
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @resolve_alloc_padding_zero() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+    // CHECK: memref<64x32xbf16, #gpu.address_space<workgroup>>
+    %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
+      : !wave.tensor<[@M, @K] of bf16, <shared>>
+    return
+  }
+}
+
+// -----
+
+// Test padding on a 1D distributed shape.
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
+// CHECK-LABEL: func.func @resolve_alloc_1d_padding
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @resolve_alloc_1d_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+    // CHECK: memref<136xf32, #gpu.address_space<workgroup>>
+    %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>, padding = 8 : i64}
+      : !wave.tensor<[@M] of f32, <shared>>
+    return
+  }
+}
+
+// -----
+
 // Test that resolved_allocations is set even when there are no allocations.
 // CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations,ordered_syms>]
 normalform.module [#wave.normal_form<full_types>] {
