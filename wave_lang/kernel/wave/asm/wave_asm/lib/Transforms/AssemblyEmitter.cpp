@@ -729,6 +729,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoad(loadOp, "buffer_load_dwordx4");
       })
 
+      // Byte/short buffer loads (for sub-dword vector.load, e.g. vector<1xi8>)
+      .Case<BUFFER_LOAD_UBYTE>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_ubyte");
+      })
+      .Case<BUFFER_LOAD_USHORT>([&](auto loadOp) {
+        return emitBufferLoad(loadOp, "buffer_load_ushort");
+      })
+
       // Buffer load to LDS (gather-to-LDS) — shared helper avoids duplication
       .Case<BUFFER_LOAD_DWORD_LDS>([&](auto loadOp) {
         return emitBufferLoadLDS(loadOp, "buffer_load_dword");

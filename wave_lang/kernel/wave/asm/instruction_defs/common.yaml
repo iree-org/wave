@@ -484,6 +484,36 @@ instructions:
   # ===========================================================================
   # Buffer Memory - Loads
   # ===========================================================================
+  buffer_load_ubyte:
+    mnemonic: buffer_load_ubyte
+    category: vmem
+    format: mtbuf
+    defs:
+      - {name: dst, type: vgpr}
+    uses:
+      - {name: vaddr, type: vgpr}
+      - {name: srd, type: sgpr_quad}
+      - {name: soffset, type: sgpr|imm}
+      - {name: offset, type: offset, optional: true}
+    latency: 200
+    special:
+      memory: true
+
+  buffer_load_ushort:
+    mnemonic: buffer_load_ushort
+    category: vmem
+    format: mtbuf
+    defs:
+      - {name: dst, type: vgpr}
+    uses:
+      - {name: vaddr, type: vgpr}
+      - {name: srd, type: sgpr_quad}
+      - {name: soffset, type: sgpr|imm}
+      - {name: offset, type: offset, optional: true}
+    latency: 200
+    special:
+      memory: true
+
   buffer_load_dword:
     mnemonic: buffer_load_dword
     category: vmem

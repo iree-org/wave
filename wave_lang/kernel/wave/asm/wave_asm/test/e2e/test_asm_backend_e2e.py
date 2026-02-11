@@ -150,7 +150,6 @@ def test_copy_kernel_cpp_backend(shape, compiler):
 
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
-    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
@@ -189,7 +188,7 @@ def test_copy_kernel_cpp_backend(shape, compiler):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
         canonicalize=True,
         backend="asm",
@@ -212,11 +211,7 @@ def test_copy_kernel_cpp_backend(shape, compiler):
     # Use Wave compiler's launch info (blocks, lds_size, grid) which is authoritative
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size  # From Wave compiler, not assembly parsing
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (shape[0] // BLOCK_M, shape[1] // BLOCK_N, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
     run_with_wave_runtime(
@@ -442,10 +437,6 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
     b = device_randn((n, k), dtype=torch.float16)
     c = device_zeros((m, n), dtype=torch.float32)
 
-    # Calculate grid dimensions
-    grid_x = m // BLOCK_M
-    grid_y = n // BLOCK_N
-
     options = WaveCompileOptions(
         subs={
             M: m,
@@ -477,11 +468,7 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
     # Use Wave compiler's launch info (blocks, lds_size) which is authoritative
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size  # From Wave compiler, not assembly parsing
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (grid_x, grid_y, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
     run_with_wave_runtime(
@@ -603,10 +590,6 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
     b = device_randn((n, k), dtype=torch.float16)
     c = device_zeros((m, n), dtype=torch.float32)
 
-    # Calculate grid dimensions
-    grid_x = m // BLOCK_M
-    grid_y = n // BLOCK_N
-
     options = WaveCompileOptions(
         subs={
             M: m,
@@ -638,11 +621,7 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
     # Use Wave compiler's launch info (blocks, lds_size) which is authoritative
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size  # From Wave compiler, not assembly parsing
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (grid_x, grid_y, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
     run_with_wave_runtime(
@@ -807,10 +786,6 @@ def test_gemm_cpp_backend(
     b = device_randn((n, k), dtype=torch.float16)
     c = device_zeros((m, n), dtype=torch.float32)
 
-    # Calculate grid dimensions
-    grid_x = m // block_m
-    grid_y = n // block_n
-
     options = WaveCompileOptions(
         subs={
             M: m,
@@ -896,11 +871,7 @@ def test_gemm_cpp_backend(
     # Use Wave compiler's launch info (blocks, lds_size) which is authoritative
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (grid_x, grid_y, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
     run_with_wave_runtime(
@@ -1030,10 +1001,6 @@ def test_gemm_cpp_backend_with_k_unroll(
     b = device_randn((n, k), dtype=torch.float16)
     c = device_zeros((m, n), dtype=torch.float32)
 
-    # Calculate grid dimensions
-    grid_x = m // block_m
-    grid_y = n // block_n
-
     # Create options WITH postprocess (K-loop unrolling)
     options = WaveCompileOptions(
         subs={
@@ -1088,11 +1055,7 @@ def test_gemm_cpp_backend_with_k_unroll(
     # Use Wave compiler's launch info
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (grid_x, grid_y, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
     run_with_wave_runtime(
@@ -1118,6 +1081,7 @@ def test_gemm_cpp_backend_with_k_unroll(
 @pytest.mark.parametrize(
     "shape",
     [
+        (32, 32, 128),  # Minimal MXFP4 GEMM (single K-tile, single workgroup)
         (64, 64, 512),  # Small MXFP4 GEMM
         (128, 128, 512),  # Medium MXFP4 GEMM
     ],
@@ -1126,21 +1090,18 @@ def test_gemm_cpp_backend_with_k_unroll(
 def test_mxfp4_scaled_gemm_cpp_backend(
     shape, use_global_to_shared, compiler, backend, dump_asm
 ):
-    """End-to-end test for MXFP4 (4-bit float) scaled GEMM using C++ or Python ASM backend.
+    """End-to-end test for MXFP4 (4-bit float) scaled GEMM with numerical validation.
+
+    Uses generate_gemm_afp4wfp4_inputs for properly packed MXFP4 inputs
+    and torchScaledGemmMXFP4 as the reference implementation. Validates
+    exact numerical correctness against the software reference.
 
     MXFP4 uses:
-    - FP4 (f4E2M1FN) data format - 4 bits per element
-    - E8M0 (f8E8M0FNU) scale factors - 1 byte per scale
-    - Scale group size of 32 elements (hardware-defined)
+    - FP4 (f4E2M1FN) data format - 4 bits per element, packed as uint8
+    - E8M0 (f8E8M0FNU) scale factors - 1 byte per scale group of 32 elements
     - Scaled MFMA instruction: v_mfma_scale_f32_16x16x128_f8f6f4
 
-    This test requires CDNA4 (gfx950+) architecture with MI350X support.
-
-    Note: This test validates basic functionality (kernel compiles and runs)
-    but does not perform exact numerical validation as that would require:
-    1. Proper FP4 packing implementation (2 elements per byte)
-    2. E8M0 scale factor calculation
-    3. Software reference implementation of scaled MFMA
+    This test requires CDNA4 (gfx950+) architecture.
     """
     # Skip if not CDNA4 (gfx950+)
     if not is_cdna4():
@@ -1159,10 +1120,11 @@ def test_mxfp4_scaled_gemm_cpp_backend(
     )
     from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
     from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import ScaledMMAType
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-    from wave_lang.kernel.wave.utils.torch_utils import (
-        device_randint,
-        device_zeros,
+    from wave_lang.kernel.wave.utils.mxfp_utils import (
+        generate_gemm_afp4wfp4_inputs,
+        torchScaledGemmMXFP4,
     )
 
     M = tkl.sym.M
@@ -1172,62 +1134,44 @@ def test_mxfp4_scaled_gemm_cpp_backend(
     BLOCK_N_SYM = tkl.sym.BLOCK_N
     BLOCK_K_SYM = tkl.sym.BLOCK_K
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
 
     # MXFP4 configuration
-    SCALE_GROUP_SIZE = 32  # Hardware-defined for MXFP4
     BLOCK_M = 32
     BLOCK_N = 32
     BLOCK_K = 128
-    WAVE_M = 16
-    WAVE_N = 16
-    wave_size = 64
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N_SYM, 1),
         tkw.TilingConstraint(K, BLOCK_K_SYM),
-        tkw.WaveConstraint(M, WAVE_M),
-        tkw.WaveConstraint(N, WAVE_N),
+        tkw.WaveConstraint(M, BLOCK_M_SYM / 2),
+        tkw.WaveConstraint(N, BLOCK_N_SYM / 2),
         tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
-            mma_type=tkw.ScaledMMAType.F32_16x16x128_F8F6F4,
+            threads_per_wave=64,
+            mma_type=ScaledMMAType.F32_16x16x128_F8F6F4,
         ),
     ]
 
     @tkw.wave(constraints)
     def mxfp4_gemm_kernel(
-        a: tkl.Memory[
-            M, K / 2, ADDRESS_SPACE, tkl.i8
-        ],  # Packed FP4 data (2 elements per byte)
-        a_scale: tkl.Memory[
-            M, K / SCALE_GROUP_SIZE, ADDRESS_SPACE, tkl.i8
-        ],  # E8M0 scales
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],  # Packed FP4 data
-        b_scale: tkl.Memory[
-            N, K / SCALE_GROUP_SIZE, ADDRESS_SPACE, tkl.i8
-        ],  # E8M0 scales
-        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            # Load packed FP4 data
             a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            # Bitcast i8 -> f4e2m1fn
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
-            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
-
-            # Load scale factors
             a_scale_reg = tkw.read(a_scale)
-            b_scale_reg = tkw.read(b_scale)
-            # Bitcast i8 -> f8e8m0fnu
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
             b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
-
-            # Scaled MMA: C += (A * scaleA) @ (B * scaleB)^T
             acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
             return acc
 
@@ -1235,21 +1179,13 @@ def test_mxfp4_scaled_gemm_cpp_backend(
 
     m, n, k = shape
 
-    # Create input tensors
-    # Note: These are placeholder values - proper FP4 packing would be needed for real validation
-    a = device_randint(-128, 127, (m, k // 2), dtype=torch.int8)  # Packed FP4
-    a_scale = device_randint(
-        -128, 127, (m, k // SCALE_GROUP_SIZE), dtype=torch.int8
-    )  # E8M0 scales
-    b = device_randint(-128, 127, (n, k // 2), dtype=torch.int8)  # Packed FP4
-    b_scale = device_randint(
-        -128, 127, (n, k // SCALE_GROUP_SIZE), dtype=torch.int8
-    )  # E8M0 scales
-    c = device_zeros((m, n), dtype=torch.float32)
+    # Generate properly packed MXFP4 inputs and compute reference output
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
-    # Calculate grid dimensions
-    grid_x = m // BLOCK_M
-    grid_y = n // BLOCK_N
+    x, w = x.cuda(), w.cuda()
+    x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
+    c = torch.zeros(m, n, dtype=torch.float32).cuda()
 
     options = WaveCompileOptions(
         subs={
@@ -1259,9 +1195,7 @@ def test_mxfp4_scaled_gemm_cpp_backend(
             BLOCK_M_SYM: BLOCK_M,
             BLOCK_N_SYM: BLOCK_N,
             BLOCK_K_SYM: BLOCK_K,
-            SCALE_GROUP_SIZE: SCALE_GROUP_SIZE,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         backend="asm",
@@ -1314,7 +1248,7 @@ def test_mxfp4_scaled_gemm_cpp_backend(
                 "v_mfma_scale_f32_16x16x128_f8f6f4" in python_asm
             ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
 
-            # Also assemble to binary for execution using the same assembler as C++ backend
+            # Also assemble to binary for execution
             if backend == "python":
                 success, binary_path, error = compiler.assemble_to_binary(python_asm)
                 if not success:
@@ -1324,7 +1258,6 @@ def test_mxfp4_scaled_gemm_cpp_backend(
             if backend == "python":
                 pytest.fail(f"Python compilation failed: {e}")
             else:
-                # Log warning if Python backend fails in "both" mode
                 import warnings
 
                 warnings.warn(f"Python backend compilation failed: {e}")
@@ -1354,16 +1287,14 @@ def test_mxfp4_scaled_gemm_cpp_backend(
     # Use Wave compiler's launch info
     block = kernel_info.workgroup_size
     lds_size = kernel_info.lds_size
-    grid = (
-        kernel_info.grid_size
-        if kernel_info.grid_size != (1, 1, 1)
-        else (grid_x, grid_y, 1)
-    )
+    grid = kernel_info.grid_size
 
     # Execute on GPU
+    # Kernel signature: (a, a_scale, b, b_scale, c)
+    # b must be transposed to match the kernel's N x K/2 layout
     run_with_wave_runtime(
         binary_path=binary_path,
-        inputs=[a, a_scale, b, b_scale],
+        inputs=[x, x_scales, w.T.contiguous(), w_scales],
         outputs=[c],
         grid=grid,
         block=block,
@@ -1371,15 +1302,15 @@ def test_mxfp4_scaled_gemm_cpp_backend(
         func_name=kernel_name,
     )
 
-    # Basic sanity checks (not exact numerical validation)
-    # We can't compute expected result without proper FP4 packing/unpacking
-    assert c.shape == (m, n), f"Output shape mismatch: expected {(m, n)}, got {c.shape}"
-
-    # Check that kernel ran and produced non-zero output (sanity check)
-    # Note: This is a weak test but validates the execution pipeline
-    assert not torch.all(
-        c == 0
-    ), "Output is all zeros - kernel may not have executed correctly"
+    # Numerical correctness validation against reference
+    c_cpu = c.cpu()
+    torch_out_cpu = torch_out.cpu() if torch_out.is_cuda else torch_out
+    torch.testing.assert_close(
+        torch_out_cpu,
+        c_cpu,
+        check_dtype=False,
+        msg=f"MXFP4 GEMM {m}x{n}x{k} ({g2s_str}, {backend}) failed numerical validation",
+    )
 
 
 # =============================================================================
@@ -1394,7 +1325,6 @@ def test_compare_backends_copy_kernel(shape, compiler):
 
     import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
-    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
@@ -1425,7 +1355,7 @@ def test_compare_backends_copy_kernel(shape, compiler):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
         canonicalize=True,
         backend="asm",

@@ -480,17 +480,29 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
         lds_size = launch_info.shared_memory_bytes
         kernel_name = launch_info.func_name
 
-        # Compute grid dimensions - launch_info.grid is a lambda
-        # For static sizes, we can call it with empty args or the bound symbols
-        try:
-            # Get bound symbols from subs
-            bound_symbols = list(options.subs.keys())
-            bound_values = [options.subs[sym] for sym in bound_symbols]
-            grid = launch_info.grid(bound_values)
-            grid = tuple(int(x) for x in grid)
-        except Exception:
-            # Fallback: compute from subs - 1 workgroup per block dimension
-            grid = (1, 1, 1)
+        # Compute grid dimensions - launch_info.grid is a sympy.lambdify lambda.
+        # It expects arguments in the same order they were defined in compile.py:
+        #   grid_symbols = bound_scalar_symbols.keys() + dynamic_symbols
+        # and is called with a single list: grid_fn(list_of_values).
+        #
+        # sympy.lambdify may reference `math.floor`/`math.ceil` in the generated
+        # lambda body but the math module may be missing from its __globals__
+        # when invoked outside the lambdify call-site.  Inject it defensively.
+        import math
+
+        launch_info.grid.__globals__.setdefault("math", math)
+        dynamic_syms = list(getattr(options, "dynamic_symbols", None) or [])
+        grid_symbols = list(kernel_func.bound_scalar_symbols.keys()) + dynamic_syms
+        grid_values = []
+        for sym in grid_symbols:
+            if sym not in options.subs:
+                raise ValueError(
+                    f"Grid symbol {sym} not found in options.subs. "
+                    f"Available: {list(options.subs.keys())}"
+                )
+            grid_values.append(options.subs[sym])
+        grid = launch_info.grid(grid_values)
+        grid = tuple(int(x) for x in grid)
 
     # Extract func.func from stream wrapper for C++ backend
     extracted_funcs = []

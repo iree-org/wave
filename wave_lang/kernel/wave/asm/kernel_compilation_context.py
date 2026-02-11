@@ -1173,7 +1173,7 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
                 result_ranges.append(dst_range)
                 bytes_remaining -= 8
                 current_offset += 8
-            else:
+            elif bytes_remaining >= 4:
                 # Use buffer_load_dword
                 dst = self.vreg()
                 self.program.emit(
@@ -1187,6 +1187,36 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
                 result_ranges.append(KRegRange(dst, 1))
                 bytes_remaining -= 4
                 current_offset += 4
+            elif bytes_remaining == 2:
+                # Use buffer_load_ushort for 2-byte loads to avoid SRD
+                # bounds-check failures when the data sits at the buffer end.
+                dst = self.vreg()
+                self.program.emit(
+                    KInstr(
+                        "buffer_load_ushort",
+                        (dst,),
+                        (voffset, srd_range, KImm(0), KMemOffset(current_offset)),
+                        comment=f"load 2B @ offset {current_offset}",
+                    )
+                )
+                result_ranges.append(KRegRange(dst, 1))
+                bytes_remaining -= 2
+                current_offset += 2
+            else:
+                # Use buffer_load_ubyte for 1-byte loads to avoid SRD
+                # bounds-check failures (e.g. MXFP4 scale bytes at buffer end).
+                dst = self.vreg()
+                self.program.emit(
+                    KInstr(
+                        "buffer_load_ubyte",
+                        (dst,),
+                        (voffset, srd_range, KImm(0), KMemOffset(current_offset)),
+                        comment=f"load 1B @ offset {current_offset}",
+                    )
+                )
+                result_ranges.append(KRegRange(dst, 1))
+                bytes_remaining -= 1
+                current_offset += 1
 
         return tuple(result_ranges)
 
@@ -1257,6 +1287,38 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     # =========================================================================
     # LDS Read/Write Operations
     # =========================================================================
+
+    def emit_lds_read_u8(
+        self,
+        dst_vreg: "KVReg",
+        addr_vreg: "KVReg",
+        offset: int = 0,
+    ):
+        """Emit ds_read_u8 (LDS load of 1 byte, zero-extended to 32 bits)."""
+        self.program.emit(
+            KInstr(
+                "ds_read_u8",
+                (dst_vreg,),
+                (addr_vreg, KMemOffset(offset)),
+                comment=f"LDS load 1B @ offset {offset}",
+            )
+        )
+
+    def emit_lds_read_u16(
+        self,
+        dst_vreg: "KVReg",
+        addr_vreg: "KVReg",
+        offset: int = 0,
+    ):
+        """Emit ds_read_u16 (LDS load of 2 bytes, zero-extended to 32 bits)."""
+        self.program.emit(
+            KInstr(
+                "ds_read_u16",
+                (dst_vreg,),
+                (addr_vreg, KMemOffset(offset)),
+                comment=f"LDS load 2B @ offset {offset}",
+            )
+        )
 
     def emit_lds_read_b32(
         self,

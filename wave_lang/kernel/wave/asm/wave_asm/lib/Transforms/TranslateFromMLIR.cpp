@@ -749,12 +749,19 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
 
     // Create the DS_READ operation with optional offset attribute
     Operation *readOp;
-    if (numBytes == 8) {
+    if (numBytes == 1) {
+      readOp = DS_READ_U8::create(builder, loc, TypeRange{vregType}, vaddr);
+    } else if (numBytes == 2) {
+      readOp = DS_READ_U16::create(builder, loc, TypeRange{vregType}, vaddr);
+    } else if (numBytes <= 4) {
+      readOp = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr);
+    } else if (numBytes <= 8) {
       readOp = DS_READ_B64::create(builder, loc, TypeRange{vregType}, vaddr);
-    } else if (numBytes == 16) {
+    } else if (numBytes <= 16) {
       readOp = DS_READ_B128::create(builder, loc, TypeRange{vregType}, vaddr);
     } else {
-      readOp = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr);
+      return op->emitError("LDS read of ")
+             << numBytes << " bytes exceeds maximum (16)";
     }
 
     // Add offset attribute if we have a non-zero instruction offset
@@ -878,8 +885,13 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
       } else if (bytesRemaining >= 8) {
         loadBytes = 8;
         loadDwords = 2;
-      } else {
+      } else if (bytesRemaining >= 4) {
         loadBytes = 4;
+        loadDwords = 1;
+      } else {
+        // Sub-dword: 1 or 2 bytes.  buffer_load_ubyte / buffer_load_ushort
+        // zero-extend into a full 32-bit VGPR, so loadDwords stays 1.
+        loadBytes = bytesRemaining; // 1 or 2
         loadDwords = 1;
       }
 
@@ -892,7 +904,16 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
       // with currentOffset (for split loads)
       int64_t totalOffset = instOffset + currentOffset;
       Operation *loadInstr;
-      if (loadDwords == 4) {
+      if (loadBytes == 1) {
+        // Use buffer_load_ubyte for 1-byte loads. buffer_load_dword would
+        // read 4 bytes and fail SRD bounds checking when the byte is at the
+        // end of a buffer (e.g. last scale byte in MXFP4).
+        loadInstr = BUFFER_LOAD_UBYTE::create(
+            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+      } else if (loadBytes == 2) {
+        loadInstr = BUFFER_LOAD_USHORT::create(
+            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+      } else if (loadDwords == 4) {
         loadInstr = BUFFER_LOAD_DWORDX4::create(
             builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
       } else if (loadDwords == 2) {
