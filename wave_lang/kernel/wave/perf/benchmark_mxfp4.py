@@ -11,7 +11,7 @@ Uses torch benchmarking (compile with wave_runtime, warmup + benchmark loop with
 torch.cuda.synchronize). When run without --_worker, the script invokes itself
 with --_worker wrapped in rocprofv3 so profiler output is still collected.
 
-Requires: torch, wave_lang, aiter
+Requires: torch, wave_lang
 
 Single shape:
   python benchmark_mxfp4.py --shape <M> <N> <K> [--tiles <mt_m> <mt_n> <mt_k>]
@@ -32,7 +32,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import aiter
 import torch
 import wave_lang.kernel.wave as tkw
 import wave_lang.kernel.lang as tkl
@@ -41,7 +40,14 @@ from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+from wave_lang.kernel.wave.utils.run_utils import (
+    get_default_arch,
+    set_default_run_config,
+)
+from wave_lang.kernel.wave.utils.mxfp_utils import (
+    generate_gemm_afp4wfp4_inputs,
+    torchScaledGemmMXFP4,
+)
 
 # ---------------------------------------------------------------------------
 # Wave kernel template and compile options (edit here to change kernel/options)
@@ -131,7 +137,7 @@ def get_mxfp4_gemm_wave(
         subs=hyperparams,
         dynamic_symbols=[],
         device="hip",
-        target=_get_hip_target_from_device(),
+        target=get_default_arch(),
         iree_launch_async=False,
         run_bench=False,
         wave_runtime=use_wave_runtime,
@@ -145,92 +151,8 @@ def get_mxfp4_gemm_wave(
 
 
 # ---------------------------------------------------------------------------
-# Helpers (mxfp4 conversion, inputs, IREE/rocprof, validate, benchmark)
+# Helpers (IREE/rocprof, validate, benchmark)
 # ---------------------------------------------------------------------------
-
-
-def _get_hip_target_from_device() -> str:
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA/ROCm not available.")
-    if torch.cuda.device_count() < 1:
-        raise RuntimeError("No GPU detected.")
-    arch_name = torch.cuda.get_device_properties(0).gcnArchName
-    return arch_name.split(":")[0]
-
-
-def _mxfp4_to_f32(x: torch.Tensor) -> torch.Tensor:
-    x = x.repeat_interleave(2, dim=-1)
-    x[..., ::2] = x[..., ::2] & 0xF
-    x[..., 1::2] = x[..., 1::2] >> 4
-    mxfp4_list = [
-        0.0,
-        0.5,
-        1.0,
-        1.5,
-        2.0,
-        3.0,
-        4.0,
-        6.0,
-        -0.0,
-        -0.5,
-        -1.0,
-        -1.5,
-        -2.0,
-        -3.0,
-        -4.0,
-        -6.0,
-    ]
-    mxfp4_in_f32 = torch.tensor(mxfp4_list, dtype=torch.float32, device=x.device)
-    return mxfp4_in_f32[x.long()]
-
-
-def _e8m0_to_f32(scale_e8m0_biased: torch.Tensor) -> torch.Tensor:
-    scale_e8m0_biased = scale_e8m0_biased.view(torch.uint8)
-    zero_case = scale_e8m0_biased == 0
-    nan_case = scale_e8m0_biased == 0xFF
-    scale_f32 = scale_e8m0_biased.to(torch.int32) << 23
-    scale_f32[zero_case] = 0x00400000
-    scale_f32[nan_case] = 0x7F800001
-    return scale_f32.view(torch.float32)
-
-
-def get_torch_reference(
-    x: torch.Tensor,
-    w: torch.Tensor,
-    x_scales: torch.Tensor,
-    w_scales: torch.Tensor,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    m, k = x.shape
-    n, k = w.shape
-    x_f32 = _mxfp4_to_f32(x)
-    w_f32 = _mxfp4_to_f32(w)
-    x_scales = x_scales[:m]
-    x_scales = x_scales.repeat_interleave(32, dim=1)
-    x_scales_f32 = _e8m0_to_f32(x_scales)
-    x_f32 = x_f32 * x_scales_f32
-    w_scales = w_scales[:n]
-    w_scales = w_scales.repeat_interleave(32, dim=1)
-    w_scales_f32 = _e8m0_to_f32(w_scales)
-    w_f32 = w_f32 * w_scales_f32
-    return torch.mm(x_f32, w_f32.T).to(dtype)[:m, :n]
-
-
-def get_mxfp4_inputs(M: int, N: int, K: int, slice_scales: bool = True):
-    c_dtype = torch.bfloat16
-    x = torch.randn((M, K), device="cuda", dtype=c_dtype)
-    w = torch.randn((N, K), device="cuda", dtype=c_dtype)
-    quant_func = aiter.get_triton_quant(aiter.QuantType.per_1x32)
-    _, x_scale = quant_func(x, shuffle=False)
-    _, w_scale = quant_func(w, shuffle=False)
-    x, _ = quant_func(x, shuffle=True)
-    w, _ = quant_func(w, shuffle=True)
-    # w = shuffle_weight(w, layout=(16, 16))
-    out = torch.empty(M, N, device=x.device, dtype=c_dtype)
-    if slice_scales:
-        x_scale = x_scale[:M, : K // 32]
-        w_scale = w_scale[:N, : K // 32]
-    return x, w, x_scale, w_scale, out
 
 
 def get_flops(M: int, N: int, K: int) -> float:
@@ -357,10 +279,10 @@ def run_worker(
     m, n, k = shape
     mt_m, mt_n, mt_k = macrotiles
     gemm_rt = get_mxfp4_gemm_wave((m, n, k), mt_m, mt_n, mt_k, use_wave_runtime=True)
-    x, w, x_scale, w_scale, wave_out = get_mxfp4_inputs(m, n, k)
-    x_scale_u8 = x_scale.view(torch.uint8)
-    w_scale_u8 = w_scale.view(torch.uint8)
-    inputs = (x, x_scale_u8, w, w_scale_u8, wave_out)
+    device = torch.device("cuda")
+    x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k), device)
+    wave_out = torch.empty(m, n, device=device, dtype=torch.bfloat16)
+    inputs = (x, x_scale, w.T, w_scale, wave_out)
     mean_us = _run_torch_benchmark(
         gemm_rt, inputs, warmup_iters=warmup_iters, benchmark_iters=benchmark_iters
     )
@@ -370,11 +292,11 @@ def run_worker(
 def validate_mxfp4_gemm(m: int, n: int, k: int, compiled_gemm) -> bool:
     """Run compiled Wave GEMM (with wave_runtime=True) and compare to torch reference."""
     try:
-        x, w, x_scale, w_scale, wave_out = get_mxfp4_inputs(m, n, k)
-        x_scale_u8 = x_scale.view(torch.uint8)
-        w_scale_u8 = w_scale.view(torch.uint8)
-        compiled_gemm(x, x_scale_u8, w, w_scale_u8, wave_out)
-        torch_ref = get_torch_reference(x, w, x_scale_u8, w_scale_u8, torch.bfloat16)
+        device = torch.device("cuda")
+        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k), device)
+        wave_out = torch.empty(m, n, device=device, dtype=torch.bfloat16)
+        compiled_gemm(x, x_scale, w.T, w_scale, wave_out)
+        torch_ref = torchScaledGemmMXFP4(x, w, x_scale, w_scale).to(torch.bfloat16)
         torch.testing.assert_close(wave_out, torch_ref, check_device=False)
         return True
     except Exception:
