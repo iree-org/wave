@@ -54,9 +54,9 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
 # ---------------------------------------------------------------------------
 
 # Default macrotile sizes (mt_m, mt_n, mt_k); used when not specified in CSV or when using single --shape without --tiles
-DEFAULT_TILES = (256, 256, 256)
 NUM_WAVES_DIM_M = 4
 NUM_WAVES_DIM_N = 2
+DEFAULT_TILES = (256 * NUM_WAVES_DIM_M, 256 * NUM_WAVES_DIM_N, 256)
 
 
 def get_mxfp4_gemm_wave(
@@ -86,8 +86,8 @@ def get_mxfp4_gemm_wave(
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M // NUM_WAVES_DIM_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N // NUM_WAVES_DIM_N)]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
     @tkw.wave(constraints)
@@ -128,18 +128,11 @@ def get_mxfp4_gemm_wave(
     hyperparams.update(get_default_scheduling_params())
 
     options = WaveCompileOptions(
+        subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.NONE,
-        use_buffer_ops=False,
-        waves_per_eu=1,
-        use_global_to_shared=False,
-        minimize_shared_allocs=False,
-        subs=hyperparams,
-        dynamic_symbols=[],
-        device="hip",
+        use_global_to_shared=True,
         target=get_default_arch(),
-        iree_launch_async=False,
-        run_bench=False,
         wave_runtime=use_wave_runtime,
     )
     if use_wave_runtime:
@@ -380,8 +373,8 @@ def run_validate_and_benchmark(
 ) -> tuple[Optional[float], Optional[float], str]:
     """
     Compile with wave_runtime and validate; then benchmark via torch worker under rocprofv3.
-    Returns (runtime_us, tflops, status) where status is "ok", "compile_validation", "validation_failed",
-    "compile_benchmark", or "benchmark_failed".
+    Returns (runtime_us, tflops, status) where status is "ok", "compile_failed", "validation_failed",
+    or "benchmark_failed".
     """
     shape = (m, n, k)
     gemm_id = f"gemm_{m}_{n}_{k}_MT_{mt_m}_{mt_n}_{mt_k}"
@@ -394,7 +387,7 @@ def run_validate_and_benchmark(
             f"Compilation (wave_runtime) failed for ({m},{n},{k}): {e}",
             file=sys.stderr,
         )
-        return None, None, "compile_validation"
+        return None, None, "compile_failed"
 
     # Save MLIR to dump directory
     mlir_dir = dump_dir / "mlir"
@@ -641,9 +634,9 @@ def main():
             benchmark_iters=benchmark_iters,
         )
         ok = status == "ok"
-        if status in ("compile_validation", "validation_failed"):
+        if status in ("compile_failed", "validation_failed"):
             failed_validation.append((M, N, K))
-        elif status in ("compile_benchmark", "benchmark_failed"):
+        elif status in ("benchmark_failed"):
             failed_benchmark.append((M, N, K))
         mean_us = runtime_us if runtime_us is not None else 0.0
         tflops_val = tflops if tflops is not None else 0.0
