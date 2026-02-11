@@ -34,9 +34,6 @@ from ..common.utils import (
 
 
 @require_e2e
-@pytest.mark.xfail(
-    reason="This test never worked on the intended SHARED_ADDRESS_SPACE."
-)
 @pytest.mark.parametrize(
     "shape, elems_per_thread",
     [
