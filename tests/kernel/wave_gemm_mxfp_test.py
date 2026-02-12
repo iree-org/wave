@@ -337,7 +337,7 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     # We encode the exact registers and wait counts as we want to know if
     # they suddenly change due to backend or upstream MLIR changes.
     if use_water_backend:
-        vgpr_count = 154
+        vgpr_count = 146
         vgpr_spill_count = 0
         sgpr_count = 61
         sgpr_spill_count = 0
@@ -345,15 +345,14 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
             "s_waitcnt lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt lgkmcnt(6)",
-            "s_waitcnt lgkmcnt(5)",
-            "s_waitcnt lgkmcnt(14)",
-            "s_waitcnt lgkmcnt(6)",
+            "s_waitcnt lgkmcnt(4)",
+            "s_waitcnt lgkmcnt(2)",
             "s_waitcnt lgkmcnt(0)",
-            "s_waitcnt vmcnt(0)",
-            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt vmcnt(0) lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt lgkmcnt(7)",
-            "s_waitcnt lgkmcnt(8)",
+            "s_waitcnt lgkmcnt(6)",
+            "s_waitcnt lgkmcnt(6)",
             "s_waitcnt lgkmcnt(5)",
             "s_waitcnt lgkmcnt(3)",
             "s_waitcnt lgkmcnt(1)",
@@ -363,22 +362,26 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
             "s_waitcnt lgkmcnt(0)",
         ]
     else:
-        vgpr_count = 142
+        vgpr_count = 140
         vgpr_spill_count = 0
-        sgpr_count = 61
+        sgpr_count = 59
         sgpr_spill_count = 0
         waitcounts = [
             "s_waitcnt lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt lgkmcnt(6)",
-            "s_waitcnt lgkmcnt(3)",
             "s_waitcnt lgkmcnt(4)",
+            "s_waitcnt lgkmcnt(2)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(4)",
+            "s_waitcnt lgkmcnt(3)",
             "s_waitcnt lgkmcnt(1)",
             "s_waitcnt lgkmcnt(0)",
             "s_waitcnt vmcnt(0) lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt lgkmcnt(7)",
-            "s_waitcnt lgkmcnt(8)",
+            "s_waitcnt lgkmcnt(6)",
+            "s_waitcnt lgkmcnt(6)",
             "s_waitcnt lgkmcnt(5)",
             "s_waitcnt lgkmcnt(3)",
             "s_waitcnt lgkmcnt(1)",
@@ -404,9 +407,10 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
         metadata.waitcnt_ops == waitcounts
     ), f"Expected {waitcounts} waitcnt operations, got {metadata.waitcnt_ops}"
 
-    # Verify interleaved scale instructions are generated (op_sel:[0,1,0]
-    # means byte 0 for a_scale and byte 1 for b_scale in the same VGPR).
-    assert "op_sel:[0,1,0]" in text, "Expected interleaved scale mfma instructions"
+    # Verify interleaved scale instructions are generated.
+    # op_sel_hi:[0,0,0] selects lower bytes (0,1), op_sel_hi:[1,1,0] selects upper bytes (2,3).
+    assert "op_sel_hi:[0,0,0]" in text, "Expected lower interleaved scale instructions"
+    assert "op_sel_hi:[1,1,0]" in text, "Expected upper interleaved scale instructions"
 
 
 @require_e2e
