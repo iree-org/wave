@@ -440,24 +440,22 @@ class HardwareConstraint(Constraint):
                         ),
                     ),  # K
                 ]
-            case ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
+            case (
+                ScaledMMAType.F32_32x32x64_F8F6F4
+                | ScaledMMAType.F32_32x32x64_F8F6F4_SCALES_INTERLEAVED
+            ):
                 offset = [
                     Piecewise(
-                        (lane % 16, ~MMA_ACC), (4 * floor(lane / 16), MMA_ACC)
+                        (lane % 32, ~MMA_ACC),
+                        (
+                            (8 * floor(GPR_NUM / 4) % 32)
+                            + 4 * floor(lane / 32)
+                            + (GPR_NUM % 4),
+                            MMA_ACC,
+                        ),
                     ),  # M
-                    lane % 16,  # N
-                    Piecewise(
-                        (
-                            64 * floor(GPR_NUM / 16)
-                            + 16 * floor(lane / 16)
-                            + (GPR_NUM % 16),
-                            ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
-                        ),
-                        (
-                            32 * floor(lane / 16),
-                            True,
-                        ),
-                    ),  # K
+                    lane % 32,  # N
+                    32 * floor(lane / 32),  # K
                 ]
             case ScaledMMAType.GFX1250_F32_16x16x128_F8F6F4:
                 offset = [
