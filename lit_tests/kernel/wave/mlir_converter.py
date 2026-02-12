@@ -158,6 +158,43 @@ def failure_in_pipeline():
     print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
+# CHECK-LABEL: vector_shapes_symbol_not_in_subs
+@run_test
+def vector_shapes_symbol_not_in_subs():
+    """emit_wave_dialect fails with a diagnostic when vector_shapes contains symbols not in subs."""
+    # Use a symbol only in vector_shapes so compilation succeeds but emit_wave_dialect hits the check.
+    VEC_M = tkl.sym.VEC_M
+    options = WaveCompileOptions(
+        subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
+        compile_to_mlir=True,
+    )
+
+    constraints_bad = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: BLOCK_M, N: VEC_M},
+        ),
+    ]
+
+    @tkw.wave(constraints_bad)
+    def kernel(a: Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f32]):
+        r = tkw.read(a)
+        tkw.write(r, a)
+
+    compiled = wave_compile(options, kernel)
+    trace = compiled.get_compiled_graph()
+
+    _, diagnostics, _ = emit_wave_dialect(trace, kernel.constraints, options)
+
+    assert len(diagnostics) == 1
+    # CHECK: Vector shape VEC_M in hardware constraints could not be resolved to an integer.
+    print(format_diagnostics([diagnostics[0]], use_color=False))
+
+
 # CHECK-LABEL: override_mlir
 @run_test
 def override_mlir():
