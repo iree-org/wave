@@ -84,7 +84,12 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   for (DictionaryAttr dictAttr : dicts) {
     for (auto named : dictAttr) {
       indexSymbols.insert(named.getName().strref());
+    }
+  }
 
+  // Validate the index attribute structure and iterator symbols.
+  for (DictionaryAttr dictAttr : dicts) {
+    for (auto named : dictAttr) {
       auto val = named.getValue();
       if (!isa<wave::WaveIndexMappingAttr>(val))
         return op->emitError("'index' attribute value for key ")
