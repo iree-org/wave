@@ -82,6 +82,7 @@ class ScaledMMAType(Enum):
     F32_32x32x64_F8F6F4 = 0x1341
 
     F32_16x16x128_F8F6F4_SCALES_INTERLEAVED = 0x1342
+    F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER = 0x1343
 
     # Intrinsics introduced in GFX1250
     GFX1250_F32_16x16x128_F8F6F4 = 0x1940
@@ -295,6 +296,7 @@ class HardwareConstraint(Constraint):
             case (
                 ScaledMMAType.F32_16x16x128_F8F6F4
                 | ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED
+                | ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER
             ):
                 return (16, 16, 128)
             case ScaledMMAType.F32_32x32x64_F8F6F4:
@@ -421,7 +423,11 @@ class HardwareConstraint(Constraint):
                         + 4 * floor(lane / 32)
                         + (GPR_NUM % 4),  # K
                     ]
-            case ScaledMMAType.F32_16x16x128_F8F6F4:
+            case (
+                ScaledMMAType.F32_16x16x128_F8F6F4
+                | ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED
+                | ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER
+            ):
                 offset = [
                     Piecewise(
                         (lane % 16, ~MMA_ACC), (4 * floor(lane / 16), MMA_ACC)
@@ -647,7 +653,10 @@ class HardwareConstraint(Constraint):
                     1,  # N
                     1,  # K
                 ]
-            case ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
+            case (
+                ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED
+                | ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER
+            ):
                 size = [
                     Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
                     1,  # N

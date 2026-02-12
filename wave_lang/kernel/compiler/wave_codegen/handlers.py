@@ -525,7 +525,10 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     else:
         pos = [0, 0]
         if mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
-            pos[1] = 1
+            pos = [0, 1]
+            scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
+        elif mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER:
+            pos = [2, 3]
             scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
         else:
             scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
