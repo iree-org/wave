@@ -1314,6 +1314,211 @@ def test_mxfp4_scaled_gemm_cpp_backend(
 
 
 # =============================================================================
+# Test: GEMM with Pipelining (PREFETCH Schedule)
+# =============================================================================
+
+
+def _pipelined_g2s_params():
+    """Return global_to_shared params for pipelined tests.
+
+    The C++ ASM backend fully supports pipelined GEMM with g2s:
+    - memref iter_args carried as SGPR LDS offsets (double-buffering)
+    - gather_to_lds in prologue/epilogue (outside scf.for)
+    - SGPR rotation (swap) at loop tail for ping-pong pattern
+    - Dynamic SGPR-carried LDS offsets in vector.load/store and gather_to_lds
+    - LDS base offset propagation to loop results for epilogue correctness
+    """
+    params = [pytest.param(False, id="no_g2s")]
+    if is_cdna4():
+        params.append(pytest.param(True, id="g2s"))
+    return params
+
+
+@pytest.mark.parametrize(
+    "shape,block_k,config",
+    [
+        # Single-wave: 64x64x128 with BLOCK_K=16 -> 8 iterations, pipelined to 7+epilogue
+        ((64, 64, 128), 16, (16, 16, 16, 16)),
+        # Multi-wave: 2x2=4 waves per WG
+        ((64, 64, 128), 16, (32, 32, 16, 16)),
+    ],
+)
+@pytest.mark.parametrize("use_global_to_shared", _pipelined_g2s_params())
+def test_gemm_pipelined_cpp_backend(
+    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+):
+    """End-to-end test for GEMM with PREFETCH pipelining using C++ ASM backend.
+
+    Software pipelining (PREFETCH schedule) restructures the K-loop into:
+    1. Prologue: Load first tile from global -> shared memory
+    2. Loop body (N-1 iterations):
+       - barrier + load current tile from shared
+       - load NEXT tile from global (overlapped with compute)
+       - MFMA compute on current tile
+       - barrier + store next tile to shared
+    3. Epilogue: barrier + load last tile from shared + final MFMA
+
+    This overlaps global memory loads with compute to hide latency.
+    """
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    import wave_lang.kernel.wave as tkw
+
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+        READ_SHARED_DELAY,
+        WRITE_SHARED_DELAY,
+        READ_GLOBAL_DELAY,
+        WRITE_GLOBAL_DELAY,
+        MMA_DELAY,
+        VALU_DELAY,
+        SHUFFLE_DELAY,
+        SHARED_MEMORY_UNITS,
+        GLOBAL_MEMORY_UNITS,
+        MMA_UNITS,
+        VALU_UNITS,
+        SHUFFLE_UNITS,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M_SYM = tkl.sym.BLOCK_M
+    BLOCK_N_SYM = tkl.sym.BLOCK_N
+    BLOCK_K_SYM = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    block_m, block_n, WAVE_M, WAVE_N = config
+    wave_size = 64
+
+    # Verify configuration
+    assert block_m % WAVE_M == 0
+    assert block_n % WAVE_N == 0
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N_SYM, 1),
+        tkw.TilingConstraint(K, BLOCK_K_SYM),
+        tkw.WaveConstraint(M, WAVE_M),
+        tkw.WaveConstraint(N, WAVE_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_kernel(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    m, n, k = shape
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    options = WaveCompileOptions(
+        subs={
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M_SYM: block_m,
+            BLOCK_N_SYM: block_n,
+            BLOCK_K_SYM: block_k,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
+    )
+    options = set_default_run_config(options)
+
+    # Capture MLIR and kernel info
+    kernel_info = capture_wave_kernel_info(options, gemm_kernel)
+
+    # Test ID for file naming
+    g2s_str = "g2s" if use_global_to_shared else "no_g2s"
+    test_id = f"gemm_pipelined_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}"
+
+    # Compile with C++ backend
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    # Dump assembly if requested
+    if dump_asm and cpp_result.asm_text:
+        from pathlib import Path
+
+        asm_file = Path("/tmp") / f"{test_id}_cpp.s"
+        asm_file.write_text(cpp_result.asm_text)
+        mlir_file = Path("/tmp") / f"{test_id}.mlir"
+        mlir_file.write_text(kernel_info.mlir_text)
+
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+
+    # Use Wave compiler's launch info
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    # Execute on GPU
+    run_with_wave_runtime(
+        binary_path=cpp_result.binary_path,
+        inputs=[a, b],
+        outputs=[c],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Validate: C = A @ B^T
+    expected = torch.matmul(a.float(), b.float().T)
+    assert_close(c, expected, atol=1e-4, rtol=1e-4)
+
+
+# =============================================================================
 # Test: Compare C++ vs Python Backend
 # =============================================================================
 

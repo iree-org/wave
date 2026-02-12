@@ -895,7 +895,116 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         Block &body = loopOp.getBodyBlock();
         for (Operation &bodyOp : body) {
           // Skip the terminator (ConditionOp) - handle it specially
-          if (isa<ConditionOp>(&bodyOp)) {
+          if (auto condOp = dyn_cast<ConditionOp>(&bodyOp)) {
+            // Emit SGPR/VGPR rotation copies for iter_args that need to be
+            // moved to different physical registers (e.g., double-buffer
+            // cross-swap). s_mov_b32 does NOT clobber SCC, so it's safe to
+            // emit between s_cmp and s_cbranch.
+            //
+            // Algorithm: detect which iter_args need copies (source phys reg
+            // != destination block arg phys reg), then emit a parallel swap
+            // using a temporary for cycles.
+            {
+              unsigned numArgs = body.getNumArguments();
+              unsigned numIter = condOp.getIterArgs().size();
+              assert(numIter == numArgs &&
+                     "ConditionOp iter_args count must match body block "
+                     "argument count for correct register rotation");
+
+              // Collect pending copies: (dstReg, srcReg, isSGPR)
+              struct CopyInfo {
+                int64_t dst;
+                int64_t src;
+                bool isSGPR;
+              };
+              SmallVector<CopyInfo> pendingCopies;
+
+              // Helper: extract (physRegIndex, isSGPR) from a Value.
+              // Works for physical types (PSRegType, PVRegType) and virtual
+              // types (via the mapping). Returns {-1, false} if unresolvable.
+              auto getPhysRegInfo = [&](Value val) -> std::pair<int64_t, bool> {
+                Type ty = val.getType();
+                if (auto psreg = dyn_cast<PSRegType>(ty))
+                  return {psreg.getIndex(), true};
+                if (auto pvreg = dyn_cast<PVRegType>(ty))
+                  return {pvreg.getIndex(), false};
+                if (isVirtualRegType(ty))
+                  return {mapping.getPhysReg(val), isSGPRType(ty)};
+                return {-1, false};
+              };
+
+              for (unsigned i = 0; i < numIter; ++i) {
+                auto [srcPhys, isSGPR] =
+                    getPhysRegInfo(condOp.getIterArgs()[i]);
+                auto [dstPhys, dstIsSGPR] = getPhysRegInfo(body.getArgument(i));
+
+                if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
+                  pendingCopies.push_back({dstPhys, srcPhys, isSGPR});
+                }
+              }
+
+              // Emit copies for loop-carried value swaps. Detect 2-element swap
+              // cycles (A->B, B->A) and use a temporary register to implement
+              // a parallel swap. Multiple independent swap pairs are handled.
+              //
+              // Algorithm: find swap pairs in the pending copies, emit each
+              // pair using 3 s_mov_b32 instructions (tmp=A, A=B, B=tmp).
+              // Non-swap copies are emitted directly.
+              SmallVector<bool> handled(pendingCopies.size(), false);
+
+              // First pass: find and emit swap pairs
+              for (size_t i = 0; i < pendingCopies.size(); ++i) {
+                if (handled[i])
+                  continue;
+                for (size_t j = i + 1; j < pendingCopies.size(); ++j) {
+                  if (handled[j])
+                    continue;
+                  // Check if (i, j) form a swap pair
+                  if (pendingCopies[i].dst == pendingCopies[j].src &&
+                      pendingCopies[j].dst == pendingCopies[i].src) {
+                    if (pendingCopies[i].isSGPR && pendingCopies[j].isSGPR) {
+                      // Emit 3-instruction swap using a temporary SGPR.
+                      // Use peakSGPRs as the scratch register -- it is
+                      // guaranteed to be beyond all allocated SGPRs (computed
+                      // in a pre-pass over the entire IR before code gen).
+                      int64_t regA = pendingCopies[i].dst;
+                      int64_t regB = pendingCopies[j].dst;
+                      int64_t tmp = peakSGPRs;
+                      // Update peak to account for the scratch register
+                      peakSGPRs = std::max(peakSGPRs, tmp + 1);
+                      os << "  s_mov_b32 s" << tmp << ", s" << regA << "\n";
+                      os << "  s_mov_b32 s" << regA << ", s" << regB << "\n";
+                      os << "  s_mov_b32 s" << regB << ", s" << tmp << "\n";
+                      handled[i] = true;
+                      handled[j] = true;
+                      break;
+                    }
+                    // VGPR swap cycles are not yet supported. If we encounter
+                    // one, the two independent copies would produce incorrect
+                    // results (second copy reads overwritten value).
+                    assert(!((!pendingCopies[i].isSGPR) &&
+                             (!pendingCopies[j].isSGPR)) &&
+                           "VGPR swap cycles in iter_args are not supported; "
+                           "extend swap emission to handle VGPRs");
+                  }
+                }
+              }
+
+              // Second pass: emit remaining non-swap copies
+              for (size_t i = 0; i < pendingCopies.size(); ++i) {
+                if (handled[i])
+                  continue;
+                const auto &copy = pendingCopies[i];
+                if (copy.isSGPR) {
+                  os << "  s_mov_b32 s" << copy.dst << ", s" << copy.src
+                     << "\n";
+                } else {
+                  os << "  v_mov_b32 v" << copy.dst << ", v" << copy.src
+                     << "\n";
+                }
+              }
+            }
+
             // ConditionOp: emit conditional branch back to loop label.
             // INVARIANT: The SCC flag must be set by the s_cmp immediately
             // preceding this ConditionOp. No SCC-clobbering instructions
@@ -1108,9 +1217,40 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   auto prologue = metaEmitter.emitPrologue();
   lines.append(prologue.begin(), prologue.end());
 
-  // Calculate peak register usage from mapping
+  // Pre-compute peak register usage from the IR before code generation.
+  // This is needed so that the SGPR swap emission in LoopOp can use peakSGPRs
+  // to pick a safe scratch register that doesn't conflict with any allocated
+  // register.
   peakVGPRs = 0;
   peakSGPRs = 0;
+  program.walk([&](Operation *preOp) {
+    for (Value result : preOp->getResults()) {
+      Type ty = result.getType();
+      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
+        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
+      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
+        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      } else if (isVirtualRegType(ty)) {
+        int64_t size = getRegSize(ty);
+        int64_t physIdx = mapping.getPhysReg(result);
+        if (physIdx >= 0) {
+          if (isVGPRType(ty))
+            peakVGPRs = std::max(peakVGPRs, physIdx + size);
+          else if (isSGPRType(ty))
+            peakSGPRs = std::max(peakSGPRs, physIdx + size);
+        }
+      }
+    }
+    for (Value operand : preOp->getOperands()) {
+      Type ty = operand.getType();
+      if (auto pvreg = dyn_cast<PVRegType>(ty))
+        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
+      else if (auto psreg = dyn_cast<PSRegType>(ty))
+        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+    }
+  });
+  peakVGPRs = std::max(peakVGPRs, int64_t(1));
+  peakSGPRs = std::max(peakSGPRs, int64_t(2)); // Kernarg pointer minimum
 
   // Generate code for each operation
   for (Operation &op : program.getBodyBlock()) {
@@ -1131,54 +1271,7 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
     // Generate instruction (with literal handling for VOP3 ops)
     auto instrLines = generateOpWithLiteralHandling(&op);
     lines.append(instrLines.begin(), instrLines.end());
-
-    // Track register usage for VGPR/SGPR accounting (top-level ops)
-    for (Value result : op.getResults()) {
-      Type ty = result.getType();
-      int64_t size = getRegSize(ty);
-      int64_t physIdx = mapping.getPhysReg(result);
-
-      if (physIdx >= 0) {
-        if (isVGPRType(ty)) {
-          peakVGPRs = std::max(peakVGPRs, physIdx + size);
-        } else if (isSGPRType(ty)) {
-          peakSGPRs = std::max(peakSGPRs, physIdx + size);
-        }
-      }
-
-      // Handle already-physical registers
-      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
-        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
-      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
-      }
-    }
   }
-
-  // Also track registers inside loop/if bodies (nested regions)
-  program.walk([&](Operation *nestedOp) {
-    for (Value result : nestedOp->getResults()) {
-      Type ty = result.getType();
-      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
-        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
-      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
-      }
-    }
-    // Also check operands (block arguments have physical types too)
-    for (Value operand : nestedOp->getOperands()) {
-      Type ty = operand.getType();
-      if (auto pvreg = dyn_cast<PVRegType>(ty)) {
-        peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
-      } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
-      }
-    }
-  });
-
-  // Ensure minimums
-  peakVGPRs = std::max(peakVGPRs, int64_t(1));
-  peakSGPRs = std::max(peakSGPRs, int64_t(2)); // Kernarg pointer
 
   // Emit epilogue
   int64_t ldsSize = program.getLdsSize().value_or(0);

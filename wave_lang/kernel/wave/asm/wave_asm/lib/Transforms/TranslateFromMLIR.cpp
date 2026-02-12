@@ -732,18 +732,21 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
       }
     }
 
-    // Add the LDS base offset from memref.view (if any)
+    // Add the LDS base offset from memref.view (if any).
+    // This handles both static offsets (from memref.view with constant byte
+    // offset) and dynamic offsets (from SGPR-carried memref iter_args in
+    // pipelined double-buffering loops).
     if (auto baseOffset = ctx.getLDSBaseOffset(loadOp.getBase())) {
       // If the base offset is a constant, fold it into instOffset instead of
       // emitting VALU instructions. This saves 2 VALU ops per LDS read.
       if (auto constVal = getArithConstantValue(*baseOffset)) {
         instOffset += *constVal;
       } else {
-        // Non-constant base offset: must use VALU
-        Value baseOffsetVgpr =
-            V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+        // Non-constant base offset: add directly to vaddr via V_ADD_U32.
+        // V_ADD_U32 accepts SGPR sources (VALUSrc), so SGPR-carried offsets
+        // from memref iter_args work without an intermediate V_MOV_B32.
         vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
-                                  baseOffsetVgpr);
+                                  *baseOffset);
       }
     }
 
@@ -1047,7 +1050,9 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       }
     }
 
-    // Add the LDS base offset from memref.view (if any)
+    // Add the LDS base offset from memref.view (if any).
+    // This handles both static offsets and dynamic SGPR-carried offsets from
+    // memref iter_args in pipelined double-buffering loops.
     int64_t ldsInstOffset = 0;
     if (auto baseOffset = ctx.getLDSBaseOffset(storeOp.getBase())) {
       // If the base offset is a constant, fold it into ldsInstOffset instead
@@ -1055,11 +1060,11 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       if (auto constVal = getArithConstantValue(*baseOffset)) {
         ldsInstOffset += *constVal;
       } else {
-        // Non-constant base offset: must use VALU
-        Value baseOffsetVgpr =
-            V_MOV_B32::create(builder, loc, ctx.createVRegType(), *baseOffset);
+        // Non-constant base offset: add directly to vaddr via V_ADD_U32.
+        // V_ADD_U32 accepts SGPR sources (VALUSrc), so SGPR-carried offsets
+        // from memref iter_args work without an intermediate V_MOV_B32.
         vaddr = V_ADD_U32::create(builder, loc, ctx.createVRegType(), vaddr,
-                                  baseOffsetVgpr);
+                                  *baseOffset);
       }
     }
 
