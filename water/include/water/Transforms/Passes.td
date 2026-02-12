@@ -145,6 +145,17 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
   ];
 }
 
+def WaterInsertBroadcastsPass : Pass<"water-insert-broadcasts"> {
+  let summary = "Insert broadcasts for uniform values derived from non-uniform inputs";
+  let description = [{
+    This pass inserts explicit broadcast operations after operations that
+    produce uniform results from non-uniform  inputs. This makes the uniformity
+    explicit in the IR and can help with downstream optimizations and code
+    generation.
+  }];
+  let dependentDialects = ["::mlir::gpu::GPUDialect"];
+}
+
 def WaterDropTransformOpsPass : Pass<"water-drop-transform-ops"> {
   let summary = "Remove transform dialect operations from the module";
   let description = [{
