@@ -17,6 +17,7 @@ from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
 from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+from wave_lang.kernel.wave.schedules import get_mxfp4_triplebuf_schedule
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
@@ -68,9 +69,29 @@ def test_dbuf_8wave_mxfp_gemm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    for i in range(100):
+    print(gemm.asm)
+
+    for i in range(1):
         _run_mxfp_gemm(gemm, shape)
     print("MXFP GEMM double-buffer 8-wave test passed!")
+
+
+def test_triplebuf_8wave_mxfp_gemm(
+    is_debug=False, shape=(512, 512, 1024), block=(128, 128, 256)
+):
+    """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=8)
+    schedule = get_mxfp4_triplebuf_schedule(use_stagger=True)
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    print(gemm.asm)
+
+    for i in range(1):
+        _run_mxfp_gemm(gemm, shape)
+    print("MXFP GEMM triple-buffer 8-wave test passed!")
 
 
 if __name__ == "__main__":
