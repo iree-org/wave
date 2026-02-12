@@ -479,6 +479,13 @@ def _convert_to_wave_expr_list_tuple(
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
 
 
+def _convert_vector_shapes(shapes: dict[IndexSymbol, int]) -> ir.DictAttr:
+    """Converts a dictionary of index symbols mapped to integers to a dictionary attribute."""
+    i64 = ir.IntegerType.get_signless(64)
+    dict = {k.name: ir.IntegerAttr.get(i64, v) for k, v in shapes.items()}
+    return ir.DictAttr.get(dict)
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -760,7 +767,20 @@ def _emit_ops_from_graph(
                         result_type, *create_mlir_operands(), offset, width, mode
                     )
                 elif isinstance(node, Reshape):
-                    mlir_op = op_builder(result_type, source=create_mlir_operands())
+                    # FIXME(#873): temporary fix to work around a malformed op.
+                    if isinstance(node.target_vector_shape, int):
+                        target_vector_shape = {
+                            node.type.symbolic_shape[-1]: node.target_vector_shape
+                        }
+                    else:
+                        target_vector_shape = node.target_vector_shape
+                    mlir_op = op_builder(
+                        result_type,
+                        source=create_mlir_operands(),
+                        target_vector_shape=_convert_vector_shapes(target_vector_shape),
+                        logical_slice=node.logical_slice,
+                        num_slices=node.num_slices,
+                    )
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
@@ -789,12 +809,7 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
 
         shape_dict = None
         if constraint.vector_shapes:
-            i64 = ir.IntegerType.get_signless(64)
-            dict = {
-                k.name: ir.IntegerAttr.get(i64, v)
-                for k, v in constraint.vector_shapes.items()
-            }
-            shape_dict = ir.DictAttr.get(dict)
+            shape_dict = _convert_vector_shapes(constraint.vector_shapes)
 
         attr = HardwareConstraintAttr.get(
             threads_per_wave=constraint.threads_per_wave,
