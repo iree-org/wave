@@ -454,10 +454,6 @@ class HardwareConstraint(Constraint):
                             ~(MMA_LHS_SCALE | MMA_RHS_SCALE | MMA_SCALE_FP4),
                         ),
                         (
-                            32 * floor(lane / 16) - 32,
-                            (MMA_RHS_SCALE),
-                        ),
-                        (
                             32 * floor(lane / 16),
                             True,
                         ),
@@ -657,7 +653,7 @@ class HardwareConstraint(Constraint):
                 size = [
                     Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
                     1,  # N
-                    Piecewise((64, MMA_LHS_SCALE | MMA_RHS_SCALE), (32, True)),  # K
+                    Piecewise((128, MMA_LHS_SCALE | MMA_RHS_SCALE), (32, True)),  # K
                 ]
                 stride = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M

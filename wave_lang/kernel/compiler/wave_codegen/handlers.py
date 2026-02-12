@@ -437,13 +437,21 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
 
 
 def emit_mfma_scaled(
-    m: int, n: int, k: int, acc: Value, values: list[Value], scales: list[Value]
+    m: int,
+    n: int,
+    k: int,
+    acc: Value,
+    values: list[Value],
+    scales: list[Value],
+    idx_a: int,
+    idx_b: int,
 ) -> Value:
-    m = get_constant_attr(m, IntegerType.get_signless(32))
-    n = get_constant_attr(n, IntegerType.get_signless(32))
-    k = get_constant_attr(k, IntegerType.get_signless(32))
-    idx_a = get_constant_attr(0, IntegerType.get_signless(32))
-    idx_b = get_constant_attr(0, IntegerType.get_signless(32))
+    i32 = IntegerType.get_signless(32)
+    m = get_constant_attr(m, i32)
+    n = get_constant_attr(n, i32)
+    k = get_constant_attr(k, i32)
+    idx_a = get_constant_attr(idx_a, i32)
+    idx_b = get_constant_attr(idx_b, i32)
 
     result = amdgpu_d.scaled_mfma(
         m=m,
@@ -518,11 +526,11 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         pos = [0, 0]
         if mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
             pos[1] = 1
-        scales = [
-            cast_scalar(emitter, val, pos)
-            for pos, val in zip(pos, [lhs_scale, rhs_scale])
-        ]
-        result = emit_mfma_scaled(m, n, k, acc, values, scales)
+            scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
+        else:
+            scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
+
+        result = emit_mfma_scaled(m, n, k, acc, values, scales, pos[0], pos[1])
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
