@@ -724,7 +724,6 @@ def _trace_launchable_and_get_kernel_signature(
     # Optimizations.
     if options.optimization_level:
         graph_passes += [
-            partial(interleave_scaled_mma, trace, launchable.constraints),
             partial(hoist_loop_invariant_ops, trace, launchable.constraints),
             partial(tensor_load_to_shared, trace, launchable.constraints, options),
             partial(multicast, trace, launchable.constraints, options),
@@ -803,6 +802,7 @@ def _trace_launchable_and_get_kernel_signature(
                 trace,
                 options.minimize_shared_allocs,
             ),
+            partial(interleave_scaled_mma, trace, launchable.constraints),
         ]
     graph_passes += [
         partial(
