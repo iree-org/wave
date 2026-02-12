@@ -571,22 +571,28 @@ def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
         raise ValueError("Allocate cannot target Register address space")
     address_space = _address_space_to_symbol(result_type.address_space, parse_ctx)
 
-    distributed_shape = tuple(expr_list_attr_to_exprs(op.distributed_shape))
+    # MLIR stores the *unpadded* distributed shape, padding is a separate
+    # attribute. Reconstruct the padded distributed_shape that the Python
+    # Allocate operation expects, i.e. padding added to the last dimension.
+    unpadded_dist = list(expr_list_attr_to_exprs(op.distributed_shape))
+    padding = int(op.padding) if op.padding is not None else 0
+    tail_padding = int(op.tail_padding) if op.tail_padding is not None else 0
+    if padding and unpadded_dist:
+        unpadded_dist[-1] = unpadded_dist[-1] + padding
+    distributed_shape = tuple(unpadded_dist)
+
     parent_node = (
         parse_ctx.resolve_operand(op.parent) if op.parent is not None else None
     )
     offset = int(op.offset) if op.offset is not None else None
 
-    # distributed_shape and offset are already handled above as constructor
-    # arguments - ignore them so _convert_supported_attrs picks up only the
-    # remaining attrs (e.g. index).
+    # distributed_shape, offset, padding, and tail_padding are handled above
+    # as explicit constructor arguments - ignore them so
+    # _convert_supported_attrs picks up only the remaining attrs.
     converted_attrs = _convert_supported_attrs(
-        op, ignore_attrs={"distributed_shape", "offset"}
+        op,
+        ignore_attrs={"distributed_shape", "offset", "padding", "tail_padding"},
     )
-
-    # TODO: Serialize padding in MLIR AllocateOp.
-    padding = 0
-    tail_padding = 0
 
     allocate_op = Allocate.create(
         parse_ctx.graph,

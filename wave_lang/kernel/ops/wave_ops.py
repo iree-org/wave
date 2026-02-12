@@ -1583,10 +1583,10 @@ class Allocate(CustomOp):
     distributed_shape: tuple[IndexExpr]
     dtype: DataType
     address_space: AddressSpace = SHARED_ADDRESS_SPACE
-    padding: int = field(default=0, compare=False)
+    padding: int = 0
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
-    tail_padding: int = field(default=0, compare=False)
+    tail_padding: int = 0
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
