@@ -3262,10 +3262,16 @@ class Reshape(CustomOp, ABC):
     Represents a reshape operation that reshapes
     vectors along the same dimension.
 
+    Conceptually, this either concatenates multiple vectors into a single vector
+    or extracts slices from the vector. Since this operation appears after
+    graph expansion, it never actually has multiple results: each expanded
+    instance of this operation extracts a single slice.
     """
 
     args: fx.Node | Sequence[fx.Node]
     target_vector_shape: dict[IndexSymbol, int]
+    logical_slice: int = 0
+    num_slices: int = 1
 
     @property
     def indexing_dims(self) -> list[IndexExpr]:
