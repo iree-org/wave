@@ -138,7 +138,7 @@ def allocate(
 
 
 def self_index(
-    dim: IndexExpr,
+    dim: IndexSymbol,
     dtype: DataType,
     elements_per_thread: Optional[IndexExpr | int] = None,
 ) -> "Register": ...
@@ -1573,7 +1573,7 @@ class Allocate(CustomOp):
 @define_op("self_index")
 @dataclass
 class SelfIndex(CustomOp):
-    dim: IndexExpr
+    dim: IndexSymbol
     dtype: DataType
     elements_per_thread: Optional[IndexExpr | int] = None
 
