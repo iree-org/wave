@@ -2180,18 +2180,22 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     # Determine whether to extract or combine.
     if len(args) > 1:
         vectors = [cast_vector(emitter, arg) for arg in args]
-        shape = vectors[0].type.shape[0]
-        if shape == 1:
+        shape = vectors[0].type.shape[0] if vectors[0].type.rank > 0 else 0
+        if shape <= 1:
             # If source is 1-element vector or scalar (which will be casted to
-            # 1-element vector by `cast_vector`), we can construct the result
+            # 0-d vector by `cast_vector`), we can construct the result
             # vector using `extract` and a single `from_elements` op instead of
             # series of `insert_strided_slice` ops.
             values = [
-                vector_d.extract(vector, static_position=[0], dynamic_position=[])
+                vector_d.extract(
+                    vector,
+                    static_position=[] if vector.type.rank == 0 else [0],
+                    dynamic_position=[],
+                )
                 for vector in vectors
             ]
             element_type = vectors[0].type.element_type
-            vector_type = VectorType.get([shape * len(args)], element_type)
+            vector_type = VectorType.get([len(args)], element_type)
             result = vector_d.from_elements(vector_type, values)
             emitter.bind_node_proxy(node, IRProxyValue(result))
             return

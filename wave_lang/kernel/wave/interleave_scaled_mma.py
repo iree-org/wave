@@ -49,17 +49,14 @@ def interleave_scaled_mma(trace: CapturedTrace, constraints: list[Constraint]):
         scale_dtype = get_custom(mma_op.lhs_scale).type.dtype
 
         with mma_op.graph.inserting_before(mma_op.fx_node):
-            # Create zero padding scalars.
-            zero0 = NewScalar(0.0, scale_dtype).add_to_graph(
-                mma_op.graph, loc=mma_op.location
-            )
-            zero1 = NewScalar(0.0, scale_dtype).add_to_graph(
+            # Create zero padding scalar.
+            zero = NewScalar(0.0, scale_dtype).add_to_graph(
                 mma_op.graph, loc=mma_op.location
             )
 
             # Combine scales: [lhs_scale, rhs_scale, 0, 0].
             combined = Reshape(
-                [mma_op.lhs_scale, mma_op.rhs_scale, zero0, zero1],
+                [mma_op.lhs_scale, mma_op.rhs_scale, zero, zero],
                 {},
             ).add_to_graph(mma_op.graph, loc=mma_op.location)
 
@@ -72,5 +69,8 @@ def interleave_scaled_mma(trace: CapturedTrace, constraints: list[Constraint]):
                 mma_op.acc,
                 ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED,
             ).add_to_graph(mma_op.graph, loc=mma_op.location)
+            new_mma.index = mma_op.index
+            new_mma.vector_shapes = mma_op.vector_shapes
 
         mma_op.replace_all_uses_with(new_mma)
+        mma_op.erase()
