@@ -42,9 +42,9 @@ _INDUCTION_SYMBOL_PREFIX = "$ARG"
 
 
 def collect_allowed_induction_symbols(fx_node) -> set[IndexSymbol]:
-    """Walk parent graphs from ``fx_node`` to collect in-scope induction symbols.
+    """Walk parent graphs from `fx_node` to collect in-scope induction symbols.
 
-    Each ``Iterate`` ancestor contributes an induction symbol derived from its
+    Each `Iterate` ancestor contributes an induction symbol derived from its
     axis.  Symbols not in the returned set are out-of-scope for this node.
     """
     # Lazy import to avoid circular dependency (symbol_utils is imported
@@ -65,12 +65,12 @@ def strip_out_of_scope_induction_symbols(
     index: dict[IndexSymbol, IndexSequence],
     allowed_induction_symbols: set[IndexSymbol],
 ) -> dict[IndexSymbol, IndexSequence]:
-    """Return a copy of ``index`` with out-of-scope induction symbols set to 0.
+    """Return a copy of `index` with out-of-scope induction symbols set to 0.
 
-    Backward index propagation (``set_derived_index``) can place induction
-    symbols on nodes that live outside the corresponding ``Iterate`` loop.
-    This function substitutes any ``$ARG``-prefixed symbol not present in
-    ``allowed_induction_symbols`` with 0.
+    Backward index propagation (`set_derived_index`) can place induction
+    symbols on nodes that live outside the corresponding `Iterate` loop.
+    This function substitutes any `$ARG`-prefixed symbol not present in
+    `allowed_induction_symbols` with 0.
     """
     cleaned = deepcopy(index)
     for _dim, seq in cleaned.items():

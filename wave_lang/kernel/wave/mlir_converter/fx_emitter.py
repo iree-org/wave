@@ -723,12 +723,12 @@ def _create_get_result_nodes(
     """Creates GetResult nodes for each result of a wave.iterate operation.
 
     Each iterate result gets a GetResult node that extracts its value from the
-    iterate's output tuple.
+    iterate's output tuple.  The index is used as-is: `Iterate.index`
+    delegates to `MMA.acc_index` which already specialises MMA_ACC and
+    drops the reduction dimension before the emitters serialise it.
 
-    Note: the index is used as-is without cleanup. MLIR-side index propagation
-    (water-wave-infer-index-exprs) is expected to have already removed the
-    iterator axis and specialized MMA_ACC in the index expressions. If those
-    passes haven't run, the index may contain stale entries.
+    # TODO: revisit when converting partially-compiled traces where
+    # index analysis has not yet run.
     """
     with parse_ctx.graph.inserting_after(iterate_node):
         for idx, result in enumerate(results):

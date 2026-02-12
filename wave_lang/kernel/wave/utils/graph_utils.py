@@ -88,8 +88,8 @@ _ADDITIONAL_NODE_ATTRS = ("vector_shapes", "reduction_dim", "iter_idx")
 def _is_effectively_none(val: Any) -> bool:
     """Return True for None or list/tuple containers of all-None values.
 
-    During graph construction, an unset index can surface as either ``None``
-    or ``[None]`` depending on the op.  Treat both as "not yet populated".
+    During graph construction, an unset index can surface as either `None`
+    or `[None]` depending on the op.  Treat both as "not yet populated".
     """
     if val is None:
         return True
@@ -463,7 +463,7 @@ def _check_nodes_equivalent(
         # Allocate indices are derived via backward propagation
         # (set_derived_index) and may contain induction symbols that belong
         # to a nested Iterate scope rather than the Allocate's own scope.
-        # The wave to MLIR conversion strips these before emitting (see
+        # The wave-to-MLIR conversion strips these before emitting (see
         # strip_out_of_scope_induction_symbols in symbol_utils.py).
         # Only the LHS (reference / source trace) needs cleanup; the RHS
         # comes from MLIR import where scoping is enforced structurally.
@@ -616,10 +616,10 @@ def _match_root_placeholders(
 ) -> tuple[list[fx.Node], list[fx.Node], CheckResult | None]:
     """Match root-graph placeholders by order and return non-placeholder nodes.
 
-    Placeholder names may differ (e.g. ``a`` vs ``arg0``), but their order as
+    Placeholder names may differ (e.g. `a` vs `arg0`), but their order as
     function parameters is what matters semantically.  Each matched pair is
-    checked for equivalence via ``_check_nodes_equivalent``.  Returns the
-    non-placeholder nodes from each side, or a ``CheckResult`` on failure.
+    checked for equivalence via `_check_nodes_equivalent`.  Returns the
+    non-placeholder nodes from each side, or a `CheckResult` on failure.
     """
     lhs_phs = [
         (i, n)
@@ -711,11 +711,11 @@ def _check_graphs_equivalent(
     """Compare two graphs node-by-node with shared node_map.
 
     Placeholder handling is delegated to helper functions:
-    - Subgraphs: ``_reconcile_lifted_placeholders`` maps captured values.
-    - Root graphs: ``_match_root_placeholders`` pairs parameters by order.
+    - Subgraphs: `_reconcile_lifted_placeholders` maps captured values.
+    - Root graphs: `_match_root_placeholders` pairs parameters by order.
 
     After placeholders are resolved, non-placeholder nodes are compared
-    positionally via ``_compare_node_lists``.
+    positionally via `_compare_node_lists`.
     """
     lhs = (
         lhs_trace.get_root_graph()
@@ -758,14 +758,14 @@ def assert_traces_equivalent(
 ) -> None:
     """Assert structural equivalence between two traces.
 
-    Designed for MLIR roundtrip validation where ``lhs`` is the reference
+    Designed for MLIR roundtrip validation where `lhs` is the reference
     (source trace, possibly sparsely populated in early pipeline stages) and
-    ``rhs`` is the actual (roundtrip result, eagerly populated from MLIR).
+    `rhs` is the actual (roundtrip result, eagerly populated from MLIR).
 
-    The comparison is directional: ``rhs`` may carry additional information
-    (e.g. indices or vector_shapes derived from constraints) that ``lhs`` does
-    not yet have, but any information present in ``lhs`` must also appear in
-    ``rhs``.
+    The comparison is directional: `rhs` may carry additional information
+    (e.g. indices or vector_shapes derived from constraints) that `lhs` does
+    not yet have, but any information present in `lhs` must also appear in
+    `rhs`.
     """
     node_map: dict[fx.Node, fx.Node] = {}
     check_result = _check_graphs_equivalent(lhs, rhs, subs, node_map)

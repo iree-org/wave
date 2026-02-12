@@ -65,8 +65,8 @@ def _format_frame(
     Args:
         frame: The location frame to format.
         lines: Accumulator list that formatted strings are appended to.
-        name: Optional name context inherited from a parent ``NameLocation``.
-              When present it is shown as ``in <name>`` after the file/line.
+        name: Optional name context inherited from a parent `NameLocation`.
+              When present it is shown as `in <name>` after the file/line.
     """
     if isinstance(frame, FileLocation):
         suffix = f", in {name}" if name else ""

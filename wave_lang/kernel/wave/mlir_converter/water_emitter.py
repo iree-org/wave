@@ -803,11 +803,11 @@ def serialize_location(loc: ir.Location) -> list[LocationFrame]:
     information.
 
     Handles:
-    - File locations (FileLineColLoc / FileLineColRange) via ``is_a_file``
-      → ``filename``, ``start_line``, ``start_col``, ``end_line``, ``end_col``
-    - Callsite locations via ``is_a_callsite`` → ``caller``, ``callee``
-    - Fused locations via ``is_a_fused`` → ``locations``
-    - Name locations via ``is_a_name`` → ``name_str``, ``child_loc``
+    - File locations (FileLineColLoc / FileLineColRange) via `is_a_file`
+      → `filename`, `start_line`, `start_col`, `end_line`, `end_col`
+    - Callsite locations via `is_a_callsite` → `caller`, `callee`
+    - Fused locations via `is_a_fused` → `locations`
+    - Name locations via `is_a_name` → `name_str`, `child_loc`
 
     Returns frames from outermost (caller) to innermost (callee).
     """

@@ -2460,7 +2460,13 @@ class Conditional(NestedRegionOp):
             subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
             return_node = get_custom(subgraph.output_node())
             assert isinstance(return_node, Output)
+            # return_vals is the output node's args tuple.
+            # return_vals[0] is either a single fx.Node (one return value) or
+            # a tuple of fx.Nodes (multiple return values)
             return_vals = return_node.return_vals[0]
+            assert isinstance(
+                return_vals, (fx.Node, tuple)
+            ), f"Expected fx.Node or tuple of fx.Nodes, got {type(return_vals)}"
             if not isinstance(return_vals, Sequence):
                 return_vals = [return_vals]
             for return_val in return_vals:
