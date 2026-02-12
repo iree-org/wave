@@ -1754,50 +1754,78 @@ def test_gemm_two_async_cluster_pingpong():
     # 1st cluster interleaved local and global reads.
 
     # 1st Cluster: First slice of Local read lhs and rhs
-    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER:.+]][{{.*}}, %[[K0:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K1:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER:.+]][{{.*}}, %[[K0]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K1]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            rocdl.sched.barrier
+    # CHECK-COUNT-4:    vector.load %[[LHS_BUFFER:.+]][{{.*}}] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[RHS_BUFFER:.+]][{{.*}}] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
-    # 1st Cluster: Global load to shared
-    # CHECK-COUNT-4:    amdgpu.gather_to_lds
+    # 1st Cluster: Global load to shared (1 gather_to_lds)
+    # CHECK:            amdgpu.gather_to_lds
     # CHECK:            rocdl.sched.barrier
 
     # First dot slice
     # CHECK:            rocdl.s.setprio 1
-    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK-COUNT-8:    amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
     # CHECK:            rocdl.sched.barrier
-    # CHECK-NEXT:       amdgpu.memory_counter_wait load(4)
-    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK:            amdgpu.memory_counter_wait load(1)
+    # CHECK:            rocdl.s.barrier
 
-    # 2nd cluster second slice of local read lhs and rhs.
-    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K2:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K3:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K2]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K3]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # 2nd cluster: second slice of local read lhs
+    # CHECK-COUNT-4:    vector.load %[[LHS_BUFFER]][{{.*}}] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+    # 2nd gather_to_lds
+    # CHECK:            amdgpu.gather_to_lds
     # CHECK:            rocdl.sched.barrier
-    # CHECK-NEXT:       amdgpu.memory_counter_wait load(0)
-    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK:            amdgpu.memory_counter_wait load(2)
+    # CHECK:            rocdl.s.barrier
 
-    # Second dot slice:
+    # Second dot slice
     # CHECK:            rocdl.s.setprio 1
-    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK-COUNT-8:    amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
     # CHECK:            rocdl.sched.barrier
+    # CHECK:            rocdl.s.barrier
 
-    # Final LDS barrier to synchronize shared writes.
-    # CHECK:            amdgpu.lds_barrier
+    # 3rd cluster: rhs local reads
+    # CHECK-COUNT-8:    vector.load %[[RHS_BUFFER]][{{.*}}] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+    # 3rd gather_to_lds
+    # CHECK:            amdgpu.gather_to_lds
+    # CHECK:            rocdl.sched.barrier
+    # CHECK:            amdgpu.memory_counter_wait load(3)
+    # CHECK:            rocdl.s.barrier
+
+    # Third dot slice
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-8:    amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            rocdl.sched.barrier
+    # CHECK:            rocdl.s.barrier
+
+    # 4th gather_to_lds
+    # CHECK:            amdgpu.gather_to_lds
+    # CHECK:            rocdl.sched.barrier
+    # CHECK:            rocdl.s.barrier
+
+    # Fourth dot slice
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-8:    amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            rocdl.sched.barrier
+    # CHECK:            amdgpu.memory_counter_wait load(2)
+    # CHECK:            rocdl.s.barrier
+    # CHECK:            rocdl.sched.barrier
     # CHECK:            scf.yield
     # CHECK:          }
 
-    # Prologue
+    # Epilogue
 
     # cond_barrier on warp low to even out assymetry between 2 wave in same SIMD and Block.
     # CHECK:          scf.if %[[WARP_LO]] {
     # CHECK-NEXT:       rocdl.s.barrier
     # CHECK-NEXT:     }
+
+    # Final LDS barrier before epilogue computations
+    # CHECK:          amdgpu.lds_barrier
 
 
 # This test that our stack is able to handle MMA layout with interleaved VGPR offsets/chunks
