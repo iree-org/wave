@@ -19,7 +19,11 @@ from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.graph_utils import assert_traces_equivalent
 from wave_lang.kernel.ops.wave_ops import Allocate, MMA, get_custom
-from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+from wave_lang.kernel.wave.utils.symbol_utils import (
+    collect_allowed_induction_symbols,
+    get_induction_symbol,
+    strip_out_of_scope_induction_symbols,
+)
 from wave_lang.support.indexing import IndexSequence
 import sympy
 import numpy as np
@@ -164,7 +168,19 @@ def _trace_gemm_kernel():
     )
     options = WaveCompileOptions(subs=hyperparams, compile_to_mlir=True)
     compiled_kernel = wave_compile(options, gemm)
-    return compiled_kernel.get_compiled_graph(), options
+    trace = compiled_kernel.get_compiled_graph()
+    # assert_traces_equivalent only strips the LHS (reference) Allocate
+    # indices because the RHS is expected to come from MLIR import.
+    # When comparing two Python traces (as these unit tests do), both
+    # sides carry out-of-scope induction symbols from backward index
+    # propagation, so we clean them up here.
+    for node in trace.walk():
+        if isinstance(get_custom(node), Allocate):
+            index = getattr(node, "index", None)
+            if isinstance(index, dict):
+                allowed = collect_allowed_induction_symbols(node)
+                node.index = strip_out_of_scope_induction_symbols(index, allowed)
+    return trace, options
 
 
 def _get_first_mma_node(trace):
@@ -313,16 +329,20 @@ def test_allocate_out_of_scope_induction_symbols_stripped():
         k: IndexSequence(v.start, v.size, v.stride) for k, v in clean_index.items()
     }
 
-    # Inject a bogus out-of-scope induction symbol into one side.
+    # Inject a bogus out-of-scope induction symbol into the LHS (reference).
     # The Allocate lives in the root graph (outside any Iterate), so $ARGK
     # is out of scope and should be stripped before comparison.
+    # assert_traces_equivalent strips the LHS Allocate indices (since the
+    # source trace carries these from backward index propagation), so the
+    # injected symbol should be removed and the comparison should pass.
     bogus_sym = get_induction_symbol(sym.K)
-    seq = alloc_b.index[sym.M]
-    alloc_b.index[sym.M] = IndexSequence(
+    seq = alloc_a.index[sym.M]
+    alloc_a.index[sym.M] = IndexSequence(
         seq.start + bogus_sym * sympy.Symbol("BLOCK_K"), seq.size, seq.stride
     )
 
-    # Should still pass because the comparison strips out-of-scope $ARG symbols.
+    # Should still pass because the comparison strips out-of-scope $ARG symbols
+    # from the LHS.
     assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
 
 
