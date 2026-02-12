@@ -34,6 +34,8 @@ from mlir_to_wave import (
     ITER_SYMBOL_NAME_WAVE_PREFIX,
 )
 
+from wave_lang.kernel._support.indexing import IndexSymbol
+
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
@@ -70,6 +72,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Placeholder,
     Placeholder,
     SelectOp,
+    SelfIndex,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
     Write,
@@ -113,6 +116,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelfIndexOp,
         ShuffleOp,
         SumOp,
         WriteOp,
@@ -169,6 +173,7 @@ WAVE_OP_CONSTRUCTORS = {
     "max_element": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
+    "self_index": SelfIndexOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
 }
 
@@ -762,6 +767,17 @@ def _emit_ops_from_graph(
                     assert len(node.offset) == 1
                     position = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(result_type, *create_mlir_operands(), position)
+                elif isinstance(node, SelfIndex):
+                    if not isinstance(node.dim, IndexSymbol):
+                        raise RuntimeError(
+                            f"SelfIndex op has non-index symbol dimension: {node.dim}"
+                        )
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        dim=_symbol_name_to_attribute(node.dim.name),
+                        elements_per_thread=node.elements_per_thread,
+                    )
                 elif isinstance(node, Shuffle):
                     offset = ir.IntegerAttr.get(
                         ir.IntegerType.get_signless(32), node.offset

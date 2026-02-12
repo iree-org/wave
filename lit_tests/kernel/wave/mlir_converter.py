@@ -316,6 +316,43 @@ def mlir_converter_matrix_add():
 
 
 @run_test
+def mlir_converter_self_index():
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M}),
+    ]
+
+    @wave.wave(constraints)
+    def self_index(a: Memory[M, ADDRESS_SPACE_A, tkl.i32]):
+        idx = wave.self_index(M, dtype=tkl.i32)
+        wave.write(idx, a)
+
+    options = WaveCompileOptions(
+        subs={M: 128, BLOCK_M: 64},
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, self_index)
+    trace = compiled_kernel.get_compiled_graph()
+    constraints = self_index.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    if diagnostics:
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_self_index
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (T0 mod 64) * (BLOCK_M ceildiv 128) + (BLOCK_M floordiv 2) * (T0 floordiv 64), BLOCK_M ceildiv 128, 1)>}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: wave.write %[[SELF_INDEX]]
+
+
+@run_test
 def multi_result_handling():
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),

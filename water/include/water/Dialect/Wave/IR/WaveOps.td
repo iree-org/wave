@@ -659,7 +659,9 @@ def SelfIndexOp : WaveOp<"self_index", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveSymbolAttr, "Dimension to index over">:$dim
+    Arg<WaveSymbolAttr, "Dimension to index over">:$dim,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread
   ), commonArguments);
 
   let results = (outs

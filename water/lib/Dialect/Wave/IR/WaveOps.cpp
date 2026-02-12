@@ -2041,7 +2041,9 @@ LogicalResult wave::SelfIndexOp::verify() {
                          << "' must match the specified dimension '"
                          << getDim().getName() << "'";
 
-  return success();
+  return verifyIndexElementsPerThread(
+      getOperation(), getIndexAttr(), getElementsPerThread(),
+      dyn_cast<WaveTensorType>(getResult().getType()), getResult().getType());
 }
 
 //-----------------------------------------------------------------------------

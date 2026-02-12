@@ -600,7 +600,8 @@ public:
 
     ArrayAttr indexArr = op.getIndexAttr();
     if (!indexArr || indexArr.empty())
-      return rewriter.notifyMatchFailure(op, "missing index attribute");
+      return rewriter.notifyMatchFailure(op,
+                                         "missing or empty index attribute");
     DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
 
     // Look up the index mapping for the specified dimension.
@@ -624,9 +625,10 @@ public:
     std::optional<SmallVector<int64_t>> stepValues =
         wave::evaluateMapWithHyperparams(mapping.getStep(),
                                          mapping.getSymbols(), hyper);
-    if (!stepValues || stepValues->size() != 1)
+    if (!stepValues)
       return rewriter.notifyMatchFailure(
           op, "failed to evaluate step to a constant");
+    assert(stepValues->size() == 1 && "expected single-result map");
     int64_t size = (*stepValues)[0];
 
     // Evaluate the stride from hyperparameters.
