@@ -64,6 +64,7 @@ from .global_to_shared_gathers import global_to_shared_gathers
 from .hardware_transpose import mark_hardware_transpose_candidates
 from .hoisting import hoist_loop_invariant_ops
 from .in_thread_transpose import in_thread_transpose
+from .interleave_scaled_mma import interleave_scaled_mma
 from .location_check_pass import location_check_pass
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
@@ -723,6 +724,7 @@ def _trace_launchable_and_get_kernel_signature(
     # Optimizations.
     if options.optimization_level:
         graph_passes += [
+            partial(interleave_scaled_mma, trace, launchable.constraints),
             partial(hoist_loop_invariant_ops, trace, launchable.constraints),
             partial(tensor_load_to_shared, trace, launchable.constraints, options),
             partial(multicast, trace, launchable.constraints, options),
