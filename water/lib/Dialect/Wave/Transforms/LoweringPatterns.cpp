@@ -901,6 +901,50 @@ public:
   }
 };
 
+class ReshapeOpLoweringPattern : public OpConversionPattern<wave::ReshapeOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ReshapeOp op, wave::ReshapeOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::all_of(adaptor.getSource().getType(), [](Type type) {
+          return type.isSignlessIntOrIndexOrFloat() || isa<VectorType>(type);
+        })) {
+      return rewriter.notifyMatchFailure(
+          op, "expected all source operands to be vectors or scalars");
+    }
+
+    if (adaptor.getSource().size() != 1) {
+      SmallVector<Value> individualValues;
+      for (Value source : adaptor.getSource()) {
+        if (source.getType().isIntOrIndexOrFloat())
+          individualValues.push_back(source);
+        else
+          individualValues.push_back(
+              vector::ExtractOp::create(rewriter, op.getLoc(), source, 0));
+      }
+      Value full = vector::FromElementsOp::create(
+          rewriter, op.getLoc(), op.getResult().getType(), individualValues);
+      rewriter.replaceOp(op, full);
+      return success();
+    }
+
+    // TODO: this requires expanded dims to be present, which is a sort of back
+    // reference?
+    // TODO: this also requires vector shapes to be present, both are on
+    // CustomOp but not listed in the ReshapeOp dataclass. There is a property
+    // on the CustomOp that forwards this to an fx_node attribute... Same for
+    // vector shapes, argh!.
+    // And this seems to be the only place in the lowering that needs these
+    // values.
+
+    // all this lowering logic should arguably go into the EPT propagation...
+
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(

@@ -431,32 +431,41 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 }
 
 def ReshapeOp : WaveOp<"reshape", [
-    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
-    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
   let summary = "Reshapes a tensor";
   let description = [{
-    Changes the shape of the tensor into a new shape by reordering its
-    dimensions. Unlike `wave.permute` that only acts on metadata, `wave.reshape`
-    physically rearranges the elements.
+    **CAUTION**: This is a legacy internal operation not expected to be used in
+    the frontend, only to be constructed by the compiler during the transitional period.
 
-    When register-resident tensors are lowered to vectors, this may become an
-    operation that composes multiple vectors into a single vector. Prior to
-    that, only one tensor operand is allowed.
+    Changes the vectorized register representation of a tensor to use
+    the vector sized specified in the target vector shape. When register-resident
+    tensors are lowered to vectors, this may become an operation that composes
+    multiple vectors into a single vector. Prior to that, only one tensor operand
+    is allowed.
   }];
 
   let arguments = !con((ins
+    // TODO: cannot use WaveTensorInRegister here because it's not a Type, requires
+    // an upstream change to Variadic to allow TypeConstraint.
     Arg<Variadic<AnyType>,
         "Tensor to reshape, potentially composed from a sequence "
-        "of registers">:$source
+        "of registers">:$source,
+    Arg<DictionaryAttr, "Target vector shape">:$target_vector_shape,
+    Arg<DefaultValuedAttr<
+        ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
+        "Logical slice">:$logical_slice,
+    Arg<DefaultValuedAttr<
+        ConfinedAttr<I64Attr, [IntMinValue<1>]>, "1">,
+        "Number of slices">:$num_slices
   ), commonArguments);
 
   let results = (outs
     Res<WaveTensorInRegister, "Reshaped tensor">:$result
   );
 
-  let assemblyFormat = "$source " # commonArgumentsSyntax # "attr-dict `:` "
-                       "custom<ReusedType>(type($source), ref($source)) `to` qualified(type($result))";
+  let assemblyFormat =
+    "$source" # commonArgumentsSyntax  # "attr-dict `:` "
+    "custom<ReusedType>(type($source), ref($source)) `to` qualified(type($result))";
   let hasVerifier = 1;
 }
 
