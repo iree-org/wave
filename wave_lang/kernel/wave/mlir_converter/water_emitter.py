@@ -727,7 +727,7 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type,
                         *create_mlir_operands(),
-                        dim=_symbol_name_to_attribute(node.dim.name),
+                        dim=symbol_name_to_attribute(node.dim.name),
                         elements_per_thread=node.elements_per_thread,
                     )
                 elif isinstance(node, Shuffle):
