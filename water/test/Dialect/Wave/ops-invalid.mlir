@@ -902,3 +902,30 @@ func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <
   wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @K] of f32, <register>>
   return
 }
+
+// -----
+
+// Test that index attribute must provide mappings for all symbols used in operands
+func.func @index_attr_missing_operand_symbol(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // expected-error @below {{'index' attribute does not provide a mapping for symbol '@N' used in operand or result types}}
+  %0 = wave.add %arg0, %arg0 index [{M : <[] -> (0, 1, 1)>}] : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that index attribute must provide mappings for all symbols used in results
+func.func @index_attr_missing_result_symbol(%arg0: f32) {
+  // expected-error @below {{'index' attribute does not provide a mapping for symbol '@B' used in operand or result types}}
+  %0 = wave.register %arg0 index [{A : <[] -> (0, 1, 1)>}] : !wave.tensor<[@A, @B] of f32, <register>>
+  return
+}
+
+// -----
+
+// Test that index attribute must provide mappings for all symbols from multiple dimensions
+func.func @index_attr_missing_multiple_symbols(%arg0: !wave.tensor<[@M, @N, @K] of f32, <register>>) {
+  // expected-error @below {{'index' attribute does not provide a mapping for symbol '@N' used in operand or result types}}
+  %0 = wave.cast %arg0 index [{M : <[] -> (0, 1, 1)>, K : <[] -> (0, 1, 1)>}] : !wave.tensor<[@M, @N, @K] of f32, <register>> to !wave.tensor<[@M, @N, @K] of bf16, <register>>
+  return
+}
