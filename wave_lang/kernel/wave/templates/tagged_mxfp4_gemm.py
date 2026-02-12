@@ -103,6 +103,8 @@ def get_tagged_mxfp4_gemm(
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         use_global_to_shared=True,
+        linearize_shared_access=True,
+        use_buffer_ops=True,
         minimize_shared_allocs=False,
         print_mlir=True,
         print_mlir_file="gemm_mxfp4_dbuf_8wave.mlir",

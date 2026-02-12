@@ -273,6 +273,12 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         g2s_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.GatherToLDS)
         s2v_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.Read)
 
+        # partition s2v_a by M
+        s2v_a_0, s2v_a_1 = tkw.partition_by_dim(s2v_a, dim=M, num_partitions=2)
+        s2v_a_scale_0, s2v_a_scale_1 = tkw.partition_by_dim(
+            s2v_a_scale, dim=M, num_partitions=2
+        )
+
         # Matrix B data and B scale - Global to Vector
         g2v_b = tkw.get_node_by_tag("read_b")
         g2v_b_scale = tkw.get_node_by_tag("read_b_scale")
@@ -292,16 +298,27 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         pipeline_loop = tkw.pipeline(k_loop)
 
         with pipeline_loop as pl:
-            # Stage 0: Global-to-shared prefetch via GatherToLDS (no fusion)
             pl.set_stage(
                 [
                     (
                         g2s_a,
                         g2s_a_scale,
+                    ),
+                    (),
+                    (),
+                ],
+            )
+            # Stage 0: Global-to-shared prefetch via GatherToLDS (no fusion)
+            pl.set_stage(
+                [
+                    (
                         g2v_b,
                         g2v_b_scale,
                     ),
-                    (),
+                    (
+                        s2v_a_0,
+                        s2v_a_scale_0,
+                    ),
                     (),
                 ],
             )
@@ -309,8 +326,8 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             pl.set_stage(
                 [
                     (
-                        s2v_a,
-                        s2v_a_scale,
+                        s2v_a_1,
+                        s2v_a_scale_1,
                     ),
                     (bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale),
                     (scaled_mma,),
@@ -328,9 +345,13 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         loop_g2v_b = tkw.filter_nodes(g2v_b, subgraph=pipeline_loop.KERNEL)
         loop_g2v_b_scale = tkw.filter_nodes(g2v_b_scale, subgraph=pipeline_loop.KERNEL)
 
-        loop_shared_load_a = tkw.filter_nodes(s2v_a, subgraph=pipeline_loop.KERNEL)
-        loop_shared_load_a_scale = tkw.filter_nodes(
-            s2v_a_scale, subgraph=pipeline_loop.KERNEL
+        loop_shared_load_a_0 = tkw.filter_nodes(s2v_a_0, subgraph=pipeline_loop.KERNEL)
+        loop_shared_load_a_scale_0 = tkw.filter_nodes(
+            s2v_a_scale_0, subgraph=pipeline_loop.KERNEL
+        )
+        loop_shared_load_a_1 = tkw.filter_nodes(s2v_a_1, subgraph=pipeline_loop.KERNEL)
+        loop_shared_load_a_scale_1 = tkw.filter_nodes(
+            s2v_a_scale_1, subgraph=pipeline_loop.KERNEL
         )
 
         loop_bitcast_a = tkw.filter_nodes(bitcast_a, subgraph=pipeline_loop.KERNEL)
@@ -350,12 +371,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
             loop_scaled_mma, dim=M, num_partitions=2
         )
-        loop_shared_load_a_0, loop_shared_load_a_1 = tkw.partition_by_dim(
-            loop_shared_load_a, dim=M, num_partitions=2
-        )
-        loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = tkw.partition_by_dim(
-            loop_shared_load_a_scale, dim=M, num_partitions=2
-        )
         loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
             loop_bitcast_a, dim=M, num_partitions=2
         )
@@ -363,20 +378,40 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             loop_bitcast_a_scale, dim=M, num_partitions=2
         )
 
+        # Interleave elements from loop_scaled_mma_1, loop_g2s_a, and loop_g2s_a_scale as described,
+        # but any of these lists may be longer than others.
+        # Always take one element from loop_scaled_mma_1,
+        # then if available one from loop_g2s_a, else if available one from loop_g2s_a_scale,
+        # else nothing.
+        new_list = []
+        i, j, k = 0, 0, 0
+        n_mma = len(loop_scaled_mma_1)
+        n_a = len(loop_g2s_a)
+        n_a_scale = len(loop_g2s_a_scale)
+        # We keep looping as long as there are any remaining elements in any list.
+        while i < n_mma or j < n_a or k < n_a_scale:
+            # Always add from loop_scaled_mma_1 if available
+            if i < n_mma:
+                new_list.append(loop_scaled_mma_1[i])
+                i += 1
+            # Try to add from loop_g2s_a if available
+            if j < n_a:
+                new_list.append(loop_g2s_a[j])
+                j += 1
+            # If loop_g2s_a is exhausted, add from loop_g2s_a_scale if available
+            elif k < n_a_scale:
+                new_list.append(loop_g2s_a_scale[k])
+                k += 1
+        # After this, if any elements remain in loop_g2s_a_scale, append them
+        while k < n_a_scale:
+            new_list.append(loop_g2s_a_scale[k])
+            k += 1
         clusters = [
-            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
+            # Cluster 0: First K-partition scaled_mma (high priority)
             tkw.cluster(
                 [
-                    loop_shared_load_a_0,
-                    loop_shared_load_a_scale_0,
                     loop_bitcast_a_0,
                     loop_bitcast_a_scale_0,
-                    tkw.SchedulingBarrier([]),
-                ]
-            ),
-            # Cluster 1: First K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
                     loop_bitcast_b,
                     loop_bitcast_b_scale,
                     loop_scaled_mma_0,
@@ -390,13 +425,21 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                 ],
             ),
             # Cluster 3: Second K-partition scaled_mma (high priority)
+            # tkw.cluster(
+            #     [
+            #         loop_scaled_mma_1,
+            #         loop_g2s_a,
+            #         loop_g2s_a_scale,
+            #     ],
+            # ),
+            tkw.cluster(new_list),
+            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
             tkw.cluster(
                 [
-                    loop_scaled_mma_1,
-                    loop_g2s_a,
-                    loop_g2s_a_scale,
+                    loop_shared_load_a_0,
+                    loop_shared_load_a_scale_0,
                     tkw.SchedulingBarrier([]),
-                ],
+                ]
             ),
         ]
 
