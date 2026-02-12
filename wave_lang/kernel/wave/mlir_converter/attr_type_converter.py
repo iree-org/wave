@@ -21,8 +21,8 @@ if "iree" in sys.modules:
 
 import sympy  # type: ignore
 from typing import Sequence
-from water_mlir import ir
-from water_mlir.dialects import wave
+from water_mlir.water_mlir import ir
+from water_mlir.water_mlir.dialects import wave
 
 # This is fine since it doesn't depend on IREE transitively.
 from wave_lang.support.indexing import (
