@@ -515,7 +515,13 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
         result = emit_wmma_scaled(m, n, k, acc, values, scales)
     else:
-        scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
+        pos = [0, 0]
+        if mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
+            pos[1] = 1
+        scales = [
+            cast_scalar(emitter, val, pos)
+            for pos, val in zip(pos, [lhs_scale, rhs_scale])
+        ]
         result = emit_mfma_scaled(m, n, k, acc, values, scales)
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
