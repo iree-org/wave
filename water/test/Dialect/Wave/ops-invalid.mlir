@@ -248,7 +248,7 @@ func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<
 
 // must provide the full triple (start, step, stride)
 func.func @index_attr_wrong_attr_type(%arg0: f32) {
-  // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr or WaveIterSymbolAtt}}
+  // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr, WaveIterSymbolAttr or WaveOperandAttr}}
   wave.register %arg0 index [{X : <[#wave.workgroup_dim<x>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
@@ -938,6 +938,7 @@ func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <
 
 // -----
 
+<<<<<<< HEAD
 func.func @reshape_no_source() {
   // expected-error @below {{expected at least one source operand}}
   "wave.reshape"() {target_vector_shape = {}} : () -> !wave.tensor<[@A, @B] of f32, <register>>
@@ -1035,49 +1036,50 @@ func.func @apply_expr_no_operands() {
 
 // -----
 
+=======
+>>>>>>> 91bf1dd5 (improve)
 // Test apply_expr with too many result expressions.
 func.func @apply_expr_multi_result(%arg0: !wave.tensor<[@M] of i32>) {
   // expected-error @below {{'wave.apply_expr' op expression must produce exactly one result, but got 2}}
-  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.ssa_value<"a">] -> (a, a + 1)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.operand<0>] -> (_Operand_0, _Operand_0 + 1)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+func.func @apply_expr_unused_operand(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
+  // expected-warning @below {{operand #1 is not used in the expression}}
+  "wave.apply_expr"(%arg0, %arg1) {expr = #wave.expr_list<[#wave.operand<0>] -> (_Operand_0 + 1)>} : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
   return
 }
 
 // -----
 
-// Test apply_expr with fewer symbols than operands.
-func.func @apply_expr_too_few_symbols(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
-  // expected-error @below {{'wave.apply_expr' op expression has 1 symbols but there are 2 operands; expected at least as many symbols as operands}}
-  "wave.apply_expr"(%arg0, %arg1) {expr = #wave.expr_list<[#wave.ssa_value<"a">] -> (a + 1)>} : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+func.func @apply_expr_operand_overflow(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{expression uses operand #2 but there are only 2 operands}}
+  wave.apply_expr(%arg0, %arg1) <[#wave.operand<0>, #wave.operand<1>, #wave.operand<2>] -> (_Operand_0 + _Operand_1 + _Operand_2)> : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+func.func @apply_expr_symbol_not_in_hyperparam(%arg0: !wave.tensor<[@M] of i32>) attributes { wave.hyperparameters = #wave.hyperparameters<{M = 42}>} {
+  // expected-error @below {{op attribute "expr" uses symbolic value #wave.symbol<"Z"> not provided as a hyperparameter}}
+  // expected-note @below {{available symbols: M}}
+  wave.apply_expr(%arg0) <[#wave.symbol<"Z">, #wave.operand<0>] -> (Z + _Operand_0)> : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
   return
 }
 
 // -----
 
-// Test apply_expr operand symbol must be WaveSSAValueAttr, not WaveSymbolAttr
-// (even when a valid hyperparameter symbol follows).
-func.func @apply_expr_operand_not_ssa_value(%arg0: !wave.tensor<[@M] of i32>)
-    attributes { "wave.hyperparameters" = #wave.hyperparameters<{a = 1 : i64, H = 4 : i64}> } {
-  // expected-error @below {{'wave.apply_expr' op expression symbol #0 (#wave.symbol<"a">) must be a WaveSSAValueAttr because it corresponds to operand #0}}
-  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.symbol<"a">, #wave.symbol<"H">] -> (a + H)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+func.func @apply_expr_non_register_operand(%arg0: !wave.tensor<[@M] of i32, <global>>) {
+  // expected-error @below {{tensor operands must be in register or unspecified address space}}
+  wave.apply_expr(%arg0) <[#wave.operand<0>] -> (_Operand_0 + 1)> : (!wave.tensor<[@M] of i32, <global>>) -> !wave.tensor<[@M] of i32>
   return
 }
 
 // -----
 
-// Test apply_expr: WaveSSAValueAttr must not appear after operand symbols
-// (mixed list with a valid WaveSymbolAttr hyperparameter in between).
-func.func @apply_expr_ssa_value_after_operands(%arg0: !wave.tensor<[@M] of i32>)
-    attributes { "wave.hyperparameters" = #wave.hyperparameters<{H = 4 : i64}> } {
-  // expected-error @below {{'wave.apply_expr' op expression symbol #2 (#wave.ssa_value<"b">) is a WaveSSAValueAttr but appears after the operand symbols; only the first 1 symbols may be WaveSSAValueAttr}}
-  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.ssa_value<"a">, #wave.symbol<"H">, #wave.ssa_value<"b">] -> (a + H + b)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
-  return
-}
-
-// -----
-
-// Test apply_expr: extra WaveSymbolAttr must be a hyperparameter.
-func.func @apply_expr_extra_symbol_not_hyperparameter(%arg0: !wave.tensor<[@M] of i32>) {
-  // expected-error @below {{'wave.apply_expr' op expression symbol #1 (#wave.symbol<"Z">) is not an operand symbol and is not provided as a hyperparameter}}
-  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.ssa_value<"a">, #wave.symbol<"Z">] -> (a + Z)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+func.func @apply_expr_symbol_type_mismatch(%arg0: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{attribute 'expr' failed to satisfy constraint: expression list with WaveSymbolAttr, WaveOperandAttr inputs}}
+  wave.apply_expr() <[#wave.iter<"K">] -> (_Iter_K + 1)> : () -> !wave.tensor<[@M] of i32>
   return
 }

@@ -439,19 +439,20 @@ def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
   let assemblyFormat = "`<` $name `>`";
 }
 
-def WaveSSAValueAttr : AttrDef<WaveDialect, "WaveSSAValue"> {
-  let mnemonic = "ssa_value";
+def WaveOperandAttr : AttrDef<WaveDialect, "WaveOperand"> {
+  let mnemonic = "operand";
   let description = [{
-    Symbol representing an SSA value operand inside a symbolic expression
-    attribute. Each SSA value operand of the enclosing operation is bound to
-    one of these symbols positionally: the first `ssa_value` corresponds to
-    the first operand, the second to the second operand, and so on. This
-    attribute distinguishes operand symbols from external symbolic constants
-    (hyperparameters), which continue to use `WaveSymbolAttr`.
+    Symbol representing an operand inside a symbolic expression attribute.
+    The integer indicates which operation operand this symbol refers to
+    (0 for the first operand, 1 for the second, and so on). When a printed
+    name is needed (e.g. for affine expressions), the symbol is rendered as
+    `_Operand_` followed by the operand number. This attribute distinguishes
+    operand symbols from external symbolic constants (hyperparameters), which
+    continue to use `WaveSymbolAttr`.
   }];
 
-  let parameters = (ins StringRefParameter<"name of the operand symbol">:$name);
-  let assemblyFormat = "`<` $name `>`";
+  let parameters = (ins "unsigned":$operandNumber);
+  let assemblyFormat = "`<` $operandNumber `>`";
 }
 
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
@@ -557,8 +558,26 @@ def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
+
+    ::wave::WaveExprListAttr getValue() { return *this; }
   }];
 }
+
+class WaveExprListAllowedInputsPred<list<AttrDef> inputTypes>
+  : CPred<"::wave::detail::areAllExprInputsAllowed<"
+  # !interleave(!foreach(entry, inputTypes, entry.cppType ), ", ")
+  # ">(::llvm::cast<::wave::WaveExprListAttr>($_self))">;
+
+class WaveExprListAttrOf<list<AttrDef> inputTypes> : Attr<
+  And<[WaveExprListAttr.predicate,
+       WaveExprListAllowedInputsPred<inputTypes>]>,
+  "expression list with "
+  # !interleave(!foreach(entry, inputTypes, entry.cppClassName), ", ")
+  # " inputs"> {
+  let storageType = WaveExprListAttr.cppType;
+  let returnType = WaveExprListAttr.returnType;
+}
+
 
 def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";

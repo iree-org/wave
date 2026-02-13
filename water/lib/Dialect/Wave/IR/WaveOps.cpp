@@ -162,15 +162,6 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
-  if (!llvm::all_of(getDistributedShape().getSymbols(),
-                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError()
-           << "distributed_shape must only contain WaveSymbolAttr";
-  }
-
-  if (hasParent && getTailPadding())
-    return emitOpError() << "only top-level allocations can have tail_padding";
-
   return llvm::success();
 }
 
@@ -1799,18 +1790,6 @@ LogicalResult ExtractSliceOp::verify() {
                          << stride.getNumSymbols() << " symbols";
   }
 
-  if (!llvm::all_of(offset.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "offset must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(size.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "size must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(stride.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "stride must only contain WaveSymbolAttr";
-  }
-
   return success();
 }
 
@@ -2162,63 +2141,39 @@ LogicalResult wave::ReciprocalOp::verify() {
 //-----------------------------------------------------------------------------
 
 LogicalResult wave::ApplyExprOp::verify() {
-  if (getArguments().empty())
-    return emitOpError("requires at least one operand");
+  for (Type operandType : getOperands().getTypes()) {
+    auto waveTensorType = dyn_cast<WaveTensorType>(operandType);
+    if (!waveTensorType)
+      continue;
+
+    if (waveTensorType.getAddressSpaceValue() !=
+            WaveAddressSpace::Unspecified &&
+        waveTensorType.getAddressSpaceValue() != WaveAddressSpace::Register)
+      return emitOpError() << "tensor operands must be in register or "
+                              "unspecified address space";
+  }
 
   unsigned numResults = getExpr().getMap().getNumResults();
   if (numResults != 1)
     return emitOpError("expression must produce exactly one result, but got ")
            << numResults;
 
-  // Number of symbols in the expression must be at least the number of
-  // operands.
-  unsigned numSymbols = getExpr().getNumSymbols();
-  unsigned numOperands = getArguments().size();
-  if (numSymbols < numOperands)
-    return emitOpError("expression has ")
-           << numSymbols << " symbols but there are " << numOperands
-           << " operands; expected at least as many symbols as operands";
-
-  ArrayRef<Attribute> symbols = getExpr().getSymbols();
-
-  // The first N symbols must be WaveSSAValueAttr (one per operand).
-  for (unsigned i = 0; i < numOperands; ++i) {
-    if (!isa<WaveSSAValueAttr>(symbols[i]))
-      return emitOpError("expression symbol #")
-             << i << " (" << symbols[i]
-             << ") must be a WaveSSAValueAttr because it corresponds to "
-                "operand #"
-             << i;
-  }
-
-  // Any remaining symbols (external symbolic constants) must not be
-  // WaveSSAValueAttr and must be valid hyperparameters.
-  if (numSymbols > numOperands) {
-    wave::WaveHyperparameterAttr hyper;
-    for (Operation *cur = getOperation(); cur != nullptr && !hyper;
-         cur = cur->getParentOp()) {
-      hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(
-          WaveDialect::kHyperparameterAttrName);
-    }
-
-    for (unsigned i = numOperands; i < numSymbols; ++i) {
-      if (isa<WaveSSAValueAttr>(symbols[i]))
-        return emitOpError("expression symbol #")
-               << i << " (" << symbols[i]
-               << ") is a WaveSSAValueAttr but appears after the operand "
-                  "symbols; only the first "
-               << numOperands << " symbols may be WaveSSAValueAttr";
-
-      auto sym = dyn_cast<WaveSymbolAttr>(symbols[i]);
-      if (!sym)
-        continue;
-      if (!hyper || !hyper.getMapping().contains(sym.getName())) {
-        return emitOpError("expression symbol #")
-               << i << " (" << sym
-               << ") is not an operand symbol and is not provided "
-                  "as a hyperparameter";
+  llvm::BitVector usedOperandAttrs(getArguments().size());
+  for (Attribute sym : getExpr().getSymbols()) {
+    if (auto operand = dyn_cast<WaveOperandAttr>(sym)) {
+      if (operand.getOperandNumber() >= getArguments().size()) {
+        return emitOpError()
+               << "expression uses operand #" << operand.getOperandNumber()
+               << " but there are only " << getArguments().size()
+               << " operands";
       }
+      usedOperandAttrs.set(operand.getOperandNumber());
     }
+  }
+  usedOperandAttrs.flip();
+  for (unsigned position : usedOperandAttrs.set_bits()) {
+    emitWarning() << "operand #" << position
+                  << " is not used in the expression";
   }
 
   return success();

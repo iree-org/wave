@@ -352,7 +352,9 @@ def AllocateOp : WaveOp<"allocate", [
 
   let arguments = !con((ins
     Arg<Optional<WaveMemoryType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
+<<<<<<< HEAD
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
+        "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset,
     Arg<DefaultValuedAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
       "Padding added to the last dimension of distributed shape in number of elements">:$padding,
@@ -361,6 +363,11 @@ def AllocateOp : WaveOp<"allocate", [
       does not affect the distributed shape
     }]
     >:$tail_padding
+=======
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
+        "Distributed (physical) shape">:$distributed_shape,
+    Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
+>>>>>>> ae93c1bd (improve)
   ), commonArguments);
 
   let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);
@@ -417,9 +424,9 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 
   let arguments = (ins
     Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
-    Arg<WaveExprListAttr>:$offset,
-    Arg<WaveExprListAttr>:$size,
-    Arg<WaveExprListAttr>:$stride
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$offset,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$size,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$stride
   );
 
   let results = (outs
@@ -738,13 +745,15 @@ def ApplyExprOp : WaveOp<"apply_expr",
     All operands must have the same type and indexing dimensions. The result
     type is the same as the operand types.
 
-    Operand symbols are represented using `WaveSSAValueAttr` (`#wave.ssa_value`)
-    while external symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
+    Operand symbols are represented using `WaveOperandAttr` (`#wave.operand`)
+    with the operand index (0 for first operand, 1 for second, etc.). In
+    expressions they appear as `_Operand_0`, `_Operand_1`, etc. External
+    symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
 
     ```mlir
-    %0 = wave.apply_expr(%a) #wave.expr_list<[#wave.ssa_value<"a">] -> (a + 1)>
+    %0 = wave.apply_expr(%a) #wave.expr_list<[#wave.operand<0>] -> (_Operand_0 + 1)>
         : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
-    %1 = wave.apply_expr(%x, %y) #wave.expr_list<[#wave.ssa_value<"x">, #wave.ssa_value<"y">] -> (x + y)>
+    %1 = wave.apply_expr(%x, %y) #wave.expr_list<[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0 + _Operand_1)>
         : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>)
         -> !wave.tensor<[@M] of i32>
     ```
@@ -755,7 +764,7 @@ def ApplyExprOp : WaveOp<"apply_expr",
   // Variadic requires a Type and not a TypeConstraint.
   let arguments = !con((ins
     Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,
-    Arg<WaveExprListAttr, "Expression to apply">:$expr
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr, WaveOperandAttr]>, "Expression to apply">:$expr
   ), commonArguments);
 
   let results = (outs
