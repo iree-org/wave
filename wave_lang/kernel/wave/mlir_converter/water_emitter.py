@@ -761,7 +761,44 @@ def _emit_ops_from_graph(
             value_map[fx_node] = tuple(mlir_op.results)
 
 
-def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
+def _resolve_vector_shapes_for_attr(
+    vector_shapes: dict[IndexSymbol, int | IndexExpr],
+    subs: dict[IndexSymbol, Any],
+) -> dict[str, int]:
+    """Resolve vector_shapes values using subs (int-only).
+
+    Raises ValueError if any vector_shapes value cannot be resolved to an integer.
+    """
+    int_subs = {k: v for k, v in subs.items() if isinstance(v, int)}
+    resolved = {}
+    for dim, v in vector_shapes.items():
+        if isinstance(v, int):
+            resolved[dim.name] = v
+            continue
+        val = safe_subs(v, int_subs)
+        if isinstance(val, int):
+            resolved[dim.name] = val
+            continue
+        if hasattr(val, "is_number") and val.is_number:
+            resolved[dim.name] = int(val)
+            continue
+        # Unresolved symbol or expression.
+        missing = (
+            getattr(val, "free_symbols", set()) or {v}
+            if hasattr(v, "free_symbols")
+            else {v}
+        )
+        raise ValueError(
+            f"Vector shape {v} in hardware constraints could not be resolved to an integer.\n"
+            f"Note: symbols {missing} do not have substitutions."
+        )
+    return resolved
+
+
+def _emit_wave_constraints(
+    constraint: Constraint,
+    subs: dict[IndexSymbol, Any] = {},
+) -> ir.Attribute:
     if isinstance(constraint, HardwareConstraint):
         mma_type_attr = None
         if constraint.mma_type:
@@ -769,11 +806,9 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
 
         shape_dict = None
         if constraint.vector_shapes:
+            resolved = _resolve_vector_shapes_for_attr(constraint.vector_shapes, subs)
             i64 = ir.IntegerType.get_signless(64)
-            dict = {
-                k.name: ir.IntegerAttr.get(i64, v)
-                for k, v in constraint.vector_shapes.items()
-            }
+            dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
             shape_dict = ir.DictAttr.get(dict)
 
         attr = HardwareConstraintAttr.get(
@@ -982,7 +1017,13 @@ def _create_kernel_module(
             )
         )
 
-        wave_constraints = list(map(_emit_wave_constraints, constraints))
+        try:
+            wave_constraints = [
+                _emit_wave_constraints(c, options.subs) for c in constraints
+            ]
+        except ValueError as e:
+            diagnostics.append(WaterError(message=str(e)))
+            return None, diagnostics, known_ids
         array_attr = ir.ArrayAttr.get(wave_constraints)
         func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
 
