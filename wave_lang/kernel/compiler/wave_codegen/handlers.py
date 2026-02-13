@@ -496,7 +496,9 @@ def emit_wmma_scaled(
 @handle_op(scaled_mma)
 def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     try:
-        lhs, lhs_scale, rhs, rhs_scale, acc, mma_type = node.args
+        lhs, lhs_scale, rhs, rhs_scale, acc, mma_type, scale_idx_a, scale_idx_b = (
+            node.args
+        )
         acc = cast_vector(emitter, acc)
         values = [cast_vector(emitter, val) for val in [lhs, rhs]]
     except ValueError as e:
@@ -523,17 +525,21 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
         result = emit_wmma_scaled(m, n, k, acc, values, scales)
     else:
-        pos = [0, 0]
-        if mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED:
-            pos = [0, 1]
-            scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
-        elif mma_type == ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER:
-            pos = [2, 3]
-            scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
-        else:
-            scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
-
-        result = emit_mfma_scaled(m, n, k, acc, values, scales, pos[0], pos[1])
+        pos_a = scale_idx_a if scale_idx_a is not None else 0
+        pos_b = scale_idx_b if scale_idx_b is not None else 0
+        scale_a = (
+            cast_vector(emitter, lhs_scale)
+            if scale_idx_a is not None
+            else cast_scalar(emitter, lhs_scale)
+        )
+        scale_b = (
+            cast_vector(emitter, rhs_scale)
+            if scale_idx_b is not None
+            else cast_scalar(emitter, rhs_scale)
+        )
+        result = emit_mfma_scaled(
+            m, n, k, acc, values, [scale_a, scale_b], pos_a, pos_b
+        )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 

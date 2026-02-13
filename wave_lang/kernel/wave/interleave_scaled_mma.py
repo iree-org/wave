@@ -22,21 +22,22 @@ from .utils.general_utils import get_hardware_constraint
 
 def interleave_scaled_mma(trace: CapturedTrace, constraints: list[Constraint]):
     """
-    Transforms ScaledMMA operations using F32_16x16x128_F8F6F4 into
-    interleaved variants that pack scale values into a single VGPR.
+    Packs scale values of ScaledMMA operations into shared VGPRs
+    using byte indexing to reduce register pressure.
 
     When two ScaledMMA ops exist in the same subgraph, their scales are
     packed into one register [a0, b0, a1, b1] and the first op uses
-    SCALES_INTERLEAVED (bytes 0,1) while the second uses
-    SCALES_INTERLEAVED_UPPER (bytes 2,3).
+    scale_idx (0,1) while the second uses (2,3).
 
-    Unpaired ops fall back to [a, b, 0, 0] with SCALES_INTERLEAVED.
+    Unpaired ops fall back to [a, b, 0, 0] with scale_idx (0,1).
     """
     hardware_constraint = get_hardware_constraint(constraints)
 
     def is_target_scaled_mma(node: fx.Node) -> bool:
         custom = get_custom(node)
         if not isinstance(custom, ScaledMMA):
+            return False
+        if custom.scale_idx_a is not None or custom.scale_idx_b is not None:
             return False
         mma_type = custom.mma_type or hardware_constraint.mma_type
         return mma_type == ScaledMMAType.F32_16x16x128_F8F6F4
@@ -71,33 +72,16 @@ def interleave_scaled_mma(trace: CapturedTrace, constraints: list[Constraint]):
                         {},
                     ).add_to_graph(mma_a.graph, loc=mma_a.location)
 
-                    new_a = ScaledMMA(
-                        mma_a.lhs,
-                        combined,
-                        mma_a.rhs,
-                        combined,
-                        mma_a.acc,
-                        ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED,
-                    ).add_to_graph(mma_a.graph, loc=mma_a.location)
-                    new_a.index = mma_a.index
-                    new_a.vector_shapes = mma_a.vector_shapes
+                mma_a.update_arg("lhs_scale", combined)
+                mma_a.update_arg("rhs_scale", combined)
+                mma_a.update_arg("scale_idx_a", 0)
+                mma_a.update_arg("scale_idx_b", 1)
 
-                with mma_b.graph.inserting_before(mma_b.fx_node):
-                    new_b = ScaledMMA(
-                        mma_b.lhs,
-                        combined,
-                        mma_b.rhs,
-                        combined,
-                        mma_b.acc,
-                        ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED_UPPER,
-                    ).add_to_graph(mma_b.graph, loc=mma_b.location)
-                    new_b.index = mma_b.index
-                    new_b.vector_shapes = mma_b.vector_shapes
+                mma_b.update_arg("lhs_scale", combined)
+                mma_b.update_arg("rhs_scale", combined)
+                mma_b.update_arg("scale_idx_a", 2)
+                mma_b.update_arg("scale_idx_b", 3)
 
-                mma_a.replace_all_uses_with(new_a)
-                mma_a.erase()
-                mma_b.replace_all_uses_with(new_b)
-                mma_b.erase()
                 i += 2
             else:
                 # Unpaired: pad upper half with zeros.
@@ -110,17 +94,9 @@ def interleave_scaled_mma(trace: CapturedTrace, constraints: list[Constraint]):
                         {},
                     ).add_to_graph(mma_a.graph, loc=mma_a.location)
 
-                    new_a = ScaledMMA(
-                        mma_a.lhs,
-                        combined,
-                        mma_a.rhs,
-                        combined,
-                        mma_a.acc,
-                        ScaledMMAType.F32_16x16x128_F8F6F4_SCALES_INTERLEAVED,
-                    ).add_to_graph(mma_a.graph, loc=mma_a.location)
-                    new_a.index = mma_a.index
-                    new_a.vector_shapes = mma_a.vector_shapes
+                mma_a.update_arg("lhs_scale", combined)
+                mma_a.update_arg("rhs_scale", combined)
+                mma_a.update_arg("scale_idx_a", 0)
+                mma_a.update_arg("scale_idx_b", 1)
 
-                mma_a.replace_all_uses_with(new_a)
-                mma_a.erase()
                 i += 1

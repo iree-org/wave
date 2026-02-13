@@ -1922,6 +1922,8 @@ class ScaledMMA(MMABase):
     rhs_scale: fx.Node
     acc: fx.Node
     mma_type: Optional["ScaledMMAType"] = None
+    scale_idx_a: Optional[int] = None
+    scale_idx_b: Optional[int] = None
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
