@@ -437,13 +437,21 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
 
 
 def emit_mfma_scaled(
-    m: int, n: int, k: int, acc: Value, values: list[Value], scales: list[Value]
+    m: int,
+    n: int,
+    k: int,
+    acc: Value,
+    values: list[Value],
+    scales: list[Value],
+    idx_a: int,
+    idx_b: int,
 ) -> Value:
-    m = get_constant_attr(m, IntegerType.get_signless(32))
-    n = get_constant_attr(n, IntegerType.get_signless(32))
-    k = get_constant_attr(k, IntegerType.get_signless(32))
-    idx_a = get_constant_attr(0, IntegerType.get_signless(32))
-    idx_b = get_constant_attr(0, IntegerType.get_signless(32))
+    i32 = IntegerType.get_signless(32)
+    m = get_constant_attr(m, i32)
+    n = get_constant_attr(n, i32)
+    k = get_constant_attr(k, i32)
+    idx_a = get_constant_attr(idx_a, i32)
+    idx_b = get_constant_attr(idx_b, i32)
 
     result = amdgpu_d.scaled_mfma(
         m=m,
@@ -488,7 +496,9 @@ def emit_wmma_scaled(
 @handle_op(scaled_mma)
 def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
     try:
-        lhs, lhs_scale, rhs, rhs_scale, acc, mma_type = node.args
+        lhs, lhs_scale, rhs, rhs_scale, acc, mma_type, scale_idx_a, scale_idx_b = (
+            node.args
+        )
         acc = cast_vector(emitter, acc)
         values = [cast_vector(emitter, val) for val in [lhs, rhs]]
     except ValueError as e:
@@ -515,8 +525,21 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
         scales = [cast_vector(emitter, val) for val in [lhs_scale, rhs_scale]]
         result = emit_wmma_scaled(m, n, k, acc, values, scales)
     else:
-        scales = [cast_scalar(emitter, val) for val in [lhs_scale, rhs_scale]]
-        result = emit_mfma_scaled(m, n, k, acc, values, scales)
+        pos_a = scale_idx_a if scale_idx_a is not None else 0
+        pos_b = scale_idx_b if scale_idx_b is not None else 0
+        scale_a = (
+            cast_vector(emitter, lhs_scale)
+            if scale_idx_a is not None
+            else cast_scalar(emitter, lhs_scale)
+        )
+        scale_b = (
+            cast_vector(emitter, rhs_scale)
+            if scale_idx_b is not None
+            else cast_scalar(emitter, rhs_scale)
+        )
+        result = emit_mfma_scaled(
+            m, n, k, acc, values, [scale_a, scale_b], pos_a, pos_b
+        )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
@@ -2165,18 +2188,22 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     # Determine whether to extract or combine.
     if len(args) > 1:
         vectors = [cast_vector(emitter, arg) for arg in args]
-        shape = vectors[0].type.shape[0]
-        if shape == 1:
+        shape = vectors[0].type.shape[0] if vectors[0].type.rank > 0 else 0
+        if shape <= 1:
             # If source is 1-element vector or scalar (which will be casted to
-            # 1-element vector by `cast_vector`), we can construct the result
+            # 0-d vector by `cast_vector`), we can construct the result
             # vector using `extract` and a single `from_elements` op instead of
             # series of `insert_strided_slice` ops.
             values = [
-                vector_d.extract(vector, static_position=[0], dynamic_position=[])
+                vector_d.extract(
+                    vector,
+                    static_position=[] if vector.type.rank == 0 else [0],
+                    dynamic_position=[],
+                )
                 for vector in vectors
             ]
             element_type = vectors[0].type.element_type
-            vector_type = VectorType.get([shape * len(args)], element_type)
+            vector_type = VectorType.get([len(args)], element_type)
             result = vector_d.from_elements(vector_type, values)
             emitter.bind_node_proxy(node, IRProxyValue(result))
             return
