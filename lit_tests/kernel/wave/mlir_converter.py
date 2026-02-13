@@ -535,6 +535,73 @@ def mlir_converter_sum():
 
 
 @run_test
+def mlir_converter_apply_expr():
+    """Test MLIR converter with apply_expr operation."""
+
+    apply_expr_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(apply_expr_constraints)
+    def apply_expr_kernel(
+        a: Memory[M, N, ADDRESS_SPACE_A, tkl.i32],
+        c: Memory[M, N, ADDRESS_SPACE_C, tkl.i32],
+    ):
+        a_reg = wave.read(a)
+        c_reg = wave.read(c)
+        result1 = wave.apply_expr(a_reg, lambda x: x + 1)
+        result2 = wave.apply_expr([a_reg, c_reg], lambda x, y: 2 * x + y)
+        result = result1 + result2
+        wave.write(result, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, apply_expr_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    kernel_constraints = apply_expr_kernel.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    print(mlir_output)
+    # CHECK: %[[ARG0:.+]] = wave.read
+    # CHECK: %[[ARG1:.+]] = wave.read
+    # CHECK: %[[APPLY1:.+]] = wave.apply_expr(%[[ARG0]])
+    # CHECK-SAME: <[#wave.operand<0>] -> (_Operand_0 + 1)>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[APPLY2:.+]] = wave.apply_expr(%[[ARG0]], %[[ARG1]])
+    # CHECK-SAME: <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_1 + _Operand_0 * 2)>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>, !wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
+
+
+@run_test
 def mlir_converter_emit_wave_dialect_loop_implicit_capture():
     """Test emit_wave_dialect with a kernel that has a loop using registers defined in the
     kernel as implicit captures.

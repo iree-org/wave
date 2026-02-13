@@ -137,34 +137,32 @@ struct PyWaveIterSymbolAttr
 };
 
 //===---------------------------------------------------------------------===//
-// WaveSSAValueAttr
+// WaveOperandAttr
 //===---------------------------------------------------------------------===//
 
-struct PyWaveSSAValueAttr
+struct PyWaveOperandAttr
     : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
-          PyWaveSSAValueAttr> {
-  static constexpr IsAFunctionTy isaFunction = mlirAttributeIsAWaveSSAValueAttr;
+          PyWaveOperandAttr> {
+  static constexpr IsAFunctionTy isaFunction = mlirAttributeIsAWaveOperandAttr;
   static constexpr GetTypeIDFunctionTy getTypeIdFunction =
-      mlirWaveSSAValueAttrGetTypeID;
-  static constexpr const char *pyClassName = "WaveSSAValueAttr";
+      mlirWaveOperandAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveOperandAttr";
   using PyConcreteAttribute::PyConcreteAttribute;
 
   static void bindDerived(ClassTy &c) {
     c.def_static(
         "get",
-        [](const std::string &symbolName,
+        [](unsigned operandNumber,
            mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
                context) {
-          MlirStringRef symbolNameStrRef =
-              mlirStringRefCreate(symbolName.data(), symbolName.size());
-          return PyWaveSSAValueAttr(
+          return PyWaveOperandAttr(
               context->getRef(),
-              mlirWaveSSAValueAttrGet(context->get(), symbolNameStrRef));
+              mlirWaveOperandAttrGet(context->get(), operandNumber));
         },
-        nb::arg("symbolName"), nb::arg("context") = nb::none(),
-        "Gets a wave.WaveSSAValueAttr from parameters.");
-    c.def_prop_ro("name", [](MlirAttribute self) {
-      return mlirWaveSSAValueAttrGetName(self);
+        nb::arg("operand_number"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveOperandAttr from the given operand index.");
+    c.def_prop_ro("operand_number", [](MlirAttribute self) {
+      return mlirWaveOperandAttrGetOperandNumber(self);
     });
   }
 };
@@ -551,10 +549,10 @@ struct PyWaveExprListAttr
           for (MlirAttribute attr : symbols) {
             if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
                 !mlirAttributeIsAWaveIndexSymbolAttr(attr) &&
-                !mlirAttributeIsAWaveSSAValueAttr(attr)) {
+                !mlirAttributeIsAWaveOperandAttr(attr)) {
               throw nb::type_error(
                   "symbols must contain only WaveSymbolAttr, "
-                  "WaveIndexSymbolAttr or WaveSSAValueAttr attributes");
+                  "WaveIndexSymbolAttr or WaveOperandAttr attributes");
             }
           }
 
@@ -991,7 +989,7 @@ NB_MODULE(_waterDialects, m) {
 
   PyWaveSymbolAttr::bind(d);
   PyWaveIterSymbolAttr::bind(d);
-  PyWaveSSAValueAttr::bind(d);
+  PyWaveOperandAttr::bind(d);
   PyWaveIndexSymbolAttr::bind(d);
   PyWaveIndexMappingAttr::bind(d);
   PyWaveHyperparameterAttr::bind(d);
