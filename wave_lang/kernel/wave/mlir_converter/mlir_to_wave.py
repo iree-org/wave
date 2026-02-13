@@ -31,6 +31,8 @@ assert (
 
 ITER_SYMBOL_NAME_WAVE_PREFIX = "$ARG"
 ITER_SYMBOL_NAME_WATER_PREFIX = "_Iter_"
+OPERAND_SYMBOL_NAME_WAVE_PREFIX = "APPLY_EXPR_ARG_"
+OPERAND_SYMBOL_NAME_WATER_PREFIX = "_Operand_"
 
 # Mapping of special symbol names to WaveIndexSymbol enum values.
 INDEX_SYMBOL_MAP: dict[str, wave.WaveIndexSymbol] = {

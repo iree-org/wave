@@ -94,22 +94,22 @@ MLIR_CAPI_EXPORTED MlirStringRef
 mlirWaveIterSymbolAttrGetName(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
-// WaveSSAValueAttr
+// WaveOperandAttr
 //===---------------------------------------------------------------------===//
 
-/// Checks whether the given MLIR attribute is a WaveSSAValueAttr.
-MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveSSAValueAttr(MlirAttribute attr);
+/// Checks whether the given MLIR attribute is a WaveOperandAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveOperandAttr(MlirAttribute attr);
 
-/// Creates a new WaveSSAValueAttr with the given operand symbol name.
-MLIR_CAPI_EXPORTED MlirAttribute
-mlirWaveSSAValueAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
+/// Creates a new WaveOperandAttr with the given operand number.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveOperandAttrGet(MlirContext mlirCtx,
+                                                        unsigned operandNumber);
 
-/// Returns the typeID of a WaveSSAValueAttr.
-MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSSAValueAttrGetTypeID();
+/// Returns the typeID of a WaveOperandAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveOperandAttrGetTypeID();
 
-/// Gets the operand symbol name.
-MLIR_CAPI_EXPORTED MlirStringRef
-mlirWaveSSAValueAttrGetName(MlirAttribute attr);
+/// Gets the operand number.
+MLIR_CAPI_EXPORTED unsigned
+mlirWaveOperandAttrGetOperandNumber(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr

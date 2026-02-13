@@ -30,6 +30,8 @@ if __name__ == "__main__":
 from mlir_to_wave import (
     INDEX_SYMBOL_MAP,
     ITER_SYMBOL_NAME_WATER_PREFIX,
+    OPERAND_SYMBOL_NAME_WATER_PREFIX,
+    OPERAND_SYMBOL_NAME_WAVE_PREFIX,
     convert_index_mapping_array_to_sympy,
     ITER_SYMBOL_NAME_WAVE_PREFIX,
 )
@@ -365,6 +367,12 @@ def _preprocess_symbols(
                 ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
             )
             result[sym] = sympy.Symbol(new_name, positive=True)
+        elif sym.name.startswith(OPERAND_SYMBOL_NAME_WAVE_PREFIX):
+            new_name = sym.name.replace(
+                OPERAND_SYMBOL_NAME_WAVE_PREFIX, OPERAND_SYMBOL_NAME_WATER_PREFIX
+            )
+            # Intentionally not marking as positive.
+            result[sym] = sympy.Symbol(new_name)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
     return result
@@ -780,38 +788,33 @@ def _emit_ops_from_graph(
                     reg = node.register_
                     if not isinstance(reg, Sequence):
                         reg = [reg]
-                    mlir_args = [get_single_mapped_value(r) for r in reg]
 
+                    # TODO: lift this
                     from wave_lang.kernel._support.indexing import index_symbol
 
-                    placeholders = [
-                        index_symbol(f"APPLY_EXPR_ARG_{i}") for i in range(len(reg))
-                    ]
-                    sympy_expr = node.expr(*placeholders)
+                    placeholders = {
+                        index_symbol(
+                            OPERAND_SYMBOL_NAME_WAVE_PREFIX + str(i)
+                        ): wave.WaveOperandAttr.get(i)
+                        for i in range(len(reg))
+                    }
+                    sympy_expr = node.expr(*list(placeholders.keys()))
 
-                    # Collect all free symbols; ensure operand placeholders
-                    # come first in the symbol list.
-                    placeholder_set = set(placeholders)
-                    extra_symbols = [
-                        s for s in sympy_expr.free_symbols if s not in placeholder_set
-                    ]
-                    ordered_symbols = list(placeholders) + extra_symbols
-
-                    symbol_mapping = _preprocess_symbols(ordered_symbols)
+                    symbol_mapping = _preprocess_symbols(sympy_expr.free_symbols)
                     affine_map = _convert_sympy_expr_to_affine_map(
                         sympy_expr, symbol_mapping
                     )
-                    num_operands = len(reg)
                     symbol_attrs = [
                         (
-                            wave.WaveSSAValueAttr.get(sym.name)
-                            if i < num_operands
-                            else _symbol_name_to_attribute(sym.name)
+                            placeholders[orig_sym]
+                            if orig_sym in placeholders
+                            else _symbol_name_to_attribute(new_sym.name)
                         )
-                        for i, sym in enumerate(symbol_mapping.values())
+                        for orig_sym, new_sym in symbol_mapping.items()
                     ]
                     expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
-                    mlir_op = op_builder(result_type, mlir_args, expr_attr)
+                    operands = [get_single_mapped_value(arg) for arg in reg]
+                    mlir_op = op_builder(result_type, operands, expr_attr)
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
