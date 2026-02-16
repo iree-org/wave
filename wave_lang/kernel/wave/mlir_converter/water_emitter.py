@@ -34,7 +34,7 @@ from attr_type_converter import (
     symbol_name_to_attribute,
 )
 
-from wave_lang.kernel._support.indexing import IndexSymbol
+from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
 
 
 if TYPE_CHECKING:
