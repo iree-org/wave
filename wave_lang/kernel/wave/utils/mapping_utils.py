@@ -8,6 +8,7 @@ from copy import deepcopy
 import sympy
 import torch.fx as fx
 
+from ...ops.wave_ops import get_custom
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
 from .general_utils import infer_dim, get_fastest_index
@@ -231,8 +232,10 @@ def check_is_dynamic_vals_broadcasted(nodes: list[fx.Node]) -> bool:
     This function checks all nodes in the list and returns True only if all dynamic values
     are broadcasted (size 1 in all dims).
     """
+
     for node in nodes:
-        index = node.index
+        custom = get_custom(node)
+        index = custom.index
         assert index is not None, f"Node {node} has no index"
         if any(subs_idxc(i.size) > 1 for i in index.values()):
             return False

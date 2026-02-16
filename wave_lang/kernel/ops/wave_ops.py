@@ -1776,6 +1776,10 @@ class AtomicOp(BinaryOpBase):
     def memory_type(self) -> "Memory":
         return get_custom(self.rhs).type
 
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
 
 @define_op("atomic_add")
 @dataclass
@@ -2497,6 +2501,8 @@ class Iterate(NestedRegionOp):
         expand_dims: list[IndexSymbol] = []
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         return_node = get_custom(subgraph.output_node())
+        if return_node.return_vals[0] is None:
+            return []
         assert isinstance(return_node, Output)
         return_vals = return_node.return_vals[0]
         if not isinstance(return_vals, Sequence):
@@ -2600,6 +2606,10 @@ class Write(CustomOp):
     def register_index(self) -> dict[IndexSymbol, IndexSequence]:
         custom = get_custom(self.register_)
         return custom.index
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
