@@ -38,12 +38,11 @@ C++ Backend Requirements:
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch.testing import assert_close
@@ -699,21 +698,25 @@ def _rocprofv3_benchmark_avg_ms(
         prefix_args = get_rocprofv3_cmd(
             out_dir, prefix, kernel_regex="", att_library_path=None
         )
-        cmd = [rocprof] + prefix_args[1:] + [
-            sys.executable,
-            script_path,
-            "--config",
-            config_path,
-            "--num_warmup",
-            str(num_warmup),
-            "--num_iterations",
-            str(num_iterations),
-            "--_worker",
-            "--_backend",
-            backend,
-            "--_shape_name",
-            shape_name,
-        ]
+        cmd = (
+            [rocprof]
+            + prefix_args[1:]
+            + [
+                sys.executable,
+                script_path,
+                "--config",
+                config_path,
+                "--num_warmup",
+                str(num_warmup),
+                "--num_iterations",
+                str(num_iterations),
+                "--_worker",
+                "--_backend",
+                backend,
+                "--_shape_name",
+                shape_name,
+            ]
+        )
         if use_schedule:
             cmd.append("--_use_schedule")
 
