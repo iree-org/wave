@@ -25,6 +25,7 @@ from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
 from ...lang.wave_types import Memory, Register
+from ..constraints import HardwareConstraint
 from ...ops.wave_ops import (
     MMA,
     Allocate,
@@ -818,6 +819,50 @@ def assert_constraints_equivalent(
                 f"Available constraints:\n  "
                 + "\n  ".join(str(c) for c in rhs_constraints)
             )
+
+
+def compare_hardware_constraints_for_mlir_roundtrip(
+    source: HardwareConstraint, roundtripped: HardwareConstraint
+) -> bool:
+    """
+    Compare HardwareConstraints for MLIR roundtrip testing.
+
+    The MLIR representation intentionally excludes certain Python-specific configuration
+    fields (workgroups_per_cluster, n_service_waves) that represent scheduling decisions
+    and runtime configuration rather than fundamental hardware constraints. This comparator
+    checks only the fields that are serialized to MLIR.
+
+    Args:
+        source: Source constraint (from Python, before MLIR roundtrip)
+        roundtripped: Constraint after MLIR roundtrip
+
+    Returns:
+        True if constraints are equivalent for MLIR roundtrip purposes
+    """
+    # Compare fields that are serialized to MLIR
+    if source.threads_per_wave != roundtripped.threads_per_wave:
+        return False
+    if source.waves_per_block != roundtripped.waves_per_block:
+        return False
+    if source.mma_type != roundtripped.mma_type:
+        return False
+    if source.max_bits_per_load != roundtripped.max_bits_per_load:
+        return False
+
+    # vector_shapes may not be present in the source trace if the set_node_indices pass
+    # (which populates vector_shapes on nodes from hardware constraints) hasn't run yet.
+    # On the MLIR side, vector_shapes are always inferred from the HardwareConstraint
+    # during conversion to fx, so roundtripped traces will always have them populated.
+    if (
+        source.vector_shapes is not None
+        and source.vector_shapes != roundtripped.vector_shapes
+    ):
+        return False
+
+    # workgroups_per_cluster and n_service_waves are intentionally NOT compared
+    # as they are not part of the MLIR representation
+
+    return True
 
 
 def move_node_after(src_node: fx.Node, anchor: fx.Node):

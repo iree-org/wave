@@ -119,6 +119,7 @@ from .cache import (
 from .water import water_leak_in_bounds_check, water_lowering_pipeline
 from wave_lang.runtime.launch import Launchable
 from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
+from .wave import LaunchableWave
 from wave_lang.kernel.lang.global_symbols import *
 from .profiling import benchmark_module
 from .debug_log_hoist import DebugArgInfo
@@ -229,7 +230,7 @@ class WaveKernel:
 
         # Partition arguments into kernel inputs and outputs.
         # ToDo: we should expose the `usage` as a property in binding desc
-        #       so that we can reduce the code and use `zip``.
+        #       so that we can reduce the code and use `zip`.
         usage_idx = 0
         for arg in args:
             if not isinstance(arg, torch.Tensor):
@@ -431,280 +432,33 @@ class WaveKernelExecutionEngine:
         self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
 
-def _build_initial_pass_pipeline(
-    launchable: "LaunchableWave",
+def build_graph_passes(
+    launchable: LaunchableWave,
     trace: CapturedTrace,
     options: WaveCompileOptions,
-    debug_arg_info: list[DebugArgInfo],
-    debug_handlers: list[Any],
-    print_ir_before: Sequence[str] = [],
-    print_ir_after: Sequence[str] = [],
-):
-    idxc = IndexingContext.current()
+    schedule: Optional["WaveSchedule"] = None,
+    debug_arg_info: Optional[list[DebugArgInfo]] = None,
+    debug_handlers: Optional[list[Any]] = None,
+    print_ir_before: Optional[Sequence[str]] = None,
+    print_ir_after: Optional[Sequence[str]] = None,
+) -> list[Callable]:
+    """Build the full ordered list of graph compilation passes.
 
-    def finalize_indices():
-        idxc.finalize()
-
-    def substitute_vector_shapes():
-        launchable.hardware_constraints[0].subs_vector_shapes(idxc.subs)
-
-    return (
-        [
-            partial(debug_log_hoist, trace, debug_handlers),
-            partial(initialize_iter_args, trace),
-            partial(launchable.create_induction_vars, trace),
-            partial(launchable.initialize_reductions, trace),
-            finalize_indices,
-            substitute_vector_shapes,
-            partial(add_get_results, trace),
-            partial(infer_types, trace, launchable.constraints),
-            partial(construct_index_mapping, trace, launchable.constraints),
-            partial(
-                debug_log_write_replace,
-                trace,
-                launchable.constraints,
-                options,
-                debug_arg_info,
-            ),
-            partial(
-                promote_placeholders,
-                trace,
-                launchable.constraints,
-                options.reorder_allocs,
-                options.target,
-            ),
-        ]
-        + (
-            [
-                partial(
-                    set_node_indices_water_checked,
-                    trace,
-                    launchable.constraints,
-                    options,
-                )
-            ]
-            if options.check_water_analysis
-            else [
-                partial(
-                    set_node_indices,
-                    trace,
-                    launchable.constraints,
-                    print_ir_before,
-                    print_ir_after,
-                )
-            ]
-        )
-        + [
-            partial(reorder_workgroups, trace, launchable.reordering_constraints),
-            partial(expand_graph, trace, launchable.constraints),
-            partial(set_post_expansion_indices, trace, launchable.constraints),
-            partial(remove_chained_getresult, trace),
-        ]
-    )
-
-
-def _rewrite_module_for_iree_stream_abi(
-    module_op: Module,
-    dispatch_entrypoint: dispatch_codegen.DispatchEntrypoint,
-    exe: dispatch_codegen.StreamExecutable,
-) -> None:
+    Returns the complete pass pipeline that transforms a traced graph through
+    all compilation stages. Each pass is a zero-argument callable (typically a
+    `partial`). Passes mutate the *trace* in place and must be executed in
+    the returned order within the same `IndexingContext` that was active when
+    the trace was created.
     """
-    Update an existing MLIR module that has been wrapped with IREE stream executable
-    to be compatible with stream bindings arguments.
-    """
+    if debug_arg_info is None:
+        debug_arg_info = []
+    if debug_handlers is None:
+        debug_handlers = []
+    if print_ir_before is None:
+        print_ir_before = []
+    if print_ir_after is None:
+        print_ir_after = []
 
-    with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
-        target_block = dispatch_entrypoint.entry_block
-        source_func_op = module_op.operation.regions[0].blocks[0].operations[0]
-        source_block = source_func_op.regions[0].blocks[0]
-
-        target_args = list(target_block.arguments)
-
-        def convert_memref_to_stream_binding(
-            target_block: Block,
-            old_arg: BlockArgument,
-            new_arg: BlockArgument,
-            index: int,
-        ) -> stream_d.BindingSubspanOp:
-            """Convert a memref argument to stream.binding + subspan extraction."""
-            # Create zero constant
-            result_type = IndexType.get()
-            zero_value = arith_d.constant(result_type, IntegerAttr.get(result_type, 0))
-
-            # Create subspan operation
-            subspan_op = stream_d.binding_subspan(
-                old_arg.type,  # The original memref type
-                new_arg,  # The stream.binding argument
-                byte_offset=zero_value,
-                # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
-                dynamic_dims=[],  # TODO: get dynamic dims
-            )
-
-            return subspan_op
-
-        # Create argument mapping
-        arg_mapping = {}
-        for i, old_arg in enumerate(source_block.arguments):
-            if i < len(target_args) and isinstance(old_arg.type, MemRefType):
-                new_subspan = convert_memref_to_stream_binding(
-                    target_block, old_arg, target_args[i], i
-                )
-                arg_mapping[old_arg] = new_subspan
-            else:
-                # Map scalar arguments to their corresponding arguments directly.
-                arg_mapping[old_arg] = target_args[i]
-
-        # Move operations
-        ops_to_move = list(source_block)
-        for op in ops_to_move:
-            op.detach_from_parent()
-            target_block.append(op)
-
-        # Replace all uses of old arguments with new subspan results
-        for old_arg, new_value in arg_mapping.items():
-            old_arg.replace_all_uses_with(new_value)
-
-
-def compile_launchable_to_mlir(
-    launchable: "LaunchableWave",
-    trace: CapturedTrace,
-    context: Context,
-    module_op: Optional[Module] = None,
-    options: WaveCompileOptions = None,
-):
-    entrypoint_name = launchable.name
-    root_graph = trace.get_root_graph()
-
-    # pass device constraint to kernel signature
-    # so that we can set the dimensions of the tensors per device
-    kernel_sig = kernel_codegen.KernelSignature(launchable.device_constraints)
-    kernel_sig.add_from_graph_placeholders(root_graph)
-    kernel_sig.add_from_dynamic_symbols(options.dynamic_symbols)
-    kernel_sig.add_grid(launchable.grid_type)
-    kernel_sig.determine_input_output_buffers(root_graph)
-    if options.print_signature:
-        print(kernel_sig)
-
-    mb = builder.ModuleBuilder(context=context, module_op=None)
-    exe = dispatch_codegen.StreamExecutable(mb, name=entrypoint_name)
-    workgroup_size = launchable.hardware_constraints[0].threads_per_block
-    subgroup_size = launchable.hardware_constraints[0].threads_per_wave
-
-    # Set MMA type for ASM backend dispatch
-    options.mma_type = launchable.hardware_constraints[0].mma_type
-    # Setup LLVM func compilation configs.
-    llvm_func_config = {}
-    if options.denorm_fp_math_f32:
-        llvm_func_config["denormal-fp-math-f32"] = options.denorm_fp_math_f32
-
-    if options.waves_per_eu:
-        llvm_func_config["amdgpu-waves-per-eu"] = options.waves_per_eu
-
-    dispatch_entrypoint = exe.define_entrypoint(
-        entrypoint_name,
-        kernel_sig,
-        launchable.grid_type,
-        workgroup_size,
-        subgroup_size,
-        options.dynamic_symbols,
-        llvm_func_config,
-        trace.location,
-    )
-
-    # Only emit MLIR if we don't have a module yet.
-    if not module_op:
-        emitter = WaveEmitter(
-            dispatch_entrypoint,
-            trace,
-            launchable.constraints,
-            options,
-            launchable.grid_type.dims,
-            entrypoint_name,
-        )
-        with mb.module_op.context, Location.unknown():
-            module_op = builtin_d.ModuleOp()
-
-        with InsertionPoint(module_op.body), Location.unknown():
-            func = emitter.emit(trace.get_root_graph())
-            if options.use_water_backend:
-                emitter.emit_host_func(func)
-
-    # Otherwise, we need to iree-fy the existing module (that supposedly has
-    # upstream MLIR ops only) in order for it to be executable in the wave
-    # pipeline.
-    # `dispatch_entrypoint` already has most of the setup, we'll just need
-    # to move the ops from existing module to inside `dispatch_entrypoint`.
-    # Also we'll need to update the uses of the memref arguments (from the
-    # existing module) to be compatible with the new stream.binding arguments.
-
-    if options.use_water_backend:
-        mb.module_op = module_op
-    else:
-        assert not any(
-            isinstance(op, stream_d.ExecutableOp)
-            for op in module_op.operation.regions[0].blocks[0]
-        ), "expected overriding module to contain only upstream MLIR ops"
-        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
-
-    if options.postprocess:
-        apply_transform(mb.module_op, options.postprocess, options.subs)
-
-    if options.canonicalize:
-        canonicalize_module(mb.module_op)
-
-    return mb, trace, exe, kernel_sig, entrypoint_name
-
-
-def _trace_launchable_and_get_kernel_signature(
-    launchable: "LaunchableWave",
-    options: WaveCompileOptions,
-    schedule: Optional[WaveSchedule] = None,
-    context: Optional[Context] = None,
-    module_op: Optional[Operation] = None,
-) -> tuple[
-    builder.ModuleBuilder,
-    CapturedTrace,
-    dispatch_codegen.StreamExecutable,
-    kernel_codegen.KernelSignature,
-    str,
-    WaveCompileOptions,
-    Sequence[DebugArgInfo],
-    Grid,
-]:
-    # Issue a warning if IREE ver is too low.
-    # Warning will only be issued if we are compiling the kernel and won't
-    # if we are using cached kernel as we don't want to add any additional
-    # overhead to 'happy' path.
-    warn_iree_is_too_old()
-
-    # Build wave runtime, if specified.
-    if options.wave_runtime:
-        # Remove any existing hsaco files in this directory.
-        # If the kernel is being cached, then it will be referenced from the
-        # cache directory. When kernels are not being cached, we remove them
-        # to ensure that at any time there is only one hsaco file in this directory.
-        remove_files_with_extension(get_temp_binary_dir(), ".hsaco")
-
-    print_ir_after = options.print_ir_after
-    print_ir_before = options.print_ir_before
-    profile_pass = options.profile_pass
-    if options.print_trace_begin:
-        print(f"\n***Tracing kernel {launchable.name}***")
-
-    debug_arg_info = []
-    debug_handlers = []
-
-    trace = launchable._trace(location_capture_config=options.location_capture_config)
-    if (
-        "all" in print_ir_after
-        or "all" in print_ir_before
-        or "trace" in print_ir_after
-        or "first" in print_ir_before
-    ):
-        print(f"***After trace/Before first pass***\n")
-        print_trace(trace)
-
-    # Initial passes, pre-optimization.
     graph_passes = _build_initial_pass_pipeline(
         launchable,
         trace,
@@ -832,6 +586,293 @@ def _trace_launchable_and_get_kernel_signature(
         )
     )
 
+    return graph_passes
+
+
+def _build_initial_pass_pipeline(
+    launchable: LaunchableWave,
+    trace: CapturedTrace,
+    options: WaveCompileOptions,
+    debug_arg_info: list[DebugArgInfo],
+    debug_handlers: list[Any],
+    print_ir_before: Sequence[str],
+    print_ir_after: Sequence[str],
+) -> list[Callable]:
+    idxc = IndexingContext.current()
+
+    def finalize_indices():
+        idxc.finalize()
+
+    def substitute_vector_shapes():
+        launchable.hardware_constraints[0].subs_vector_shapes(idxc.subs)
+
+    return (
+        [
+            partial(debug_log_hoist, trace, debug_handlers),
+            partial(initialize_iter_args, trace),
+            partial(launchable.create_induction_vars, trace),
+            partial(launchable.initialize_reductions, trace),
+            finalize_indices,
+            substitute_vector_shapes,
+            partial(add_get_results, trace),
+            partial(infer_types, trace, launchable.constraints),
+            partial(construct_index_mapping, trace, launchable.constraints),
+            partial(
+                debug_log_write_replace,
+                trace,
+                launchable.constraints,
+                options,
+                debug_arg_info,
+            ),
+            partial(
+                promote_placeholders,
+                trace,
+                launchable.constraints,
+                options.reorder_allocs,
+                options.target,
+            ),
+        ]
+        + (
+            [
+                partial(
+                    set_node_indices_water_checked,
+                    trace,
+                    launchable.constraints,
+                    options,
+                )
+            ]
+            if options.check_water_analysis
+            else [
+                partial(
+                    set_node_indices,
+                    trace,
+                    launchable.constraints,
+                    print_ir_before,
+                    print_ir_after,
+                )
+            ]
+        )
+        + [
+            partial(reorder_workgroups, trace, launchable.reordering_constraints),
+            partial(expand_graph, trace, launchable.constraints),
+            partial(set_post_expansion_indices, trace, launchable.constraints),
+            partial(remove_chained_getresult, trace),
+        ]
+    )
+
+
+def _rewrite_module_for_iree_stream_abi(
+    module_op: Module,
+    dispatch_entrypoint: dispatch_codegen.DispatchEntrypoint,
+    exe: dispatch_codegen.StreamExecutable,
+) -> None:
+    """
+    Update an existing MLIR module that has been wrapped with IREE stream executable
+    to be compatible with stream bindings arguments.
+    """
+
+    with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
+        target_block = dispatch_entrypoint.entry_block
+        source_func_op = module_op.operation.regions[0].blocks[0].operations[0]
+        source_block = source_func_op.regions[0].blocks[0]
+
+        target_args = list(target_block.arguments)
+
+        def convert_memref_to_stream_binding(
+            target_block: Block,
+            old_arg: BlockArgument,
+            new_arg: BlockArgument,
+            index: int,
+        ) -> stream_d.BindingSubspanOp:
+            """Convert a memref argument to stream.binding + subspan extraction."""
+            # Create zero constant
+            result_type = IndexType.get()
+            zero_value = arith_d.constant(result_type, IntegerAttr.get(result_type, 0))
+
+            # Create subspan operation
+            subspan_op = stream_d.binding_subspan(
+                old_arg.type,  # The original memref type
+                new_arg,  # The stream.binding argument
+                byte_offset=zero_value,
+                # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
+                dynamic_dims=[],  # TODO: get dynamic dims
+            )
+
+            return subspan_op
+
+        # Create argument mapping
+        arg_mapping = {}
+        for i, old_arg in enumerate(source_block.arguments):
+            if i < len(target_args) and isinstance(old_arg.type, MemRefType):
+                new_subspan = convert_memref_to_stream_binding(
+                    target_block, old_arg, target_args[i], i
+                )
+                arg_mapping[old_arg] = new_subspan
+            else:
+                # Map scalar arguments to their corresponding arguments directly.
+                arg_mapping[old_arg] = target_args[i]
+
+        # Move operations
+        ops_to_move = list(source_block)
+        for op in ops_to_move:
+            op.detach_from_parent()
+            target_block.append(op)
+
+        # Replace all uses of old arguments with new subspan results
+        for old_arg, new_value in arg_mapping.items():
+            old_arg.replace_all_uses_with(new_value)
+
+
+def compile_launchable_to_mlir(
+    launchable: LaunchableWave,
+    trace: CapturedTrace,
+    context: Context,
+    module_op: Optional[Module] = None,
+    options: WaveCompileOptions = None,
+):
+    entrypoint_name = launchable.name
+    root_graph = trace.get_root_graph()
+
+    # pass device constraint to kernel signature
+    # so that we can set the dimensions of the tensors per device
+    kernel_sig = kernel_codegen.KernelSignature(launchable.device_constraints)
+    kernel_sig.add_from_graph_placeholders(root_graph)
+    kernel_sig.add_from_dynamic_symbols(options.dynamic_symbols)
+    kernel_sig.add_grid(launchable.grid_type)
+    kernel_sig.determine_input_output_buffers(root_graph)
+    if options.print_signature:
+        print(kernel_sig)
+
+    mb = builder.ModuleBuilder(context=context, module_op=None)
+    exe = dispatch_codegen.StreamExecutable(mb, name=entrypoint_name)
+    workgroup_size = launchable.hardware_constraints[0].threads_per_block
+    subgroup_size = launchable.hardware_constraints[0].threads_per_wave
+
+    # Set MMA type for ASM backend dispatch
+    options.mma_type = launchable.hardware_constraints[0].mma_type
+    # Setup LLVM func compilation configs.
+    llvm_func_config = {}
+    if options.denorm_fp_math_f32:
+        llvm_func_config["denormal-fp-math-f32"] = options.denorm_fp_math_f32
+
+    if options.waves_per_eu:
+        llvm_func_config["amdgpu-waves-per-eu"] = options.waves_per_eu
+
+    dispatch_entrypoint = exe.define_entrypoint(
+        entrypoint_name,
+        kernel_sig,
+        launchable.grid_type,
+        workgroup_size,
+        subgroup_size,
+        options.dynamic_symbols,
+        llvm_func_config,
+        trace.location,
+    )
+
+    # Only emit MLIR if we don't have a module yet.
+    if not module_op:
+        emitter = WaveEmitter(
+            dispatch_entrypoint,
+            trace,
+            launchable.constraints,
+            options,
+            launchable.grid_type.dims,
+            entrypoint_name,
+        )
+        with mb.module_op.context, Location.unknown():
+            module_op = builtin_d.ModuleOp()
+
+        with InsertionPoint(module_op.body), Location.unknown():
+            func = emitter.emit(trace.get_root_graph())
+            if options.use_water_backend:
+                emitter.emit_host_func(func)
+
+    # Otherwise, we need to iree-fy the existing module (that supposedly has
+    # upstream MLIR ops only) in order for it to be executable in the wave
+    # pipeline.
+    # `dispatch_entrypoint` already has most of the setup, we'll just need
+    # to move the ops from existing module to inside `dispatch_entrypoint`.
+    # Also we'll need to update the uses of the memref arguments (from the
+    # existing module) to be compatible with the new stream.binding arguments.
+
+    if options.use_water_backend:
+        mb.module_op = module_op
+    else:
+        assert not any(
+            isinstance(op, stream_d.ExecutableOp)
+            for op in module_op.operation.regions[0].blocks[0]
+        ), "expected overriding module to contain only upstream MLIR ops"
+        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
+
+    if options.postprocess:
+        apply_transform(mb.module_op, options.postprocess, options.subs)
+
+    if options.canonicalize:
+        canonicalize_module(mb.module_op)
+
+    return mb, trace, exe, kernel_sig, entrypoint_name
+
+
+def _trace_launchable_and_get_kernel_signature(
+    launchable: LaunchableWave,
+    options: WaveCompileOptions,
+    schedule: Optional[WaveSchedule] = None,
+    context: Optional[Context] = None,
+    module_op: Optional[Operation] = None,
+) -> tuple[
+    builder.ModuleBuilder,
+    CapturedTrace,
+    dispatch_codegen.StreamExecutable,
+    kernel_codegen.KernelSignature,
+    str,
+    WaveCompileOptions,
+    Sequence[DebugArgInfo],
+    Grid,
+]:
+    # Issue a warning if IREE ver is too low.
+    # Warning will only be issued if we are compiling the kernel and won't
+    # if we are using cached kernel as we don't want to add any additional
+    # overhead to 'happy' path.
+    warn_iree_is_too_old()
+
+    # Build wave runtime, if specified.
+    if options.wave_runtime:
+        # Remove any existing hsaco files in this directory.
+        # If the kernel is being cached, then it will be referenced from the
+        # cache directory. When kernels are not being cached, we remove them
+        # to ensure that at any time there is only one hsaco file in this directory.
+        remove_files_with_extension(get_temp_binary_dir(), ".hsaco")
+
+    print_ir_after = options.print_ir_after
+    print_ir_before = options.print_ir_before
+    profile_pass = options.profile_pass
+    if options.print_trace_begin:
+        print(f"\n***Tracing kernel {launchable.name}***")
+
+    debug_arg_info = []
+    debug_handlers = []
+
+    trace = launchable._trace(location_capture_config=options.location_capture_config)
+    if (
+        "all" in print_ir_after
+        or "all" in print_ir_before
+        or "trace" in print_ir_after
+        or "first" in print_ir_before
+    ):
+        print(f"***After trace/Before first pass***\n")
+        print_trace(trace)
+
+    graph_passes = build_graph_passes(
+        launchable,
+        trace,
+        options,
+        schedule,
+        debug_arg_info,
+        debug_handlers,
+        print_ir_before,
+        print_ir_after,
+    )
+
     pass_times = {}
     for p in graph_passes:
         try_apply_pass(
@@ -901,7 +942,7 @@ def _trace_launchable_and_get_kernel_signature(
 
 def wave_compile(
     options: WaveCompileOptions,
-    kernel: "LaunchableWave",
+    kernel: LaunchableWave,
     schedule: Optional["WaveSchedule"] = None,
 ) -> WaveKernel | WaveKernelExecutionEngine:
     """

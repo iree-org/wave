@@ -14,7 +14,7 @@ from wave_lang.kernel.wave.constraints import (
     MMAType,
     HardwareConstraint,
 )
-from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic
+from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
     mlir_to_fx,
@@ -27,13 +27,9 @@ from wave_lang.kernel.wave.utils.general_utils import (
 from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
     assert_constraints_equivalent,
+    compare_hardware_constraints_for_mlir_roundtrip,
 )
 from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
-
-
-def _error_diagnostics(diags: list[MLIRDiagnostic]) -> list[MLIRDiagnostic]:
-    """Filter structured diagnostics to errors only."""
-    return [d for d in diags if "error" in d.severity.lower()]
 
 
 M = tkl.sym.M
@@ -60,50 +56,6 @@ def _check_hyperparameters_roundtrip(
         assert source_subs.get(param) == roundtripped_subs.get(
             param
         ), f"Hyperparameter {param} mismatch: {source_subs.get(param)} vs {roundtripped_subs.get(param)}"
-
-
-def _compare_hardware_constraints_for_mlir_roundtrip(
-    source: HardwareConstraint, roundtripped: HardwareConstraint
-) -> bool:
-    """
-    Compare HardwareConstraints for MLIR roundtrip testing.
-
-    The MLIR representation intentionally excludes certain Python-specific configuration
-    fields (workgroups_per_cluster, n_service_waves) that represent scheduling decisions
-    and runtime configuration rather than fundamental hardware constraints. This comparator
-    checks only the fields that are serialized to MLIR.
-
-    Args:
-        source: Source constraint (from Python, before MLIR roundtrip)
-        roundtripped: Constraint after MLIR roundtrip
-
-    Returns:
-        True if constraints are equivalent for MLIR roundtrip purposes
-    """
-    # Compare fields that are serialized to MLIR
-    if source.threads_per_wave != roundtripped.threads_per_wave:
-        return False
-    if source.waves_per_block != roundtripped.waves_per_block:
-        return False
-    if source.mma_type != roundtripped.mma_type:
-        return False
-    if source.max_bits_per_load != roundtripped.max_bits_per_load:
-        return False
-
-    # vector_shapes may not be present in the source trace if the set_node_indices pass
-    # (which populates vector_shapes on nodes from hardware constraints) hasn't run yet.
-    # On the MLIR side, vector_shapes are always inferred from the HardwareConstraint
-    # during conversion to fx, so roundtripped traces will always have them populated.
-    if (
-        source.vector_shapes is not None
-        and source.vector_shapes != roundtripped.vector_shapes
-    ):
-        return False
-
-    # workgroups_per_cluster and n_service_waves are intentionally NOT compared
-    # as they are not part of the MLIR representation
-
-    return True
 
 
 def _get_read_write_trace() -> (
@@ -146,12 +98,12 @@ def mlir_to_fx_minimal_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, test_constraints, options)
-    errors = _error_diagnostics(diagnostics)
+    errors = error_diagnostics(diagnostics)
     assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    errors = _error_diagnostics(fx_diags)
+    errors = error_diagnostics(fx_diags)
     assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
@@ -159,7 +111,7 @@ def mlir_to_fx_minimal_roundtrip():
         test_constraints,
         fx_constraints,
         custom_comparators={
-            HardwareConstraint: _compare_hardware_constraints_for_mlir_roundtrip
+            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
         },
     )
     assert_traces_equivalent(trace, fx_trace, subs=options.subs)
@@ -226,12 +178,12 @@ def mlir_to_fx_simple_matmul_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, source_constraints, options)
-    errors = _error_diagnostics(diagnostics)
+    errors = error_diagnostics(diagnostics)
     assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    errors = _error_diagnostics(fx_diags)
+    errors = error_diagnostics(fx_diags)
     assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
@@ -239,7 +191,7 @@ def mlir_to_fx_simple_matmul_roundtrip():
         source_constraints,
         fx_constraints,
         custom_comparators={
-            HardwareConstraint: _compare_hardware_constraints_for_mlir_roundtrip
+            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
         },
     )
     assert_traces_equivalent(trace, fx_trace, subs=options.subs)
@@ -314,12 +266,12 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
 
     # Emit MLIR from the traced kernel.
     mlir_text, diagnostics, _ = emit_wave_dialect(trace, source_constraints, options)
-    errors = _error_diagnostics(diagnostics)
+    errors = error_diagnostics(diagnostics)
     assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Convert back to FX trace
     fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
-    errors = _error_diagnostics(fx_diags)
+    errors = error_diagnostics(fx_diags)
     assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
 
     # Check roundtrip worked
@@ -331,7 +283,7 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
         source_constraints,
         fx_constraints,
         custom_comparators={
-            HardwareConstraint: _compare_hardware_constraints_for_mlir_roundtrip
+            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
         },
     )
     assert_traces_equivalent(trace, fx_trace, subs=options.subs)
@@ -389,7 +341,7 @@ def mlir_to_fx_unspecified_address_space():
     mlir_text, diagnostics, _ = emit_wave_dialect(
         trace, matmul_for_addr_test.constraints, options
     )
-    errors = _error_diagnostics(diagnostics)
+    errors = error_diagnostics(diagnostics)
     assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
 
     # Replace all concrete address spaces with unspecified to simulate
@@ -401,7 +353,7 @@ def mlir_to_fx_unspecified_address_space():
     )
 
     fx_trace, _, _, fx_diags = mlir_to_fx(mlir_unspecified)
-    errors = _error_diagnostics(fx_diags)
+    errors = error_diagnostics(fx_diags)
     assert errors == [], f"unexpected errors: {errors}"
 
     # Collect address space symbols from Memory-typed placeholders (each

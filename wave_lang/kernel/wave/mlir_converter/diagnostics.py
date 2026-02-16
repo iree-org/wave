@@ -67,6 +67,11 @@ class MLIRDiagnostic:
     location: list[LocationFrame] = field(default_factory=list)
 
 
+def error_diagnostics(diags: list[MLIRDiagnostic]) -> list[MLIRDiagnostic]:
+    """Filter a list of diagnostics to errors only."""
+    return [d for d in diags if "error" in d.severity.lower()]
+
+
 @dataclass
 class WaterError:
     """An error originating from the Water/Wave compilation pipeline."""
