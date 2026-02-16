@@ -76,7 +76,6 @@ from wave_lang.kernel.ops.wave_ops import (
     Placeholder,
     Placeholder,
     Reshape,
-    SelectOp,
     SelfIndex,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
@@ -106,6 +105,7 @@ try:
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         ApplyExprOp,
+        BroadcastOp,
         SubOp,
         AllocateOp,
         CastOp,
@@ -123,6 +123,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelectOp,
         SelfIndexOp,
         ShuffleOp,
         SumOp,
@@ -145,6 +146,7 @@ try:
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
+        convert_sympy_to_affine_map_and_combinator,
     )
     from water_mlir.water_mlir.dialects import arith, func, wave, amdgpu
     from water_mlir.water_mlir.dialects.transform import interpreter
@@ -156,13 +158,14 @@ except Exception as e:
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
     "apply_expr": ApplyExprOp,
+    "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
     "extract": ExtractOp,
     "extract_slice": ExtractSliceOp,
-    "max": MaxOp,
-    "min": MinOp,
+    "maximum": MaxOp,
+    "minimum": MinOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
@@ -176,7 +179,7 @@ WAVE_OP_CONSTRUCTORS = {
     "output": YieldOp,
     "write": WriteOp,
     "permute": PermuteOp,
-    "max_element": MaxElementOp,
+    "max": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
     "self_index": SelfIndexOp,
@@ -192,6 +195,7 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    "bool": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
     "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
@@ -786,6 +790,21 @@ def _emit_ops_from_graph(
                         logical_slice=node.logical_slice,
                         num_slices=node.num_slices,
                     )
+                elif node.tkw_op_name in ["max", "sum"]:
+                    if op_builder is None:
+                        raise NotImplementedError(
+                            f"Unsupported reduce op: {node.tkw_op_name}"
+                        )
+
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        scope=wave.WaveReductionScopeAttr.get(
+                            wave.WaveReductionScope.Block
+                            if node.block
+                            else wave.WaveReductionScope.Warp
+                        ),
+                    )
                 elif isinstance(node, ApplyExpr):
                     reg = node.register_
                     if not isinstance(reg, Sequence):
@@ -799,8 +818,8 @@ def _emit_ops_from_graph(
                         sympy_expr.free_symbols, key=lambda s: s.name
                     )
                     symbol_mapping = preprocess_symbols(ordered_symbols)
-                    affine_map = _convert_sympy_expr_to_affine_map(
-                        sympy_expr, symbol_mapping
+                    affine_map, combinator = convert_sympy_to_affine_map_and_combinator(
+                        sympy_expr, [symbol.name for symbol in symbol_mapping.keys()]
                     )
                     symbol_attrs = [
                         (
@@ -812,7 +831,18 @@ def _emit_ops_from_graph(
                     ]
                     expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
                     operands = [get_single_mapped_value(arg) for arg in reg]
-                    mlir_op = op_builder(result_type, operands, expr_attr)
+                    # TODO: need to add automatic constructor of WaveApplyExprCombinatorAttr
+                    # from enum.
+                    mlir_op = op_builder(
+                        result_type,
+                        operands,
+                        expr_attr,
+                        combinator=(
+                            wave.WaveApplyExprCombinatorAttr.get(combinator)
+                            if combinator is not None
+                            else None
+                        ),
+                    )
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
@@ -1033,7 +1063,6 @@ def _create_kernel_module(
         func_op = func.FuncOp("kernel", func_type)
         # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
         # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
-        # print([(str(k), v) for k, v in options.subs.items()])
         for k, v in options.subs.items():
             if not isinstance(v, int):
                 if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
@@ -1163,7 +1192,8 @@ def _emit_from_captured_trace(
                 diagnostics,
                 None,
             )
-            return 0
+            print(module.operation.get_asm(), file=sys.stderr)
+            return 1
 
         if options.print_mlir_before_water:
             print(module.operation.get_asm(), file=sys.stderr)

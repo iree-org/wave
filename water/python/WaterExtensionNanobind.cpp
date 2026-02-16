@@ -421,6 +421,44 @@ struct PyWaveWorkgroupDimAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveReductionScopeAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveReductionScopeAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveReductionScopeAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveReductionScopeAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveReductionScopeAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveReductionScopeAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](WaveReductionScope value,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveReductionScopeAttr(
+              context->getRef(),
+              mlirWaveReductionScopeAttrGet(context->get(),
+                                            static_cast<uint32_t>(value)));
+        },
+        nb::arg("value"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveReductionScopeAttr from a reduction scope enum "
+        "value.");
+    c.def_prop_ro(
+        "value",
+        [](MlirAttribute self) {
+          return static_cast<WaveReductionScope>(
+              mlirWaveReductionScopeAttrGetValue(self));
+        },
+        "Reduction scope enum value.");
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
@@ -491,6 +529,44 @@ struct PyWaveShuffleModeAttr
               mlirWaveShuffleModeAttrGetValue(self));
         },
         "Shuffle mode enum value.");
+  }
+};
+
+//===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveApplyExprCombinatorAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveApplyExprCombinatorAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveApplyExprCombinatorAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveApplyExprCombinatorAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveApplyExprCombinatorAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](WaveApplyExprCombinator value,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveApplyExprCombinatorAttr(
+              context->getRef(),
+              mlirWaveApplyExprCombinatorAttrGet(context->get(),
+                                                 static_cast<uint32_t>(value)));
+        },
+        nb::arg("value"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveApplyExprCombinatorAttr from a combinator enum "
+        "value.");
+    c.def_prop_ro(
+        "value",
+        [](MlirAttribute self) {
+          return static_cast<WaveApplyExprCombinator>(
+              mlirWaveApplyExprCombinatorAttrGetValue(self));
+        },
+        "Apply expression combinator enum value.");
   }
 };
 
@@ -952,6 +1028,10 @@ NB_MODULE(_waterDialects, m) {
       .value("Y", WaveWorkgroupDimY)
       .value("Z", WaveWorkgroupDimZ);
 
+  nb::enum_<WaveReductionScope>(d, "WaveReductionScope")
+      .value("Block", WaveReductionScopeBlock)
+      .value("Warp", WaveReductionScopeWarp);
+
   nb::enum_<WaveAddressSpace>(d, "WaveAddressSpace")
       .value("Unspecified", WaveAddressSpaceUnspecified)
       .value("Global", WaveAddressSpaceGlobal)
@@ -963,6 +1043,16 @@ NB_MODULE(_waterDialects, m) {
       .value("DOWN", WaveShuffleModeDOWN)
       .value("UP", WaveShuffleModeUP)
       .value("IDX", WaveShuffleModeIDX);
+
+  nb::enum_<WaveApplyExprCombinator>(d, "WaveApplyExprCombinator")
+      .value("Greater", WaveApplyExprCombinatorGreater)
+      .value("Less", WaveApplyExprCombinatorLess)
+      .value("Equal", WaveApplyExprCombinatorEqual)
+      .value("NotEqual", WaveApplyExprCombinatorNotEqual)
+      .value("GreaterOrEqual", WaveApplyExprCombinatorGreaterOrEqual)
+      .value("LessOrEqual", WaveApplyExprCombinatorLessOrEqual)
+      .value("Maximum", WaveApplyExprCombinatorMaximum)
+      .value("Minimum", WaveApplyExprCombinatorMinimum);
 
   nb::enum_<WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
@@ -995,8 +1085,10 @@ NB_MODULE(_waterDialects, m) {
   PyWaveHyperparameterAttr::bind(d);
   PyWaveNormalFormAttr::bind(d);
   PyWaveWorkgroupDimAttr::bind(d);
+  PyWaveReductionScopeAttr::bind(d);
   PyWaveAddressSpaceAttr::bind(d);
   PyWaveShuffleModeAttr::bind(d);
+  PyWaveApplyExprCombinatorAttr::bind(d);
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
   PyWaveReadWriteBoundsAttr::bind(d);

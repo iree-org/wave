@@ -176,6 +176,11 @@ def CompatibleOperandsAndResultsIgnoreSpaceOpTrait
   let cppNamespace = "::wave";
 }
 
+def CompatibleOperandAndResultsShapeOpTrait
+    : NativeOpTrait<"CompatibleOperandAndResultsShapeOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 //-----------------------------------------------------------------------------
 // WaveInferIndexExprsOpInterface and implementation traits
 //-----------------------------------------------------------------------------

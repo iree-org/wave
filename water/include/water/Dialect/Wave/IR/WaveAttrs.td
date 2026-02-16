@@ -35,6 +35,29 @@ def WaveAddressSpaceAttr
 }
 
 //-----------------------------------------------------------------------------
+// Apply expression combinator enum and attribute
+//-----------------------------------------------------------------------------
+
+def WaveApplyExprCombinatorAttr : I32EnumAttr<"WaveApplyExprCombinator", "Apply expression combinator", [
+  I32EnumAttrCase<"Greater", 0, "gt">,
+  I32EnumAttrCase<"Less", 1, "lt">,
+  I32EnumAttrCase<"Equal", 2, "eq">,
+  I32EnumAttrCase<"NotEqual", 3, "ne">,
+  I32EnumAttrCase<"GreaterOrEqual", 4, "ge">,
+  I32EnumAttrCase<"LessOrEqual", 5, "le">,
+  I32EnumAttrCase<"Maximum", 6, "max">,
+  I32EnumAttrCase<"Minimum", 7, "min">,
+]> {
+  let cppNamespace = "::wave";
+  // let genSpecializedAttr = 0;
+}
+
+// def WaveApplyExprCombinatorAttr
+//     : EnumAttr<WaveDialect, WaveApplyExprCombinatorEnum, "combinator"> {
+//   let assemblyFormat = "`<` $value `>`";
+// }
+
+//-----------------------------------------------------------------------------
 // MMA kind enum and attribute
 //-----------------------------------------------------------------------------
 

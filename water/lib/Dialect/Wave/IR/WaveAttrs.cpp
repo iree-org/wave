@@ -565,12 +565,6 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
   if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Paren, parseOneExpr))
     return {};
 
-  if (results.empty()) {
-    parser.emitError(
-        parser.getCurrentLocation(),
-        "wave expression attribute must have at least one dimension");
-    return {};
-  }
   if (parser.parseGreater())
     return {};
 

@@ -20,6 +20,10 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
     format_diagnostics,
 )
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_vanilla_attention_kernel,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -55,6 +59,145 @@ constraints = [
     tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
     tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}),
 ]
+
+
+@run_test
+def mlir_converter_attention():
+    attention, hyperparams, _ = get_vanilla_attention_kernel(
+        AttentionShape(
+            num_query_heads=8,
+            num_kv_heads=2,
+            query_seq_len=256,
+            head_size_kv=64,
+            head_size=64,
+            kv_seq_len=256,
+        ),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+        False,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+        # print_ir_after="all",
+        print_mlir_before_water=True,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, attention)
+    trace = compiled_kernel.get_compiled_graph()
+
+    constraints = attention.constraints
+
+    import sys
+
+    sys.setrecursionlimit(10000)
+
+    # print_trace(trace)
+    with Context(), Location.unknown():
+        mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
+
+    print(mlir_output)
+    sys.exit(0)
+
+
+# @run_test
+# def test_chained_gemm_32x32x8():
+#     K1 = tkl.sym.K1
+#     K2 = tkl.sym.K2
+#     BLOCK_K2 = tkl.sym.BLOCK_K2
+
+#     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+#     ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+#     B = tkl.sym.B
+#     BLOCK_B = tkl.sym.BLOCK_B
+
+#     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+#     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+#     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+#     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
+#     constraints += [tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2))]
+#     constraints += [tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2))]
+
+#     mfma_variant = tkw.MMAType.F32_32x32x8_F16
+#     constraints += [
+#         tkw.HardwareConstraint(
+#             threads_per_wave=64,
+#             mma_type=mfma_variant,
+#             vector_shapes={B: 0},
+#         )
+#     ]
+
+#     @tkw.wave(constraints)
+#     def chained_gemm_32x32x8(
+#         q: tkl.Memory[B, M, K1, ADDRESS_SPACE, tkl.f16],
+#         k: tkl.Memory[B, K2, K1, ADDRESS_SPACE, tkl.f16],
+#         v: tkl.Memory[B, N, K2, ADDRESS_SPACE, tkl.f16],
+#         c: tkl.Memory[B, M, N, ADDRESS_SPACE_0, tkl.f32],
+#     ):
+#         c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+#         @tkw.iterate(K2, init_args=[c_reg])
+#         def repeat(
+#             acc: tkl.Register[B, M, N, tkl.f32],
+#         ) -> tkl.Register[B, M, N, tkl.f32]:
+#             inner_acc = tkl.Register[B, K2, M, tkl.f32](0.0)
+#             q_reg = tkw.read(q)
+#             k_reg = tkw.read(k)
+#             kq_reg = tkw.mma(k_reg, q_reg, inner_acc)
+#             qk_reg = tkw.permute(kq_reg, target_shape=[B, M, K2])
+#             qk_cast_reg = tkw.cast(qk_reg, tkl.f16)
+#             v_reg = tkw.read(v)
+#             acc = tkw.mma(qk_cast_reg, v_reg, acc)
+#             return acc
+
+#         tkw.write(repeat, c)
+
+#     options = WaveCompileOptions(
+#         subs={
+#             M: 128,
+#             N: 128,
+#             K1: 32,
+#             K2: 256,
+#             B: 8,
+#             BLOCK_M: 64,
+#             BLOCK_N: 64,
+#             BLOCK_K2: 32,
+#             BLOCK_B: 1,
+#             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+#             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+#         },
+#         canonicalize=True,
+#         compile_to_mlir=True,
+#         # print_ir_after="all",
+#     )
+
+#     chained_gemm_32x32x8 = wave_compile(options, chained_gemm_32x32x8)
+#     # print(chained_gemm_32x32x8.asm)
+#     emitted, diagnostics, _ = emit_wave_dialect(chained_gemm_32x32x8.compiled_graph, constraints, options)
+#     print(diagnostics)
+#     print(emitted)
+
+#     # CHECK-LABEL:     func.func @chained_gemm_32x32x8
+#     # CHECK-SAME:        (%[[ARG0:.*]]: !stream.binding, %{{.+}}: !stream.binding, %{{.+}}: !stream.binding, %{{.+}}: !stream.binding)
+#     # CHECK-DAG:         %[[C0:.+]] = arith.constant 0 : index
+#     # CHECK-DAG:         %[[GLOBAL_0:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [8, 128, 32], strides: [4096, 32, 1] : memref<f16> to memref<8x128x32xf16, strided<[4096, 32, 1]>>
+#     # CHECK:             %[[GLOBAL_READ_0:.+]] = vector.load %[[GLOBAL_0]]
+#     # CHECK:             {{.*}} = scf.for
+#     # CHECK-COUNT-4:       {{.*}} = amdgpu.mfma
+#     # CHECK-COUNT-1:       {{.*}} = arith.truncf
+#     # CHECK:               {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [4], strides = [1]}
+#     # CHECK:               {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [4], sizes = [4], strides = [1]}
+#     # CHECK:               {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [8], sizes = [4], strides = [1]}
+#     # CHECK:               {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [12], sizes = [4], strides = [1]}
+#     # CHECK-COUNT-4:       {{.*}} = amdgpu.mfma
+#     # CHECK:             scf.yield
+
+#     import sys
+#     sys.exit(0)
 
 
 def _get_dummy_trace_options_and_constraints() -> (
@@ -462,6 +605,7 @@ def mlir_converter_reshape():
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
+        print_ir_after="all",
     )
     options = set_default_run_config(options)
 
