@@ -70,7 +70,9 @@ class BenchmarkError(RuntimeError):
 
     def __init__(self, message: str, stage: str):
         super().__init__(message)
-        self.stage = stage  # "compile_failed", "validation_failed", or "benchmark_failed"
+        self.stage = (
+            stage  # "compile_failed", "validation_failed", or "benchmark_failed"
+        )
 
 
 def get_flops(M: int, N: int, K: int) -> float:
@@ -184,8 +186,12 @@ def benchmark_mxfp4_gemm_rocprof(
     timeout: Optional[float] = None,
     warmup_iters: int = 0,
     benchmark_iters: int = 1,
-) -> tuple[float, bool]:
-    """Run self as worker under rocprofv3 (torch benchmark); return mean runtime in microseconds."""
+) -> float:
+    """Run self as worker under rocprofv3 (torch benchmark); return mean runtime in microseconds.
+
+    Raises RuntimeError if the subprocess times out, exits non-zero, the worker does not
+    output MEAN_US, or rocprof parsing fails.
+    """
     m, n, k = shape
     mt_m, mt_n, mt_k = macrotiles
     _clear_dir(profiler_dump_path)
@@ -220,18 +226,32 @@ def benchmark_mxfp4_gemm_rocprof(
             text=True,
             cwd=os.getcwd(),
         )
-    except subprocess.TimeoutExpired:
-        return 0.0, False
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"rocprof worker subprocess timed out after {timeout}s for shape {shape}"
+        ) from e
     if proc.returncode != 0:
-        return 0.0, False
-    runtime_us, ok = _parse_worker_stdout_for_mean_us(proc.stdout)
-    if ok:
-        stats_path, _ = find_rocprof_outputs(profiler_dump_path, None)
-        if stats_path is not None:
-            rocprof_stats = parse_rocprof_kernel_stats(stats_path, kernel_regex)
-            if rocprof_stats and "mean_duration_us" in rocprof_stats:
-                runtime_us = rocprof_stats["mean_duration_us"]
-    return runtime_us, ok
+        stderr_preview = (proc.stderr or "").strip()[:500]
+        raise RuntimeError(
+            f"rocprof worker subprocess exited with code {proc.returncode} for shape {shape}"
+            + (f"; stderr: {stderr_preview}" if stderr_preview else "")
+        )
+    _, worker_ok = _parse_worker_stdout_for_mean_us(proc.stdout)
+    if not worker_ok:
+        raise RuntimeError(
+            f"Torch benchmarking failed within worker for shape {shape}: no MEAN_US in worker stdout"
+        )
+    stats_path, _ = find_rocprof_outputs(profiler_dump_path, None)
+    if stats_path is None:
+        raise RuntimeError(
+            f"rocprof kernel stats file not found under {profiler_dump_path} for shape {shape}"
+        )
+    rocprof_stats = parse_rocprof_kernel_stats(stats_path, kernel_regex)
+    if not rocprof_stats or "mean_duration_us" not in rocprof_stats:
+        raise RuntimeError(
+            f"rocprof kernel stats parsing failed for regex {kernel_regex!r} in {stats_path} for shape {shape}"
+        )
+    return rocprof_stats["mean_duration_us"]
 
 
 def run_validate_and_benchmark(
@@ -276,20 +296,18 @@ def run_validate_and_benchmark(
 
     # Benchmark via torch worker under rocprofv3
     profiler_dump_path = dump_dir / "rocprof" / gemm_id
-    runtime_us, ok = benchmark_mxfp4_gemm_rocprof(
-        shape,
-        macrotiles,
-        profiler_dump_path,
-        att_library_path,
-        kernel_regex=kernel_regex,
-        warmup_iters=warmup_iters,
-        benchmark_iters=benchmark_iters,
-    )
-    if not ok:
-        raise BenchmarkError(
-            f"Benchmark failed for shape {shape}: worker did not report MEAN_US or exited non-zero",
-            stage="benchmark_failed",
+    try:
+        runtime_us = benchmark_mxfp4_gemm_rocprof(
+            shape,
+            macrotiles,
+            profiler_dump_path,
+            att_library_path,
+            kernel_regex=kernel_regex,
+            warmup_iters=warmup_iters,
+            benchmark_iters=benchmark_iters,
         )
+    except RuntimeError as e:
+        raise BenchmarkError(str(e), stage="benchmark_failed") from e
 
     tflops = runtime_us_to_tflops(m, n, k, runtime_us)
     return runtime_us, tflops, "ok"
@@ -334,14 +352,14 @@ def parse_args():
         type=int,
         default=0,
         metavar="N",
-        help="Warmup iterations for torch benchmark (default: 0)",
+        help="Warmup iterations for benchmark (default: 0)",
     )
     p.add_argument(
         "--benchmark-iters",
         type=int,
         default=1,
         metavar="N",
-        help="Benchmark iterations for torch benchmark (default: 1)",
+        help="Benchmark iterations (default: 1)",
     )
     p.add_argument(
         "-o",
