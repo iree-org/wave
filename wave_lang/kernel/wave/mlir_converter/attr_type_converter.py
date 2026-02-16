@@ -140,9 +140,11 @@ def preprocess_symbols(
       2. replacing ITER_SYMBOL_NAME_WAVE_PREFIX (`$ARG`) prefix of argument
          symbols (e.g. `ARG0`) by ITER_SYMBOL_NAME_WATER_PREFIX (`_Iter_`) to
          match dialect expectations.
+      3. sorting symbols by name for deterministic symbol order as they may be
+         coming from, e.g., a set.
     """
     result = {}
-    for sym in symbols:
+    for sym in sorted(symbols, key=lambda s: s.name):
         if sym.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX):
             new_name = sym.name.replace(
                 ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
