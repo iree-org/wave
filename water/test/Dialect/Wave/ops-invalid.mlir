@@ -1061,6 +1061,13 @@ func.func @apply_expr_operand_overflow(%arg0: !wave.tensor<[@M] of i32>, %arg1: 
 
 // -----
 
+func.func @apply_expr_non_integer_result(%arg0: !wave.tensor<[@M] of f32>) {
+  // expected-error @below {{operates on integers only}}
+  wave.apply_expr(%arg0) <[#wave.operand<0>] -> (_Operand_0 + 1)> : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+}
+
+// -----
+
 func.func @apply_expr_symbol_not_in_hyperparam(%arg0: !wave.tensor<[@M] of i32>) attributes { wave.hyperparameters = #wave.hyperparameters<{M = 42}>} {
   // expected-error @below {{op attribute "expr" uses symbolic value #wave.symbol<"Z"> not provided as a hyperparameter}}
   // expected-note @below {{available symbols: M}}

@@ -2158,6 +2158,9 @@ LogicalResult wave::ApplyExprOp::verify() {
     return emitOpError("expression must produce exactly one result, but got ")
            << numResults;
 
+  if (!isa<IntegerType>(getElementType(getResult().getType())))
+    return emitOpError() << "operates on integers only";
+
   llvm::BitVector usedOperandAttrs(getArguments().size());
   for (Attribute sym : getExpr().getSymbols()) {
     if (auto operand = dyn_cast<WaveOperandAttr>(sym)) {

@@ -749,14 +749,6 @@ def ApplyExprOp : WaveOp<"apply_expr",
     with the operand index (0 for first operand, 1 for second, etc.). In
     expressions they appear as `_Operand_0`, `_Operand_1`, etc. External
     symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
-
-    ```mlir
-    %0 = wave.apply_expr(%a) #wave.expr_list<[#wave.operand<0>] -> (_Operand_0 + 1)>
-        : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
-    %1 = wave.apply_expr(%x, %y) #wave.expr_list<[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0 + _Operand_1)>
-        : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>)
-        -> !wave.tensor<[@M] of i32>
-    ```
   }] # baseDescription;
 
   // Accept both WaveTensorType (before PropagateElementsPerThread) and
