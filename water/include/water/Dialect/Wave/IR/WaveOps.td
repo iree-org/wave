@@ -352,7 +352,6 @@ def AllocateOp : WaveOp<"allocate", [
 
   let arguments = !con((ins
     Arg<Optional<WaveMemoryType>, "Optional parent buffer to view into">:$parent,
-<<<<<<< HEAD
     Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
         "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset,
@@ -363,11 +362,6 @@ def AllocateOp : WaveOp<"allocate", [
       does not affect the distributed shape
     }]
     >:$tail_padding
-=======
-    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
-        "Distributed (physical) shape">:$distributed_shape,
-    Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
->>>>>>> ae93c1bd (improve)
   ), commonArguments);
 
   let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);

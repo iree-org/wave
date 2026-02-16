@@ -162,6 +162,9 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
+  if (hasParent && getTailPadding())
+    return emitOpError() << "only top-level allocations can have tail_padding";
+
   return llvm::success();
 }
 
