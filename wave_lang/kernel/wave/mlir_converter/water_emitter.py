@@ -772,26 +772,17 @@ def _resolve_vector_shapes_for_attr(
     int_subs = {k: v for k, v in subs.items() if isinstance(v, int)}
     resolved = {}
     for dim, v in vector_shapes.items():
-        if isinstance(v, int):
-            resolved[dim.name] = v
-            continue
         val = safe_subs(v, int_subs)
         if isinstance(val, int):
             resolved[dim.name] = val
-            continue
-        if hasattr(val, "is_number") and val.is_number:
+        elif isinstance(val, sympy.Basic) and val.is_number:
             resolved[dim.name] = int(val)
-            continue
-        # Unresolved symbol or expression.
-        missing = (
-            getattr(val, "free_symbols", set()) or {v}
-            if hasattr(v, "free_symbols")
-            else {v}
-        )
-        raise ValueError(
-            f"Vector shape {v} in hardware constraints could not be resolved to an integer.\n"
-            f"Note: symbols {missing} do not have substitutions."
-        )
+        else:
+            missing = getattr(val, "free_symbols", None) or {v}
+            raise ValueError(
+                f"Vector shape {v} in hardware constraints could not be resolved to an integer.\n"
+                f"Note: symbols {missing} do not have substitutions."
+            )
     return resolved
 
 
