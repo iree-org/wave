@@ -24,6 +24,7 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from utils import parse_args, list_tests, run_test
 
 
@@ -78,7 +79,9 @@ def test_dbuf_4wave_mxfp_hipblaslt_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 4 waves, with stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(1, 4))
+    gemm, options = get_tagged_mxfp4_gemm(
+        shape, block, wave_shape=(1, 4), b_address_space=GLOBAL_ADDRESS_SPACE
+    )
     options.print_mlir_file = "gemm_mxfp4_dbuf_4wave_hipblaslt.mlir"
     options.print_mlir = True
     options.dump_binaries = "build/binaries"

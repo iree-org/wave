@@ -27,6 +27,8 @@ def get_tagged_mxfp4_gemm(
     block_shape: tuple[int, int, int] = (256, 256, 256),
     wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
+    a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -47,7 +49,9 @@ def get_tagged_mxfp4_gemm(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
+    B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
+    C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -60,11 +64,11 @@ def get_tagged_mxfp4_gemm(
 
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
-        b: tkl.Memory[N, K / 2, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        a: tkl.Memory[M, K / 2, A_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, B_ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -88,7 +92,9 @@ def get_tagged_mxfp4_gemm(
         tkw.write(repeat, c)
 
     hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        A_ADDRESS_SPACE: a_address_space,
+        B_ADDRESS_SPACE: b_address_space,
+        C_ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
@@ -106,8 +112,6 @@ def get_tagged_mxfp4_gemm(
         linearize_shared_access=True,
         use_buffer_ops=True,
         minimize_shared_allocs=False,
-        print_mlir=True,
-        print_mlir_file="gemm_mxfp4_dbuf_8wave.mlir",
     )
 
     return gemm, options
