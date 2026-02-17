@@ -361,9 +361,9 @@ def test_result_type_comparisons(shape1, shape2, dtype1, dtype2, expected_error)
     result = _check_result_types_equivalent(mem1, mem2)
 
     if expected_error:
-        assert not result.success and expected_error in result.reason
+        assert not result and expected_error in result.error
     else:
-        assert result.success
+        assert result
 
 
 @pytest.mark.parametrize(
@@ -380,9 +380,7 @@ def test_payload_comparisons(lhs, rhs, expected_error):
     """Test payload comparison for dtypes, sequences, and dicts."""
     result = _check_payloads_equivalent(lhs, rhs, None, {})
     assert (
-        result.success
-        if not expected_error
-        else not result.success and expected_error in result.reason
+        result if not expected_error else not result and expected_error in result.error
     )
 
 
@@ -397,8 +395,8 @@ def test_payload_comparisons(lhs, rhs, expected_error):
 def test_index_sequence_field_mismatches(seq1, seq2, expected_field):
     """Test that IndexSequence field differences are detected."""
     result = _check_expr_equivalent(seq1, seq2, None)
-    assert not result.success
-    assert f"IndexSequence.{expected_field} mismatch" in result.reason
+    assert not result
+    assert f"IndexSequence.{expected_field} mismatch" in result.error
 
 
 @pytest.mark.parametrize(
@@ -413,9 +411,7 @@ def test_symbolic_expression_equivalence(expr1, expr2, expected_error):
     """Test symbolic expression comparison and simplification."""
     result = _check_expr_equivalent(expr1, expr2, None)
     assert (
-        result.success
-        if not expected_error
-        else not result.success and expected_error in result.reason
+        result if not expected_error else not result and expected_error in result.error
     )
 
 
@@ -437,8 +433,8 @@ def test_symbolic_expression_equivalence(expr1, expr2, expected_error):
 def test_index_dict_mismatches(dict1, dict2, expected_error):
     """Test IndexDict comparison detects key and value differences."""
     result = _check_index_mapping_equivalent(dict1, dict2, None)
-    assert not result.success
-    assert expected_error in result.reason
+    assert not result
+    assert expected_error in result.error
 
 
 @pytest.mark.skip("Too slow")
