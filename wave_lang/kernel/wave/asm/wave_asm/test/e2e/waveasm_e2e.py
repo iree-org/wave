@@ -44,6 +44,7 @@ if str(wave_root) not in sys.path:
     sys.path.insert(0, str(wave_root))
 
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+from wave_lang.kernel.wave.utils.classes import Failure, Success, SuccessOrFailure
 
 
 @dataclass
@@ -238,16 +239,8 @@ class WaveASMCompiler:
         except Exception as e:
             return False, str(e), ""
 
-    def assemble_to_binary(self, asm_text: str) -> Tuple[bool, Optional[Path], str]:
-        """
-        Assemble AMDGCN assembly to GPU binary using amdclang++.
-
-        Args:
-            asm_text: AMDGCN assembly text
-
-        Returns:
-            Tuple of (success, binary_path, error_message)
-        """
+    def assemble_to_binary(self, asm_text: str) -> SuccessOrFailure[Path]:
+        """Assemble AMDGCN assembly to GPU binary using amdclang++."""
         temp_dir = self._get_temp_dir()
         asm_file = temp_dir / "kernel.s"
         obj_file = temp_dir / "kernel.o"
@@ -281,7 +274,7 @@ class WaveASMCompiler:
             )
 
             if result.returncode != 0:
-                return False, None, f"Assembly failed: {result.stderr}"
+                return Failure(f"Assembly failed: {result.stderr}")
 
             # Step 2: Link to HSACO
             link_cmd = [
@@ -303,14 +296,14 @@ class WaveASMCompiler:
             )
 
             if result.returncode != 0:
-                return False, None, f"Linking failed: {result.stderr}"
+                return Failure(f"Linking failed: {result.stderr}")
 
-            return True, hsaco_file, ""
+            return Success(hsaco_file)
 
         except subprocess.TimeoutExpired:
-            return False, None, "Assembly/linking timed out"
+            return Failure("Assembly/linking timed out")
         except Exception as e:
-            return False, None, str(e)
+            return Failure(str(e))
 
     def compile_full(
         self,
@@ -344,21 +337,21 @@ class WaveASMCompiler:
         asm_text = asm_or_error
 
         # Step 2: ASM -> Binary
-        success, binary_path, error = self.assemble_to_binary(asm_text)
+        asm_result = self.assemble_to_binary(asm_text)
 
-        if not success:
+        if not asm_result:
             return CompilationResult(
                 mlir_text=mlir_text,
                 asm_text=asm_text,
                 binary_path=None,
                 success=False,
-                error_message=f"ASM->Binary failed: {error}",
+                error_message=f"ASM->Binary failed: {asm_result.error}",
             )
 
         return CompilationResult(
             mlir_text=mlir_text,
             asm_text=asm_text,
-            binary_path=binary_path,
+            binary_path=asm_result.value,
             success=True,
         )
 

@@ -6,11 +6,12 @@
 Tests that FX <-> Water MLIR roundtrip holds at each stage of the
 PyWave compilation pipeline.
 
-Each pass is classified against a per-kernel `expected_failures` set:
+Each pass is classified against a per-kernel `expected_failures` set,
+using the standard LLVM lit result codes:
 
     OK    -- roundtrip succeeded, pass is NOT in the xfail set  (working)
-    XFAIL -- roundtrip failed,    pass IS in the xfail set      (known gap)
-    XPASS -- roundtrip succeeded, pass IS in the xfail set      (newly supported)
+    XFAIL -- roundtrip failed,    pass IS in the xfail set      (expected failure)
+    XPASS -- roundtrip succeeded, pass IS in the xfail set      (unexpected pass)
     FAIL  -- roundtrip failed,    pass is NOT in the xfail set  (regression)
 
 The test asserts zero FAIL (regressions) and zero XPASS (stale xfails).
@@ -18,14 +19,9 @@ When a pass is fixed, the XPASS forces the developer to remove it from
 the `expected_failures` set, keeping it in sync with reality.
 """
 
-import sympy
-
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel._support.indexing import IndexingContext
-import wave_lang.kernel.wave as wave
 from wave_lang.kernel.wave.wave import LaunchableWave
-import wave_lang.kernel.lang as tkl
-from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.kernel.wave.compile import WaveCompileOptions, build_graph_passes
 from wave_lang.kernel.wave.constraints import (
     Constraint,
@@ -35,8 +31,11 @@ from wave_lang.kernel.wave.constraints import (
 from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
+    format_diagnostics,
     mlir_to_fx,
 )
+from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.utils.classes import Failure, Success, SuccessOrFailure
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
@@ -49,24 +48,20 @@ def _try_roundtrip(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-) -> tuple[bool, str]:
-    """Attempt an MLIR roundtrip on the current trace state.
-
-    Returns `(True, "")` on success, or `(False, reason)` if the
-    roundtrip cannot be performed or produces a non-equivalent trace.
-    """
+) -> SuccessOrFailure[None]:
+    """Attempt an MLIR roundtrip on the current trace state."""
     try:
         # Emit FX -> Water MLIR.
         mlir_text, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
         errors = error_diagnostics(diagnostics)
         if errors:
-            return False, f"emit: {errors[0]}"
+            return Failure(f"emit:\n{format_diagnostics(errors, use_color=False)}")
 
         # Import Water MLIR -> FX.
         fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
         errors = error_diagnostics(fx_diags)
         if errors:
-            return False, f"import: {errors[0]}"
+            return Failure(f"import:\n{format_diagnostics(errors, use_color=False)}")
 
         # Check structural equivalence.
         assert_traces_equivalent(trace, fx_trace, subs=options.subs)
@@ -80,9 +75,9 @@ def _try_roundtrip(
             },
         )
 
-        return True, ""
+        return Success()
     except Exception as e:
-        return False, str(e)
+        return Failure(str(e))
 
 
 def _run_progressive_roundtrip(
@@ -129,28 +124,29 @@ def _run_progressive_roundtrip(
         for i, p in enumerate(graph_passes, 1):
             name = p.__name__
             expected_fail = name in expected_failures
+            # Each pass mutates `trace` in place (captured by reference in
+            # the partial). _try_roundtrip is read-only on the trace: it
+            # serializes to MLIR text and compares it against a fresh import.
             p()
 
-            success, err = _try_roundtrip(
-                trace,
-                launchable.constraints,
-                options,
-            )
+            result = _try_roundtrip(trace, launchable.constraints, options)
 
-            if success and not expected_fail:
+            if result and not expected_fail:
                 ok_count += 1
                 print(f"[{i}/{total}] {name}: OK")
-            elif success and expected_fail:
+            elif result and expected_fail:
                 xpass_count += 1
                 xpass_names.append(name)
                 print(f"[{i}/{total}] {name}: XPASS (remove from expected_failures)")
-            elif not success and expected_fail:
+            elif not result and expected_fail:
                 xfail_count += 1
+                err = result.error
                 short_err = (err[:120] + "...") if len(err) > 120 else err
                 print(f"[{i}/{total}] {name}: XFAIL ({short_err})")
             else:
                 fail_count += 1
                 fail_names.append(name)
+                err = result.error
                 short_err = (err[:120] + "...") if len(err) > 120 else err
                 print(f"[{i}/{total}] {name}: FAIL ({short_err})")
 
@@ -171,52 +167,19 @@ def _run_progressive_roundtrip(
             )
 
 
-# CHECK-LABEL: matmul_progressive_roundtrip
+# CHECK-LABEL: gemm_progressive_roundtrip
 @run_test
-def matmul_progressive_roundtrip():
-    """Test MLIR roundtrip at each stage of the matmul compilation pipeline."""
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-
-    constraints = [
-        wave.WorkgroupConstraint(M, BLOCK_M, 0),
-        wave.WorkgroupConstraint(N, BLOCK_N, 1),
-        wave.TilingConstraint(K, BLOCK_K),
-        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
-        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
-        wave.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_16x16x16_F16),
-    ]
-
-    @wave.wave(constraints)
-    def matmul(
-        a: tkl.Memory[M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @wave.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = wave.read(a, bounds={M: M, K: K})
-            b_reg = wave.read(b, bounds={N: N, K: K})
-            acc = wave.mma(a_reg, b_reg, acc)
-            return acc
-
-        wave.write(repeat, c)
+def gemm_progressive_roundtrip():
+    """Test MLIR roundtrip at each stage of the GEMM compilation pipeline."""
+    gemm, hyperparams, _ = get_gemm_kernel(
+        shape=(128, 128, 16),
+        dynamic_dims=False,
+        mfma_variant=MMAType.F32_16x16x16_F16,
+        block_shape=(16, 16, 16),
+    )
 
     options = WaveCompileOptions(
-        subs={
-            BLOCK_M: 16,
-            BLOCK_N: 16,
-            BLOCK_K: 16,
-            M: 128,
-            N: 128,
-            K: 16,
-        },
+        subs=hyperparams,
         compile_to_mlir=True,
     )
 
@@ -238,11 +201,17 @@ def matmul_progressive_roundtrip():
             "promote_placeholders",
             "set_node_indices",
             "reorder_workgroups",
+            "expand_graph",
+            "set_post_expansion_indices",
+            "remove_chained_getresult",
+            "decompose_vmma_ops",
+            "decompose_dot_mma",
+            "generate_bounds_exprs",
+            "location_check_pass",
         }
     )
 
-    # All passes after expand_graph should succeed.
-    # CHECK: expand_graph: OK
+    # CHECK: hoist_loop_invariant_ops: OK
     # CHECK-NOT: FAIL (
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
-    _run_progressive_roundtrip(matmul, options, expected_failures)
+    _run_progressive_roundtrip(gemm, options, expected_failures)

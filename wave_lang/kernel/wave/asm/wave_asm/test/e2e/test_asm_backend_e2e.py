@@ -835,10 +835,10 @@ def test_gemm_cpp_backend(
             python_asm = python_compiler.compile_mlir_string(kernel_info.mlir_text)
             # Also assemble to binary for execution using the same assembler as C++ backend
             if backend == "python":
-                success, binary_path, error = compiler.assemble_to_binary(python_asm)
-                if not success:
-                    pytest.fail(f"Python ASM->Binary failed: {error}")
-                python_binary_path = binary_path
+                asm_result = compiler.assemble_to_binary(python_asm)
+                if not asm_result:
+                    pytest.fail(f"Python ASM->Binary failed: {asm_result.error}")
+                python_binary_path = asm_result.value
         except Exception as e:
             if backend == "python":
                 pytest.fail(f"Python compilation failed: {e}")
@@ -1250,10 +1250,10 @@ def test_mxfp4_scaled_gemm_cpp_backend(
 
             # Also assemble to binary for execution
             if backend == "python":
-                success, binary_path, error = compiler.assemble_to_binary(python_asm)
-                if not success:
-                    pytest.fail(f"Python ASM->Binary failed: {error}")
-                python_binary_path = binary_path
+                asm_result = compiler.assemble_to_binary(python_asm)
+                if not asm_result:
+                    pytest.fail(f"Python ASM->Binary failed: {asm_result.error}")
+                python_binary_path = asm_result.value
         except Exception as e:
             if backend == "python":
                 pytest.fail(f"Python compilation failed: {e}")
