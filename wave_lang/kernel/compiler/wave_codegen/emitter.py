@@ -153,7 +153,7 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         stride_arg_count = 0
-        if self.options.use_dynamic_strides:
+        if self.options.wave_runtime:
             stride_arg_count = sum(
                 len(b.kernel_buffer_type.symbolic_shape)
                 for b in self.root_sig.sig.kernel_buffer_bindings
@@ -176,7 +176,7 @@ class WaveEmitter:
 
         with InsertionPoint(entry_block), Location.name("wave-generated function"):
             self.emit_program_invariants()
-            stride_arg_offset = len(bindings) if self.options.use_dynamic_strides else 0
+            stride_arg_offset = len(bindings) if self.options.wave_runtime else 0
             for bind, arg in zip(bindings, entry_block.arguments):
                 node = bind.reference[1]
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
@@ -206,12 +206,14 @@ class WaveEmitter:
                 static_sizes = [get_static_dim(s) for s in physical_shape]
                 rank = len(symbolic_shape)
 
-                use_dynamic_strides = self.options.use_dynamic_strides and stride_arg_count > 0
+                use_dynamic_strides = self.options.wave_runtime and stride_arg_count > 0
                 if use_dynamic_strides:
                     # vector.load requires the most minor (innermost) dim to have unit stride.
                     # Use dynamic strides only for leading dims; keep innermost stride static 1.
                     stride_args = list(
-                        entry_block.arguments[stride_arg_offset : stride_arg_offset + rank]
+                        entry_block.arguments[
+                            stride_arg_offset : stride_arg_offset + rank
+                        ]
                     )
                     stride_arg_offset += rank
                     dyn_stride_sentinel = MemRefType.get_dynamic_stride_or_offset()
@@ -227,7 +229,9 @@ class WaveEmitter:
                         layout = StridedLayoutAttr.get(
                             offset=dyn_val, strides=static_strides
                         )
-                    memref_type = MemRefType.get(static_sizes, element_type, layout=layout)
+                    memref_type = MemRefType.get(
+                        static_sizes, element_type, layout=layout
+                    )
                     offset = arith_d.constant(IndexType.get(), 0)
                     dyn_sizes = [
                         gen_sympy_index(add_emitter_subs(self), s)
@@ -250,8 +254,12 @@ class WaveEmitter:
                         idx_context, physical_shape, allow_mixed_shapes=True
                     )
                     static_strides = [get_static_dim(s) for s in strides]
-                    layout = StridedLayoutAttr.get(offset=dyn_val, strides=static_strides)
-                    memref_type = MemRefType.get(static_sizes, element_type, layout=layout)
+                    layout = StridedLayoutAttr.get(
+                        offset=dyn_val, strides=static_strides
+                    )
+                    memref_type = MemRefType.get(
+                        static_sizes, element_type, layout=layout
+                    )
 
                     offset = arith_d.constant(IndexType.get(), 0)
                     dyn_sizes = [
