@@ -425,7 +425,7 @@ def parse_range(range_str):
     return list(range(start, end + 1))
 
 
-def visualize_shuffle(m, n, row_range=None, col_range=None):
+def visualize_shuffle(m, n, row_range=None, col_range=None, use_unshuffle=False):
     """
     Visualize the shuffle mapping by printing a matrix of tuples.
 
@@ -437,16 +437,27 @@ def visualize_shuffle(m, n, row_range=None, col_range=None):
         n: Column dimension of the matrix (before padding)
         row_range: List of row indices to display (required)
         col_range: List of column indices to display (required)
+        use_unshuffle: If True, use e8m0_unshuffle_coords; otherwise use e8m0_shuffle_coords
     """
     # Calculate padded dimensions
     sm = ((m + 255) // 256) * 256
     sn = ((n + 7) // 8) * 8
 
-    translate_func = e8m0_unshuffle_coords
+    translate_func = e8m0_unshuffle_coords if use_unshuffle else e8m0_shuffle_coords
+    forward_shuffle = translate_func == e8m0_shuffle_coords
 
-    print(f"Visualizing shuffle mapping for size ({m}, {n})")
+    print(
+        f"Visualizing {'shuffle' if forward_shuffle else 'unshuffle'} mapping for size ({m}, {n})"
+    )
+    if forward_shuffle:
+        print(
+            f"IE the grid has the logical grid, with each cell showing the coordinates of where it will be shuffled to."
+        )
+    else:
+        print(
+            f"IE the grid has the physical shuffled grid, with each cell showing the unshuffled coordinates."
+        )
     print(f"Padded dimensions: ({sm}, {sn})")
-    print()
 
     if row_range is None or col_range is None:
         print("Error: --visualize-range is required for visualization")
@@ -511,6 +522,9 @@ Examples:
   # Visualize shuffle mapping (requires --visualize-range)
   python mxfp4_scale_preshuffle_visualize.py --visualize-shuffle --visualize-range "0-8" "0-15"
 
+  # Visualize unshuffle mapping (requires --visualize-range)
+  python mxfp4_scale_preshuffle_visualize.py --visualize-shuffle --visualize-unshuffle --visualize-range "0-8" "0-15"
+
   # Visualize with custom matrix size
   python mxfp4_scale_preshuffle_visualize.py --visualize-shuffle --size 256 64 --visualize-range "0-31" "0-15"
         """,
@@ -545,6 +559,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--visualize-unshuffle",
+        action="store_true",
+        help="Use unshuffle coordinates for visualization (shows physical shuffled grid with unshuffled coordinates)",
+    )
+
+    parser.add_argument(
         "--visualize-range",
         type=str,
         nargs=2,
@@ -576,7 +596,13 @@ Examples:
             row_range = parse_range(args.visualize_range[0])
             col_range = parse_range(args.visualize_range[1])
 
-        visualize_shuffle(m, n, row_range=row_range, col_range=col_range)
+        visualize_shuffle(
+            m,
+            n,
+            row_range=row_range,
+            col_range=col_range,
+            use_unshuffle=args.visualize_unshuffle,
+        )
         exit(0)
 
     # Run round-trip test if --test is specified
