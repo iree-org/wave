@@ -327,7 +327,7 @@ def get_preshuffle_kernel():
 def run_all_tests():
     """Run both vanilla and pre-shuffled tests and compare results."""
     m, n, k = 512, 512, 2048
-    block_m, block_n, block_k = 128, 128, 128
+    block_m, block_n, block_k = 128, 128, 256
 
     print("=" * 70)
     print("MXFP4 GEMM COMPREHENSIVE TEST SUITE")

@@ -430,6 +430,9 @@ def _expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
             return (sympy.Integer(1), sympy.Integer(1))
         bounds = [_expr_bounds(a) for a in expr.args]
         if all(b is not None for b in bounds):
+            # Bail out if any bound is infinite (0 * oo = NaN).
+            if any(sympy.oo in b or -sympy.oo in b for b in bounds):
+                return None
             lo, hi = bounds[0]
             for b in bounds[1:]:
                 corners = [lo * b[0], lo * b[1], hi * b[0], hi * b[1]]
@@ -459,10 +462,30 @@ def _simplify_floor_mod(expr: sympy.Expr) -> sympy.Expr:
 
 
 def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
-    """Single pass of bounds-based simplification (bottom-up)."""
+    """Single pass of bounds-based simplification (bottom-up).
+
+    Mod nodes are handled specially to avoid a sympy auto-evaluation bug
+    where Mod(k*Mod(x,n), m) produces incorrect symbolic results.
+    See https://github.com/sympy/sympy/issues/28744.
+    """
     if not isinstance(expr, sympy.Basic) or expr.is_Atom:
         return expr
-    expr = expr.func(*[_simplify_floor_mod_once(a) for a in expr.args])
+
+    simplified_args = [_simplify_floor_mod_once(a) for a in expr.args]
+
+    # Handle Mod before reconstruction to avoid triggering the sympy bug.
+    if isinstance(expr, sympy.Mod):
+        p, q = simplified_args
+        if q.is_positive and q.is_number:
+            p_bounds = _expr_bounds(p)
+            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
+                return p
+        # Keep Mod but prevent buggy auto-evaluation.
+        return sympy.Mod(p, q, evaluate=False)
+
+    # Reconstruct (safe for non-Mod nodes).
+    expr = expr.func(*simplified_args)
+
     if isinstance(expr, sympy.floor):
         bounds = _expr_bounds(expr.args[0])
         if (
@@ -472,12 +495,6 @@ def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
             and sympy.floor(bounds[0]) == sympy.floor(bounds[1])
         ):
             return sympy.Integer(int(sympy.floor(bounds[0])))
-    if isinstance(expr, sympy.Mod):
-        p, q = expr.args
-        if q.is_positive and q.is_number:
-            p_bounds = _expr_bounds(p)
-            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
-                return p
     return expr
 
 
