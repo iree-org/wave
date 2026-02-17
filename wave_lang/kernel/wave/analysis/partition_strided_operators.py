@@ -509,42 +509,65 @@ def merge_contiguous_expanded_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
     """
-    Merge pairs of expanded scalar reads that access contiguous physical memory.
+    Merge expanded reads that access contiguous physical memory into wider loads.
 
-    After expansion, scale reads with non-identity mappings are often split into
-    multiple scalar reads (elements_per_thread=1). When consecutive expansion copies
-    produce contiguous physical addresses (via the mapping), this pass merges them
-    into vector reads (elements_per_thread=2), reducing the number of memory operations.
+    Runs to a fixed point, doubling the vector width each iteration:
+    ept=1 pairs → ept=2, ept=2 pairs → ept=4, etc. This also works when the IR
+    already contains vector reads (e.g. ept=2) from earlier passes.
 
-    For example, with e8m0 pre-shuffled scales, reads at M and M+16 (same K/32)
-    produce adjacent shuffled flat offsets due to bit0 = (M%32)//16 in the shuffle.
-    This pass detects such pairs and merges them into 2-element vector loads.
+    For example, with e8m0 pre-shuffled scales at BLOCK_K=128, four scalar reads
+    at M offsets 0/16/32/48 produce shuffled flat offsets in pairs:
+    (base, base+1) and (base+2048, base+2049). This pass merges each pair into
+    a 2-element vector load.
+    """
+    while _merge_contiguous_reads_once(trace):
+        pass
+
+
+def _get_physical_start(
+    custom: Read,
+    symbolic_shape: tuple,
+    symbolic_dims: list,
+) -> dict:
+    """Get the physical start coordinates for a read.
+
+    For reads with a non-identity mapping, applies the mapping to get physical
+    coordinates. For identity-mapped reads (mapping=None), reads the start
+    offsets directly from the index.
+    """
+    from ..utils.mapping_utils import transform_index_on_mapping
+
+    if custom.mapping is not None and not custom.has_identity_mapping():
+        physical = transform_index_on_mapping(
+            custom.mapping, symbolic_shape, custom.index, is_read=True
+        )
+        return {dim: physical[dim] for dim in symbolic_dims}
+    return {dim: custom.index[dim].start for dim in symbolic_dims}
+
+
+def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
+    """Single merge pass: merge adjacent pairs of same-ept reads.
+
+    Groups reads by (pre_expansion_id, ept), sorts by expanded_dims, and
+    merges pairs whose flat offset starts differ by exactly ept.
+    Returns True if any merges happened.
     """
     from collections import defaultdict
-    from ..utils.mapping_utils import transform_index_on_mapping
     from ...compiler.utils import strides_from_symbolic_shape
     from ..._support.indexing import IndexingContext
 
-    # Find scalar reads with non-identity mappings (candidates for merging).
-    groups: dict[int, list[fx.Node]] = defaultdict(list)
-    for node in trace.walk(
-        lambda n: isinstance(get_custom(n), Read)
-    ):
+    # Group reads by (pre_expansion_id, ept).
+    groups: dict[tuple, list[fx.Node]] = defaultdict(list)
+    for node in trace.walk(lambda n: isinstance(get_custom(n), Read)):
         custom = get_custom(node)
-        if (
-            custom.elements_per_thread == 1
-            and custom.mapping is not None
-            and not custom.has_identity_mapping()
-            and custom.pre_expansion_id is not None
-        ):
-            groups[custom.pre_expansion_id].append(node)
-
-    if not groups:
-        return
+        if custom.pre_expansion_id is not None:
+            key = (custom.pre_expansion_id, custom.elements_per_thread)
+            groups[key].append(node)
 
     idxc = IndexingContext.current()
+    merged_any = False
 
-    for reads in groups.values():
+    for (pre_exp_id, ept), reads in groups.items():
         if len(reads) < 2:
             continue
 
@@ -552,8 +575,6 @@ def merge_contiguous_expanded_reads(
         first_custom = customs[0][0]
         memory = get_custom(first_custom.memory)
         symbolic_shape = memory.type.symbolic_shape
-
-        # Compute physical (mapped) coordinates and flat offsets for each read.
         strides = strides_from_symbolic_shape(
             idxc, symbolic_shape, allow_mixed_shapes=True
         )
@@ -561,35 +582,32 @@ def merge_contiguous_expanded_reads(
 
         read_infos = []
         for custom, node in customs:
-            physical = transform_index_on_mapping(
-                custom.mapping, symbolic_shape, custom.index, is_read=True
-            )
+            phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
             flat_offset = sum(
-                physical[dim] * stride
-                for dim, stride in zip(symbolic_dims, strides)
+                phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
             )
-            # Use expanded_dims (concrete integers) as sort key.
-            dims_key = tuple(custom.expanded_dims.values())
-            read_infos.append((dims_key, flat_offset, physical, custom, node))
+            dims_key = (
+                tuple(custom.expanded_dims.values()) if custom.expanded_dims else ()
+            )
+            read_infos.append((dims_key, flat_offset, phys_start, custom, node))
 
-        # Sort by expanded_dims (concrete integers, always sortable).
         read_infos.sort(key=lambda x: x[0])
 
-        # Greedily merge consecutive pairs with offset diff == 1.
+        # Merge adjacent pairs whose flat offset starts differ by ept.
         i = 0
         while i < len(read_infos) - 1:
             _, off1, phys1, custom1, node1 = read_infos[i]
             _, off2, phys2, custom2, node2 = read_infos[i + 1]
-            diff = off2 - off1
-            if not _check_symbolic_equals_int(diff, 1):
+
+            if not _check_symbolic_equals_int(off2 - off1, ept):
                 i += 1
                 continue
 
-            # Find the dimension along which they differ (fastest changing).
+            # Find dimension that advances by ept (others must be unchanged).
             merge_dim = None
             for dim in symbolic_dims:
                 d = phys2[dim] - phys1[dim]
-                if _check_symbolic_equals_int(d, 1):
+                if _check_symbolic_equals_int(d, ept):
                     merge_dim = dim
                 elif not _check_symbolic_equals_int(d, 0):
                     merge_dim = None
@@ -598,22 +616,18 @@ def merge_contiguous_expanded_reads(
                 i += 1
                 continue
 
-            # Create a merged Read with ept=2, no mapping, at physical coords.
+            new_ept = 2 * ept
             with custom1.graph.inserting_before(node1):
                 new_index = {}
                 for dim in symbolic_dims:
                     if dim == merge_dim:
-                        new_index[dim] = IndexSequence(
-                            phys1[dim], 2, 1
-                        )
+                        new_index[dim] = IndexSequence(phys1[dim], new_ept, 1)
                     else:
-                        new_index[dim] = IndexSequence(
-                            phys1[dim], 1, 1
-                        )
+                        new_index[dim] = IndexSequence(phys1[dim], 1, 1)
 
                 merged_read = Read(
                     custom1.memory,
-                    elements_per_thread=2,
+                    elements_per_thread=new_ept,
                     mapping=None,
                     _write_dependency=custom1._write_dependency,
                     flags=custom1.flags,
@@ -621,36 +635,37 @@ def merge_contiguous_expanded_reads(
                 merged_custom = get_custom(merged_read)
                 merged_custom.index = new_index
                 merged_custom.vector_shapes = deepcopy(custom1.vector_shapes)
+                merged_custom.pre_expansion_id = pre_exp_id
+                merged_custom.expanded_dims = (
+                    deepcopy(custom1.expanded_dims) if custom1.expanded_dims else {}
+                )
                 propagate_tag(node1, merged_read)
 
-                # Create ExtractSlice for each element.
-                extract0 = ExtractSlice(
-                    merged_read, [0], [1], [1]
-                ).add_to_graph(custom1.graph, loc=custom1.location)
+                # ExtractSlice for first half [0..ept).
+                extract0 = ExtractSlice(merged_read, [0], [ept], [1]).add_to_graph(
+                    custom1.graph, loc=custom1.location
+                )
                 get_custom(extract0).index = deepcopy(custom1.index)
                 get_custom(extract0).vector_shapes = deepcopy(custom1.vector_shapes)
                 propagate_tag(node1, extract0)
 
-                extract1 = ExtractSlice(
-                    merged_read, [1], [1], [1]
-                ).add_to_graph(custom1.graph, loc=custom1.location)
+                # ExtractSlice for second half [ept..2*ept).
+                extract1 = ExtractSlice(merged_read, [ept], [ept], [1]).add_to_graph(
+                    custom1.graph, loc=custom1.location
+                )
                 get_custom(extract1).index = deepcopy(custom2.index)
                 get_custom(extract1).vector_shapes = deepcopy(custom2.vector_shapes)
                 propagate_tag(node2, extract1)
 
-            # Replace uses and erase originals.
             custom1.replace_all_uses_with(extract0)
             custom2.replace_all_uses_with(extract1)
             custom1.graph.erase_node(node1)
             custom2.graph.erase_node(node2)
 
-            # Skip the merged pair.
+            merged_any = True
             i += 2
 
-            logger.debug(
-                f"Merged contiguous reads into 2-element vector load "
-                f"along {merge_dim} dimension"
-            )
+    return merged_any
 
 
 def partition_gather_like_ops(
