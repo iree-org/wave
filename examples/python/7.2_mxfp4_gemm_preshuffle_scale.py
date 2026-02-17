@@ -167,6 +167,7 @@ def get_vanilla_kernel():
         ),
     ]
 
+    # TODO: preshuffle merge doesn't work with shared address space yet.
     @tkw.wave(constraints)
     def mxfp4_gemm_vanilla(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
@@ -378,11 +379,6 @@ def run_all_tests():
 
     # Compile preshuffle kernel only.
     compiled_preshuffle = wave_compile(options, preshuffle_kernel)
-    print("=" * 70)
-    print("PRESHUFFLE ASM (scales in global)")
-    print("=" * 70)
-    print(compiled_preshuffle.asm)
-    return
 
     # Generate test data
     x, w, x_scales, w_scales = generate_mxfp4_inputs(
