@@ -490,7 +490,7 @@ llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
 
   // LHS: ignore M symbol since it has different indexing in LHS vs result.
   if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    Attribute mSymbol = lhsType.getShape()[0];
+    Attribute mSymbol = lhsType.getShape().drop_back().back();
     resultLattice = wave::IndexExprsLatticeStorage::join(
         resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
   }
@@ -549,7 +549,7 @@ llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
       continue;
 
     // For LHS/RHS operands, ignore M symbol.
-    Attribute mSymbol = resultType.getShape()[0];
+    Attribute mSymbol = resultType.getShape().drop_back().back();
     operandLattice = wave::IndexExprsLatticeStorage::join(
         operandLattice, resultExpr, {mSymbol});
 
@@ -1094,6 +1094,25 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
+// Append index mappings with offset=0, step=1 and stride=1 to the
+// `symbolMappings` list for each entry in `indexingSymbols`.
+static void
+appendDefaultIndexMapping(MLIRContext *context,
+                          llvm::SmallVectorImpl<NamedAttribute> &symbolMappings,
+                          ArrayRef<wave::WaveSymbolAttr> indexingSymbols) {
+
+  auto zero = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                             getAffineConstantExpr(0, context));
+  auto one = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                            getAffineConstantExpr(1, context));
+
+  for (wave::WaveSymbolAttr symbol : indexingSymbols) {
+    symbolMappings.emplace_back(
+        symbol.getName(),
+        wave::WaveIndexMappingAttr::get(context, {}, zero, one, one));
+  }
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1106,14 +1125,18 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   SmallVector<NamedAttribute> symbolMappings;
   symbolMappings.reserve(indexingSymbols.size());
 
-  assert(indexingSymbols.size() == 2 &&
-         "only 2 indexing symbols are currently supported for MMA result");
-  wave::WaveSymbolAttr mSymbol = indexingSymbols[0];
-  wave::WaveSymbolAttr nSymbol = indexingSymbols[1];
+  assert(indexingSymbols.size() >= 2 &&
+         "at least 2 indexing symbols are required for MMA result");
+  wave::WaveSymbolAttr mSymbol = indexingSymbols.drop_back().back();
+  wave::WaveSymbolAttr nSymbol = indexingSymbols.back();
 
   std::optional<wave::WaveMmaKind> mmaKind = getKind();
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
+  // Batch symbols are initialized to index expressions (0, 1, 1). Handle them
+  // first to be somewhat consistent with the order of dimensions.
+  appendDefaultIndexMapping(getContext(), symbolMappings,
+                            indexingSymbols.drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
@@ -1140,17 +1163,24 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     wave::EmitErrorFn emitError) {
   auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
   auto lhsType = llvm::cast<wave::WaveTensorType>(getLhs().getType());
-  assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() == 2 &&
-         "only 2D MMA operations are supported");
-  wave::WaveSymbolAttr mSymbol = resultType.getShape()[0];
-  wave::WaveSymbolAttr nSymbol = resultType.getShape()[1];
-  wave::WaveSymbolAttr kSymbol = lhsType.getShape()[1];
+  assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() >= 2 &&
+         "at least 2D MMA operations are supported");
+  wave::WaveSymbolAttr mSymbol = resultType.getShape().drop_back().back();
+  wave::WaveSymbolAttr nSymbol = resultType.getShape().back();
+  wave::WaveSymbolAttr kSymbol = lhsType.getShape().back();
 
   std::optional<wave::WaveMmaKind> mmaKind = getKind();
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
 
+  // Add batch dimensions first to be somewhat consistent with the order of
+  // dimensions. Note that we reserve space for 1 more since the list will
+  // initially contain m,n,k along with batch dimensions until we drop either m
+  // or n for each operand.
   llvm::SmallVector<NamedAttribute> operandSymbolMappings;
+  operandSymbolMappings.reserve(lhsType.getShape().size() + 1);
+  appendDefaultIndexMapping(getContext(), operandSymbolMappings,
+                            lhsType.getShape().drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
@@ -1159,6 +1189,9 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   }
 
   llvm::SmallVector<NamedAttribute> accumulatorSymbolMappings;
+  accumulatorSymbolMappings.reserve(resultType.getShape().size());
+  appendDefaultIndexMapping(getContext(), accumulatorSymbolMappings,
+                            resultType.getShape().drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
@@ -1248,19 +1281,30 @@ LogicalResult MmaOp::verify() {
                                              "accumulator", accumulatorType)))
     return failure();
 
-  if (lhsType.getRank() != 2 || rhsType.getRank() != 2 ||
-      accumulatorType.getRank() != 2) {
-    return emitError() << "only 2D MMA operations are supported";
+  if (lhsType.getRank() != rhsType.getRank() ||
+      lhsType.getRank() != accumulatorType.getRank() ||
+      lhsType.getRank() != resultType.getRank()) {
+    return emitOpError()
+           << "expects all operands and results to have the same rank";
   }
 
-  if (detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {1},
-                                            "RHS", rhsType, {1})
+  SmallVector<int> batchDims =
+      llvm::to_vector(llvm::seq<int>(0, lhsType.getRank() - 2));
+  SmallVector<int> batchAndLast(batchDims);
+  batchAndLast.push_back(lhsType.getRank() - 1);
+  SmallVector<int> batchAndSecondToLast(std::move(batchDims));
+  batchAndSecondToLast.push_back(lhsType.getRank() - 2);
+
+  if (detail::verifyTypesMatchingDimensions(
+          getLoc(), "LHS", lhsType, batchAndLast, "RHS", rhsType, batchAndLast)
           .failed() ||
-      detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {0},
-                                            "accumulator", accumulatorType, {0})
+      detail::verifyTypesMatchingDimensions(
+          getLoc(), "LHS", lhsType, batchAndSecondToLast, "accumulator",
+          accumulatorType, batchAndSecondToLast)
           .failed() ||
-      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {0},
-                                            "accumulator", accumulatorType, {1})
+      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType,
+                                            batchAndSecondToLast, "accumulator",
+                                            accumulatorType, batchAndLast)
           .failed()) {
     return failure();
   }

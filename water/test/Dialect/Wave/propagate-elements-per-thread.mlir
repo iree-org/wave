@@ -304,6 +304,25 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: func.func @batched_mma
+  func.func @batched_mma(%mem1: !wave.tensor<[@B, @M, @K] of f16, <global>>, %mem2: !wave.tensor<[@B, @N, @K] of f16, <global>>, %mem3: !wave.tensor<[@B, @M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{B = 2, M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {B = 1, M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+    %lhs_init = arith.constant 0.0 : f16
+    %lhs = wave.register %lhs_init : !wave.tensor<[@B, @M, @K] of f16, <register>>
+    %rhs_init = arith.constant 0.0 : f16
+    %rhs = wave.register %rhs_init : !wave.tensor<[@B, @N, @K] of f16, <register>>
+
+    %acc = wave.read %mem3 {elements_per_thread = 8} : (!wave.tensor<[@B, @M, @N] of f32, <global>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
+
+    // CHECK: wave.mma
+    // CHECK-SAME: (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
+    %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@B, @M, @K] of f16, <register>>, !wave.tensor<[@B, @N, @K] of f16, <register>>, !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
 // Test iterate working with vectors after PropagateElementsPerThread conversion
 normalform.module [#wave.normal_form<full_types>] {
 

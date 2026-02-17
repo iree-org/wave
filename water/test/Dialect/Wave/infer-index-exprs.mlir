@@ -86,6 +86,45 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// Batched (3D) MMA: batch dimension B is leading; M, N, K indexing is as in 2D.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @batched_mma
+  func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                        %b: !wave.tensor<[@B, @N, @K] of f16>,
+                        %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // LHS
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK: }, {
+    // RHS
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Accumulator
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Result
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @simple_mma_with_reads_and_write
   func.func @simple_mma_with_reads_and_write(%a: !wave.tensor<[@M, @K] of f16>,

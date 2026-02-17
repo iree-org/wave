@@ -14,6 +14,16 @@ func.func @mma(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave.tensor<[@C, @B] 
   return %0 : !wave.tensor<[@A, @C] of f32>
 }
 
+// CHECK-LABEL: @batched_mma
+func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                       %b: !wave.tensor<[@B, @N, @K] of f16>,
+                       %c: !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>  {
+  // CHECK: wave.mma
+  %0 = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+    : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+  return %0 : !wave.tensor<[@B, @M, @N] of f32>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
