@@ -571,17 +571,32 @@ def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
     from ...compiler.utils import strides_from_symbolic_shape
     from ..._support.indexing import IndexingContext
 
-    # Group reads by (memory node, ept).
+    # Group reads by (memory, ept, region).  A new region starts at each
+    # subgraph boundary and whenever a side-effecting op (write, barrier, ...)
+    # is encountered, so we never merge reads across such ops.  Reads with
+    # dynamic mapping values are skipped to keep the merge logic simple.
     groups: dict[tuple, list[fx.Node]] = defaultdict(list)
-    for node in trace.walk(lambda n: isinstance(get_custom(n), Read)):
-        custom = get_custom(node)
-        key = (custom.memory, custom.elements_per_thread)
-        groups[key].append(node)
+    region_id = 0
+    for subgraph in trace.region_graph.subgraphs.values():
+        region_id += 1
+        for node in subgraph.nodes:
+            custom = get_custom(node)
+            if not isinstance(custom, CustomOp):
+                continue
+            if custom.has_side_effects:
+                region_id += 1
+                continue
+            if not isinstance(custom, Read):
+                continue
+            if custom.mapping_dynamic_vals:
+                continue
+            key = (custom.memory, custom.elements_per_thread, region_id)
+            groups[key].append(node)
 
     idxc = IndexingContext.current()
     merged_any = False
 
-    for (memory_node, ept), reads in groups.items():
+    for (memory_node, ept, _region), reads in groups.items():
         if len(reads) < 2:
             continue
 

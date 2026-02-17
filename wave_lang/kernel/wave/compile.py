@@ -813,13 +813,13 @@ def _trace_launchable_and_get_kernel_signature(
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(
+            partition_gather_like_ops, trace, launchable.constraints, options.target
+        ),
+        partial(
             merge_contiguous_expanded_reads,
             trace,
             launchable.constraints,
             options.target,
-        ),
-        partial(
-            partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
         partial(generate_bounds_exprs, trace, launchable.constraints),
     ]
