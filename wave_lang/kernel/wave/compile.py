@@ -79,6 +79,7 @@ from .tensor_load_to_shared import tensor_load_to_shared
 from .type_inference import infer_types
 from .wave_schedule import WaveSchedule
 from .workgroup_reordering import reorder_workgroups
+from .opsel_scaled_mfma import apply_opsel_scaled_mfma
 
 # Utilities.
 from .utils.compile_utils import canonicalize_module, apply_transform, compile_to_vmfb
@@ -814,6 +815,12 @@ def compile_launchable_to_mlir(
     if options.postprocess:
         apply_transform(mb.module_op, options.postprocess, options.subs)
 
+    if options.canonicalize:
+        canonicalize_module(mb.module_op)
+
+    # Replace scalar extract+bitcast scale chains on scaled_mfma ops
+    # with vector-level bitcast and opsel byte selection.
+    apply_opsel_scaled_mfma(mb.module_op)
     if options.canonicalize:
         canonicalize_module(mb.module_op)
 
