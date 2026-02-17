@@ -198,8 +198,8 @@ def stagger(loop: Any): ...
 def interleave_ops(
     base_ops: Any,
     interleaved_ops: Any,
-    interval: int = 1,
-    start_offset: int = 0,
+    intervals: int | list[int] = 1,
+    start_offsets: int | list[int] | None = None,
 ): ...
 
 
