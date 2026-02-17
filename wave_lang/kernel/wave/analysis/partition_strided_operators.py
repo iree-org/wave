@@ -38,7 +38,7 @@ from ..utils.mma_utils import (
     simplify_index,
 )
 from ..utils.symbol_utils import (
-    check_symbolic_equals_int,
+    simplify as sym_simplify,
     subs_idxc,
 )
 
@@ -504,12 +504,12 @@ def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
                 off2, phys2, custom2, node2 = read_infos[j]
 
                 # Check both orderings: i before j and j before i.
-                diff = off2 - off1
-                if check_symbolic_equals_int(diff, ept):
+                diff = sym_simplify(off2 - off1)
+                if diff == ept:
                     lo_phys, hi_phys = phys1, phys2
                     lo_custom, hi_custom = custom1, custom2
                     lo_node, hi_node = node1, node2
-                elif check_symbolic_equals_int(diff, -ept):
+                elif diff == -ept:
                     lo_phys, hi_phys = phys2, phys1
                     lo_custom, hi_custom = custom2, custom1
                     lo_node, hi_node = node2, node1
@@ -519,10 +519,10 @@ def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
                 # Find dimension that advances by ept.
                 merge_dim = None
                 for dim in symbolic_dims:
-                    d = hi_phys[dim] - lo_phys[dim]
-                    if check_symbolic_equals_int(d, ept):
+                    d = sym_simplify(hi_phys[dim] - lo_phys[dim])
+                    if d == ept:
                         merge_dim = dim
-                    elif not check_symbolic_equals_int(d, 0):
+                    elif not (d == 0):
                         merge_dim = None
                         break
                 if merge_dim is None:

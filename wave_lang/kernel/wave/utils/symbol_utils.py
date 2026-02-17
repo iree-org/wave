@@ -70,18 +70,17 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
-def simplify_floor_mod(expr: sympy.Expr) -> sympy.Expr:
-    """Simplify floor/Mod expressions using interval arithmetic.
+def simplify(expr: sympy.Expr) -> sympy.Expr:
+    """Simplify a sympy expression using interval arithmetic and sympy.simplify.
 
-    Standard sympy.simplify cannot handle expressions like floor(Mod(x,16)/16)
-    because it lacks range information. This function uses expr_bounds to
-    determine when floor() collapses to a constant or Mod() is a no-op.
-    Iterates to a fixed point to handle cascading simplifications.
+    Extends sympy.simplify with bounds-based reasoning that can resolve
+    floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
+    sympy cannot handle.  Iterates to a fixed point.
     """
     if not isinstance(expr, sympy.Basic):
         return expr
     for _ in range(5):
-        new_expr = _simplify_floor_mod_once(expr)
+        new_expr = _bounds_simplify_once(expr)
         new_expr = sympy.simplify(new_expr)
         if new_expr == expr:
             break
@@ -89,8 +88,8 @@ def simplify_floor_mod(expr: sympy.Expr) -> sympy.Expr:
     return expr
 
 
-def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
-    """Single pass of bounds-based simplification (bottom-up).
+def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
+    """Single bottom-up pass of bounds-based simplification.
 
     Mod nodes are handled specially to avoid a sympy auto-evaluation bug
     where Mod(k*Mod(x,n), m) produces incorrect symbolic results.
@@ -99,7 +98,7 @@ def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
     if not isinstance(expr, sympy.Basic) or expr.is_Atom:
         return expr
 
-    simplified_args = [_simplify_floor_mod_once(a) for a in expr.args]
+    simplified_args = [_bounds_simplify_once(a) for a in expr.args]
 
     # Handle Mod before reconstruction to avoid triggering the sympy bug.
     if isinstance(expr, sympy.Mod):
@@ -124,19 +123,6 @@ def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
         ):
             return sympy.Integer(int(sympy.floor(bounds[0])))
     return expr
-
-
-def check_symbolic_equals_int(expr, value: int) -> bool:
-    """Check if a symbolic expression equals a constant integer.
-
-    Adds non-negative integer assumptions to free symbols and simplifies
-    floor/Mod sub-expressions via interval arithmetic.
-    """
-    if expr == value:
-        return True
-    if not isinstance(expr, sympy.Basic):
-        return expr == value
-    return simplify_floor_mod(expr) == value
 
 
 ####################################################################
