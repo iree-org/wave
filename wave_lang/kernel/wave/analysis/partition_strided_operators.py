@@ -509,16 +509,14 @@ def merge_contiguous_expanded_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
     """
-    Merge expanded reads that access contiguous physical memory into wider loads.
+    Merge reads that access contiguous physical memory into wider vector loads.
 
     Runs to a fixed point, doubling the vector width each iteration:
-    ept=1 pairs → ept=2, ept=2 pairs → ept=4, etc. This also works when the IR
-    already contains vector reads (e.g. ept=2) from earlier passes.
+    ept=1 pairs → ept=2, ept=2 pairs → ept=4, etc. Works regardless of how
+    the reads were created (expansion, manual, etc.).
 
-    For example, with e8m0 pre-shuffled scales at BLOCK_K=128, four scalar reads
-    at M offsets 0/16/32/48 produce shuffled flat offsets in pairs:
-    (base, base+1) and (base+2048, base+2049). This pass merges each pair into
-    a 2-element vector load.
+    Reads are grouped by (memory operand, ept). Within each group, pairs whose
+    physical flat offset starts differ by exactly ept are merged.
     """
     while _merge_contiguous_reads_once(trace):
         pass
@@ -548,32 +546,30 @@ def _get_physical_start(
 def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
     """Single merge pass: merge adjacent pairs of same-ept reads.
 
-    Groups reads by (pre_expansion_id, ept), sorts by expanded_dims, and
-    merges pairs whose flat offset starts differ by exactly ept.
-    Returns True if any merges happened.
+    Groups reads by (memory operand, ept) and merges pairs whose physical
+    flat offset starts differ by exactly ept. Returns True if any merges
+    happened.
     """
     from collections import defaultdict
     from ...compiler.utils import strides_from_symbolic_shape
     from ..._support.indexing import IndexingContext
 
-    # Group reads by (pre_expansion_id, ept).
+    # Group reads by (memory node, ept).
     groups: dict[tuple, list[fx.Node]] = defaultdict(list)
     for node in trace.walk(lambda n: isinstance(get_custom(n), Read)):
         custom = get_custom(node)
-        if custom.pre_expansion_id is not None:
-            key = (custom.pre_expansion_id, custom.elements_per_thread)
-            groups[key].append(node)
+        key = (custom.memory, custom.elements_per_thread)
+        groups[key].append(node)
 
     idxc = IndexingContext.current()
     merged_any = False
 
-    for (pre_exp_id, ept), reads in groups.items():
+    for (memory_node, ept), reads in groups.items():
         if len(reads) < 2:
             continue
 
         customs = [(get_custom(n), n) for n in reads]
-        first_custom = customs[0][0]
-        memory = get_custom(first_custom.memory)
+        memory = get_custom(memory_node)
         symbolic_shape = memory.type.symbolic_shape
         strides = strides_from_symbolic_shape(
             idxc, symbolic_shape, allow_mixed_shapes=True
@@ -586,84 +582,94 @@ def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
             flat_offset = sum(
                 phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
             )
-            dims_key = (
-                tuple(custom.expanded_dims.values()) if custom.expanded_dims else ()
-            )
-            read_infos.append((dims_key, flat_offset, phys_start, custom, node))
+            read_infos.append((flat_offset, phys_start, custom, node))
 
-        read_infos.sort(key=lambda x: x[0])
-
-        # Merge adjacent pairs whose flat offset starts differ by ept.
-        i = 0
-        while i < len(read_infos) - 1:
-            _, off1, phys1, custom1, node1 = read_infos[i]
-            _, off2, phys2, custom2, node2 = read_infos[i + 1]
-
-            if not _check_symbolic_equals_int(off2 - off1, ept):
-                i += 1
+        # Try all pairs to find contiguous ones (diff == ept).
+        merged = set()
+        for i in range(len(read_infos)):
+            if i in merged:
                 continue
+            for j in range(i + 1, len(read_infos)):
+                if j in merged:
+                    continue
+                off1, phys1, custom1, node1 = read_infos[i]
+                off2, phys2, custom2, node2 = read_infos[j]
 
-            # Find dimension that advances by ept (others must be unchanged).
-            merge_dim = None
-            for dim in symbolic_dims:
-                d = phys2[dim] - phys1[dim]
-                if _check_symbolic_equals_int(d, ept):
-                    merge_dim = dim
-                elif not _check_symbolic_equals_int(d, 0):
-                    merge_dim = None
-                    break
-            if merge_dim is None:
-                i += 1
-                continue
+                # Check both orderings: i before j and j before i.
+                diff = off2 - off1
+                if _check_symbolic_equals_int(diff, ept):
+                    lo_phys, hi_phys = phys1, phys2
+                    lo_custom, hi_custom = custom1, custom2
+                    lo_node, hi_node = node1, node2
+                elif _check_symbolic_equals_int(diff, -ept):
+                    lo_phys, hi_phys = phys2, phys1
+                    lo_custom, hi_custom = custom2, custom1
+                    lo_node, hi_node = node2, node1
+                else:
+                    continue
 
-            new_ept = 2 * ept
-            with custom1.graph.inserting_before(node1):
-                new_index = {}
+                # Find dimension that advances by ept.
+                merge_dim = None
                 for dim in symbolic_dims:
-                    if dim == merge_dim:
-                        new_index[dim] = IndexSequence(phys1[dim], new_ept, 1)
-                    else:
-                        new_index[dim] = IndexSequence(phys1[dim], 1, 1)
+                    d = hi_phys[dim] - lo_phys[dim]
+                    if _check_symbolic_equals_int(d, ept):
+                        merge_dim = dim
+                    elif not _check_symbolic_equals_int(d, 0):
+                        merge_dim = None
+                        break
+                if merge_dim is None:
+                    continue
 
-                merged_read = Read(
-                    custom1.memory,
-                    elements_per_thread=new_ept,
-                    mapping=None,
-                    _write_dependency=custom1._write_dependency,
-                    flags=custom1.flags,
-                ).add_to_graph(custom1.graph, loc=custom1.location)
-                merged_custom = get_custom(merged_read)
-                merged_custom.index = new_index
-                merged_custom.vector_shapes = deepcopy(custom1.vector_shapes)
-                merged_custom.pre_expansion_id = pre_exp_id
-                merged_custom.expanded_dims = (
-                    deepcopy(custom1.expanded_dims) if custom1.expanded_dims else {}
-                )
-                propagate_tag(node1, merged_read)
+                # Merge lo + hi into a single wider read.
+                new_ept = 2 * ept
+                with lo_custom.graph.inserting_before(lo_node):
+                    new_index = {
+                        dim: IndexSequence(
+                            lo_phys[dim],
+                            new_ept if dim == merge_dim else 1,
+                            1,
+                        )
+                        for dim in symbolic_dims
+                    }
 
-                # ExtractSlice for first half [0..ept).
-                extract0 = ExtractSlice(merged_read, [0], [ept], [1]).add_to_graph(
-                    custom1.graph, loc=custom1.location
-                )
-                get_custom(extract0).index = deepcopy(custom1.index)
-                get_custom(extract0).vector_shapes = deepcopy(custom1.vector_shapes)
-                propagate_tag(node1, extract0)
+                    merged_read = Read(
+                        lo_custom.memory,
+                        elements_per_thread=new_ept,
+                        mapping=None,
+                        _write_dependency=lo_custom._write_dependency,
+                        flags=lo_custom.flags,
+                    ).add_to_graph(lo_custom.graph, loc=lo_custom.location)
+                    merged_custom = get_custom(merged_read)
+                    merged_custom.index = new_index
+                    merged_custom.vector_shapes = deepcopy(lo_custom.vector_shapes)
+                    propagate_tag(lo_node, merged_read)
 
-                # ExtractSlice for second half [ept..2*ept).
-                extract1 = ExtractSlice(merged_read, [ept], [ept], [1]).add_to_graph(
-                    custom1.graph, loc=custom1.location
-                )
-                get_custom(extract1).index = deepcopy(custom2.index)
-                get_custom(extract1).vector_shapes = deepcopy(custom2.vector_shapes)
-                propagate_tag(node2, extract1)
+                    extract0 = ExtractSlice(merged_read, [0], [ept], [1]).add_to_graph(
+                        lo_custom.graph, loc=lo_custom.location
+                    )
+                    get_custom(extract0).index = deepcopy(lo_custom.index)
+                    get_custom(extract0).vector_shapes = deepcopy(
+                        lo_custom.vector_shapes
+                    )
+                    propagate_tag(lo_node, extract0)
 
-            custom1.replace_all_uses_with(extract0)
-            custom2.replace_all_uses_with(extract1)
-            custom1.graph.erase_node(node1)
-            custom2.graph.erase_node(node2)
+                    extract1 = ExtractSlice(
+                        merged_read, [ept], [ept], [1]
+                    ).add_to_graph(lo_custom.graph, loc=lo_custom.location)
+                    get_custom(extract1).index = deepcopy(hi_custom.index)
+                    get_custom(extract1).vector_shapes = deepcopy(
+                        hi_custom.vector_shapes
+                    )
+                    propagate_tag(hi_node, extract1)
 
-            merged_any = True
-            i += 2
+                lo_custom.replace_all_uses_with(extract0)
+                hi_custom.replace_all_uses_with(extract1)
+                lo_custom.graph.erase_node(lo_node)
+                hi_custom.graph.erase_node(hi_node)
+
+                merged.update({i, j})
+                merged_any = True
+                break
 
     return merged_any
 
