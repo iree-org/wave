@@ -1,7 +1,7 @@
 # RUN: python %s | FileCheck %s
 
 """
-Test merge_contiguous_expanded_reads pass on pre-shuffled (e8m0_shuffle) scale
+Test merge_contiguous_reads pass on pre-shuffled (e8m0_shuffle) scale
 reads for MXFP4 GEMM.
 
 The e8m0_shuffle index mapping rearranges scale data so that each thread's

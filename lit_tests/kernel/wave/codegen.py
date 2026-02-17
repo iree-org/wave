@@ -785,7 +785,7 @@ def test_read_write_conditional():
     )
     print(test_conditional.asm)
 
-    # The merge_contiguous_expanded_reads pass combines the per-element scalar
+    # The merge_contiguous_reads pass combines the per-element scalar
     # reads into wider vector loads (up to max_bits_per_load / element_bits = 8
     # for f16).  The merged loads are then sliced back to scalars for the
     # per-element conditional stores.

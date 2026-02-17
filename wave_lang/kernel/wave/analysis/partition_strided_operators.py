@@ -399,7 +399,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
-def merge_contiguous_expanded_reads(
+def merge_contiguous_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
     """
