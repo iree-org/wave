@@ -167,7 +167,6 @@ def get_vanilla_kernel():
         ),
     ]
 
-    # TODO: preshuffle merge doesn't work with shared address space yet.
     @tkw.wave(constraints)
     def mxfp4_gemm_vanilla(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
@@ -295,6 +294,7 @@ def get_preshuffle_kernel():
         },
     )
 
+    # TODO: preshuffle merge doesn't work with shared address space yet.
     @tkw.wave(constraints)
     def mxfp4_gemm_preshuffle(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
