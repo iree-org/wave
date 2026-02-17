@@ -31,6 +31,7 @@ from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
     get_fastest_index,
+    get_hardware_constraint,
     get_largest_index_and_size,
     infer_dim,
 )
@@ -411,7 +412,8 @@ def merge_contiguous_expanded_reads(
     Reads are grouped by (memory operand, ept). Within each group, pairs whose
     physical flat offset starts differ by exactly ept are merged.
     """
-    while _merge_contiguous_reads_once(trace):
+    hw_constraint = get_hardware_constraint(constraints)
+    while _merge_contiguous_reads_once(trace, hw_constraint):
         pass
 
 
@@ -436,7 +438,7 @@ def _get_physical_start(
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
-def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
+def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
     """Single merge pass: merge adjacent pairs of same-ept reads.
 
     Groups reads by (memory operand, ept) and merges pairs whose physical
@@ -530,8 +532,11 @@ def _merge_contiguous_reads_once(trace: CapturedTrace) -> bool:
                 if merge_dim is None:
                     continue
 
-                # Merge lo + hi into a single wider read.
+                # Respect hardware vector width limit.
                 new_ept = 2 * ept
+                element_type = lo_custom.type.dtype
+                if new_ept > hw_constraint.max_elems_per_load(element_type):
+                    continue
                 with lo_custom.graph.inserting_before(lo_node):
                     new_index = {
                         dim: IndexSequence(
