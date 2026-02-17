@@ -3359,10 +3359,13 @@ class Reshape(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexExpr]:
-        return get_custom(_to_sequence(self.args)[0]).indexing_dims
+        if not self.type:
+            return get_custom(_to_sequence(self.args)[0]).indexing_dims
+        return list(self.type.symbolic_shape)
 
     def infer_type(self, *args):
-        self.type = get_custom(_to_sequence(self.args)[0]).type
+        if not self.type:
+            self.type = get_custom(_to_sequence(self.args)[0]).type
 
 
 @define_op("tensor_load_to_lds")
