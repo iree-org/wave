@@ -334,6 +334,52 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                 ],
             )
 
+        # Constants derived from schedule structure
+        num_m_partitions = (
+            2  # we are dividing the M dimension into 2 paritions per loop iteration
+        )
+        num_pf_iters = (
+            2  # prefetch depth of A and A_scale is 2 iterations (triple buffer)
+        )
+
+        # =====================================================================
+        # Prologue: G2S_A + G2S_A_scale + G2V_B + G2V_B_scale + vmcnt(25) + s2v_a_0 + s2v_a_scale_0
+        # =====================================================================
+        prologue_g2s_a = tkw.filter_nodes(g2s_a, subgraph=pipeline_loop.PROLOGUE)
+        prologue_g2s_a_scale = tkw.filter_nodes(
+            g2s_a_scale, subgraph=pipeline_loop.PROLOGUE
+        )
+        prologue_g2v_b = tkw.filter_nodes(g2v_b, subgraph=pipeline_loop.PROLOGUE)
+        prologue_g2v_b_scale = tkw.filter_nodes(
+            g2v_b_scale, subgraph=pipeline_loop.PROLOGUE
+        )
+        prologue_s2v_a_0 = tkw.filter_nodes(s2v_a_0, subgraph=pipeline_loop.PROLOGUE)
+        prologue_s2v_a_scale_0 = tkw.filter_nodes(
+            s2v_a_scale_0, subgraph=pipeline_loop.PROLOGUE
+        )
+        g2s_per_iter = (len(prologue_g2s_a) + len(prologue_g2s_a_scale)) // num_pf_iters
+        must_complete = g2s_per_iter // num_m_partitions
+        total_vmcnt = (
+            len(prologue_g2s_a)
+            + len(prologue_g2s_a_scale)
+            + len(prologue_g2v_b)
+            + len(prologue_g2v_b_scale)
+        )
+        prologue_vmcnt = total_vmcnt - must_complete
+        prologue_clusters = [
+            tkw.cluster(
+                [
+                    prologue_g2s_a,
+                    prologue_g2s_a_scale,
+                    prologue_g2v_b,
+                    prologue_g2v_b_scale,
+                    tkw.MemoryCounterWaitBarrier(load=prologue_vmcnt),
+                    prologue_s2v_a_0,
+                    prologue_s2v_a_scale_0,
+                ],
+            )
+        ]
+
         # =====================================================================
         # KERNEL: Main loop body with custom cluster ordering
         # =====================================================================
@@ -378,19 +424,33 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             loop_bitcast_a_scale, dim=M, num_partitions=2
         )
 
-        # B load count — used for targeted vmcnt at Barrier 2.
-        # Following the reference kernel (F4GEMM hipBLASLt) pattern:
-        #   GatherToLDS are issued BEFORE B loads inside Cluster 1
-        #   so G2LDS are the oldest vmcnt entries.  At Barrier 2 we
-        #   use vmcnt(n_b_loads) which drains the older G2LDS while
-        #   keeping the newer B loads in-flight for the next iteration.
+        # Barrier count calculations
+        g2s_per_iter = (len(prologue_g2s_a) + len(prologue_g2s_a_scale)) // num_pf_iters
         n_b_loads = len(loop_g2v_b) + len(loop_g2v_b_scale)
 
+        # First A sub-block that must land in LDS before ds_read
+        a_sub_block = g2s_per_iter // num_m_partitions
+
+        total_prologue_loads = (
+            len(prologue_g2s_a)
+            + len(prologue_g2s_a_scale)
+            + len(prologue_g2v_b)
+            + len(prologue_g2v_b_scale)
+        )
+
+        prologue_wait_load = total_prologue_loads - a_sub_block
+
+        # ===========================================================
+        # Loop vmcnt: wait for first A sub-block + ALL B loads
+        # ===========================================================
+        loop_wait_load = prologue_wait_load - a_sub_block - n_b_loads
+
+        # Insert MemoryCounterWaitBarrier at the start of the kernel
+        tkw.insert_at_start(
+            pipeline_loop.KERNEL, tkw.MemoryCounterWaitBarrier(load=loop_wait_load)
+        )
+
         clusters = [
-            # Cluster 0: MMA_0 + second-half LDS reads + bitcasts
-            #   No vmcnt ops here — B loads moved to Cluster 1.
-            #   Barrier 1 (between C0 and C1) sees zero outstanding
-            #   vmcnt, so the wait_async vmcnt(0) is free.
             tkw.cluster(
                 [
                     loop_bitcast_a_0,
@@ -407,11 +467,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                     tkw.SchedulingBarrier([]),
                 ],
             ),
-            # Cluster 1: MMA_1 + GatherToLDS + B loads
-            #   Issue order matters for vmcnt targeting:
-            #     1. GatherToLDS A data+scale  (oldest vmcnt entries)
-            #     2. B data+scale global loads  (newest vmcnt entries)
-            #   MMA_1 executes alongside both, hiding latency.
             tkw.cluster(
                 [
                     loop_scaled_mma_1,
@@ -424,11 +479,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                 ]
             ),
         ]
-
-        # Barrier 1 (insert_before): between Cluster 0 and Cluster 1.
-        #   Zero outstanding vmcnt → vmcnt(0) from SharedMemoryBarrier
-        #   is trivially satisfied (no stall).
-        tkw.insert_before(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
         # Barrier 3 (insert_at_end): loop backedge between C2 and next
         #   iteration's C0.  No vmcnt ops outstanding after C2 (only
@@ -567,8 +617,11 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         ]
 
         clusters += epilogue_clusters_itr0
-
+        clusters += prologue_clusters
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.EPILOGUE, clusters)
+        # Unroll factor requires per-GEMM tuning:
+        unroll_factor = 2
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
     return mxfp4_dbuf_schedule
