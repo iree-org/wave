@@ -133,22 +133,22 @@ def _run_progressive_roundtrip(
 
             if result and not expected_fail:
                 ok_count += 1
-                print(f"[{i}/{total}] {name}: OK")
+                print(f"[{i}/{total}] {name}: [OK]")
             elif result and expected_fail:
                 xpass_count += 1
                 xpass_names.append(name)
-                print(f"[{i}/{total}] {name}: XPASS (remove from expected_failures)")
+                print(f"[{i}/{total}] {name}: [XPASS] remove from expected_failures")
             elif not result and expected_fail:
                 xfail_count += 1
                 err = result.error
                 short_err = (err[:120] + "...") if len(err) > 120 else err
-                print(f"[{i}/{total}] {name}: XFAIL ({short_err})")
+                print(f"[{i}/{total}] {name}: [XFAIL] {short_err}")
             else:
                 fail_count += 1
                 fail_names.append(name)
                 err = result.error
                 short_err = (err[:120] + "...") if len(err) > 120 else err
-                print(f"[{i}/{total}] {name}: FAIL ({short_err})")
+                print(f"[{i}/{total}] {name}: [FAIL] {short_err}")
 
         print(
             f"summary: {ok_count} OK, {xfail_count} XFAIL, "
@@ -211,7 +211,5 @@ def gemm_progressive_roundtrip():
         }
     )
 
-    # CHECK: hoist_loop_invariant_ops: OK
-    # CHECK-NOT: FAIL (
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
     _run_progressive_roundtrip(gemm, options, expected_failures)
