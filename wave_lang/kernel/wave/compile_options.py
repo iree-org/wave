@@ -32,7 +32,6 @@ class WaveCompileOptions:
     # === Symbol mappings ===
     subs: dict[str | IndexSymbol, Any] = field(default_factory=dict)
     dynamic_symbols: list[str] = field(default_factory=list)
-    use_dynamic_strides: bool = False
 
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE

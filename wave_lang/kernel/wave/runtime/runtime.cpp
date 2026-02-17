@@ -137,8 +137,8 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
                        2 * strides.size() * sizeof(uint32_t);
 
   // TODO(paulzzy): We should set a maximum size to avoid stack corruption
-  std::vector<uint8_t> kernelArguments(kernArgSize);
-  uint64_t *ptr = (uint64_t *)kernelArguments.data();
+  uint8_t kernelArguments[kernArgSize];
+  uint64_t *ptr = (uint64_t *)kernelArguments;
   for (auto val : tensors)
     *ptr++ = val;
 
@@ -164,8 +164,7 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
     *ptr3++ = static_cast<uint32_t>(stride >> 32);
   }
 
-  void *hipLaunchParams[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER,
-                             kernelArguments.data(),
+  void *hipLaunchParams[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, kernelArguments,
                              HIP_LAUNCH_PARAM_BUFFER_SIZE, &kernArgSize,
                              HIP_LAUNCH_PARAM_END};
 
