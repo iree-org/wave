@@ -309,7 +309,14 @@ class WaveKernel:
             )
         else:
             tensors = [t.data for t in chain(kernel_inputs, kernel_outputs)]
-            self.launchable(*tensors, *scalar_args)
+            if self.options.use_dynamic_strides:
+                stride_values = []
+                for t in chain(kernel_inputs, kernel_outputs):
+                    for d in range(t.dim()):
+                        stride_values.append(t.stride(d))
+                self.launchable(*tensors, *scalar_args, *stride_values)
+            else:
+                self.launchable(*tensors, *scalar_args)
 
             if self.options.run_bench:
                 benchmark_flags = get_benchmark_flags(self.options)
@@ -785,6 +792,7 @@ def compile_launchable_to_mlir(
         options.dynamic_symbols,
         llvm_func_config,
         trace.location,
+        options.use_dynamic_strides,
     )
 
     # Only emit MLIR if we don't have a module yet.
@@ -1111,6 +1119,7 @@ def wave_compile(
                 async_dispatch=is_async,
                 device_layout=device_layout,
                 device_constraints=kernel.device_constraints,
+                use_dynamic_strides=options.use_dynamic_strides,
             )
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
