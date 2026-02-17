@@ -90,14 +90,23 @@ def invoke_with_wave_runtime(
     # Ensure that the tensors are contiguous.
     kern_args = []
     for arg_tensor in chain(kernel_inputs, kernel_outputs):
-        if not arg_tensor.is_contiguous():
-            arg_tensor = arg_tensor.contiguous()
+        # if not arg_tensor.is_contiguous():
+        #     arg_tensor = arg_tensor.contiguous()
         kern_args.append(arg_tensor.data_ptr())
 
     kernel_args = wave_runtime.Int64Vector(kern_args)
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims[len(bound_scalar_symbols) :])
+
+    # Pass in dynamic strides if enabled.
+    stride_values = []
+    if options.use_dynamic_strides:
+        for arg_tensor in chain(kernel_inputs, kernel_outputs):
+            for d in range(arg_tensor.dim()):
+                stride_values.append(arg_tensor.stride(d))
+    strides = wave_runtime.Int64Vector(stride_values)
+
     # Launch the kernel.
-    wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, scalar_args)
+    wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, scalar_args, strides)
 
 
 def get_default_arch() -> str:
