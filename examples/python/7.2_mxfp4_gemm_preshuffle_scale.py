@@ -377,7 +377,6 @@ def run_all_tests():
     # Compile both kernels
     compiled_vanilla = wave_compile(options, vanilla_kernel)
 
-    # Compile preshuffle kernel only.
     compiled_preshuffle = wave_compile(options, preshuffle_kernel)
 
     # Generate test data
