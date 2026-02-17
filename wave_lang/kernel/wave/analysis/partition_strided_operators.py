@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from copy import deepcopy
-import itertools
 from itertools import groupby
 from operator import itemgetter
 
@@ -398,35 +397,112 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
-def _check_symbolic_equals_int(
-    expr, value: int, num_samples: int = 32
-) -> bool:
+def _expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
+    """Compute (lo, hi) bounds for a sympy expression via interval arithmetic.
+
+    Free symbols are assumed to be non-negative integers (hardware indices).
+    Returns (lo, hi) or None if bounds cannot be determined.
+    """
+    if expr.is_Integer or expr.is_Rational:
+        return (expr, expr)
+    if expr.is_Symbol:
+        return (sympy.Integer(0), sympy.oo) if expr.is_nonnegative else None
+    if isinstance(expr, sympy.Mod):
+        p, q = expr.args
+        if q.is_positive and q.is_number:
+            p_bounds = _expr_bounds(p)
+            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
+                return p_bounds
+            return (sympy.Integer(0), q - 1)
+        return None
+    if isinstance(expr, sympy.floor):
+        inner_bounds = _expr_bounds(expr.args[0])
+        if inner_bounds:
+            return (sympy.floor(inner_bounds[0]), sympy.floor(inner_bounds[1]))
+        return None
+    if isinstance(expr, sympy.Add):
+        bounds = [_expr_bounds(a) for a in expr.args]
+        if all(b is not None for b in bounds):
+            return (sum(b[0] for b in bounds), sum(b[1] for b in bounds))
+        return None
+    if isinstance(expr, sympy.Mul):
+        if not expr.args:
+            return (sympy.Integer(1), sympy.Integer(1))
+        bounds = [_expr_bounds(a) for a in expr.args]
+        if all(b is not None for b in bounds):
+            lo, hi = bounds[0]
+            for b in bounds[1:]:
+                corners = [lo * b[0], lo * b[1], hi * b[0], hi * b[1]]
+                lo, hi = min(corners), max(corners)
+            return (lo, hi)
+        return None
+    return None
+
+
+def _simplify_floor_mod(expr: sympy.Expr) -> sympy.Expr:
+    """Simplify floor/Mod expressions using interval arithmetic.
+
+    Standard sympy.simplify cannot handle expressions like floor(Mod(x,16)/16)
+    because it lacks range information. This function uses _expr_bounds to
+    determine when floor() collapses to a constant or Mod() is a no-op.
+    Iterates to a fixed point to handle cascading simplifications.
+    """
+    if not isinstance(expr, sympy.Basic):
+        return expr
+    for _ in range(5):
+        new_expr = _simplify_floor_mod_once(expr)
+        new_expr = sympy.simplify(new_expr)
+        if new_expr == expr:
+            break
+        expr = new_expr
+    return expr
+
+
+def _simplify_floor_mod_once(expr: sympy.Expr) -> sympy.Expr:
+    """Single pass of bounds-based simplification (bottom-up)."""
+    if not isinstance(expr, sympy.Basic) or expr.is_Atom:
+        return expr
+    expr = expr.func(*[_simplify_floor_mod_once(a) for a in expr.args])
+    if isinstance(expr, sympy.floor):
+        bounds = _expr_bounds(expr.args[0])
+        if (
+            bounds
+            and bounds[0] != sympy.oo
+            and bounds[1] != sympy.oo
+            and sympy.floor(bounds[0]) == sympy.floor(bounds[1])
+        ):
+            return sympy.Integer(int(sympy.floor(bounds[0])))
+    if isinstance(expr, sympy.Mod):
+        p, q = expr.args
+        if q.is_positive and q.is_number:
+            p_bounds = _expr_bounds(p)
+            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
+                return p
+    return expr
+
+
+def _check_symbolic_equals_int(expr, value: int) -> bool:
     """Check if a symbolic expression equals a constant integer.
 
-    Uses numerical evaluation with concrete integer substitutions for all free
-    symbols since sympy.simplify cannot handle complex floor/Mod expressions.
-    Returns True only if the expression evaluates to the given value for all
-    tested points.
+    Adds non-negative integer assumptions to free symbols and simplifies
+    floor/Mod sub-expressions via interval arithmetic.
     """
     if expr == value:
         return True
     if not isinstance(expr, sympy.Basic):
         return expr == value
+    # Add integer/nonneg assumptions to all free symbols so that
+    # _expr_bounds can reason about Mod/floor ranges.
     free = list(expr.free_symbols)
-    if not free:
-        try:
-            return int(expr) == value
-        except (TypeError, ValueError):
-            return False
-    # Test with concrete values covering key modular residue classes.
-    rng = np.random.RandomState(42)
-    key_values = [0, 1, 3, 7, 15, 16, 31, 32, 47, 63, 64, 100, 127]
-    for _ in range(num_samples):
-        subs = {s: int(rng.choice(key_values)) for s in free}
-        result = expr.subs(subs)
-        if result != value:
-            return False
-    return True
+    if free:
+        subs = {}
+        for s in free:
+            if not s.is_nonnegative or not s.is_integer:
+                new_s = sympy.Symbol(s.name, integer=True, nonnegative=True)
+                subs[s] = new_s
+        if subs:
+            expr = expr.subs(subs)
+    return _simplify_floor_mod(expr) == value
 
 
 def merge_contiguous_expanded_reads(

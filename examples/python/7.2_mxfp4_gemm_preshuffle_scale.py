@@ -297,9 +297,9 @@ def get_preshuffle_kernel():
     @tkw.wave(constraints)
     def mxfp4_gemm_preshuffle(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -376,7 +376,13 @@ def run_all_tests():
     # Compile both kernels
     compiled_vanilla = wave_compile(options, vanilla_kernel)
 
+    # Compile preshuffle kernel only.
     compiled_preshuffle = wave_compile(options, preshuffle_kernel)
+    print("=" * 70)
+    print("PRESHUFFLE ASM (scales in global)")
+    print("=" * 70)
+    print(compiled_preshuffle.asm)
+    return
 
     # Generate test data
     x, w, x_scales, w_scales = generate_mxfp4_inputs(
