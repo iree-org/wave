@@ -177,7 +177,13 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
 
         # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
         cluster_0_ops = [
-            tkw.MemoryCounterWaitBarrier(load=0),
+            tkw.SchedulingBarrier([]),
+            # tkw.MemoryCounterWait(load=0),
+            tkw.WorkgroupBarrier(),
+            tkw.WorkgroupBarrier(),
+            loop_global_to_shared,
+            tkw.SchedulingBarrier([]),
+            tkw.MemoryCounterWait(load=independent_global_count),
             loop_shared_load_a_0,
             loop_shared_load_a_scale_0,
             loop_shared_load_b_0,
@@ -186,8 +192,6 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
             loop_bitcast_a_scale_0,
             loop_bitcast_b_0,
             loop_bitcast_b_scale_0,
-            tkw.SchedulingBarrier([]),
-            loop_global_to_shared,
             tkw.SchedulingBarrier([]),
         ]
         if use_stagger:
@@ -215,6 +219,7 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
             # Cluster 2: Second K-partition shared loads/bitcasts
             tkw.cluster(
                 [
+                    tkw.SchedulingBarrier([]),
                     loop_shared_load_a_1,
                     loop_shared_load_a_scale_1,
                     loop_shared_load_b_1,
@@ -241,7 +246,8 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
 
         # Insert barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
-        tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+        tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+        # tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
