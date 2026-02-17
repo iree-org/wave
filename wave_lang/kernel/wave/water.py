@@ -383,7 +383,15 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
         nonlocal mlir_asm
-        # Erase the last occurrence of '}' from mlir_asm which closes the module operation
+        # Add transform.with_named_sequence attribute to the module if missing.
+        attr_name = "transform.with_named_sequence"
+        if attr_name not in mlir_asm:
+            mlir_asm = mlir_asm.replace(
+                "gpu.container_module",
+                "gpu.container_module, " + attr_name,
+                1,
+            )
+        # Erase the last occurrence of '}' from mlir_asm which closes the module operation.
         last_close = mlir_asm.rfind("}")
         if last_close != -1:
             mlir_asm = mlir_asm[:last_close]

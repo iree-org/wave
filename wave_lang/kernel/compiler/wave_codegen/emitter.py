@@ -1200,14 +1200,14 @@ def cast_vector(emitter: WaveEmitter, value, *, element_type: Optional[IrType] =
         return vector_d.broadcast(vector_type, value)
 
 
-def cast_scalar(emitter: WaveEmitter, value):
+def cast_scalar(emitter: WaveEmitter, value: Value, position: int = 0) -> Value:
     proxy_value = cast_py_value(emitter, value)
     value = proxy_value.ir_value
 
     # After scalar promotion, promote to vector.
     if isinstance(value.type, VectorType):
         # Vector -> scalar.
-        return vector_d.extract(value, static_position=[0], dynamic_position=[])
+        return vector_d.extract(value, static_position=[position], dynamic_position=[])
     else:
         # Already a scalar. Coerce or return.
         # No target element_type.
