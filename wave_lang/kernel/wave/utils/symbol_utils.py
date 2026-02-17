@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from copy import deepcopy
+from functools import lru_cache
 from typing import Optional
 
 import sympy
@@ -25,6 +26,7 @@ from ..._support.indexing import (
 ####################################################################
 
 
+@lru_cache(maxsize=1024)
 def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     """Compute (lo, hi) bounds for a sympy expression via interval arithmetic.
 
@@ -70,6 +72,7 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
+@lru_cache(maxsize=1024)
 def simplify(expr: sympy.Expr) -> sympy.Expr:
     """Simplify a sympy expression using interval arithmetic and sympy.simplify.
 
