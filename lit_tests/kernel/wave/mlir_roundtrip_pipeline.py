@@ -35,7 +35,7 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     mlir_to_fx,
 )
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
-from wave_lang.kernel.wave.utils.classes import Failure, Success, SuccessOrFailure
+from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
@@ -48,7 +48,7 @@ def _try_roundtrip(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-) -> SuccessOrFailure[None]:
+) -> Result[None]:
     """Attempt an MLIR roundtrip on the current trace state."""
     try:
         # Emit FX -> Water MLIR.

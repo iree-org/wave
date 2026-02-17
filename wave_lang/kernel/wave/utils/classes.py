@@ -11,7 +11,7 @@ from enum import Enum
 T = TypeVar("T")
 
 
-class SuccessOrFailure(ABC, Generic[T]):
+class Result(ABC, Generic[T]):
     """Abstract result of a failable operation.
 
     Construct via `Success()` or `Failure(error)`.
@@ -27,7 +27,7 @@ class SuccessOrFailure(ABC, Generic[T]):
     def __repr__(self) -> str: ...
 
 
-class Success(SuccessOrFailure[T]):
+class Success(Result[T]):
     """Successful outcome, optionally carrying a typed value."""
 
     def __init__(self, value: T = None):
@@ -43,7 +43,7 @@ class Success(SuccessOrFailure[T]):
         return f"Success({self.value!r})"
 
 
-class Failure(SuccessOrFailure):
+class Failure(Result):
     """Failed outcome with an error description."""
 
     def __init__(self, error: str):

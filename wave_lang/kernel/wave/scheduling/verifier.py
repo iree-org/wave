@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TypeAlias
 import numpy as np
 import torch.fx as fx
 
-from ..utils.classes import Failure, Success, SuccessOrFailure
+from ..utils.classes import Failure, Result, Success
 from .graph_utils import Edge
 
 Schedule: TypeAlias = Dict[fx.Node, int]
@@ -365,9 +365,7 @@ class ScheduleValidator:
 
         self._repairer = ScheduleConstraintRepairer(self._dep_graph, self.edges, self.T)
 
-    def attempt_move(
-        self, node_to_move: fx.Node, new_cycle: int
-    ) -> SuccessOrFailure[Schedule]:
+    def attempt_move(self, node_to_move: fx.Node, new_cycle: int) -> Result[Schedule]:
         if node_to_move not in self.S:
             return Failure("Node not in schedule")
 

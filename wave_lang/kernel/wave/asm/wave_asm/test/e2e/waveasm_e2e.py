@@ -44,7 +44,7 @@ if str(wave_root) not in sys.path:
     sys.path.insert(0, str(wave_root))
 
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
-from wave_lang.kernel.wave.utils.classes import Failure, Success, SuccessOrFailure
+from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 
 
 @dataclass
@@ -239,7 +239,7 @@ class WaveASMCompiler:
         except Exception as e:
             return False, str(e), ""
 
-    def assemble_to_binary(self, asm_text: str) -> SuccessOrFailure[Path]:
+    def assemble_to_binary(self, asm_text: str) -> Result[Path]:
         """Assemble AMDGCN assembly to GPU binary using amdclang++."""
         temp_dir = self._get_temp_dir()
         asm_file = temp_dir / "kernel.s"
