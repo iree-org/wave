@@ -379,17 +379,22 @@ def ExtractOp : WaveOp<"extract",
     is not intended for use in user code. As such, it intentionally does not
     implement the interfaces for type and index dataflow analyses as it only
     appears after those. It does, however, implement the elements per thread
-    interface as it is needed for lowering to vectors.
+    interface as it is needed for lowering to vectors. User code should use
+    `extract_slice` instead.
 
     When lowered, extracts a single element from the vector that corresponds
     to lowered register-resident tensor, producing a 1-element vector.
-    Therefore, the result tensor is always indexed by one dimension.
+    Therefore, the result tensor is indexed by one less dimension that the
+    source tensor.
 
-    TODO: we don't have a good way of verifying this, but the indexing symbol
-    of the result must be the indexing symbol for which the size
-    (second element of the index expression) is greater than 1 when such a
+    TODO: we don't have a good way of verifying this, but the shape dimension
+    removed from the result must be the only one with non-unit index step
+    (second element of the index expression) when such a
     symbol exists (and presumably the last / the one mapped to thread X
     otherwise).
+
+    TODO: this operation leaks the internal abstraction of vector registers.
+    Consider regrouping it with `reshape` into a single relayout operation.
   }];
 
   let arguments = !con((ins
