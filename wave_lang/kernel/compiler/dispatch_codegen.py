@@ -97,6 +97,7 @@ class StreamExecutable:
         dynamic_symbols: list[IndexSymbol] = [],
         llvm_configs: dict[str, str] = {},
         kernel_location: Optional[CapturedLocation] = None,
+        use_dynamic_strides: bool = False,
     ) -> "DispatchEntrypoint":
         """Defines a dispatch function with a signature like:
 
@@ -123,6 +124,14 @@ class StreamExecutable:
 
         linear_bindings = sig.linear_bindings
 
+        # Dynamic strides: add one index argument per dimension per buffer.
+        stride_arg_count = 0
+        if use_dynamic_strides:
+            stride_arg_count = sum(
+                len(b.kernel_buffer_type.symbolic_shape)
+                for b in sig.kernel_buffer_bindings
+            )
+
         dynamic_dim_indices = {
             "begin": len(kb_input_bindings)
             + len(kb_output_bindings)
@@ -139,10 +148,11 @@ class StreamExecutable:
                     return binding_type
                 return binding.as_mlir_type()
 
-            def_ftype = FunctionType.get(
-                [abi_type(b) for b in linear_bindings],
-                [],
-            )
+            ftype_arg_types = [abi_type(b) for b in linear_bindings]
+            if stride_arg_count > 0:
+                index_type = IndexType.get()
+                ftype_arg_types += [index_type] * stride_arg_count
+            def_ftype = FunctionType.get(ftype_arg_types, [])
 
             if kernel_location is not None:
                 func_location_with_di = create_debug_info_for_kernel(
@@ -155,6 +165,8 @@ class StreamExecutable:
                 with func_location_with_di:
                     def_func_op = func_d.FuncOp(name, def_ftype)
                 arg_locs = create_argument_locations(linear_bindings)
+                if stride_arg_count > 0:
+                    arg_locs += [Location.unknown()] * stride_arg_count
                 def_func_block = def_func_op.add_entry_block(arg_locs)
                 def_func_args = list(def_func_block.arguments)
                 if workgroup_size is not None and subgroup_size is not None:
@@ -186,15 +198,16 @@ class StreamExecutable:
             # Define the export.
             with InsertionPoint.at_block_begin(self._exe_block):
                 index_type = IndexType.get()
+                export_param_types = [
+                    index_type
+                    for _ in dynamic_dim_bindings
+                    + [b for b in scalar_bindings if is_scalar_symbol(b)]
+                ]
+                if stride_arg_count > 0:
+                    export_param_types += [index_type] * stride_arg_count
                 export_op = stream_d.ExecutableExportOp(name, name)
                 export_block = export_op.workgroup_count.blocks.append(
-                    *(
-                        [
-                            index_type
-                            for b in dynamic_dim_bindings
-                            + [b for b in scalar_bindings if is_scalar_symbol(b)]
-                        ]
-                    )
+                    *export_param_types
                 )
 
             workgroup_builder = WorkgroupBuilder(

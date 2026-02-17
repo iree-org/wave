@@ -192,6 +192,7 @@ class WaveCacheManager(object):
             options.func_name,
             options.subs,
             options.dynamic_symbols,
+            options.use_dynamic_strides,
             options.schedule,
             options.use_scheduling_barriers,
             options.backend,  # Include backend to differentiate llvm vs asm
