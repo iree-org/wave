@@ -434,7 +434,7 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
 
-    # CHECK: func.func @base_attention
+    # CHECK-LABEL: func.func @base_attention
 
     # CHECK: scf.if
     # CHECK-NEXT: rocdl.s.barrier
