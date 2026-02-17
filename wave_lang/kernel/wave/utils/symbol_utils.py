@@ -136,17 +136,6 @@ def check_symbolic_equals_int(expr, value: int) -> bool:
         return True
     if not isinstance(expr, sympy.Basic):
         return expr == value
-    # Add integer/nonneg assumptions to all free symbols so that
-    # expr_bounds can reason about Mod/floor ranges.
-    free = list(expr.free_symbols)
-    if free:
-        subs = {}
-        for s in free:
-            if not s.is_nonnegative or not s.is_integer:
-                new_s = sympy.Symbol(s.name, integer=True, nonnegative=True)
-                subs[s] = new_s
-        if subs:
-            expr = expr.subs(subs)
     return simplify_floor_mod(expr) == value
 
 
