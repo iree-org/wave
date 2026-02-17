@@ -22,7 +22,6 @@ from ...ops.wave_ops import (
 from ..constraints import Constraint
 from ..utils.general_utils import (
     get_induction_variable,
-    get_shared_memory_operands,
     rotate_list,
     collect_shared_memory_operands,
 )
@@ -32,10 +31,7 @@ from .loop_reconstruction_utils import (
     ArgumentContext,
     compute_multi_buffer_count,
     create_drain_stage_schedule,
-    create_extended_drain_stage_schedule,
     create_fill_stage_schedule,
-    filter_out_deep_prefetch,
-    filter_partitioned_graph_by_prefetch,
     interleave_instructions,
     liveness_analysis,
     partition_graph_by_stage,
@@ -100,7 +96,6 @@ def add_nodes_by_schedule(
     pipelining_stage: PipelineStage = PipelineStage.KERNEL,
     use_scheduling_barriers: bool = False,
     node_mapping: dict[fx.Node, list[fx.Node]] = None,
-    step: int = 1,
 ):
     """
     Interleave the instructions in the partitioned graph by stage
@@ -167,21 +162,10 @@ def add_nodes_by_schedule(
             )
 
             # Set the index for the new node by substituting the induction variable
-            # for the current iteration. For deeply-prefetched nodes in the kernel,
-            # shift the index forward by prefetch_extra_offset * step so that
-            # e.g. A's GatherToLDS fetches K=2 instead of K=1 at iter 0.
-            iv = current_induction_variables[iteration]
-            if pipelining_stage == PipelineStage.KERNEL:
-                prefetch_extra = custom_node.scheduling_parameters.get(
-                    "prefetch_extra_offset", 0
-                )
-                if prefetch_extra > 0:
-                    iv = iv + prefetch_extra * step
-                    logger.debug(
-                        f"Deep prefetch shift for {node}: IV {current_induction_variables[iteration]} -> {iv} "
-                        f"(extra_offset={prefetch_extra}, step={step})"
-                    )
-            update_node_index(new_node, induction_variable, iv)
+            # for the current iteration.
+            update_node_index(
+                new_node, induction_variable, current_induction_variables[iteration]
+            )
             if custom_node.expanded_dims:
                 new_node.expanded_dims = custom_node.expanded_dims
             if custom_node.pre_expansion_id:
@@ -376,7 +360,6 @@ def construct_prologue(
     stages: list[int],
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
     node_mapping: dict[fx.Node, list[fx.Node]] = None,
-    max_extra_depth: int = 0,
 ):
     """
     Construct the prologue of the pipelined loop.
@@ -384,41 +367,17 @@ def construct_prologue(
     before the reduction operator in the root graph in the appropriate order.
     We also need to initialize the rotating registers and update the indices
     of the nodes to use the appropriate values of the induction variable.
-
-    When max_extra_depth > 0, additional fill iterations are added for
-    deeply-prefetched nodes (those with prefetch_extra_offset > 0 in their
-    scheduling parameters). This enables filling multiple buffer slots in
-    the prologue for specific operands.
     """
     logger.debug("=====================================")
     logger.debug("Constructing prologue.")
     logger.debug("=====================================")
 
-    # When we have extra depth, we need more iteration slots in the
-    # ArgumentContext to track the additional prefetch iterations.
-    total_iterations = num_stages + max_extra_depth
     arg_context = ArgumentContext(
         reduction.outputs(reduction_subgraph),
         reduction.iter_args(reduction_subgraph),
         reduction.init_args,
         num_stages,
-        num_iterations=total_iterations,
     )
-
-    # Extend induction variables and fill schedule to cover extra iterations.
-    if max_extra_depth > 0:
-        # Pad induction variables: [0, 1, ..., num_stages-1, num_stages, ...]
-        extended_ivs = list(new_induction_variables) + list(
-            range(num_stages, total_iterations)
-        )
-        # Pad normal fill schedule rows to match extended iteration count.
-        extended_stages = []
-        for row in stages:
-            padded_row = list(row) + [None] * max_extra_depth
-            extended_stages.append(padded_row)
-    else:
-        extended_ivs = new_induction_variables
-        extended_stages = stages
 
     # Map iter args to init args in the prologue.
     original_init_args = list(reduction.init_args)
@@ -431,65 +390,20 @@ def construct_prologue(
 
     push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
     with reduction.graph.inserting_before(reduction.fx_node):
-        # Normal fill iterations (num_stages - 1).
         for i in range(num_stages - 1):
             add_nodes_by_schedule(
                 reduction,
                 reduction.graph,
                 partitioned_graph,
                 arg_context,
-                extended_stages[i],
+                stages[i],
                 initiation_interval,
                 induction_variable,
-                extended_ivs,
+                new_induction_variables,
                 rotating_registers,
                 PipelineStage.PROLOGUE,
                 node_mapping=node_mapping,
             )
-
-        # Extra fill iterations for deeply-prefetched nodes.
-        if max_extra_depth > 0:
-            logger.info(
-                f"Adding {max_extra_depth} extra prefetch iterations to prologue."
-            )
-            for j in range(max_extra_depth):
-                # Filter to only include nodes with sufficient prefetch depth.
-                # Extra iteration j includes nodes with prefetch_extra_offset >= (j + 1).
-                min_offset = j + 1
-                filtered_graph = filter_partitioned_graph_by_prefetch(
-                    partitioned_graph, min_offset
-                )
-                # Log for debugging: count filtered nodes
-                filtered_count = sum(
-                    len(nodes)
-                    for stage_dict in filtered_graph
-                    for nodes in stage_dict.values()
-                )
-                logger.info(
-                    f"Extra fill iteration {j}: min_offset={min_offset}, "
-                    f"filtered_nodes={filtered_count}"
-                )
-                # Build schedule row: only stage 0 at the next iteration slot.
-                # We use iteration index (num_stages - 1 + j) so that:
-                #   - The induction variable gives the correct K value
-                #   - The buffer rotation maps to the correct double-buffer slot
-                # For 2-stage + depth=2: j=0 → iteration 1 → K=1, buffer 1
-                extra_iter_idx = num_stages - 1 + j
-                extra_row = [None] * total_iterations
-                extra_row[extra_iter_idx] = 0  # Execute stage 0
-                add_nodes_by_schedule(
-                    reduction,
-                    reduction.graph,
-                    filtered_graph,
-                    arg_context,
-                    extra_row,
-                    initiation_interval,
-                    induction_variable,
-                    extended_ivs,
-                    rotating_registers,
-                    PipelineStage.PROLOGUE,
-                    node_mapping=node_mapping,
-                )
 
     # During the prologue, we may have computed results that need to be passed as init args
     # to the kernel.
@@ -614,7 +528,6 @@ def construct_kernel(
     use_scheduling_barriers: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
     node_mapping: dict[fx.Node, list[fx.Node]] = None,
-    step: int = 1,
 ) -> tuple[Iterate, fx.Graph]:
     """
     Construct the kernel of the pipelined loop.
@@ -697,7 +610,6 @@ def construct_kernel(
             PipelineStage.KERNEL,
             use_scheduling_barriers,
             node_mapping,
-            step=step,
         )
 
         # Create output node (last node in the graph).
@@ -744,7 +656,6 @@ def construct_epilogue(
     visualize: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
     node_mapping: dict[fx.Node, list[fx.Node]] = None,
-    max_extra_depth: int = 0,
 ) -> list[fx.Node]:
     """
     Construct the epilogue of the pipelined loop.
@@ -753,10 +664,6 @@ def construct_epilogue(
     no iteration is every completed and so we don't compute the final results)
     We emit GetResult nodes for the rotating registers and map them to
     the different epilogue stages.
-
-    When max_extra_depth > 0, extra drain iterations are needed because
-    the kernel ran fewer iterations (due to extra prologue fills). Non-deeply-
-    prefetched stage-0 nodes still need to complete their last prefetches.
 
     Returns:
         The list of nodes representing the final values after the epilogue completes.
@@ -767,28 +674,11 @@ def construct_epilogue(
     logger.debug("Constructing epilogue.")
     logger.debug("=====================================")
 
-    # When max_extra_depth > 0, we need more iteration slots in the
-    # ArgumentContext for the extra drain iterations, but keep num_stages
-    # as the real pipeline stage count (for rotating register mapping).
-    effective_iterations = num_stages + max_extra_depth
-    if max_extra_depth > 0:
-        stages = create_extended_drain_stage_schedule(num_stages, max_extra_depth)
-        partitioned_graph = filter_out_deep_prefetch(partitioned_graph)
-        # Extend induction variables to cover extra drain iterations.
-        step = (
-            new_induction_variables[1] - new_induction_variables[0]
-            if len(new_induction_variables) > 1
-            else 1
-        )
-        base = new_induction_variables[0] - max_extra_depth * step
-        new_induction_variables = [base + i * step for i in range(effective_iterations)]
-
     arg_context = ArgumentContext(
         reduction.outputs(reduction_subgraph),
         reduction.iter_args(reduction_subgraph),
         reduction.init_args,
         num_stages,
-        num_iterations=effective_iterations,
     )
 
     existing_get_results: list[GetResult] = [
@@ -851,10 +741,7 @@ def construct_epilogue(
             arg_context, pipelined_reduction, counter, outer_vars
         )
 
-        # The number of drain rows is len(stages), which equals:
-        # - (num_stages - 1) for standard drain
-        # - (num_stages - 1 + max_extra_depth) for extended drain
-        for i in range(len(stages)):
+        for i in range(num_stages - 1):
             add_nodes_by_schedule(
                 pipelined_reduction,
                 pipelined_reduction.graph,
@@ -936,18 +823,10 @@ def construct_pipelined_loop(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
-    max_extra_depth: int = 0,
 ) -> tuple[fx.Node, dict[fx.Node, list[fx.Node]], list[fx.Node]]:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
     with a prologue, kernel and epilogue.
-
-    Args:
-        max_extra_depth: Extra prologue iterations for deeply-prefetched nodes.
-            When > 0, specific stage-0 nodes (those with prefetch_extra_offset > 0
-            in their scheduling_parameters) get additional fill iterations in the
-            prologue. The kernel loop count is reduced accordingly, and the kernel
-            applies per-node index offsets for deeply-prefetched nodes.
 
     Returns:
         pipelined_reduction: The pipelined loop node
@@ -969,35 +848,12 @@ def construct_pipelined_loop(
     if multi_buffer_count:
         create_multibuffered_allocs(graph, multi_buffer_count, outer_vars)
 
-    # Validate that deeply-prefetched nodes have sufficient buffer counts.
-    if max_extra_depth > 0 and multi_buffer_count:
-        for node in graph.nodes:
-            custom = get_custom(node)
-            if not hasattr(custom, "scheduling_parameters"):
-                continue
-            if custom.scheduling_parameters is None:
-                continue
-            extra_offset = custom.scheduling_parameters.get("prefetch_extra_offset", 0)
-            if extra_offset > 0:
-                depth = extra_offset + 1
-                shared_operands = get_shared_memory_operands(node)
-                for alloc in shared_operands:
-                    buf_count = multi_buffer_count.get(alloc, 1)
-                    if depth > buf_count:
-                        raise ValueError(
-                            f"Node {node.name} has prefetch depth={depth} but its "
-                            f"shared memory alloc has only {buf_count} buffers. "
-                            f"Ensure multi_buffer_count >= depth for deeply-prefetched nodes."
-                        )
-
     rotating_registers: dict[fx.Node, deque[fx.Node]] = {
         k: deque([None for _ in range(v)]) for k, v in num_rotating_registers.items()
     }
 
     partitioned_graph = partition_graph_by_stage(graph, num_stages)
     # Construct prologue.
-    # When max_extra_depth > 0, the prologue adds additional fill iterations
-    # for deeply-prefetched nodes (those with prefetch_extra_offset > 0).
     construct_prologue(
         graph,
         reduction,
@@ -1010,7 +866,6 @@ def construct_pipelined_loop(
         create_fill_stage_schedule(num_stages),
         outer_vars=outer_vars,
         node_mapping=node_mapping,
-        max_extra_depth=max_extra_depth,
     )
 
     # Construct kernel.
@@ -1018,10 +873,6 @@ def construct_pipelined_loop(
     # In a pipelined loop with num_stages stages, stage i operates on data
     # from i iterations ahead. With step > 1 (e.g., from unrolling),
     # "i iterations ahead" means i * step in terms of the induction variable.
-    #
-    # When max_extra_depth > 0, deeply-prefetched nodes in the kernel have
-    # their indices shifted forward by their prefetch_extra_offset * step.
-    # This is handled per-node in add_nodes_by_schedule via the step param.
     step = reduction.step
     pipelined_reduction, pipelined_reduction_graph = construct_kernel(
         graph,
@@ -1036,7 +887,6 @@ def construct_pipelined_loop(
         use_scheduling_barriers,
         outer_vars=outer_vars,
         node_mapping=node_mapping,
-        step=step,
     )
 
     pipelined_reduction_graph.parent_op = pipelined_reduction
@@ -1064,7 +914,6 @@ def construct_pipelined_loop(
         visualize,
         outer_vars=outer_vars,
         node_mapping=node_mapping,
-        max_extra_depth=max_extra_depth,
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph

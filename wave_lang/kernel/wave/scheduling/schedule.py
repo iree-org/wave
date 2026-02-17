@@ -214,7 +214,6 @@ def build_guarded_pipeline_with_remainder(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
-    max_extra_depth: int = 0,
 ):
     """
     Build conditional + pipelined loop + remainder loop for dynamic shapes.
@@ -313,7 +312,6 @@ def build_guarded_pipeline_with_remainder(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
-        max_extra_depth,
     )
 
     # Set the count for the pipelined loop
@@ -322,11 +320,7 @@ def build_guarded_pipeline_with_remainder(
     # data for the "next" iteration (offset by step), so we need to ensure
     # that stays within bounds.
     step = get_custom(pipelined_node).step
-    # Reduce loop count by max_extra_depth: the extra prologue fills
-    # consume additional iterations, so the kernel runs fewer.
-    get_custom(pipelined_node).count = (
-        pipelined_iterations - (num_stages - 1 + max_extra_depth) * step
-    )
+    get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1) * step
 
     # Verify we have the right number of results
     assert len(final_results) == len(
@@ -420,7 +414,6 @@ def construct_pipelined_loop_adaptive(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
-    max_extra_depth: int = 0,
 ):
     """
     Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
@@ -457,14 +450,11 @@ def construct_pipelined_loop_adaptive(
             visualize,
             use_scheduling_barriers,
             multi_buffer_count,
-            max_extra_depth,
         )
         if new_reduction:
             step = get_custom(new_reduction).step
-            # Reduce loop count by max_extra_depth: the extra prologue fills
-            # consume additional iterations, so the kernel runs fewer.
             get_custom(new_reduction).count = (
-                max_induction_variable - (num_stages - 1 + max_extra_depth) * step
+                max_induction_variable - (num_stages - 1) * step
             )
         return new_reduction, node_mapping
 
@@ -481,7 +471,6 @@ def construct_pipelined_loop_adaptive(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
-        max_extra_depth,
     )
 
 
@@ -496,7 +485,6 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
-    max_extra_depth: int = 0,
 ) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
@@ -531,7 +519,6 @@ def apply_pipelined_schedule(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
-        max_extra_depth,
     )
 
 

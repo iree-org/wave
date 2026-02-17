@@ -35,18 +35,15 @@ class ArgumentContext:
         iter_args: list[fx.Node],
         init_args: list[fx.Node],
         num_stages: int,
-        num_iterations: Optional[int] = None,
     ) -> None:
-        if num_iterations is None:
-            num_iterations = num_stages
         self.argument_map: list[list[dict[fx.Node, fx.Node]]] = [
-            [{} for _ in range(num_stages)] for _ in range(num_iterations)
+            [{} for _ in range(num_stages)] for _ in range(num_stages)
         ]
         self.results = results
         self.iter_args = iter_args
         self.init_args = init_args
         self.num_stages = num_stages
-        self.num_iterations = num_iterations
+        self.num_iterations = num_stages
         self.result_to_iter_arg: dict[fx.Node, fx.Node] = {}
         self.result_to_init_arg: dict[fx.Node, fx.Node] = {}
 
@@ -354,121 +351,6 @@ def partition_graph_by_stage(
                 cycle = custom.scheduling_parameters["cycle"]
                 partitioned_graph[stage][cycle].append(node)
     return partitioned_graph
-
-
-def filter_partitioned_graph_by_prefetch(
-    partitioned_graph: list[dict[int, list[fx.Node]]],
-    min_extra_offset: int,
-) -> list[dict[int, list[fx.Node]]]:
-    """
-    Filter a partitioned graph to only include nodes with
-    prefetch_extra_offset >= min_extra_offset in their scheduling parameters.
-
-    This is used to create a filtered version of the partitioned graph
-    for extra prefetch iterations in the prologue, where only deeply-
-    prefetched nodes should be included.
-
-    Args:
-        partitioned_graph: The full partitioned graph (list of stage dicts).
-        min_extra_offset: Minimum prefetch_extra_offset value to include.
-
-    Returns:
-        A new partitioned graph containing only the filtered nodes.
-    """
-    filtered = [defaultdict(list) for _ in range(len(partitioned_graph))]
-    for stage_idx, stage_dict in enumerate(partitioned_graph):
-        for cycle, nodes in stage_dict.items():
-            for node in nodes:
-                custom = get_custom(node)
-                extra_offset = custom.scheduling_parameters.get(
-                    "prefetch_extra_offset", 0
-                )
-                if extra_offset >= min_extra_offset:
-                    filtered[stage_idx][cycle].append(node)
-    return filtered
-
-
-def filter_out_deep_prefetch(
-    partitioned_graph: list[dict[int, list[fx.Node]]],
-) -> list[dict[int, list[fx.Node]]]:
-    """
-    Create a partitioned graph with deeply-prefetched nodes removed from
-    stage 0. All other stages are preserved unchanged.
-
-    This is used in the epilogue drain, where deeply-prefetched stage-0 nodes
-    have already completed their work (they were prefetched further ahead by
-    the extra prologue and the kernel's shifted indices). Only non-deeply-
-    prefetched stage-0 nodes need to be drained.
-
-    Args:
-        partitioned_graph: The full partitioned graph (list of stage dicts).
-
-    Returns:
-        A new partitioned graph with deeply-prefetched nodes excluded from stage 0.
-    """
-    filtered = [defaultdict(list) for _ in range(len(partitioned_graph))]
-    for stage_idx, stage_dict in enumerate(partitioned_graph):
-        for cycle, nodes in stage_dict.items():
-            for node in nodes:
-                custom = get_custom(node)
-                extra_offset = custom.scheduling_parameters.get(
-                    "prefetch_extra_offset", 0
-                )
-                # For stage 0, exclude deeply-prefetched nodes
-                if stage_idx == 0 and extra_offset > 0:
-                    continue
-                filtered[stage_idx][cycle].append(node)
-    return filtered
-
-
-def create_extended_drain_stage_schedule(
-    num_stages: int, max_extra_depth: int
-) -> list[list[Optional[int]]]:
-    """
-    Create an extended drain schedule that accounts for deeply-prefetched nodes.
-
-    With max_extra_depth > 0, extra drain iterations are needed because
-    non-deeply-prefetched stage-0 nodes haven't completed their last iterations
-    (they were only 1 iteration ahead, while the kernel ran fewer iterations
-    due to extra prologue fills).
-
-    For num_stages=2, max_extra_depth=1, the schedule is:
-        [None, 1, 0]     -> compute at iter 1, non-deep prefetch at iter 2
-        [None, None, 1]   -> compute at iter 2
-
-    This is derived from create_drain_stage_schedule(num_stages + max_extra_depth)
-    with virtual stage indices remapped to real stage indices:
-        virtual_stage -> real_stage = max(0, virtual_stage - max_extra_depth)
-
-    Args:
-        num_stages: Number of real pipeline stages (e.g., 2).
-        max_extra_depth: Extra depth from deeply-prefetched nodes (e.g., 1).
-
-    Returns:
-        Extended drain schedule with (num_stages - 1 + max_extra_depth) rows.
-    """
-    if max_extra_depth == 0:
-        return create_drain_stage_schedule(num_stages)
-
-    effective_stages = num_stages + max_extra_depth
-    virtual_schedule = create_drain_stage_schedule(effective_stages)
-
-    # Remap virtual stage indices to real stage indices.
-    # Virtual stages [0, max_extra_depth) map to real stage 0.
-    # Virtual stages [max_extra_depth, effective_stages) map to
-    # real stages [0, num_stages).
-    remapped_schedule = []
-    for row in virtual_schedule:
-        remapped_row = []
-        for entry in row:
-            if entry is None:
-                remapped_row.append(None)
-            else:
-                real_stage = max(0, entry - max_extra_depth)
-                remapped_row.append(real_stage)
-        remapped_schedule.append(remapped_row)
-
-    return remapped_schedule
 
 
 def interleave_instructions(instructions: list[tuple[int, int, fx.Node]]):
