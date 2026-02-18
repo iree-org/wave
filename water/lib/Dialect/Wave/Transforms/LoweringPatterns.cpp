@@ -531,7 +531,6 @@ public:
     AffineMap map = exprListAttr.getMap();
     ArrayRef<Attribute> symbols = exprListAttr.getSymbols();
     SmallVector<Value> operands = adaptor.getOperands();
-    assert(map.getNumResults() == 1 && "expected a single result expression");
 
     const auto *typeConverter =
         static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
@@ -540,14 +539,70 @@ public:
     if (!convertedType)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    AffineExprExpander expander(rewriter, op.getLoc(), convertedType, symbols,
-                                operands, typeConverter->getHyperparameters(),
-                                arith::IntegerOverflowFlags::nsw |
-                                    arith::IntegerOverflowFlags::nuw);
-    Value result = expander.visit(map.getResults()[0]);
-    if (!result)
-      return rewriter.notifyMatchFailure(op,
-                                         "failed to expand affine expression");
+    SmallVector<Value> results;
+    for (AffineExpr expr : map.getResults()) {
+      AffineExprExpander expander(rewriter, op.getLoc(), convertedType, symbols,
+                                  operands, typeConverter->getHyperparameters(),
+                                  arith::IntegerOverflowFlags::nsw |
+                                      arith::IntegerOverflowFlags::nuw);
+      results.push_back(expander.visit(expr));
+      assert(results.back() && "failed to expand affine expression");
+    }
+
+    if (!op.getCombinator().has_value()) {
+      assert(results.size() == 1 &&
+             "expected a single result in absence of a combinator");
+      rewriter.replaceOp(op, results[0]);
+      return success();
+    }
+
+    wave::WaveApplyExprCombinator combinator = *op.getCombinator();
+    if (llvm::is_contained({wave::WaveApplyExprCombinator::Maximum,
+                            wave::WaveApplyExprCombinator::Minimum},
+                           combinator)) {
+      assert(results.size() >= 1 &&
+             "expected at least one result for min/max combinator");
+      Value running = results[0];
+      for (size_t i = 1, e = results.size(); i < e; ++i) {
+        if (combinator == wave::WaveApplyExprCombinator::Maximum) {
+          running = arith::MaxSIOp::create(rewriter, op.getLoc(), running,
+                                           results[i]);
+        } else {
+          running = arith::MinSIOp::create(rewriter, op.getLoc(), running,
+                                           results[i]);
+        }
+      }
+      rewriter.replaceOp(op, running);
+      return success();
+    }
+
+    assert(results.size() == 2 &&
+           "expected exactly two results for comparison combinator");
+    arith::CmpIPredicate predicate = [&] {
+      switch (combinator) {
+      case wave::WaveApplyExprCombinator::Greater:
+        return arith::CmpIPredicate::sgt;
+      case wave::WaveApplyExprCombinator::Less:
+        return arith::CmpIPredicate::slt;
+      case wave::WaveApplyExprCombinator::Equal:
+        return arith::CmpIPredicate::eq;
+      case wave::WaveApplyExprCombinator::NotEqual:
+        return arith::CmpIPredicate::ne;
+      case wave::WaveApplyExprCombinator::GreaterOrEqual:
+        return arith::CmpIPredicate::sge;
+      case wave::WaveApplyExprCombinator::LessOrEqual:
+        return arith::CmpIPredicate::sle;
+      default:
+        llvm_unreachable("unsupported comparison combinator");
+      }
+    }();
+    Value result = arith::CmpIOp::create(rewriter, op.getLoc(), predicate,
+                                         results[0], results[1]);
+    Type elementType = wave::getElementType(convertedType);
+    if (!elementType.isInteger(1)) {
+      result =
+          arith::ExtUIOp::create(rewriter, op.getLoc(), convertedType, result);
+    }
     rewriter.replaceOp(op, result);
     return success();
   }

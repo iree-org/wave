@@ -142,6 +142,12 @@ llvm::LogicalResult wave::AllocateOp::verify() {
   if (hasParent && getTailPadding())
     return emitOpError() << "only top-level allocations can have tail_padding";
 
+  if (WaveExprListAttr distributedShape = getDistributedShape()) {
+    if (distributedShape.getMap().getNumResults() == 0) {
+      return emitOpError() << "distributed shape must have at least one result";
+    }
+  }
+
   return llvm::success();
 }
 
@@ -238,7 +244,8 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
   // Both are wave tensors - check shape and address space compatibility.
   if (lhsTensor && rhsTensor) {
     return detail::verifyTypesCompatible(lhsTensor, rhsTensor,
-                                         /*includeAddressSpace=*/true)
+                                         /*includeAddressSpace=*/true,
+                                         /*includeElementalType=*/true)
         .succeeded();
   }
 
@@ -375,8 +382,8 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
     if (resultTensor && terminatorOperandTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
               resultTensor, terminatorOperandTensor,
-              /*includeAddressSpace=*/true, getLoc(), "result #" + istr,
-              "terminator operand #" + istr))) {
+              /*includeAddressSpace=*/true, /*includeElementalType=*/true,
+              getLoc(), "result #" + istr, "terminator operand #" + istr))) {
         return llvm::failure();
       }
     } else if (isa<VectorType>(result) && isa<VectorType>(terminatorOperand)) {
@@ -396,8 +403,8 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
     if (iterArgTensor && blockIterArgTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
               iterArgTensor, blockIterArgTensor,
-              /*includeAddressSpace=*/true, getLoc(), "iter arg #" + istr,
-              "block iter arg #" + istr))) {
+              /*includeAddressSpace=*/true, /*includeElementalType=*/true,
+              getLoc(), "iter arg #" + istr, "block iter arg #" + istr))) {
         return llvm::failure();
       }
     } else if (isa<VectorType>(iterArg) && isa<VectorType>(blockIterArg)) {
@@ -1958,10 +1965,46 @@ LogicalResult wave::ApplyExprOp::verify() {
                               "unspecified address space";
   }
 
+  auto verifyElementalTypesMatch = [&](Value reference,
+                                       StringRef referenceName) {
+    for (Value operand : getOperands()) {
+      if (failed(detail::verifyElementTypesMatch(
+              getLoc(), "operand", operand.getType(), referenceName,
+              reference.getType())))
+        return failure();
+    }
+    return success();
+  };
+
+  Type elementType = getElementType(getResult().getType());
   unsigned numResults = getExpr().getMap().getNumResults();
-  if (numResults != 1)
-    return emitOpError("expression must produce exactly one result, but got ")
-           << numResults;
+  if (std::optional<WaveApplyExprCombinator> combinator = getCombinator()) {
+    if (llvm::is_contained({WaveApplyExprCombinator::Maximum,
+                            WaveApplyExprCombinator::Minimum},
+                           *combinator)) {
+      if (numResults < 1)
+        return emitOpError() << "for min/max combinators, expression must "
+                                "produce at least one result";
+
+      if (failed(verifyElementalTypesMatch(getResult(), "result")))
+        return failure();
+    } else {
+      if (numResults != 2)
+        return emitOpError() << "for comparison combinators, expression must "
+                                "produce exactly two results";
+
+      if (failed(verifyElementalTypesMatch(getOperand(0), "operand #0")))
+        return failure();
+    }
+  } else {
+    if (numResults != 1) {
+      return emitOpError() << "in absence of a combinator, expression must "
+                              "produce exactly one result, but got "
+                           << numResults;
+    }
+    if (failed(verifyElementalTypesMatch(getResult(), "result")))
+      return failure();
+  }
 
   if (!isa<IntegerType>(getElementType(getResult().getType())))
     return emitOpError() << "operates on integers only";
@@ -1994,12 +2037,13 @@ LogicalResult wave::ApplyExprOp::verify() {
 LogicalResult wave::SelectOp::verify() {
   if (failed(detail::verifyTypesCompatible(
           getLhs().getType(), getRhs().getType(), /*includeAddressSpace=*/false,
-          getLoc(), "LHS", "RHS")))
+          /*includeElementalType=*/true, getLoc(), "LHS", "RHS")))
     return failure();
 
   if (failed(detail::verifyTypesCompatible(
           getLhs().getType(), getResult().getType(),
-          /*includeAddressSpace=*/false, getLoc(), "LHS", "result")))
+          /*includeAddressSpace=*/false, /*includeElementalType=*/true,
+          getLoc(), "LHS", "result")))
     return failure();
 
   auto intType =

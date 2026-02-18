@@ -143,6 +143,7 @@ try:
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
+        convert_sympy_to_affine_map_and_combinator,
     )
     from water_mlir.water_mlir.dialects import arith, func, wave, amdgpu
     from water_mlir.water_mlir.dialects.transform import interpreter
@@ -189,6 +190,7 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    "bool": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
     "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
@@ -759,8 +761,8 @@ def _emit_ops_from_graph(
                         sympy_expr.free_symbols, key=lambda s: s.name
                     )
                     symbol_mapping = preprocess_symbols(ordered_symbols)
-                    affine_map = _convert_sympy_expr_to_affine_map(
-                        sympy_expr, symbol_mapping
+                    affine_map, combinator = convert_sympy_to_affine_map_and_combinator(
+                        sympy_expr, [symbol.name for symbol in symbol_mapping.keys()]
                     )
                     symbol_attrs = [
                         (
@@ -772,7 +774,18 @@ def _emit_ops_from_graph(
                     ]
                     expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
                     operands = [get_single_mapped_value(arg) for arg in reg]
-                    mlir_op = op_builder(result_type, operands, expr_attr)
+                    # TODO: need to add automatic constructor of WaveApplyExprCombinatorAttr
+                    # from enum.
+                    mlir_op = op_builder(
+                        result_type,
+                        operands,
+                        expr_attr,
+                        combinator=(
+                            wave.WaveApplyExprCombinatorAttr.get(combinator)
+                            if combinator is not None
+                            else None
+                        ),
+                    )
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
@@ -1148,6 +1161,7 @@ def _emit_from_captured_trace(
 
         # Verify the module before transforming or printing.
         try:
+            print(module, file=sys.stderr)
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(WaterError(message=e.message))

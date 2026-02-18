@@ -277,6 +277,36 @@ MLIR_CAPI_EXPORTED uint32_t mlirWaveShuffleModeAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveShuffleModeAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+enum WaveApplyExprCombinator {
+  WaveApplyExprCombinatorGreater = 0,
+  WaveApplyExprCombinatorLess = 1,
+  WaveApplyExprCombinatorEqual = 2,
+  WaveApplyExprCombinatorNotEqual = 3,
+  WaveApplyExprCombinatorGreaterOrEqual = 4,
+  WaveApplyExprCombinatorLessOrEqual = 5,
+  WaveApplyExprCombinatorMaximum = 6,
+  WaveApplyExprCombinatorMinimum = 7,
+};
+
+/// Checks whether the given MLIR attribute is a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveApplyExprCombinatorAttr(MlirAttribute attr);
+
+/// Creates a new WaveApplyExprCombinatorAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveApplyExprCombinatorAttrGet(MlirContext mlirCtx, uint32_t value);
+
+/// Get the value from a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveApplyExprCombinatorAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveApplyExprCombinatorAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 

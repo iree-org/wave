@@ -342,6 +342,29 @@ MlirTypeID mlirWaveShuffleModeAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveApplyExprCombinatorAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveApplyExprCombinatorAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveApplyExprCombinatorAttrGet(MlirContext mlirCtx,
+                                                 uint32_t value) {
+  return wrap(wave::WaveApplyExprCombinatorAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveApplyExprCombinator>(value)));
+}
+
+uint32_t mlirWaveApplyExprCombinatorAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveApplyExprCombinatorAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveApplyExprCombinatorAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveApplyExprCombinatorAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 

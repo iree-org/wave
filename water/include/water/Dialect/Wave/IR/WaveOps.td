@@ -582,18 +582,27 @@ def ShuffleOp : WaveOp<"shuffle", [
 def ApplyExprOp : WaveOp<"apply_expr",
     [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
      WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-     CompatibleOperandsAndResultsOpTrait,
+     CompatibleOperandAndResultsShapeOpTrait,
      WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
     WaveArithmeticOpDoc {
   let summary = "Apply a symbolic expression to one or more register values";
   let description = [{
     Applies a symbolic expression to one or more register-resident tensor
     values. The expression is specified as a `WaveExprListAttr` containing an
-    affine map with a single result. Each symbol in the expression corresponds
-    to one of the operands or to an external symbolic constant.
+    affine map. Symbols in the expression correspond to one of the operands or
+    to an external symbolic constant. An optional `combinator` may be provided
+    to combine multiple results of the affine map together in a non-affine way.
+    If not provided, the map must have a single result. If a comparison
+    combinator is provided, the map must have exactly two results. For min/max
+    combinators, the map must have at least one result.
 
     All operands must have the same type and indexing dimensions. The result
-    type is the same as the operand types.
+    type is the same as the operand types except for comparison combinators
+    where it may be an arbitrary integer type, though only the last bit of
+    this type will be set if the comparison is true.
+
+    TODO(#901): tighten the constraint on comparison result to be i1, which is
+    currently impossible because python typing is broken.
 
     Operand symbols are represented using `WaveOperandAttr` (`#wave.operand`)
     with the operand index (0 for first operand, 1 for second, etc.). In
@@ -606,7 +615,8 @@ def ApplyExprOp : WaveOp<"apply_expr",
   // Variadic requires a Type and not a TypeConstraint.
   let arguments = !con((ins
     Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,
-    Arg<WaveExprListAttrOf<[WaveSymbolAttr, WaveOperandAttr]>, "Expression to apply">:$expr
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr, WaveOperandAttr]>, "Expression to apply">:$expr,
+    Arg<OptionalAttr<WaveApplyExprCombinatorAttr>, "Combinator to apply">:$combinator
   ), commonArguments);
 
   let results = (outs
@@ -614,8 +624,8 @@ def ApplyExprOp : WaveOp<"apply_expr",
   );
 
   let assemblyFormat =
-    "`(` $arguments `)` $expr " # commonArgumentsSyntax # "attr-dict `:`"
-    "functional-type(operands, results)";
+    "`(` $arguments `)` ($combinator^)? $expr " # commonArgumentsSyntax
+    # "attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

@@ -601,6 +601,107 @@ def mlir_converter_apply_expr():
     # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>, !wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
 
 
+# CHECK-LABEL: mlir_converter_apply_expr_combinators
+@run_test
+def mlir_converter_apply_expr_combinators():
+    """Test MLIR converter with apply_expr operation featuring combinators."""
+
+    apply_expr_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(apply_expr_constraints)
+    def apply_expr_kernel(
+        a: Memory[M, N, ADDRESS_SPACE_A, tkl.i32],
+        c: Memory[M, N, ADDRESS_SPACE_C, tkl.i32],
+        d: Memory[M, N, ADDRESS_SPACE_C, tkl.i32],
+    ):
+        a_reg = wave.read(a)
+        c_reg = wave.read(c)
+        result1 = wave.apply_expr([a_reg, c_reg], lambda x, y: sympy.Max(x, y))
+        result2 = wave.apply_expr([a_reg, c_reg], lambda x, y: sympy.Min(x, y))
+        result3 = wave.apply_expr([a_reg, c_reg], lambda x, y: x > y)
+        result4 = wave.apply_expr([a_reg, c_reg], lambda x, y: x < y)
+        result5 = wave.apply_expr([a_reg, c_reg], lambda x, y: sympy.Eq(x, y))
+        result6 = wave.apply_expr([a_reg, c_reg], lambda x, y: sympy.Ne(x, y))
+        result7 = wave.apply_expr([a_reg, c_reg], lambda x, y: x >= y)
+        result8 = wave.apply_expr([a_reg, c_reg], lambda x, y: x <= y)
+        result = result1 + result2
+        comparison_result = result3 + result4 + result5 + result6 + result7 + result8
+        wave.write(result, c)
+        # TODO(#901) this should not be necessary.
+        casted = wave.cast(comparison_result, tkl.i32)
+        wave.write(casted, d)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, apply_expr_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    kernel_constraints = apply_expr_kernel.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    print(mlir_output)
+    # CHECK: %[[OP0:.+]] = wave.read
+    # CHECK: %[[OP1:.+]] = wave.read
+    # CHECK: %[[MAX:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) max <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[MIN:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) min <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[GT:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) gt <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[LT:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) lt <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[EQ:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) eq <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[NE:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) ne <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[GE:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) ge <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[LE:.+]] = wave.apply_expr(%[[OP0]], %[[OP1]]) le <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)>
+    # CHECK-SAME:  -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[ADD1:.+]] = wave.add %[[MAX]], %[[MIN]]
+    # CHECK: %[[ADD2:.+]] = wave.add %[[GT]], %[[LT]]
+    # CHECK: %[[ADD3:.+]] = wave.add %[[ADD2]], %[[EQ]]
+    # CHECK: %[[ADD4:.+]] = wave.add %[[ADD3]], %[[NE]]
+    # CHECK: %[[ADD5:.+]] = wave.add %[[ADD4]], %[[GE]]
+    # CHECK: %[[ADD6:.+]] = wave.add %[[ADD5]], %[[LE]]
+    # CHECK: wave.write %[[ADD1]]
+
+    # TODO(#901) this cast is a noop in proper IR but is needed to make broken python side happy.
+    # CHECK: %[[CASTED:.+]] = wave.cast %[[ADD6]]
+    # CHECK-SAME: !wave.tensor<[@M, @N] of i32, <register>> to !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: wave.write %[[CASTED]]
+
+
 @run_test
 def mlir_converter_emit_wave_dialect_loop_implicit_capture():
     """Test emit_wave_dialect with a kernel that has a loop using registers defined in the

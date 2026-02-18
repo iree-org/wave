@@ -495,6 +495,44 @@ struct PyWaveShuffleModeAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveApplyExprCombinatorAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveApplyExprCombinatorAttr> {
+  static constexpr IsAFunctionTy isaFunction =
+      mlirAttributeIsAWaveApplyExprCombinatorAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveApplyExprCombinatorAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveApplyExprCombinatorAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](WaveApplyExprCombinator value,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveApplyExprCombinatorAttr(
+              context->getRef(),
+              mlirWaveApplyExprCombinatorAttrGet(context->get(),
+                                                 static_cast<uint32_t>(value)));
+        },
+        nb::arg("value"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveApplyExprCombinatorAttr from a combinator enum "
+        "value.");
+    c.def_prop_ro(
+        "value",
+        [](MlirAttribute self) {
+          return static_cast<WaveApplyExprCombinator>(
+              mlirWaveApplyExprCombinatorAttrGetValue(self));
+        },
+        "Apply expression combinator enum value.");
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 
@@ -964,6 +1002,16 @@ NB_MODULE(_waterDialects, m) {
       .value("UP", WaveShuffleModeUP)
       .value("IDX", WaveShuffleModeIDX);
 
+  nb::enum_<WaveApplyExprCombinator>(d, "WaveApplyExprCombinator")
+      .value("Greater", WaveApplyExprCombinatorGreater)
+      .value("Less", WaveApplyExprCombinatorLess)
+      .value("Equal", WaveApplyExprCombinatorEqual)
+      .value("NotEqual", WaveApplyExprCombinatorNotEqual)
+      .value("GreaterOrEqual", WaveApplyExprCombinatorGreaterOrEqual)
+      .value("LessOrEqual", WaveApplyExprCombinatorLessOrEqual)
+      .value("Maximum", WaveApplyExprCombinatorMaximum)
+      .value("Minimum", WaveApplyExprCombinatorMinimum);
+
   nb::enum_<WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
       .value("F32_16x16x16_F16", WaveMmaKind_F32_16x16x16_F16)
@@ -997,6 +1045,7 @@ NB_MODULE(_waterDialects, m) {
   PyWaveWorkgroupDimAttr::bind(d);
   PyWaveAddressSpaceAttr::bind(d);
   PyWaveShuffleModeAttr::bind(d);
+  PyWaveApplyExprCombinatorAttr::bind(d);
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
   PyWaveReadWriteBoundsAttr::bind(d);

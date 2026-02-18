@@ -435,6 +435,54 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_apply_comparisons
+  func.func @lower_apply_comparisons() -> vector<4xi1> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 42 : i32
+    %input = wave.register %cst : vector<4xi32>
+    %cst2 = arith.constant 2 : i32
+    %input2 = wave.register %cst2 : vector<4xi32>
+    // CHECK: %[[CST_42:.+]] = arith.constant dense<42> : vector<4xi32>
+    // CHECK: %[[CST_2:.+]] = arith.constant dense<2> : vector<4xi32>
+    // CHECK: %[[LT:.+]] = arith.cmpi slt, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[GT:.+]] = arith.cmpi sgt, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[LE:.+]] = arith.cmpi sle, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[EXT_LE:.+]] = arith.extui %[[LE]] : vector<4xi1> to vector<4xi32>
+    // CHECK: %[[GE:.+]] = arith.cmpi sge, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[EQ:.+]] = arith.cmpi eq, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[EXT_EQ:.+]] = arith.extui %[[EQ]] : vector<4xi1> to vector<4xi64>
+    // CHECK: %[[NE:.+]] = arith.cmpi ne, %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    %result1 = wave.apply_expr(%input, %input2) lt <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi1>
+    %result2 = wave.apply_expr(%input, %input2) gt <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi1>
+    %result3 = wave.apply_expr(%input, %input2) le <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi32>
+    %result4 = wave.apply_expr(%input, %input2) ge <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi1>
+    %result5 = wave.apply_expr(%input, %input2) eq <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi64>
+    %result6 = wave.apply_expr(%input, %input2) ne <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi1>
+    return %result1 : vector<4xi1>
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_apply_expr_minmax
+  func.func @lower_apply_expr_minmax() -> vector<4xi32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst = arith.constant 42 : i32
+    %input = wave.register %cst : vector<4xi32>
+    %cst2 = arith.constant 2 : i32
+    %input2 = wave.register %cst2 : vector<4xi32>
+    // CHECK: %[[CST_42:.+]] = arith.constant dense<42> : vector<4xi32>
+    // CHECK: %[[CST_2:.+]] = arith.constant dense<2> : vector<4xi32>
+    // CHECK: %[[MIN:.+]] = arith.minsi %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    // CHECK: %[[MAX:.+]] = arith.maxsi %[[CST_42]], %[[CST_2]] : vector<4xi32>
+    %result1 = wave.apply_expr(%input, %input2) min <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi32>
+    %result2 = wave.apply_expr(%input, %input2) max <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0, _Operand_1)> : (vector<4xi32>, vector<4xi32>) -> vector<4xi32>
+    return %result1 : vector<4xi32>
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: func.func @lower_apply_expr_div
   func.func @lower_apply_expr_div() -> vector<4xi64> attributes {wave.hyperparameters = #wave.hyperparameters<{A = 15, B = 4}>} {
     // CHECK: %[[CST_A:.+]] = arith.constant dense<15> : vector<4xi64>
