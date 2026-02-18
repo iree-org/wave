@@ -40,7 +40,7 @@ try:
         YieldOp,
         WaveAddressSpaceAttr,
         WaveMmaKindAttr,
-        WaveReadWriteBoundsAttr,
+        WaveSymbolMappingAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
         iterate_make_isolated,
@@ -200,7 +200,7 @@ def _convert_mma_kind(attr: WaveMmaKindAttr) -> MMAType | ScaledMMAType:
 
 
 def _convert_read_write_bounds(
-    attr: WaveReadWriteBoundsAttr,
+    attr: WaveSymbolMappingAttr,
 ) -> dict[IndexSymbol, IndexExpr]:
     """
     Converts Wave read/write bounds attribute into a dictionary mapping dimensions to expressions.
@@ -208,11 +208,9 @@ def _convert_read_write_bounds(
     Bounds specify the iteration space for memory operations (read/write) along each dimension.
     """
     bounds: dict[IndexSymbol, IndexExpr] = {}
-    for named in attr.mapping:
-        key = named.name
-        value = named.attr
+    for key, value in attr:
         exprs = expr_list_attr_to_exprs(value)
-        bounds[index_symbol(key)] = exprs[0]
+        bounds[index_symbol(key.name)] = exprs[0]
     return bounds
 
 

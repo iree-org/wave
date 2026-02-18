@@ -595,30 +595,6 @@ class WaveExprListAttrOf<list<AttrDef> inputTypes> : Attr<
   let returnType = WaveExprListAttr.returnType;
 }
 
-
-def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
-  let mnemonic = "read_write_bounds";
-  let description = [{
-    This attribute contains a dictionary mapping from symbolic dimensions
-    (strings) to a WaveExprListAttr specifying the bounds of the read/write
-    operations this is attached to. The dictionary may be sparse: only
-    dimensions that require masking need an entry.
-  }];
-
-  let parameters = (ins "::mlir::DictionaryAttr":$mapping);
-  let assemblyFormat = "`<` $mapping `>`";
-
-  let extraClassDeclaration = [{
-    /// Check if a symbolic dimension exists in the mapping
-    bool hasSymbol(::llvm::StringRef symbolicDim) const {
-      return getMapping().get(symbolicDim) != nullptr;
-    }
-
-    /// Get the number of symbols in the mapping
-    size_t getNumSymbols() const { return getMapping().size(); }
-  }];
-}
-
 //-----------------------------------------------------------------------------
 // Symbol mapping attribute
 //-----------------------------------------------------------------------------
@@ -647,6 +623,12 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
 
+  let builders = [
+    AttrBuilder<(ins
+      "::llvm::ArrayRef<std::pair<::wave::WaveSymbolAttr, ::wave::WaveExprListAttr>>"
+      :$entries)>
+  ];
+
   let extraClassDeclaration = [{
     /// Verify that every value `WaveExprListAttr` in the mapping has exactly
     /// `numResults` results. Returns failure with a diagnostic on the first
@@ -658,6 +640,14 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
     /// Look up the `WaveExprListAttr` associated with `key`.
     /// Returns a default-constructed (null) attribute if the key is absent.
     ::wave::WaveExprListAttr lookup(::wave::WaveSymbolAttr key) const;
+
+    /// Check if a symbolic dimension exists in the mapping.
+    bool hasSymbol(::wave::WaveSymbolAttr key) const {
+      return static_cast<bool>(lookup(key));
+    }
+
+    /// Get the number of entries in the mapping.
+    size_t getNumEntries() const { return getKeys().size(); }
   }];
 }
 

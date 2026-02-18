@@ -217,25 +217,42 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with ValueError."
 
-    # CHECK: #wave.read_write_bounds<{M = #wave.expr_list<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3)>}>
-    print(wave.WaveReadWriteBoundsAttr.get({"M": expr_attr}))
+    # CHECK: #wave.symbol_mapping<@M = #wave.expr_list<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3)>>
+    mapping_attr = wave.WaveSymbolMappingAttr.get({"M": expr_attr})
+    print(mapping_attr)
+    assert len(mapping_attr) == 1
+    assert mapping_attr["M"] == expr_attr
 
     try:
-        wave.WaveReadWriteBoundsAttr.get({3: expr_attr})
+        mapping_attr["nyan"]
+    except KeyError as e:
+        assert "Key not found." in str(e)
+    else:
+        assert False, "Expected to fail with KeyError."
+
+    mapping_attr_2 = wave.WaveSymbolMappingAttr.get(
+        {wave.WaveSymbolAttr.get("M"): expr_attr}
+    )
+    print(mapping_attr_2)
+    assert len(mapping_attr_2) == 1
+    assert mapping_attr_2[wave.WaveSymbolAttr.get("M")] == expr_attr
+
+    try:
+        wave.WaveSymbolMappingAttr.get({3: expr_attr})
     except TypeError as e:
         assert "must be a string" in str(e)
     else:
         assert False, "Expected to fail with TypeError."
 
     try:
-        wave.WaveReadWriteBoundsAttr.get({"A": 1.0})
+        wave.WaveSymbolMappingAttr.get({"A": 1.0})
     except TypeError as e:
         assert "must be an attribute" in str(e)
     else:
         assert False, "Expected to fail with TypeError."
 
     try:
-        wave.WaveReadWriteBoundsAttr.get({"A": addr_attr})
+        wave.WaveSymbolMappingAttr.get({"A": addr_attr})
     except TypeError as e:
         assert "must be a WaveExprListAttr" in str(e)
     else:

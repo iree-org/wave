@@ -28,7 +28,6 @@
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -1595,33 +1594,20 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
 // will not generate mask operations during lowering.
 static LogicalResult verifyReadWriteBounds(Location loc,
                                            wave::WaveTensorType boundedType,
-                                           DictionaryAttr bounds) {
+                                           WaveSymbolMappingAttr bounds) {
   assert(bounds && "expected non-null bounds");
   assert(boundedType && "expected non-null type");
 
-  // We need a fixed iteration order of names for determinism of error messages,
-  // so using a vector instead of a StringSet.
-  // TODO: consider refactoring bounds and other dictionary-like attributes to
-  // be indexed by symbol expressions rather than string attributes to avoid
-  // string comparisons everywhere.
-  SmallVector<StringRef> validSymbolNames = llvm::map_to_vector(
-      boundedType.getShape(),
-      [](wave::WaveSymbolAttr symbol) { return symbol.getName(); });
+  ArrayRef<wave::WaveSymbolAttr> validSymbols = boundedType.getShape();
 
-  for (NamedAttribute value : bounds) {
-    if (!llvm::is_contained(validSymbolNames, value.getName().strref())) {
+  for (auto [key, value] : llvm::zip(bounds.getKeys(), bounds.getValues())) {
+    if (!llvm::is_contained(validSymbols, key)) {
       return emitError(loc)
-             << "'bounds' specified for a symbol " << value.getName()
+             << "'bounds' specified for a symbol " << key.getName()
              << " not used in the "
                 "indexed memory tensor";
     }
-
-    // Value type must be WaveExprListAttr.
-    auto exprListAttr = dyn_cast<wave::WaveExprListAttr>(value.getValue());
-    if (!exprListAttr)
-      return emitError(loc) << "'bounds' values must be WaveExprListAttr, got "
-                            << value.getValue();
-    if (exprListAttr.getRank() != 1) {
+    if (value.getRank() != 1) {
       return emitError(loc)
              << "'bounds' must only contain single-result expressions";
     }
@@ -1634,7 +1620,7 @@ static LogicalResult verifyReadWriteBounds(Location loc,
 static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        std::optional<int64_t> elementsPerThread,
                                        Type memoryType, Type valueType,
-                                       WaveReadWriteBoundsAttr bounds,
+                                       WaveSymbolMappingAttr bounds,
                                        ArrayAttr orderedSyms) {
 
   if (failed(wave::detail::verifyElementTypesMatch(
@@ -1675,7 +1661,7 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
   if (!bounds)
     return success();
 
-  return verifyReadWriteBounds(op->getLoc(), tensorType, bounds.getMapping());
+  return verifyReadWriteBounds(op->getLoc(), tensorType, bounds);
 }
 
 LogicalResult ReadOp::verify() {
@@ -2422,11 +2408,12 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
 
   DictionaryAttr inputDict = inputLattice.getConcreteValue();
 
-  llvm::StringMap<WaveIndexMappingAttr> symbolToMapping;
+  llvm::DenseMap<WaveSymbolAttr, WaveIndexMappingAttr> symbolToMapping;
   for (NamedAttribute namedAttr : inputDict) {
     if (auto mapping =
             llvm::dyn_cast<WaveIndexMappingAttr>(namedAttr.getValue())) {
-      symbolToMapping[namedAttr.getName().getValue()] = mapping;
+      auto key = WaveSymbolAttr::get(ctx, namedAttr.getName());
+      symbolToMapping[key] = mapping;
     }
   }
 
@@ -2438,11 +2425,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   permutedMappings.reserve(srcShape.size());
   for (auto [srcSymbol, targetSymbol] :
        llvm::zip_equal(srcShape, targetShape)) {
-    llvm::StringRef srcName = srcSymbol.getName();
-    auto srcMappingIt = symbolToMapping.find(srcName);
-
-    llvm::StringRef targetName = targetSymbol.getName();
-    auto targetMappingIt = symbolToMapping.find(targetName);
+    auto srcMappingIt = symbolToMapping.find(srcSymbol);
+    auto targetMappingIt = symbolToMapping.find(targetSymbol);
 
     assert(srcMappingIt != symbolToMapping.end() &&
            "source mapping not found for symbol");
@@ -2469,7 +2453,7 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
                                                 alignedStep, alignedStride);
 
     permutedMappings.push_back(
-        NamedAttribute(StringAttr::get(ctx, srcName), newMapping));
+        NamedAttribute(StringAttr::get(ctx, srcSymbol.getName()), newMapping));
   }
 
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings));

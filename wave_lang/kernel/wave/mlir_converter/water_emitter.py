@@ -443,7 +443,7 @@ def _attach_attributes(
                 symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
-        op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
+        op.attributes["bounds"] = wave.WaveSymbolMappingAttr.get(bounds)
 
     if water_id := getattr(node.fx_node, "_water_id", None):
         op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)

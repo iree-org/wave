@@ -709,6 +709,20 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 // WaveSymbolMappingAttr
 //===----------------------------------------------------------------------===//
 
+WaveSymbolMappingAttr WaveSymbolMappingAttr::get(
+    MLIRContext *context,
+    ArrayRef<std::pair<WaveSymbolAttr, WaveExprListAttr>> entries) {
+  SmallVector<WaveSymbolAttr> keys;
+  SmallVector<WaveExprListAttr> values;
+  keys.reserve(entries.size());
+  values.reserve(entries.size());
+  for (auto &[k, v] : entries) {
+    keys.push_back(k);
+    values.push_back(v);
+  }
+  return Base::get(context, keys, values);
+}
+
 Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
   // Capture the location before consuming any tokens so that verification
   // errors are reported at the opening `<`.

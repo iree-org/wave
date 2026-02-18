@@ -451,7 +451,7 @@ def ReadOp : WaveOp<"read", [
     Arg<WaveMemoryType, "Memory to read from">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
-    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+    Arg<OptionalAttr<WaveSymbolMappingAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms
@@ -517,7 +517,7 @@ def WriteOp : WaveOp<"write", [
     Arg<WaveMemoryType, "Memory to write into">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
-    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+    Arg<OptionalAttr<WaveSymbolMappingAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms

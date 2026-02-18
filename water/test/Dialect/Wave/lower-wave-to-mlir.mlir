@@ -613,9 +613,9 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
         // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
         // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 32)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
         N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
-      }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
-        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
       // Bounds for dim 0.
       // CHECK: %[[DIM0_SIZE:.+]] = affine.apply affine_map<() -> (100)>()
@@ -648,9 +648,9 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %v = wave.read %mem index [{
         M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 8, 64)>,
         N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)>
-      }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
-        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
       // CHECK: %[[MASK:.+]] = arith.andi {{.*}}, {{.*}}
       // CHECK: %[[PAD:.*]] = arith.constant {{.*}} : f16
@@ -673,8 +673,8 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
         // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1)>()[%[[BIDX_X]], %[[TIDX_X]]]
         M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
         N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
-      }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}>}
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
       // Only M dimension produces a mask — no andi needed.
       // CHECK: %[[DIM0_SIZE:.+]] = affine.apply affine_map<() -> (100)>()

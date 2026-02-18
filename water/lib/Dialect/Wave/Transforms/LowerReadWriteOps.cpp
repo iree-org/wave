@@ -94,11 +94,11 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 /// whenever a bounds dictionary is provided. When it is not provided, return a
 /// null mask. If the vectorized dimension cannot be identified, return failure.
 static FailureOr<Value>
-buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
+buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
           ArrayRef<wave::WaveSymbolAttr> orderedSyms, PatternRewriter &rewriter,
           DictionaryAttr indexDict, wave::WaveHyperparameterAttr hyper,
           ArrayRef<Value> startIdx, int64_t elementsPerThread) {
-  if (!boundsDict)
+  if (!boundsMapping)
     return Value();
 
   const uint64_t rank = startIdx.size();
@@ -112,11 +112,9 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
   // without an entry are fully in-bounds and are skipped.
   Value finalMask;
   for (uint64_t d = 0; d < rank; ++d) {
-    StringRef name = orderedSyms[d].getName();
-    Attribute a = boundsDict.getMapping().get(name);
-    if (!a)
+    wave::WaveExprListAttr boundAttr = boundsMapping.lookup(orderedSyms[d]);
+    if (!boundAttr)
       continue;
-    auto boundAttr = cast<wave::WaveExprListAttr>(a);
     // Materialize bounds.
     FailureOr<SmallVector<Value>> boundValsFo = wave::materializeAffine(
         loc, boundAttr.getSymbols(), boundAttr.getMap(), rewriter, hyper);
@@ -312,7 +310,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
                            Type memoryTypeArg, VectorType vectorType) {
   int64_t elementsPerThread = vectorType.getNumElements();
 
-  wave::WaveReadWriteBoundsAttr boundsDict = op.getBoundsAttr();
+  wave::WaveSymbolMappingAttr boundsDict = op.getBoundsAttr();
   wave::WaveHyperparameterAttr hyper =
       static_cast<const wave::WaveTypeConverter &>(*typeConverter)
           .getHyperparameters();

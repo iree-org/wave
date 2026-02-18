@@ -474,16 +474,8 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.tensor<[@N] of f32, <register>>) {
-  // expected-error @below {{'bounds' specified for a symbol "M" not used in the indexed memory tensor}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
-  return
-}
-
-// -----
-
-func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
-  // expected-error @below {{'bounds' values must be WaveExprListAttr, got 42 : i64}}
-  wave.read %mem { bounds = #wave.read_write_bounds<{ N = 42 }> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+  // expected-error @below {{'bounds' specified for a symbol M not used in the indexed memory tensor}}
+  wave.write %val, %mem { bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
   return
 }
 
@@ -491,7 +483,7 @@ func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
 
 func.func @bounds_wrong_rank(%mem: !wave.tensor<[@N] of f32>) {
   // expected-error @below {{'bounds' must only contain single-result expressions}}
-  wave.read %mem { bounds = #wave.read_write_bounds<{ N = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64, BLOCK_M * 64)>}> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+  wave.read %mem { bounds = #wave.symbol_mapping<@N = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64, BLOCK_M * 64)>> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
   return
 }
 
