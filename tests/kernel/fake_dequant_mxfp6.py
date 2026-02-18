@@ -34,7 +34,66 @@ def get_mxfp6_e2m3_lut():
 
 
 MXFP6_E2M3_LUT = get_mxfp6_e2m3_lut()
-MAX_E2M3 = 7.5  # (1 + 7/8) * 2^2 = 7.5
+MAX_E2M3 = 8.0  # power-of-two ceiling of (1 + 7/8) * 2^2 = 7.5 -> 8.0
+
+
+# ---------------------------------------------------------------------------
+# Reference MXFP quantizer (pure PyTorch, no Brevitas dependency)
+# Used as ground truth for validating the LUT-based pack/unpack path.
+# ---------------------------------------------------------------------------
+
+
+def safe_frexp(x: torch.Tensor) -> torch.Tensor:
+    """torch.frexp returns unbiased exponent 0 for 0.0, which is not what we want."""
+    if x.is_cuda and x.dtype not in (torch.float32, torch.float16):
+        x = x.float()
+    return torch.where(
+        x == 0.0, torch.tensor(-126, dtype=torch.int32), x.frexp().exponent - 1
+    )
+
+
+class MXFP:
+    """
+    MXFP - Quantize OCP MXFP floating point types.
+    A type is defined as ebits, mbits, bias, and inf/nan handling.
+    """
+
+    CONFIG = dict(
+        e5m2=(5, 2, 15, "ieee"),
+        e4m3=(4, 3, 7, "fn"),
+        e3m2=(3, 2, 3, "fnuz"),
+        e2m3=(2, 3, 1, "fnuz"),
+        e2m1=(2, 1, 1, "fnuz"),
+    )
+
+    def __init__(self, name, tile_size=32):
+        self.name = name.lower()
+        assert self.name in self.CONFIG
+        self.ebits, self.mbits, self.bias, self.infnan = self.CONFIG[self.name]
+        self.tile_size = tile_size
+
+    @property
+    def emax(self) -> int:
+        return 2**self.ebits - 1 - self.bias - int(self.infnan == "ieee")
+
+    @property
+    def emin(self) -> int:
+        return 1 - self.bias
+
+    @property
+    def maxval(self) -> float:
+        return 2**self.emax * (
+            2.0 - (1 + int(self.infnan == "fn")) * 2 ** (-self.mbits)
+        )
+
+    def quantize(self, tensor: torch.Tensor, axis: int = -1):
+        exp = safe_frexp(tensor)
+        shared = exp.amax(axis, keepdim=True)
+        scale = (
+            self.mbits - (shared - exp - (self.emax - self.emin)).clamp_min(0) - exp
+        ).exp2()
+        maxval = self.maxval * (shared - self.emax).exp2()
+        return ((tensor * scale).round() / scale).clamp(-maxval, maxval)
 
 
 def f32_to_mxfp6(x, lut, block_size=32):
@@ -44,16 +103,25 @@ def f32_to_mxfp6(x, lut, block_size=32):
     Returns: packed_uint8 [N, (K*6)/8], scales [N, K/block_size]
     """
 
-    # Calculate block-wise scales (Microscaling)
+    # Step 1: Quantize using the analytical MXFP reference quantizer.
+    # This uses torch.round() (round-half-to-even) for correct rounding behavior,
+    # exactly matching the Brevitas/OCP MX spec.
     x_reshaped = x.view(-1, block_size)
-    amax = x_reshaped.abs().max(dim=1, keepdim=True).values
-    scales = amax / MAX_E2M3
-    x_norm = x_reshaped / (scales + 1e-12)
+    _quantizer = MXFP("e2m3")
+    x_q = _quantizer.quantize(x_reshaped)
 
-    # Find closest 6-bit index (0-63)
-    # Compare normalized values against the E2M3 LUT
-    dists = torch.abs(x_norm.unsqueeze(-1) - lut)
-    indices = torch.argmin(dists, dim=-1).to(torch.uint8).view(-1)
+    # Step 2: Recover the block scales (power-of-two, per OCP MX spec).
+    # Scale = 2^(shared - emax), where shared is the max per-element exponent
+    # in the block and emax = 2 for E2M3.
+    shared = safe_frexp(x_reshaped).amax(dim=1, keepdim=True)
+    scales = torch.pow(2.0, (shared - 2).float())
+
+    # Step 3: Normalize quantized values to LUT range and map to 6-bit indices.
+    # Since x_q is already quantized to E2M3-representable values, dividing by
+    # the block scale yields values that are exactly in the LUT.
+    x_norm_q = x_q / scales
+    dists = torch.abs(x_norm_q.view(-1).unsqueeze(-1) - lut.unsqueeze(0))
+    indices = torch.argmin(dists, dim=-1).to(torch.uint8)
 
     # pack bytes using indexing
     v = indices.view(-1, 4)
@@ -115,7 +183,7 @@ test_cases = [
 def test_mxfp6_tensor_quantization(
     m, n, k, block_size, max_rel_error_tensor, max_rel_error_matmul
 ):
-    """Test that individual tensor quantization preserves values within expected error bounds."""
+    """Test that LUT-based quantization matches the analytical MXFP reference."""
     torch.manual_seed(0)
 
     # Create test tensors
@@ -125,30 +193,25 @@ def test_mxfp6_tensor_quantization(
     # Generate MXFP6 LUT
     lut = get_mxfp6_e2m3_lut()
 
-    # Quantize and dequantize
+    # LUT-based quantize and dequantize
     a_packed, a_scales = f32_to_mxfp6(a, lut, block_size=block_size)
     b_packed, b_scales = f32_to_mxfp6(b, lut, block_size=block_size)
 
     a_dequant = mxfp6_to_f32(a_packed, a_scales, lut, block_size=block_size)
     b_dequant = mxfp6_to_f32(b_packed, b_scales, lut, block_size=block_size)
 
-    # Calculate errors for tensor A
-    a_abs_error = (a - a_dequant).abs()
-    a_rel_error = a_abs_error / (a.abs() + 1e-12)
+    # Reference analytical quantization (must match f32_to_mxfp6's block_size)
+    quantizer = MXFP("e2m3")
+    a_ref = quantizer.quantize(a.view(-1, block_size)).view(m, k)
+    b_ref = quantizer.quantize(b.view(-1, block_size)).view(n, k)
 
-    # Calculate errors for tensor B
-    b_abs_error = (b - b_dequant).abs()
-    b_rel_error = b_abs_error / (b.abs() + 1e-12)
-
-    # Assert tensor quantization errors are within bounds
-    assert a_rel_error.mean().item() < max_rel_error_tensor, (
-        f"Tensor A mean relative error {a_rel_error.mean().item():.4f} "
-        f"exceeds threshold {max_rel_error_tensor}"
-    )
-    assert b_rel_error.mean().item() < max_rel_error_tensor, (
-        f"Tensor B mean relative error {b_rel_error.mean().item():.4f} "
-        f"exceeds threshold {max_rel_error_tensor}"
-    )
+    # LUT output must match the analytical reference
+    assert torch.allclose(
+        a_dequant, a_ref, atol=1e-8
+    ), f"Tensor A: LUT vs reference max diff {(a_dequant - a_ref).abs().max().item():.8f}"
+    assert torch.allclose(
+        b_dequant, b_ref, atol=1e-8
+    ), f"Tensor B: LUT vs reference max diff {(b_dequant - b_ref).abs().max().item():.8f}"
 
 
 @require_e2e
@@ -219,6 +282,30 @@ def test_mxfp6_roundtrip_exact_values():
     ), f"Round-trip error for exact values {error.max().item():.6f} is too large"
 
 
+@require_e2e
+def test_mxfp6_weight_quantization():
+    """Test that LUT-based weight quantization matches the analytical MXFP reference."""
+    torch.manual_seed(0)
+    linear = torch.nn.Linear(32, 1, bias=False)
+
+    x = torch.randn(1, 32) * 1e4
+    linear.weight.data = x
+
+    # LUT-based quantize and dequantize the weight
+    lut = get_mxfp6_e2m3_lut()
+    packed, scales = f32_to_mxfp6(linear.weight.data, lut, block_size=32)
+    qx_weight = mxfp6_to_f32(packed, scales, lut, block_size=32)
+
+    # Reference analytical quantization
+    quantizer = MXFP("e2m3")
+    y = quantizer.quantize(x)
+
+    assert torch.allclose(qx_weight, y, atol=1e-8), (
+        f"Weight quantization: LUT vs reference max diff "
+        f"{(qx_weight - y).abs().max().item():.8f}"
+    )
+
+
 def simple_quantize_matmul_test():
     """Basic matrix multiplication kernel with detailed output."""
 
@@ -276,6 +363,28 @@ def simple_quantize_matmul_test():
     print(f"Mean absolute error: {b_abs_error.mean().item():.6f}")
     print(f"Max relative error: {b_rel_error.max().item():.4f}")
     print(f"Mean relative error: {b_rel_error.mean().item():.4f}")
+
+    # Compare LUT-based quantization against analytical MXFP reference
+    # Must reshape to block_size=32 to match f32_to_mxfp6's block structure
+    quantizer = MXFP("e2m3")
+    a_ref = quantizer.quantize(a.to(torch.float32).cpu().view(-1, 32)).view(m, k)
+    b_ref = quantizer.quantize(b.to(torch.float32).cpu().view(-1, 32)).view(n, k)
+
+    a_ref_diff = (a_dequant_cpu - a_ref).abs()
+    b_ref_diff = (b_dequant_cpu - b_ref).abs()
+
+    print("\n--- LUT vs Analytical MXFP Reference ---")
+    print(
+        f"Tensor A: max diff = {a_ref_diff.max().item():.8f}, "
+        f"mean diff = {a_ref_diff.mean().item():.8f}"
+    )
+    print(
+        f"Tensor B: max diff = {b_ref_diff.max().item():.8f}, "
+        f"mean diff = {b_ref_diff.mean().item():.8f}"
+    )
+    a_match = torch.allclose(a_dequant_cpu, a_ref, atol=1e-6)
+    b_match = torch.allclose(b_dequant_cpu, b_ref, atol=1e-6)
+    print(f"All close (atol=1e-6): A={a_match}, B={b_match}")
 
     # Matmul comparison
     expected = torch.matmul(a.to(torch.float32), b.to(torch.float32).transpose(0, 1))
