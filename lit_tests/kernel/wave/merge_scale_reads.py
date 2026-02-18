@@ -1,16 +1,22 @@
 # RUN: python %s | FileCheck %s
 
 """
-Test that pre-shuffled (e8m0_shuffle) scale reads with MXFP4 GEMM
-use opsel (byte selection) in amdgpu.scaled_mfma at the MLIR level.
+Test merge_contiguous_reads pass on pre-shuffled (e8m0_shuffle) scale
+reads for MXFP4 GEMM.
 
-The opsel_scaled_mfma pass should replace:
-  - Scalar scale operands (f8E8M0FNU)
-  - With vector scale operands (vector<4xf8E8M0FNU>)
-  - And set scalesIdxA/scalesIdxB attributes to select the byte
+The e8m0_shuffle index mapping rearranges scale data so that each thread's
+scale elements land in contiguous groups in physical memory.  The merge pass
+should combine the expanded scalar reads into wider vector loads:
 
-This allows hardware to efficiently extract the correct scale byte
-from a packed VGPR instead of using separate scalar extracts.
+  BLOCK_K=128 -> 4 scale elements -> 2 groups of 2 -> vector<2xi8>
+  BLOCK_K=256 -> 8 scale elements -> 2 groups of 4 -> vector<4xi8>
+
+The shuffle layout requires K/32 >= 64 (i.e. K >= 2048) for the groups to
+land contiguously in the row-major [M, K/32] scale tensor.
+
+Also verifies that the opsel_scaled_mfma pass enables byte selection in
+amdgpu.scaled_mfma, replacing scalar scale operands with vector operands
+and scalesIdxA/scalesIdxB attributes for efficient hardware extraction.
 """
 
 import wave_lang.kernel.lang as tkl
@@ -119,13 +125,9 @@ def get_preshuffle_kernel():
     return preshuffle_scaled_mma
 
 
-@run_test
-def test_preshuffle_opsel():
-    """Test that opsel is applied to preshuffle scale reads."""
-    m, n, k = 512, 512, 2048
-    block_k = 256
+def compile_and_print(m, n, k, block_k):
+    """Compile the preshuffle kernel with given dimensions and print MLIR."""
     k_scale_shuffled = (((k // 32) + 7) // 8) * 8
-
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         BLOCK_M: 128,
@@ -146,25 +148,46 @@ def test_preshuffle_opsel():
         compile_to_mlir=True,
         use_global_to_shared=True,
     )
-
     kernel = get_preshuffle_kernel()
     result = wave_compile(options, kernel)
     print(result.asm)
 
-    # CHECK-LABEL: test_preshuffle_opsel
 
-    # Check that scales are loaded as vector<4xi8> from global memory
-    # CHECK: vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+@run_test
+def test_preshuffle_scale_merge_block_k_128():
+    # BLOCK_K=128: 4 scale elements per thread -> 2 groups of 2 -> vector<2xi8>.
+    compile_and_print(m=512, n=512, k=2048, block_k=128)
 
-    # Check that the vector<4xi8> is bitcast to vector<4xf8E8M0FNU>
-    # CHECK: %[[SCALE_VEC_A:.+]] = vector.bitcast %{{.*}} : vector<4xi8> to vector<4xf8E8M0FNU>
+    # CHECK-LABEL: test_preshuffle_scale_merge_block_k_128
 
-    # Check that another scale vector is loaded and bitcast
-    # CHECK: vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK: %[[SCALE_VEC_B:.+]] = vector.bitcast %{{.*}} : vector<4xi8> to vector<4xf8E8M0FNU>
+    # Each scale tensor produces 2 merged vector<2xi8> loads from global.
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
 
-    # Check that amdgpu.scaled_mfma uses vector scales with opsel (indexed access)
-    # The key indicator is the [N] indexing syntax on vector<4xf8E8M0FNU> scales
+    # No unmerged scalar scale loads from global should remain.
+    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+
+
+@run_test
+def test_preshuffle_scale_merge_block_k_256():
+    # BLOCK_K=256: 8 scale elements per thread -> 2 groups of 4 -> vector<4xi8>.
+    compile_and_print(m=512, n=512, k=2048, block_k=256)
+
+    # CHECK-LABEL: test_preshuffle_scale_merge_block_k_256
+
+    # Each scale tensor produces 2 merged vector<4xi8> loads from global.
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+
+    # No unmerged scalar scale loads from global should remain.
+    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+
+    # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
+    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands
     # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[{{[0-9]+}}] * %{{.*}}) * (%{{.*}}[{{[0-9]+}}] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
 
     # Verify that we're not using scalar scale extracts (the old pattern)
