@@ -139,11 +139,8 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
-  if (!llvm::all_of(getDistributedShape().getSymbols(),
-                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError()
-           << "distributed_shape must only contain WaveSymbolAttr";
-  }
+  if (hasParent && getTailPadding())
+    return emitOpError() << "only top-level allocations can have tail_padding";
 
   return llvm::success();
 }
@@ -1773,18 +1770,6 @@ LogicalResult ExtractSliceOp::verify() {
                          << stride.getNumSymbols() << " symbols";
   }
 
-  if (!llvm::all_of(offset.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "offset must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(size.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "size must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(stride.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "stride must only contain WaveSymbolAttr";
-  }
-
   return success();
 }
 
@@ -1957,6 +1942,52 @@ LogicalResult wave::ReciprocalOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ApplyExprOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::ApplyExprOp::verify() {
+  for (Type operandType : getOperands().getTypes()) {
+    auto waveTensorType = dyn_cast<WaveTensorType>(operandType);
+    if (!waveTensorType)
+      continue;
+
+    if (waveTensorType.getAddressSpaceValue() !=
+            WaveAddressSpace::Unspecified &&
+        waveTensorType.getAddressSpaceValue() != WaveAddressSpace::Register)
+      return emitOpError() << "tensor operands must be in register or "
+                              "unspecified address space";
+  }
+
+  unsigned numResults = getExpr().getMap().getNumResults();
+  if (numResults != 1)
+    return emitOpError("expression must produce exactly one result, but got ")
+           << numResults;
+
+  if (!isa<IntegerType>(getElementType(getResult().getType())))
+    return emitOpError() << "operates on integers only";
+
+  llvm::BitVector usedOperandAttrs(getArguments().size());
+  for (Attribute sym : getExpr().getSymbols()) {
+    if (auto operand = dyn_cast<WaveOperandAttr>(sym)) {
+      if (operand.getOperandNumber() >= getArguments().size()) {
+        return emitOpError()
+               << "expression uses operand #" << operand.getOperandNumber()
+               << " but there are only " << getArguments().size()
+               << " operands";
+      }
+      usedOperandAttrs.set(operand.getOperandNumber());
+    }
+  }
+  usedOperandAttrs.flip();
+  for (unsigned position : usedOperandAttrs.set_bits()) {
+    emitWarning() << "operand #" << position
+                  << " is not used in the expression";
+  }
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // SelectOp
 //-----------------------------------------------------------------------------
 
@@ -2011,6 +2042,39 @@ LogicalResult wave::SelectOp::verify() {
     return failure();
 
   return success();
+}
+
+//-----------------------------------------------------------------------------
+// SelfIndexOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::SelfIndexOp::verify() {
+  Type elementType = getElementType(getResult().getType());
+
+  if (!isa<IntegerType>(elementType))
+    return emitOpError() << "result element type must be an integer type, got "
+                         << elementType;
+
+  auto tensorType = dyn_cast<WaveTensorType>(getResult().getType());
+  if (!tensorType)
+    return success();
+
+  if (!tensorType.getFullySpecified())
+    return success();
+
+  if (tensorType.getRank() != 1)
+    return emitOpError() << "result must be a 1-dimensional tensor, got rank "
+                         << tensorType.getRank();
+
+  if (tensorType.getShape()[0] != getDim())
+    return emitOpError() << "result dimension '"
+                         << tensorType.getShape()[0].getName()
+                         << "' must match the specified dimension '"
+                         << getDim().getName() << "'";
+
+  return verifyIndexElementsPerThread(
+      getOperation(), getIndexAttr(), getElementsPerThread(),
+      dyn_cast<WaveTensorType>(getResult().getType()), getResult().getType());
 }
 
 //-----------------------------------------------------------------------------

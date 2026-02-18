@@ -2,6 +2,7 @@
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
@@ -40,7 +41,7 @@ def _make_options(
         N: 16,
         BLOCK_M: 16,
         BLOCK_N: 16,
-        ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     options = WaveCompileOptions(
         subs=subs,

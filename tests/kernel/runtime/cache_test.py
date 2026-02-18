@@ -668,7 +668,7 @@ def testDifferentSignatureSameCore(tmp_path):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
     )
@@ -750,7 +750,7 @@ def testChangeFreeVarOfNestedFunction(tmp_path):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
     )
@@ -808,7 +808,7 @@ def testAsmBackendCache(tmp_path):
         tkw.write(res, b)
 
     hyperparams = {
-        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 16,
         BLOCK_N: 16,
         M: 16,

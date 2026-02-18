@@ -137,6 +137,37 @@ struct PyWaveIterSymbolAttr
 };
 
 //===---------------------------------------------------------------------===//
+// WaveOperandAttr
+//===---------------------------------------------------------------------===//
+
+struct PyWaveOperandAttr
+    : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
+          PyWaveOperandAttr> {
+  static constexpr IsAFunctionTy isaFunction = mlirAttributeIsAWaveOperandAttr;
+  static constexpr GetTypeIDFunctionTy getTypeIdFunction =
+      mlirWaveOperandAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveOperandAttr";
+  using PyConcreteAttribute::PyConcreteAttribute;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](unsigned operandNumber,
+           mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
+               context) {
+          return PyWaveOperandAttr(
+              context->getRef(),
+              mlirWaveOperandAttrGet(context->get(), operandNumber));
+        },
+        nb::arg("operand_number"), nb::arg("context") = nb::none(),
+        "Gets a wave.WaveOperandAttr from the given operand index.");
+    c.def_prop_ro("operand_number", [](MlirAttribute self) {
+      return mlirWaveOperandAttrGetOperandNumber(self);
+    });
+  }
+};
+
+//===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -517,10 +548,11 @@ struct PyWaveExprListAttr
         [](std::vector<MlirAttribute> &symbols, MlirAffineMap map) {
           for (MlirAttribute attr : symbols) {
             if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
-                !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
+                !mlirAttributeIsAWaveIndexSymbolAttr(attr) &&
+                !mlirAttributeIsAWaveOperandAttr(attr)) {
               throw nb::type_error(
-                  "symbols must contain only WaveSymbolAttr or "
-                  "WaveIndexSymbolAttr attributes");
+                  "symbols must contain only WaveSymbolAttr, "
+                  "WaveIndexSymbolAttr or WaveOperandAttr attributes");
             }
           }
 
@@ -876,6 +908,21 @@ NB_MODULE(_waterDialects, m) {
       "register_passes", []() { mlirWaveDialectRegisterPasses(); },
       "Registers the wave dialect passes.");
 
+  // Wave operation methods
+  // TODO: These should be methods on a Python IterateOp class rather than
+  // free functions on the dialect module.  Requires per-operation Python
+  // class bindings which we don't currently generate.
+  d.def(
+      "iterate_make_isolated",
+      [](MlirOperation op) { mlirWaveIterateOpMakeIsolated(op); },
+      nb::arg("op"),
+      "Makes a wave.iterate operation's region isolated from above.");
+  d.def(
+      "iterate_make_non_isolated",
+      [](MlirOperation op) { mlirWaveIterateOpMakeNonIsolated(op); },
+      nb::arg("op"),
+      "Makes a wave.iterate operation's region non-isolated from above.");
+
   // Export dialect constants
   d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;
 
@@ -942,6 +989,7 @@ NB_MODULE(_waterDialects, m) {
 
   PyWaveSymbolAttr::bind(d);
   PyWaveIterSymbolAttr::bind(d);
+  PyWaveOperandAttr::bind(d);
   PyWaveIndexSymbolAttr::bind(d);
   PyWaveIndexMappingAttr::bind(d);
   PyWaveHyperparameterAttr::bind(d);

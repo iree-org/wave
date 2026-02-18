@@ -400,7 +400,7 @@ To use the ASM backend, specify it in your Wave compilation options:
 
    # Compile with ASM backend
    options = WaveCompileOptions(
-       subs={M: 16, N: 16, ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value},
+       subs={M: 16, N: 16, ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE},
        backend="asm",
        wave_runtime=True,
        compile_to_mlir=False
@@ -469,7 +469,7 @@ Here's a complete example of a copy kernel using the ASM backend:
        subs={
            M: shape[0],
            N: shape[1],
-           ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value
+           ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE
        },
        canonicalize=True,
        backend="asm",
@@ -658,7 +658,7 @@ The ASM backend supports hardware-accelerated matrix operations using MFMA instr
            BLOCK_M: 16, BLOCK_N: 16,
            LOAD_ELEMS_PER_THREAD: 4,
            STORE_ELEMS_PER_THREAD: 4,
-           ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value
+           ADDRESS_SPACE: SHARED_ADDRESS_SPACE
        },
        canonicalize=True,
        backend="asm",
@@ -985,8 +985,8 @@ The ASM backend supports efficient GEMM kernels with K-dimension tiling using ``
        subs={
            M: 64, N: 64, K: 128,
            BLOCK_M: 32, BLOCK_N: 32, BLOCK_K: 64,
-           ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
-           ADDRESS_SPACE_0: tkl.AddressSpace.GLOBAL_MEMORY.value,
+           ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+           ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
        },
        backend="asm",
        wave_runtime=True,

@@ -35,7 +35,7 @@ def get_wave_compile_options(
     block_m: int = 16,
     block_n: int = 16,
     block_k: int = 16,
-    address_space: tkl.AddressSpace = tkl.AddressSpace.SHARED_MEMORY.value,
+    address_space=SHARED_ADDRESS_SPACE,
     canonicalize: bool = False,
     dynamic_symbols=[],
     additional_symbols={},

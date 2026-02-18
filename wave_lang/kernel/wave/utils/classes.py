@@ -3,9 +3,57 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import Generic, List, TypeVar
 from enum import Enum
+
+T = TypeVar("T")
+
+
+class Result(ABC, Generic[T]):
+    """Abstract result of a failable operation.
+
+    Construct via `Success()` or `Failure(error)`.
+    Truthy on success, falsy on failure.
+    """
+
+    error: str | None
+
+    @abstractmethod
+    def __bool__(self) -> bool: ...
+
+    @abstractmethod
+    def __repr__(self) -> str: ...
+
+
+class Success(Result[T]):
+    """Successful outcome, optionally carrying a typed value."""
+
+    def __init__(self, value: T = None):
+        self.error = None
+        self.value = value
+
+    def __bool__(self) -> bool:
+        return True
+
+    def __repr__(self) -> str:
+        if self.value is None:
+            return "Success()"
+        return f"Success({self.value!r})"
+
+
+class Failure(Result):
+    """Failed outcome with an error description."""
+
+    def __init__(self, error: str):
+        self.error = error
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"Failure({self.error!r})"
 
 
 @dataclass

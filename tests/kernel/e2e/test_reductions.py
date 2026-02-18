@@ -11,6 +11,7 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
@@ -69,7 +70,7 @@ def test_reduce_sum(shape, run_bench, threads_per_wave):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -139,7 +140,7 @@ def test_block_reduce_sum(shape, run_bench, threads_per_wave):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -216,7 +217,7 @@ def test_toy_online_softmax(shape, threads_per_wave):
             M: shape[0],
             N: shape[1],
             BLOCK_N: max(min(128, shape[1]), threads_per_wave),
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=False,

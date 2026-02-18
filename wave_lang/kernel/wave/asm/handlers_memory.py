@@ -518,7 +518,19 @@ class _MemoryHandlers:
         total_bytes = num_elements * element_bytes
 
         # Alignment depends on load size
-        DS_ALIGN = 16 if total_bytes == 16 else (8 if total_bytes == 8 else 4)
+        # ds_read_u8 is byte-aligned, ds_read_u16 is 2-byte, ds_read_b32 is
+        # 4-byte aligned, etc.  Using exact alignment lets the offset-folding
+        # optimiser emit the offset: field for narrow loads too.
+        if total_bytes >= 16:
+            DS_ALIGN = 16
+        elif total_bytes >= 8:
+            DS_ALIGN = 8
+        elif total_bytes >= 4:
+            DS_ALIGN = 4
+        elif total_bytes >= 2:
+            DS_ALIGN = 2
+        else:
+            DS_ALIGN = 1
 
         if DEBUG_DS_OFFSET:
             print(f"[DS_OFFSET_DEBUG] memref={memref_ssa[:60]}...")
@@ -579,18 +591,30 @@ class _MemoryHandlers:
                 KVReg(dst_range.base_reg.id),
                 KVReg(dst_range.base_reg.id + 1),
             )
+        elif total_bytes == 1:
+            # 8-bit load (e.g., i8/f8E8M0FNU scale factors for MXFP4)
+            # ds_read_u8 loads exactly 1 byte, zero-extended to 32 bits.
+            # Using ds_read_b32 here would read 3 garbage bytes from
+            # adjacent LDS locations, corrupting the scale register.
+            dst_vreg = ctx.vreg()
+            ctx.emit_lds_read_u8(dst_vreg, addr_vreg, lds_offset)
+            result_regs = (dst_vreg,)
+        elif total_bytes == 2:
+            # 16-bit load (e.g., f16 or i16 data)
+            # ds_read_u16 loads exactly 2 bytes, zero-extended to 32 bits.
+            dst_vreg = ctx.vreg()
+            ctx.emit_lds_read_u16(dst_vreg, addr_vreg, lds_offset)
+            result_regs = (dst_vreg,)
         elif total_bytes <= 4:
-            # 32-bit or smaller load (1, 2, or 4 bytes)
-            # ds_read_b32 loads 4 bytes into a single VGPR.
-            # For sub-4-byte types (e.g., 1-byte i8/f8E8M0FNU scales),
-            # the needed data is in the low bits; upper bits are don't-care.
+            # 32-bit load
             dst_vreg = ctx.vreg()
             ctx.emit_lds_read_b32(dst_vreg, addr_vreg, lds_offset)
             result_regs = (dst_vreg,)
         else:
             raise NotImplementedError(
                 f"LDS load of {total_bytes} bytes not supported. "
-                f"Expected 4 (ds_read_b32), 8 (ds_read_b64), or 16 (ds_read_b128) bytes."
+                f"Expected 1 (ds_read_u8), 2 (ds_read_u16), 4 (ds_read_b32), "
+                f"8 (ds_read_b64), or 16 (ds_read_b128) bytes."
             )
 
         # Track in SSA mapping as tuple of KVReg

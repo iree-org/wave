@@ -14,6 +14,7 @@
 #include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Transforms/Liveness.h"
 #include "waveasm/Transforms/Passes.h"
 
 #include "mlir/IR/Builders.h"
@@ -173,11 +174,9 @@ private:
     if (!needsVALUHazard)
       return;
 
-    // Collect operations in order
+    // Collect operations in order, recursively walking into while/if bodies
     llvm::SmallVector<Operation *> ops;
-    for (Operation &op : program.getBodyBlock()) {
-      ops.push_back(&op);
-    }
+    collectOpsRecursive(program.getBodyBlock(), ops);
 
     // Scan for hazards and collect insertion points
     llvm::SmallVector<Operation *> insertionPoints;

@@ -38,6 +38,7 @@ from .analysis.index_sequence_analysis import (
     set_post_expansion_indices,
 )
 from .analysis.partition_strided_operators import (
+    merge_contiguous_reads,
     partition_gather_like_ops,
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
@@ -119,6 +120,7 @@ from .cache import (
 from .water import water_leak_in_bounds_check, water_lowering_pipeline
 from wave_lang.runtime.launch import Launchable
 from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
+from .wave import LaunchableWave
 from wave_lang.kernel.lang.global_symbols import *
 from .profiling import benchmark_module
 from .debug_log_hoist import DebugArgInfo
@@ -229,7 +231,7 @@ class WaveKernel:
 
         # Partition arguments into kernel inputs and outputs.
         # ToDo: we should expose the `usage` as a property in binding desc
-        #       so that we can reduce the code and use `zip``.
+        #       so that we can reduce the code and use `zip`.
         usage_idx = 0
         for arg in args:
             if not isinstance(arg, torch.Tensor):
@@ -431,15 +433,178 @@ class WaveKernelExecutionEngine:
         self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
 
+def build_graph_passes(
+    launchable: LaunchableWave,
+    trace: CapturedTrace,
+    options: WaveCompileOptions,
+    schedule: Optional["WaveSchedule"] = None,
+    debug_arg_info: Optional[list[DebugArgInfo]] = None,
+    debug_handlers: Optional[list[Any]] = None,
+    print_ir_before: Optional[Sequence[str]] = None,
+    print_ir_after: Optional[Sequence[str]] = None,
+) -> list[Callable]:
+    """Build the full ordered list of graph compilation passes.
+
+    Returns the complete pass pipeline that transforms a traced graph through
+    all compilation stages. Each pass is a zero-argument callable (typically a
+    `partial`). Passes mutate the *trace* in place and must be executed in
+    the returned order within the same `IndexingContext` that was active when
+    the trace was created.
+    """
+    if debug_arg_info is None:
+        debug_arg_info = []
+    if debug_handlers is None:
+        debug_handlers = []
+    if print_ir_before is None:
+        print_ir_before = []
+    if print_ir_after is None:
+        print_ir_after = []
+
+    graph_passes = _build_initial_pass_pipeline(
+        launchable,
+        trace,
+        options,
+        debug_arg_info,
+        debug_handlers,
+        print_ir_before,
+        print_ir_after,
+    )
+
+    graph_passes += [
+        partial(decompose_vmma_ops, trace, launchable.constraints),
+        partial(decompose_dot_mma, trace, launchable.constraints),
+    ]
+
+    # Optimizations.
+    if options.optimization_level:
+        graph_passes += [
+            partial(hoist_loop_invariant_ops, trace, launchable.constraints),
+            partial(tensor_load_to_shared, trace, launchable.constraints, options),
+            partial(multicast, trace, launchable.constraints, options),
+            partial(fuse_tensor_loads, trace, launchable.constraints, options),
+            partial(in_thread_transpose, trace, launchable.constraints, options),
+            partial(global_to_shared_gathers, trace, launchable.constraints),
+            partial(minimize_global_loads, trace, launchable.constraints),
+            # Wave specialization
+            partial(specialize_kernel, trace, launchable.constraints, options),
+            partial(gather_to_shared, trace, launchable.constraints, options),
+            partial(gather_to_shared_swizzling, trace, launchable.constraints, options),
+            partial(
+                mark_hardware_transpose_candidates,
+                trace,
+                launchable.constraints,
+                options,
+            ),
+        ]
+    graph_passes += [
+        partial(
+            apply_shared_memory_indexing_corrections, trace, launchable.constraints
+        ),
+    ]
+
+    # Partition strided operators.
+    graph_passes += [
+        partial(partition_ops_with_gpr_offsets, trace, launchable.constraints),
+        partial(partition_strided_operators, trace, launchable.constraints),
+        partial(remove_chained_extractslice, trace),
+    ]
+
+    graph_passes += [
+        partial(decompose_reduce_ops, trace, launchable.constraints),
+        partial(decompose_scan_ops, trace, launchable.constraints),
+        partial(decompose_topk_ops, trace, launchable.constraints),
+    ]
+
+    # Schedule the iterate ops.
+    scheduling_type = options.schedule
+    use_scheduling_barriers = options.use_scheduling_barriers
+    if options.schedule == SchedulingType.MANUAL:
+        graph_passes.append(
+            partial(
+                launchable.run_manual_schedule,
+                trace,
+                launchable.constraints,
+                schedule,
+                use_scheduling_barriers,
+            ),
+        )
+    else:
+        graph_passes.append(
+            partial(
+                schedule_graph,
+                trace,
+                launchable.constraints,
+                use_scheduling_barriers,
+                scheduling_type,
+                options.override_schedule,
+                options.dump_schedule,
+                options.multi_buffer_count,
+            )
+        )
+
+    if options.optimization_level:
+        graph_passes += [
+            partial(
+                schedule_reordering,
+                trace,
+                launchable.constraints,
+                scheduling_type,
+                options.use_global_to_shared,
+            ),
+            partial(
+                minimize_shared_allocs,
+                trace,
+                options.minimize_shared_allocs,
+            ),
+        ]
+    graph_passes += [
+        partial(
+            add_shared_memory_barriers,
+            trace,
+            target=options.target,
+            is_specialized=options.specialize,
+        ),
+        partial(add_cluster_barriers, trace, launchable.constraints, options),
+        partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
+        partial(
+            partition_gather_like_ops, trace, launchable.constraints, options.target
+        ),
+        partial(generate_bounds_exprs, trace, launchable.constraints),
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        ),
+    ]
+
+    if options.use_bound_check:
+        graph_passes += [
+            partial(generate_bound_checks, trace),
+        ]
+
+    graph_passes.append(
+        partial(
+            location_check_pass,
+            trace,
+            "enforce-locations",
+            log=False,
+            enforce_locations=options.enforce_locations,
+        )
+    )
+
+    return graph_passes
+
+
 def _build_initial_pass_pipeline(
-    launchable: "LaunchableWave",
+    launchable: LaunchableWave,
     trace: CapturedTrace,
     options: WaveCompileOptions,
     debug_arg_info: list[DebugArgInfo],
     debug_handlers: list[Any],
-    print_ir_before: Sequence[str] = [],
-    print_ir_after: Sequence[str] = [],
-):
+    print_ir_before: Sequence[str],
+    print_ir_after: Sequence[str],
+) -> list[Callable]:
     idxc = IndexingContext.current()
 
     def finalize_indices():
@@ -566,7 +731,7 @@ def _rewrite_module_for_iree_stream_abi(
 
 
 def compile_launchable_to_mlir(
-    launchable: "LaunchableWave",
+    launchable: LaunchableWave,
     trace: CapturedTrace,
     context: Context,
     module_op: Optional[Module] = None,
@@ -656,7 +821,7 @@ def compile_launchable_to_mlir(
 
 
 def _trace_launchable_and_get_kernel_signature(
-    launchable: "LaunchableWave",
+    launchable: LaunchableWave,
     options: WaveCompileOptions,
     schedule: Optional[WaveSchedule] = None,
     context: Optional[Context] = None,
@@ -704,132 +869,15 @@ def _trace_launchable_and_get_kernel_signature(
         print(f"***After trace/Before first pass***\n")
         print_trace(trace)
 
-    # Initial passes, pre-optimization.
-    graph_passes = _build_initial_pass_pipeline(
+    graph_passes = build_graph_passes(
         launchable,
         trace,
         options,
+        schedule,
         debug_arg_info,
         debug_handlers,
         print_ir_before,
         print_ir_after,
-    )
-
-    graph_passes += [
-        partial(decompose_vmma_ops, trace, launchable.constraints),
-        partial(decompose_dot_mma, trace, launchable.constraints),
-    ]
-
-    # Optimizations.
-    if options.optimization_level:
-        graph_passes += [
-            partial(hoist_loop_invariant_ops, trace, launchable.constraints),
-            partial(tensor_load_to_shared, trace, launchable.constraints, options),
-            partial(multicast, trace, launchable.constraints, options),
-            partial(fuse_tensor_loads, trace, launchable.constraints, options),
-            partial(in_thread_transpose, trace, launchable.constraints, options),
-            partial(global_to_shared_gathers, trace, launchable.constraints),
-            partial(minimize_global_loads, trace, launchable.constraints),
-            # Wave specialization
-            partial(specialize_kernel, trace, launchable.constraints, options),
-            partial(gather_to_shared, trace, launchable.constraints, options),
-            partial(gather_to_shared_swizzling, trace, launchable.constraints, options),
-            partial(
-                mark_hardware_transpose_candidates,
-                trace,
-                launchable.constraints,
-                options,
-            ),
-        ]
-    graph_passes += [
-        partial(
-            apply_shared_memory_indexing_corrections, trace, launchable.constraints
-        ),
-    ]
-
-    # Partition strided operators.
-    graph_passes += [
-        partial(partition_ops_with_gpr_offsets, trace, launchable.constraints),
-        partial(partition_strided_operators, trace, launchable.constraints),
-        partial(remove_chained_extractslice, trace),
-    ]
-
-    graph_passes += [
-        partial(decompose_reduce_ops, trace, launchable.constraints),
-        partial(decompose_scan_ops, trace, launchable.constraints),
-        partial(decompose_topk_ops, trace, launchable.constraints),
-    ]
-
-    # Schedule the iterate ops.
-    scheduling_type = options.schedule
-    use_scheduling_barriers = options.use_scheduling_barriers
-    if options.schedule == SchedulingType.MANUAL:
-        graph_passes.append(
-            partial(
-                launchable.run_manual_schedule,
-                trace,
-                launchable.constraints,
-                schedule,
-                use_scheduling_barriers,
-            ),
-        )
-    else:
-        graph_passes.append(
-            partial(
-                schedule_graph,
-                trace,
-                launchable.constraints,
-                use_scheduling_barriers,
-                scheduling_type,
-                options.override_schedule,
-                options.dump_schedule,
-                options.multi_buffer_count,
-            )
-        )
-
-    if options.optimization_level:
-        graph_passes += [
-            partial(
-                schedule_reordering,
-                trace,
-                launchable.constraints,
-                scheduling_type,
-                options.use_global_to_shared,
-            ),
-            partial(
-                minimize_shared_allocs,
-                trace,
-                options.minimize_shared_allocs,
-            ),
-        ]
-    graph_passes += [
-        partial(
-            add_shared_memory_barriers,
-            trace,
-            target=options.target,
-            is_specialized=options.specialize,
-        ),
-        partial(add_cluster_barriers, trace, launchable.constraints, options),
-        partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
-        partial(
-            partition_gather_like_ops, trace, launchable.constraints, options.target
-        ),
-        partial(generate_bounds_exprs, trace, launchable.constraints),
-    ]
-
-    if options.use_bound_check:
-        graph_passes += [
-            partial(generate_bound_checks, trace),
-        ]
-
-    graph_passes.append(
-        partial(
-            location_check_pass,
-            trace,
-            "enforce-locations",
-            log=False,
-            enforce_locations=options.enforce_locations,
-        )
     )
 
     pass_times = {}
@@ -901,7 +949,7 @@ def _trace_launchable_and_get_kernel_signature(
 
 def wave_compile(
     options: WaveCompileOptions,
-    kernel: "LaunchableWave",
+    kernel: LaunchableWave,
     schedule: Optional["WaveSchedule"] = None,
 ) -> WaveKernel | WaveKernelExecutionEngine:
     """

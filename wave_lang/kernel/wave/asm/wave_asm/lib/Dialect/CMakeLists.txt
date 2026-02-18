@@ -9,6 +9,7 @@ add_mlir_dialect_library(MLIRWaveASMDialect
   WaveASMTypes.cpp
   WaveASMAttrs.cpp
   WaveASMOps.cpp
+  WaveASMControlFlowOps.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/waveasm
@@ -19,4 +20,6 @@ add_mlir_dialect_library(MLIRWaveASMDialect
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
+  MLIRControlFlowInterfaces
+  MLIRFunctionInterfaces
 )

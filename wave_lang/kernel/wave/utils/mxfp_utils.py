@@ -20,7 +20,18 @@ SCALE_GROUP_SIZE = 32
 def generate_gemm_afp4wfp4_inputs(
     shape: tuple[int, int, int], device: torch.device = None
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Generate random packed MXFP4 inputs and e8m0 scales for scaled GEMM."""
+    """Generate random packed MXFP4 inputs and e8m0 scales for scaled GEMM.
+
+    Returns:
+        x:        uint8 tensor of shape [M, K//2]   – packed FP4 activations
+        w:        uint8 tensor of shape [K//2, N]    – packed FP4 weights (transposed)
+        x_scales: uint8 tensor of shape [M, K//32]   – E8M0 activation scales
+        w_scales: uint8 tensor of shape [N, K//32]    – E8M0 weight scales
+
+    Note: ``w`` is returned in *transposed* (K//2 x N) layout.  The kernel
+    expects N x K//2, so callers must pass ``w.T.contiguous()`` to the kernel.
+    ``torchScaledGemmMXFP4`` handles the transpose internally.
+    """
     if device is None:
         device = get_default_device()
     M, N, K = shape
@@ -32,6 +43,9 @@ def generate_gemm_afp4wfp4_inputs(
     w_high = torch.randint(0, 16, (N, K // 2), dtype=torch.uint8, device=device)
     w = w_low | (w_high << 4)
     w = w.T
+    # Scale range [124, 128) -> exponents {-3, -2, -1, 0} -> scales {0.125, 0.25,
+    # 0.5, 1.0}.  Deliberately narrow to keep (FP4 * scale) products within a
+    # well-behaved f32 range, avoiding overflow/underflow in the reference path.
     x_scales = torch.randint(
         124, 128, (K // SCALE_GROUP_SIZE, M), dtype=torch.uint8, device=device
     )
@@ -70,9 +84,14 @@ def mxfp4_to_f32(x: Tensor) -> Tensor:
 
 
 def e8m0_to_f32(x: Tensor) -> Tensor:
-    """Convert e8m0 scale values to f32."""
+    """Convert e8m0 scale values to f32.
+
+    E8M0 is an 8-bit exponent-only format: value = 2^(x - 127).
+    The special encoding x=255 (all ones) represents NaN.
+    """
+    nan_mask = x == 255
     x_f32 = 2 ** ((x - 127).to(torch.float32))
-    x_f32[x_f32 == 128] = float("nan")
+    x_f32[nan_mask] = float("nan")
     return x_f32
 
 

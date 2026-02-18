@@ -211,6 +211,13 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
 
     `max_bits_per_load` specifies the maximum number of bits that can
     be loaded with a single load instruction.
+
+    Note: The Python-based Wave compiler supports additional configuration
+    options (e.g., cluster dimensions for multicast operations, service wave
+    counts for wave specialization) that control optimization passes and
+    kernel launch parameters. These are intentionally not included in the
+    MLIR representation, as they represent scheduling decisions and runtime
+    configuration rather than fundamental hardware constraints.
   }];
   let parameters = (ins "unsigned":$threads_per_wave,
                         OptionalArrayRefParameter<"unsigned">:$waves_per_block,
@@ -432,6 +439,22 @@ def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
   let assemblyFormat = "`<` $name `>`";
 }
 
+def WaveOperandAttr : AttrDef<WaveDialect, "WaveOperand"> {
+  let mnemonic = "operand";
+  let description = [{
+    Symbol representing an operand inside a symbolic expression attribute.
+    The integer indicates which operation operand this symbol refers to
+    (0 for the first operand, 1 for the second, and so on). When a printed
+    name is needed (e.g. for affine expressions), the symbol is rendered as
+    `_Operand_` followed by the operand number. This attribute distinguishes
+    operand symbols from external symbolic constants (hyperparameters), which
+    continue to use `WaveSymbolAttr`.
+  }];
+
+  let parameters = (ins "unsigned":$operandNumber);
+  let assemblyFormat = "`<` $operandNumber `>`";
+}
+
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
   let mnemonic = "index_mapping";
   let description = [{
@@ -535,8 +558,26 @@ def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
+
+    ::wave::WaveExprListAttr getValue() { return *this; }
   }];
 }
+
+class WaveExprListAllowedInputsPred<list<AttrDef> inputTypes>
+  : CPred<"::wave::detail::allExprSymbolsOfType<"
+  # !interleave(!foreach(entry, inputTypes, entry.cppType ), ", ")
+  # ">(::llvm::cast<::wave::WaveExprListAttr>($_self))">;
+
+class WaveExprListAttrOf<list<AttrDef> inputTypes> : Attr<
+  And<[WaveExprListAttr.predicate,
+       WaveExprListAllowedInputsPred<inputTypes>]>,
+  "expression list with "
+  # !interleave(!foreach(entry, inputTypes, entry.cppClassName), ", ")
+  # " inputs"> {
+  let storageType = WaveExprListAttr.cppType;
+  let returnType = WaveExprListAttr.returnType;
+}
+
 
 def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";

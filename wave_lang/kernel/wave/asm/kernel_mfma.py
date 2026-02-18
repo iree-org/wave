@@ -221,11 +221,12 @@ class _MFMASupport:
                 self.program.register_accumulator_vreg_range(acc_range)
 
             # Scaled MFMA with accumulator: v_mfma_scale dst, a, b, acc, a_scale, b_scale
+            # Hardware operand order: src_a, src_b, src_c(acc), scale_a, scale_b
             self.program.emit(
                 KInstr(
                     "v_mfma_scale_f32_16x16x128_f8f6f4",
                     (acc_range,),  # def: accumulator range (RMW)
-                    (acc_range, a_range, b_range, a_scale_reg, b_scale_reg),
+                    (a_range, b_range, acc_range, a_scale_reg, b_scale_reg),
                     comment="Scaled MFMA 16x16x128 F8F6F4 with accumulator (in-place)",
                     modifiers=modifiers,
                 )

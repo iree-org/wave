@@ -352,8 +352,16 @@ def AllocateOp : WaveOp<"allocate", [
 
   let arguments = !con((ins
     Arg<Optional<WaveMemoryType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
-    Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
+        "Distributed (physical) shape">:$distributed_shape,
+    Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset,
+    Arg<DefaultValuedAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
+      "Padding added to the last dimension of distributed shape in number of elements">:$padding,
+    Arg<OptionalAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>>, [{
+      Padding added to the end of an allocation in number of elements,
+      does not affect the distributed shape
+    }]
+    >:$tail_padding
   ), commonArguments);
 
   let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);
@@ -410,9 +418,9 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 
   let arguments = (ins
     Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
-    Arg<WaveExprListAttr>:$offset,
-    Arg<WaveExprListAttr>:$size,
-    Arg<WaveExprListAttr>:$stride
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$offset,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$size,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$stride
   );
 
   let results = (outs
@@ -571,6 +579,46 @@ def ShuffleOp : WaveOp<"shuffle", [
 // Miscellaneous operations
 //-----------------------------------------------------------------------------
 
+def ApplyExprOp : WaveOp<"apply_expr",
+    [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+     CompatibleOperandsAndResultsOpTrait,
+     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
+    WaveArithmeticOpDoc {
+  let summary = "Apply a symbolic expression to one or more register values";
+  let description = [{
+    Applies a symbolic expression to one or more register-resident tensor
+    values. The expression is specified as a `WaveExprListAttr` containing an
+    affine map with a single result. Each symbol in the expression corresponds
+    to one of the operands or to an external symbolic constant.
+
+    All operands must have the same type and indexing dimensions. The result
+    type is the same as the operand types.
+
+    Operand symbols are represented using `WaveOperandAttr` (`#wave.operand`)
+    with the operand index (0 for first operand, 1 for second, etc.). In
+    expressions they appear as `_Operand_0`, `_Operand_1`, etc. External
+    symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
+  }] # baseDescription;
+
+  // Accept both WaveTensorType (before PropagateElementsPerThread) and
+  // 1D vectors (after). We cannot use Variadic<WaveTensorInRegister> because
+  // Variadic requires a Type and not a TypeConstraint.
+  let arguments = !con((ins
+    Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr, WaveOperandAttr]>, "Expression to apply">:$expr
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Result">:$result
+  );
+
+  let assemblyFormat =
+    "`(` $arguments `)` $expr " # commonArgumentsSyntax # "attr-dict `:`"
+    "functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def CastOp : WaveOp<"cast", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
@@ -635,6 +683,43 @@ def BroadcastOp : WaveOp<"broadcast", [
     // types to be fully specified tensor types.
     ::llvm::SmallVector<::wave::WaveSymbolAttr> inferBroadcastDims();
   }];
+}
+
+def SelfIndexOp : WaveOp<"self_index", [
+    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    NoOpElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Produce a vector of indices along a specified dimension";
+  let description = [{
+    Creates a register-resident tensor containing the index values for each
+    thread along the specified symbolic dimension. The index computation uses
+    the index mapping associated with the operation: for each element position
+    i, the value is `start + i * stride`, where start and stride come from
+    the index mapping for the specified dimension.
+
+    The result type must be a 1-dimensional tensor (or vector) with an integer
+    element type, indexed by the specified dimension.
+
+    Example:
+    ```mlir
+    %idx = wave.self_index @N index {...} : !wave.tensor<[N], i32, register>
+    ```
+  }];
+
+  let arguments = !con((ins
+    Arg<WaveSymbolAttr, "Dimension to index over">:$dim,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Index values">:$result
+  );
+
+  let assemblyFormat =
+    "custom<SingleSymbol>($dim) " # commonArgumentsSyntax # " attr-dict `:`"
+    " type($result)";
+  let hasVerifier = 1;
 }
 
 def PermuteOp : WaveOp<"permute", [

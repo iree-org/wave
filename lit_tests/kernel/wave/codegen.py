@@ -50,7 +50,7 @@ def get_wave_compile_options(
         BLOCK_M: 16,
         BLOCK_N: 16,
         BLOCK_K: 16,
-        ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     bindings.update(additional_symbols)
 
@@ -162,7 +162,7 @@ def test_read_mapped_buffer():
             BLOCK_M: 16,
             BLOCK_N: 16,
             BLOCK_K: 16,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         use_buffer_ops=True,
         compile_to_mlir=True,
@@ -205,7 +205,7 @@ def test_read_dynamic_3d_buffer():
             BLOCK_M: 16,
             BLOCK_N: 16,
             BLOCK_K: 16,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         dynamic_symbols=dynamic_symbols,
         use_buffer_ops=True,
@@ -336,7 +336,7 @@ def test_read_write_masked():
             N: 3,
             BLOCK_M: 4,
             BLOCK_N: 4,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -785,18 +785,23 @@ def test_read_write_conditional():
     )
     print(test_conditional.asm)
 
+    # The merge_contiguous_reads pass combines the per-element scalar
+    # reads into wider vector loads (up to max_bits_per_load / element_bits = 8
+    # for f16).  The merged loads are then sliced back to scalars for the
+    # per-element conditional stores.
     # CHECK-LABEL:    func.func @test_conditional
     #  CHECK-SAME:      (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #   CHECK-DAG:      %[[A1:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A2:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A3:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
-    #       CHECK:      %[[RES:.*]] = vector.load %[[A1]][%[[M:.*]], %[[N:.*]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
-    #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[N]]] : memref<16x16xi32, strided<[16, 1]>>
+    #       CHECK:      %[[VEC:.*]] = vector.load %[[A1]][%[[M:.*]], %{{.*}}] : memref<16x16xf16, strided<[16, 1]>>, vector<8xf16>
+    #       CHECK:      %[[RES:.*]] = vector.extract_strided_slice %[[VEC]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf16> to vector<1xf16>
+    #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[C0]]] : memref<16x16xi32, strided<[16, 1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.cmpi sgt, %[[O2]], %[[C0]] : index
     #       CHECK:      scf.if %[[O3]] {
-    #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[N]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
+    #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
     #       CHECK:      }
 
 
@@ -899,7 +904,7 @@ def test_int_to_float_handler_conversion():
             N: shape[1],
             LOAD_ELEMS_PER_THREAD: 4,
             STORE_ELEMS_PER_THREAD: 4,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
     )
@@ -1222,7 +1227,7 @@ def test_reduce_sum():
             BLOCK_M: 1,
             BLOCK_N: 128,
             ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1297,7 +1302,7 @@ def test_mutliple_local_reduce_sum():
             BLOCK_M: 1,
             BLOCK_N: 128,
             ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1368,7 +1373,7 @@ def test_reduction_and_elemwise():
             BLOCK_M: 2,
             BLOCK_N: 128,
             ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1456,7 +1461,7 @@ def test_tiled_reduce_max():
             BLOCK_M: 1,
             BLOCK_N: 128,
             ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1546,7 +1551,7 @@ def test_tiled_reduce_min():
             N: shape[1],
             BLOCK_M: 1,
             BLOCK_N: 128,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1636,7 +1641,7 @@ def test_tiled_reduce_min_unaligned():
             N: shape[1],
             BLOCK_M: 1,
             BLOCK_N: 128,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1716,7 +1721,7 @@ def test_multiple_reduction_iv():
             BLOCK_M: 2,
             BLOCK_N: 128,
             ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1815,7 +1820,7 @@ def test_reduce_propagate_broadcast():
             BLOCK_M: 1,
             BLOCK_N: 128,
             LOAD_ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1888,7 +1893,7 @@ def test_block_reduce_sum():
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1965,7 +1970,7 @@ def test_explicit_broadcast():
             BLOCK_N: 128,
             LOAD_ELEMS_PER_THREAD: 2,
             STORE_ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -1991,14 +1996,11 @@ def test_explicit_broadcast():
     # CHECK: %[[X_SLICE_1:.+]] = affine.apply #[[map1]]()[%[[workgroup_id_1]]]
     # CHECK: %[[LHS_1:.+]] = vector.load %[[LHS]][%[[X_SLICE_1]], %[[Y_SLICE]]] : memref<256x128xf16, strided<[128, 1]>>, vector<2xf16>
 
-    # Slicing RHS
-    # CHECK: %[[RHS_0:.+]] = memref.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>
-    # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1]>>
-
-    # 1st Broadcast RHS
+    # Slicing RHS — merge pass combines two scalar loads into one vector load.
+    # CHECK: %[[RHS_VEC:.+]] = vector.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>, vector<2xf16>
+    # CHECK: %[[RHS_0:.+]] = vector.extract %[[RHS_VEC]][0] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
-
-    # 2nd Broadcast RHS
+    # CHECK: %[[RHS_1:.+]] = vector.extract %[[RHS_VEC]][1] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS
@@ -2040,7 +2042,7 @@ def test_select_with_broadcast():
         subs={
             M: 1,
             N: 16,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2088,7 +2090,7 @@ def test_broadcast_add():
             BLOCK_N: 128,
             LOAD_ELEMS_PER_THREAD: 2,
             STORE_ELEMS_PER_THREAD: 2,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2114,14 +2116,11 @@ def test_broadcast_add():
     # CHECK: %[[X_SLICE_1:.+]] = affine.apply #[[map2]]()[%[[workgroup_id_1]]]
     # CHECK: %[[LHS_1:.+]] = vector.load %[[LHS]][%[[X_SLICE_1]], %[[Y_SLICE]]] : memref<256x128xf16, strided<[128, 1]>>, vector<2xf16>
 
-    # Slicing RHS
-    # CHECK: %[[RHS_0:.+]] = memref.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>
-    # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1]>>
-
-    # 1st Broadcast RHS
+    # Slicing RHS — merge pass combines two scalar loads into one vector load.
+    # CHECK: %[[RHS_VEC:.+]] = vector.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>, vector<2xf16>
+    # CHECK: %[[RHS_0:.+]] = vector.extract %[[RHS_VEC]][0] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
-
-    # 2nd Broadcast RHS
+    # CHECK: %[[RHS_1:.+]] = vector.extract %[[RHS_VEC]][1] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS
@@ -2397,7 +2396,7 @@ def test_register_codegen_i32():
         subs={
             M: 1,
             N: 27,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2449,7 +2448,7 @@ def test_scalar_codegen_f32():
         subs={
             M: 1,
             N: 27,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2507,7 +2506,7 @@ def test_scalar_codegen_i32():
         subs={
             M: 1,
             N: 27,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2585,7 +2584,7 @@ def test_scalar_cond_copy():
         subs={
             M: 1,
             N: 64,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2644,7 +2643,7 @@ def test_scanop_cumsum():
             N: 64,
             BLOCK_M: 1,
             BLOCK_N: 64,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=True,
@@ -2731,7 +2730,7 @@ def test_atomic_min():
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         use_buffer_ops=False,

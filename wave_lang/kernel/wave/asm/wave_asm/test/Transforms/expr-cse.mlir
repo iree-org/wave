@@ -37,8 +37,9 @@ waveasm.program @cse_arithmetic_only target = #waveasm.target<#waveasm.gfx942, 5
   // Same operation - should be CSE'd (no second v_and_b32 with same operands)
   %v1 = waveasm.v_and_b32 %a, %b : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.vreg
 
-  // Different operand order - not the same (AND is commutative but CSE uses operand order)
-  // CHECK: waveasm.v_and_b32
+  // Reversed operand order - also CSE'd because AND is commutative and
+  // the CSE key canonicalizes operand order for commutative ops.
+  // CHECK-NOT: waveasm.v_and_b32
   %v2 = waveasm.v_and_b32 %b, %a : !waveasm.pvreg<1>, !waveasm.pvreg<0> -> !waveasm.vreg
 
   waveasm.s_endpgm

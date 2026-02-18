@@ -39,9 +39,6 @@ STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
 ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
 
-SHARED_ADDRESS_SPACE = tkl.AddressSpace.SHARED_MEMORY.value
-GLOBAL_ADDRESS_SPACE = tkl.AddressSpace.GLOBAL_MEMORY.value
-
 
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""

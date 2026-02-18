@@ -195,6 +195,15 @@ def stagger(loop: Any): ...
 
 
 @define_schedule_op
+def interleave_ops(
+    base_ops: Any,
+    interleaved_ops: Any,
+    intervals: int | list[int] = 1,
+    start_offsets: int | list[int] | None = None,
+): ...
+
+
+@define_schedule_op
 def insert_cond_barrier_before(condition: Any, target: Any): ...
 
 
@@ -243,6 +252,48 @@ def extract_nodes(item):
         return list(item)
     # Single node
     return [item]
+
+
+def interleave_operations(
+    base_ops: list,
+    interleaved_ops: list | list[list],
+    intervals: int | list[int] = 1,
+    start_offsets: int | list[int] | None = None,
+) -> list:
+    """Interleave operations with flexible per-group patterns."""
+    # Normalize inputs to lists
+    if not isinstance(interleaved_ops[0], list):
+        # Single list of ops
+        interleaved_ops = [interleaved_ops]
+    if isinstance(intervals, int):
+        intervals = [intervals] * len(interleaved_ops)
+    if start_offsets is None:
+        start_offsets = [0] * len(interleaved_ops)
+    elif isinstance(start_offsets, int):
+        start_offsets = [start_offsets] * len(interleaved_ops)
+    # Track counters for each group
+    counters = [0] * len(interleaved_ops)
+    result = []
+    for i, base_op in enumerate(base_ops):
+        result.append(base_op)
+        # Check each group for insertion
+        for group_idx, (ops, interval, offset) in enumerate(
+            zip(interleaved_ops, intervals, start_offsets)
+        ):
+            # Check if we should insert from this group
+            if (
+                i >= offset
+                and (i - offset + 1) % interval == 0
+                and counters[group_idx] < len(ops)
+            ):
+                result.append(ops[counters[group_idx]])
+                counters[group_idx] += 1
+    # Add any remaining ops from each group
+    for group_idx, ops in enumerate(interleaved_ops):
+        while counters[group_idx] < len(ops):
+            result.append(ops[counters[group_idx]])
+            counters[group_idx] += 1
+    return result
 
 
 def get_nodes_from_ref(ref):

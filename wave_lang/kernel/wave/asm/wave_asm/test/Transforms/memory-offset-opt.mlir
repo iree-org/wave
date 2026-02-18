@@ -58,7 +58,7 @@ waveasm.program @test_buffer_store_const_add target = #waveasm.target<#waveasm.g
 
   // The constant 1024 should be folded into the buffer_store instOffset
   // CHECK: waveasm.buffer_store_dword
-  // CHECK-SAME: instOffset = 1024
+  // CHECK-SAME: offset : 1024
   waveasm.buffer_store_dword %data, %srd, %addr : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.vreg
 
   waveasm.s_endpgm
@@ -86,7 +86,7 @@ waveasm.program @test_shift_distribution target = #waveasm.target<#waveasm.gfx94
   // The shift should distribute: addr should use base_row shifted, with offset 1024
   // CHECK: waveasm.v_lshlrev_b32
   // CHECK: waveasm.buffer_store_dword
-  // CHECK-SAME: instOffset = 1024
+  // CHECK-SAME: offset : 1024
   waveasm.buffer_store_dword %data, %srd, %shifted : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.vreg
 
   waveasm.s_endpgm
@@ -163,7 +163,7 @@ waveasm.program @test_shift_add_combined target = #waveasm.target<#waveasm.gfx94
   // CHECK: waveasm.v_lshlrev_b32
   // CHECK: waveasm.v_add_u32
   // CHECK: waveasm.buffer_store_dword
-  // CHECK-SAME: instOffset = 2048
+  // CHECK-SAME: offset : 2048
   waveasm.buffer_store_dword %data, %srd, %voffset : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.vreg
 
   waveasm.s_endpgm
@@ -213,11 +213,14 @@ waveasm.program @test_or_shift_distribution target = #waveasm.target<#waveasm.gf
   // voffset = shifted + col_offset
   %voffset = waveasm.v_add_u32 %shifted, %col_offset : !waveasm.vreg, !waveasm.pvreg<2> -> !waveasm.vreg
 
-  // Should fold: offset = 1 << 10 = 1024
+  // Cannot fold: the pass can't locally prove that the OR operands
+  // don't overlap (base_row is not itself a left shift), so it
+  // conservatively keeps the original expression.
+  // CHECK: waveasm.v_or_b32
   // CHECK: waveasm.v_lshlrev_b32
   // CHECK: waveasm.v_add_u32
   // CHECK: waveasm.buffer_store_dword
-  // CHECK-SAME: instOffset = 1024
+  // CHECK-NOT: offset :
   waveasm.buffer_store_dword %data, %srd, %voffset : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.vreg
 
   waveasm.s_endpgm

@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TypeAlias
 import numpy as np
 import torch.fx as fx
 
+from ..utils.classes import Failure, Result, Success
 from .graph_utils import Edge
 
 Schedule: TypeAlias = Dict[fx.Node, int]
@@ -364,14 +365,12 @@ class ScheduleValidator:
 
         self._repairer = ScheduleConstraintRepairer(self._dep_graph, self.edges, self.T)
 
-    def attempt_move(
-        self, node_to_move: fx.Node, new_cycle: int
-    ) -> Tuple[bool, Optional[Schedule], Optional[str]]:
+    def attempt_move(self, node_to_move: fx.Node, new_cycle: int) -> Result[Schedule]:
         if node_to_move not in self.S:
-            return False, None, "Node not in schedule"
+            return Failure("Node not in schedule")
 
         if new_cycle == self.S[node_to_move]:
-            return True, self.S.copy(), None
+            return Success(self.S.copy())
 
         repaired_schedule = self.S.copy()
         resource_tracker_candidate = ResourceUsageTracker(
@@ -394,12 +393,12 @@ class ScheduleValidator:
         )
 
         if not success:
-            return False, None, "Schedule repair failed"
+            return Failure("Schedule repair failed")
 
         if not self._repairer.validate_dependencies(repaired_schedule):
-            return False, None, "Dependency validation failed after repair"
+            return Failure("Dependency validation failed after repair")
 
-        return True, repaired_schedule, None
+        return Success(repaired_schedule)
 
     def commit_move(self, new_schedule: Schedule, new_rt: np.ndarray) -> None:
         """Commits a previously validated schedule change to make it permanent.

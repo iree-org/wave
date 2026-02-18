@@ -38,12 +38,11 @@ C++ Backend Requirements:
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch.testing import assert_close
@@ -64,6 +63,12 @@ from wave_lang.kernel.wave.utils.run_utils import (
 from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
+)
+from wave_lang.kernel.wave.perf.utils import (
+    ensure_rocprofv3,
+    find_rocprof_outputs,
+    get_rocprofv3_cmd,
+    rocprof_avg_ms_from_kernel_trace_last_n,
 )
 from wave_lang.support.logging import get_logger
 from wave_lang.support.location_config import (
@@ -672,132 +677,6 @@ def compute_tflops(m: int, n: int, k: int, time_ms: float) -> float:
     return tflops
 
 
-def _csv_read(path: Path) -> list[dict[str, str]]:
-    import csv
-
-    with path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        return [dict(r) for r in reader]
-
-
-def _pick_column(sample_row: dict[str, str], candidates: list[str]) -> Optional[str]:
-    # Exact match first.
-    for c in candidates:
-        if c in sample_row:
-            return c
-    # Case-insensitive match next.
-    lowered = {k.lower(): k for k in sample_row.keys()}
-    for c in candidates:
-        if c.lower() in lowered:
-            return lowered[c.lower()]
-    return None
-
-
-def _parse_float(s: Any) -> float:
-    if s is None:
-        raise ValueError("Missing numeric field")
-    txt = str(s).strip()
-    if txt == "":
-        raise ValueError("Empty numeric field")
-    return float(txt)
-
-
-def _parse_int(s: Any) -> int:
-    if s is None:
-        raise ValueError("Missing integer field")
-    txt = str(s).strip()
-    if txt == "":
-        raise ValueError("Empty integer field")
-    return int(float(txt))
-
-
-def _find_rocprof_outputs(
-    output_dir: Path, prefix: str
-) -> tuple[Optional[Path], Optional[Path]]:
-    # Preferred files when --output-file is set:
-    #   <prefix>_kernel_stats.csv and <prefix>_kernel_trace.csv
-    stats = output_dir / f"{prefix}_kernel_stats.csv"
-    trace = output_dir / f"{prefix}_kernel_trace.csv"
-    if stats.exists() or trace.exists():
-        return (stats if stats.exists() else None, trace if trace.exists() else None)
-
-    # Fallback: best-effort search across rocprofv3 versions.
-    stats_matches = sorted(output_dir.glob("*kernel*_stats*.csv"))
-    trace_matches = sorted(output_dir.glob("*kernel*_trace*.csv"))
-    return (
-        stats_matches[0] if stats_matches else None,
-        trace_matches[0] if trace_matches else None,
-    )
-
-
-def _rocprof_avg_ms_from_kernel_trace_last_n(
-    trace_csv: Path, *, num_iterations: int
-) -> float:
-    """Compute average time (ms) for the last N dispatches of the most frequent kernel.
-
-    This avoids requiring ROCTx/marker ranges (which may not be available for the
-    Python version in use) by selecting the dominant repeatedly-called kernel and
-    averaging its last num_iterations dispatch durations.
-    """
-    rows = _csv_read(trace_csv)
-    if not rows:
-        raise ValueError(f"Empty rocprof trace: {trace_csv}")
-
-    kind_col = _pick_column(rows[0], ["Kind", "kind"])
-    name_col = _pick_column(
-        rows[0], ["Kernel_Name", "KernelName", "Kernel Name", "Name", "name"]
-    )
-    start_col = _pick_column(
-        rows[0], ["Start_Timestamp", "StartNs", "Start (ns)", "start_ns"]
-    )
-    end_col = _pick_column(rows[0], ["End_Timestamp", "EndNs", "End (ns)", "end_ns"])
-
-    if name_col is None or start_col is None or end_col is None:
-        raise ValueError(
-            f"Unexpected kernel trace schema in {trace_csv}. "
-            f"cols={list(rows[0].keys())}"
-        )
-
-    # Filter to kernel dispatch rows if "Kind" exists; otherwise assume all rows are kernels.
-    def is_kernel_row(r: dict[str, str]) -> bool:
-        if kind_col is None:
-            return True
-        return str(r.get(kind_col, "")).strip().upper() == "KERNEL_DISPATCH"
-
-    # Gather per-kernel durations in order.
-    per_kernel: dict[str, list[float]] = {}
-    for r in rows:
-        if not is_kernel_row(r):
-            continue
-        kname = str(r.get(name_col, "")).strip()
-        if not kname:
-            continue
-        start = _parse_float(r.get(start_col))
-        end = _parse_float(r.get(end_col))
-        dur_ns = end - start
-        if dur_ns < 0:
-            continue
-        per_kernel.setdefault(kname, []).append(dur_ns)
-
-    if not per_kernel:
-        raise ValueError(f"No kernel dispatch rows found in {trace_csv}")
-
-    # Choose the most frequent kernel as the benchmark target.
-    target_kernel = max(per_kernel.items(), key=lambda kv: len(kv[1]))[0]
-    durations = per_kernel[target_kernel]
-
-    if len(durations) < num_iterations:
-        raise ValueError(
-            f"Kernel trace has only {len(durations)} occurrences of selected kernel "
-            f"'{target_kernel}', expected at least {num_iterations}. "
-            f"Trace file: {trace_csv}"
-        )
-
-    tail = durations[-num_iterations:]
-    avg_ms = (sum(tail) / len(tail)) / 1e6
-    return avg_ms
-
-
 def _rocprofv3_benchmark_avg_ms(
     *,
     config_path: str,
@@ -807,10 +686,7 @@ def _rocprofv3_benchmark_avg_ms(
     num_iterations: int,
     use_schedule: bool = False,
 ) -> float:
-    rocprof = shutil.which("rocprofv3")
-    if not rocprof:
-        raise RuntimeError("rocprofv3 not found in PATH. Install ROCm/rocprofiler-sdk.")
-
+    rocprof = ensure_rocprofv3()
     script_path = os.path.abspath(__file__)
 
     with tempfile.TemporaryDirectory(prefix="wave_rocprofv3_") as tmpdir:
@@ -819,40 +695,33 @@ def _rocprofv3_benchmark_avg_ms(
             " ", "_"
         )
 
-        cmd = [
-            rocprof,
-            "--kernel-trace",
-            "--stats",
-            "--output-format",
-            "csv",
-            "--output-directory",
-            str(out_dir),
-            "--output-file",
-            prefix,
-            "--",
-            sys.executable,
-            script_path,
-            "--config",
-            config_path,
-            "--num_warmup",
-            str(num_warmup),
-            "--num_iterations",
-            str(num_iterations),
-            # Worker args:
-            "--_worker",
-            "--_backend",
-            backend,
-            "--_shape_name",
-            shape_name,
-        ]
+        prefix_args = get_rocprofv3_cmd(
+            out_dir, prefix, kernel_regex="", att_library_path=None
+        )
+        cmd = (
+            [rocprof]
+            + prefix_args[1:]
+            + [
+                sys.executable,
+                script_path,
+                "--config",
+                config_path,
+                "--num_warmup",
+                str(num_warmup),
+                "--num_iterations",
+                str(num_iterations),
+                "--_worker",
+                "--_backend",
+                backend,
+                "--_shape_name",
+                shape_name,
+            ]
+        )
         if use_schedule:
             cmd.append("--_use_schedule")
 
         env = os.environ.copy()
-        # Keep cache disabled for fair comparison.
         env["WAVE_CACHE_ON"] = "0"
-
-        # Keep rocprofv3 output noise down in normal runs.
         env.setdefault("ROCPROFILER_LOG_LEVEL", "error")
 
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -864,7 +733,7 @@ def _rocprofv3_benchmark_avg_ms(
                 f"stderr:\n{proc.stderr}\n"
             )
 
-        _stats_csv, trace_csv = _find_rocprof_outputs(out_dir, prefix)
+        _stats_csv, trace_csv = find_rocprof_outputs(out_dir, prefix)
         if trace_csv is None:
             present = sorted([p.name for p in out_dir.glob("*.csv")])
             raise RuntimeError(
@@ -875,8 +744,7 @@ def _rocprofv3_benchmark_avg_ms(
                 f"stderr:\n{proc.stderr}\n"
             )
 
-        # Compute average from the last N dispatches of the dominant kernel.
-        return _rocprof_avg_ms_from_kernel_trace_last_n(
+        return rocprof_avg_ms_from_kernel_trace_last_n(
             trace_csv,
             num_iterations=num_iterations,
         )

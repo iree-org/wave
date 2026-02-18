@@ -116,7 +116,7 @@ def test_im2col(run_bench):
             HF: hf,
             M: res_shape[0],
             K: res_shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,

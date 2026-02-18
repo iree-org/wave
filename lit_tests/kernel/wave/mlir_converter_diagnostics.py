@@ -12,8 +12,21 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostics,
+)
+from wave_lang.kernel.wave.mlir_converter.diagnostics import (
+    FileLocation,
+    NameLocation,
+    MLIRDiagnostic,
+    WaterError,
+)
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.support.location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -55,42 +68,179 @@ def matrix_add(
     wave.write(c_reg, c)
 
 
-@run_test
-def mlir_converter_diagnostics_emission():
-    """Test MLIR converter with matrix addition kernel."""
-    # Set parameters for compilation
-    subs: dict[str | IndexSymbol, Any] = {
-        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
-        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
-        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        M: 128,
-        N: 128,
-    }
+# Common substitutions for all tests
+SUBS: dict[str | IndexSymbol, Any] = {
+    ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+    ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+    ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+    BLOCK_M: 64,
+    BLOCK_N: 64,
+    M: 128,
+    N: 128,
+}
 
-    # Compile the kernel to get the trace
+
+def compile_and_emit_diagnostics(
+    location_level: LocationCaptureLevel,
+    test_diagnostic_emission: bool = True,
+) -> list[MLIRDiagnostic | WaterError]:
+    """Helper to compile kernel and emit diagnostics with given location level.
+
+    Args:
+        location_level: The LocationCaptureLevel to use for capturing locations.
+        test_diagnostic_emission: Whether to emit a test diagnostic for verification.
+
+    Returns:
+        List of MLIRDiagnostic or WaterError objects.
+    """
+    # When location capture is disabled, we must also disable location enforcement
+    enforce_locations = location_level != LocationCaptureLevel.NONE
+
     options = WaveCompileOptions(
-        subs=subs,
-        compile_to_mlir=True,  # Avoid IREE compilation
+        subs=SUBS,
+        compile_to_mlir=True,
+        drop_debug_info_before_mlir=False,
+        location_capture_config=LocationCaptureConfig(level=location_level),
+        enforce_locations=enforce_locations,
+        use_local_scope=False,
     )
     options = set_default_run_config(options)
 
-    # Compile the kernel to get the trace
     compiled_kernel = wave_compile(options, matrix_add)
-
-    # Get the compiled graph from the compiled kernel
     trace = compiled_kernel.get_compiled_graph()
 
-    constraints = matrix_add.constraints
-
-    # Use the mlir_converter to emit wave MLIR dialect
     _, diagnostics, _ = emit_wave_dialect(
-        trace, constraints, options, test_diagnostic_emission=True
+        trace,
+        matrix_add.constraints,
+        options,
+        test_diagnostic_emission=test_diagnostic_emission,
+    )
+    return diagnostics
+
+
+@run_test
+def test_location_capture_none():
+    """Test with LocationCaptureLevel.NONE - compilation without location capture.
+
+    With NONE, locations are not captured so the test diagnostic should have an
+    unknown location.
+    """
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.NONE, test_diagnostic_emission=True
     )
 
-    # Print to stdout for FileCheck
-    print(diagnostics[0])
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
 
-    # CHECK-LABEL: mlir_converter_diagnostics_emission
-    # CHECK: loc("{{.*}}mlir_converter_diagnostics.py":37{{.*}}): test error
+    print(format_diagnostics(diagnostics, use_color=False))
+
+    # Verify structured data — location should be unknown with NONE
+    location = diag.location
+    print(f"location frame count: {len(location)}")
+
+    print(f"diagnostics count: {len(diagnostics)}")
+    print("location capture none: compilation succeeded")
+
+    # CHECK-LABEL: test_location_capture_none
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   <unknown location>
+    # CHECK: location frame count: 1
+    # CHECK: diagnostics count: 1
+    # CHECK: location capture none: compilation succeeded
+
+
+@run_test
+def test_location_capture_file_line_col():
+    """Test diagnostics with LocationCaptureLevel.FILE_LINE_COL - single location."""
+    diagnostics = compile_and_emit_diagnostics(LocationCaptureLevel.FILE_LINE_COL)
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+    diag = diagnostics[0]
+
+    print(format_diagnostics(diagnostics, use_color=False))
+
+    # Verify structured data
+    location = diag.location
+    print(f"location frame count: {len(location)}")
+    if location:
+        frame = location[0]
+        if isinstance(frame, FileLocation):
+            frame_type = "file"
+        elif isinstance(frame, NameLocation):
+            frame_type = "name"
+        else:
+            frame_type = "unknown"
+        print(f"first frame type: {frame_type}")
+        print(f"has filename: {hasattr(frame, 'filename')}")
+        print(f"has start_line: {hasattr(frame, 'start_line')}")
+
+    # CHECK-LABEL: test_location_capture_file_line_col
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
+    # CHECK: first frame type: file
+    # CHECK: has filename: True
+    # CHECK: has start_line: True
+
+
+@run_test
+def test_location_capture_stack_trace():
+    """Test diagnostics with LocationCaptureLevel.STACK_TRACE - multiple frames."""
+    diagnostics = compile_and_emit_diagnostics(LocationCaptureLevel.STACK_TRACE)
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+
+    print(format_diagnostics(diagnostics, use_color=False))
+
+    # Verify we have location frames
+    diag = diagnostics[0]
+    location = diag.location
+    print(f"location frame count: {len(location)}")
+
+    # Print all frames for verification
+    for i, frame in enumerate(location):
+        if isinstance(frame, FileLocation):
+            print(f"frame {i}: {frame.filename}:{frame.start_line}")
+
+    # CHECK-LABEL: test_location_capture_stack_trace
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
+    # CHECK: frame 0: {{.*}}mlir_converter_diagnostics.py:50
+
+
+@run_test
+def test_location_capture_stack_trace_with_system():
+    """Test diagnostics with LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM."""
+    diagnostics = compile_and_emit_diagnostics(
+        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM
+    )
+
+    assert len(diagnostics) > 0, "Expected at least one diagnostic"
+
+    print(format_diagnostics(diagnostics, use_color=False))
+
+    # Verify we have location frames
+    diag = diagnostics[0]
+    location = diag.location
+    print(f"location frame count: {len(location)}")
+
+    # With STACK_TRACE_WITH_SYSTEM, we should have more frames including system internals
+    for i, frame in enumerate(location):
+        if isinstance(frame, FileLocation):
+            # Print just the basename for readability
+            basename = frame.filename.split("/")[-1]
+            print(f"frame {i}: {basename}:{frame.start_line}")
+
+    # CHECK-LABEL: test_location_capture_stack_trace_with_system
+    # CHECK: ERROR: test error
+    # CHECK: Traceback (Wave DSL source):
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 50
+    # CHECK:     @wave.wave(constraints)
+    # CHECK: location frame count: 1
+    # CHECK: frame 0: mlir_converter_diagnostics.py:50

@@ -12,6 +12,7 @@ pipeline to DWARF.
 import sys
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
@@ -73,7 +74,7 @@ def test_debug_dwarf():
             BLOCK_M: 32,
             BLOCK_N: 32,
             BLOCK_K: 16,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         compile_to_mlir=False,
@@ -94,12 +95,12 @@ def test_debug_dwarf():
 # CHECK-NEXT: uri: "{{.*}}/debug_dwarf.py"
 
 # Verify that the line table contains entries for the key operations in our Wave kernel.
-# Line 61: a_reg = tkw.read(a)
-# Line 62: b_reg = tkw.read(b)
-# Line 63: acc = tkw.mma(a_reg, b_reg, acc)
-# Line 66: tkw.write(repeat, c)
+# Line 62: a_reg = tkw.read(a)
+# Line 63: b_reg = tkw.read(b)
+# Line 64: acc = tkw.mma(a_reg, b_reg, acc)
+# Line 67: tkw.write(repeat, c)
 #####        Address           Line,Column Info
-# CHECK-DAG: {{0x[0-9a-f]+}} [ 61,{{.*}}] NS
 # CHECK-DAG: {{0x[0-9a-f]+}} [ 62,{{.*}}] NS
 # CHECK-DAG: {{0x[0-9a-f]+}} [ 63,{{.*}}] NS
-# CHECK-DAG: {{0x[0-9a-f]+}} [ 66,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 64,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 67,{{.*}}] NS

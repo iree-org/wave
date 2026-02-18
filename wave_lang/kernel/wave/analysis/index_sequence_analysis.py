@@ -14,7 +14,10 @@ import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel._support.dtype import DataType
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostics,
+)
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.logging import get_logger
 
@@ -357,7 +360,9 @@ def set_node_indices_water_checked(
     _set_water_id(trace)
     _, diagnostics, inferred_attributes = emit_wave_dialect(trace, constraints, options)
     if diagnostics:
-        raise RuntimeError(f"Water indices check failed: {diagnostics}")
+        raise RuntimeError(
+            f"Water indices check failed:\n{format_diagnostics(diagnostics, use_color=False)}"
+        )
     set_node_indices(trace, constraints, print_ir_before, print_ir_after)
     _check_water_indices(trace, inferred_attributes)
     _reset_water_id(trace)

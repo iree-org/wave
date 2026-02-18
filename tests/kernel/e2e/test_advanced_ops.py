@@ -11,7 +11,10 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    SHARED_ADDRESS_SPACE,
+)
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import (
@@ -40,7 +43,14 @@ from ..common.utils import (
         ((64, 64), 4),
     ],
 )
-def test_scatter_add(shape, elems_per_thread, request):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_scatter_add(shape, elems_per_thread, threads_per_wave, request):
     run_bench = request.config.getoption("--runperf")
 
     M = tkl.sym.M
@@ -49,15 +59,14 @@ def test_scatter_add(shape, elems_per_thread, request):
     BLOCK_N = tkl.sym.BLOCK_N
     LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
     STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
     m_size, n_size = shape
 
     constraints = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             waves_per_block=(1, 1, 1),
-            vector_shapes={M: 64, N: elems_per_thread},
+            vector_shapes={M: threads_per_wave, N: elems_per_thread},
         ),
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
@@ -77,11 +86,14 @@ def test_scatter_add(shape, elems_per_thread, request):
     def test(
         a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
         index: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.i32],
-        lds: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
         b: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
         index_reg = tkw.read(index, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        lds = tkw.allocate((M, N), (BLOCK_M, BLOCK_N), tkl.f32, SHARED_ADDRESS_SPACE)
+        zero = tkw.Register[M, N, tkl.f32](0.0)
+        tkw.write(zero, lds, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        tkw.workgroup_barrier()
         tkw.scatter_add(
             a_reg,
             index_reg,
@@ -105,10 +117,10 @@ def test_scatter_add(shape, elems_per_thread, request):
             BLOCK_N: n_size,
             LOAD_ELEMS_PER_THREAD: elems_per_thread,
             STORE_ELEMS_PER_THREAD: elems_per_thread,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         canonicalize=True,
         run_bench=run_bench,
+        minimize_shared_allocs=False,
     )
     options = set_default_run_config(options)
     test_fn = wave_compile(options, test)
@@ -119,10 +131,9 @@ def test_scatter_add(shape, elems_per_thread, request):
         .contiguous()
     )
     index = device_randint(0, m_size, (m_size, n_size), dtype=torch.int32).contiguous()
-    lds = device_zeros((m_size, n_size), dtype=torch.float32).contiguous()
     output = device_zeros((m_size, n_size), dtype=torch.float32).contiguous()
 
-    test_fn(input, index, lds, output)
+    test_fn(input, index, output)
 
     def scatter_add_baseline(input, index):
         index = index.to(dtype=torch.int64)
@@ -204,7 +215,7 @@ def test_topk(shape, k, allow_duplicates, threads_per_wave, run_bench):
             M: shape[0],
             N: shape[1],
             K: k,
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -276,7 +287,7 @@ def test_fused_softmax(shape, use_buffer_ops, threads_per_wave):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=False,

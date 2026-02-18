@@ -243,9 +243,14 @@ getExprSymbolNames(ArrayRef<Attribute> symbols,
       llvm::raw_svector_ostream os(owningSymbolNames.emplace_back());
       os << "_Iter_" << sym.getName();
       names.push_back(os.str());
+    } else if (auto operand = dyn_cast<WaveOperandAttr>(attr)) {
+      llvm::raw_svector_ostream os(owningSymbolNames.emplace_back());
+      os << "_Operand_" << operand.getOperandNumber();
+      names.push_back(os.str());
     } else {
       emitError("expected symbol names to be one of WaveSymbolAttr, "
-                "WaveIndexSymbolAttr or WaveIterSymbolAttr");
+                "WaveIndexSymbolAttr, WaveIterSymbolAttr or "
+                "WaveOperandAttr");
       return failure();
     }
   }
@@ -613,10 +618,12 @@ void WaveExprListAttr::print(AsmPrinter &printer) const {
 LogicalResult
 WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                          ArrayRef<Attribute> symbols, AffineMap map) {
-  if (!llvm::all_of(symbols, llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr,
-                                           WaveIterSymbolAttr>))
+  if (!llvm::all_of(symbols,
+                    llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr,
+                                  WaveIterSymbolAttr, WaveOperandAttr>))
     return emitError() << "expected all symbols to be a WaveSymbolAttr, "
-                          "WaveIndexSymbolAttr or WaveIterSymbolAttr";
+                          "WaveIndexSymbolAttr, WaveIterSymbolAttr or "
+                          "WaveOperandAttr";
 
   return success();
 }

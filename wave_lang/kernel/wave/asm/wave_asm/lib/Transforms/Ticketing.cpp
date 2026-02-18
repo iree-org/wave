@@ -423,8 +423,13 @@ private:
         numWaitcntInserted++;
       }
 
-      // Reset waits at control flow boundaries (labels, branches)
-      if (isa<LabelOp>(op) || op->getName().getStringRef().contains("branch")) {
+      // Reset waits at loop boundaries and branches.
+      // We reset at LoopOp (loop entry) and ConditionOp (loop back-edge)
+      // since pending waits from before the loop may not be valid inside,
+      // and vice versa. We do NOT reset at IfOp/YieldOp to avoid
+      // unnecessary s_waitcnt insertions inside straight-line if-then-else.
+      if (isa<LoopOp, ConditionOp>(op) ||
+          op->getName().getStringRef().contains("branch")) {
         ticketing.resetWaits();
       }
     });

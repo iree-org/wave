@@ -5,6 +5,7 @@
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
@@ -35,7 +36,7 @@ def test_reduce_op_location():
         M: 256,
         K: 128,
         BLOCK_M: 1,
-        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     options = WaveCompileOptions(
         subs=subs,
@@ -70,22 +71,22 @@ def test_reduce_op_location():
     # CHECK-LABEL: @reduce_sum_kernel
 
     # Test that placeholder locations are placed on function arguments.
-    # CHECK: @reduce_sum_kernel(%{{.*}} loc("a"("{{.*}}specific_location.py":54{{.*}})))
+    # CHECK: @reduce_sum_kernel(%{{.*}} loc("a"("{{.*}}specific_location.py":55{{.*}})))
 
     # load
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":60
     # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":61
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":62
 
     # multiply
-    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":62
+    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":63
     # cast
-    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":63
+    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":64
 
     # reduce
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":64
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":64
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":64
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
 
     # write
-    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":66

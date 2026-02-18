@@ -30,6 +30,15 @@ struct WaveMmaSpec {
 
 namespace wave {
 
+namespace detail {
+/// Check that all symbols in the expression are of the types provided as
+/// template arguments. Does NOT emit diagnostics.
+template <typename... InputTypes>
+bool allExprSymbolsOfType(WaveExprListAttr expr) {
+  return llvm::all_of(expr.getSymbols(), llvm::IsaPred<InputTypes...>);
+}
+} // namespace detail
+
 /// Verify that all provided ExprAttr attributes have the same rank. Returns
 /// success if all ranks match, failure otherwise.
 llvm::LogicalResult

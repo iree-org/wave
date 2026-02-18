@@ -39,7 +39,7 @@ def get_wave_compile_options(canonicalize: bool = False, dynamic_symbols=[]):
         BLOCK_M: 16,
         BLOCK_N: 16,
         BLOCK_K: 16,
-        ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
     }
 
     # Remove dynamic symbols from the bindings.

@@ -63,78 +63,6 @@ struct LiveRange {
 };
 
 //===----------------------------------------------------------------------===//
-// Basic Block for CFG
-//===----------------------------------------------------------------------===//
-
-/// Represents a basic block in the control flow graph
-struct BasicBlock {
-  /// Unique block identifier
-  int64_t id = 0;
-
-  /// Optional label at the start of this block
-  std::optional<llvm::StringRef> label;
-
-  /// First instruction index (inclusive)
-  int64_t startIdx = 0;
-
-  /// Last instruction index (inclusive)
-  int64_t endIdx = 0;
-
-  /// Successor blocks
-  llvm::SmallVector<BasicBlock *> successors;
-
-  /// Predecessor blocks
-  llvm::SmallVector<BasicBlock *> predecessors;
-
-  /// Registers used before being defined in this block
-  llvm::DenseSet<mlir::Value> useSet;
-
-  /// Registers defined in this block
-  llvm::DenseSet<mlir::Value> defSet;
-
-  /// Registers live at block entry
-  llvm::DenseSet<mlir::Value> liveIn;
-
-  /// Registers live at block exit
-  llvm::DenseSet<mlir::Value> liveOut;
-};
-
-//===----------------------------------------------------------------------===//
-// Control Flow Graph
-//===----------------------------------------------------------------------===//
-
-/// Control flow graph built from labels and branches
-class CFG {
-public:
-  /// Build CFG from a kernel program
-  static CFG build(ProgramOp program);
-
-  /// Get all basic blocks
-  llvm::ArrayRef<BasicBlock> getBlocks() const {
-    return llvm::ArrayRef<BasicBlock>(blocks.begin(), blocks.end());
-  }
-
-  /// Get the entry block
-  BasicBlock *getEntryBlock() { return blocks.empty() ? nullptr : &blocks[0]; }
-
-  /// Get block for a label
-  BasicBlock *getBlockForLabel(llvm::StringRef label);
-
-  /// Check if the CFG contains loops
-  bool hasLoops() const;
-
-  /// Get number of blocks
-  size_t size() const { return blocks.size(); }
-
-  /// Get mutable blocks for liveness analysis
-  llvm::SmallVector<BasicBlock, 16> &getMutableBlocks() { return blocks; }
-
-private:
-  llvm::SmallVector<BasicBlock, 16> blocks;
-  llvm::DenseMap<llvm::StringRef, BasicBlock *> labelToBlock;
-};
-
-//===----------------------------------------------------------------------===//
 // Liveness Information
 //===----------------------------------------------------------------------===//
 
@@ -169,23 +97,24 @@ struct LivenessInfo {
 };
 
 //===----------------------------------------------------------------------===//
+// Region Utilities
+//===----------------------------------------------------------------------===//
+
+/// Collect all operations in a block and its nested regions into a flat list.
+/// Operations are visited in pre-order: parent first, then children.
+/// This is used by liveness analysis, hazard mitigation, and other passes
+/// that need a linearized view of the instruction stream.
+void collectOpsRecursive(mlir::Block &block,
+                         llvm::SmallVectorImpl<mlir::Operation *> &ops);
+
+//===----------------------------------------------------------------------===//
 // Liveness Analysis Functions
 //===----------------------------------------------------------------------===//
 
 /// Compute liveness information for a kernel program
 /// @param program The kernel program to analyze
-/// @param useCFG Whether to use CFG-based analysis (needed for loops)
 /// @return Complete liveness information
-LivenessInfo computeLiveness(ProgramOp program, bool useCFG = true);
-
-/// Compute local use/def sets for a basic block
-void computeBlockLocalInfo(BasicBlock &block,
-                           llvm::ArrayRef<mlir::Operation *> instructions);
-
-/// Run backward dataflow to compute live_in/live_out sets
-/// Iterates until fixed point is reached
-void computeCFGLiveness(CFG &cfg,
-                        llvm::ArrayRef<mlir::Operation *> instructions);
+LivenessInfo computeLiveness(ProgramOp program);
 
 /// Compute maximum register pressure using sweep algorithm
 int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges);

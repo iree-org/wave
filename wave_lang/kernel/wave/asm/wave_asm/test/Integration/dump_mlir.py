@@ -64,7 +64,7 @@ def get_copy_kernel():
     subs = {
         M: 16,
         N: 16,
-        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     return copy_kernel, subs, "copy_kernel"
 

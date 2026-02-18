@@ -92,8 +92,8 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-            SHARED_ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+            SHARED_ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,

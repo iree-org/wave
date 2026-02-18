@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
+#include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -20,6 +23,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/AffineExprVisitor.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -402,6 +406,154 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
+// ApplyExprOp
+//===----------------------------------------------------------------------===//
+
+// Visit affine expressions. Unlike upstream, this takes a target type and is
+// capable of producing vector opreations operating on non-index types.
+class AffineExprExpander : public AffineExprVisitor<AffineExprExpander, Value> {
+public:
+  // Initialize the expander to create operations with the specified result type
+  // using the given builder and location. Symbols, operands and hyperparameters
+  // are used to construct operands; hyperamareters are expected to contain all
+  // named symbols and operands are expected to have at least as many entries as
+  // the last indexed operand present in the symbols list. The expression is not
+  // expected to use any dimensions. Addition and multiplication operations are
+  // constructed with the specified fastmath flags.
+  AffineExprExpander(OpBuilder &builder, Location loc, Type targetType,
+                     ArrayRef<Attribute> symbols, ArrayRef<Value> operands,
+                     wave::WaveHyperparameterAttr hypeparameters,
+                     arith::IntegerOverflowFlags overflowFlags)
+      : AffineExprVisitor<AffineExprExpander, Value>(), builder(builder),
+        loc(loc), symbols(symbols), operands(operands),
+        hypeparameters(hypeparameters), targetType(targetType),
+        overflowFlags(overflowFlags) {}
+
+  // Build a (splat) constant matching the target type.
+  Value getConstant(int64_t value) {
+    Type elementType = targetType;
+    auto shapedType = dyn_cast<ShapedType>(targetType);
+    if (shapedType) {
+      elementType = shapedType.getElementType();
+    }
+
+    // Go through APInt since ElementsAttr complains about wrong bitwidth if
+    // int64_t is given for any elemental type other than i64.
+    APInt apValue(elementType.getIntOrFloatBitWidth(), value,
+                  /*isSigned=*/true);
+    if (shapedType) {
+      return arith::ConstantOp::create(
+          builder, loc, SplatElementsAttr::get(shapedType, apValue));
+    } else {
+      return arith::ConstantIntOp::create(builder, loc, targetType, apValue);
+    }
+  }
+
+  // Create a constant.
+  Value visitConstantExpr(AffineConstantExpr expr) {
+    return getConstant(expr.getValue());
+  }
+
+  // Create an add operation.
+  Value visitAddExpr(AffineBinaryOpExpr expr) {
+    Value lhs = visit(expr.getLHS());
+    Value rhs = visit(expr.getRHS());
+    return arith::AddIOp::create(builder, loc, lhs, rhs, overflowFlags);
+  }
+
+  // Create a mul operation.
+  Value visitMulExpr(AffineBinaryOpExpr expr) {
+    Value lhs = visit(expr.getLHS());
+    Value rhs = visit(expr.getRHS());
+    return arith::MulIOp::create(builder, loc, lhs, rhs, overflowFlags);
+  }
+
+  // Create a flooring division operation.
+  Value visitFloorDivExpr(AffineBinaryOpExpr expr) {
+    Value lhs = visit(expr.getLHS());
+    Value rhs = visit(expr.getRHS());
+    return arith::FloorDivSIOp::create(builder, loc, lhs, rhs);
+  }
+
+  // Create a ceiling division operation.
+  Value visitCeilDivExpr(AffineBinaryOpExpr expr) {
+    Value lhs = visit(expr.getLHS());
+    Value rhs = visit(expr.getRHS());
+    return arith::CeilDivSIOp::create(builder, loc, lhs, rhs);
+  }
+
+  // Create a modulo operation.
+  Value visitModExpr(AffineBinaryOpExpr expr) {
+    Value lhs = visit(expr.getLHS());
+    Value rhs = visit(expr.getRHS());
+    return arith::RemSIOp::create(builder, loc, lhs, rhs);
+  }
+
+  // Operand symbols are taken from the operand list, named symbols are treated
+  // as constants and expected to be present in hyperparameters.
+  Value visitSymbolExpr(AffineSymbolExpr expr) {
+    if (auto operandAttr =
+            dyn_cast<wave::WaveOperandAttr>(symbols[expr.getPosition()])) {
+      return operands[operandAttr.getOperandNumber()];
+    } else if (auto symbolAttr = dyn_cast<wave::WaveSymbolAttr>(
+                   symbols[expr.getPosition()])) {
+      std::optional<int64_t> value =
+          hypeparameters.getSymbolValue(symbolAttr.getName());
+      assert(value && "failed to get symbol value");
+      return getConstant(*value);
+    }
+    llvm_unreachable("unsupported symbol kind");
+  }
+
+  Value visitDimExpr(AffineDimExpr) {
+    llvm_unreachable("dims are not supported");
+  }
+
+private:
+  OpBuilder &builder;
+  Location loc;
+  ArrayRef<Attribute> symbols;
+  ArrayRef<Value> operands;
+  wave::WaveHyperparameterAttr hypeparameters;
+  Type targetType;
+  arith::IntegerOverflowFlags overflowFlags;
+};
+
+class ApplyExprOpLoweringPattern
+    : public OpConversionPattern<wave::ApplyExprOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ApplyExprOp op, wave::ApplyExprOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    wave::WaveExprListAttr exprListAttr = op.getExpr();
+    AffineMap map = exprListAttr.getMap();
+    ArrayRef<Attribute> symbols = exprListAttr.getSymbols();
+    SmallVector<Value> operands = adaptor.getOperands();
+    assert(map.getNumResults() == 1 && "expected a single result expression");
+
+    const auto *typeConverter =
+        static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
+    auto convertedType = dyn_cast_or_null<VectorType>(
+        typeConverter->convertType(op.getResult().getType()));
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    AffineExprExpander expander(rewriter, op.getLoc(), convertedType, symbols,
+                                operands, typeConverter->getHyperparameters(),
+                                arith::IntegerOverflowFlags::nsw |
+                                    arith::IntegerOverflowFlags::nuw);
+    Value result = expander.visit(map.getResults()[0]);
+    if (!result)
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to expand affine expression");
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // CastOp
 //===----------------------------------------------------------------------===//
 
@@ -563,6 +715,104 @@ public:
         ArrayRef<int64_t>(*strideValues));
     rewriter.replaceOp(op, extractOp);
 
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// SelfIndexOp
+//===----------------------------------------------------------------------===//
+
+/// Lowers `wave.self_index` to arithmetic on index vectors.
+/// Computes: start + iota(size) * stride, where start, size and stride come
+/// from the index mapping for the specified dimension.
+class SelfIndexOpLoweringPattern
+    : public OpConversionPattern<wave::SelfIndexOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::SelfIndexOp op, wave::SelfIndexOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+
+    auto resultVectorType = dyn_cast<VectorType>(convertedType);
+    if (!resultVectorType)
+      return rewriter.notifyMatchFailure(op, "expected vector result type");
+
+    auto *waveTypeConverter =
+        static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
+    wave::WaveHyperparameterAttr hyper =
+        waveTypeConverter->getHyperparameters();
+
+    ArrayAttr indexArr = op.getIndexAttr();
+    if (!indexArr || indexArr.empty())
+      return rewriter.notifyMatchFailure(op,
+                                         "missing or empty index attribute");
+    DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+
+    // Look up the index mapping for the specified dimension.
+    StringRef dimName = op.getDim().getName();
+    Attribute mappingAttr = indexDict.get(dimName);
+    if (!mappingAttr)
+      return rewriter.notifyMatchFailure(
+          op, "index mapping not found for dimension '" + dimName + "'");
+    auto mapping = cast<wave::WaveIndexMappingAttr>(mappingAttr);
+
+    // Materialize the start expression.
+    FailureOr<SmallVector<Value>> startValues = wave::materializeAffine(
+        loc, mapping.getSymbols(), mapping.getStart(), rewriter, hyper);
+    if (failed(startValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to materialize start expression");
+    assert(llvm::hasSingleElement(*startValues));
+    Value start = (*startValues)[0];
+
+    // Evaluate the step (number of elements) from hyperparameters.
+    std::optional<SmallVector<int64_t>> stepValues =
+        wave::evaluateMapWithHyperparams(mapping.getStep(),
+                                         mapping.getSymbols(), hyper);
+    if (!stepValues)
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate step to a constant");
+    assert(stepValues->size() == 1 && "expected single-result map");
+    int64_t size = (*stepValues)[0];
+
+    // Evaluate the stride from hyperparameters.
+    std::optional<SmallVector<int64_t>> strideValues =
+        wave::evaluateMapWithHyperparams(mapping.getStride(),
+                                         mapping.getSymbols(), hyper);
+    if (!strideValues || strideValues->size() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate stride to a constant");
+    int64_t stride = (*strideValues)[0];
+
+    // Build iota vector [0, 1, ..., size-1] of index type.
+    IndexType indexType = rewriter.getIndexType();
+    VectorType iotaVectorType = VectorType::get({size}, indexType);
+    Value iota = vector::StepOp::create(rewriter, loc, iotaVectorType);
+
+    Value startVec =
+        vector::BroadcastOp::create(rewriter, loc, iotaVectorType, start);
+
+    Value result;
+    if (stride == 1) {
+      result = arith::AddIOp::create(rewriter, loc, startVec, iota);
+    } else {
+      Value strideVal = arith::ConstantIndexOp::create(rewriter, loc, stride);
+      Value strideVec =
+          vector::BroadcastOp::create(rewriter, loc, iotaVectorType, strideVal);
+      Value iotaScaled = arith::MulIOp::create(rewriter, loc, iota, strideVec);
+      result = arith::AddIOp::create(rewriter, loc, startVec, iotaScaled);
+    }
+
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, resultVectorType,
+                                                    result);
     return success();
   }
 };
@@ -809,6 +1059,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<
       // clang-format off
+      ApplyExprOpLoweringPattern,
       CastOpLoweringPattern,
       ExtractOpLoweringPattern,
       ExtractSliceOpLoweringPattern,
@@ -816,6 +1067,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
       PermuteOpLoweringPattern,
       RegisterOpLoweringPattern,
       SelectOpLoweringPattern,
+      SelfIndexOpLoweringPattern,
       ShuffleOpLoweringPattern
       // clang-format on
       >(typeConverter, patterns.getContext());

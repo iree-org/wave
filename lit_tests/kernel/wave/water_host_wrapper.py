@@ -43,7 +43,7 @@ def get_wave_compile_options(
         BLOCK_M: 16,
         BLOCK_N: 16,
         BLOCK_K: 16,
-        ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
     bindings.update(additional_symbols)
 

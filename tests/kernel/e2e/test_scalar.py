@@ -11,7 +11,11 @@ from torch.testing import assert_close
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import THREAD_0, WORKGROUP_0
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    THREAD_0,
+    WORKGROUP_0,
+)
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
@@ -80,7 +84,7 @@ def test_scalar_codegen(
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -155,7 +159,7 @@ def test_scalar_cond_copy(shape, run_bench):
         subs={
             M: shape[0],
             N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
         run_bench=run_bench,

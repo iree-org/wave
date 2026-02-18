@@ -16,7 +16,10 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import Constraint, MMAType
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
+    emit_wave_dialect,
+    format_diagnostics,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -87,7 +90,7 @@ def failure_to_parse_override_mlir():
 
     assert len(diagnostics) == 1
     # CHECK: Unable to parse module assembly
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: failure_to_parse_pipeline
@@ -100,7 +103,7 @@ def failure_to_parse_pipeline():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Unable to parse module assembly
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: pipeline_is_empty
@@ -113,7 +116,7 @@ def pipeline_is_empty():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Transform module is empty
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: pipeline_is_not_a_named_sequence
@@ -126,7 +129,7 @@ def pipeline_is_not_a_named_sequence():
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Expected first op to be "transform.named_sequence", got "builtin.module"
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # This script is guaranteed to fail unless we somehow have a root op called
@@ -152,7 +155,44 @@ def failure_in_pipeline():
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script:
     # CHECK: incompatible payload operation name expected foo.bar vs builtin.module
-    print(diagnostics[0])
+    print(format_diagnostics([diagnostics[0]], use_color=False))
+
+
+# CHECK-LABEL: vector_shapes_symbol_not_in_subs
+@run_test
+def vector_shapes_symbol_not_in_subs():
+    """emit_wave_dialect fails with a diagnostic when vector_shapes contains symbols not in subs."""
+    # Use a symbol only in vector_shapes so compilation succeeds but emit_wave_dialect hits the check.
+    VEC_M = tkl.sym.VEC_M
+    options = WaveCompileOptions(
+        subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
+        compile_to_mlir=True,
+    )
+
+    constraints_bad = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: BLOCK_M, N: VEC_M},
+        ),
+    ]
+
+    @tkw.wave(constraints_bad)
+    def kernel(a: Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f32]):
+        r = tkw.read(a)
+        tkw.write(r, a)
+
+    compiled = wave_compile(options, kernel)
+    trace = compiled.get_compiled_graph()
+
+    _, diagnostics, _ = emit_wave_dialect(trace, kernel.constraints, options)
+
+    assert len(diagnostics) == 1
+    # CHECK: Vector shape VEC_M in hardware constraints could not be resolved to an integer.
+    print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
 # CHECK-LABEL: override_mlir
@@ -228,8 +268,7 @@ def mlir_converter_matrix_add():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -311,6 +350,43 @@ def mlir_converter_matrix_add():
     # CHECK: arith.addf
     # CHECK-NOT: wave.write
     # CHECK: vector.maskedstore
+
+
+@run_test
+def mlir_converter_self_index():
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M}),
+    ]
+
+    @wave.wave(constraints)
+    def self_index(a: Memory[M, ADDRESS_SPACE_A, tkl.i32]):
+        idx = wave.self_index(M, dtype=tkl.i32)
+        wave.write(idx, a)
+
+    options = WaveCompileOptions(
+        subs={M: 128, BLOCK_M: 64},
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, self_index)
+    trace = compiled_kernel.get_compiled_graph()
+    constraints = self_index.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    if diagnostics:
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+    print(mlir_output)
+
+    # CHECK-LABEL: mlir_converter_self_index
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (T0 mod 64) * (BLOCK_M ceildiv 128) + (BLOCK_M floordiv 2) * (T0 floordiv 64), BLOCK_M ceildiv 128, 1)>}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: wave.write %[[SELF_INDEX]]
 
 
 @run_test
@@ -430,8 +506,7 @@ def mlir_converter_sum():
     mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -457,6 +532,73 @@ def mlir_converter_sum():
     # CHECK: wave.add
     # CHECK: wave.add
     # CHECK: wave.write
+
+
+@run_test
+def mlir_converter_apply_expr():
+    """Test MLIR converter with apply_expr operation."""
+
+    apply_expr_constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(apply_expr_constraints)
+    def apply_expr_kernel(
+        a: Memory[M, N, ADDRESS_SPACE_A, tkl.i32],
+        c: Memory[M, N, ADDRESS_SPACE_C, tkl.i32],
+    ):
+        a_reg = wave.read(a)
+        c_reg = wave.read(c)
+        result1 = wave.apply_expr(a_reg, lambda x: x + 1)
+        result2 = wave.apply_expr([a_reg, c_reg], lambda x, y: 2 * x + y)
+        result = result1 + result2
+        wave.write(result, c)
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, apply_expr_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    kernel_constraints = apply_expr_kernel.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    print(mlir_output)
+    # CHECK: %[[ARG0:.+]] = wave.read
+    # CHECK: %[[ARG1:.+]] = wave.read
+    # CHECK: %[[APPLY1:.+]] = wave.apply_expr(%[[ARG0]])
+    # CHECK-SAME: <[#wave.operand<0>] -> (_Operand_0 + 1)>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
+    # CHECK: %[[APPLY2:.+]] = wave.apply_expr(%[[ARG0]], %[[ARG1]])
+    # CHECK-SAME: <[#wave.operand<0>, #wave.operand<1>] -> (_Operand_1 + _Operand_0 * 2)>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of i32, <register>>, !wave.tensor<[@M, @N] of i32, <register>>) -> !wave.tensor<[@M, @N] of i32, <register>>
 
 
 @run_test
@@ -637,8 +779,7 @@ def mlir_converter_matmul():
     )
 
     if diagnostics:
-        for diagnostic in diagnostics:
-            print(diagnostic, file=sys.stderr)
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -684,6 +825,7 @@ def mlir_converter_matmul():
     # CHECK-SAME: K = #wave.index_mapping<
     # CHECK-NOT:  ARGK
     # CHECK-SAME: offset =
+    # CHECK-SAME: padding = 4
     #
     # Another child allocation with parent reference and offset.
     #
@@ -691,6 +833,7 @@ def mlir_converter_matmul():
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: index =
     # CHECK-SAME: offset =
+    # CHECK-SAME: padding = 4
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
     # CHECK-NEXT:     %[[READ_A:.*]] = wave.read %[[ARG0]]

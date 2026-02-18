@@ -21,7 +21,6 @@ std::unique_ptr<mlir::Pass> createWAVEASMValidateSSAPass();
 
 /// Create the liveness analysis pass
 std::unique_ptr<mlir::Pass> createWAVEASMLivenessPass();
-std::unique_ptr<mlir::Pass> createWAVEASMLivenessPass(bool useCFG);
 
 /// Create the linear scan register allocation pass
 std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass();
