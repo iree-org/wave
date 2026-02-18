@@ -187,8 +187,8 @@ def test_preshuffle_scale_merge_block_k_256():
     # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
 
     # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
-    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands
-    # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[{{[0-9]+}}] * %{{.*}}) * (%{{.*}}[{{[0-9]+}}] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands.  Check %REG[1] as a simple check that we are doing a non-zero index
+    # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[1] * %{{.*}}) * (%{{.*}}[1] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
 
     # Verify that we're not using scalar scale extracts (the old pattern)
     # If opsel is working, we should NOT see vector.extract before scaled_mfma
