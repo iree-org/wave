@@ -167,7 +167,7 @@ def torchScaledGemmMXFP4(
 # 16384,16384,16384
 def test_preshuffleB_direct_global_b_8wave(
     is_debug: bool = False,
-    shape: tuple[int, int, int] = (16384, 16384, 16384),  # (1024, 1024, 8192),
+    shape: tuple[int, int, int] = (1024, 1024, 8192),
     block: tuple[int, int, int] = (256, 256, 256),
 ):
     """
