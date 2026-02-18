@@ -60,7 +60,7 @@ def _trace_scale_chain(scale_value):
         <- source             : vector<4xi8>  (typically a vector.load)
     """
     extract_op = scale_value.owner
-    if extract_op.name != "vector.extract":
+    if not hasattr(extract_op, "name") or extract_op.name != "vector.extract":
         return None
 
     extract_source = extract_op.operands[0]
@@ -71,7 +71,7 @@ def _trace_scale_chain(scale_value):
         return None
 
     bitcast_op = extract_source.owner
-    if bitcast_op.name != "vector.bitcast":
+    if not hasattr(bitcast_op, "name") or bitcast_op.name != "vector.bitcast":
         return None
 
     bitcast_source = bitcast_op.operands[0]
@@ -82,7 +82,7 @@ def _trace_scale_chain(scale_value):
         return None
 
     slice_op = bitcast_source.owner
-    if slice_op.name != "vector.extract_strided_slice":
+    if not hasattr(slice_op, "name") or slice_op.name != "vector.extract_strided_slice":
         return None
 
     offsets = slice_op.attributes["offsets"]
@@ -125,7 +125,7 @@ def apply_opsel_scaled_mfma(module: Module):
 
         scaled_mfma_ops = []
         for op in _walk_operations(module.operation):
-            if op.name == "amdgpu.scaled_mfma":
+            if hasattr(op, "name") and op.name == "amdgpu.scaled_mfma":
                 scaled_mfma_ops.append(op.opview)
 
         if not scaled_mfma_ops:
