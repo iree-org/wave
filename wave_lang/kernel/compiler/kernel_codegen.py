@@ -47,7 +47,14 @@ from ..lang.kernel_buffer import (
     is_kernel_buffer_meta_derived,
 )
 from ..lang.wave_types import Memory, SymbolBind
-from ..ops.wave_ops import NestedRegionOp, Placeholder, Read, Write, get_custom
+from ..ops.wave_ops import (
+    AtomicOp,
+    NestedRegionOp,
+    Placeholder,
+    Read,
+    Write,
+    get_custom,
+)
 from .base import (
     CodegenError,
 )
@@ -411,7 +418,10 @@ class KernelSignature:
             if len(node.users) == 0:
                 return False
             return any(
-                [isinstance(get_custom(x), Write) for x in get_users_recursive(node)]
+                [
+                    isinstance(get_custom(x), (Write, AtomicOp))
+                    for x in get_users_recursive(node)
+                ]
             )
 
         for node in placeholder_nodes:

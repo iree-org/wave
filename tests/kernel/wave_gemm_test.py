@@ -46,6 +46,7 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
+    get_splitk_gemm_kernel,
     get_streamk_gemm_kernel,
     get_hybrid_streamk_gemm_kernel,
     get_persistent_reordering_kernel,
@@ -3573,3 +3574,43 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
     assert (
         metadata.readfirstlane_ops == readfirstlane_ops
     ), f"Expected {readfirstlane_ops} readfirstlane operations, got {metadata.readfirstlane_ops}"
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(256, 256, 256), (1024, 1024, 1024)])
+@pytest.mark.parametrize("num_splits", [2, 4])
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+def testSplitKGemm(
+    shape: tuple[int, int, int],
+    num_splits: int,
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+):
+    splitk_gemm, hyperparams = get_splitk_gemm_kernel(
+        shape,
+        num_splits=num_splits,
+        mfma_variant=mfma_variant,
+        threads_per_wave=threads_per_wave,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+    splitk_gemm = wave_compile(options, splitk_gemm)
+
+    m, n, k = shape
+    a = device_randn(m, k, dtype=torch.float16)
+    b = device_randn(n, k, dtype=torch.float16)
+    c = device_zeros(m, n, dtype=torch.float32)
+    splitk_gemm(a, b, c)
+
+    torch_ref = a.cpu().to(torch.float32) @ b.cpu().T.to(torch.float32)
+    assert_close(c.cpu(), torch_ref, rtol=1e-3, atol=1e-2)

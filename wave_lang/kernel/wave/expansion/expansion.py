@@ -19,6 +19,7 @@ from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     Allocate,
+    AtomicOp,
     Conditional,
     CustomOp,
     GetResult,
@@ -971,6 +972,7 @@ def is_leaf_node(node):
     custom = get_custom(node)
     return (
         isinstance(custom, Write)
+        or isinstance(custom, AtomicOp)
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
         or isinstance(custom, ScatterAdd)
