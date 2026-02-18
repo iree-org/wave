@@ -27,6 +27,39 @@ using namespace mlir;
 // Index attribute verification
 //-----------------------------------------------------------------------------
 
+// Helper function to collect all symbols used in the operation's operands and
+// results.
+static void collectSymbolsFromTypes(Operation *op,
+                                     llvm::SmallVectorImpl<StringRef> &symbols) {
+  llvm::StringSet<> seenSymbols;
+
+  // Collect symbols from operand types.
+  for (Value operand : op->getOperands()) {
+    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(operand.getType());
+    if (!tensorType || !tensorType.getFullySpecified())
+      continue;
+
+    for (wave::WaveSymbolAttr symbol : tensorType.getShape()) {
+      StringRef name = symbol.getName();
+      if (seenSymbols.insert(name).second)
+        symbols.push_back(name);
+    }
+  }
+
+  // Collect symbols from result types.
+  for (Value result : op->getResults()) {
+    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(result.getType());
+    if (!tensorType || !tensorType.getFullySpecified())
+      continue;
+
+    for (wave::WaveSymbolAttr symbol : tensorType.getShape()) {
+      StringRef name = symbol.getName();
+      if (seenSymbols.insert(name).second)
+        symbols.push_back(name);
+    }
+  }
+}
+
 LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // The attribute is optional.
   Attribute attribute =
@@ -46,6 +79,15 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
     dicts.push_back(dict);
   }
 
+  // Collect all symbols from the index attribute.
+  llvm::StringSet<> indexSymbols;
+  for (DictionaryAttr dictAttr : dicts) {
+    for (auto named : dictAttr) {
+      indexSymbols.insert(named.getName().strref());
+    }
+  }
+
+  // Validate the index attribute structure and iterator symbols.
   for (DictionaryAttr dictAttr : dicts) {
     for (auto named : dictAttr) {
       auto val = named.getValue();
@@ -84,6 +126,20 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
       }
     }
   }
+
+  // Collect all symbols used in operands and results.
+  SmallVector<StringRef> requiredSymbols;
+  collectSymbolsFromTypes(op, requiredSymbols);
+
+  // Check that all required symbols have an entry in the index attribute.
+  for (StringRef symbolName : requiredSymbols) {
+    if (!indexSymbols.contains(symbolName)) {
+      return op->emitError("'index' attribute does not provide a mapping for "
+                           "symbol '@")
+             << symbolName << "' used in operand or result types";
+    }
+  }
+
   return success();
 }
 
