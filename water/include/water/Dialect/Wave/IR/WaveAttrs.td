@@ -572,4 +572,46 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   }];
 }
 
+//-----------------------------------------------------------------------------
+// Symbol mapping attribute
+//-----------------------------------------------------------------------------
+
+def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
+  let mnemonic = "symbol_mapping";
+  let description = [{
+    An ordered mapping from `WaveSymbolAttr` keys to `WaveExprListAttr` values.
+    The ordering of entries is guaranteed to be persistent, implemented as two
+    co-indexed arrays: `keys[i]` maps to `values[i]`.
+
+    Example:
+    ```mlir
+    #wave.symbol_mapping<
+      @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>,
+      @N = #wave.expr_list<[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>
+    >
+    ```
+  }];
+
+  let parameters = (ins
+    ArrayRefParameter<"::wave::WaveSymbolAttr">:$keys,
+    ArrayRefParameter<"::wave::WaveExprListAttr">:$values
+  );
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+
+  let extraClassDeclaration = [{
+    /// Verify that every value `WaveExprListAttr` in the mapping has exactly
+    /// `numResults` results. Returns failure with a diagnostic on the first
+    /// non-conforming entry.
+    llvm::LogicalResult verifyResultCount(
+        llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
+        unsigned numResults) const;
+
+    /// Look up the `WaveExprListAttr` associated with `key`.
+    /// Returns a default-constructed (null) attribute if the key is absent.
+    ::wave::WaveExprListAttr lookup(::wave::WaveSymbolAttr key) const;
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEATTRS

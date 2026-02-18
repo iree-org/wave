@@ -132,3 +132,20 @@ module attributes {wave_test.symbol = #wave.symbol<"_A">}
 
 // expected-error @below {{duplicate symbol #wave.symbol<"A"> in shape}}
 "wave_test.create_tensor"() {fully_specified = true, shape = [@A, @B, @A]} : () -> ()
+
+// -----
+
+// Duplicate key is rejected at attribute parse/verify time.
+// expected-error @below {{duplicate key: #wave.symbol<"M">}}
+#dup_key = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
+func.func private @duplicate_key() attributes {test.map = #dup_key}
+
+// -----
+
+// expected-error @below {{expected 1 result(s) in expr_list for key #wave.symbol<"M">, got 3}}
+water_test.wave_symbol_mapping {mapping = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>>, expected_num_results = 1 : i64}
+
+// -----
+
+// expected-error @below {{expected 3 result(s) in expr_list for key #wave.symbol<"N">, got 1}}
+water_test.wave_symbol_mapping {mapping = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>, @N = #wave.expr_list<[#wave.symbol<"B">] -> (B)>>, expected_num_results = 3 : i64}
