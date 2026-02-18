@@ -98,3 +98,13 @@ func.func private @three_results_per_value() attributes {
     @M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>
   >
 }
+
+// CHECK-LABEL: @index_mapping
+// CHECK: #wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, BLOCK_M)>, @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, BLOCK_N)>>
+func.func private @index_mapping() {
+  water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<
+    @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, BLOCK_M)>,
+    @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, BLOCK_N)>
+  >}
+  return
+}

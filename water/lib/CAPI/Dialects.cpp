@@ -466,12 +466,12 @@ MlirAttribute mlirWaveSymbolMappingAttrGet(MlirContext ctx, intptr_t numEntries,
                                            MlirAttribute *keys,
                                            MlirAttribute *values) {
   SmallVector<wave::WaveSymbolAttr> keyAttrs;
-  SmallVector<wave::WaveExprListAttr> valueAttrs;
+  SmallVector<Attribute> valueAttrs;
   keyAttrs.reserve(numEntries);
   valueAttrs.reserve(numEntries);
   for (intptr_t i = 0; i < numEntries; ++i) {
     keyAttrs.push_back(llvm::cast<wave::WaveSymbolAttr>(unwrap(keys[i])));
-    valueAttrs.push_back(llvm::cast<wave::WaveExprListAttr>(unwrap(values[i])));
+    valueAttrs.push_back(unwrap(values[i]));
   }
   return wrap(
       wave::WaveSymbolMappingAttr::get(unwrap(ctx), keyAttrs, valueAttrs));

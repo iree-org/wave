@@ -482,7 +482,7 @@ func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.te
 // -----
 
 func.func @bounds_wrong_rank(%mem: !wave.tensor<[@N] of f32>) {
-  // expected-error @below {{'bounds' must only contain single-result expressions}}
+  // expected-error @below {{op attribute 'bounds' failed to satisfy constraint: symbol mapping with 1-result expr list value}}
   wave.read %mem { bounds = #wave.symbol_mapping<@N = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64, BLOCK_M * 64)>> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
   return
 }

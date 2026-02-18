@@ -38,18 +38,16 @@ def WaveFailPropagationOp
   let assemblyFormat = "$in1 `,` $in2 attr-dict `:` functional-type(operands, results)";
 }
 
-// Dummy op used to test WaveSymbolMappingAttr. When `expected_num_results` is
-// provided the op verifier checks that every value in the mapping has exactly
-// that many results.
+// Dummy op used to test WaveSymbolMappingAttr with different types of values.
 def WaveSymbolMappingOp
     : Op<WaterTestDialect, "wave_symbol_mapping"> {
-  let summary = "Test op that holds a WaveSymbolMappingAttr";
+  let summary = "Test op that holds a WaveSymbolMappingAttr of expr lists";
   let arguments = (ins
-    WaveSymbolMappingAttr:$mapping,
-    OptionalAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>>:$expected_num_results
+    OptionalAttr<WaveSymbolMappingAttrOf<[WaveExprListAttr]>>:$mapping,
+    OptionalAttr<WaveSymbolMappingAttrOf<[WaveIndexMappingAttr]>>:$index_mapping,
+    OptionalAttr<WaveSymbolMappingToNResultExprListAttr<3>>:$three_results_mapping
   );
   let assemblyFormat = "attr-dict";
-  let hasVerifier = 1;
 }
 
 #endif // WATER_TEST_LIB_DIALECT_WATERTESTDIALECT

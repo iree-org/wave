@@ -711,9 +711,9 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 
 WaveSymbolMappingAttr WaveSymbolMappingAttr::get(
     MLIRContext *context,
-    ArrayRef<std::pair<WaveSymbolAttr, WaveExprListAttr>> entries) {
+    ArrayRef<std::pair<WaveSymbolAttr, Attribute>> entries) {
   SmallVector<WaveSymbolAttr> keys;
-  SmallVector<WaveExprListAttr> values;
+  SmallVector<Attribute> values;
   keys.reserve(entries.size());
   values.reserve(entries.size());
   for (auto &[k, v] : entries) {
@@ -733,13 +733,13 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
     return {};
 
   SmallVector<WaveSymbolAttr> keys;
-  SmallVector<WaveExprListAttr> values;
+  SmallVector<Attribute> values;
 
   // Handle empty mapping: `<>`.
   if (failed(parser.parseOptionalGreater())) {
     do {
       StringAttr nameAttr;
-      WaveExprListAttr value;
+      Attribute value;
       if (failed(parser.parseSymbolName(nameAttr)) || parser.parseEqual() ||
           failed(parser.parseAttribute(value)))
         return {};
@@ -771,7 +771,7 @@ void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
 LogicalResult
 WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                               ArrayRef<WaveSymbolAttr> keys,
-                              ArrayRef<WaveExprListAttr> values) {
+                              ArrayRef<Attribute> values) {
   if (keys.size() != values.size())
     return emitError() << "keys and values arrays must have the same size, got "
                        << keys.size() << " keys and " << values.size()
@@ -786,18 +786,7 @@ WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
-LogicalResult WaveSymbolMappingAttr::verifyResultCount(
-    function_ref<InFlightDiagnostic()> emitError, unsigned numResults) const {
-  for (auto [key, value] : llvm::zip(getKeys(), getValues())) {
-    if (value.getRank() != numResults)
-      return emitError() << "expected " << numResults
-                         << " result(s) in expr_list for key " << key
-                         << ", got " << value.getRank();
-  }
-  return success();
-}
-
-WaveExprListAttr WaveSymbolMappingAttr::lookup(WaveSymbolAttr key) const {
+Attribute WaveSymbolMappingAttr::lookupImpl(WaveSymbolAttr key) const {
   for (auto [k, v] : llvm::zip(getKeys(), getValues())) {
     if (k == key)
       return v;

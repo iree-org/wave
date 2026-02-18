@@ -1607,10 +1607,6 @@ static LogicalResult verifyReadWriteBounds(Location loc,
              << " not used in the "
                 "indexed memory tensor";
     }
-    if (value.getRank() != 1) {
-      return emitError(loc)
-             << "'bounds' must only contain single-result expressions";
-    }
   }
 
   return success();

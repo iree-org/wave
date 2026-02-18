@@ -112,7 +112,8 @@ buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
   // without an entry are fully in-bounds and are skipped.
   Value finalMask;
   for (uint64_t d = 0; d < rank; ++d) {
-    wave::WaveExprListAttr boundAttr = boundsMapping.lookup(orderedSyms[d]);
+    auto boundAttr =
+        boundsMapping.lookup<wave::WaveExprListAttr>(orderedSyms[d]);
     if (!boundAttr)
       continue;
     // Materialize bounds.

@@ -138,16 +138,5 @@ LogicalResult WaveFailPropagationOp::finalizeTypeInference() {
   return success();
 }
 
-//-----------------------------------------------------------------------------
-// WaveSymbolMappingOp implementations.
-//-----------------------------------------------------------------------------
-
-llvm::LogicalResult WaveSymbolMappingOp::verify() {
-  if (auto n = getExpectedNumResults())
-    return getMapping().verifyResultCount([this]() { return emitOpError(); },
-                                          static_cast<unsigned>(n.value()));
-  return llvm::success();
-}
-
 #define GET_OP_CLASSES
 #include "WaterTestDialectOps.cpp.inc"
