@@ -450,6 +450,33 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             pipeline_loop.KERNEL, tkw.MemoryCounterWaitBarrier(load=loop_wait_load)
         )
 
+        # Interleave MFMAs with memory ops (matching aiter f4gemm pattern).
+        # First half: g2v_b (buffer_load_dwordx4) and shared_load_a_1
+        # (ds_read_b128) interleaved every 4 MFMAs.
+        interleaved_mma_0 = tkw.interleave_operations(
+            base_ops=loop_scaled_mma_0,
+            interleaved_ops=[
+                loop_g2v_b,
+                loop_shared_load_a_1,
+                loop_shared_load_a_scale_1,
+            ],
+            intervals=[4, 4, 4],
+        )
+
+        # Second half: g2v_b_scale (buffer_load_dword), shared_load_a_0
+        # (ds_read_b128), and shared_load_a_scale_0 (ds_read_b32)
+        # interleaved every 4 MFMAs with staggered offsets.
+        interleaved_mma_1 = tkw.interleave_operations(
+            base_ops=loop_scaled_mma_1,
+            interleaved_ops=[
+                loop_g2v_b_scale,
+                loop_shared_load_a_0,
+                loop_shared_load_a_scale_0,
+            ],
+            intervals=[4, 4, 4],
+            start_offsets=[0, 0, 1],
+        )
+
         clusters = [
             tkw.cluster(
                 [
@@ -457,19 +484,17 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                     loop_bitcast_a_scale_0,
                     loop_bitcast_b,
                     loop_bitcast_b_scale,
-                    loop_scaled_mma_0,
-                    loop_g2v_b,
-                    loop_shared_load_a_1,
-                    loop_g2v_b_scale,
-                    loop_shared_load_a_scale_1,
-                    loop_bitcast_a_1,
-                    loop_bitcast_a_scale_1,
+                    tkw.SchedulingBarrier([]),
+                    interleaved_mma_0,
                     tkw.SchedulingBarrier([]),
                 ],
             ),
             tkw.cluster(
                 [
-                    loop_scaled_mma_1,
+                    loop_bitcast_a_1,
+                    loop_bitcast_a_scale_1,
+                    tkw.SchedulingBarrier([]),
+                    interleaved_mma_1,
                     loop_g2s_a,
                     loop_g2s_a_scale,
                     tkw.MemoryCounterWaitBarrier(load=n_b_loads, ds=0),
@@ -621,7 +646,7 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.EPILOGUE, clusters)
         # Unroll factor requires per-GEMM tuning:
-        unroll_factor = 2
-        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
+        # unroll_factor = 2
+        # tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
     return mxfp4_dbuf_schedule
