@@ -564,7 +564,7 @@ def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
 }
 
 class WaveExprListAllowedInputsPred<list<AttrDef> inputTypes>
-  : CPred<"::wave::detail::areAllExprInputsAllowed<"
+  : CPred<"::wave::detail::allExprSymbolsOfType<"
   # !interleave(!foreach(entry, inputTypes, entry.cppType ), ", ")
   # ">(::llvm::cast<::wave::WaveExprListAttr>($_self))">;
 

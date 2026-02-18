@@ -34,7 +34,7 @@ namespace detail {
 /// Check that all symbols in the expression are of the types provided as
 /// template arguments. Does NOT emit diagnostics.
 template <typename... InputTypes>
-bool areAllExprInputsAllowed(WaveExprListAttr expr) {
+bool allExprSymbolsOfType(WaveExprListAttr expr) {
   return llvm::all_of(expr.getSymbols(), llvm::IsaPred<InputTypes...>);
 }
 } // namespace detail

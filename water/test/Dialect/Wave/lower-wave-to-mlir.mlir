@@ -412,14 +412,16 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
   func.func @lower_apply_expr() -> vector<4xi32> attributes {wave.hyperparameters = #wave.hyperparameters<{N = 10}>} {
     %cst = arith.constant 42 : i32
     %input = wave.register %cst : vector<4xi32>
-    %cst2 = arith.constant 2 : i32
-    %input2 = wave.register %cst2 : vector<4xi32>
+    %cst3 = arith.constant 3 : i32
+    %input2 = wave.register %cst3 : vector<4xi32>
+    // CHECK: %[[CST_42:.+]] = arith.constant dense<42> : vector<4xi32>
+    // CHECK: %[[CST_3:.+]] = arith.constant dense<3> : vector<4xi32>
     // CHECK: %[[CST_10:.+]] = arith.constant dense<10> : vector<4xi32>
     // CHECK: %[[CST_2:.+]] = arith.constant dense<2> : vector<4xi32>
     // CHECK: %[[MUL:.+]] = arith.muli %[[CST_10]], %[[CST_2]] overflow<nsw, nuw> : vector<4xi32>
-    // CHECK: %[[ADD:.+]] = arith.addi %{{.*}}, %[[MUL]] overflow<nsw, nuw> : vector<4xi32>
+    // CHECK: %[[ADD:.+]] = arith.addi %[[CST_42]], %[[MUL]] overflow<nsw, nuw> : vector<4xi32>
     // CHECK: %[[CST_N1:.+]] = arith.constant dense<-1> : vector<4xi32>
-    // CHECK: %[[MUL2:.+]] = arith.muli %{{.*}}, %[[CST_N1]] overflow<nsw, nuw> : vector<4xi32>
+    // CHECK: %[[MUL2:.+]] = arith.muli %[[CST_3]], %[[CST_N1]] overflow<nsw, nuw> : vector<4xi32>
     // CHECK: %[[ADD2:.+]] = arith.addi %[[ADD]], %[[MUL2]] overflow<nsw, nuw> : vector<4xi32>
     // CHECK: %[[CST_1:.+]] = arith.constant dense<1> : vector<4xi32>
     // CHECK: %[[ADD3:.+]] = arith.addi %[[ADD2]], %[[CST_1]] overflow<nsw, nuw> : vector<4xi32>
@@ -439,7 +441,10 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     // CHECK: %[[CST_B:.+]] = arith.constant dense<4> : vector<4xi64>
     // CHECK: %[[FLOORDIV:.+]] = arith.floordivsi %[[CST_A]], %[[CST_B]] : vector<4xi64>
     // CHECK: %[[CEILDIV:.+]] = arith.ceildivsi %{{.*}}, %{{.*}} : vector<4xi64>
+    // CHECK: %[[ADD:.+]] = arith.addi %[[FLOORDIV]], %[[CEILDIV]] overflow<nsw, nuw> : vector<4xi64>
     // CHECK: %[[REM:.+]] = arith.remsi %{{.*}}, %{{.*}} : vector<4xi64>
+    // CHECK: %[[ADD2:.+]] = arith.addi %[[ADD]], %[[REM]] overflow<nsw, nuw> : vector<4xi64>
+    // CHECK: return %[[ADD2]] : vector<4xi64>
     %result = wave.apply_expr()
       <[#wave.symbol<"A">, #wave.symbol<"B">] ->
       ((A floordiv B) + (A ceildiv B) + (A mod B))>

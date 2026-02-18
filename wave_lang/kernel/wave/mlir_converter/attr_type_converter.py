@@ -181,7 +181,8 @@ def symbol_name_to_attribute(name: str) -> ir.Attribute:
     WaveOperandAttr.
 
     Special symbols with predefined prefixes are converted to
-    WaveIndexSymbolAttr, while regular symbols are converted to WaveSymbolAttr.
+    WaveIndexSymbolAttr or WaveOperandAttr, while regular symbols are converted
+    to WaveSymbolAttr.
     """
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
