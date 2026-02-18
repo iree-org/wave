@@ -208,6 +208,7 @@ def gemm_progressive_roundtrip():
             "decompose_dot_mma",
             "generate_bounds_exprs",
             "location_check_pass",
+            "merge_contiguous_reads",
         }
     )
 
