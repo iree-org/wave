@@ -66,17 +66,23 @@ public:
   llvm::SmallVector<std::string> emitPrologue();
 
   /// Emit assembly epilogue (kernel symbol info, metadata YAML)
-  llvm::SmallVector<std::string>
-  emitEpilogue(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
+  llvm::SmallVector<std::string> emitEpilogue(int64_t peakVGPRs,
+                                              int64_t peakSGPRs,
+                                              int64_t peakAGPRs,
+                                              int64_t ldsSize);
 
 private:
   /// Emit .amdhsa_kernel directive and its fields
-  llvm::SmallVector<std::string>
-  emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
+  llvm::SmallVector<std::string> emitKernelDescriptor(int64_t peakVGPRs,
+                                                      int64_t peakSGPRs,
+                                                      int64_t peakAGPRs,
+                                                      int64_t ldsSize);
 
   /// Emit .amdgpu_metadata section
-  llvm::SmallVector<std::string>
-  emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs, int64_t ldsSize);
+  llvm::SmallVector<std::string> emitMetadataYAML(int64_t peakVGPRs,
+                                                  int64_t peakSGPRs,
+                                                  int64_t peakAGPRs,
+                                                  int64_t ldsSize);
 
   ProgramOp program;
   TargetAttrInterface target;
@@ -100,6 +106,9 @@ public:
 
   /// Get peak SGPR usage from allocation
   int64_t getPeakSGPRs() const { return peakSGPRs; }
+
+  /// Get peak AGPR usage from allocation
+  int64_t getPeakAGPRs() const { return peakAGPRs; }
 
 private:
   /// Resolve an SSA Value to its physical register string
@@ -173,6 +182,7 @@ private:
 
   int64_t peakVGPRs = 0;
   int64_t peakSGPRs = 0;
+  int64_t peakAGPRs = 0;
 
   /// Counter for generating unique loop labels in assembly
   int loopLabelCounter = 0;

@@ -25,22 +25,28 @@ namespace waveasm {
 
 /// Check if a type is a virtual register type
 inline bool isVirtualRegType(mlir::Type type) {
-  return mlir::isa<VRegType, SRegType>(type);
+  return mlir::isa<VRegType, SRegType, ARegType>(type);
 }
 
 /// Check if a type is a physical register type
 inline bool isPhysicalRegType(mlir::Type type) {
-  return mlir::isa<PVRegType, PSRegType>(type);
+  return mlir::isa<PVRegType, PSRegType, PARegType>(type);
 }
 
 /// Check if a type is any register type
 inline bool isRegType(mlir::Type type) {
-  return mlir::isa<VRegType, SRegType, PVRegType, PSRegType>(type);
+  return mlir::isa<VRegType, SRegType, ARegType, PVRegType, PSRegType,
+                   PARegType>(type);
 }
 
 /// Check if a type is a VGPR type (virtual or physical)
 inline bool isVGPRType(mlir::Type type) {
   return mlir::isa<VRegType, PVRegType>(type);
+}
+
+/// Check if a type is an AGPR type (virtual or physical)
+inline bool isAGPRType(mlir::Type type) {
+  return mlir::isa<ARegType, PARegType>(type);
 }
 
 /// Check if a type is an SGPR type (virtual or physical)
@@ -54,6 +60,8 @@ inline std::optional<RegClass> getRegClass(mlir::Type type) {
     return RegClass::VGPR;
   if (mlir::isa<SRegType, PSRegType>(type))
     return RegClass::SGPR;
+  if (mlir::isa<ARegType, PARegType>(type))
+    return RegClass::AGPR;
   return std::nullopt;
 }
 
@@ -67,6 +75,10 @@ inline int64_t getRegSize(mlir::Type type) {
     return pvreg.getSize();
   if (auto psreg = mlir::dyn_cast<PSRegType>(type))
     return psreg.getSize();
+  if (auto areg = mlir::dyn_cast<ARegType>(type))
+    return areg.getSize();
+  if (auto pareg = mlir::dyn_cast<PARegType>(type))
+    return pareg.getSize();
   return 1;
 }
 
@@ -76,6 +88,8 @@ inline int64_t getRegAlignment(mlir::Type type) {
     return vreg.getAlignment();
   if (auto sreg = mlir::dyn_cast<SRegType>(type))
     return sreg.getAlignment();
+  if (auto areg = mlir::dyn_cast<ARegType>(type))
+    return areg.getAlignment();
   // Physical registers don't have alignment (already allocated)
   return 1;
 }
@@ -112,6 +126,16 @@ inline bool typesCompatible(mlir::Type a, mlir::Type b) {
     if (auto pb = mlir::dyn_cast<PSRegType>(b))
       return pa.getSize() == pb.getSize();
 
+  // Both are AReg types (virtual)
+  if (auto aa = mlir::dyn_cast<ARegType>(a))
+    if (auto ab = mlir::dyn_cast<ARegType>(b))
+      return aa.getSize() == ab.getSize();
+
+  // Both are PAReg types (physical) - compare size only, not index
+  if (auto aa = mlir::dyn_cast<PARegType>(a))
+    if (auto ab = mlir::dyn_cast<PARegType>(b))
+      return aa.getSize() == ab.getSize();
+
   // Cross virtual/physical: vreg vs pvreg (same register class)
   if ((mlir::isa<VRegType>(a) && mlir::isa<PVRegType>(b)) ||
       (mlir::isa<PVRegType>(a) && mlir::isa<VRegType>(b)))
@@ -119,6 +143,10 @@ inline bool typesCompatible(mlir::Type a, mlir::Type b) {
 
   if ((mlir::isa<SRegType>(a) && mlir::isa<PSRegType>(b)) ||
       (mlir::isa<PSRegType>(a) && mlir::isa<SRegType>(b)))
+    return true; // Allow during mixed states (mid-regalloc)
+
+  if ((mlir::isa<ARegType>(a) && mlir::isa<PARegType>(b)) ||
+      (mlir::isa<PARegType>(a) && mlir::isa<ARegType>(b)))
     return true; // Allow during mixed states (mid-regalloc)
 
   return false;

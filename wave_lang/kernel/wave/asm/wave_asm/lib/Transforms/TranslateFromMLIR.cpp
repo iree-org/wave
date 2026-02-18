@@ -57,6 +57,10 @@ SRegType TranslationContext::createSRegType(int64_t size, int64_t alignment) {
   return SRegType::get(builder.getContext(), size, alignment);
 }
 
+ARegType TranslationContext::createARegType(int64_t size, int64_t alignment) {
+  return ARegType::get(builder.getContext(), size, alignment);
+}
+
 ImmType TranslationContext::createImmType(int64_t value) {
   return ImmType::get(builder.getContext(), value);
 }
@@ -1215,6 +1219,16 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       Value storeData = *data;
       if (!splitResults.empty() && splitIndex < splitResults.size()) {
         storeData = splitResults[splitIndex];
+      }
+
+      // If the data source is an AGPR (from MFMA accumulator), we need to
+      // move it to a VGPR before storing. MUBUF store instructions require
+      // VGPR sources. Emit v_accvgpr_read_b32 to a temporary VGPR.
+      if (isAGPRType(storeData.getType())) {
+        auto vregType =
+            ctx.createVRegType(storeDwords, storeDwords > 1 ? storeDwords : 1);
+        storeData =
+            V_ACCVGPR_READ_B32::create(builder, loc, vregType, storeData);
       }
 
       // Use instOffset attribute instead of computing new voffset

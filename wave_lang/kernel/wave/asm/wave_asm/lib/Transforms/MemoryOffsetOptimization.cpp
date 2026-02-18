@@ -265,6 +265,38 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
     // Try src1 as shifted, src0 as other
     if (auto result = tryShiftOperand(addLike->src1, addLike->src0))
       return *result;
+
+    // Recursive case: neither operand is a direct constant or shift, but one
+    // may contain an extractable constant deeper in its expression tree.
+    // V_ADD_U32(X, Y) where extractConstant(X) = (X_base, K), K != 0
+    //   -> V_ADD_U32(X_base, Y) + K
+    // This handles patterns like:
+    //   V_ADD_U32(V_ADD_U32(V_LSHLREV_B32(N, base+K), col), loop_offset)
+    // where the constant K is inside a nested shift within an add chain.
+    auto trySrcRecurse = [&](Value src,
+                             Value other) -> std::optional<AddrAnalysis> {
+      // Only recurse into add-like ops to avoid infinite recursion on
+      // non-add trees (shifts are already handled above).
+      if (!getAddLikeOp(src))
+        return std::nullopt;
+      auto srcAnalysis = extractConstant(src, builder, loc);
+      if (srcAnalysis.constOffset == 0)
+        return std::nullopt;
+      // Also recurse on the other operand
+      auto otherAnalysis = extractConstant(other, builder, loc);
+      auto totalConst =
+          safeAdd(srcAnalysis.constOffset, otherAnalysis.constOffset);
+      if (!totalConst)
+        return std::nullopt;
+      Value newBase = V_ADD_U32::create(builder, loc, addLike->resultType,
+                                        srcAnalysis.base, otherAnalysis.base);
+      return AddrAnalysis{newBase, *totalConst};
+    };
+
+    if (auto result = trySrcRecurse(addLike->src0, addLike->src1))
+      return *result;
+    if (auto result = trySrcRecurse(addLike->src1, addLike->src0))
+      return *result;
   }
 
   // Pattern 2: V_LSHLREV_B32(N, add_like(base, K))

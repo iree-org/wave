@@ -225,3 +225,126 @@ waveasm.program @test_or_shift_distribution target = #waveasm.target<#waveasm.gf
 
   waveasm.s_endpgm
 }
+
+//===----------------------------------------------------------------------===//
+// Test: Nested add chain with shift - matches real ds_read patterns
+// V_ADD_U32(V_ADD_U32(V_LSHLREV_B32(7, row+16), col_base), loop_offset)
+// The constant 16 is inside a shift inside a nested add chain.
+// Should extract: offset = 16 << 7 = 2048
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_nested_add_shift_extraction
+waveasm.program @test_nested_add_shift_extraction target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %base_row = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %col_base = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %loop_offset = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  // row_plus_16 = base_row + 16  (this is in a prologue)
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+  %row_plus_16 = waveasm.v_add_u32 %base_row, %c16 : !waveasm.pvreg<0>, !waveasm.imm<16> -> !waveasm.vreg
+
+  // shifted = (base_row + 16) << 7
+  %c7 = waveasm.constant 7 : !waveasm.imm<7>
+  %shifted = waveasm.v_lshlrev_b32 %c7, %row_plus_16 : !waveasm.imm<7>, !waveasm.vreg -> !waveasm.vreg
+
+  // inner_addr = shifted + col_base
+  %inner_addr = waveasm.v_add_u32 %shifted, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  // addr = inner_addr + loop_offset  (this is the pattern from real GEMM loops)
+  %addr = waveasm.v_add_u32 %inner_addr, %loop_offset : !waveasm.vreg, !waveasm.psreg<0> -> !waveasm.vreg
+
+  // The nested constant 16 should be extracted through the shift and add chain:
+  //   16 << 7 = 2048, which fits in DS offset (max 65535)
+  // CHECK: waveasm.v_lshlrev_b32
+  // CHECK-SAME: !waveasm.pvreg<0>
+  // CHECK: waveasm.ds_read_b128
+  // CHECK-SAME: offset = 2048
+  %result = waveasm.ds_read_b128 %addr : !waveasm.vreg -> !waveasm.vreg<4, 4>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Multiple ds_reads sharing a base with different constant offsets
+// This models the real GEMM pattern where 4 ds_reads load consecutive tiles
+// with row offsets +0, +16, +32, +48, each shifted by 7.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_ds_read_shared_base_offsets
+waveasm.program @test_ds_read_shared_base_offsets target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %base_row = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %col_base = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+
+  // row variants: base_row, base_row+16, base_row+32, base_row+48
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+  %c32 = waveasm.constant 32 : !waveasm.imm<32>
+  %c48 = waveasm.constant 48 : !waveasm.imm<48>
+  %c7 = waveasm.constant 7 : !waveasm.imm<7>
+
+  %row0 = waveasm.v_lshlrev_b32 %c7, %base_row : !waveasm.imm<7>, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  %row1_val = waveasm.v_add_u32 %base_row, %c16 : !waveasm.pvreg<0>, !waveasm.imm<16> -> !waveasm.vreg
+  %row1 = waveasm.v_lshlrev_b32 %c7, %row1_val : !waveasm.imm<7>, !waveasm.vreg -> !waveasm.vreg
+
+  %row2_val = waveasm.v_add_u32 %base_row, %c32 : !waveasm.pvreg<0>, !waveasm.imm<32> -> !waveasm.vreg
+  %row2 = waveasm.v_lshlrev_b32 %c7, %row2_val : !waveasm.imm<7>, !waveasm.vreg -> !waveasm.vreg
+
+  %row3_val = waveasm.v_add_u32 %base_row, %c48 : !waveasm.pvreg<0>, !waveasm.imm<48> -> !waveasm.vreg
+  %row3 = waveasm.v_lshlrev_b32 %c7, %row3_val : !waveasm.imm<7>, !waveasm.vreg -> !waveasm.vreg
+
+  // Each address: row_shifted + col_base
+  %addr0 = waveasm.v_add_u32 %row0, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+  %addr1 = waveasm.v_add_u32 %row1, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+  %addr2 = waveasm.v_add_u32 %row2, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+  %addr3 = waveasm.v_add_u32 %row3, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  // ds_read #0: no offset (base_row has no constant)
+  // CHECK: waveasm.ds_read_b128 %{{.*}} :
+  // CHECK-NOT: offset
+  %r0 = waveasm.ds_read_b128 %addr0 : !waveasm.vreg -> !waveasm.vreg<4, 4>
+
+  // ds_read #1: offset = 16 << 7 = 2048
+  // CHECK: waveasm.ds_read_b128
+  // CHECK-SAME: offset = 2048
+  %r1 = waveasm.ds_read_b128 %addr1 : !waveasm.vreg -> !waveasm.vreg<4, 4>
+
+  // ds_read #2: offset = 32 << 7 = 4096
+  // CHECK: waveasm.ds_read_b128
+  // CHECK-SAME: offset = 4096
+  %r2 = waveasm.ds_read_b128 %addr2 : !waveasm.vreg -> !waveasm.vreg<4, 4>
+
+  // ds_read #3: offset = 48 << 7 = 6144
+  // CHECK: waveasm.ds_read_b128
+  // CHECK-SAME: offset = 6144
+  %r3 = waveasm.ds_read_b128 %addr3 : !waveasm.vreg -> !waveasm.vreg<4, 4>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Nested add with scale reads (smaller shift)
+// V_ADD_U32(V_ADD_U32(V_LSHLREV_B32(3, row+16), col_base), loop_offset)
+// offset = 16 << 3 = 128
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_nested_scale_read_offset
+waveasm.program @test_nested_scale_read_offset target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %base_row = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %col_base = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %loop_offset = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+  %c3 = waveasm.constant 3 : !waveasm.imm<3>
+
+  %row_plus_16 = waveasm.v_add_u32 %base_row, %c16 : !waveasm.pvreg<0>, !waveasm.imm<16> -> !waveasm.vreg
+  %shifted = waveasm.v_lshlrev_b32 %c3, %row_plus_16 : !waveasm.imm<3>, !waveasm.vreg -> !waveasm.vreg
+  %inner = waveasm.v_add_u32 %shifted, %col_base : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+  %addr = waveasm.v_add_u32 %inner, %loop_offset : !waveasm.vreg, !waveasm.psreg<0> -> !waveasm.vreg
+
+  // offset = 16 << 3 = 128
+  // CHECK: waveasm.ds_read_u8
+  // CHECK-SAME: offset = 128
+  %result = waveasm.ds_read_u8 %addr : !waveasm.vreg -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}

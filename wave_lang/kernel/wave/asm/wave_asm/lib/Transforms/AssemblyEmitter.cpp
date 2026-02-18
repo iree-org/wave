@@ -47,6 +47,9 @@ std::string KernelGenerator::resolveValue(Value value) {
   if (auto psreg = dyn_cast<PSRegType>(ty)) {
     return formatSGPRRange(psreg.getIndex(), psreg.getSize());
   }
+  if (auto pareg = dyn_cast<PARegType>(ty)) {
+    return formatAGPRRange(pareg.getIndex(), pareg.getSize());
+  }
 
   if (isVirtualRegType(ty)) {
     int64_t physIdx = mapping.getPhysReg(value);
@@ -54,6 +57,8 @@ std::string KernelGenerator::resolveValue(Value value) {
       int64_t size = getRegSize(ty);
       if (isVGPRType(ty)) {
         return formatVGPRRange(physIdx, size);
+      } else if (isAGPRType(ty)) {
+        return formatAGPRRange(physIdx, size);
       } else {
         return formatSGPRRange(physIdx, size);
       }
@@ -228,6 +233,12 @@ std::string KernelGenerator::resolveScalarValue(Value value) {
       return formatSGPRRange(psreg.getIndex(), 1);
     }
   }
+  // For multi-register physical AGPRs, use only the first register
+  if (auto pareg = dyn_cast<PARegType>(ty)) {
+    if (pareg.getSize() > 1) {
+      return formatAGPRRange(pareg.getIndex(), 1);
+    }
+  }
   return resolveValue(value);
 }
 
@@ -278,7 +289,7 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
   return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
       .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
-            PrecoloredSRegOp, ConstantOp, PackOp, ExtractOp>(
+            PrecoloredSRegOp, PrecoloredARegOp, ConstantOp, PackOp, ExtractOp>(
           [](auto) { return std::nullopt; })
 
       .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
@@ -427,25 +438,60 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
       .Case<V_MOV_B32>([&](V_MOV_B32 movOp) -> std::optional<std::string> {
         Value result = movOp.getDst();
+        Value srcVal = movOp.getSrc();
         int64_t size = getRegSize(result.getType());
+        bool isAGPR = isAGPRType(result.getType());
+        bool srcIsImm = isa<ImmType>(srcVal.getType());
+
         if (size > 1) {
           int64_t baseIdx = mapping.getPhysReg(result);
           if (baseIdx < 0) {
             if (auto pvreg = dyn_cast<PVRegType>(result.getType())) {
               baseIdx = pvreg.getIndex();
+            } else if (auto pareg = dyn_cast<PARegType>(result.getType())) {
+              baseIdx = pareg.getIndex();
             }
           }
           if (baseIdx >= 0) {
-            std::string src = resolveValue(movOp.getSrc());
+            std::string src = resolveValue(srcVal);
             std::string lines;
-            for (int64_t i = 0; i < size; ++i) {
-              if (i > 0)
-                lines += "\n";
-              lines +=
-                  "  v_mov_b32 v" + std::to_string(baseIdx + i) + ", " + src;
+            if (isAGPR) {
+              // v_accvgpr_write_b32 requires a VGPR source in this backend.
+              // Materialize immediate sources into the reserved scratch VGPR.
+              std::string writeSrc = src;
+              if (srcIsImm) {
+                lines += "  v_mov_b32 " + formatVGPRRange(kScratchVGPR, 1) +
+                         ", " + src;
+                writeSrc = formatVGPRRange(kScratchVGPR, 1);
+                peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+              }
+              for (int64_t i = 0; i < size; ++i) {
+                if (!lines.empty())
+                  lines += "\n";
+                lines += "  v_accvgpr_write_b32 a" +
+                         std::to_string(baseIdx + i) + ", " + writeSrc;
+              }
+            } else {
+              for (int64_t i = 0; i < size; ++i) {
+                if (i > 0)
+                  lines += "\n";
+                lines +=
+                    "  v_mov_b32 v" + std::to_string(baseIdx + i) + ", " + src;
+              }
             }
             return lines;
           }
+        }
+        if (isAGPR) {
+          if (srcIsImm) {
+            std::string src = resolveValue(srcVal);
+            std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            return "  v_mov_b32 " + scratch + ", " + src +
+                   "\n  v_accvgpr_write_b32 " + resolveValue(result) + ", " +
+                   scratch;
+          }
+          return emitDefaultFormat(movOp, "v_accvgpr_write_b32");
         }
         return emitDefaultFormat(movOp, "v_mov_b32");
       })
@@ -663,6 +709,7 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
 
   peakVGPRs = 0;
   peakSGPRs = 0;
+  peakAGPRs = 0;
   program.walk([&](Operation *preOp) {
     for (Value result : preOp->getResults()) {
       Type ty = result.getType();
@@ -670,12 +717,16 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
       } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
         peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      } else if (auto pareg = dyn_cast<PARegType>(ty)) {
+        peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
       } else if (isVirtualRegType(ty)) {
         int64_t size = getRegSize(ty);
         int64_t physIdx = mapping.getPhysReg(result);
         if (physIdx >= 0) {
           if (isVGPRType(ty))
             peakVGPRs = std::max(peakVGPRs, physIdx + size);
+          else if (isAGPRType(ty))
+            peakAGPRs = std::max(peakAGPRs, physIdx + size);
           else if (isSGPRType(ty))
             peakSGPRs = std::max(peakSGPRs, physIdx + size);
         }
@@ -687,6 +738,8 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
       else if (auto psreg = dyn_cast<PSRegType>(ty))
         peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      else if (auto pareg = dyn_cast<PARegType>(ty))
+        peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
     }
   });
   peakVGPRs = std::max(peakVGPRs, int64_t(1));
@@ -712,7 +765,8 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   }
 
   int64_t ldsSize = program.getLdsSize().value_or(0);
-  auto epilogue = metaEmitter.emitEpilogue(peakVGPRs, peakSGPRs, ldsSize);
+  auto epilogue =
+      metaEmitter.emitEpilogue(peakVGPRs, peakSGPRs, peakAGPRs, ldsSize);
   lines.append(epilogue.begin(), epilogue.end());
 
   return lines;

@@ -1347,7 +1347,11 @@ def _dbuf_mxfp4_helper(
     import torch
 
     from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-    from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+    from wave_lang.kernel.wave.schedules import (
+        get_mxfp4_dbuf_schedule,
+        get_mxfp4_asymmetric_schedule,
+    )
+    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         generate_gemm_afp4wfp4_inputs,
@@ -1355,8 +1359,24 @@ def _dbuf_mxfp4_helper(
     )
 
     # Get tagged kernel + options (same as 7.1_schedule.py)
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=num_waves)
-    schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
+    # Use asymmetric schedule with wave_shape=(1,4) for 4-wave
+    # (B direct from global, A through LDS, matching AITER layout),
+    # standard double-buffer with wave_shape=(4,2) for 8-wave.
+    if num_waves <= 4:
+        gemm, options = get_tagged_mxfp4_gemm(
+            shape,
+            block,
+            wave_shape=(1, 4),
+            b_address_space=GLOBAL_ADDRESS_SPACE,
+        )
+        schedule = get_mxfp4_asymmetric_schedule()
+    else:
+        gemm, options = get_tagged_mxfp4_gemm(
+            shape,
+            block,
+            wave_shape=(4, 2),
+        )
+        schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
 
     # Override to ASM backend for C++ compilation path
     options.backend = "asm"
@@ -1436,19 +1456,15 @@ def _dbuf_mxfp4_helper(
 
 
 @pytest.mark.xfail(
-    reason="C++ backend linear scan register allocator exceeds VGPR limit "
-    "(~898 VGPRs needed vs 256 limit) for the full MXFP4 double-buffered "
-    "kernel with 64 accumulator iter_args + 8 memref iter_args",
-    strict=True,
+    reason="Asymmetric schedule with wave_shape=(1,4) requires ~330 VGPRs, "
+    "exceeding the 256 hardware encoding limit. Needs LDS spilling or "
+    "liveness tied-value coalescing to fit.",
 )
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
-    """End-to-end test for double-buffered MXFP4 GEMM with 4 waves.
+    """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
-    Mirrors: test_dbuf_4wave_mxfp_gemm from examples/python/7.1_schedule.py
-
-    4-wave configuration (2 M-tiles x 2 N-tiles), no stagger.
-    Uses tagged kernel template + double-buffer schedule with 2-stage
-    pipeline and K-dimension partitioning for memory/compute interleaving.
+    Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4) and
+    B direct from global (no LDS). Currently xfail due to VGPR pressure.
     """
     _dbuf_mxfp4_helper(
         shape=(1024, 1024, 8192),
@@ -1461,11 +1477,10 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
     )
 
 
-@pytest.mark.xfail(
-    reason="C++ backend register allocator needs ~260 VGPRs for 8-wave MXFP4 "
-    "double-buffered kernel (exceeds 256 limit). Needs AccVGPR support to "
-    "move accumulator VGPRs off the regular VGPR budget.",
-    strict=True,
+@pytest.mark.skip(
+    reason="C++ backend allocates 264 VGPRs for 8-wave MXFP4, exceeding the "
+    "256 VGPR hardware limit. Running this test causes a fatal "
+    "HSA_STATUS_ERROR_INVALID_ISA abort that kills the entire test process.",
 )
 def test_dbuf_8wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
     """End-to-end test for double-buffered MXFP4 GEMM with 8 waves.

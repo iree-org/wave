@@ -78,3 +78,33 @@ waveasm.program @overlapping_ranges target = #waveasm.target<#waveasm.gfx942, 5>
 
   waveasm.s_endpgm
 }
+
+// Test 6: Loop result allocation - result should get physical register via tying
+// CHECK-LABEL: waveasm.program @loop_result_alloc
+waveasm.program @loop_result_alloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c1 = waveasm.constant 1 : !waveasm.imm<1>
+  %c10 = waveasm.constant 10 : !waveasm.imm<10>
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+
+  %init_i = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+  // CHECK: waveasm.v_mov_b32 {{.*}} -> !waveasm.pvreg<[[LR:[0-9]+]]>
+  %init_sum = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
+
+  // Loop result should be allocated to a physical register
+  // CHECK: waveasm.loop
+  %i_out, %sum_out = waveasm.loop(%i = %init_i, %sum = %init_sum)
+      : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+    // CHECK: waveasm.v_add_u32 {{.*}} -> !waveasm.pvreg<[[LR]]>
+    %new_sum = waveasm.v_add_u32 %sum, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %new_sum) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  // Post-loop use: loop result should have same physical register as init/body
+  // CHECK: waveasm.v_add_u32 {{.*}}!waveasm.pvreg<[[LR]]>{{.*}} -> !waveasm.pvreg<
+  %final = waveasm.v_add_u32 %sum_out, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}

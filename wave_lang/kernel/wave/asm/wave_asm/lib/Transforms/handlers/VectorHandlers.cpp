@@ -219,6 +219,21 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
     auto elemReg =
         PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, size);
     ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
+  } else if (auto pareg = dyn_cast<PARegType>(srcType)) {
+    // Physical AGPR - extract element(s) at offset
+    int64_t baseIdx = pareg.getIndex() + offset;
+    auto elemType = PARegType::get(builder.getContext(), baseIdx, size);
+    auto elemReg =
+        PrecoloredARegOp::create(builder, loc, elemType, baseIdx, size);
+    ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
+  } else if (isAGPRType(srcType)) {
+    // Virtual AGPR - use waveasm.extract op with AGPR result type.
+    // Preserving the AGPR type is critical: downstream vector.store handlers
+    // check isAGPRType to insert v_accvgpr_read_b32 before MUBUF stores.
+    auto elemType = ctx.createARegType(size, 1);
+    auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
+                                           builder.getI64IntegerAttr(offset));
+    ctx.getMapper().mapValue(extractOp.getResult(), extractWaveOp.getResult());
   } else {
     // Virtual VGPR or other type - use waveasm.extract op
     // This will be lowered to proper register offset during register allocation

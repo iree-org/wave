@@ -198,6 +198,8 @@ class WaveASMCompiler:
             "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-linear-scan",  # Run register allocation
+            "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
+            "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
             "--waveasm-insert-waitcnt",  # Insert wait instructions
             "--waveasm-hazard-mitigation",  # Handle hazards
             "--emit-assembly",  # Emit AMDGCN assembly

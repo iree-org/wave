@@ -577,6 +577,210 @@ struct MFMAZeroAccumPattern : public RewritePattern {
 };
 
 //===----------------------------------------------------------------------===//
+// Pattern: Fold v_mov_b32 of constant into v_add_u32
+//
+// Transforms:
+//   %tmp = v_mov_b32 %const  (where %const is a ConstantOp)
+//   %dst = v_add_u32 %tmp, %x
+// Into:
+//   %dst = v_add_u32 %const, %x
+//
+// On GFX9, v_add_u32 (VOP2) supports a 32-bit literal constant as src0.
+// This eliminates the v_mov_b32 instruction and frees its VGPR output,
+// reducing both instruction count and register pressure.
+//===----------------------------------------------------------------------===//
+
+struct FoldMovConstIntoAddPattern : public OpRewritePattern<V_ADD_U32> {
+  using OpRewritePattern<V_ADD_U32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_ADD_U32 addOp,
+                                PatternRewriter &rewriter) const override {
+    // Check if either operand is a v_mov_b32 of a constant
+    auto tryFold = [&](Value movVal, Value other) -> LogicalResult {
+      auto movOp = movVal.getDefiningOp<V_MOV_B32>();
+      if (!movOp)
+        return failure();
+
+      // The mov source must be a ConstantOp (immediate)
+      auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>();
+      if (!constOp)
+        return failure();
+
+      // Only fold if the mov result is used only by this add.
+      // If other users exist, the mov is still needed.
+      if (!movOp.getResult().hasOneUse())
+        return failure();
+
+      // Replace: v_add_u32(v_mov_b32(CONST), X) -> v_add_u32(CONST, X)
+      auto loc = addOp.getLoc();
+      auto resultType = addOp.getResult().getType();
+      auto newAdd =
+          V_ADD_U32::create(rewriter, loc, resultType, movOp.getSrc(), other);
+      rewriter.replaceOp(addOp, newAdd.getResult());
+      return success();
+    };
+
+    // Try both operand orderings (V_ADD_U32 is commutative)
+    if (succeeded(tryFold(addOp.getSrc0(), addOp.getSrc1())))
+      return success();
+    if (succeeded(tryFold(addOp.getSrc1(), addOp.getSrc0())))
+      return success();
+
+    return failure();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: Fold v_mov_b32 of constant into v_sub_u32
+//
+// Transforms:
+//   %tmp = v_mov_b32 %const
+//   %dst = v_sub_u32 %x, %tmp     (x - const)
+// Into:
+//   %dst = v_sub_u32 %x, %const
+//===----------------------------------------------------------------------===//
+
+struct FoldMovConstIntoSubPattern : public OpRewritePattern<V_SUB_U32> {
+  using OpRewritePattern<V_SUB_U32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_SUB_U32 subOp,
+                                PatternRewriter &rewriter) const override {
+    // Check each operand for a v_mov_b32 of a constant
+    auto tryFoldSrc0 = [&]() -> LogicalResult {
+      auto movOp = subOp.getSrc0().getDefiningOp<V_MOV_B32>();
+      if (!movOp || !movOp.getSrc().getDefiningOp<ConstantOp>())
+        return failure();
+      if (!movOp.getResult().hasOneUse())
+        return failure();
+      auto loc = subOp.getLoc();
+      auto resultType = subOp.getResult().getType();
+      auto newSub = V_SUB_U32::create(rewriter, loc, resultType, movOp.getSrc(),
+                                      subOp.getSrc1());
+      rewriter.replaceOp(subOp, newSub.getResult());
+      return success();
+    };
+
+    auto tryFoldSrc1 = [&]() -> LogicalResult {
+      auto movOp = subOp.getSrc1().getDefiningOp<V_MOV_B32>();
+      if (!movOp || !movOp.getSrc().getDefiningOp<ConstantOp>())
+        return failure();
+      if (!movOp.getResult().hasOneUse())
+        return failure();
+      auto loc = subOp.getLoc();
+      auto resultType = subOp.getResult().getType();
+      auto newSub = V_SUB_U32::create(rewriter, loc, resultType,
+                                      subOp.getSrc0(), movOp.getSrc());
+      rewriter.replaceOp(subOp, newSub.getResult());
+      return success();
+    };
+
+    if (succeeded(tryFoldSrc0()))
+      return success();
+    if (succeeded(tryFoldSrc1()))
+      return success();
+
+    return failure();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: Fold v_mov_b32 of constant into v_lshlrev_b32
+//
+// Transforms:
+//   %tmp = v_mov_b32 %const
+//   %dst = v_lshlrev_b32 %tmp, %x    (x << const)
+// Into:
+//   %dst = v_lshlrev_b32 %const, %x
+//===----------------------------------------------------------------------===//
+
+struct FoldMovConstIntoLshlPattern : public OpRewritePattern<V_LSHLREV_B32> {
+  using OpRewritePattern<V_LSHLREV_B32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_LSHLREV_B32 lshlOp,
+                                PatternRewriter &rewriter) const override {
+    // src0 is the shift amount - check if it's a v_mov_b32 of a constant
+    auto movOp = lshlOp.getSrc0().getDefiningOp<V_MOV_B32>();
+    if (!movOp)
+      return failure();
+    auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>();
+    if (!constOp)
+      return failure();
+    if (!movOp.getResult().hasOneUse())
+      return failure();
+
+    auto loc = lshlOp.getLoc();
+    auto resultType = lshlOp.getResult().getType();
+    auto newLshl = V_LSHLREV_B32::create(rewriter, loc, resultType,
+                                         movOp.getSrc(), lshlOp.getSrc1());
+    rewriter.replaceOp(lshlOp, newLshl.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: Fold v_mov_b32 of constant into v_lshrrev_b32
+//===----------------------------------------------------------------------===//
+
+struct FoldMovConstIntoLshrPattern : public OpRewritePattern<V_LSHRREV_B32> {
+  using OpRewritePattern<V_LSHRREV_B32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_LSHRREV_B32 lshrOp,
+                                PatternRewriter &rewriter) const override {
+    auto movOp = lshrOp.getSrc0().getDefiningOp<V_MOV_B32>();
+    if (!movOp)
+      return failure();
+    auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>();
+    if (!constOp)
+      return failure();
+    if (!movOp.getResult().hasOneUse())
+      return failure();
+
+    auto loc = lshrOp.getLoc();
+    auto resultType = lshrOp.getResult().getType();
+    auto newLshr = V_LSHRREV_B32::create(rewriter, loc, resultType,
+                                         movOp.getSrc(), lshrOp.getSrc1());
+    rewriter.replaceOp(lshrOp, newLshr.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pattern: Fold v_mov_b32 of constant into v_and_b32
+//===----------------------------------------------------------------------===//
+
+struct FoldMovConstIntoAndPattern : public OpRewritePattern<V_AND_B32> {
+  using OpRewritePattern<V_AND_B32>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(V_AND_B32 andOp,
+                                PatternRewriter &rewriter) const override {
+    auto tryFold = [&](Value movVal, Value other) -> LogicalResult {
+      auto movOp = movVal.getDefiningOp<V_MOV_B32>();
+      if (!movOp)
+        return failure();
+      auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>();
+      if (!constOp)
+        return failure();
+      if (!movOp.getResult().hasOneUse())
+        return failure();
+
+      auto loc = andOp.getLoc();
+      auto resultType = andOp.getResult().getType();
+      auto newAnd =
+          V_AND_B32::create(rewriter, loc, resultType, movOp.getSrc(), other);
+      rewriter.replaceOp(andOp, newAnd.getResult());
+      return success();
+    };
+
+    if (succeeded(tryFold(andOp.getSrc0(), andOp.getSrc1())))
+      return success();
+    if (succeeded(tryFold(andOp.getSrc1(), andOp.getSrc0())))
+      return success();
+
+    return failure();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Peephole Optimization Pass
 //===----------------------------------------------------------------------===//
 
@@ -603,6 +807,11 @@ struct PeepholePass
         // clang-format off
         AddNegToSubPattern,
         AddZeroPattern,
+        FoldMovConstIntoAddPattern,
+        FoldMovConstIntoAndPattern,
+        FoldMovConstIntoLshlPattern,
+        FoldMovConstIntoLshrPattern,
+        FoldMovConstIntoSubPattern,
         LshlAddPattern,
         LshlOrFusePattern,
         MFMAZeroAccumPattern,
@@ -620,6 +829,37 @@ struct PeepholePass
       signalPassFailure();
       return;
     }
+
+    // After pattern-based optimizations, eliminate redundant M0 writes.
+    // Track the last M0 source value and skip writes that set M0 to the
+    // same value. This requires sequential analysis, not a rewrite pattern.
+    module.walk([](ProgramOp program) {
+      program.walk([](Block *block) {
+        Value lastM0Source;
+        SmallVector<Operation *, 8> toErase;
+
+        for (Operation &op : *block) {
+          auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
+          if (!m0Op)
+            continue;
+
+          if (m0Op->getNumOperands() < 1)
+            continue;
+
+          Value src = m0Op->getOperand(0);
+
+          // If M0 already holds this value, the write is redundant
+          if (src == lastM0Source) {
+            toErase.push_back(m0Op);
+          } else {
+            lastM0Source = src;
+          }
+        }
+
+        for (auto *op : toErase)
+          op->erase();
+      });
+    });
   }
 };
 

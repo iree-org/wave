@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Transforms/RegionBuilder.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "waveasm/Dialect/WaveASMOps.h"
@@ -48,6 +49,29 @@ static Value resolveLDSOffset(Value memref, TranslationContext &ctx,
   return nullptr;
 }
 
+/// Check if an scf.for region iter arg is used exclusively as a scaled MFMA
+/// accumulator (destC operand). Used to decide whether the init arg
+/// should be an AGPR on gfx950+ targets.
+///
+/// Only matches ScaledMFMAOp -- regular MFMAOp uses VGPR accumulators in
+/// the C++ backend, so AGPR init would cause a type mismatch.
+static bool isAccumulatorIterArg(scf::ForOp forOp, unsigned iterArgIdx) {
+  auto regionIterArgs = forOp.getRegionIterArgs();
+  if (iterArgIdx >= regionIterArgs.size())
+    return false;
+  Value regionArg = regionIterArgs[iterArgIdx];
+
+  for (OpOperand &use : regionArg.getUses()) {
+    Operation *user = use.getOwner();
+    // Only scaled MFMA uses AGPR accumulators in this backend
+    if (!isa<amdgpu::ScaledMFMAOp>(user))
+      return false;
+    if (use.getOperandNumber() != 2)
+      return false;
+  }
+  return !regionArg.use_empty();
+}
+
 // Forward declaration
 LogicalResult translateOperation(Operation *op, TranslationContext &ctx);
 
@@ -82,7 +106,7 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
   // to block arguments and to handle yield correctly.
   SmallVector<bool> isMemrefIterArg;
 
-  for (Value arg : forOp.getInitArgs()) {
+  for (auto [iterIdx, arg] : llvm::enumerate(forOp.getInitArgs())) {
     bool isLDSMemref = isLDSMemRefValue(arg);
     isMemrefIterArg.push_back(isLDSMemref);
 
@@ -98,18 +122,30 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
       initArgs.push_back(offsetSgpr);
     } else if (auto mapped = ctx.getMapper().getMapped(arg)) {
       Value mappedValue = *mapped;
-      // Convert immediate iter args to vregs (they'll be used in VALU ops)
+      // Convert immediate iter args to register types
       if (isa<ImmType>(mappedValue.getType())) {
-        // Infer vreg size from the original SCF type.
+        // Infer register size from the original SCF type.
         // For vector types (e.g. vector<4xf32> for MFMA accumulators),
-        // we need a vreg with matching element count and alignment.
-        int64_t vregSize = 1;
+        // we need a register with matching element count and alignment.
+        int64_t regSize = 1;
         if (auto vecType = dyn_cast<VectorType>(arg.getType())) {
-          vregSize = vecType.getNumElements();
+          regSize = vecType.getNumElements();
         }
-        int64_t vregAlign = vregSize > 1 ? vregSize : 1;
-        auto vregType = ctx.createVRegType(vregSize, vregAlign);
-        mappedValue = V_MOV_B32::create(builder, loc, vregType, mappedValue);
+        int64_t regAlign = regSize > 1 ? regSize : 1;
+
+        // On gfx950, use AGPRs for MFMA accumulator iter_args.
+        // This keeps accumulators in the upper half of the unified register
+        // file (a0, a1, ...) so that VGPR indices stay within the 256
+        // hardware limit. Without AGPRs, large tiles would need v256+ which
+        // the assembler rejects.
+        bool useAGPR = llvm::isa<GFX950TargetAttr>(ctx.getTarget());
+        if (useAGPR && isAccumulatorIterArg(forOp, iterIdx)) {
+          auto aregType = ctx.createARegType(regSize, regAlign);
+          mappedValue = V_MOV_B32::create(builder, loc, aregType, mappedValue);
+        } else {
+          auto vregType = ctx.createVRegType(regSize, regAlign);
+          mappedValue = V_MOV_B32::create(builder, loc, vregType, mappedValue);
+        }
       }
       initArgs.push_back(mappedValue);
     } else {

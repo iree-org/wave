@@ -252,6 +252,9 @@ public:
   /// Create a virtual SGPR type
   SRegType createSRegType(int64_t size = 1, int64_t alignment = 1);
 
+  /// Create a virtual AGPR type
+  ARegType createARegType(int64_t size = 1, int64_t alignment = 1);
+
   /// Create an immediate type with a value
   ImmType createImmType(int64_t value);
 

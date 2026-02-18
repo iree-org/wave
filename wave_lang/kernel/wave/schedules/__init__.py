@@ -24,6 +24,6 @@ __all__ = [
     "get_two_pp_cluster_schedule",
     "get_async_two_pp_clusters",
     "get_mxfp4_dbuf_schedule",
-    "get_attention_prefetch_schedule",
     "get_mxfp4_asymmetric_schedule",
+    "get_attention_prefetch_schedule",
 ]

@@ -101,11 +101,37 @@ LivenessInfo computeLiveness(ProgramOp program) {
   for (int64_t idx = 0; idx < static_cast<int64_t>(ops.size()); ++idx) {
     Operation *op = ops[idx];
 
-    // Process defs: results are definitions
-    for (Value def : op->getResults()) {
-      if (isVirtualRegType(def.getType())) {
-        if (!info.defPoints.contains(def)) {
-          info.defPoints[def] = idx;
+    // Process defs: results are definitions.
+    // For LoopOp results, the def point should be AFTER the loop body,
+    // not at the LoopOp itself. Loop results are only available after
+    // the loop exits, so their live ranges should not overlap with the
+    // loop body. Using the LoopOp index would inflate register pressure
+    // by keeping these results "live" throughout the entire loop.
+    if (isa<LoopOp>(op)) {
+      // Find the next sibling op after this LoopOp in the parent block.
+      // If there is no next sibling (loop is block-terminating), use idx + 1
+      // as a synthetic "after loop" point so loop results still get def points.
+      int64_t loopResultDefPoint = idx + 1;
+      Operation *nextOp = op->getNextNode();
+      if (nextOp) {
+        auto nextIt = opToIdx.find(nextOp);
+        if (nextIt != opToIdx.end()) {
+          loopResultDefPoint = nextIt->second;
+        }
+      }
+      for (Value def : op->getResults()) {
+        if (isVirtualRegType(def.getType())) {
+          if (!info.defPoints.contains(def)) {
+            info.defPoints[def] = loopResultDefPoint;
+          }
+        }
+      }
+    } else {
+      for (Value def : op->getResults()) {
+        if (isVirtualRegType(def.getType())) {
+          if (!info.defPoints.contains(def)) {
+            info.defPoints[def] = idx;
+          }
         }
       }
     }
@@ -197,6 +223,10 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // Pass 2b: Extend live ranges for values used inside loop bodies.
   // Any value used inside a loop body is used on EVERY iteration, so its
   // live range must extend from its definition to the end of the loop body.
+  // We cannot shorten this to just the last use point because the linear
+  // scan allocator processes the loop body only once -- if we freed the
+  // register after the use point, a later op could take it, but the next
+  // iteration would still read from the original register.
   for (const auto &[value, defPoint] : info.defPoints) {
     auto it = info.ranges.find(value);
     if (it == info.ranges.end())
@@ -272,6 +302,8 @@ LivenessInfo computeLiveness(ProgramOp program) {
       info.vregRanges.push_back(range);
     } else if (range.regClass == RegClass::SGPR) {
       info.sregRanges.push_back(range);
+    } else if (range.regClass == RegClass::AGPR) {
+      info.aregRanges.push_back(range);
     }
   }
 
@@ -284,10 +316,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
 
   llvm::sort(info.vregRanges, sortByStart);
   llvm::sort(info.sregRanges, sortByStart);
+  llvm::sort(info.aregRanges, sortByStart);
 
   // Pass 5: Compute pressure
   info.maxVRegPressure = computeMaxPressure(info.vregRanges);
   info.maxSRegPressure = computeMaxPressure(info.sregRanges);
+  info.maxARegPressure = computeMaxPressure(info.aregRanges);
 
   return info;
 }

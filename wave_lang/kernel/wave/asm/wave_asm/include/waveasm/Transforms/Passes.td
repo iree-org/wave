@@ -134,7 +134,9 @@ def WAVEASMLinearScan : Pass<"waveasm-linear-scan"> {
     Option<"maxVGPRs", "max-vgprs", "int64_t", "256",
            "Maximum VGPRs available">,
     Option<"maxSGPRs", "max-sgprs", "int64_t", "104",
-           "Maximum SGPRs available">
+           "Maximum SGPRs available">,
+    Option<"maxAGPRs", "max-agprs", "int64_t", "256",
+           "Maximum AGPRs available">
   ];
 
   let statistics = [

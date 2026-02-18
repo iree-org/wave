@@ -114,6 +114,34 @@ def WaveASM_SRegType : WAVEASMType<"SReg", "sreg"> {
   }];
 }
 
+def WaveASM_ARegType : WAVEASMType<"AReg", "areg"> {
+  let summary = "Virtual AGPR";
+  let description = [{
+    Represents a virtual accumulator register that will be assigned to a
+    physical AGPR during register allocation.
+
+    Parameters:
+    - size: Number of consecutive registers
+    - alignment: Required physical alignment (default = size)
+  }];
+
+  let parameters = (ins
+    DefaultValuedParameter<"int64_t", "1">:$size,
+    DefaultValuedParameter<"int64_t", "1">:$alignment
+  );
+
+  let assemblyFormat = "(`<` $size^ (`,` $alignment^)? `>`)?";
+
+  let builders = [
+    TypeBuilder<(ins), [{
+      return $_get($_ctxt, 1, 1);
+    }]>,
+    TypeBuilder<(ins "int64_t":$size), [{
+      return $_get($_ctxt, size, size);
+    }]>
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // Physical Register Types (Post-Allocation / Precolored)
 //===----------------------------------------------------------------------===//
@@ -182,6 +210,25 @@ def WaveASM_PSRegType : WAVEASMType<"PSReg", "psreg"> {
   }];
 }
 
+def WaveASM_PARegType : WAVEASMType<"PAReg", "pareg"> {
+  let summary = "Physical AGPR";
+  let description = [{
+    Represents a physical accumulator register at a specific hardware index.
+    Used after register allocation and for precolored AGPR values.
+  }];
+
+  let parameters = (ins
+    "int64_t":$index,
+    DefaultValuedParameter<"int64_t", "1">:$size
+  );
+
+  let assemblyFormat = "`<` $index (`,` $size^)? `>`";
+
+  let extraClassDeclaration = [{
+    int64_t getEndIndex() const { return getIndex() + getSize(); }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Immediate Value Type
 //===----------------------------------------------------------------------===//
@@ -228,22 +275,28 @@ def WaveASM_ImmType : WAVEASMType<"Imm", "imm"> {
 def WaveASM_AnyVReg : AnyTypeOf<[WaveASM_VRegType], "virtual VGPR">;
 def WaveASM_AnySReg : AnyTypeOf<[WaveASM_SRegType], "virtual SGPR">;
 def WaveASM_AnyVirtualReg : AnyTypeOf<[WaveASM_VRegType, WaveASM_SRegType], "virtual register">;
+def WaveASM_AnyAReg : AnyTypeOf<[WaveASM_ARegType], "virtual AGPR">;
+def WaveASM_AnyVirtualVecReg : AnyTypeOf<[WaveASM_VRegType, WaveASM_ARegType], "virtual vector register">;
 
 // Any physical register
 def WaveASM_AnyPVReg : AnyTypeOf<[WaveASM_PVRegType], "physical VGPR">;
 def WaveASM_AnyPSReg : AnyTypeOf<[WaveASM_PSRegType], "physical SGPR">;
-def WaveASM_AnyPhysicalReg : AnyTypeOf<[WaveASM_PVRegType, WaveASM_PSRegType], "physical register">;
+def WaveASM_AnyPAReg : AnyTypeOf<[WaveASM_PARegType], "physical AGPR">;
+def WaveASM_AnyPhysicalReg : AnyTypeOf<[WaveASM_PVRegType, WaveASM_PSRegType, WaveASM_PARegType], "physical register">;
+def WaveASM_AnyPhysicalVecReg : AnyTypeOf<[WaveASM_PVRegType, WaveASM_PARegType], "physical vector register">;
 
 // Any VGPR (virtual or physical)
 def WaveASM_AnyVGPR : AnyTypeOf<[WaveASM_VRegType, WaveASM_PVRegType], "any VGPR">;
+def WaveASM_AnyAGPR : AnyTypeOf<[WaveASM_ARegType, WaveASM_PARegType], "any AGPR">;
+def WaveASM_AnyVecReg : AnyTypeOf<[WaveASM_VRegType, WaveASM_ARegType, WaveASM_PVRegType, WaveASM_PARegType], "any vector register">;
 
 // Any SGPR (virtual or physical)
 def WaveASM_AnySGPR : AnyTypeOf<[WaveASM_SRegType, WaveASM_PSRegType], "any SGPR">;
 
 // Any register
 def WaveASM_AnyReg : AnyTypeOf<[
-  WaveASM_VRegType, WaveASM_SRegType,
-  WaveASM_PVRegType, WaveASM_PSRegType
+  WaveASM_VRegType, WaveASM_SRegType, WaveASM_ARegType,
+  WaveASM_PVRegType, WaveASM_PSRegType, WaveASM_PARegType
 ], "any register">;
 
 // Immediate
@@ -264,10 +317,17 @@ def WaveASM_VALUSrc : AnyTypeOf<[
   WaveASM_ImmType
 ], "VALU source operand">;
 
+// MFMA accumulator source: VGPR/AGPR or immediate
+def WaveASM_MFMAAccSrc : AnyTypeOf<[
+  WaveASM_VRegType, WaveASM_ARegType,
+  WaveASM_PVRegType, WaveASM_PARegType,
+  WaveASM_ImmType
+], "MFMA accumulator source">;
+
 // Any operand (register or immediate)
 def WaveASM_AnyOperand : AnyTypeOf<[
-  WaveASM_VRegType, WaveASM_SRegType,
-  WaveASM_PVRegType, WaveASM_PSRegType,
+  WaveASM_VRegType, WaveASM_SRegType, WaveASM_ARegType,
+  WaveASM_PVRegType, WaveASM_PSRegType, WaveASM_PARegType,
   WaveASM_ImmType
 ], "any operand">;
 

@@ -27,8 +27,10 @@ namespace waveasm {
 struct AllocationStats {
   int64_t peakVGPRs = 0;
   int64_t peakSGPRs = 0;
+  int64_t peakAGPRs = 0;
   int64_t totalVRegs = 0;
   int64_t totalSRegs = 0;
+  int64_t totalARegs = 0;
   int64_t rangesAllocated = 0;
   int64_t rangesExpired = 0;
 };
@@ -194,11 +196,13 @@ private:
 /// Linear scan register allocator for pure SSA IR
 class LinearScanRegAlloc {
 public:
-  LinearScanRegAlloc(int64_t maxVGPRs, int64_t maxSGPRs,
+  LinearScanRegAlloc(int64_t maxVGPRs, int64_t maxSGPRs, int64_t maxAGPRs,
                      const llvm::DenseSet<int64_t> &reservedVGPRs,
-                     const llvm::DenseSet<int64_t> &reservedSGPRs)
-      : maxVGPRs(maxVGPRs), maxSGPRs(maxSGPRs), reservedVGPRs(reservedVGPRs),
-        reservedSGPRs(reservedSGPRs) {}
+                     const llvm::DenseSet<int64_t> &reservedSGPRs,
+                     const llvm::DenseSet<int64_t> &reservedAGPRs)
+      : maxVGPRs(maxVGPRs), maxSGPRs(maxSGPRs), maxAGPRs(maxAGPRs),
+        reservedVGPRs(reservedVGPRs), reservedSGPRs(reservedSGPRs),
+        reservedAGPRs(reservedAGPRs) {}
 
   /// Precolor a Value to a specific physical register (for ABI args)
   void precolorValue(mlir::Value value, int64_t physIdx) {
@@ -226,8 +230,10 @@ private:
 
   int64_t maxVGPRs;
   int64_t maxSGPRs;
+  int64_t maxAGPRs;
   llvm::DenseSet<int64_t> reservedVGPRs;
   llvm::DenseSet<int64_t> reservedSGPRs;
+  llvm::DenseSet<int64_t> reservedAGPRs;
   llvm::DenseMap<mlir::Value, int64_t> precoloredValues;
   llvm::DenseMap<mlir::Value, mlir::Value> tiedOperands; // result -> operand
 };

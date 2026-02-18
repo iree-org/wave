@@ -111,14 +111,16 @@ llvm::SmallVector<std::string> MetadataEmitter::emitPrologue() {
 
 llvm::SmallVector<std::string> MetadataEmitter::emitEpilogue(int64_t peakVGPRs,
                                                              int64_t peakSGPRs,
+                                                             int64_t peakAGPRs,
                                                              int64_t ldsSize) {
   llvm::SmallVector<std::string> lines;
 
-  auto descriptor = emitKernelDescriptor(peakVGPRs, peakSGPRs, ldsSize);
+  auto descriptor =
+      emitKernelDescriptor(peakVGPRs, peakSGPRs, peakAGPRs, ldsSize);
   lines.append(descriptor.begin(), descriptor.end());
   lines.push_back("");
 
-  auto metadata = emitMetadataYAML(peakVGPRs, peakSGPRs, ldsSize);
+  auto metadata = emitMetadataYAML(peakVGPRs, peakSGPRs, peakAGPRs, ldsSize);
   lines.append(metadata.begin(), metadata.end());
 
   return lines;
@@ -171,7 +173,7 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
 
 llvm::SmallVector<std::string>
 MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
-                                      int64_t ldsSize) {
+                                      int64_t peakAGPRs, int64_t ldsSize) {
   llvm::SmallVector<std::string> lines;
   std::string symName = program.getSymName().str();
 
@@ -230,6 +232,8 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   }
   int64_t nextFreeVGPR =
       ((peakVGPRs + vgprGranularity - 1) / vgprGranularity) * vgprGranularity;
+  int64_t nextFreeAGPR =
+      ((peakAGPRs + vgprGranularity - 1) / vgprGranularity) * vgprGranularity;
 
   int64_t sgprGranularity = 8;
   int64_t nextFreeSGPR =
@@ -240,7 +244,13 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
 
   if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
     int64_t accumOffset = std::max(int64_t(4), ((nextFreeVGPR + 3) / 4) * 4);
+    accumOffset = std::min(accumOffset, int64_t(256));
     lines.push_back("  .amdhsa_accum_offset " + std::to_string(accumOffset));
+    if (nextFreeAGPR > 0) {
+      // On CDNA targets AGPRs share the unified file after accum_offset.
+      // next_free_vgpr encodes unified usage when AGPRs are present.
+      nextFreeVGPR = accumOffset + nextFreeAGPR;
+    }
   }
 
   lines.push_back("  .amdhsa_next_free_vgpr " + std::to_string(nextFreeVGPR));
@@ -282,7 +292,7 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
 
 llvm::SmallVector<std::string>
 MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
-                                  int64_t ldsSize) {
+                                  int64_t peakAGPRs, int64_t ldsSize) {
   llvm::SmallVector<std::string> lines;
   std::string symName = program.getSymName().str();
 
@@ -324,6 +334,8 @@ MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
   lines.push_back("    .wavefront_size: " + std::to_string(waveSizeVal));
   lines.push_back("    .sgpr_count: " + std::to_string(peakSGPRs));
   lines.push_back("    .vgpr_count: " + std::to_string(peakVGPRs));
+  if (peakAGPRs > 0)
+    lines.push_back("    .agpr_count: " + std::to_string(peakAGPRs));
 
   auto workgroupSize = program.getWorkgroupSize();
   int64_t maxFlatSize = 256;
