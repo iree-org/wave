@@ -433,6 +433,54 @@ def mlir_converter_self_index():
     # CHECK: wave.write %[[SELF_INDEX]]
 
 
+# CHECK-LABEL: mlir_converter_select
+@run_test
+def mlir_converter_select():
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M}),
+    ]
+
+    @wave.wave(constraints)
+    def select(
+        a: Memory[M, ADDRESS_SPACE_A, tkl.f32],
+        b: Memory[M, ADDRESS_SPACE_A, tkl.f32],
+        c: Memory[M, ADDRESS_SPACE_A, tkl.bool],
+        d: Memory[M, ADDRESS_SPACE_A, tkl.f32],
+    ):
+        a_reg = wave.read(a)
+        b_reg = wave.read(b)
+        c_reg = wave.read(c)
+        res = wave.select(c_reg, a_reg, b_reg)
+        wave.write(res, d)
+
+    options = WaveCompileOptions(
+        subs={M: 128, BLOCK_M: 64},
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, select)
+    trace = compiled_kernel.get_compiled_graph()
+    constraints = select.constraints
+
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    if diagnostics:
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+    print(mlir_output)
+
+    # CHECK: %[[READ_A:.*]] = wave.read
+    # CHECK: %[[READ_B:.*]] = wave.read
+    # CHECK: %[[READ_C:.*]] = wave.read
+    # CHECK: %[[SELECT:.*]] = wave.select %[[READ_C]], %[[READ_A]], %[[READ_B]]
+    # CHECK: wave.write %[[SELECT]]
+
+
 @run_test
 def multi_result_handling():
     constraints = [

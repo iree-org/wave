@@ -123,6 +123,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelectOp,
         SelfIndexOp,
         ShuffleOp,
         SumOp,
