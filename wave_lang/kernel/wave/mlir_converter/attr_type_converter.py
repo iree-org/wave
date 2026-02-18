@@ -145,6 +145,8 @@ def get_operand_symbol_placeholders(
 
 def preprocess_symbols(
     symbols: Sequence[sympy.Symbol],
+    *,
+    for_mapping: bool = False,
 ) -> dict[sympy.Symbol, sympy.Symbol]:
     """
     Preprocess symbols by:
@@ -164,12 +166,15 @@ def preprocess_symbols(
                 ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
             )
             result[sym] = sympy.Symbol(new_name, positive=True)
-        elif sym.name.startswith(OPERAND_SYMBOL_NAME_WAVE_PREFIX):
+        elif not for_mapping and sym.name.startswith(OPERAND_SYMBOL_NAME_WAVE_PREFIX):
             new_name = sym.name.replace(
                 OPERAND_SYMBOL_NAME_WAVE_PREFIX, OPERAND_SYMBOL_NAME_WATER_PREFIX
             )
             # Intentionally not marking as positive.
             result[sym] = sympy.Symbol(new_name)
+        elif for_mapping and sym.name.startswith("$index"):
+            new_name = sym.name.replace("$index", OPERAND_SYMBOL_NAME_WATER_PREFIX)
+            result[sym] = sympy.Symbol(new_name, positive=True)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
     return result

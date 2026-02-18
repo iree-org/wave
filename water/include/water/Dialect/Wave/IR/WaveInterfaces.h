@@ -71,12 +71,16 @@ llvm::FailureOr<mlir::ChangeResult>
 propagateShapeInformation(wave::WaveTensorType from, wave::WaveTensorType &to,
                           llvm::StringRef fromName, llvm::StringRef toName,
                           llvm::raw_ostream &errs);
+llvm::FailureOr<mlir::ChangeResult>
+propagateShapeInformation(llvm::ArrayRef<wave::WaveSymbolAttr> from,
+                          wave::WaveTensorType &to, llvm::StringRef fromName,
+                          llvm::StringRef toName, llvm::raw_ostream &errs);
 
 // Propagate shape information from `source` to `target` and drop the `n`
 // `source` dims. Expects both to be fully-specified tensor types. If
 // propagation discovers a type conflict, prints the error message to the
-// `errs` stream and returns failure. Otherwise returns a tag indicating whether
-// the target type changed.
+// `errs` stream and returns failure. Otherwise returns a tag indicating
+// whether the target type changed.
 llvm::FailureOr<mlir::ChangeResult> propagateShapeDropTrailingDims(
     wave::WaveTensorType source, wave::WaveTensorType &target,
     llvm::StringRef sourceName, llvm::StringRef targetName, unsigned n,
