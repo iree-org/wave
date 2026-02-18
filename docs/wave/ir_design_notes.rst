@@ -87,3 +87,38 @@ node directly.  The MLIR side does not have this problem: `makeIsolated`
 walks the region and discovers all outer references regardless of how they
 are represented.  As a result, the MLIR-imported trace may list more
 captures than the source trace.
+
+
+IndexMapping
+------------
+
+The `mapping` attribute on read and write operations on the Python side allows
+for separate mappings for "inputs" (memory operand for reads, value operand for
+writes) and "outputs" (value operand for reads, memory operand for writes). Each
+of this is a dictionary from symbol names used to index the corresponding tensor
+to a full-fledged sympy expression that may involve, in addition to the usual
+symbols, special placeholder `iterator` symbols that refer to
+positionally-indexed iterators of the notional iteration space that surrounds
+the op. The order of elements in the dictionary is load-bearing, though its
+exact meaning is not properly documented. It does not necessarily match the
+order of symbols in the shape. None of this has verification logic and
+unsupported cases just hit assertions or other exceptions inside the compilation
+flow.
+
+The simultaneous presence of both "inputs" and "outputs" mapping means that one
+of them may be kept as identity, i.e., the symbols are mapped to positional
+iterators where the position matches the position of the symbol in the
+corresponding shape. For reads, this is the "outputs" mapping and, for writes,
+this is the "inputs" mapping. There is currently no enforcement that it is
+indeed the case, only a verbalized implicit assumption. This redundancy allows
+one to (almost always) map every symbol to a single positional iterator. When a
+more complex expression is used, additional logic attempts to extract the single
+iterator that is used in it. This in turn allows to compute a permutation of
+dimensions during _code generation_ of reads and writes: index expressions that
+appear in a specific order are mapped to positional iterations with the same
+position. Then this mapping is used to update the mapping from the memory shape
+dimensions to co-indexed iterators, potentially resulting in a permuted index
+expression list. For example, given a memory shape `[A, B, C, D]` and a mapping
+`{A: i0, B: i3, C: i2, D: i1}` first creates a map `{i0: index[A], i1: index[B],
+i2: index[C], i3: index[D]}` and then obtains the permuted index map
+`{A: index[A], B: index[D], C: index[C], D: index[B]}`.

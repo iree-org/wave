@@ -8,6 +8,7 @@
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -1432,6 +1433,84 @@ wave::MmaOp::propagateElementsPerThreadBackward(
 // ReadOp
 //-----------------------------------------------------------------------------
 
+// Compute the shape implied by (inverse if requested) mapping from sourceType.
+// For example, if the source type is [A, B, C, D] and the mapping is
+// (d0,d1,d2,d3)->(d3,d1,d0,d2), the direct expected shape is [D, B, A, C] and
+// the inverse expected shape is [C, B, D, A] since the inverse map is
+// (d0,d1,d2,d3)->(d2,d1,d3,d0).
+static void getExpectedMemoryTypeFromMapping(
+    wave::WaveTensorType sourceType, wave::WaveExprListAttr mapping,
+    bool inverse, SmallVectorImpl<wave::WaveSymbolAttr> &expectedShape) {
+  if (mapping) {
+    assert(mapping.getMap() && "expected mapping to have a non-null map");
+    expectedShape.resize(sourceType.getRank());
+    AffineMap map = mapping.getMap();
+    if (inverse)
+      map = inversePermutation(map);
+    for (auto [i, expr] : llvm::enumerate(map.getResults())) {
+      auto dim = cast<AffineDimExpr>(expr);
+      expectedShape[i] = sourceType.getShape()[dim.getPosition()];
+    }
+  } else {
+    expectedShape = llvm::to_vector(sourceType.getShape());
+  }
+}
+
+// Propagate the shape information accounting for the mapping. The mapping is
+// understood as going from memory shape to value shape, so if `fromIsMemory` is
+// unset, the inverse mapping is used.
+static FailureOr<ChangeResult>
+propagateTypesWithMapping(wave::WaveTensorType from, wave::WaveTensorType &to,
+                          StringRef fromName, StringRef toName,
+                          bool fromIsMemory, wave::WaveExprListAttr mapping,
+                          raw_ostream &errs) {
+  if (!from) {
+    if (!to)
+      return ChangeResult::NoChange;
+    to = nullptr;
+    return ChangeResult::Change;
+  }
+  if (!from.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (!mapping)
+    return wave::detail::propagateShapeInformation(from, to, fromName, toName,
+                                                   errs);
+  if (!mapping.getMap()) {
+    errs << "unexpected NULL mapping";
+    return failure();
+  }
+
+  SmallVector<wave::WaveSymbolAttr> expectedResultShape;
+  getExpectedMemoryTypeFromMapping(from, mapping, /*inverse=*/fromIsMemory,
+                                   expectedResultShape);
+  constexpr llvm::StringLiteral fromNameImpliedBase =
+      "implied by mapping from ";
+  std::string fromNameImplied = fromNameImpliedBase.str() + fromName.str();
+  return wave::detail::propagateShapeInformation(expectedResultShape, to,
+                                                 fromNameImplied, toName, errs);
+}
+
+FailureOr<ChangeResult>
+ReadOp::propagateForward(ArrayRef<wave::WaveTensorType> operandTypes,
+                         MutableArrayRef<wave::WaveTensorType> resultTypes,
+                         raw_ostream &errs) {
+  return propagateTypesWithMapping(operandTypes[0], resultTypes[0], "memory",
+                                   "value", /*fromIsMemory=*/true,
+                                   getMappingAttr(), errs);
+}
+
+FailureOr<ChangeResult>
+ReadOp::propagateBackward(MutableArrayRef<wave::WaveTensorType> operandTypes,
+                          ArrayRef<wave::WaveTensorType> resultTypes,
+                          raw_ostream &errs) {
+  return propagateTypesWithMapping(resultTypes[0], operandTypes[0], "value",
+                                   "memory", /*fromIsMemory=*/false,
+                                   getMappingAttr(), errs);
+}
+
+LogicalResult ReadOp::finalizeTypeInference() { return success(); }
+
 // Check the well-formedness of the index attribute (must have at most one
 // non-unit dimension) and its correspondence with the explicit elements per
 // thread, if provided, and with the number of elements in the vector type.
@@ -1524,17 +1603,17 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
   return success();
 }
 
-// Check that if the given read/write operation has bound expressions specified,
-// each symbolic dimension of the WaveTensorType has exactly one bound
-// expression.
+// Check that if the given read/write operation has bound expressions
+// specified, each symbolic dimension of the WaveTensorType has exactly one
+// bound expression.
 static LogicalResult verifyReadWriteBounds(Location loc,
                                            wave::WaveTensorType boundedType,
                                            DictionaryAttr bounds) {
   assert(bounds && "expected non-null bounds");
   assert(boundedType && "expected non-null type");
 
-  // We need a fixed iteration order of names for determinism of error messages,
-  // so using a vector instead of a StringSet.
+  // We need a fixed iteration order of names for determinism of error
+  // messages, so using a vector instead of a StringSet.
   // TODO: consider refactoring bounds and other dictionary-like attributes to
   // be indexed by symbol expressions rather than string attributes to avoid
   // string comparisons everywhere.
@@ -1578,7 +1657,8 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                                        std::optional<int64_t> elementsPerThread,
                                        Type memoryType, Type valueType,
                                        WaveReadWriteBoundsAttr bounds,
-                                       ArrayAttr orderedSyms) {
+                                       ArrayAttr orderedSyms,
+                                       WaveExprListAttr mapping) {
 
   if (failed(wave::detail::verifyElementTypesMatch(
           op->getLoc(), "memory", memoryType, "register", valueType)))
@@ -1586,45 +1666,68 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
 
   // Skip the rest of the verification if memory is already resolved to
   // MemRefType.
-  auto tensorType = dyn_cast<WaveTensorType>(memoryType);
-  if (!tensorType)
-    return success();
+  auto memoryTensorType = dyn_cast<WaveTensorType>(memoryType);
+  auto valueTensorType = dyn_cast<WaveTensorType>(valueType);
 
-  // When tensor type is present, verify ordered_syms matches if specified.
-  if (orderedSyms) {
-    ArrayRef<WaveSymbolAttr> shape = tensorType.getShape();
-    if (orderedSyms.size() != shape.size()) {
-      return op->emitOpError()
-             << "'ordered_syms' size (" << orderedSyms.size()
-             << ") does not match memory tensor rank (" << shape.size() << ")";
+  if (mapping) {
+    if (mapping.getNumSymbols() != 0)
+      return op->emitError() << "mapping attribute must have no symbols";
+    if (!mapping.getMap())
+      return op->emitError() << "mapping attribute must have a map";
+    if (valueTensorType && valueTensorType.getFullySpecified()) {
+      if (mapping.getMap().getNumDims() != valueTensorType.getRank())
+        return op->emitError() << "mapping attribute must have a map with as "
+                                  "many dimensions as the value rank ("
+                               << valueTensorType.getRank() << "), got "
+                               << mapping.getMap().getNumDims();
     }
-    for (auto [i, pair] : llvm::enumerate(llvm::zip(orderedSyms, shape))) {
-      auto orderedSym = cast<WaveSymbolAttr>(std::get<0>(pair));
-      WaveSymbolAttr shapeSym = std::get<1>(pair);
-      if (orderedSym.getName() != shapeSym.getName()) {
-        return op->emitOpError()
-               << "'ordered_syms' symbol at index " << i << " ('"
-               << orderedSym.getName()
-               << "') does not match memory tensor shape symbol ('"
-               << shapeSym.getName() << "')";
-      }
+    if (!mapping.getMap().isPermutation()) {
+      return op->emitError() << "mapping attribute only supports permutation "
+                                "maps at the moment";
     }
   }
 
+  if (memoryTensorType && valueTensorType &&
+      memoryTensorType.getFullySpecified() &&
+      valueTensorType.getFullySpecified()) {
+    SmallVector<WaveSymbolAttr> expectedMemoryShape;
+    getExpectedMemoryTypeFromMapping(valueTensorType, mapping,
+                                     /*inverse=*/false, expectedMemoryShape);
+    if (!llvm::equal(expectedMemoryShape, memoryTensorType.getShape())) {
+      InFlightDiagnostic diag = op->emitError()
+                                << (mapping ? "the shape implied by mapping ("
+                                            : "the value shape (");
+      llvm::interleaveComma(
+          expectedMemoryShape, diag,
+          [&](WaveSymbolAttr symbol) { diag << symbol.getName(); });
+      diag << ") doesn't match the memory shape (";
+      llvm::interleaveComma(
+          memoryTensorType.getShape(), diag,
+          [&](WaveSymbolAttr symbol) { diag << symbol.getName(); });
+      diag << ")";
+      return diag;
+    }
+  }
+
+  if (!memoryTensorType)
+    return success();
+
   if (failed(verifyIndexElementsPerThread(op, indexAttr, elementsPerThread,
-                                          tensorType, valueType)))
+                                          memoryTensorType, valueType)))
     return failure();
 
   if (!bounds)
     return success();
 
-  return verifyReadWriteBounds(op->getLoc(), tensorType, bounds.getMapping());
+  return verifyReadWriteBounds(op->getLoc(), memoryTensorType,
+                               bounds.getMapping());
 }
 
 LogicalResult ReadOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getResult().getType(),
-                           getBoundsAttr(), getOrderedSymsAttr());
+                           getBoundsAttr(), getOrderedSymsAttr(),
+                           getMappingAttr());
 }
 
 llvm::FailureOr<mlir::ChangeResult>
@@ -1632,9 +1735,9 @@ wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
-  // ReadOp only propagates elements_per_thread attribute to result (register).
-  // Memory operand is ignored for propagation - you can read any number of
-  // elements from memory regardless of how many were written.
+  // ReadOp only propagates elements_per_thread attribute to result
+  // (register). Memory operand is ignored for propagation - you can read any
+  // number of elements from memory regardless of how many were written.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
     return mlir::ChangeResult::NoChange;
@@ -1780,16 +1883,17 @@ LogicalResult ExtractSliceOp::verify() {
 LogicalResult WriteOp::verify() {
   return verifyReadWriteOp(*this, getIndexAttr(), getElementsPerThread(),
                            getMemory().getType(), getValueToStore().getType(),
-                           getBoundsAttr(), getOrderedSymsAttr());
+                           getBoundsAttr(), getOrderedSymsAttr(),
+                           getMappingAttr());
 }
 
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
-  // WriteOp only validates that elements_per_thread attribute matches register
-  // operand. Memory operand is ignored for propagation - you can write to
-  // memory with any layout.
+  // WriteOp only validates that elements_per_thread attribute matches
+  // register operand. Memory operand is ignored for propagation - you can
+  // write to memory with any layout.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
     return ChangeResult::NoChange;
@@ -1835,8 +1939,8 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsForward(
   return ChangeResult::NoChange;
 }
 
-// Propagating "sideways" between operands, but only if this would not result in
-// conflicts.
+// Propagating "sideways" between operands, but only if this would not result
+// in conflicts.
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
@@ -1993,8 +2097,8 @@ LogicalResult wave::ApplyExprOp::verify() {
 
 LogicalResult wave::SelectOp::verify() {
   if (failed(detail::verifyTypesCompatible(
-          getLhs().getType(), getRhs().getType(), /*includeAddressSpace=*/false,
-          getLoc(), "LHS", "RHS")))
+          getLhs().getType(), getRhs().getType(),
+          /*includeAddressSpace=*/false, getLoc(), "LHS", "RHS")))
     return failure();
 
   if (failed(detail::verifyTypesCompatible(
@@ -2310,7 +2414,8 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateBackward(
 // The permute operation swaps the strides of the permuted indices.
 // For example, if we have a permute operation that swaps [B, M, N] to
 // [M, N, B], then for each dimension k, we keep its start and step,
-// but take the stride from the dimension at the same position in target_shape.
+// but take the stride from the dimension at the same position in
+// target_shape.
 static IndexExprsLatticeStorage
 permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
                          llvm::ArrayRef<wave::WaveSymbolAttr> srcShape,

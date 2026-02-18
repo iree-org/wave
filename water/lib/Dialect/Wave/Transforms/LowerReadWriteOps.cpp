@@ -378,6 +378,9 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getMapping())
+      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
+
     // wave.read produces a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The
     // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that
@@ -405,6 +408,9 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getMapping())
+      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
+
     // wave.write consumes a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The
     // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that

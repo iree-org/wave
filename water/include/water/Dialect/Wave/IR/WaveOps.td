@@ -432,14 +432,18 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 }
 
 def ReadOp : WaveOp<"read", [
-    WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Reads from memory";
   let description = [{
     Moves data from a memory-resident tensor to a register-resident tensor
     preserving the shape.
+
+    If mapping is provided, it indicates how dimensions of the register-resident
+    value tensor map to those of the memory-resident tensor. Currently, this must
+    be a permutation of dimensions such that the symbolic shapes of the tensors
+    match.
   }];
 
   let arguments = !con((ins
@@ -449,7 +453,10 @@ def ReadOp : WaveOp<"read", [
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
-        "Ordered dimension symbols from memory type shape">:$ordered_syms
+        "Ordered dimension symbols from memory type shape">:$ordered_syms,
+    Arg<OptionalAttr<WaveExprListAttr>,
+        "Indicates how value dimensions are remapped into memory dimensions">
+       :$mapping
   ), commonArguments);
 
   let results = (outs
@@ -498,13 +505,17 @@ def RegisterOp : WaveOp<"register", [
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
     RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor
     preserving the shape.
+
+    If mapping is provided, it indicates how dimensions of the register-resident
+    value tensor map to those of the memory-resident tensor. Currently, this must
+    be a permutation of dimensions such that the symbolic shapes of the tensors
+    match.
   }];
 
   let arguments = !con((ins
@@ -515,7 +526,10 @@ def WriteOp : WaveOp<"write", [
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
         "Bound expressions for each symbolic dimension">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
-        "Ordered dimension symbols from memory type shape">:$ordered_syms
+        "Ordered dimension symbols from memory type shape">:$ordered_syms,
+    Arg<OptionalAttr<WaveExprListAttr>,
+        "Indicates how value dimensions are remapped into memory dimensions">
+       :$mapping
   ), commonArguments);
 
   let assemblyFormat =

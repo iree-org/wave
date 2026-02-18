@@ -208,6 +208,18 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
   return ChangeResult::Change;
 }
 
+FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
+    ArrayRef<wave::WaveSymbolAttr> from, wave::WaveTensorType &to,
+    llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  llvm::FailureOr<ChangeResult> res =
+      ::checkPropagateShapeConflict(from, to, fromName, toName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+
+  to = to.copyShapeFrom(from);
+  return ChangeResult::Change;
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     llvm::ArrayRef<wave::WaveTensorType> from,
     llvm::MutableArrayRef<wave::WaveTensorType> to, llvm::StringRef fromName,
