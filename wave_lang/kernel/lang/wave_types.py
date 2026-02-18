@@ -220,7 +220,6 @@ class IndexMapping:
         inputs: SymbolsMap,
         outputs: SymbolsMap,
         dynamic_val_mappings: SymbolsMap | Sequence[SymbolsMap] = (),
-        contiguous: bool = False,
     ) -> None:
         iters = {self.iterator(i): i for i in range(num_iterators)}
         iter_shape = [None] * num_iterators
@@ -242,7 +241,6 @@ class IndexMapping:
         self.iteration_shape = iter_shape
         self.input_mapping = inputs
         self.output_mapping = outputs
-        self.contiguous = contiguous
         if not isinstance(dynamic_val_mappings, Sequence):
             dynamic_val_mappings = (
                 (dynamic_val_mappings,) if dynamic_val_mappings else ()
@@ -267,9 +265,7 @@ class IndexMapping:
         new_outputs = {
             key: _subs_expr(val, subs) for key, val in self.output_mapping.items()
         }
-        return IndexMapping(
-            self.num_iterators, new_inputs, new_outputs, contiguous=self.contiguous
-        )
+        return IndexMapping(self.num_iterators, new_inputs, new_outputs)
 
     @property
     def input_shape(self) -> tuple[IndexExpr]:

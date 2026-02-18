@@ -2265,11 +2265,6 @@ class Read(CustomOp):
         if self.elements_per_thread == 1:
             return True
 
-        # If the mapping is explicitly marked as contiguous by the user,
-        # trust it and skip the symbolic contiguity analysis.
-        if self.mapping is not None and getattr(self.mapping, "contiguous", False):
-            return True
-
         from ..wave.utils.mapping_utils import (
             check_is_dynamic_vals_broadcasted,
             check_is_mapping_contiguous,
@@ -2668,11 +2663,6 @@ class Write(CustomOp):
             return True
 
         if self.elements_per_thread == 1:
-            return True
-
-        # If the mapping is explicitly marked as contiguous by the user,
-        # trust it and skip the symbolic contiguity analysis.
-        if self.mapping is not None and getattr(self.mapping, "contiguous", False):
             return True
 
         from ..wave.utils.mapping_utils import (

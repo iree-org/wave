@@ -67,6 +67,29 @@ def preshuffle_b_aiter(b: torch.Tensor) -> torch.Tensor:
     return b_ps.view(N, K_packed)
 
 
+def e8m0_shuffle(scale: torch.Tensor) -> torch.Tensor:
+    """
+    Shuffle the scale tensor for e8m0 format (from 7.2 preshuffle_scale).
+
+    Transforms a [m, n] scale matrix via:
+      view(m//32, 2, 16, n//8, 2, 4) -> permute(0,3,5,2,4,1) -> view(m, n)
+
+    See: rocm-libraries PreSwizzle.hpp
+    """
+    if scale is None or scale.dtype == torch.float32:
+        return scale
+    assert scale.ndim == 2, "scale must be a 2D tensor"
+    m, n = scale.shape
+    # Pad to multiples of 256 (rows) and 8 (cols)
+    sm = (m + 255) // 256 * 256
+    sn = (n + 7) // 8 * 8
+    scale_padded = torch.zeros(sm, sn, dtype=scale.dtype, device=scale.device)
+    scale_padded[:m, :n] = scale
+    scale_padded = scale_padded.view(sm // 32, 2, 16, sn // 8, 2, 4)
+    scale_padded = scale_padded.permute(0, 3, 5, 2, 4, 1).contiguous()
+    return scale_padded.view(sm, sn)[:m, :n].contiguous()
+
+
 def generate_gemm_afp4wfp4_inputs(
     shape: tuple[int, int, int], device: torch.device = torch.device("cpu")
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -138,9 +161,13 @@ def torchScaledGemmMXFP4(
     return torch.mm(x_f32, w_f32)
 
 
+# 2048,57344,16384
+# 4096,57344,16384
+# 8192,57344,16384
+# 16384,16384,16384
 def test_preshuffleB_direct_global_b_8wave(
     is_debug: bool = False,
-    shape: tuple[int, int, int] = (1024, 1024, 8192),
+    shape: tuple[int, int, int] = (16384, 16384, 16384),  # (1024, 1024, 8192),
     block: tuple[int, int, int] = (256, 256, 256),
 ):
     """
@@ -160,6 +187,7 @@ def test_preshuffleB_direct_global_b_8wave(
     BLOCK_K = tkl.sym.BLOCK_K
     ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
     K_PACKED = tkl.sym.K_PACKED  # K/2 (byte count in K dim)
+    K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED  # ceil(K/32, 8) for shuffled scales
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -212,7 +240,32 @@ def test_preshuffleB_direct_global_b_8wave(
             K: within_nblk % K_PACKED,
         },
         outputs={N: n_it, K: k_it},
-        contiguous=True,
+    )
+
+    # B-scale preshuffle mapping (from 7.2 e8m0_shuffle permutation).
+    # Maps logical (N, K/32) scale coordinates to the shuffled physical layout.
+    # The e8m0_shuffle does: view(N//32, 2, 16, Ks//8, 2, 4).permute(0,3,5,2,4,1)
+    # where Ks = K_SCALE_SHUFFLED = ceil(K/32, 8).
+    k_s = tkw.IndexMapping.iterator(0)  # K/32 scale dimension
+    n_s = tkw.IndexMapping.iterator(1)  # N dimension
+
+    b_scale_flat = (
+        (n_s // 32) * ((K_SCALE_SHUFFLED // 8) * 256)
+        + (k_s // 8) * 256
+        + ((k_s % 8) % 4) * 64
+        + ((n_s % 32) % 16) * 4
+        + (((k_s % 8) // 4) * 2)
+        + ((n_s % 32) // 16)
+    )
+
+    # TODO: Once the preshuffle scale is up, rebase on top of it.
+    b_scale_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={
+            N: b_scale_flat // K_SCALE_SHUFFLED,
+            K: b_scale_flat % K_SCALE_SHUFFLED,
+        },
+        outputs={K: k_s, N: n_s},
     )
 
     @tkw.wave(constraints)
@@ -221,7 +274,7 @@ def test_preshuffleB_direct_global_b_8wave(
         a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE_A, tkl.i8],
         # B matrix stays in global memory; preshuffled layout enables contiguous wave reads.
         b: tkl.Memory[N, K / 2, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE_A, tkl.i8],  # LDS path for scales
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -235,7 +288,9 @@ def test_preshuffleB_direct_global_b_8wave(
 
             b_reg = tkw.read(b, mapping=b_preshuffle_mapping, tag="read_b")
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
-            b_scale_reg = tkw.read(b_scale, tag="read_b_scale")
+            b_scale_reg = tkw.read(
+                b_scale, tag="read_b_scale"
+            )  # no mapping, through LDS
             b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu, tag="bitcast_b_scale")
 
             acc = tkw.scaled_mma(
@@ -264,7 +319,10 @@ def test_preshuffleB_direct_global_b_8wave(
         global_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
 
         all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
-        global_load_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
+        global_to_shared_b_scale = tkw.filter_nodes(
+            all_read_b_scale, node_type=tkw.GatherToLDS
+        )
+        shared_load_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
 
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
         bitcast_a_scale = tkw.get_node_by_tag("bitcast_a_scale")
@@ -274,25 +332,37 @@ def test_preshuffleB_direct_global_b_8wave(
 
         pipeline_loop = tkw.pipeline(k_loop)
         with pipeline_loop as pl:
-            # Stage 0: async global->shared for A/A_scale only
-            pl.set_stage([(global_to_shared_a, global_to_shared_a_scale), (), ()])
-            # Stage 1: shared loads for A, direct global loads for B + compute
+            # Stage 0: async global->shared for A/A_scale and B_scale
+            pl.set_stage(
+                [
+                    (
+                        global_to_shared_a,
+                        global_to_shared_a_scale,
+                        global_to_shared_b_scale,
+                    ),
+                    (),
+                    (),
+                ]
+            )
+            # Stage 1: shared loads for A + B_scale, direct global loads for B data + compute
             pl.set_stage(
                 [
                     (
                         shared_load_a,
                         shared_load_a_scale,
+                        shared_load_b_scale,
                         global_load_b,
-                        global_load_b_scale,
                     ),
                     (bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale),
                     (scaled_mma,),
                 ]
             )
 
-        loop_global_to_shared = tkw.filter_nodes(
-            global_to_shared_a, subgraph=pipeline_loop.KERNEL
-        ) + tkw.filter_nodes(global_to_shared_a_scale, subgraph=pipeline_loop.KERNEL)
+        loop_global_to_shared = (
+            tkw.filter_nodes(global_to_shared_a, subgraph=pipeline_loop.KERNEL)
+            + tkw.filter_nodes(global_to_shared_a_scale, subgraph=pipeline_loop.KERNEL)
+            + tkw.filter_nodes(global_to_shared_b_scale, subgraph=pipeline_loop.KERNEL)
+        )
 
         loop_shared_load_a = tkw.filter_nodes(
             shared_load_a, subgraph=pipeline_loop.KERNEL
@@ -303,8 +373,8 @@ def test_preshuffleB_direct_global_b_8wave(
         loop_global_load_b = tkw.filter_nodes(
             global_load_b, subgraph=pipeline_loop.KERNEL
         )
-        loop_global_load_b_scale = tkw.filter_nodes(
-            global_load_b_scale, subgraph=pipeline_loop.KERNEL
+        loop_shared_load_b_scale = tkw.filter_nodes(
+            shared_load_b_scale, subgraph=pipeline_loop.KERNEL
         )
 
         loop_bitcast_a = tkw.filter_nodes(bitcast_a, subgraph=pipeline_loop.KERNEL)
@@ -327,12 +397,6 @@ def test_preshuffleB_direct_global_b_8wave(
         loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = tkw.partition_by_dim(
             loop_shared_load_a_scale, dim=K, num_partitions=2
         )
-        loop_global_load_b_0, loop_global_load_b_1 = tkw.partition_by_dim(
-            loop_global_load_b, dim=K, num_partitions=2
-        )
-        loop_global_load_b_scale_0, loop_global_load_b_scale_1 = tkw.partition_by_dim(
-            loop_global_load_b_scale, dim=K, num_partitions=2
-        )
         loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
             loop_bitcast_a, dim=K, num_partitions=2
         )
@@ -345,20 +409,27 @@ def test_preshuffleB_direct_global_b_8wave(
         loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = tkw.partition_by_dim(
             loop_bitcast_b_scale, dim=K, num_partitions=2
         )
+        loop_global_load_b_0, loop_global_load_b_1 = tkw.partition_by_dim(
+            loop_global_load_b, dim=K, num_partitions=2
+        )
+        loop_shared_load_b_scale_0, loop_shared_load_b_scale_1 = tkw.partition_by_dim(
+            loop_shared_load_b_scale, dim=K, num_partitions=2
+        )
 
         independent_global_count = len(loop_global_to_shared)
 
         clusters = [
-            # Cluster 1: first half loads + bitcasts + issue async gathers for next iter
+            # Cluster 0: issue B_0 global loads FIRST (high latency ~400 cy),
+            #            then A shared loads + B_scale from LDS, bitcasts,
+            #            then GatherToLDS prefetches for next iteration
             tkw.cluster(
                 [
+                    loop_global_load_b_0,
                     loop_shared_load_a_0,
                     loop_shared_load_a_scale_0,
-                    loop_global_load_b_0,
-                    loop_global_load_b_scale_0,
+                    loop_shared_load_b_scale_0,
                     loop_bitcast_a_0,
                     loop_bitcast_a_scale_0,
-                    loop_bitcast_b_0,
                     loop_bitcast_b_scale_0,
                     tkw.SchedulingBarrier([]),
                     loop_global_to_shared,
@@ -367,9 +438,13 @@ def test_preshuffleB_direct_global_b_8wave(
                     tkw.SchedulingBarrier([]),
                 ]
             ),
-            # Cluster 2: first half MMAs with higher priority; wait for async gathers
+            # Cluster 1: issue B_1 global loads early (overlap with MMA_0),
+            #            then bitcast B_0 + first-half MMAs.
+            #            B_1 now has MMA_0 (~128+ cy) + Cluster 2 to arrive.
             tkw.cluster(
                 [
+                    loop_global_load_b_1,
+                    loop_bitcast_b_0,
                     tkw.SetWavePrio(1),
                     loop_scaled_mma_0,
                     tkw.SetWavePrio(0),
@@ -378,25 +453,25 @@ def test_preshuffleB_direct_global_b_8wave(
                     tkw.SchedulingBarrier([]),
                 ]
             ),
-            # Cluster 3: second half loads + bitcasts
+            # Cluster 2: second-half A shared loads + B_scale from LDS
+            #            (B_1 already in flight from Cluster 1)
             tkw.cluster(
                 [
                     loop_shared_load_a_1,
                     loop_shared_load_a_scale_1,
-                    loop_global_load_b_1,
-                    loop_global_load_b_scale_1,
+                    loop_shared_load_b_scale_1,
                     loop_bitcast_a_1,
                     loop_bitcast_a_scale_1,
-                    loop_bitcast_b_1,
                     loop_bitcast_b_scale_1,
                     tkw.SchedulingBarrier([]),
                     tkw.MemoryCounterWaitBarrier(load=0),
                     tkw.SchedulingBarrier([]),
                 ]
             ),
-            # Cluster 4: second half MMAs
+            # Cluster 3: bitcast B_1 (should have arrived) + second-half MMAs
             tkw.cluster(
                 [
+                    loop_bitcast_b_1,
                     tkw.SetWavePrio(1),
                     loop_scaled_mma_1,
                     tkw.SetWavePrio(0),
@@ -419,6 +494,7 @@ def test_preshuffleB_direct_global_b_8wave(
         N: shape[1],
         K: shape[2],
         K_PACKED: shape[2] // 2,  # K / 2 (byte count)
+        K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,  # ceil(K/32, 8)
         READ_SHARED_DELAY: 1,
         WRITE_SHARED_DELAY: 1,
         READ_GLOBAL_DELAY: 2,
@@ -440,7 +516,7 @@ def test_preshuffleB_direct_global_b_8wave(
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
         use_buffer_ops=True,
-        dump_intermediates="tmp_files/mxfp4_wave8_preshuffleB_schedule/", # uncomment to dump intermediate files
+        dump_intermediates="tmp_files/mxfp4_wave8_preshuffleB_schedule/",
     )
     options = set_default_run_config(options)
     compiled = wave_compile(options, gemm, preshuffleB_schedule)
@@ -459,6 +535,7 @@ def test_preshuffleB_direct_global_b_8wave(
     w_t = w.T.contiguous()
     w_t_ps = preshuffle_b_aiter(w_t)
 
+    # B scales go through LDS (no preshuffle needed)
     x = x.cuda()
     x_scales = x_scales.cuda()
     w_t_ps = w_t_ps.cuda()
@@ -470,6 +547,29 @@ def test_preshuffleB_direct_global_b_8wave(
 
     torch.testing.assert_close(torch_out, out.cpu(), check_dtype=False)
     print("PreshuffleB direct-global-B scheduled GEMM test passed!")
+
+    # Benchmark: warmup + timed iterations
+    warmup_iters, bench_iters = 50, 100
+    for _ in range(warmup_iters):
+        compiled(x, x_scales, w_t_ps, w_scales, out)
+    torch.cuda.synchronize()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(bench_iters):
+        compiled(x, x_scales, w_t_ps, w_scales, out)
+    end.record()
+    torch.cuda.synchronize()
+
+    elapsed_ms = start.elapsed_time(end) / bench_iters
+    M, N, K = shape
+    flops = 2 * M * N * K
+    tflops_per_sec = (flops / 1e12) / (elapsed_ms / 1e3)
+
+    print(f"  Problem size: M={M}, N={N}, K={K}")
+    print(f"  Avg time:     {elapsed_ms:.3f} ms  ({bench_iters} iters)")
+    print(f"  TFLOP/s:      {tflops_per_sec:.2f}")
 
 
 if __name__ == "__main__":

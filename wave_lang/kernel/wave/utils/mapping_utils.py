@@ -312,9 +312,76 @@ def check_is_mapping_contiguous(
         offset = _compute_offset(
             [new_index[infer_dim(d)] for d in symbolic_shape], strides
         )
-        if (offset - prev_offset) != 1:
-            return False
 
+        # When the sympy expressions are complex, we fallback to the aligned-base check.
+        # Because sympy evaluates to a value, we cannot use the difference check. Hence, the check fails.
+        if (offset - prev_offset) != 1:
+            return _check_contiguous_with_aligned_base(
+                mapping,
+                symbolic_shape,
+                array_shape,
+                index,
+                elements_per_thread,
+                is_read,
+            )
+
+        prev_offset = offset
+
+    return True
+
+
+def _check_contiguous_with_aligned_base(
+    mapping: IndexMapping,
+    symbolic_shape: tuple[IndexExpr, ...],
+    array_shape: tuple[IndexExpr, ...],
+    index: dict[IndexExpr, IndexSequence],
+    elements_per_thread: int | IndexExpr,
+    is_read: bool,
+) -> bool:
+    """Aligned-base contiguity check for complex floor/Mod mappings.
+
+    Thread indices in the fastest dimension are distributed in chunks of
+    elements_per_thread, so the base is always a multiple of that value.
+    Encoding this alignment (base = _aligned * elements_per_thread) lets
+    sympy resolve sub-expressions such as Mod(16*k + i, 16) -> i and
+    floor(k/2 + i/32) → floor(k/2) that the generic check cannot simplify.
+    It is independent of the tensor shape and depends on the thread distributuion.
+    """
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+    _aligned = sympy.Symbol("_aligned", integer=True, nonnegative=True)
+
+    idxc = IndexingContext.current()
+    strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
+
+    def _make_aligned_index(offset_val: int) -> dict[IndexExpr, IndexSequence]:
+        idx = deepcopy(index)
+        idx[fastest_dim].start = _aligned * elements_per_thread + offset_val
+        return idx
+
+    new_index = transform_index_on_mapping(
+        mapping,
+        symbolic_shape,
+        _make_aligned_index(0),
+        is_read=is_read,
+    )
+    prev_offset = _compute_offset(
+        [new_index[infer_dim(d)] for d in symbolic_shape],
+        strides,
+    )
+    for i in range(1, elements_per_thread):
+        new_index = transform_index_on_mapping(
+            mapping,
+            symbolic_shape,
+            _make_aligned_index(i),
+            is_read=is_read,
+        )
+        offset = _compute_offset(
+            [new_index[infer_dim(d)] for d in symbolic_shape],
+            strides,
+        )
+        diff_expr = _simplify_sympy_expr(offset - prev_offset)
+        if diff_expr != 1:
+            return False
         prev_offset = offset
 
     return True
