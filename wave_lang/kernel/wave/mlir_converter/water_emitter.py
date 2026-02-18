@@ -990,9 +990,11 @@ def _create_kernel_module(
     func_type = ir.FunctionType.get(arg_types, [])
     with ir.InsertionPoint(module.body):
         func_op = func.FuncOp("kernel", func_type)
-        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
-        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
-        # print([(str(k), v) for k, v in options.subs.items()])
+        # Validate that all non-int mappings are address spaces (either
+        # SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE). These mappings can be
+        # dropped safely because the information has been encoded in either
+        # `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the
+        # kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
         for k, v in options.subs.items():
             if not isinstance(v, int):
                 if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
