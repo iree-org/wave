@@ -260,51 +260,22 @@ def interleave_operations(
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
 ) -> list:
-    """
-    Interleave operations with flexible per-group patterns.
-    
-    Args:
-        base_ops: List of base operations (e.g., MFMAs)
-        interleaved_ops: List of operations OR list of lists for multiple groups
-        intervals: Single interval or list of intervals per group (default: 1)
-        start_offsets: Single offset or list of offsets per group (default: 0 for all)
-    
-    Returns:
-        List of interleaved operations
-        
-    Examples:
-        # Single group: DS read after every 4 MFMAs
-        result = interleave_operations(mfmas, ds_reads, intervals=4)
-        
-        # Multiple groups with different patterns:
-        # - Scale reads (u8) after every MFMA
-        # - Data reads (b128) after every 4 MFMAs
-        result = interleave_operations(
-            base_ops=mfmas,
-            interleaved_ops=[scale_reads, data_reads],
-            intervals=[1, 4]
-        )
-    """
+    """Interleave operations with flexible per-group patterns."""
     # Normalize inputs to lists
     if not isinstance(interleaved_ops[0], list):
         # Single list of ops
         interleaved_ops = [interleaved_ops]
-    
     if isinstance(intervals, int):
         intervals = [intervals] * len(interleaved_ops)
-    
     if start_offsets is None:
         start_offsets = [0] * len(interleaved_ops)
     elif isinstance(start_offsets, int):
         start_offsets = [start_offsets] * len(interleaved_ops)
-    
     # Track counters for each group
     counters = [0] * len(interleaved_ops)
     result = []
-    
     for i, base_op in enumerate(base_ops):
         result.append(base_op)
-        
         # Check each group for insertion
         for group_idx, (ops, interval, offset) in enumerate(
             zip(interleaved_ops, intervals, start_offsets)
@@ -317,13 +288,11 @@ def interleave_operations(
             ):
                 result.append(ops[counters[group_idx]])
                 counters[group_idx] += 1
-    
     # Add any remaining ops from each group
     for group_idx, ops in enumerate(interleaved_ops):
         while counters[group_idx] < len(ops):
             result.append(ops[counters[group_idx]])
             counters[group_idx] += 1
-    
     return result
 
 
