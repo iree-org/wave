@@ -138,12 +138,6 @@ def torchScaledGemmMXFP4(
     return torch.mm(x_f32, w_f32)
 
 
-def torchScaledGemmMXFP4_scale1(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    x_f32 = mxfp4_to_f32(x)
-    w_f32 = mxfp4_to_f32(w.T).T
-    return torch.mm(x_f32, w_f32)
-
-
 def test_preshuffleB_direct_global_b_8wave(
     is_debug: bool = False,
     shape: tuple[int, int, int] = (1024, 1024, 8192),
@@ -153,7 +147,6 @@ def test_preshuffleB_direct_global_b_8wave(
     GEMM with:
     - A + A_scales via LDS (GatherToLDS) for bandwidth/latency hiding
     - B + B_scales via direct GLOBAL reads (no LDS) using preshuffled B layout
-    - Here, B_scales are set to 127, so no scaling is applied.
     """
     mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
 
@@ -447,26 +440,20 @@ def test_preshuffleB_direct_global_b_8wave(
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
         use_buffer_ops=True,
-        # dump_intermediates="tmp_files/mxfp4_wave8_preshuffleB_schedule/",
+        dump_intermediates="tmp_files/mxfp4_wave8_preshuffleB_schedule/", # uncomment to dump intermediate files
     )
     options = set_default_run_config(options)
     compiled = wave_compile(options, gemm, preshuffleB_schedule)
 
-    # with open("tmp_files/mxfp4_wave8_preshuffleB_schedule/temp.mlir", "w") as f:
-    #     f.write(compiled.asm)
+    with open("tmp_files/mxfp4_wave8_preshuffleB_schedule/temp.mlir", "w") as f:
+        f.write(compiled.asm)
 
     # Testing
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
         shape, device=torch.device("cpu")
     )
 
-    x_scales.fill_(127)
-    w_scales.fill_(127)
-
-    # This is to set scales to 1.0, so no scaling is applied.
-    # TODO: comment out when scale shuffling is implemented (after testing).
-    # torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
-    torch_out = torchScaledGemmMXFP4_scale1(x, w)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     # Kernel expects B as [N, K/2]. w is [K/2, N], so transpose back.
     w_t = w.T.contiguous()
@@ -477,13 +464,10 @@ def test_preshuffleB_direct_global_b_8wave(
     w_t_ps = w_t_ps.cuda()
     w_scales = w_scales.cuda()
 
-    x_scales.fill_(127)
-    w_scales.fill_(127)
-
     out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32, device="cuda")
 
     compiled(x, x_scales, w_t_ps, w_scales, out)
-    # breakpoint()
+
     torch.testing.assert_close(torch_out, out.cpu(), check_dtype=False)
     print("PreshuffleB direct-global-B scheduled GEMM test passed!")
 
