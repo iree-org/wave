@@ -468,6 +468,10 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 continue
             if custom.mapping_dynamic_vals:
                 continue
+            # Skip reads that have bounds: the merged read would lose the
+            # mapping and source→target index, making mask generation incorrect.
+            if custom.bounds is not None:
+                continue
             key = (custom.memory, custom.elements_per_thread, region_id)
             groups[key].append(node)
 

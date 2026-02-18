@@ -815,13 +815,13 @@ def _trace_launchable_and_get_kernel_signature(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
+        partial(generate_bounds_exprs, trace, launchable.constraints),
         partial(
             merge_contiguous_reads,
             trace,
             launchable.constraints,
             options.target,
         ),
-        partial(generate_bounds_exprs, trace, launchable.constraints),
     ]
 
     if options.use_bound_check:
