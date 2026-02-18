@@ -209,6 +209,30 @@ mlirWaveWorkgroupDimAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveReductionScopeAttr
+//===---------------------------------------------------------------------===//
+
+enum WaveReductionScope {
+  WaveReductionScopeBlock = 0,
+  WaveReductionScopeWarp = 1,
+};
+
+/// Checks whether the given MLIR attribute is a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveReductionScopeAttr(MlirAttribute attr);
+
+/// Creates a new WaveReductionScopeAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveReductionScopeAttrGet(MlirContext mlirCtx, uint32_t value);
+
+/// Get the value from a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveReductionScopeAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveReductionScopeAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 

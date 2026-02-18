@@ -154,8 +154,8 @@ WAVE_OP_CONSTRUCTORS = {
     "cast": CastOp,
     "extract": ExtractOp,
     "extract_slice": ExtractSliceOp,
-    "max": MaxOp,
-    "min": MinOp,
+    "maximum": MaxOp,
+    "minimum": MinOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
@@ -168,7 +168,7 @@ WAVE_OP_CONSTRUCTORS = {
     "output": YieldOp,
     "write": WriteOp,
     "permute": PermuteOp,
-    "max_element": MaxElementOp,
+    "max": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
     "self_index": SelfIndexOp,
@@ -664,6 +664,21 @@ def _emit_ops_from_graph(
                     )
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
+                    )
+                elif node.tkw_op_name in ["max", "min", "sum"]:
+                    if op_builder is None:
+                        raise NotImplementedError(
+                            f"Unsupported reduce op: {node.tkw_op_name}"
+                        )
+
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        scope=wave.WaveReductionScopeAttr.get(
+                            wave.WaveReductionScope.Block
+                            if node.block
+                            else wave.WaveReductionScope.Warp
+                        ),
                     )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.

@@ -276,6 +276,29 @@ MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveReductionScopeAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveReductionScopeAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveReductionScopeAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveReductionScopeAttrGet(MlirContext mlirCtx,
+                                            uint32_t value) {
+  return wrap(wave::WaveReductionScopeAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveReductionScope>(value)));
+}
+
+uint32_t mlirWaveReductionScopeAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveReductionScopeAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveReductionScopeAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveReductionScopeAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
