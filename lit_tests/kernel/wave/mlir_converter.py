@@ -1161,7 +1161,7 @@ def mlir_converter_read_with_mapping():
     # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @M] of f16, <global>>)
 
     # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
-    # CHECK-SAME: mapping = #wave.expr_list<[] -> (d1, d0)>
+    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1) -> (d1, d0)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@N, @M] of f16, <register>>
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
@@ -1235,5 +1235,5 @@ def mlir_converter_write_with_mapping():
     # CHECK-SAME: (!wave.tensor<[@N, @M] of f16, <global>>) -> !wave.tensor<[@N, @M] of f16, <register>>
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
-    # CHECK-SAME: mapping = #wave.expr_list<[] -> (d1, d0)>
+    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1) -> (d1, d0)>
     # CHECK-SAME: (!wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>)
