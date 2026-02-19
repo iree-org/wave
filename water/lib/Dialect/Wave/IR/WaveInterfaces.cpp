@@ -690,29 +690,38 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   if (op->getNumOperands() == 0 && op->getNumResults() == 0)
     return llvm::success();
 
-  // Get the reference type from the first operand or result
+  // Get the reference type from the first operand if available, otherwise from
+  // the first result
   Type referenceType;
   std::string referenceName;
+  bool isOperandReference = false;
   if (op->getNumOperands() > 0) {
     referenceType = op->getOperandTypes()[0];
     referenceName = "operand #0";
+    isOperandReference = true;
   } else {
     referenceType = op->getResultTypes()[0];
     referenceName = "result #0";
   }
 
-  // Verify all operand element types match
-  for (auto [idx, operandType] : llvm::enumerate(op->getOperandTypes())) {
-    std::string operandName = "operand #" + std::to_string(idx);
+  // Verify all operand element types match (skip operand #0 if it's the
+  // reference to avoid redundant check)
+  unsigned startIdx = isOperandReference ? 1 : 0;
+  for (auto [idx, operandType] :
+       llvm::enumerate(op->getOperandTypes().drop_front(startIdx))) {
+    std::string operandName = "operand #" + std::to_string(idx + startIdx);
     if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
                                        referenceType, operandName,
                                        operandType)))
       return llvm::failure();
   }
 
-  // Verify all result element types match
-  for (auto [idx, resultType] : llvm::enumerate(op->getResultTypes())) {
-    std::string resultName = "result #" + std::to_string(idx);
+  // Verify all result element types match (skip result #0 if it's the
+  // reference to avoid redundant check)
+  startIdx = !isOperandReference ? 1 : 0;
+  for (auto [idx, resultType] :
+       llvm::enumerate(op->getResultTypes().drop_front(startIdx))) {
+    std::string resultName = "result #" + std::to_string(idx + startIdx);
     if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
                                        referenceType, resultName, resultType)))
       return llvm::failure();
