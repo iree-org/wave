@@ -118,8 +118,22 @@ def get_tagged_mxfp4_gemm(
 def get_preshuffle_kernel(
     shape: tuple[int, int, int] = (1024, 1024, 8192),
     block_shape: tuple[int, int, int] = (256, 256, 256),
+    mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
+    num_waves: int = 8,
 ):
-    """Return the pre-shuffled MXFP4 GEMM kernel definition with IndexMapping for shuffled scales."""
+    """Return the pre-shuffled MXFP4 GEMM kernel definition with IndexMapping for shuffled scales.
+
+    All ops are tagged for use with MXFP4 schedule functions (e.g. get_mxfp4_dbuf_schedule_shuffle).
+
+    Args:
+        shape: (M, N, K) problem dimensions.
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        mfma_variant: Scaled MMA instruction type.
+        num_waves: Waves per workgroup (4 or 8).
+
+    Returns:
+        (kernel_function, WaveCompileOptions)
+    """
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -127,17 +141,25 @@ def get_preshuffle_kernel(
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    # Calculate shuffled dimensions for pre-shuffle kernel
-    k_scale_shuffled = (((shape[2] // 32) + 7) // 8) * 8
     K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+    k_scale_shuffled = (((shape[2] // 32) + 7) // 8) * 8
 
     constraints: list[tkw.Constraint] = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, BLOCK_M / 4),
-        tkw.WaveConstraint(N, BLOCK_N / 2),
+    ]
+
+    if num_waves == 8:
+        # 8 waves: 4 M-tiles x 2 N-tiles
+        constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    else:
+        # 4 waves: 2 M-tiles x 2 N-tiles
+        constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=ScaledMMAType.F32_16x16x128_F8F6F4,
@@ -218,10 +240,11 @@ def get_preshuffle_kernel(
         },
     )
 
+    # TODO: preshuffle merge doesn't work with shared address space yet.
     @tkw.wave(constraints)
     def mxfp4_gemm_preshuffle(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
@@ -232,7 +255,7 @@ def get_preshuffle_kernel(
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
-            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
+            a_scale_reg = tkw.read(a_scale, tag="read_a_scale")
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale")
 
             b_reg = tkw.read(b, tag="read_b")
@@ -266,4 +289,5 @@ def get_preshuffle_kernel(
         use_global_to_shared=True,
         minimize_shared_allocs=True,
     )
+
     return mxfp4_gemm_preshuffle, options
