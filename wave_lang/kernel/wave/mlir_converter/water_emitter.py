@@ -72,6 +72,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
+    ReduceOp as Reduce,
     SelectOp,
     SelfIndex,
     SharedMemoryBarrier,
@@ -665,12 +666,11 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
-                elif node.tkw_op_name in ["max", "min", "sum"]:
-                    if op_builder is None:
+                elif isinstance(node, Reduce):
+                    if isinstance(node.arg, Sequence):
                         raise NotImplementedError(
-                            f"Unsupported reduce op: {node.tkw_op_name}"
+                            "Only single-operand reductions are currently supported."
                         )
-
                     mlir_op = op_builder(
                         result_type,
                         *create_mlir_operands(),
