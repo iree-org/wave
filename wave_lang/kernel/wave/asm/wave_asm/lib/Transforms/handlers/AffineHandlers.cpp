@@ -388,6 +388,44 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
         return ExprResult(lhs, BitRange()); // Conservative
       }
 
+      case AffineExprKind::CeilDiv: {
+        if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
+          int64_t divisor = constRhs.getValue();
+
+          if (threadIdUpperBound > 0 && divisor >= threadIdUpperBound) {
+            // ceil(x / divisor) where x in [0, upper_bound-1] and
+            // divisor >= upper_bound: result is 0 when x==0, 1 otherwise.
+            // For thread IDs that are always > 0 this simplifies to 1,
+            // but conservatively we fall through to the general case.
+          }
+
+          // ceildiv(a, N) = (a + N - 1) / N  (for positive a, N)
+          if (isPowerOf2(divisor)) {
+            int64_t shiftAmount = log2(divisor);
+            int64_t bias = divisor - 1;
+            auto biasImm = ctx.createImmType(bias);
+            auto biasConst =
+                ConstantOp::create(builder, loc, biasImm, bias);
+            // Constant must be src0 for VOP2 encoding on AMDGCN
+            Value biased =
+                V_ADD_U32::create(builder, loc, vregType, biasConst, lhs);
+            auto shiftAmt = ctx.createImmType(shiftAmount);
+            auto shiftConst =
+                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
+            Value shiftResult =
+                V_LSHRREV_B32::create(builder, loc, vregType, shiftConst,
+                                      biased);
+            BitRange resultRange = lhsRange.extendForAdd(
+                BitRange::fromConstant(bias)).shiftRight(shiftAmount);
+            ctx.setBitRange(shiftResult, resultRange);
+            return ExprResult(shiftResult, resultRange);
+          }
+
+          // Non-power-of-2 ceildiv not yet supported
+        }
+        return ExprResult(lhs, BitRange());
+      }
+
       case AffineExprKind::Mod: {
         // Check if RHS is constant power of 2 -> use AND
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
