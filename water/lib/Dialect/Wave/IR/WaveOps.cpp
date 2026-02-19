@@ -1737,8 +1737,11 @@ LogicalResult ExtractOp::verify() {
     return emitOpError() << "source tensor type must be fully specified";
 
   auto resultTensorType = cast<WaveTensorType>(getResult().getType());
-  if (!resultTensorType.getFullySpecified() ||
-      resultTensorType.getRank() + 1 != sourceTensorType.getRank()) {
+
+  if (!resultTensorType.getFullySpecified())
+    return emitOpError() << "target tensor type must be fully specified";
+
+  if (resultTensorType.getRank() + 1 != sourceTensorType.getRank()) {
     return emitOpError()
            << "result tensor must have one less dimension than source";
   }

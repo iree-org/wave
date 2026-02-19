@@ -36,6 +36,13 @@ func.func @extract_dynamic(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tens
   return %0 : !wave.tensor<[@A] of f32>
 }
 
+// CHECK-LABEL: extract_0d
+func.func @extract_0d(%arg0: !wave.tensor<[@X] of f32>) {
+  // CHECK: wave.extract
+  %0 = wave.extract %arg0[<[] -> (0)>] : (!wave.tensor<[@X] of f32>) -> !wave.tensor<[] of f32>
+  return
+}
+
 // CHECK-LABEL: @unary
 func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.exp2

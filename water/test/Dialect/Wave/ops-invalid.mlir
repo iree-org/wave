@@ -565,7 +565,7 @@ func.func @extract_vector_result_not_one_element(%src: vector<4xf32>) {
 
 // -----
 
-func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) attributes {
+func.func @extract_result_same_rank_as_source(%src: !wave.tensor<[@M, @N] of f32>) attributes {
   wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16}>
 } {
   // expected-error @below {{result tensor must have one less dimension than source}}
@@ -578,6 +578,14 @@ func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) att
 func.func @extract_source_not_fully_specified(%src: !wave.tensor<any of f32>) {
   // expected-error @below {{source tensor type must be fully specified}}
   %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<any of f32>) -> !wave.tensor<[@X] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_target_not_fully_specified(%src: !wave.tensor<[@X] of f32>) {
+  // expected-error @below {{target tensor type must be fully specified}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@X] of f32>) -> !wave.tensor<any of f32>
   return
 }
 
