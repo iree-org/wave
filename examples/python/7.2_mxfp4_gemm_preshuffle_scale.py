@@ -372,6 +372,7 @@ def run_all_tests():
         subs=hyperparams,
         canonicalize=True,
         use_global_to_shared=True,
+        # minimize_shared_allocs=True,
     )
     options = set_default_run_config(options)
 
@@ -379,6 +380,7 @@ def run_all_tests():
     compiled_vanilla = wave_compile(options, vanilla_kernel)
 
     compiled_preshuffle = wave_compile(options, preshuffle_kernel)
+    print(compiled_preshuffle.asm)
 
     # Generate test data
     x, w, x_scales, w_scales = generate_mxfp4_inputs(
