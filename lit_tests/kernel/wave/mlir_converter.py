@@ -1102,14 +1102,15 @@ def read_with_mapping_kernel(
     a: Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
     b: Memory[N, M, ADDRESS_SPACE_C, tkl.f16],
 ):
-    # Create a permutation mapping: (d0, d1) -> (d1, d0)
-    # This transposes the indices when reading from memory
+    # Create a permutation mapping for read that transposes dimensions
+    # Memory has shape [M, N], register will have shape [N, M]
+    # Iterator i (position 0) corresponds to M, iterator j (position 1) corresponds to N
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     transpose_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: i, N: j},  # Memory has shape [M, N]
-        outputs={N: j, M: i},  # Value (register) has shape [N, M]
+        inputs={M: i, N: j},  # Memory dimension M uses iterator i, dimension N uses iterator j
+        outputs={N: j, M: i},  # Register dimension N uses iterator j, dimension M uses iterator i
     )
 
     # Read with transpose mapping
@@ -1173,14 +1174,15 @@ def write_with_mapping_kernel(
     a: Memory[N, M, ADDRESS_SPACE_A, tkl.f16],
     b: Memory[M, N, ADDRESS_SPACE_C, tkl.f16],
 ):
-    # Create a permutation mapping for write: (d0, d1) -> (d1, d0)
-    # This transposes the indices when writing to memory
+    # Create a permutation mapping for write that transposes dimensions
+    # Register has shape [N, M], memory has shape [M, N]
+    # Iterator i (position 0) corresponds to N, iterator j (position 1) corresponds to M
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     transpose_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: j, N: i},  # Memory b has shape [M, N], M maps to iterator j, N maps to iterator i
-        outputs={N: i, M: j},  # Value (register a_reg) has shape [N, M], N maps to iterator i, M maps to iterator j
+        inputs={M: j, N: i},  # Memory dimension M uses iterator j, dimension N uses iterator i
+        outputs={N: i, M: j},  # Register dimension N uses iterator i, dimension M uses iterator j
     )
 
     # Read from memory (no mapping)
