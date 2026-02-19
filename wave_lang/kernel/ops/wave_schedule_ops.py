@@ -277,15 +277,14 @@ def interleave_operations(
     counters = [0] * len(interleaved_ops)
     result = []
     for i, base_op in enumerate(base_ops):
-        result.append(base_op)  
+        result.append(base_op)
         # Check each group for insertion
         for group_idx, (ops, interval, offset, depends_on) in enumerate(
             zip(interleaved_ops, intervals, start_offsets, start_after_groups)
         ):
             # All dependent groups must be fully exhausted first
             deps_satisfied = all(
-                counters[dep] >= len(interleaved_ops[dep])
-                for dep in depends_on
+                counters[dep] >= len(interleaved_ops[dep]) for dep in depends_on
             )
             if (
                 deps_satisfied
