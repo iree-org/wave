@@ -63,7 +63,7 @@ func.func @invalid_register_type(%arg0: f32) {
 // -----
 
 func.func @register_type_mismatch(%arg0: f32) {
-  // expected-error @below {{expected the type of the init value to match the elemental type of the result}}
+  // expected-error @below {{expected operand #0 and result #0 elemental types to match}}
   "wave.register"(%arg0) : (f32) -> !wave.tensor<[@A, @B] of bf16>
 }
 
@@ -843,7 +843,7 @@ func.func @broadcast_explicit_dims_with_fully_specified_types(%arg0: !wave.tenso
 
 func.func @broadcast_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
   // Source and result must have matching element types.
-  // expected-error @below {{expected source and result elemental types to match, got 'f32', 'f16'}}
+  // expected-error @below {{expected operand #0 and result #0 elemental types to match}}
   wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f16, <register>>
   return
 }
@@ -893,7 +893,7 @@ func.func @permute_empty_result_shape(%arg0: !wave.tensor<[@M, @N] of f32, <regi
 
 // Test that permute input and result element types must match
 func.func @permute_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
-  // expected-error @below {{expected input and result elemental types to match, got 'f32', 'f16'}}
+  // expected-error @below {{expected operand #0 and result #0 elemental types to match}}
   wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @M] of f16, <register>>
   return
 }
