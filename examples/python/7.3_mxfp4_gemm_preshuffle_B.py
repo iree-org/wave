@@ -1,3 +1,16 @@
+"""
+MXFP4 GEMM with Pre-shuffled B: 4-wave and 8-wave.
+
+B data is preshuffled on the host and read directly from global memory.
+A + A_scales + B_scales go through LDS (GatherToLDS).
+
+Usage:
+    python 7.3_mxfp4_gemm_preshuffle_B.py --test test_preshuffleB_8wave
+    python 7.3_mxfp4_gemm_preshuffle_B.py --test test_preshuffleB_4wave
+    python 7.3_mxfp4_gemm_preshuffle_B.py --test <test_name> --debug
+    python 7.3_mxfp4_gemm_preshuffle_B.py --list_tests
+"""
+
 import torch
 
 import wave_lang.kernel.wave as tkw
@@ -19,12 +32,12 @@ SCALE_GROUP_SIZE = 32
 
 def preshuffle_b_aiter(b: torch.Tensor) -> torch.Tensor:
     """
-    Preshuffle B using the aiter ``shuffle_weight`` permutation (see
-    ``preshuffle_B_analysis.md``).
+    Preshuffle B using the aiter `shuffle_weight` permutation (see
+    `preshuffle_B_analysis.md`).
 
     Within each 16-row x 32-byte tile the original layout is
-    ``[n, k_sub, k_elem]``  (shape ``[16, 2, 16]``).
-    The permutation reorders it to ``[k_sub, n, k_elem]``, so that a
+    `[n, k_sub, k_elem]`  (shape `[16, 2, 16]`).
+    The permutation reorders it to `[k_sub, n, k_elem]`, so that a
     contiguous 256-byte read fetches one K-chunk for all 16 N-rows.
 
     For the full MFMA B operand (16 N x 128 K FP4 = 1024 packed bytes),
@@ -32,8 +45,8 @@ def preshuffle_b_aiter(b: torch.Tensor) -> torch.Tensor:
 
         addr(lane) = tile_base + lane * 16   (64 lanes x 16 B = 1024 B contiguous)
 
-    Equivalent to ``aiter/ops/shuffle.py::shuffle_weight`` with
-    ``layout=(16, 16), use_int4=False``:
+    Equivalent to `aiter/ops/shuffle.py::shuffle_weight` with
+    `layout=(16, 16), use_int4=False`:
 
         x.view(N//16, 16, K_packed//32, 2, 16)
          .permute(0, 2, 3, 1, 4)
@@ -41,7 +54,7 @@ def preshuffle_b_aiter(b: torch.Tensor) -> torch.Tensor:
          .view(N, K_packed)
 
     Input:
-      - b: ``[N, K/2]`` packed MXFP4 bytes (``uint8``)
+      - b: `[N, K/2]` packed MXFP4 bytes (`uint8`)
     Output:
       - b_ps: same shape/dtype, rearranged for PRESHUFFLEB
     """
@@ -165,16 +178,19 @@ def torchScaledGemmMXFP4(
 # 4096,57344,16384
 # 8192,57344,16384
 # 16384,16384,16384
-def test_preshuffleB_direct_global_b_8wave(
+def _run_preshuffleB_gemm(
+    num_waves: int,
     is_debug: bool = False,
     shape: tuple[int, int, int] = (1024, 1024, 8192),
     block: tuple[int, int, int] = (256, 256, 256),
 ):
     """
-    GEMM with:
-    - A + A_scales via LDS (GatherToLDS) for bandwidth/latency hiding
-    - B + B_scales via direct GLOBAL reads (no LDS) using preshuffled B layout
+    GEMM with preshuffle B
+    - A + A_scales + B_scales via LDS (GatherToLDS)
+    - B via direct GLOBAL reads (preshuffled layout)
+    - 8-wave uses WorkgroupBarrier + stagger; 4-wave does not.
     """
+    use_stagger = num_waves == 8
     mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
 
     M = tkl.sym.M
@@ -192,7 +208,8 @@ def test_preshuffleB_direct_global_b_8wave(
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    # Wave layout: (num_waves // 2) in M × 2 in N
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / (num_waves // 2))]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
     constraints += [tkw.IteratorBindings({m_iter: M, n_iter: N})]
     constraints += [
@@ -418,33 +435,31 @@ def test_preshuffleB_direct_global_b_8wave(
 
         independent_global_count = len(loop_global_to_shared)
 
+        # Build Cluster 0 contents — 8-wave includes WorkgroupBarrier, 4-wave does not
+        cluster_0_ops = [
+            loop_global_load_b_0,
+            loop_global_load_b_1,
+            loop_shared_load_a_0,
+            loop_shared_load_a_scale_0,
+            loop_shared_load_b_scale_0,
+            loop_bitcast_a_0,
+            loop_bitcast_a_scale_0,
+            loop_bitcast_b_0,
+            loop_bitcast_b_scale_0,
+            tkw.SchedulingBarrier([]),
+            loop_global_to_shared,
+            tkw.SchedulingBarrier([]),
+        ]
+        if use_stagger:
+            cluster_0_ops += [tkw.WorkgroupBarrier(), tkw.SchedulingBarrier([])]
+
         clusters = [
-            # Cluster 0: issue B_0 global loads FIRST (high latency ~400 cy),
-            #            then A shared loads + B_scale from LDS, bitcasts,
+            # Cluster 0: ALL B global loads, first-half shared loads + bitcasts,
             #            then GatherToLDS prefetches for next iteration
+            tkw.cluster(cluster_0_ops),
+            # Cluster 1: first-half MMAs only (clean)
             tkw.cluster(
                 [
-                    loop_global_load_b_0,
-                    loop_shared_load_a_0,
-                    loop_shared_load_a_scale_0,
-                    loop_shared_load_b_scale_0,
-                    loop_bitcast_a_0,
-                    loop_bitcast_a_scale_0,
-                    loop_bitcast_b_scale_0,
-                    tkw.SchedulingBarrier([]),
-                    loop_global_to_shared,
-                    tkw.SchedulingBarrier([]),
-                    tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
-                ]
-            ),
-            # Cluster 1: issue B_1 global loads early (overlap with MMA_0),
-            #            then bitcast B_0 + first-half MMAs.
-            #            B_1 now has MMA_0 (~128+ cy) + Cluster 2 to arrive.
-            tkw.cluster(
-                [
-                    loop_global_load_b_1,
-                    loop_bitcast_b_0,
                     tkw.SetWavePrio(1),
                     loop_scaled_mma_0,
                     tkw.SetWavePrio(0),
@@ -453,8 +468,7 @@ def test_preshuffleB_direct_global_b_8wave(
                     tkw.SchedulingBarrier([]),
                 ]
             ),
-            # Cluster 2: second-half A shared loads + B_scale from LDS
-            #            (B_1 already in flight from Cluster 1)
+            # Cluster 2: second-half shared loads + bitcasts
             tkw.cluster(
                 [
                     loop_shared_load_a_1,
@@ -462,16 +476,16 @@ def test_preshuffleB_direct_global_b_8wave(
                     loop_shared_load_b_scale_1,
                     loop_bitcast_a_1,
                     loop_bitcast_a_scale_1,
+                    loop_bitcast_b_1,
                     loop_bitcast_b_scale_1,
                     tkw.SchedulingBarrier([]),
                     tkw.MemoryCounterWaitBarrier(load=0),
                     tkw.SchedulingBarrier([]),
                 ]
             ),
-            # Cluster 3: bitcast B_1 (should have arrived) + second-half MMAs
+            # Cluster 3: second-half MMAs only (clean)
             tkw.cluster(
                 [
-                    loop_bitcast_b_1,
                     tkw.SetWavePrio(1),
                     loop_scaled_mma_1,
                     tkw.SetWavePrio(0),
@@ -483,7 +497,12 @@ def test_preshuffleB_direct_global_b_8wave(
         tkw.insert_before(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
         tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
-        tkw.stagger(pipeline_loop.KERNEL)
+        if use_stagger:
+            tkw.stagger(pipeline_loop.KERNEL)
+
+    dump_dir = (
+        f"tmp_files/mxfp4_{num_waves}wave_preshuffleB_schedule/" if is_debug else None
+    )
 
     hyperparams = {
         ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE,
@@ -516,13 +535,14 @@ def test_preshuffleB_direct_global_b_8wave(
         print_ir_after="all" if is_debug else [],
         use_global_to_shared=True,
         use_buffer_ops=True,
-        dump_intermediates="tmp_files/mxfp4_wave8_preshuffleB_schedule/",
+        dump_intermediates=dump_dir,
     )
     options = set_default_run_config(options)
     compiled = wave_compile(options, gemm, preshuffleB_schedule)
 
-    with open("tmp_files/mxfp4_wave8_preshuffleB_schedule/temp.mlir", "w") as f:
-        f.write(compiled.asm)
+    if dump_dir:
+        with open(dump_dir + "temp.mlir", "w") as f:
+            f.write(compiled.asm)
 
     # Testing
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
@@ -546,7 +566,7 @@ def test_preshuffleB_direct_global_b_8wave(
     compiled(x, x_scales, w_t_ps, w_scales, out)
 
     torch.testing.assert_close(torch_out, out.cpu(), check_dtype=False)
-    print("PreshuffleB direct-global-B scheduled GEMM test passed!")
+    print(f"PreshuffleB {num_waves}-wave scheduled GEMM test passed!")
 
     # Benchmark: warmup + timed iterations
     warmup_iters, bench_iters = 50, 100
@@ -570,6 +590,24 @@ def test_preshuffleB_direct_global_b_8wave(
     print(f"  Problem size: M={M}, N={N}, K={K}")
     print(f"  Avg time:     {elapsed_ms:.3f} ms  ({bench_iters} iters)")
     print(f"  TFLOP/s:      {tflops_per_sec:.2f}")
+
+
+def test_preshuffleB_8wave(
+    is_debug: bool = False,
+    shape: tuple[int, int, int] = (1024, 1024, 8192),
+    block: tuple[int, int, int] = (256, 256, 256),
+):
+    """PreshuffleB GEMM with 8 waves, with stagger."""
+    _run_preshuffleB_gemm(num_waves=8, is_debug=is_debug, shape=shape, block=block)
+
+
+def test_preshuffleB_4wave(
+    is_debug: bool = False,
+    shape: tuple[int, int, int] = (1024, 1024, 8192),
+    block: tuple[int, int, int] = (256, 256, 256),
+):
+    """PreshuffleB GEMM with 4 waves, no stagger."""
+    _run_preshuffleB_gemm(num_waves=4, is_debug=is_debug, shape=shape, block=block)
 
 
 if __name__ == "__main__":
