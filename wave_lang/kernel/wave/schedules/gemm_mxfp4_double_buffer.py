@@ -562,7 +562,6 @@ def get_mxfp4_asymmetric_schedule():
             # both drain iterations.
             itr0 = []
             itr1 = []
-            breakpoint()
             for node in nodes:
                 value = getattr(node, key)
                 if "1_2" in value:
