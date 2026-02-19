@@ -478,6 +478,7 @@ def mlir_converter_select():
     # CHECK: %[[READ_B:.*]] = wave.read
     # CHECK: %[[READ_C:.*]] = wave.read
     # CHECK: %[[SELECT:.*]] = wave.select %[[READ_C]], %[[READ_A]], %[[READ_B]]
+    # CHECK-SAME: (!wave.tensor<[@M] of i1, <register>>
     # CHECK: wave.write %[[SELECT]]
 
 
