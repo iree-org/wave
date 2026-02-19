@@ -1,4 +1,5 @@
 import hashlib
+from itertools import count
 import math
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence, TYPE_CHECKING
@@ -259,6 +260,7 @@ def interleave_operations(
     interleaved_ops: list | list[list],
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
+    start_after_groups: list[list[int]] | None = None,
 ) -> list:
     """
     Interleave operations with flexible per-group patterns.
@@ -268,6 +270,9 @@ def interleave_operations(
         interleaved_ops: List of operations OR list of lists for multiple groups
         intervals: Single interval or list of intervals per group (default: 1)
         start_offsets: Single offset or list of offsets per group (default: 0 for all)
+        start_after_groups: Per-group list of group indices that must be fully
+            exhausted before this group begins firing. E.g. [[],[],[0,1],[0,1]]
+            means groups 2 and 3 will not fire until groups 0 and 1 are done.
     
     Returns:
         List of interleaved operations
@@ -284,6 +289,15 @@ def interleave_operations(
             interleaved_ops=[scale_reads, data_reads],
             intervals=[1, 4]
         )
+
+        # Scale loads only after all wide loads are done:
+        result = interleave_operations(
+            base_ops=mfmas,
+            interleaved_ops=[g2s_a, shared_load_a_0, shared_load_a_scale_0, g2s_a_scale],
+            intervals=[4, 4, 2, 4],
+            start_offsets=[0, 3, 3, 4],
+            start_after_groups=[[], [], [0, 1], [0, 1]],
+        )
     """
     # Normalize inputs to lists
     if not isinstance(interleaved_ops[0], list):
@@ -297,7 +311,10 @@ def interleave_operations(
         start_offsets = [0] * len(interleaved_ops)
     elif isinstance(start_offsets, int):
         start_offsets = [start_offsets] * len(interleaved_ops)
-    
+
+    if start_after_groups is None:
+        start_after_groups = [[] for _ in interleaved_ops]
+
     # Track counters for each group
     counters = [0] * len(interleaved_ops)
     result = []
@@ -306,13 +323,18 @@ def interleave_operations(
         result.append(base_op)
         
         # Check each group for insertion
-        for group_idx, (ops, interval, offset) in enumerate(
-            zip(interleaved_ops, intervals, start_offsets)
+        for group_idx, (ops, interval, offset, depends_on) in enumerate(
+            zip(interleaved_ops, intervals, start_offsets, start_after_groups)
         ):
-            # Check if we should insert from this group
+            # All dependent groups must be fully exhausted first
+            deps_satisfied = all(
+                counters[dep] >= len(interleaved_ops[dep])
+                for dep in depends_on
+            )
             if (
-                i >= offset
-                and (i - offset + 1) % interval == 0
+                deps_satisfied
+                and i >= offset
+                and (i - offset) % interval == 0
                 and counters[group_idx] < len(ops)
             ):
                 result.append(ops[counters[group_idx]])
