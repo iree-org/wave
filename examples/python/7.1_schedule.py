@@ -8,6 +8,7 @@ Usage:
     python 7.1_schedule.py --test test_dbuf_4wave_mxfp_gemm
     python 7.1_schedule.py --test test_dbuf_8wave_mxfp_gemm
     python 7.1_schedule.py --test test_dbuf_8wave_mxfp_gemm --debug
+    python 7.1_schedule.py --test test_splitk_preshuffle_scales_gemm_cpp
     python 7.1_schedule.py --list_tests
 """
 
@@ -19,7 +20,8 @@ from wave_lang.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
     SHARED_ADDRESS_SPACE,
 )
-from wave_lang.kernel.wave.compile import wave_compile
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import ScaledMMAType
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_asymmetric_schedule,
     get_mxfp4_dbuf_mixed_pingpong_schedule,
@@ -36,6 +38,7 @@ from wave_lang.kernel.wave.templates import (
     get_tagged_mxfp4_gemm_preshuffle_scales,
     get_tagged_mxfp4_gemm_preshuffle_scales_and_B,
 )
+from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     b_preshuffle,
     e8m0_shuffle,
@@ -61,7 +64,14 @@ def _run_mxfp_gemm(gemm, shape):
 
 
 def _run_mxfp_gemm_preshuffle(
-    gemm, shape, all=False, only_scale=False, only_b=False, output_dtype=torch.float32
+    gemm,
+    shape,
+    all=False,
+    only_scale=False,
+    only_b=False,
+    output_dtype=torch.float32,
+    atol=None,
+    rtol=None,
 ):
     """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference.
 
@@ -90,8 +100,13 @@ def _run_mxfp_gemm_preshuffle(
 
     gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
+    tol_kwargs = {}
+    if atol is not None:
+        tol_kwargs["atol"] = atol
+    if rtol is not None:
+        tol_kwargs["rtol"] = rtol
     torch.testing.assert_close(
-        torch_out, out.cpu(), check_dtype=False, check_device=False
+        torch_out, out.cpu(), check_dtype=False, check_device=False, **tol_kwargs
     )
 
 
@@ -495,6 +510,40 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     print(
         "MXFP GEMM preshuffle-B 4-wave dynamic M, N, K (WaveASM backend) test passed!"
     )
+
+
+def test_splitk_preshuffle_scales_gemm_cpp(
+    is_debug=False,
+    shape=(1024, 1024, 8192),
+    block=(128, 128, 256),
+):
+    """Split-K MXFP4 GEMM using C++ WaveASM backend (preshuffled scales)."""
+    splitk_fn, hyperparams = get_splitk_mxfp4_gemm_kernel(
+        shape,
+        num_splits=2,
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        block_shape=block,
+        waves_per_block=(2, 2),
+        preshuffle_scales=True,
+        output_type=tkl.f32,
+    )
+    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        use_global_to_shared=True,
+    )
+    options.use_wave_asm_backend = True
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, splitk_fn)
+
+    _run_mxfp_gemm_preshuffle(gemm, shape, only_scale=True)
+    print("Split-K MXFP4 GEMM (preshuffled scales, WaveASM backend) test passed!")
 
 
 if __name__ == "__main__":

@@ -1358,7 +1358,12 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
     BUFFER_ATOMIC_PK_ADD_BF16::create(builder, loc, packed, srd, alignedVoffset,
                                       alignedInstOffset);
   } else if (elementType.isF32()) {
-    BUFFER_ATOMIC_ADD_F32::create(builder, loc, *valueMapped, srd, voffset,
+    Value f32Value = *valueMapped;
+    if (isAGPRType(f32Value.getType())) {
+      auto vregType = ctx.createVRegType();
+      f32Value = V_ACCVGPR_READ_B32::create(builder, loc, vregType, f32Value);
+    }
+    BUFFER_ATOMIC_ADD_F32::create(builder, loc, f32Value, srd, voffset,
                                   instOffset);
   } else {
     return op->emitError("unsupported element type for atomic_rmw: ")
