@@ -56,6 +56,7 @@ def get_tagged_mxfp4_gemm(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
+    GROUP_SIZE_N = tkl.sym.GROUP_SIZE_N
     A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
     B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
@@ -70,21 +71,23 @@ def get_tagged_mxfp4_gemm(
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
     if reorder_workgroups:
-        # Workgroup reordering based on SP3 example: group by 32 along N dim
+        # Workgroup reordering based on SP3 example: group by GROUP_SIZE_N along N dim
         wg0, wg1 = WORKGROUP_0, WORKGROUP_1
         num_wg_0 = ceiling(M / BLOCK_M)
         num_wg_1 = ceiling(N / BLOCK_N)
 
         # Flatten in column-major order
         flat_wg_index = wg0 + wg1 * num_wg_0
-        group_index = flat_wg_index // 32
+        group_index = flat_wg_index // GROUP_SIZE_N
 
-        # Main case, forming full groups of 32 tiles along N
+        # Main case, forming full groups of GROUP_SIZE_N tiles along N
         main_new_wg0 = group_index % num_wg_0
-        main_new_wg1 = (group_index // num_wg_0) * 32 + flat_wg_index % 32
+        main_new_wg1 = (
+            group_index // num_wg_0
+        ) * GROUP_SIZE_N + flat_wg_index % GROUP_SIZE_N
 
-        # Tailing case, when N tiles is not a multiple of 32
-        full_tiles_n = floor(num_wg_1 / 32) * 32
+        # Tailing case, when N tiles is not a multiple of GROUP_SIZE_N
+        full_tiles_n = floor(num_wg_1 / GROUP_SIZE_N) * GROUP_SIZE_N
         tail_tiles_n = num_wg_1 - full_tiles_n
         total_full = full_tiles_n * num_wg_0
         tail_linear = flat_wg_index - total_full
@@ -140,6 +143,7 @@ def get_tagged_mxfp4_gemm(
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
+        GROUP_SIZE_N: 32,
         M: shape[0],
         N: shape[1],
         K: shape[2],
