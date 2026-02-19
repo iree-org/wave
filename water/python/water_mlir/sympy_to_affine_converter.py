@@ -24,7 +24,7 @@ class NonAffineExpr:
     """Represents a non-affine expression with affine subexpressions"""
 
     expressions: list[ir.AffineExpr]
-    combinator: wave.WaveApplyExprCombinatorAttr
+    combinator: wave.WaveApplyExprCombinator
 
 
 @dataclass
@@ -91,9 +91,9 @@ class AffineFraction:
 
 def _convert_sympy_expr_mlir(
     sympy_expr: sympy.core.expr.Expr, symbols: List[str]
-) -> NonAffineExpr | AffineFraction:
+) -> NonAffineExpr | ir.AffineExpr:
 
-    def get(combinator: wave.WaveApplyExprCombinatorAttr) -> NonAffineExpr:
+    def get(combinator: wave.WaveApplyExprCombinator) -> NonAffineExpr:
         return NonAffineExpr(
             expressions=[
                 _convert_sympy_to_affine_expr(expr, symbols) for expr in sympy_expr.args

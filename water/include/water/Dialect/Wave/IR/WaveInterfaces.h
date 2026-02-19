@@ -291,9 +291,9 @@ public:
 };
 
 template <typename OpTy>
-class CompatibleOperandAndResultsShapeOpTrait
-    : public mlir::OpTrait::TraitBase<OpTy,
-                                      CompatibleOperandAndResultsShapeOpTrait> {
+class CompatibleOperandsAndResultsShapeOpTrait
+    : public mlir::OpTrait::TraitBase<
+          OpTy, CompatibleOperandsAndResultsShapeOpTrait> {
 public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(

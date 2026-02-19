@@ -1161,7 +1161,6 @@ def _emit_from_captured_trace(
 
         # Verify the module before transforming or printing.
         try:
-            print(module, file=sys.stderr)
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(WaterError(message=e.message))

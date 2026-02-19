@@ -1976,7 +1976,6 @@ LogicalResult wave::ApplyExprOp::verify() {
     return success();
   };
 
-  Type elementType = getElementType(getResult().getType());
   unsigned numResults = getExpr().getMap().getNumResults();
   if (std::optional<WaveApplyExprCombinator> combinator = getCombinator()) {
     if (llvm::is_contained({WaveApplyExprCombinator::Maximum,

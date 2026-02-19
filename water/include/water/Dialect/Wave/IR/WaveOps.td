@@ -582,7 +582,7 @@ def ShuffleOp : WaveOp<"shuffle", [
 def ApplyExprOp : WaveOp<"apply_expr",
     [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
      WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-     CompatibleOperandAndResultsShapeOpTrait,
+     CompatibleOperandsAndResultsShapeOpTrait,
      WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
     WaveArithmeticOpDoc {
   let summary = "Apply a symbolic expression to one or more register values";
