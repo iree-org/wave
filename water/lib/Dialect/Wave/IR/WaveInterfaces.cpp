@@ -685,6 +685,42 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
                          kResultNamePrefix, os.str());
 }
 
+llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
+    Operation *op) {
+  if (op->getNumOperands() == 0 && op->getNumResults() == 0)
+    return llvm::success();
+
+  // Get the reference type from the first operand or result
+  Type referenceType;
+  std::string referenceName;
+  if (op->getNumOperands() > 0) {
+    referenceType = op->getOperandTypes()[0];
+    referenceName = "operand #0";
+  } else {
+    referenceType = op->getResultTypes()[0];
+    referenceName = "result #0";
+  }
+
+  // Verify all operand element types match
+  for (auto [idx, operandType] : llvm::enumerate(op->getOperandTypes())) {
+    std::string operandName = "operand #" + std::to_string(idx);
+    if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
+                                       referenceType, operandName,
+                                       operandType)))
+      return llvm::failure();
+  }
+
+  // Verify all result element types match
+  for (auto [idx, resultType] : llvm::enumerate(op->getResultTypes())) {
+    std::string resultName = "result #" + std::to_string(idx);
+    if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
+                                       referenceType, resultName, resultType)))
+      return llvm::failure();
+  }
+
+  return llvm::success();
+}
+
 //-----------------------------------------------------------------------------
 // Lattice implementation
 //-----------------------------------------------------------------------------

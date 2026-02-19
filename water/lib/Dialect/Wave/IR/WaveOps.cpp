@@ -1669,13 +1669,6 @@ wave::ReadOp::propagateElementsPerThreadBackward(
 LogicalResult wave::RegisterOp::verify() {
   Type type = getResult().getType();
   auto tensorType = dyn_cast<WaveTensorType>(type);
-  auto elementType = tensorType ? tensorType.getElementType()
-                                : cast<VectorType>(type).getElementType();
-  Type initType = getInit().getType();
-  if (elementType != initType) {
-    return emitOpError() << "expected the type of the init value to match the "
-                            "elemental type of the result";
-  }
   if (!tensorType)
     return success();
 
@@ -1713,12 +1706,6 @@ LogicalResult ExtractOp::verify() {
     return emitOpError() << "position must contain exactly one expression, but "
                             "got "
                          << position.getRank();
-  }
-
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
-                                             getSource().getType(), "result",
-                                             getResult().getType()))) {
-    return failure();
   }
 
   if (auto resultVectorType = dyn_cast<VectorType>(getResult().getType())) {
@@ -2151,11 +2138,6 @@ llvm::SmallVector<WaveSymbolAttr> wave::BroadcastOp::inferBroadcastDims() {
 }
 
 LogicalResult wave::BroadcastOp::verify() {
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
-                                             getSource().getType(), "result",
-                                             getResult().getType())))
-    return failure();
-
   auto sourceType = llvm::dyn_cast<WaveTensorType>(getSource().getType());
   auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
 
@@ -2289,10 +2271,6 @@ static LogicalResult validatePermutationInput(WaveTensorType inputType,
 LogicalResult wave::PermuteOp::verify() {
   Value input = getValue();
   Value result = getResult();
-
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "input", input.getType(),
-                                             "result", result.getType())))
-    return failure();
 
   auto inputType = dyn_cast<WaveTensorType>(input.getType());
   auto resultType = dyn_cast<WaveTensorType>(result.getType());

@@ -373,7 +373,8 @@ def AllocateOp : WaveOp<"allocate", [
 }
 
 def ExtractOp : WaveOp<"extract",
-    [DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
+    [DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
+     EqualElementTypesOpTrait]> {
   let summary = "Extracts a single element from a vector at the given index";
   let description = [{
     This is an internal operation that appears during expansion/lowering and
@@ -477,7 +478,8 @@ def ReadOp : WaveOp<"read", [
 def RegisterOp : WaveOp<"register", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     NoOpElementsPerThreadOpTrait,
-    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait,
+    EqualElementTypesOpTrait]> {
   let summary = "Defines a tensor value known to be placed in a register";
   let description = [{
     Defines a new register-resident tensor initialized with the given scalar
@@ -661,7 +663,8 @@ def CastOp : WaveOp<"cast", [
 def BroadcastOp : WaveOp<"broadcast", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
-    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait,
+    EqualElementTypesOpTrait]> {
   let summary = "Broadcast a tensor to a larger shape by replicating values";
   let description = [{
     Broadcasts the source tensor to the result shape by replicating values
@@ -740,7 +743,8 @@ def SelfIndexOp : WaveOp<"self_index", [
 def PermuteOp : WaveOp<"permute", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
+    EqualElementTypesOpTrait]> {
   let summary = "Permute the dimensions of a register-resident tensor";
   let description = [{
     Reorders the symbolic dimensions of a register-resident tensor according
