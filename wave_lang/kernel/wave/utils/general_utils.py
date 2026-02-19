@@ -173,6 +173,13 @@ def remove_global_indexing(
     tiling_constraints = [c for c in constraints if isinstance(c, TilingConstraint)]
     workgroup_ids = [WORKGROUP_0, WORKGROUP_1, WORKGROUP_2]
     subs = {w: 0 for w in workgroup_ids}
+    # Zero out tiling constraint starts (e.g. K_SPLIT_OFF) alongside
+    # workgroup IDs.  These starts are global offsets that must be removed
+    # *before* any dimension scaling (K → K/32 for MXFP4 scales) so that
+    # the subtraction later doesn't mix scaled and unscaled units.
+    for tc in tiling_constraints:
+        if tc.start != sympy.Integer(0) and isinstance(tc.start, sympy.Symbol):
+            subs[tc.start] = 0
 
     new_index = {key: safe_subs(index[key], subs) for key in index}
     for key in new_index:
@@ -180,13 +187,14 @@ def remove_global_indexing(
             new_dim = new_index[key]
             if new_dim.has(constraint.induction_var):
                 new_dim = new_dim.subs({constraint.induction_var: 0})
+                local_start = safe_subs(constraint.start, subs)
                 if isinstance(new_dim, IndexSequence):
-                    new_dim.start = new_dim.start - constraint.start
+                    new_dim.start = new_dim.start - local_start
                 else:
                     assert isinstance(
                         new_dim, sympy.Basic
                     ), f"new_dim is not a sympy expression: {new_dim}"
-                    new_dim = new_dim - constraint.start
+                    new_dim = new_dim - local_start
 
                 new_index[key] = new_dim
     return new_index

@@ -243,6 +243,207 @@ def get_splitk_gemm_kernel(
     return splitk_gemm, hyperparams
 
 
+def get_splitk_mxfp4_gemm_kernel(
+    shape: tuple[int, int, int],
+    num_splits: int,
+    mfma_variant: "ScaledMMAType",
+    threads_per_wave: int = 64,
+    block_shape: Optional[tuple[int, int, int]] = None,
+    waves_per_block: Optional[tuple[int, int]] = None,
+    preshuffle_B: bool = False,
+    preshuffle_scales: bool = False,
+):
+    """
+    Creates a split-K MXFP4 GEMM kernel that parallelizes the K dimension
+    across multiple workgroups using atomic_add accumulation.
+
+    Inputs are packed MXFP4 data (2 values per byte stored as i8) with
+    E8M0 scale tensors (1 scale per 32 data elements). The kernel uses
+    scaled_mma for the compute and atomic_add for the final accumulation.
+
+    The caller must zero-initialize the output tensor C before launch.
+
+    Args:
+        shape: (M, N, K) problem dimensions (K is the logical element count).
+        num_splits: Number of splits along the K dimension.
+        mfma_variant: Scaled MMA instruction type (e.g. ScaledMMAType.F32_16x16x128_F8F6F4).
+        threads_per_wave: Threads per wave (64 for CDNA).
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        waves_per_block: (waves_M, waves_N) waves per workgroup.
+        preshuffle_B: If True, read B with the aiter preshuffled IndexMapping.
+            The caller must pre-shuffle b with preshuffle_b_aiter().
+        preshuffle_scales: If True, read a_scale and b_scale from GLOBAL memory
+            using the e8m0_shuffle IndexMapping.  The caller must pre-shuffle
+            scales with e8m0_shuffle().
+    """
+
+    if not block_shape:
+        block_shape = (128, 128, 128)
+
+    if not waves_per_block:
+        waves_per_block = (2, 2)
+
+    m, n, k = shape
+    k_per_split = math.ceil(k / num_splits)
+    if k_per_split < block_shape[2]:
+        raise ValueError(
+            f"K per split ({k_per_split}) is less than BLOCK_K ({block_shape[2]}). "
+            f"Reduce num_splits or BLOCK_K so that each split has at least BLOCK_K elements."
+        )
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    S = tkl.sym.S
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    BLOCK_S = tkl.sym.BLOCK_S
+    K_SPLIT_OFF = tkl.sym.K_SPLIT_OFF
+    K_SPLIT_LEN = tkl.sym.K_SPLIT_LEN
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
+    K_PACKED = tkl.sym.K_PACKED
+    K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+
+    k_packed_val = k // 2
+    k_scale_shuffled_val = (((k // 32) + 7) // 8) * 8
+
+    b_preshuffle_mapping = None
+    if preshuffle_B:
+        n_it = tkw.IndexMapping.iterator(0)
+        k_it = tkw.IndexMapping.iterator(1)
+        within_nblk = (
+            (k_it // 32) * 512 + ((k_it // 16) % 2) * 256 + (n_it % 16) * 16 + k_it % 16
+        )
+        b_preshuffle_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                N: (n_it // 16) * 16 + within_nblk // K_PACKED,
+                K: within_nblk % K_PACKED,
+            },
+            outputs={N: n_it, K: k_it},
+        )
+
+    a_scale_mapping = None
+    b_scale_mapping = None
+    if preshuffle_scales:
+        i = tkw.IndexMapping.iterator(0)
+        j = tkw.IndexMapping.iterator(1)
+        _flat_a = (
+            (j // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (i // 8) * 256
+            + ((i % 8) % 4) * 64
+            + ((j % 32) % 16) * 4
+            + (((i % 8) // 4) * 2)
+            + ((j % 32) // 16)
+        )
+        a_scale_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                M: _flat_a // k_scale_shuffled_val,
+                K: _flat_a % k_scale_shuffled_val,
+            },
+            outputs={K: i, M: j},
+        )
+        kk = tkw.IndexMapping.iterator(0)
+        n_s = tkw.IndexMapping.iterator(1)
+        _flat_b = (
+            (n_s // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (kk // 8) * 256
+            + ((kk % 8) % 4) * 64
+            + ((n_s % 32) % 16) * 4
+            + (((kk % 8) // 4) * 2)
+            + ((n_s % 32) // 16)
+        )
+        b_scale_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                N: _flat_b // k_scale_shuffled_val,
+                K: _flat_b % k_scale_shuffled_val,
+            },
+            outputs={K: kk, N: n_s},
+        )
+
+    a_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
+    b_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WorkgroupConstraint(S, BLOCK_S, 2),
+        tkw.TilingConstraint(
+            K,
+            BLOCK_K,
+            iters=sympy.ceiling(K_SPLIT_LEN / BLOCK_K),
+            start=K_SPLIT_OFF,
+        ),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / waves_per_block[0])),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / waves_per_block[1])),
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            vector_shapes={S: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def splitk_mxfp4_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, a_scale_space, tkl.i8],
+        b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, b_scale_space, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b, mapping=b_preshuffle_mapping)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale, mapping=b_scale_mapping)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        repeat_bf16 = tkw.cast(repeat, tkl.bf16)
+        tkw.atomic_add(repeat_bf16, c)
+
+    hyperparams = {
+        # Use global address space to work around a compiler bug where
+        # shared-memory write indices are incorrect for fractional K
+        # dimensions (K/2, K/32) when TilingConstraint has a non-zero start.
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        B_ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        BLOCK_S: 1,
+        M: m,
+        N: n,
+        K: k,
+        S: num_splits,
+        K_SPLIT_OFF: WORKGROUP_2 * k_per_split,
+        K_SPLIT_LEN: sympy.Min(K, (WORKGROUP_2 + 1) * k_per_split) - K_SPLIT_OFF,
+    }
+    for key, value in hyperparams.items():
+        if isinstance(value, sympy.Expr):
+            hyperparams[key] = value.subs(hyperparams)
+
+    if preshuffle_B:
+        hyperparams[K_PACKED] = k_packed_val
+    if preshuffle_scales:
+        hyperparams[K_SCALE_SHUFFLED] = k_scale_shuffled_val
+
+    hyperparams.update(get_default_scheduling_params())
+
+    return splitk_mxfp4_gemm, hyperparams
+
+
 def get_gemm_kernel_transpose_a_b(
     shape: tuple[int, int, int],
     dynamic_dims: bool | tuple[bool, bool, bool],

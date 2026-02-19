@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
 
-from sympy import Integer, Piecewise, ceiling, floor
+from sympy import Integer, Min, Mul, Piecewise, ceiling, floor
 
 from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
@@ -760,6 +760,45 @@ class WorkgroupConstraint(DistributionConstraint):
         return bound
 
 
+def _expr_contains_min_with_bound(expr: IndexExpr, bound) -> bool:
+    """Return True when *expr* (recursively) contains ``Min(bound, ...)``."""
+    if isinstance(expr, Min):
+        if any(a == bound for a in expr.args):
+            return True
+    for arg in getattr(expr, "args", ()):
+        if _expr_contains_min_with_bound(arg, bound):
+            return True
+    return False
+
+
+def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
+    """Conservatively decide whether *work_bound* can exceed *dim_bound*.
+
+    Returns ``False`` (no overshoot) when we can prove that the tiled work
+    never exceeds the tensor dimension.  In particular this handles the
+    split-K pattern where ``work_bound = tile * ceiling(Min(dim, f(wg)) / tile)``
+    and ``dim`` is tile-aligned: ``ceiling(Min(dim, x) / tile) * tile <= dim``.
+
+    Falls back to ``True`` (bounds needed) when the relationship cannot be
+    determined.
+    """
+    if work_bound == dim_bound:
+        return False
+    if isinstance(work_bound, (int, Integer)) and isinstance(dim_bound, (int, Integer)):
+        return int(work_bound) > int(dim_bound)
+    if isinstance(dim_bound, (int, Integer)):
+        dim_int = int(dim_bound)
+        if _expr_contains_min_with_bound(work_bound, dim_int):
+            tile = None
+            if isinstance(work_bound, Mul) and len(work_bound.args) == 2:
+                for a in work_bound.args:
+                    if isinstance(a, (int, Integer)):
+                        tile = int(a)
+            if tile is not None and dim_int % tile == 0:
+                return False
+    return True
+
+
 @dataclass
 class TilingConstraint(DistributionConstraint):
     """
@@ -819,7 +858,7 @@ class TilingConstraint(DistributionConstraint):
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
         bound = None
-        if subs_idxc(self.work_bound) != subs_idxc(self.dim_bound):
+        if _work_may_exceed_dim(subs_idxc(self.work_bound), subs_idxc(self.dim_bound)):
             bound = self.dim_bound
 
         if (
