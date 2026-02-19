@@ -450,14 +450,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             pipeline_loop.KERNEL, tkw.MemoryCounterWaitBarrier(load=loop_wait_load)
         )
 
-        # 4-WAVE OPTIMIZED: Interleave global loads and shared loads with MFMAs
-        # Pattern: g2v after 1st, 5th, 9th... | ds_read after 4th, 8th, 12th...
-        # g2v at i%4==0, ds_read at i%4==3
-        
-        # Interleave with MFMAs:
-        #   - Wide data loads (dwordx4) at offset 0: issue first for max latency hiding
-        #   - ds_reads (data + scale) at offset 3: after 4 mfmas
-        #   - Narrow scale loads (dword) at offset 4: after ds_reads, still ahead of use
         interleaved_mma_0 = tkw.interleave_operations(
             base_ops=loop_scaled_mma_0,
             interleaved_ops=[
@@ -468,7 +460,7 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             ],
             intervals=[4, 4, 2, 4],
             start_offsets=[0, 3, 2, 0],
-            start_after_groups=[[], [], [1], [0]]
+            start_after_groups=[[], [], [1], [0]],
         )
 
         interleaved_mma_1 = tkw.interleave_operations(
@@ -481,7 +473,7 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             ],
             intervals=[4, 4, 2, 4],
             start_offsets=[0, 3, 2, 0],
-            start_after_groups=[[], [], [1], [0]]
+            start_after_groups=[[], [], [1], [0]],
         )
 
         clusters = [
@@ -499,7 +491,7 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
                 ]
             ),
             tkw.cluster(
-                [   
+                [
                     loop_bitcast_a_1,
                     loop_bitcast_a_scale_1,
                     tkw.SchedulingBarrier([]),
