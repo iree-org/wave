@@ -87,6 +87,8 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm(
     options.dump_binaries = "build/binaries"
     options.dump_intermediates = "build/intermediates"
     options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
     options.use_water_backend = True
     schedule = get_mxfp4_asymmetric_schedule()
 

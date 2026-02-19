@@ -627,21 +627,23 @@ def testBroadcastedScaleGemmMXFP4(
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
 @pytest.mark.parametrize(
-    "num_waves,use_stagger",
+    "wave_shape,use_stagger",
     [
-        (4, False),
-        (8, True),
+        ((2, 2), False),
+        ((4, 2), True),
     ],
 )
 def testScaledGemmMXFP4ManualDoubleBuf(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
-    num_waves: int,
+    wave_shape: tuple[int, int],
     use_stagger: bool,
 ):
     """End-to-end test for CDNA4 MXFP4 scaled GEMM with manual double-buffer schedule."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block_shape, mfma_variant, num_waves)
+    gemm, options = get_tagged_mxfp4_gemm(
+        shape, block_shape, wave_shape=wave_shape, mfma_variant=mfma_variant
+    )
     schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
@@ -687,6 +689,8 @@ def testScaledGemmMXFP4AsymmetricSchedule(
     )
     schedule = get_mxfp4_asymmetric_schedule()
     options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
     options.use_water_backend = use_water_backend
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)

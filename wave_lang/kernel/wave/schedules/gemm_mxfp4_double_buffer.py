@@ -556,7 +556,10 @@ def get_mxfp4_asymmetric_schedule():
         epilogue_mma = tkw.filter_nodes(scaled_mma, subgraph=pipeline_loop.EPILOGUE)
 
         def split_by_iteration(nodes, key="name"):
-            """Utility to split nodes by name containing '1_2' and '2_2'."""
+            # TODO: Replace name-based splitting with a pipeline_drain_iteration
+            # attribute (analogous to unroll_iteration). expanded_dims can't be
+            # used here because loop_reconstruction copies them verbatim for
+            # both drain iterations.
             itr0 = []
             itr1 = []
             breakpoint()
