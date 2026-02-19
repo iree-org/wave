@@ -19,6 +19,7 @@ from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     Allocate,
+    AtomicOp,
     Conditional,
     CustomOp,
     GetResult,
@@ -698,6 +699,34 @@ def fixup_mma_nodes(trace: CapturedTrace, expansion_context: ExpansionContext):
         first.replace_all_uses_with_except(second, [exclude])
 
 
+def fixup_reshape_nodes(trace: CapturedTrace):
+    """Update reshape nodes after expansion.
+
+    Set fields indicating the logical slice this reshape extracts and the total
+    number of slices handled by clones of this reshape node after expansion.
+    """
+    reshape_nodes: list[fx.Node] = trace.walk(
+        lambda x: isinstance(get_custom(x), Reshape)
+    )
+    for reshape in reshape_nodes:
+        custom = get_custom(reshape)
+        innermost_dim = custom.type.symbolic_shape[-1]
+        if not custom.expanded_dims:
+            continue
+        offset = custom.expanded_dims[innermost_dim]
+        num_partitions = (
+            custom.target_vector_shape[innermost_dim]
+            // custom.vector_shapes[innermost_dim]
+        )
+        # When num_partitions == 0, this is a concat-style reshape so just
+        # pretend it is a single slice (default value for num_slices is 1).
+        if num_partitions > 0:
+            # Cannot just assign values to the fields since the fx.Node is not updated...
+            # TODO: this can be implemented by redefining `__setattr__` in CustomOp...
+            custom.update_arg("logical_slice", offset % num_partitions)
+            custom.update_arg("num_slices", num_partitions)
+
+
 def get_mma_indexed_dims(
     mma: MMA,
     original_indexed_dims: tuple[tuple[IndexSymbol, int]],
@@ -943,6 +972,7 @@ def is_leaf_node(node):
     custom = get_custom(node)
     return (
         isinstance(custom, Write)
+        or isinstance(custom, AtomicOp)
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
         or isinstance(custom, ScatterAdd)
@@ -1004,6 +1034,8 @@ def expand_graph(
     fixup_conditional_nodes(trace, expansion_context)
     # Fixup all mma nodes.
     fixup_mma_nodes(trace, expansion_context)
+    # Fixup all reshape nodes.
+    fixup_reshape_nodes(trace)
     # Remove original nodes in root graph.
     remove_original_nodes(leaf_ops)
     remove_unused_registers(trace)

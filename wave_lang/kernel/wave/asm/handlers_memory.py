@@ -320,11 +320,15 @@ class _MemoryHandlers:
     def handle_scaled_mfma_op(
         self, operation: amdgpu_d.ScaledMFMAOp, kernel_info: KernelInfo
     ):
-        """Handle amdgpu.scaled_mfma operations - emit scaled MFMA instruction for MXFP4/FP6/FP8."""
+        """Handle amdgpu.scaled_mfma operations - emit scaled MFMA instruction for MXFP4/FP6/FP8.
 
-        # Scaled MFMA format: %result = amdgpu.scaled_mfma M x N x K
-        #                      (%scaleA * %dataA) * (%scaleB * %dataB) + %acc
-        # where scaleA and scaleB are scalar f8E8M0FNU values (often from vector.extract)
+        Scaled MFMA format: %result = amdgpu.scaled_mfma M x N x K
+                             (%scaleA * %dataA) * (%scaleB * %dataB) + %acc
+
+        Supports both scalar f8E8M0FNU and vector<4xf8E8M0FNU> scale types.
+        When the scale is a vector<4xf8E8M0FNU>, the scalesIdx attribute
+        selects which byte within the 32-bit VGPR to use (opsel).
+        """
         from .kernel_mfma import _MFMASupport
 
         ctx = self.walker.kernel_ctx
@@ -342,13 +346,21 @@ class _MemoryHandlers:
         cbsz = _MFMASupport._get_scaled_mfma_format_code(a_type_str)
         blgp = _MFMASupport._get_scaled_mfma_format_code(b_type_str)
 
+        # Extract opsel (byte index within scale VGPR) from attributes
+        scales_idx_a = int(operation.attributes["scalesIdxA"])
+        scales_idx_b = int(operation.attributes["scalesIdxB"])
+
         # Get operands based on actual MLIR structure
         # Operand order: sourceA, sourceB, destC, scaleA, scaleB
         data_a_ssa = str(operation.operands[0])  # sourceA: vector<32xf4E2M1FN>
         data_b_ssa = str(operation.operands[1])  # sourceB: vector<32xf4E2M1FN>
         acc_ssa = str(operation.operands[2])  # destC: vector<4xf32>
-        scale_a_ssa = str(operation.operands[3])  # scaleA: f8E8M0FNU (scalar)
-        scale_b_ssa = str(operation.operands[4])  # scaleB: f8E8M0FNU (scalar)
+        scale_a_ssa = str(
+            operation.operands[3]
+        )  # scaleA: f8E8M0FNU or vector<4xf8E8M0FNU>
+        scale_b_ssa = str(
+            operation.operands[4]
+        )  # scaleB: f8E8M0FNU or vector<4xf8E8M0FNU>
 
         # Get registers from kernel context
         scale_a_reg = ctx.ssa_to_reg.get(scale_a_ssa)
@@ -363,7 +375,9 @@ class _MemoryHandlers:
                 # For MXFP4: 32 elements of FP4 = 16 bytes = 4 VGPRs (4 bytes/VGPR)
                 # vector<32xf4E2M1FN> bitcast from vector<16xi8> -> 4 VGPRs
 
-                # Scale registers should be single VGPRs (extracted from vector<1xf8E8M0FNU>)
+                # Scale register: either a single VGPR (scalar f8E8M0FNU)
+                # or a single VGPR containing 4 packed bytes (vector<4xf8E8M0FNU>).
+                # In both cases it maps to a single VGPR register.
                 if isinstance(scale_a_reg, (list, tuple)):
                     scale_a_vreg = scale_a_reg[0] if len(scale_a_reg) > 0 else None
                 else:
@@ -390,6 +404,8 @@ class _MemoryHandlers:
                     acc_regs if acc_regs and len(acc_regs) == 4 else None,
                     cbsz=cbsz,
                     blgp=blgp,
+                    scales_idx_a=scales_idx_a,
+                    scales_idx_b=scales_idx_b,
                 )
 
                 # Track result in SSA mapping
@@ -518,7 +534,19 @@ class _MemoryHandlers:
         total_bytes = num_elements * element_bytes
 
         # Alignment depends on load size
-        DS_ALIGN = 16 if total_bytes == 16 else (8 if total_bytes == 8 else 4)
+        # ds_read_u8 is byte-aligned, ds_read_u16 is 2-byte, ds_read_b32 is
+        # 4-byte aligned, etc.  Using exact alignment lets the offset-folding
+        # optimiser emit the offset: field for narrow loads too.
+        if total_bytes >= 16:
+            DS_ALIGN = 16
+        elif total_bytes >= 8:
+            DS_ALIGN = 8
+        elif total_bytes >= 4:
+            DS_ALIGN = 4
+        elif total_bytes >= 2:
+            DS_ALIGN = 2
+        else:
+            DS_ALIGN = 1
 
         if DEBUG_DS_OFFSET:
             print(f"[DS_OFFSET_DEBUG] memref={memref_ssa[:60]}...")
@@ -579,18 +607,30 @@ class _MemoryHandlers:
                 KVReg(dst_range.base_reg.id),
                 KVReg(dst_range.base_reg.id + 1),
             )
+        elif total_bytes == 1:
+            # 8-bit load (e.g., i8/f8E8M0FNU scale factors for MXFP4)
+            # ds_read_u8 loads exactly 1 byte, zero-extended to 32 bits.
+            # Using ds_read_b32 here would read 3 garbage bytes from
+            # adjacent LDS locations, corrupting the scale register.
+            dst_vreg = ctx.vreg()
+            ctx.emit_lds_read_u8(dst_vreg, addr_vreg, lds_offset)
+            result_regs = (dst_vreg,)
+        elif total_bytes == 2:
+            # 16-bit load (e.g., f16 or i16 data)
+            # ds_read_u16 loads exactly 2 bytes, zero-extended to 32 bits.
+            dst_vreg = ctx.vreg()
+            ctx.emit_lds_read_u16(dst_vreg, addr_vreg, lds_offset)
+            result_regs = (dst_vreg,)
         elif total_bytes <= 4:
-            # 32-bit or smaller load (1, 2, or 4 bytes)
-            # ds_read_b32 loads 4 bytes into a single VGPR.
-            # For sub-4-byte types (e.g., 1-byte i8/f8E8M0FNU scales),
-            # the needed data is in the low bits; upper bits are don't-care.
+            # 32-bit load
             dst_vreg = ctx.vreg()
             ctx.emit_lds_read_b32(dst_vreg, addr_vreg, lds_offset)
             result_regs = (dst_vreg,)
         else:
             raise NotImplementedError(
                 f"LDS load of {total_bytes} bytes not supported. "
-                f"Expected 4 (ds_read_b32), 8 (ds_read_b64), or 16 (ds_read_b128) bytes."
+                f"Expected 1 (ds_read_u8), 2 (ds_read_u16), 4 (ds_read_b32), "
+                f"8 (ds_read_b64), or 16 (ds_read_b128) bytes."
             )
 
         # Track in SSA mapping as tuple of KVReg

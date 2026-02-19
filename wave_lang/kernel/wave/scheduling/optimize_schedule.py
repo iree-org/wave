@@ -221,15 +221,12 @@ class ScheduleOptimizer:
                 f"  Attempting to move node {node_to_move.name} to cycle {new_target_cycle}"
             )
 
-        (
-            is_valid_move,
-            candidate_schedule,
-            error_message,
-        ) = self.validator.attempt_move(node_to_move, new_target_cycle)
+        move_result = self.validator.attempt_move(node_to_move, new_target_cycle)
 
-        if not is_valid_move or candidate_schedule is None:
+        if not move_result:
             return False, current_best_latency, None, None
 
+        candidate_schedule = move_result.value
         candidate_latency = self._measure_with_logging(candidate_schedule)
 
         # Skip invalid results (infinity indicates compilation failure)

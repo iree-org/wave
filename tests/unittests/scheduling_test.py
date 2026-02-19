@@ -541,10 +541,11 @@ class ScheduleRepairerTest(unittest.TestCase):
         )
 
         # Try to move node 'c' to cycle 2 (which would require backward repair)
-        success, new_schedule, _ = validator.attempt_move(nodes["c"], 2)
+        result = validator.attempt_move(nodes["c"], 2)
 
         # The move should succeed
-        self.assertTrue(success, "Move should succeed")
+        self.assertTrue(result, "Move should succeed")
+        new_schedule = result.value
         self.assertIsNotNone(new_schedule, "New schedule should not be None")
 
         # Verify that all dependencies are satisfied
@@ -616,10 +617,11 @@ class ScheduleRepairerTest(unittest.TestCase):
         )
 
         # Try to move node 'b' to cycle 3 (which would require forward repair)
-        success, new_schedule, _ = validator.attempt_move(nodes["b"], 3)
+        result = validator.attempt_move(nodes["b"], 3)
 
         # The move should succeed
-        self.assertTrue(success)
+        self.assertTrue(result)
+        new_schedule = result.value
         self.assertIsNotNone(new_schedule)
 
         # Verify that node 'b' was moved to cycle 3
@@ -666,11 +668,10 @@ class ScheduleRepairerTest(unittest.TestCase):
         )
 
         # Try to move node 'c' to cycle 0 (conflicts with 'a' on resource 0)
-        success, new_schedule, _ = validator.attempt_move(nodes["c"], 0)
+        result = validator.attempt_move(nodes["c"], 0)
 
         # The move should fail due to resource constraints
-        self.assertFalse(success)
-        self.assertIsNone(new_schedule)
+        self.assertFalse(result)
 
     def test_load_and_move_schedule_txt(self):
         """Test loading a schedule from schedule.txt and moving a node."""
@@ -762,8 +763,9 @@ class ScheduleRepairerTest(unittest.TestCase):
         requested_cycle = original_cycle - 1 if offset < 0 else original_cycle + 1
 
         # Try to move the node
-        success, new_schedule, _ = validator.attempt_move(node_to_move, requested_cycle)
-        self.assertTrue(success, f"Failed to move node with offset {offset}")
+        result = validator.attempt_move(node_to_move, requested_cycle)
+        self.assertTrue(result, f"Failed to move node with offset {offset}")
+        new_schedule = result.value
         self.assertIsNotNone(new_schedule)
 
         # Verify the node was moved (either to requested cycle or a valid alternative)

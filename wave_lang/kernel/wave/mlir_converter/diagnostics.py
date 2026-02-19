@@ -32,7 +32,7 @@ class FileLocation:
     """A file-based location with filename, line range, and column range.
 
     Field names match the ir.Location Python binding properties for
-    ``FileLineColLoc`` / ``FileLineColRange``.
+    `FileLineColLoc` / `FileLineColRange`.
     """
 
     filename: str
@@ -46,7 +46,7 @@ class FileLocation:
 class NameLocation:
     """A named location wrapping a child location.
 
-    Maps to MLIR's ``NameLoc``.  Contains the name identifier and the
+    Maps to MLIR's `NameLoc`.  Contains the name identifier and the
     recursively-serialized child location (if any).
     """
 
@@ -65,6 +65,11 @@ class MLIRDiagnostic:
     message: str
     severity: str
     location: list[LocationFrame] = field(default_factory=list)
+
+
+def error_diagnostics(diags: list[MLIRDiagnostic]) -> list[MLIRDiagnostic]:
+    """Filter a list of diagnostics to errors only."""
+    return [d for d in diags if "error" in d.severity.lower()]
 
 
 @dataclass

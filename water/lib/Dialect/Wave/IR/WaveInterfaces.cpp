@@ -585,7 +585,7 @@ llvm::LogicalResult wave::detail::verifyTensorShapesCompatible(
 }
 
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
-    Type lhs, Type rhs, bool includeAddressSpace,
+    Type lhs, Type rhs, bool includeAddressSpace, bool includeElementalType,
     std::optional<Location> errorLocation, llvm::StringRef lhsName,
     llvm::StringRef rhsName) {
   // Fast and cheap path.
@@ -597,9 +597,11 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
            "expected names when location is provided");
   }
 
-  if (failed(
-          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
-    return failure();
+  if (includeElementalType) {
+    if (failed(
+            verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
+      return failure();
+  }
 
   auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
   auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
@@ -626,7 +628,7 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
 
 static llvm::LogicalResult
 verifyTypeRange(Location loc, TypeRange range, Type referenceType,
-                bool includeAddressSpace,
+                bool includeAddressSpace, bool includeElementalType,
                 llvm::StringRef rangeDescriptionPrefix,
                 llvm::StringRef referenceDescription) {
   llvm::SmallString<16> rangeDescription(rangeDescriptionPrefix);
@@ -636,8 +638,8 @@ verifyTypeRange(Location loc, TypeRange range, Type referenceType,
     os << i;
 
     if (failed(wave::detail::verifyTypesCompatible(
-            type, referenceType, includeAddressSpace, loc, os.str(),
-            referenceDescription))) {
+            type, referenceType, includeAddressSpace, includeElementalType, loc,
+            os.str(), referenceDescription))) {
       return llvm::failure();
     }
   }
@@ -645,7 +647,7 @@ verifyTypeRange(Location loc, TypeRange range, Type referenceType,
 }
 
 llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
-    Operation *op, bool includeAddressSpace) {
+    Operation *op, bool includeAddressSpace, bool includeElementalType) {
   const llvm::StringLiteral kOperandNamePrefix = "operand #";
   const llvm::StringLiteral kResultNamePrefix = "result #";
   std::string referenceDescription;
@@ -674,11 +676,13 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 
   if (llvm::failed(verifyTypeRange(op->getLoc(), op->getOperandTypes(),
                                    referenceType, includeAddressSpace,
-                                   kOperandNamePrefix, os.str())))
+                                   includeElementalType, kOperandNamePrefix,
+                                   os.str())))
     return llvm::failure();
 
   return verifyTypeRange(op->getLoc(), op->getResultTypes(), referenceType,
-                         includeAddressSpace, kResultNamePrefix, os.str());
+                         includeAddressSpace, includeElementalType,
+                         kResultNamePrefix, os.str());
 }
 
 //-----------------------------------------------------------------------------
@@ -1379,7 +1383,7 @@ LogicalResult wave::detail::verifyReductionOperation(Operation *op,
   }
   if (failed(wave::detail::verifyTypesCompatible(
           initTypeBase, resultTypeBase, /*includeAddressSpace=*/true,
-          op->getLoc(), "init", "result"))) {
+          /*includeElementalType=*/true, op->getLoc(), "init", "result"))) {
     return failure();
   }
 

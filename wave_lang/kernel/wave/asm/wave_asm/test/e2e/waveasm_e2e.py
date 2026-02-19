@@ -44,6 +44,7 @@ if str(wave_root) not in sys.path:
     sys.path.insert(0, str(wave_root))
 
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 
 
 @dataclass
@@ -238,16 +239,8 @@ class WaveASMCompiler:
         except Exception as e:
             return False, str(e), ""
 
-    def assemble_to_binary(self, asm_text: str) -> Tuple[bool, Optional[Path], str]:
-        """
-        Assemble AMDGCN assembly to GPU binary using amdclang++.
-
-        Args:
-            asm_text: AMDGCN assembly text
-
-        Returns:
-            Tuple of (success, binary_path, error_message)
-        """
+    def assemble_to_binary(self, asm_text: str) -> Result[Path]:
+        """Assemble AMDGCN assembly to GPU binary using amdclang++."""
         temp_dir = self._get_temp_dir()
         asm_file = temp_dir / "kernel.s"
         obj_file = temp_dir / "kernel.o"
@@ -281,7 +274,7 @@ class WaveASMCompiler:
             )
 
             if result.returncode != 0:
-                return False, None, f"Assembly failed: {result.stderr}"
+                return Failure(f"Assembly failed: {result.stderr}")
 
             # Step 2: Link to HSACO
             link_cmd = [
@@ -303,14 +296,14 @@ class WaveASMCompiler:
             )
 
             if result.returncode != 0:
-                return False, None, f"Linking failed: {result.stderr}"
+                return Failure(f"Linking failed: {result.stderr}")
 
-            return True, hsaco_file, ""
+            return Success(hsaco_file)
 
         except subprocess.TimeoutExpired:
-            return False, None, "Assembly/linking timed out"
+            return Failure("Assembly/linking timed out")
         except Exception as e:
-            return False, None, str(e)
+            return Failure(str(e))
 
     def compile_full(
         self,
@@ -344,21 +337,21 @@ class WaveASMCompiler:
         asm_text = asm_or_error
 
         # Step 2: ASM -> Binary
-        success, binary_path, error = self.assemble_to_binary(asm_text)
+        asm_result = self.assemble_to_binary(asm_text)
 
-        if not success:
+        if not asm_result:
             return CompilationResult(
                 mlir_text=mlir_text,
                 asm_text=asm_text,
                 binary_path=None,
                 success=False,
-                error_message=f"ASM->Binary failed: {error}",
+                error_message=f"ASM->Binary failed: {asm_result.error}",
             )
 
         return CompilationResult(
             mlir_text=mlir_text,
             asm_text=asm_text,
-            binary_path=binary_path,
+            binary_path=asm_result.value,
             success=True,
         )
 
@@ -480,17 +473,29 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
         lds_size = launch_info.shared_memory_bytes
         kernel_name = launch_info.func_name
 
-        # Compute grid dimensions - launch_info.grid is a lambda
-        # For static sizes, we can call it with empty args or the bound symbols
-        try:
-            # Get bound symbols from subs
-            bound_symbols = list(options.subs.keys())
-            bound_values = [options.subs[sym] for sym in bound_symbols]
-            grid = launch_info.grid(bound_values)
-            grid = tuple(int(x) for x in grid)
-        except Exception:
-            # Fallback: compute from subs - 1 workgroup per block dimension
-            grid = (1, 1, 1)
+        # Compute grid dimensions - launch_info.grid is a sympy.lambdify lambda.
+        # It expects arguments in the same order they were defined in compile.py:
+        #   grid_symbols = bound_scalar_symbols.keys() + dynamic_symbols
+        # and is called with a single list: grid_fn(list_of_values).
+        #
+        # sympy.lambdify may reference `math.floor`/`math.ceil` in the generated
+        # lambda body but the math module may be missing from its __globals__
+        # when invoked outside the lambdify call-site.  Inject it defensively.
+        import math
+
+        launch_info.grid.__globals__.setdefault("math", math)
+        dynamic_syms = list(getattr(options, "dynamic_symbols", None) or [])
+        grid_symbols = list(kernel_func.bound_scalar_symbols.keys()) + dynamic_syms
+        grid_values = []
+        for sym in grid_symbols:
+            if sym not in options.subs:
+                raise ValueError(
+                    f"Grid symbol {sym} not found in options.subs. "
+                    f"Available: {list(options.subs.keys())}"
+                )
+            grid_values.append(options.subs[sym])
+        grid = launch_info.grid(grid_values)
+        grid = tuple(int(x) for x in grid)
 
     # Extract func.func from stream wrapper for C++ backend
     extracted_funcs = []

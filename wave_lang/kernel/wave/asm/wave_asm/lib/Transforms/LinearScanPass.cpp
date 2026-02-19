@@ -27,6 +27,20 @@
 using namespace mlir;
 using namespace waveasm;
 
+/// Convert a virtual register type to a physical register type.
+/// Returns the original type unchanged if it's not a virtual register type
+/// or if physReg < 0.
+static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
+                             int64_t physReg) {
+  if (physReg < 0)
+    return virtualType;
+  if (auto vreg = dyn_cast<VRegType>(virtualType))
+    return PVRegType::get(ctx, physReg, vreg.getSize());
+  if (auto sreg = dyn_cast<SRegType>(virtualType))
+    return PSRegType::get(ctx, physReg, sreg.getSize());
+  return virtualType;
+}
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -271,23 +285,10 @@ private:
       for (Value result : op->getResults()) {
         Type ty = result.getType();
         int64_t physReg = mapping.getPhysReg(result);
-
-        if (physReg >= 0) {
-          // Convert virtual to physical type
-          if (auto vreg = dyn_cast<VRegType>(ty)) {
-            newResultTypes.push_back(
-                PVRegType::get(op->getContext(), physReg, vreg.getSize()));
-            needsUpdate = true;
-          } else if (auto sreg = dyn_cast<SRegType>(ty)) {
-            newResultTypes.push_back(
-                PSRegType::get(op->getContext(), physReg, sreg.getSize()));
-            needsUpdate = true;
-          } else {
-            newResultTypes.push_back(ty);
-          }
-        } else {
-          newResultTypes.push_back(ty);
-        }
+        Type newTy = makePhysicalType(op->getContext(), ty, physReg);
+        newResultTypes.push_back(newTy);
+        if (newTy != ty)
+          needsUpdate = true;
       }
 
       // Update the operation's result types if needed
@@ -306,9 +307,9 @@ private:
     // result types still have virtual types. We need to propagate the
     // physical types to maintain consistency.
     //
-    // Strategy: get types from the condition's iter_args (which are the
-    // loop-back values with physical types), and propagate to block args
-    // and loop results.
+    // Strategy: Use the allocation mapping to update block argument types
+    // directly to their assigned physical register types. Then propagate
+    // to loop result types and init arg types.
     program.walk([&](LoopOp loopOp) {
       Block &bodyBlock = loopOp.getBodyBlock();
 
@@ -317,12 +318,25 @@ private:
       if (!condOp)
         return;
 
-      // Update block argument types to match condition's iter_arg types.
-      // The condition iter_args are the loop-back values (already updated
-      // to physical types by the first walk).
+      // Update block argument types from the allocation mapping.
+      // Block arguments are tied to init args, so they should get the same
+      // physical register. Using the mapping directly is more robust than
+      // inferring from condition iter_arg types (which may themselves be
+      // block arguments not yet updated, e.g. in cross-swap patterns).
       for (unsigned i = 0; i < bodyBlock.getNumArguments(); ++i) {
-        if (i < condOp.getIterArgs().size()) {
-          bodyBlock.getArgument(i).setType(condOp.getIterArgs()[i].getType());
+        BlockArgument blockArg = bodyBlock.getArgument(i);
+        Type ty = blockArg.getType();
+        int64_t physReg = mapping.getPhysReg(blockArg);
+
+        if (physReg >= 0) {
+          blockArg.setType(makePhysicalType(loopOp->getContext(), ty, physReg));
+        } else if (i < condOp.getIterArgs().size()) {
+          // Fallback: infer from condition iter_arg type (for values not in
+          // the mapping, e.g. precolored values)
+          Type condType = condOp.getIterArgs()[i].getType();
+          if (isa<PVRegType>(condType) || isa<PSRegType>(condType)) {
+            blockArg.setType(condType);
+          }
         }
       }
 

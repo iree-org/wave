@@ -6,6 +6,7 @@
 
 import sympy
 from water_mlir import ir
+from water_mlir.dialects import wave
 
 
 from typing import List
@@ -16,6 +17,14 @@ class AffineConversionError(Exception):
     """Exception raised for errors in affine expression conversion."""
 
     pass
+
+
+@dataclass
+class NonAffineExpr:
+    """Represents a non-affine expression with affine subexpressions"""
+
+    expressions: list[ir.AffineExpr]
+    combinator: wave.WaveApplyExprCombinator
 
 
 @dataclass
@@ -78,6 +87,39 @@ class AffineFraction:
             denominator = self.denominator * other.denominator
 
         return AffineFraction(numerator, denominator)
+
+
+def _convert_sympy_expr_mlir(
+    sympy_expr: sympy.core.expr.Expr, symbols: List[str]
+) -> NonAffineExpr | ir.AffineExpr:
+
+    def get(combinator: wave.WaveApplyExprCombinator) -> NonAffineExpr:
+        return NonAffineExpr(
+            expressions=[
+                _convert_sympy_to_affine_expr(expr, symbols) for expr in sympy_expr.args
+            ],
+            combinator=combinator,
+        )
+
+    match sympy_expr:
+        case sympy.StrictGreaterThan():
+            return get(wave.WaveApplyExprCombinator.Greater)
+        case sympy.StrictLessThan():
+            return get(wave.WaveApplyExprCombinator.Less)
+        case sympy.Eq():
+            return get(wave.WaveApplyExprCombinator.Equal)
+        case sympy.Ne():
+            return get(wave.WaveApplyExprCombinator.NotEqual)
+        case sympy.GreaterThan():
+            return get(wave.WaveApplyExprCombinator.GreaterOrEqual)
+        case sympy.LessThan():
+            return get(wave.WaveApplyExprCombinator.LessOrEqual)
+        case sympy.Max():
+            return get(wave.WaveApplyExprCombinator.Maximum)
+        case sympy.Min():
+            return get(wave.WaveApplyExprCombinator.Minimum)
+
+    return _convert_sympy_to_affine_expr(sympy_expr, symbols)
 
 
 def _convert_expr_to_fraction(
@@ -186,6 +228,22 @@ def _convert_expr_to_fraction(
         )
 
 
+def _convert_sympy_to_affine_expr(
+    expr: sympy.core.expr.Expr, symbols: List[str]
+) -> ir.AffineExpr:
+    fraction = _convert_expr_to_fraction(expr, symbols)
+
+    # Final validation: we must have valid fraction (i.e. denominator = 1) result for AffineMap
+    if not AffineFraction.is_affine_expr_constant_one(fraction.denominator):
+        raise AffineConversionError(
+            f"Expression results in invalid fraction: {expr}\n"
+            f"  Numerator: {fraction.numerator}\n"
+            f"  Denominator: {fraction.denominator}"
+        )
+
+    return fraction.numerator
+
+
 def convert_sympy_to_affine_map(
     expr: sympy.core.expr.Expr, symbols: List[str]
 ) -> ir.AffineMap:
@@ -202,15 +260,25 @@ def convert_sympy_to_affine_map(
     Raises:
         AffineConversionError: if conversion fails for any reason
     """
+    return ir.AffineMap.get(
+        0, len(symbols), [_convert_sympy_to_affine_expr(expr, symbols)]
+    )
 
-    fraction = _convert_expr_to_fraction(expr, symbols)
 
-    # Final validation: we must have valid fraction (i.e. denominator = 1) result for AffineMap
-    if not AffineFraction.is_affine_expr_constant_one(fraction.denominator):
-        raise AffineConversionError(
-            f"Expression results in invalid fraction: {expr}\n"
-            f"  Numerator: {fraction.numerator}\n"
-            f"  Denominator: {fraction.denominator}"
+def convert_sympy_to_affine_map_and_combinator(
+    expr: sympy.core.expr.Expr, symbols: List[str]
+) -> tuple[ir.AffineMap, wave.WaveApplyExprCombinatorAttr | None]:
+    """
+    Convert a sympy expression to an MLIR AffineMap and a
+    WaveApplyExprCombinatorAttr that connects its results in a non-affine way.
+
+    If no such combinator is needed, None is returned instead.
+    """
+    converted_expr = _convert_sympy_expr_mlir(expr, symbols)
+    if isinstance(converted_expr, NonAffineExpr):
+        return (
+            ir.AffineMap.get(0, len(symbols), converted_expr.expressions),
+            converted_expr.combinator,
         )
-
-    return ir.AffineMap.get(0, len(symbols), [fraction.numerator])
+    else:
+        return ir.AffineMap.get(0, len(symbols), [converted_expr]), None

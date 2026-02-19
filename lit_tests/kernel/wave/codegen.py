@@ -785,18 +785,23 @@ def test_read_write_conditional():
     )
     print(test_conditional.asm)
 
+    # The merge_contiguous_reads pass combines the per-element scalar
+    # reads into wider vector loads (up to max_bits_per_load / element_bits = 8
+    # for f16).  The merged loads are then sliced back to scalars for the
+    # per-element conditional stores.
     # CHECK-LABEL:    func.func @test_conditional
     #  CHECK-SAME:      (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #   CHECK-DAG:      %[[A1:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A2:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A3:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
-    #       CHECK:      %[[RES:.*]] = vector.load %[[A1]][%[[M:.*]], %[[N:.*]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
-    #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[N]]] : memref<16x16xi32, strided<[16, 1]>>
+    #       CHECK:      %[[VEC:.*]] = vector.load %[[A1]][%[[M:.*]], %{{.*}}] : memref<16x16xf16, strided<[16, 1]>>, vector<8xf16>
+    #       CHECK:      %[[RES:.*]] = vector.extract_strided_slice %[[VEC]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf16> to vector<1xf16>
+    #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[C0]]] : memref<16x16xi32, strided<[16, 1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.cmpi sgt, %[[O2]], %[[C0]] : index
     #       CHECK:      scf.if %[[O3]] {
-    #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[N]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
+    #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
     #       CHECK:      }
 
 
@@ -1991,14 +1996,11 @@ def test_explicit_broadcast():
     # CHECK: %[[X_SLICE_1:.+]] = affine.apply #[[map1]]()[%[[workgroup_id_1]]]
     # CHECK: %[[LHS_1:.+]] = vector.load %[[LHS]][%[[X_SLICE_1]], %[[Y_SLICE]]] : memref<256x128xf16, strided<[128, 1]>>, vector<2xf16>
 
-    # Slicing RHS
-    # CHECK: %[[RHS_0:.+]] = memref.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>
-    # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1]>>
-
-    # 1st Broadcast RHS
+    # Slicing RHS — merge pass combines two scalar loads into one vector load.
+    # CHECK: %[[RHS_VEC:.+]] = vector.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>, vector<2xf16>
+    # CHECK: %[[RHS_0:.+]] = vector.extract %[[RHS_VEC]][0] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
-
-    # 2nd Broadcast RHS
+    # CHECK: %[[RHS_1:.+]] = vector.extract %[[RHS_VEC]][1] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS
@@ -2114,14 +2116,11 @@ def test_broadcast_add():
     # CHECK: %[[X_SLICE_1:.+]] = affine.apply #[[map2]]()[%[[workgroup_id_1]]]
     # CHECK: %[[LHS_1:.+]] = vector.load %[[LHS]][%[[X_SLICE_1]], %[[Y_SLICE]]] : memref<256x128xf16, strided<[128, 1]>>, vector<2xf16>
 
-    # Slicing RHS
-    # CHECK: %[[RHS_0:.+]] = memref.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>
-    # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1]>>
-
-    # 1st Broadcast RHS
+    # Slicing RHS — merge pass combines two scalar loads into one vector load.
+    # CHECK: %[[RHS_VEC:.+]] = vector.load %[[RHS]][%[[X_SLICE_0]]] : memref<256xf16, strided<[1]>>, vector<2xf16>
+    # CHECK: %[[RHS_0:.+]] = vector.extract %[[RHS_VEC]][0] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
-
-    # 2nd Broadcast RHS
+    # CHECK: %[[RHS_1:.+]] = vector.extract %[[RHS_VEC]][1] : f16 from vector<2xf16>
     # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS

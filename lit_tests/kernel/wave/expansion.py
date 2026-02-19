@@ -1246,13 +1246,13 @@ def test_chained_gemm_32x32x8():
     # CHECK: %read_2_shared_M:0_N:0_K2:3
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %reshape_M:0_N:0_K2:0
-    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 0, 4)
     # CHECK: %reshape_M:0_N:0_K2:1
-    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 1, 4)
     # CHECK: %reshape_M:0_N:0_K2:2
-    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 2, 4)
     # CHECK: %reshape_M:0_N:0_K2:3
-    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 3, 4)
     # CHECK: %mma_1_M:0_N:0_K2:0
     # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:0, %read_2_shared_M:0_N:0_K2:0, %acc_M:0_N:0_K2:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_1_M:0_N:0_K2:1

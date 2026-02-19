@@ -245,7 +245,7 @@ jobs:
           # TODO: can't sudo to install dwarfdump on rdna4
           echo "WAVE_TEST_WATER=$WAVE_TEST_WATER"
           echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"
-          lit lit_tests/ -v
+          lit lit_tests/ -vv
 
       - name: MyPy Type Checking
         run: |

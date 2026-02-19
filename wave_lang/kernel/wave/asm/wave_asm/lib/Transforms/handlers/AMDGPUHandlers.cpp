@@ -463,10 +463,17 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     voff = V_MOV_B32::create(builder, loc, vregType, zeroConst);
   }
 
-  // Get LDS info
+  // Get LDS info.
+  // The LDS base offset can be:
+  //   (a) A constant (from memref.view with static byte offset) -> ImmType
+  //   (b) An SGPR (from memref iter_arg in a pipelined loop) ->
+  //   SRegType/PSRegType
+  // We track both cases and handle them appropriately when computing m0.
   int64_t ldsBaseOffsetConst = 0;
   int64_t ldsRowStride = 0;
   bool hasLdsBaseOffset = false;
+  bool hasLdsDynamicBaseOffset = false;
+  Value ldsDynamicBaseOffset;
 
   if (op->getNumOperands() > 2) {
     mlir::Value ldsMemref = op->getOperand(2);
@@ -474,6 +481,10 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
       if (auto immType = dyn_cast<ImmType>(baseOffset->getType())) {
         ldsBaseOffsetConst = immType.getValue();
         hasLdsBaseOffset = true;
+      } else {
+        // Dynamic offset: SGPR-carried from a memref iter_arg (pipelined loop)
+        hasLdsDynamicBaseOffset = true;
+        ldsDynamicBaseOffset = *baseOffset;
       }
     }
     if (auto memrefType = dyn_cast<MemRefType>(ldsMemref.getType())) {
@@ -498,7 +509,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
   }
 
   int64_t m0Const = ldsBaseOffsetConst;
-  bool canUseImmediateM0 = hasLdsBaseOffset;
+  // Can only use immediate m0 if the base offset is constant (not dynamic SGPR)
+  bool canUseImmediateM0 = hasLdsBaseOffset && !hasLdsDynamicBaseOffset;
   int64_t colIdxConst = 0;
   bool hasConstCol = false;
 
@@ -527,7 +539,9 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
         } else {
           m0Const = ldsBaseOffsetConst + rowIdxConst;
         }
-        canUseImmediateM0 = hasConstCol || (colIdxConst == 0);
+        // Can use immediate only if base is static and col is const
+        canUseImmediateM0 =
+            !hasLdsDynamicBaseOffset && (hasConstCol || (colIdxConst == 0));
       } else {
         canUseImmediateM0 = false;
       }
@@ -540,14 +554,24 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
     auto m0ConstVal = ConstantOp::create(builder, loc, m0Imm, m0Const);
     S_MOV_B32_M0::create(builder, loc, m0ConstVal);
   } else {
-    // Need to compute m0 dynamically
+    // Need to compute m0 dynamically.
+    // This path handles both:
+    //   (1) Dynamic row/col indices (original path)
+    //   (2) Dynamic base offset from SGPR-carried memref iter_args (new)
     Value m0Val;
+
+    // Start from the dynamic base offset if we have one (pipelined loop)
+    if (hasLdsDynamicBaseOffset) {
+      // Start m0 computation from the SGPR-carried LDS base offset.
+      // We'll use SALU when possible since the base is already an SGPR.
+      // (ldsDynamicBaseOffset is guaranteed non-null when the flag is set)
+      m0Val = ldsDynamicBaseOffset;
+    }
+
     if (op->getNumOperands() > 3) {
       mlir::Value ldsRowIndex = op->getOperand(3);
       auto ldsRowMapped = ctx.getMapper().getMapped(ldsRowIndex);
       if (ldsRowMapped) {
-        m0Val = *ldsRowMapped;
-
         // Lambda to convert SGPR to VGPR if needed
         auto convertToVgpr = [&](Value val) -> Value {
           if (!isVGPRType(val.getType())) {
@@ -561,59 +585,142 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
           return val;
         };
 
-        // Multiply row index by row stride if needed
+        // Compute row*stride contribution
+        Value rowContrib = *ldsRowMapped;
+        bool rowIsConst = isa<ImmType>(rowContrib.getType());
+        int64_t rowConstBytes = 0;
         if (ldsRowStride > 1) {
-          auto strideImm = ctx.createImmType(ldsRowStride);
-          auto strideConst =
-              ConstantOp::create(builder, loc, strideImm, ldsRowStride);
-          m0Val = convertToVgpr(m0Val);
-          m0Val = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
-                                       m0Val, strideConst);
+          // If the row index is a constant, we can stay in SGPR domain
+          if (auto immType = dyn_cast<ImmType>(rowContrib.getType())) {
+            rowConstBytes = immType.getValue() * ldsRowStride;
+            rowIsConst = true;
+          } else {
+            auto strideImm = ctx.createImmType(ldsRowStride);
+            auto strideConst =
+                ConstantOp::create(builder, loc, strideImm, ldsRowStride);
+            rowContrib = convertToVgpr(rowContrib);
+            rowContrib = V_MUL_LO_U32::create(
+                builder, loc, ctx.createVRegType(), rowContrib, strideConst);
+            rowIsConst = false;
+          }
+        } else if (rowIsConst) {
+          rowConstBytes = dyn_cast<ImmType>(rowContrib.getType()).getValue();
         }
 
-        // Add column offset
+        // Check if column offset is also a constant (for folding)
+        int64_t colConstBytes = 0;
+        bool colIsConst = false;
+        Value colDynamic;
         if (op->getNumOperands() > 4) {
           mlir::Value ldsColIndex = op->getOperand(4);
           auto ldsColMapped = ctx.getMapper().getMapped(ldsColIndex);
           if (ldsColMapped) {
             if (auto immType = dyn_cast<ImmType>(ldsColMapped->getType())) {
-              int64_t colOffset = immType.getValue() * ldsElemBytes;
-              if (colOffset != 0) {
-                auto colImm = ctx.createImmType(colOffset);
-                auto colConst =
-                    ConstantOp::create(builder, loc, colImm, colOffset);
-                Value colVgpr = V_MOV_B32::create(
-                    builder, loc, ctx.createVRegType(), colConst);
-                m0Val = convertToVgpr(m0Val);
-                m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
-                                          m0Val, colVgpr);
-              }
+              colConstBytes = immType.getValue() * ldsElemBytes;
+              colIsConst = true;
             } else {
-              m0Val = convertToVgpr(m0Val);
-              Value colVgpr = convertToVgpr(*ldsColMapped);
-              if (ldsElemBytes > 1) {
-                auto scaleImm = ctx.createImmType(ldsElemBytes);
-                auto scaleConst =
-                    ConstantOp::create(builder, loc, scaleImm, ldsElemBytes);
-                colVgpr = V_MUL_LO_U32::create(
-                    builder, loc, ctx.createVRegType(), colVgpr, scaleConst);
-              }
-              m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
-                                        m0Val, colVgpr);
+              colDynamic = *ldsColMapped;
             }
           }
         }
 
-        // Add base offset
-        if (hasLdsBaseOffset && ldsBaseOffsetConst != 0) {
+        // Optimization: if both row and col are constants and we have a
+        // dynamic base, fold them into a single constant add to save one
+        // SALU instruction.
+        if (rowIsConst && colIsConst) {
+          int64_t staticContrib = rowConstBytes + colConstBytes;
+          if (!m0Val) {
+            // All static: just materialize the total offset
+            auto totalImm = ctx.createImmType(staticContrib);
+            m0Val = ConstantOp::create(builder, loc, totalImm, staticContrib);
+          } else if (staticContrib != 0) {
+            // Dynamic base + single static add
+            auto totalImm = ctx.createImmType(staticContrib);
+            auto totalConst =
+                ConstantOp::create(builder, loc, totalImm, staticContrib);
+            bool m0IsSgpr = !isVGPRType(m0Val.getType());
+            if (m0IsSgpr) {
+              auto sregType = ctx.createSRegType();
+              m0Val =
+                  S_ADD_U32::create(builder, loc, sregType, m0Val, totalConst);
+            } else {
+              m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                        m0Val, totalConst);
+            }
+          }
+          // else: staticContrib == 0, m0Val already has the dynamic base
+        } else {
+          // Non-constant row or col: add row contribution
+          if (rowIsConst && rowConstBytes != 0) {
+            auto rowImm = ctx.createImmType(rowConstBytes);
+            rowContrib =
+                ConstantOp::create(builder, loc, rowImm, rowConstBytes);
+          }
+          if (!rowIsConst || rowConstBytes != 0) {
+            if (!m0Val) {
+              m0Val = rowContrib;
+            } else {
+              bool m0IsSgpr = !isVGPRType(m0Val.getType());
+              bool rowIsSgpr = !isVGPRType(rowContrib.getType());
+              if (m0IsSgpr && rowIsSgpr) {
+                auto sregType = ctx.createSRegType();
+                m0Val = S_ADD_U32::create(builder, loc, sregType, m0Val,
+                                          rowContrib);
+              } else {
+                m0Val = convertToVgpr(m0Val);
+                rowContrib = convertToVgpr(rowContrib);
+                m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                          m0Val, rowContrib);
+              }
+            }
+          }
+
+          // Add column offset (non-constant or constant with non-const row)
+          if (colIsConst && colConstBytes != 0) {
+            auto colImm = ctx.createImmType(colConstBytes);
+            auto colConst =
+                ConstantOp::create(builder, loc, colImm, colConstBytes);
+            bool m0IsSgpr = m0Val && !isVGPRType(m0Val.getType());
+            if (m0IsSgpr) {
+              auto sregType = ctx.createSRegType();
+              m0Val =
+                  S_ADD_U32::create(builder, loc, sregType, m0Val, colConst);
+            } else if (m0Val) {
+              m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                        m0Val, colConst);
+            }
+          } else if (colDynamic) {
+            m0Val = convertToVgpr(m0Val);
+            Value colVgpr = convertToVgpr(colDynamic);
+            if (ldsElemBytes > 1) {
+              auto scaleImm = ctx.createImmType(ldsElemBytes);
+              auto scaleConst =
+                  ConstantOp::create(builder, loc, scaleImm, ldsElemBytes);
+              colVgpr = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                             colVgpr, scaleConst);
+            }
+            m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(), m0Val,
+                                      colVgpr);
+          }
+        }
+
+        // Add static base offset (if we have a constant base AND a dynamic
+        // row/col making us land in this branch)
+        if (hasLdsBaseOffset && !hasLdsDynamicBaseOffset &&
+            ldsBaseOffsetConst != 0) {
           auto baseImm = ctx.createImmType(ldsBaseOffsetConst);
           auto baseConst =
               ConstantOp::create(builder, loc, baseImm, ldsBaseOffsetConst);
-          Value baseVgpr =
-              V_MOV_B32::create(builder, loc, ctx.createVRegType(), baseConst);
-          m0Val = convertToVgpr(m0Val);
-          m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(), m0Val,
-                                    baseVgpr);
+          bool m0IsSgpr = !isVGPRType(m0Val.getType());
+          if (m0IsSgpr) {
+            auto sregType = ctx.createSRegType();
+            m0Val = S_ADD_U32::create(builder, loc, sregType, m0Val, baseConst);
+          } else {
+            Value baseVgpr = V_MOV_B32::create(builder, loc,
+                                               ctx.createVRegType(), baseConst);
+            m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(), m0Val,
+                                      baseVgpr);
+          }
         }
       }
     }

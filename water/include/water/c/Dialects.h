@@ -94,6 +94,24 @@ MLIR_CAPI_EXPORTED MlirStringRef
 mlirWaveIterSymbolAttrGetName(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
+// WaveOperandAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveOperandAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveOperandAttr(MlirAttribute attr);
+
+/// Creates a new WaveOperandAttr with the given operand number.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveOperandAttrGet(MlirContext mlirCtx,
+                                                        unsigned operandNumber);
+
+/// Returns the typeID of a WaveOperandAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveOperandAttrGetTypeID();
+
+/// Gets the operand number.
+MLIR_CAPI_EXPORTED unsigned
+mlirWaveOperandAttrGetOperandNumber(MlirAttribute attr);
+
+//===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -209,6 +227,30 @@ mlirWaveWorkgroupDimAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveReductionScopeAttr
+//===---------------------------------------------------------------------===//
+
+enum WaveReductionScope {
+  WaveReductionScopeBlock = 0,
+  WaveReductionScopeWarp = 1,
+};
+
+/// Checks whether the given MLIR attribute is a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveReductionScopeAttr(MlirAttribute attr);
+
+/// Creates a new WaveReductionScopeAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveReductionScopeAttrGet(MlirContext mlirCtx, uint32_t value);
+
+/// Get the value from a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveReductionScopeAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveReductionScopeAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveReductionScopeAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
@@ -257,6 +299,36 @@ MLIR_CAPI_EXPORTED uint32_t mlirWaveShuffleModeAttrGetValue(MlirAttribute attr);
 
 /// Returns the typeID of a WaveShuffleModeAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveShuffleModeAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+enum WaveApplyExprCombinator {
+  WaveApplyExprCombinatorGreater = 0,
+  WaveApplyExprCombinatorLess = 1,
+  WaveApplyExprCombinatorEqual = 2,
+  WaveApplyExprCombinatorNotEqual = 3,
+  WaveApplyExprCombinatorGreaterOrEqual = 4,
+  WaveApplyExprCombinatorLessOrEqual = 5,
+  WaveApplyExprCombinatorMaximum = 6,
+  WaveApplyExprCombinatorMinimum = 7,
+};
+
+/// Checks whether the given MLIR attribute is a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveApplyExprCombinatorAttr(MlirAttribute attr);
+
+/// Creates a new WaveApplyExprCombinatorAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveApplyExprCombinatorAttrGet(MlirContext mlirCtx, uint32_t value);
+
+/// Get the value from a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveApplyExprCombinatorAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveApplyExprCombinatorAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveApplyExprCombinatorAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
@@ -507,6 +579,19 @@ mlirTilingConstraintAttrGetDim(MlirAttribute attr);
 
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirTilingConstraintAttrGetTileSize(MlirAttribute attr);
+
+//===---------------------------------------------------------------------===//
+// Wave Operations
+//===---------------------------------------------------------------------===//
+
+/// Makes a wave.iterate operation's region isolated from above.
+/// This transforms the region to not capture values from outer scopes,
+/// instead passing them explicitly as operands.
+MLIR_CAPI_EXPORTED void mlirWaveIterateOpMakeIsolated(MlirOperation op);
+
+/// Makes a wave.iterate operation's region non-isolated from above.
+/// This allows the region to capture values from outer scopes implicitly.
+MLIR_CAPI_EXPORTED void mlirWaveIterateOpMakeNonIsolated(MlirOperation op);
 
 #ifdef __cplusplus
 }

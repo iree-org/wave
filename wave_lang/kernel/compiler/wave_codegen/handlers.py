@@ -587,12 +587,6 @@ def handle_atomic_op(op):
                     f"{op}\nGot\n"
                     f"lhs: {lhs_data_type} vs rhs: {rhs_data_type}\n"
                 )
-            if is_float_type(lhs_data_type):
-                # TODO: To support float types, MLIR LLVM dialect needs to be updated with
-                # float types. LLVM already supports fmin and fmax (https://llvm.org/docs/LangRef.html#atomicrmw-instruction)
-                # and thus atomicrmw operation in MLIR dialect needs to target those instructions with "workgroup" scope.
-                raise NotImplementedError(f"Atomic ops don't support float types yet\n")
-
             lhs = lhs.ir_value
             rhs = rhs.ir_value
             lhs_type = lhs.type
@@ -2158,10 +2152,9 @@ def handle_permute(emitter: WaveEmitter, node: fx.Node):
 @handle_op(reshape)
 def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     try:
-        args, target_vector_shapes = node.args
+        args, _, logical_slice, num_slices = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-    custom = get_custom(node)
 
     # Determine whether to extract or combine.
     if len(args) > 1:
@@ -2205,16 +2198,10 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     # actual offset, we need to multiply by the size. The size is obtained by
     # computing the number of partitions using the source and target vector shapes
     # and dividing the incoming vector shape by the number of partitions.
-    innermost_dim = custom.type.symbolic_shape[-1]
-    offset = custom.expanded_dims[innermost_dim]
-    num_partitions = (
-        target_vector_shapes[innermost_dim] // custom.vector_shapes[innermost_dim]
-    )
+    offset = logical_slice
     vector = cast_vector(emitter, args[0])
-    size = vector.type.shape[0] // num_partitions
+    size = vector.type.shape[0] // num_slices
     result_type = VectorType.get([size], vector.type.element_type)
-    # The offset should only be in [0, num_partitions - 1].
-    offset = offset % num_partitions
     slice = vector_d.extract_strided_slice(
         result_type,
         vector,

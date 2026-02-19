@@ -8,10 +8,12 @@
 #include "mlir/CAPI/AffineMap.h"
 #include "mlir/CAPI/Registration.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/TypeID.h"
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/c/Dialects.h"
@@ -131,6 +133,28 @@ MlirTypeID mlirWaveIterSymbolAttrGetTypeID() {
 
 MlirStringRef mlirWaveIterSymbolAttrGetName(MlirAttribute attr) {
   return wrap(llvm::cast<wave::WaveIterSymbolAttr>(unwrap(attr)).getName());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveOperandAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveOperandAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveOperandAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveOperandAttrGet(MlirContext mlirCtx,
+                                     unsigned operandNumber) {
+  MLIRContext *ctx = unwrap(mlirCtx);
+  return wrap(wave::WaveOperandAttr::get(ctx, operandNumber));
+}
+
+MlirTypeID mlirWaveOperandAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveOperandAttr>());
+}
+
+unsigned mlirWaveOperandAttrGetOperandNumber(MlirAttribute attr) {
+  return llvm::cast<wave::WaveOperandAttr>(unwrap(attr)).getOperandNumber();
 }
 
 //===---------------------------------------------------------------------===//
@@ -274,6 +298,29 @@ MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveReductionScopeAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveReductionScopeAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveReductionScopeAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveReductionScopeAttrGet(MlirContext mlirCtx,
+                                            uint32_t value) {
+  return wrap(wave::WaveReductionScopeAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveReductionScope>(value)));
+}
+
+uint32_t mlirWaveReductionScopeAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveReductionScopeAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveReductionScopeAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveReductionScopeAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
@@ -318,6 +365,29 @@ MlirTypeID mlirWaveShuffleModeAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveApplyExprCombinatorAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveApplyExprCombinatorAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveApplyExprCombinatorAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveApplyExprCombinatorAttrGet(MlirContext mlirCtx,
+                                                 uint32_t value) {
+  return wrap(wave::WaveApplyExprCombinatorAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveApplyExprCombinator>(value)));
+}
+
+uint32_t mlirWaveApplyExprCombinatorAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveApplyExprCombinatorAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveApplyExprCombinatorAttrGetTypeID() {
+  return wrap(TypeID::get<wave::WaveApplyExprCombinatorAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
 
@@ -356,12 +426,13 @@ MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
       llvm::make_range(symbolNames, symbolNames + numSymbols),
       [](MlirAttribute attr) { return unwrap(attr); });
 
-  assert(llvm::all_of(
-             symbolAttrs,
-             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr,
-                           wave::WaveIterSymbolAttr>) &&
-         "expected mapping to contain only WaveSymbolAttr, "
-         "WaveIndexSymbolAttr or WaveIterSymbolAttr attributes");
+  assert(
+      llvm::all_of(
+          symbolAttrs,
+          llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr,
+                        wave::WaveIterSymbolAttr, wave::WaveOperandAttr>) &&
+      "expected mapping to contain only WaveSymbolAttr, "
+      "WaveIndexSymbolAttr, WaveIterSymbolAttr or WaveOperandAttr attributes");
 
   return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }
@@ -631,4 +702,24 @@ uint32_t mlirWaveNormalFormAttrGetValue(MlirAttribute attr) {
 
 MlirTypeID mlirWaveNormalFormAttrGetTypeID() {
   return wrap(TypeID::get<wave::WaveNormalFormAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// Wave Operations
+//===---------------------------------------------------------------------===//
+
+void mlirWaveIterateOpMakeIsolated(MlirOperation op) {
+  Operation *operation = unwrap(op);
+  if (auto iterateOp = dyn_cast<wave::IterateOp>(operation)) {
+    IRRewriter rewriter(operation->getContext());
+    iterateOp.makeIsolated(rewriter);
+  }
+}
+
+void mlirWaveIterateOpMakeNonIsolated(MlirOperation op) {
+  Operation *operation = unwrap(op);
+  if (auto iterateOp = dyn_cast<wave::IterateOp>(operation)) {
+    IRRewriter rewriter(operation->getContext());
+    iterateOp.makeNonIsolated(rewriter);
+  }
 }

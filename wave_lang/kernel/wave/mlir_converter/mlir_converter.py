@@ -5,21 +5,22 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """
-MLIR Converter for Wave Dialect
+Bidirectional converter between Wave FX traces and Wave MLIR.
 
-This provides functionality to convert Wave traces into MLIR code
-using the Wave dialect. It serializes the trace data and spawns a separate water emitter
-process that uses Water Python bindings to generate the MLIR output.
+Both directions run in a subprocess to isolate the Water MLIR Python bindings
+from the host process.
 
-The converter handles:
-- Serialization of Wave kernel traces using the dill library
-- Spawning the water emitter as a subprocess
-- Triggering operation type inference and some simple wave type mapping
+`emit_wave_dialect` serializes a CapturedTrace via dill, spawns
+`water_emitter.py`, and returns the MLIR module text.
+
+`mlir_to_fx` sends MLIR text to `fx_emitter.py` and returns a
+reconstructed CapturedTrace with constraints and compile options.
 """
 
 import linecache
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import dill
@@ -64,8 +65,8 @@ def _format_frame(
     Args:
         frame: The location frame to format.
         lines: Accumulator list that formatted strings are appended to.
-        name: Optional name context inherited from a parent ``NameLocation``.
-              When present it is shown as ``in <name>`` after the file/line.
+        name: Optional name context inherited from a parent `NameLocation`.
+              When present it is shown as `in <name>` after the file/line.
     """
     if isinstance(frame, FileLocation):
         suffix = f", in {name}" if name else ""
@@ -199,6 +200,16 @@ def print_diagnostics(
         print(formatted, file=file)
 
 
+@dataclass
+class FxEmitterResponse:
+    """Structured response from the fx_emitter subprocess."""
+
+    trace: CapturedTrace | None = None
+    constraints: list[Constraint] = field(default_factory=list)
+    options: WaveCompileOptions = field(default_factory=WaveCompileOptions)
+    diagnostics: list[MLIRDiagnostic] = field(default_factory=list)
+
+
 def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -295,3 +306,76 @@ module attributes {transform.with_named_sequence} {
         diagnostics,
         inferred_attributes,
     )
+
+
+def mlir_to_fx(
+    mlir_text: str,
+) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]]:
+    """Convert Wave MLIR text back into a Wave FX trace via subprocess.
+
+    Spawns `fx_emitter.py`, sends the MLIR text over stdin, and returns
+    the reconstructed FX graph together with its associated metadata.
+
+    Args:
+        mlir_text: Textual representation of a Wave MLIR module containing a
+            single function with Wave dialect operations.
+
+    Returns:
+        A 4-tuple of:
+        - trace: The reconstructed `CapturedTrace` (FX graph with subgraphs).
+        - constraints: Wave constraints extracted from the function attributes
+          (workgroup, wave, tiling, device, and hardware constraints).
+        - options: `WaveCompileOptions` with hyperparameters recovered from
+          the `wave.hyperparameters` function attribute.
+        - diagnostics: List of `MLIRDiagnostic` instances (errors, warnings,
+          remarks) collected during parsing, verification, and conversion.
+
+    Raises:
+        RuntimeError: If the subprocess exits with a non-zero code or the
+            response cannot be unpickled / validated.
+    """
+    if not isinstance(mlir_text, str):
+        raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
+    child = Path(__file__).with_name("fx_emitter.py")
+    if not child.exists():
+        raise RuntimeError(f"fx_emitter helper not found: {child}")
+    proc = subprocess.Popen(
+        [sys.executable, str(child)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output, err = proc.communicate(dill.dumps({"mlir": mlir_text}))
+    if proc.returncode != 0:
+        diagnostics: list[MLIRDiagnostic] = []
+        try:
+            response = dill.loads(output)
+            if isinstance(response, FxEmitterResponse):
+                diagnostics = response.diagnostics
+        except Exception:
+            pass
+        diag_text = (
+            f"\n{format_diagnostics(diagnostics, use_color=False)}"
+            if diagnostics
+            else ""
+        )
+        raise RuntimeError(
+            f"fx_emitter failed (code {proc.returncode}):\n"
+            f"{err.decode('utf-8', errors='replace')}{diag_text}"
+        )
+    try:
+        response = dill.loads(output)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to unpickle output from fx_emitter (code {proc.returncode}):\n"
+            f"Output: {output!r}\n"
+            f"Exception: {e}"
+        ) from e
+    if not isinstance(response, FxEmitterResponse):
+        raise RuntimeError(f"fx_emitter output has unexpected type: {type(response)}")
+    if not isinstance(response.trace, CapturedTrace):
+        raise RuntimeError(
+            f"fx_emitter trace has unexpected type: {type(response.trace)}"
+        )
+    response.trace.restore_node_state()
+    return response.trace, response.constraints, response.options, response.diagnostics

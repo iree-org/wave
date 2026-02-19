@@ -259,7 +259,6 @@ def interleave_operations(
     interleaved_ops: list | list[list],
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
-    start_after_groups: list[list[int]] | None = None,
 ) -> list:
     """Interleave operations with flexible per-group patterns."""
     # Normalize inputs to lists

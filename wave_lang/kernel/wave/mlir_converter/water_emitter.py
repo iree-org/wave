@@ -7,13 +7,14 @@ mlir operations of wave and other dialects.
 """
 
 from __future__ import annotations
-import dill
-import torch.fx as fx
-import sys
-from typing import TYPE_CHECKING, Callable, Sequence
-import sympy
 import argparse
+import dill
+import sys
+import torch.fx as fx
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Sequence
+
+import sympy
 
 if __name__ == "__main__":
     # Add parent directory to sys.path to enable relative imports when running standalone
@@ -22,22 +23,24 @@ if __name__ == "__main__":
     _parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
     if _parent_dir not in sys.path:
         sys.path.append(_parent_dir)
-    # Add current directory to enable importing mlir_to_wave without full package path
+    # Add current directory to enable importing attr_type_converter without full package path
     _current_dir = str(_current_file.parent)
     if _current_dir not in sys.path:
         sys.path.append(_current_dir)
 
-from mlir_to_wave import (
-    INDEX_SYMBOL_MAP,
-    ITER_SYMBOL_NAME_WATER_PREFIX,
+from attr_type_converter import (
     convert_index_mapping_array_to_sympy,
-    ITER_SYMBOL_NAME_WAVE_PREFIX,
+    dtype_to_mlir_scalar_type,
+    get_operand_symbol_placeholders,
+    preprocess_symbols,
+    symbol_name_to_attribute,
 )
+
+from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
 
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
-    from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
 from wave_lang.kernel.wave.mlir_converter.diagnostics import (
@@ -52,11 +55,14 @@ from wave_lang.kernel.lang.wave_types import Memory, Register
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
-from wave_lang.kernel._support.indexing import safe_subs
-from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+from wave_lang.kernel.wave.utils.symbol_utils import (
+    collect_allowed_induction_symbols,
+    strip_out_of_scope_induction_symbols,
+)
 
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
+    ApplyExpr,
     Extract,
     ExtractSlice,
     get_custom,
@@ -69,7 +75,8 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
-    SelectOp,
+    ReduceOp as Reduce,
+    SelfIndex,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
     Write,
@@ -97,8 +104,10 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
+        ApplyExprOp,
         SubOp,
         AllocateOp,
+        BroadcastOp,
         CastOp,
         DivOp,
         ReciprocalOp,
@@ -113,6 +122,8 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelectOp,
+        SelfIndexOp,
         ShuffleOp,
         SumOp,
         WriteOp,
@@ -134,11 +145,9 @@ try:
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
+        convert_sympy_to_affine_map_and_combinator,
     )
-    from water_mlir.water_mlir.dialects import arith
-    from water_mlir.water_mlir.dialects import func
-    from water_mlir.water_mlir.dialects import wave
-    from water_mlir.water_mlir.dialects import amdgpu
+    from water_mlir.water_mlir.dialects import arith, func, wave, amdgpu
     from water_mlir.water_mlir.dialects.transform import interpreter
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
@@ -147,13 +156,15 @@ except Exception as e:
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
+    "apply_expr": ApplyExprOp,
+    "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
     "extract": ExtractOp,
     "extract_slice": ExtractSliceOp,
-    "max": MaxOp,
-    "min": MinOp,
+    "maximum": MaxOp,
+    "minimum": MinOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
@@ -166,9 +177,10 @@ WAVE_OP_CONSTRUCTORS = {
     "output": YieldOp,
     "write": WriteOp,
     "permute": PermuteOp,
-    "max_element": MaxElementOp,
+    "max": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
+    "self_index": SelfIndexOp,
     # TODO: Add more or find a good way of avoiding needing a mapping
 }
 
@@ -181,6 +193,8 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    # 'bool' is an alias for 'i1'.
+    "bool": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
     "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
@@ -342,49 +356,6 @@ def _convert_sympy_expr_to_affine_map(
     )
 
 
-def _preprocess_symbols(
-    symbols: Sequence[sympy.Symbol],
-) -> dict[sympy.Symbol, sympy.Symbol]:
-    """
-    Preprocess symbols by:
-
-      1. adding assumptions about all symbols being positive to later enable
-         more simplifications.
-      2. replacing ITER_SYMBOL_NAME_WAVE_PREFIX (`$ARG`) prefix of argument
-         symbols (e.g. `ARG0`) by ITER_SYMBOL_NAME_WATER_PREFIX (`_Iter_`) to
-         match dialect expectations.
-    """
-    result = {}
-    for sym in symbols:
-        # Special case: rename $ARG* symbols to _Iter_*.
-        if sym.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX):
-            new_name = sym.name.replace(
-                ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
-            )
-            result[sym] = sympy.Symbol(new_name, positive=True)
-        else:
-            result[sym] = sympy.Symbol(sym.name, positive=True)
-    return result
-
-
-def _symbol_name_to_attribute(name: str) -> ir.Attribute:
-    """
-    Convert a symbol name to either a WaveSymbolAttr or WaveIndexSymbolAttr.
-
-    Special symbols starting with $ are converted to WaveIndexSymbolAttr,
-    while regular symbols are converted to WaveSymbolAttr.
-    """
-
-    if name in INDEX_SYMBOL_MAP:
-        return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
-    if name.startswith(ITER_SYMBOL_NAME_WATER_PREFIX):
-        return wave.WaveIterSymbolAttr.get(
-            name.replace(ITER_SYMBOL_NAME_WATER_PREFIX, "")
-        )
-    else:
-        return wave.WaveSymbolAttr.get(name)
-
-
 def _build_index_mapping_dict(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
@@ -395,46 +366,22 @@ def _build_index_mapping_dict(
     For MMA, multiple DictAttr objects are assembled into an ArrayAttr (one per
     operand). For all other nodes a single-element ArrayAttr is used.
 
-    The `allowed_induction_symbols` argument lists induction variable-related
-    symbols that are allowed to be present in the expressions. Other symbols
-    will be removed and a warning will be generated if it is the case.
+    Out-of-scope induction symbols are stripped before conversion.
     """
+    index = strip_out_of_scope_induction_symbols(index, allowed_induction_symbols)
 
     index_mappings: dict[str, ir.Attribute] = {}
     for dim, exprs in index.items():
-        all_symbols_set = set().union(
-            *[
-                expr.free_symbols
-                for expr in [exprs.start, exprs.size, exprs.stride]
-                if isinstance(expr, sympy.Expr)
-            ]
-        )
-        induction_symbols_to_remove = {
-            symbol
-            for symbol in all_symbols_set
-            if symbol.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX)
-            and symbol not in allowed_induction_symbols
-        }
-        if induction_symbols_to_remove:
-            induction_symbols_subs = {
-                symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
-            }
-            # TODO: can we wrap this into a diagnostic?
-            print(
-                f"WARNING: Removing invalid induction symbols {induction_symbols_to_remove} from {index}",
-                file=sys.stderr,
-            )
-            exprs.start = safe_subs(exprs.start, induction_symbols_subs)
-            exprs.size = safe_subs(exprs.size, induction_symbols_subs)
-            exprs.stride = safe_subs(exprs.stride, induction_symbols_subs)
-
-        all_symbols = list(all_symbols_set - induction_symbols_to_remove)
-        symbol_mapping = _preprocess_symbols(all_symbols)
+        all_symbols = set()
+        for component in (exprs.start, exprs.size, exprs.stride):
+            if isinstance(component, sympy.Expr):
+                all_symbols |= component.free_symbols
+        symbol_mapping = preprocess_symbols(list(all_symbols))
         start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
         size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
         stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
         symbol_attrs = [
-            _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+            symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
         ]
         index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
             symbol_attrs, start, size, stride
@@ -448,19 +395,15 @@ def _attach_attributes(
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
 
-        # XXX: Collect induction-related symbols that make sense in the current
-        # context; the frontend is buggy and may have these symbols outside of
-        # the respective loops.
-        parent_fx_node = node.fx_node
-        allowed_induction_symbols: set[IndexSymbol] = set()
-        while parent_fx_node := getattr(parent_fx_node.graph, "parent_op", None):
-            parent_custom = get_custom(parent_fx_node)
-            if isinstance(parent_custom, Iterate):
-                induction_symbol = get_induction_symbol(parent_custom.axis)
-                allowed_induction_symbols.add(induction_symbol)
+        allowed_induction_symbols = collect_allowed_induction_symbols(node.fx_node)
 
         if isinstance(node, MMA):
-            # Build one index mapping dict per operand for MMA nodes
+            # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
+            # match MmaOp::setIndexFromLattices which serialises
+            # operandExprs + resultExprs.  The Python-side index sequence
+            # analysis only tracks 3 (lhs, rhs, acc), so we emit acc_index
+            # twice: once for the accumulator operand and once for the
+            # result (MMA result type == acc type).
             if lhs_index := getattr(node, "lhs_index", None):
                 dict_attrs.append(
                     _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
@@ -470,9 +413,13 @@ def _attach_attributes(
                     _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
                 )
             if acc_index := getattr(node, "acc_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                acc_attr = _build_index_mapping_dict(
+                    acc_index, allowed_induction_symbols
                 )
+                # Append acc_index for both the accumulator operand and the
+                # result, since MMA result type == acc type.
+                dict_attrs.append(acc_attr)
+                dict_attrs.append(acc_attr)
         else:
             dict_attrs.append(
                 _build_index_mapping_dict(node.index, allowed_induction_symbols)
@@ -488,12 +435,12 @@ def _attach_attributes(
     if getattr(node, "bounds", None):
         bounds = {}
         for dim, expr in node.bounds.items():
-            symbol_mapping = _preprocess_symbols(
+            symbol_mapping = preprocess_symbols(
                 list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
             )
             result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
             symbol_attrs = [
-                _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+                symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
@@ -520,7 +467,7 @@ def _convert_to_wave_expr_list_tuple(
             all_symbols.update(expr.free_symbols)
 
     # Preprocess symbols and create mapping
-    symbol_mapping = _preprocess_symbols(list(all_symbols))
+    symbol_mapping = preprocess_symbols(list(all_symbols))
 
     # Convert each expression to an affine expression
     affine_exprs = []
@@ -534,7 +481,7 @@ def _convert_to_wave_expr_list_tuple(
 
     # Convert symbol names to attributes
     symbol_attrs = [
-        _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+        symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
     ]
 
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
@@ -667,7 +614,7 @@ def _emit_ops_from_graph(
                     dtype = getattr(node, "dtype", None)
                     if dtype is None:
                         raise RuntimeError("Register op missing dtype")
-                    element_type = _dtype_to_mlir_scalar_type(dtype)
+                    element_type = dtype_to_mlir_scalar_type(dtype)
                     constant_op = arith.ConstantOp(
                         result=element_type, value=node.value
                     )
@@ -729,6 +676,20 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
+                elif isinstance(node, Reduce):
+                    if isinstance(node.arg, Sequence):
+                        raise NotImplementedError(
+                            "Only single-operand reductions are currently supported."
+                        )
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        scope=wave.WaveReductionScopeAttr.get(
+                            wave.WaveReductionScope.Block
+                            if node.block
+                            else wave.WaveReductionScope.Warp
+                        ),
+                    )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.
                     parent_value = None
@@ -743,13 +704,34 @@ def _emit_ops_from_graph(
                         offset_attr = ir.IntegerAttr.get(
                             ir.IntegerType.get_signless(64), int(node.offset)
                         )
+                    i64 = ir.IntegerType.get_signless(64)
+                    padding_attr = (
+                        ir.IntegerAttr.get(i64, node.padding)
+                        if node.padding != 0
+                        else None
+                    )
+                    tail_padding_attr = (
+                        ir.IntegerAttr.get(i64, node.tail_padding)
+                        if node.tail_padding != 0
+                        else None
+                    )
+                    # Use unpadded_shape when distributed_shape matches
+                    # shape rank (standard allocation). For flattened
+                    # allocations (e.g. after minimize_shared_allocs),
+                    # use distributed_shape directly since the padding
+                    # is already baked into the flat size.
+                    dist_shape = (
+                        node.unpadded_shape
+                        if len(node.distributed_shape) == len(node.shape)
+                        else node.distributed_shape
+                    )
                     mlir_op = op_builder(
                         result_type,
                         parent=parent_value,
-                        distributed_shape=_convert_to_wave_expr_list_tuple(
-                            node.distributed_shape
-                        ),
+                        distributed_shape=_convert_to_wave_expr_list_tuple(dist_shape),
                         offset=offset_attr,
+                        padding=padding_attr,
+                        tail_padding=tail_padding_attr,
                     )
                 elif isinstance(node, ExtractSlice):
                     size = _convert_to_wave_expr_list_tuple(node.size)
@@ -762,6 +744,17 @@ def _emit_ops_from_graph(
                     assert len(node.offset) == 1
                     position = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(result_type, *create_mlir_operands(), position)
+                elif isinstance(node, SelfIndex):
+                    if not isinstance(node.dim, IndexSymbol):
+                        raise RuntimeError(
+                            f"SelfIndex op has non-index symbol dimension: {node.dim}"
+                        )
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        dim=symbol_name_to_attribute(node.dim.name),
+                        elements_per_thread=node.elements_per_thread,
+                    )
                 elif isinstance(node, Shuffle):
                     offset = ir.IntegerAttr.get(
                         ir.IntegerType.get_signless(32), node.offset
@@ -772,6 +765,44 @@ def _emit_ops_from_graph(
                     mode = wave.WaveShuffleModeAttr.get(node.mode.value)
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), offset, width, mode
+                    )
+                elif isinstance(node, ApplyExpr):
+                    reg = node.register_
+                    if not isinstance(reg, Sequence):
+                        reg = [reg]
+
+                    placeholders = get_operand_symbol_placeholders(len(reg))
+                    sympy_expr = node.expr(*list(placeholders.keys()))
+
+                    # Sort all free_symbols by name for deterministic symbol order in the expr_list.
+                    ordered_symbols = sorted(
+                        sympy_expr.free_symbols, key=lambda s: s.name
+                    )
+                    symbol_mapping = preprocess_symbols(ordered_symbols)
+                    affine_map, combinator = convert_sympy_to_affine_map_and_combinator(
+                        sympy_expr, [symbol.name for symbol in symbol_mapping.keys()]
+                    )
+                    symbol_attrs = [
+                        (
+                            placeholders[orig_sym]
+                            if orig_sym in placeholders
+                            else symbol_name_to_attribute(new_sym.name)
+                        )
+                        for orig_sym, new_sym in symbol_mapping.items()
+                    ]
+                    expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
+                    operands = [get_single_mapped_value(arg) for arg in reg]
+                    # TODO: need to add automatic constructor of WaveApplyExprCombinatorAttr
+                    # from enum.
+                    mlir_op = op_builder(
+                        result_type,
+                        operands,
+                        expr_attr,
+                        combinator=(
+                            wave.WaveApplyExprCombinatorAttr.get(combinator)
+                            if combinator is not None
+                            else None
+                        ),
                     )
                 else:
                     try:
@@ -793,7 +824,35 @@ def _emit_ops_from_graph(
             value_map[fx_node] = tuple(mlir_op.results)
 
 
-def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
+def _resolve_vector_shapes_for_attr(
+    vector_shapes: dict[IndexSymbol, int | IndexExpr],
+    subs: dict[IndexSymbol, Any],
+) -> dict[str, int]:
+    """Resolve vector_shapes values using subs (int-only).
+
+    Raises ValueError if any vector_shapes value cannot be resolved to an integer.
+    """
+    int_subs = {k: v for k, v in subs.items() if isinstance(v, int)}
+    resolved = {}
+    for dim, v in vector_shapes.items():
+        val = safe_subs(v, int_subs)
+        if isinstance(val, int):
+            resolved[dim.name] = val
+        elif isinstance(val, sympy.Basic) and val.is_number:
+            resolved[dim.name] = int(val)
+        else:
+            missing = getattr(val, "free_symbols", None) or {v}
+            raise ValueError(
+                f"Vector shape {v} in hardware constraints could not be resolved to an integer.\n"
+                f"Note: symbols {missing} do not have substitutions."
+            )
+    return resolved
+
+
+def _emit_wave_constraints(
+    constraint: Constraint,
+    subs: dict[IndexSymbol, Any] = {},
+) -> ir.Attribute:
     if isinstance(constraint, HardwareConstraint):
         mma_type_attr = None
         if constraint.mma_type:
@@ -801,11 +860,9 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
 
         shape_dict = None
         if constraint.vector_shapes:
+            resolved = _resolve_vector_shapes_for_attr(constraint.vector_shapes, subs)
             i64 = ir.IntegerType.get_signless(64)
-            dict = {
-                k.name: ir.IntegerAttr.get(i64, v)
-                for k, v in constraint.vector_shapes.items()
-            }
+            dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
             shape_dict = ir.DictAttr.get(dict)
 
         attr = HardwareConstraintAttr.get(
@@ -844,18 +901,18 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
-def _serialize_location(loc: ir.Location) -> list[LocationFrame]:
+def serialize_location(loc: ir.Location) -> list[LocationFrame]:
     """Convert ir.Location to a serializable list of location frames (stack trace).
 
     Uses the MLIR Python binding properties to extract structured location
     information.
 
     Handles:
-    - File locations (FileLineColLoc / FileLineColRange) via ``is_a_file``
-      → ``filename``, ``start_line``, ``start_col``, ``end_line``, ``end_col``
-    - Callsite locations via ``is_a_callsite`` → ``caller``, ``callee``
-    - Fused locations via ``is_a_fused`` → ``locations``
-    - Name locations via ``is_a_name`` → ``name_str``, ``child_loc``
+    - File locations (FileLineColLoc / FileLineColRange) via `is_a_file`
+      → `filename`, `start_line`, `start_col`, `end_line`, `end_col`
+    - Callsite locations via `is_a_callsite` → `caller`, `callee`
+    - Fused locations via `is_a_fused` → `locations`
+    - Name locations via `is_a_name` → `name_str`, `child_loc`
 
     Returns frames from outermost (caller) to innermost (callee).
     """
@@ -996,9 +1053,11 @@ def _create_kernel_module(
     func_type = ir.FunctionType.get(arg_types, [])
     with ir.InsertionPoint(module.body):
         func_op = func.FuncOp("kernel", func_type)
-        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
-        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
-        # print([(str(k), v) for k, v in options.subs.items()])
+        # Validate that all non-int mappings are address spaces (either
+        # SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE). These mappings can be
+        # dropped safely because the information has been encoded in either
+        # `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the
+        # kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
         for k, v in options.subs.items():
             if not isinstance(v, int):
                 if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
@@ -1014,7 +1073,13 @@ def _create_kernel_module(
             )
         )
 
-        wave_constraints = list(map(_emit_wave_constraints, constraints))
+        try:
+            wave_constraints = [
+                _emit_wave_constraints(c, options.subs) for c in constraints
+            ]
+        except ValueError as e:
+            diagnostics.append(WaterError(message=str(e)))
+            return None, diagnostics, known_ids
         array_attr = ir.ArrayAttr.get(wave_constraints)
         func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
 
@@ -1084,7 +1149,7 @@ def _emit_from_captured_trace(
         diagnostics.append(
             MLIRDiagnostic(
                 message=d.message,
-                location=_serialize_location(d.location),
+                location=serialize_location(d.location),
                 severity=d.severity.name,
             )
         )
