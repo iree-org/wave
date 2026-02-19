@@ -1198,6 +1198,57 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // Check if the source value has split results from a corresponding load
     auto splitResults = ctx.getSplitResults(storeOp.getValueToStore());
 
+    // BF16 store conversion: the arith.truncf handler defers vector f32→bf16
+    // conversion (pass-through mapping), so the data registers still contain
+    // f32 values. Convert to packed bf16 before storing.
+    if (elementType.isBF16() && data.has_value()) {
+      int64_t numElems = vectorType.getNumElements();
+      Value srcData = *data;
+      Type srcType = srcData.getType();
+
+      // Helper to extract element i from the source f32 register range.
+      auto extractF32Elem = [&](int64_t i) -> Value {
+        if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
+          int64_t baseIdx = pvreg.getIndex() + i;
+          auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
+          return PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
+        }
+        auto elemType = ctx.createVRegType(1, 1);
+        return ExtractOp::create(builder, loc, elemType, srcData,
+                                 builder.getI64IntegerAttr(i));
+      };
+
+      if (numElems == 1) {
+        // Single bf16: convert f32→bf16 (low 16 bits), store 2 bytes.
+        auto vregType = ctx.createVRegType();
+        data = V_CVT_BF16_F32::create(builder, loc, vregType, extractF32Elem(0));
+        numBytes = 2;
+      } else {
+        // Multiple bf16: pack pairs with v_cvt_pk_bf16_f32, store as dwords.
+        SmallVector<Value> packedVals;
+        for (int64_t i = 0; i < numElems; i += 2) {
+          Value elemI = extractF32Elem(i);
+          Value elemJ;
+          if (i + 1 < numElems) {
+            elemJ = extractF32Elem(i + 1);
+          } else {
+            auto immZero = ctx.createImmType(0);
+            elemJ = ConstantOp::create(builder, loc, immZero, 0);
+          }
+          auto vregType = ctx.createVRegType();
+          packedVals.push_back(
+              V_CVT_PK_BF16_F32::create(builder, loc, vregType, elemI, elemJ));
+        }
+        if (packedVals.size() == 1) {
+          data = packedVals[0];
+        } else {
+          auto packedType = ctx.createVRegType(packedVals.size(), 1);
+          data = PackOp::create(builder, loc, packedType, packedVals);
+        }
+        numBytes = static_cast<int64_t>(packedVals.size()) * 4;
+      }
+    }
+
     // Split large stores into multiple buffer_store_dwordx4 (16 bytes each)
     // Use the same voffset for all stores, with instOffset for subsequent
     // chunks Add any constant offset from affine expressions to the base offset
@@ -1208,17 +1259,17 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
 
     while (bytesRemaining > 0) {
       int64_t storeBytes;
-      int64_t storeDwords;
 
       if (bytesRemaining >= 16) {
         storeBytes = 16;
-        storeDwords = 4;
       } else if (bytesRemaining >= 8) {
         storeBytes = 8;
-        storeDwords = 2;
-      } else {
+      } else if (bytesRemaining >= 4) {
         storeBytes = 4;
-        storeDwords = 1;
+      } else if (bytesRemaining >= 2) {
+        storeBytes = 2;
+      } else {
+        storeBytes = 1;
       }
 
       // Use the correct split result if available, otherwise use mapped data
@@ -1231,24 +1282,28 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       // move it to a VGPR before storing. MUBUF store instructions require
       // VGPR sources. Emit v_accvgpr_read_b32 to a temporary VGPR.
       if (isAGPRType(storeData.getType())) {
+        int64_t storeDwords = (storeBytes + 3) / 4;
         auto vregType =
             ctx.createVRegType(storeDwords, storeDwords > 1 ? storeDwords : 1);
         storeData =
             V_ACCVGPR_READ_B32::create(builder, loc, vregType, storeData);
       }
 
-      // Use instOffset attribute instead of computing new voffset
-      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
-      // instruction
-      if (storeDwords == 4) {
+      if (storeBytes == 16) {
         BUFFER_STORE_DWORDX4::create(builder, loc, storeData, srd, voffset,
                                      currentOffset);
-      } else if (storeDwords == 2) {
+      } else if (storeBytes == 8) {
         BUFFER_STORE_DWORDX2::create(builder, loc, storeData, srd, voffset,
                                      currentOffset);
-      } else {
+      } else if (storeBytes == 4) {
         BUFFER_STORE_DWORD::create(builder, loc, storeData, srd, voffset,
                                    currentOffset);
+      } else if (storeBytes == 2) {
+        BUFFER_STORE_SHORT::create(builder, loc, storeData, srd, voffset,
+                                   currentOffset);
+      } else {
+        BUFFER_STORE_BYTE::create(builder, loc, storeData, srd, voffset,
+                                  currentOffset);
       }
 
       bytesRemaining -= storeBytes;

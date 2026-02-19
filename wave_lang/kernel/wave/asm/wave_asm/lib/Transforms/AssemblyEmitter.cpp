@@ -365,6 +365,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       .Case<BUFFER_STORE_DWORDX4>([&](auto storeOp) {
         return emitBufferStore(storeOp, "buffer_store_dwordx4");
       })
+      .Case<BUFFER_STORE_SHORT>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_short");
+      })
+      .Case<BUFFER_STORE_BYTE>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_byte");
+      })
 
       .Case<GLOBAL_LOAD_DWORD>([&](auto loadOp) {
         return emitGlobalLoad(loadOp, "global_load_dword");

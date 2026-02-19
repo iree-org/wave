@@ -421,6 +421,7 @@ def WaveASM_V_CVT_F32_F64 : VALUUnaryOp<"v_cvt_f32_f64">;
 def WaveASM_V_CVT_F64_F32 : VALUUnaryOp<"v_cvt_f64_f32">;
 def WaveASM_V_CVT_F32_BF16 : VALUUnaryOp<"v_cvt_f32_bf16">;
 def WaveASM_V_CVT_BF16_F32 : VALUUnaryOp<"v_cvt_bf16_f32">;
+def WaveASM_V_CVT_PK_BF16_F32 : VALUBinaryOp<"v_cvt_pk_bf16_f32">;
 
 // Transcendentals
 def WaveASM_V_RCP_F32 : VALUUnaryOp<"v_rcp_f32">;
