@@ -11,7 +11,6 @@ Usage:
     python 7.3_mxfp4_gemm_preshuffle_B.py --list_tests
 """
 
-
 import torch
 
 import wave_lang.kernel.wave as tkw
