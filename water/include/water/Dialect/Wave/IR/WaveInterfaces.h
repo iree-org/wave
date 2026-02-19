@@ -229,7 +229,8 @@ llvm::LogicalResult verifyElementTypesMatch(std::optional<mlir::Location> loc,
                                             mlir::Type rhs);
 
 // Verify if two Wave tensor or vector types are compatible:
-//   - their element types are equal;
+//   - their element types are equal unless `includeElementalType` is false;
+//   - their address spaces are equal unless `includeAddressSpace` is false;
 //   - tensor symbolic shapes are either equal or at least one of them is
 //     underspecified;
 //   - tensor address spaces are either equal or at least one of them is
@@ -238,6 +239,7 @@ llvm::LogicalResult verifyElementTypesMatch(std::optional<mlir::Location> loc,
 // location is provided.
 llvm::LogicalResult verifyTypesCompatible(
     mlir::Type lhs, mlir::Type rhs, bool includeAddressSpace,
+    bool includeElementalType,
     std::optional<mlir::Location> errorLocation = std::nullopt,
     llvm::StringRef lhsName = "", llvm::StringRef rhsName = "");
 
@@ -262,9 +264,8 @@ verifyTypesMatchingDimensions(std::optional<mlir::Location> loc,
 // Verification logic for the compatible-operands traits. Succeeds if all wave
 // tensor-typed operands and results have compatible shapes and, if the
 // corresponding flag is set, compatible address spaces.
-llvm::LogicalResult
-verifyCompatibleOperandsAndResultsOpTrait(mlir::Operation *op,
-                                          bool includeAddressSpace);
+llvm::LogicalResult verifyCompatibleOperandsAndResultsOpTrait(
+    mlir::Operation *op, bool includeAddressSpace, bool includeElementalType);
 }; // namespace detail
 
 template <typename OpTy>
@@ -274,7 +275,7 @@ class CompatibleOperandsAndResultsOpTrait
 public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(
-        op, /*includeAddressSpace=*/true);
+        op, /*includeAddressSpace=*/true, /*includeElementalType=*/true);
   }
 };
 
@@ -285,7 +286,18 @@ class CompatibleOperandsAndResultsIgnoreSpaceOpTrait
 public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(
-        op, /*includeAddressSpace=*/false);
+        op, /*includeAddressSpace=*/false, /*includeElementalType=*/true);
+  }
+};
+
+template <typename OpTy>
+class CompatibleOperandsAndResultsShapeOpTrait
+    : public mlir::OpTrait::TraitBase<
+          OpTy, CompatibleOperandsAndResultsShapeOpTrait> {
+public:
+  static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
+    return detail::verifyCompatibleOperandsAndResultsOpTrait(
+        op, /*includeAddressSpace=*/true, /*includeElementalType=*/false);
   }
 };
 

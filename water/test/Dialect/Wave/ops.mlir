@@ -22,18 +22,25 @@ func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor
 }
 
 // CHECK-LABEL: @extract_static
-func.func @extract_static(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+func.func @extract_static(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32> {
   // CHECK: wave.extract
-  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return %0 : !wave.tensor<[@A] of f32>
 }
 
 // CHECK-LABEL: @extract_dynamic
-func.func @extract_dynamic(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+func.func @extract_dynamic(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32> {
   // CHECK: wave.extract
   // CHECK-SAME: #wave.index_symbol<T0>
-  %0 = wave.extract %source[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  %0 = wave.extract %source[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return %0 : !wave.tensor<[@A] of f32>
+}
+
+// CHECK-LABEL: extract_0d
+func.func @extract_0d(%arg0: !wave.tensor<[@X] of f32>) {
+  // CHECK: wave.extract
+  %0 = wave.extract %arg0[<[] -> (0)>] : (!wave.tensor<[@X] of f32>) -> !wave.tensor<[] of f32>
+  return
 }
 
 // CHECK-LABEL: @unary
@@ -676,4 +683,76 @@ func.func @broadcast_explicit_dims(%arg0: !wave.tensor<any of f32>) {
   // CHECK: wave.broadcast %{{.*}} dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   wave.broadcast %arg0 dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
   return
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_single
+func.func @apply_expr_single(%arg0: !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{C = 7 : i64, M = 42}> } {
+  // CHECK: wave.apply_expr(%{{.*}}) <[#wave.operand<0>, #wave.symbol<"C">] -> (_Operand_0 + C)>
+  %0 = wave.apply_expr(%arg0) <[#wave.operand<0>, #wave.symbol<"C">] -> (_Operand_0 + C)> : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return %0 : !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_multi
+func.func @apply_expr_multi(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{S = 2 : i64, M = 42}> } {
+  // CHECK: wave.apply_expr(%{{.*}}, %{{.*}}) <[#wave.operand<0>, #wave.operand<1>, #wave.symbol<"S">] -> (_Operand_0 + _Operand_1 * S)>
+  %0 = wave.apply_expr(%arg0, %arg1) <[#wave.operand<0>, #wave.operand<1>, #wave.symbol<"S">] -> (_Operand_0 + _Operand_1 * S)> : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return %0 : !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_ceildiv
+func.func @apply_expr_ceildiv(%arg0: !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{U = 4 : i64, M = 42}> } {
+  // CHECK: wave.apply_expr(%{{.*}}) <[#wave.operand<0>, #wave.symbol<"U">] -> (_Operand_0 ceildiv U)>
+  %0 = wave.apply_expr(%arg0) <[#wave.operand<0>, #wave.symbol<"U">] -> (_Operand_0 ceildiv U)> : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return %0 : !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_with_index
+func.func @apply_expr_with_index(%arg0: !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{P = 3 : i64, M = 42}> } {
+  // CHECK: wave.apply_expr
+  // CHECK-SAME: index
+  %0 = wave.apply_expr(%arg0) <[#wave.operand<0>, #wave.symbol<"P">] -> (_Operand_0 + P)>
+    index [{M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>}]
+    : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return %0 : !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_vector
+func.func @apply_expr_vector(%arg0: vector<4xi32>) -> vector<4xi32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{D = 10 : i64}> } {
+  // CHECK: wave.apply_expr(%{{.*}}) <[#wave.operand<0>, #wave.symbol<"D">] -> (_Operand_0 * D)>
+  %0 = wave.apply_expr(%arg0) <[#wave.operand<0>, #wave.symbol<"D">] -> (_Operand_0 * D)> : (vector<4xi32>) -> vector<4xi32>
+  return %0 : vector<4xi32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_underspecified
+func.func @apply_expr_underspecified(%arg0: !wave.tensor<any of i32>) -> !wave.tensor<any of i32>
+    attributes { "wave.hyperparameters" = #wave.hyperparameters<{E = 5 : i64}> } {
+  // CHECK: wave.apply_expr(%{{.*}})  <[#wave.symbol<"E">, #wave.operand<0>] -> (E + _Operand_0)>
+  %0 = wave.apply_expr(%arg0) <[#wave.symbol<"E">, #wave.operand<0>] -> (_Operand_0 + E)> : (!wave.tensor<any of i32>) -> !wave.tensor<any of i32>
+  return %0 : !wave.tensor<any of i32>
+}
+
+// -----
+
+// CHECK-LABEL: @apply_expr_no_symbols
+func.func @apply_expr_no_symbols() -> !wave.tensor<any of i64> {
+  // CHECK: wave.apply_expr() <[] -> (1)>
+  %0 = wave.apply_expr() <[] -> (1)> : () -> !wave.tensor<any of i64>
+  return %0 : !wave.tensor<any of i64>
 }

@@ -182,6 +182,8 @@ class _MFMASupport:
         acc_regs: Optional[Tuple[KReg, ...]] = None,
         cbsz: int = 4,
         blgp: int = 4,
+        scales_idx_a: int = 0,
+        scales_idx_b: int = 0,
     ) -> Tuple[KReg, ...]:
         """
         Emit scaled MFMA instruction for MXFP4 (16x16x128 F8F6F4).
@@ -194,19 +196,24 @@ class _MFMASupport:
         Args:
             a_regs: Tuple of 4 VGPRs for A operand (32 x f4E2M1FN packed as i8)
             b_regs: Tuple of 4 VGPRs for B operand (32 x f4E2M1FN packed as i8)
-            a_scale_reg: Single VGPR for A scale factor (f8E8M0FNU)
-            b_scale_reg: Single VGPR for B scale factor (f8E8M0FNU)
+            a_scale_reg: Single VGPR for A scale factor (f8E8M0FNU or
+                         4 packed bytes with opsel byte selection)
+            b_scale_reg: Single VGPR for B scale factor (same as above)
             acc_regs: Optional tuple of 4 VGPRs for accumulator (f32x4)
                       If None, allocates new result registers
             cbsz: Format code for A source data (0=FP8, 1=BF8, 2=FP6_E2M3,
                    3=FP6_E3M2, 4=FP4). Default 4 (FP4).
             blgp: Format code for B source data. Same encoding as cbsz.
                    Default 4 (FP4).
+            scales_idx_a: Byte index (0-3) within the A scale VGPR. Default 0.
+            scales_idx_b: Byte index (0-3) within the B scale VGPR. Default 0.
 
         Returns:
             Tuple of 4 VGPRs containing the result
         """
         modifiers = f"cbsz:{cbsz} blgp:{blgp}"
+        if scales_idx_a != 0 or scales_idx_b != 0:
+            modifiers += f" op_sel_hi:[0,0,0,{scales_idx_a},{scales_idx_b}]"
 
         # Build operand ranges - For FP4: 32 elements = 16 bytes = 4 VGPRs
         a_range = KRegRange(a_regs[0], len(a_regs), alignment=4)

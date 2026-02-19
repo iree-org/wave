@@ -139,14 +139,14 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
-  if (!llvm::all_of(getDistributedShape().getSymbols(),
-                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError()
-           << "distributed_shape must only contain WaveSymbolAttr";
-  }
-
   if (hasParent && getTailPadding())
     return emitOpError() << "only top-level allocations can have tail_padding";
+
+  if (WaveExprListAttr distributedShape = getDistributedShape()) {
+    if (distributedShape.getMap().getNumResults() == 0) {
+      return emitOpError() << "distributed shape must have at least one result";
+    }
+  }
 
   return llvm::success();
 }
@@ -244,7 +244,8 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
   // Both are wave tensors - check shape and address space compatibility.
   if (lhsTensor && rhsTensor) {
     return detail::verifyTypesCompatible(lhsTensor, rhsTensor,
-                                         /*includeAddressSpace=*/true)
+                                         /*includeAddressSpace=*/true,
+                                         /*includeElementalType=*/true)
         .succeeded();
   }
 
@@ -381,8 +382,8 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
     if (resultTensor && terminatorOperandTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
               resultTensor, terminatorOperandTensor,
-              /*includeAddressSpace=*/true, getLoc(), "result #" + istr,
-              "terminator operand #" + istr))) {
+              /*includeAddressSpace=*/true, /*includeElementalType=*/true,
+              getLoc(), "result #" + istr, "terminator operand #" + istr))) {
         return llvm::failure();
       }
     } else if (isa<VectorType>(result) && isa<VectorType>(terminatorOperand)) {
@@ -402,8 +403,8 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
     if (iterArgTensor && blockIterArgTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
               iterArgTensor, blockIterArgTensor,
-              /*includeAddressSpace=*/true, getLoc(), "iter arg #" + istr,
-              "block iter arg #" + istr))) {
+              /*includeAddressSpace=*/true, /*includeElementalType=*/true,
+              getLoc(), "iter arg #" + istr, "block iter arg #" + istr))) {
         return llvm::failure();
       }
     } else if (isa<VectorType>(iterArg) && isa<VectorType>(blockIterArg)) {
@@ -1728,13 +1729,6 @@ LogicalResult ExtractOp::verify() {
     return success();
   }
 
-  auto resultTensorType = cast<WaveTensorType>(getResult().getType());
-  if (!resultTensorType.getFullySpecified() ||
-      resultTensorType.getRank() != 1) {
-    return emitOpError() << "result must be a 1-dimensional tensor, got "
-                         << resultTensorType;
-  }
-
   auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
   // For mixed types, cannot do anything here.
   if (!sourceTensorType)
@@ -1743,10 +1737,22 @@ LogicalResult ExtractOp::verify() {
   if (!sourceTensorType.getFullySpecified())
     return emitOpError() << "source tensor type must be fully specified";
 
-  if (!llvm::is_contained(sourceTensorType.getShape(),
-                          resultTensorType.getShape()[0])) {
-    return emitOpError() << "source tensor type dimensions must contain the "
-                            "result tensor type dimension";
+  auto resultTensorType = cast<WaveTensorType>(getResult().getType());
+
+  if (!resultTensorType.getFullySpecified())
+    return emitOpError() << "target tensor type must be fully specified";
+
+  if (resultTensorType.getRank() + 1 != sourceTensorType.getRank()) {
+    return emitOpError()
+           << "result tensor must have one less dimension than source";
+  }
+
+  for (WaveSymbolAttr dim : resultTensorType.getShape()) {
+    if (!llvm::is_contained(sourceTensorType.getShape(), dim)) {
+      return emitOpError() << "source tensor type dimensions must contain the "
+                              "result tensor type dimension "
+                           << dim;
+    }
   }
 
   return success();
@@ -1774,18 +1780,6 @@ LogicalResult ExtractSliceOp::verify() {
                          << offset.getNumSymbols() << " symbols, size with "
                          << size.getNumSymbols() << " symbols, and stride with "
                          << stride.getNumSymbols() << " symbols";
-  }
-
-  if (!llvm::all_of(offset.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "offset must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(size.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "size must only contain WaveSymbolAttr";
-  }
-
-  if (!llvm::all_of(stride.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
-    return emitOpError() << "stride must only contain WaveSymbolAttr";
   }
 
   return success();
@@ -1960,18 +1954,100 @@ LogicalResult wave::ReciprocalOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ApplyExprOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::ApplyExprOp::verify() {
+  for (Type operandType : getOperands().getTypes()) {
+    auto waveTensorType = dyn_cast<WaveTensorType>(operandType);
+    if (!waveTensorType)
+      continue;
+
+    if (waveTensorType.getAddressSpaceValue() !=
+            WaveAddressSpace::Unspecified &&
+        waveTensorType.getAddressSpaceValue() != WaveAddressSpace::Register)
+      return emitOpError() << "tensor operands must be in register or "
+                              "unspecified address space";
+  }
+
+  auto verifyElementalTypesMatch = [&](Value reference,
+                                       StringRef referenceName) {
+    for (Value operand : getOperands()) {
+      if (failed(detail::verifyElementTypesMatch(
+              getLoc(), "operand", operand.getType(), referenceName,
+              reference.getType())))
+        return failure();
+    }
+    return success();
+  };
+
+  unsigned numResults = getExpr().getMap().getNumResults();
+  if (std::optional<WaveApplyExprCombinator> combinator = getCombinator()) {
+    if (llvm::is_contained({WaveApplyExprCombinator::Maximum,
+                            WaveApplyExprCombinator::Minimum},
+                           *combinator)) {
+      if (numResults < 1)
+        return emitOpError() << "for min/max combinators, expression must "
+                                "produce at least one result";
+
+      if (failed(verifyElementalTypesMatch(getResult(), "result")))
+        return failure();
+    } else {
+      if (numResults != 2)
+        return emitOpError() << "for comparison combinators, expression must "
+                                "produce exactly two results";
+
+      if (failed(verifyElementalTypesMatch(getOperand(0), "operand #0")))
+        return failure();
+    }
+  } else {
+    if (numResults != 1) {
+      return emitOpError() << "in absence of a combinator, expression must "
+                              "produce exactly one result, but got "
+                           << numResults;
+    }
+    if (failed(verifyElementalTypesMatch(getResult(), "result")))
+      return failure();
+  }
+
+  if (!isa<IntegerType>(getElementType(getResult().getType())))
+    return emitOpError() << "operates on integers only";
+
+  llvm::BitVector usedOperandAttrs(getArguments().size());
+  for (Attribute sym : getExpr().getSymbols()) {
+    if (auto operand = dyn_cast<WaveOperandAttr>(sym)) {
+      if (operand.getOperandNumber() >= getArguments().size()) {
+        return emitOpError()
+               << "expression uses operand #" << operand.getOperandNumber()
+               << " but there are only " << getArguments().size()
+               << " operands";
+      }
+      usedOperandAttrs.set(operand.getOperandNumber());
+    }
+  }
+  usedOperandAttrs.flip();
+  for (unsigned position : usedOperandAttrs.set_bits()) {
+    emitWarning() << "operand #" << position
+                  << " is not used in the expression";
+  }
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // SelectOp
 //-----------------------------------------------------------------------------
 
 LogicalResult wave::SelectOp::verify() {
   if (failed(detail::verifyTypesCompatible(
           getLhs().getType(), getRhs().getType(), /*includeAddressSpace=*/false,
-          getLoc(), "LHS", "RHS")))
+          /*includeElementalType=*/true, getLoc(), "LHS", "RHS")))
     return failure();
 
   if (failed(detail::verifyTypesCompatible(
           getLhs().getType(), getResult().getType(),
-          /*includeAddressSpace=*/false, getLoc(), "LHS", "result")))
+          /*includeAddressSpace=*/false, /*includeElementalType=*/true,
+          getLoc(), "LHS", "result")))
     return failure();
 
   auto intType =

@@ -40,6 +40,8 @@ assert (
 
 ITER_SYMBOL_NAME_WAVE_PREFIX = "$ARG"
 ITER_SYMBOL_NAME_WATER_PREFIX = "_Iter_"
+OPERAND_SYMBOL_NAME_WAVE_PREFIX = "APPLY_EXPR_ARG_"
+OPERAND_SYMBOL_NAME_WATER_PREFIX = "_Operand_"
 
 # Mapping of special symbol names to WaveIndexSymbol enum values.
 INDEX_SYMBOL_MAP: dict[str, wave.WaveIndexSymbol] = {
@@ -129,6 +131,18 @@ def symbol_attr_to_sympy(symbol_attr: ir.Attribute) -> sympy.Symbol:
     return index_symbol(symbol_attr_to_name(symbol_attr))
 
 
+def get_operand_symbol_placeholders(
+    num_operands: int,
+) -> dict[IndexSymbol, wave.WaveOperandAttr]:
+    """Get a dictionary of operand symbol placeholders for a given number of operands."""
+    return {
+        index_symbol(
+            OPERAND_SYMBOL_NAME_WAVE_PREFIX + str(i)
+        ): wave.WaveOperandAttr.get(i)
+        for i in range(num_operands)
+    }
+
+
 def preprocess_symbols(
     symbols: Sequence[sympy.Symbol],
 ) -> dict[sympy.Symbol, sympy.Symbol]:
@@ -150,6 +164,12 @@ def preprocess_symbols(
                 ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
             )
             result[sym] = sympy.Symbol(new_name, positive=True)
+        elif sym.name.startswith(OPERAND_SYMBOL_NAME_WAVE_PREFIX):
+            new_name = sym.name.replace(
+                OPERAND_SYMBOL_NAME_WAVE_PREFIX, OPERAND_SYMBOL_NAME_WATER_PREFIX
+            )
+            # Intentionally not marking as positive.
+            result[sym] = sympy.Symbol(new_name)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
     return result
@@ -157,16 +177,22 @@ def preprocess_symbols(
 
 def symbol_name_to_attribute(name: str) -> ir.Attribute:
     """
-    Convert a symbol name to either a WaveSymbolAttr or WaveIndexSymbolAttr.
+    Convert a symbol name to a WaveSymbolAttr, WaveIndexSymbolAttr, or
+    WaveOperandAttr.
 
-    Special symbols starting with $ are converted to WaveIndexSymbolAttr,
-    while regular symbols are converted to WaveSymbolAttr.
+    Special symbols with predefined prefixes are converted to
+    WaveIndexSymbolAttr or WaveOperandAttr, while regular symbols are converted
+    to WaveSymbolAttr.
     """
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
     if name.startswith(ITER_SYMBOL_NAME_WATER_PREFIX):
         return wave.WaveIterSymbolAttr.get(
             name.replace(ITER_SYMBOL_NAME_WATER_PREFIX, "")
+        )
+    elif name.startswith(OPERAND_SYMBOL_NAME_WATER_PREFIX):
+        return wave.WaveOperandAttr.get(
+            int(name.replace(OPERAND_SYMBOL_NAME_WATER_PREFIX, ""))
         )
     return wave.WaveSymbolAttr.get(name)
 

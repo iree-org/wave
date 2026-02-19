@@ -1776,6 +1776,10 @@ class AtomicOp(BinaryOpBase):
     def memory_type(self) -> "Memory":
         return get_custom(self.rhs).type
 
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
 
 @define_op("atomic_add")
 @dataclass

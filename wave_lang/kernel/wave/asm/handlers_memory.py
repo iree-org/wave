@@ -320,11 +320,15 @@ class _MemoryHandlers:
     def handle_scaled_mfma_op(
         self, operation: amdgpu_d.ScaledMFMAOp, kernel_info: KernelInfo
     ):
-        """Handle amdgpu.scaled_mfma operations - emit scaled MFMA instruction for MXFP4/FP6/FP8."""
+        """Handle amdgpu.scaled_mfma operations - emit scaled MFMA instruction for MXFP4/FP6/FP8.
 
-        # Scaled MFMA format: %result = amdgpu.scaled_mfma M x N x K
-        #                      (%scaleA * %dataA) * (%scaleB * %dataB) + %acc
-        # where scaleA and scaleB are scalar f8E8M0FNU values (often from vector.extract)
+        Scaled MFMA format: %result = amdgpu.scaled_mfma M x N x K
+                             (%scaleA * %dataA) * (%scaleB * %dataB) + %acc
+
+        Supports both scalar f8E8M0FNU and vector<4xf8E8M0FNU> scale types.
+        When the scale is a vector<4xf8E8M0FNU>, the scalesIdx attribute
+        selects which byte within the 32-bit VGPR to use (opsel).
+        """
         from .kernel_mfma import _MFMASupport
 
         ctx = self.walker.kernel_ctx
@@ -342,13 +346,21 @@ class _MemoryHandlers:
         cbsz = _MFMASupport._get_scaled_mfma_format_code(a_type_str)
         blgp = _MFMASupport._get_scaled_mfma_format_code(b_type_str)
 
+        # Extract opsel (byte index within scale VGPR) from attributes
+        scales_idx_a = int(operation.attributes["scalesIdxA"])
+        scales_idx_b = int(operation.attributes["scalesIdxB"])
+
         # Get operands based on actual MLIR structure
         # Operand order: sourceA, sourceB, destC, scaleA, scaleB
         data_a_ssa = str(operation.operands[0])  # sourceA: vector<32xf4E2M1FN>
         data_b_ssa = str(operation.operands[1])  # sourceB: vector<32xf4E2M1FN>
         acc_ssa = str(operation.operands[2])  # destC: vector<4xf32>
-        scale_a_ssa = str(operation.operands[3])  # scaleA: f8E8M0FNU (scalar)
-        scale_b_ssa = str(operation.operands[4])  # scaleB: f8E8M0FNU (scalar)
+        scale_a_ssa = str(
+            operation.operands[3]
+        )  # scaleA: f8E8M0FNU or vector<4xf8E8M0FNU>
+        scale_b_ssa = str(
+            operation.operands[4]
+        )  # scaleB: f8E8M0FNU or vector<4xf8E8M0FNU>
 
         # Get registers from kernel context
         scale_a_reg = ctx.ssa_to_reg.get(scale_a_ssa)
@@ -363,7 +375,9 @@ class _MemoryHandlers:
                 # For MXFP4: 32 elements of FP4 = 16 bytes = 4 VGPRs (4 bytes/VGPR)
                 # vector<32xf4E2M1FN> bitcast from vector<16xi8> -> 4 VGPRs
 
-                # Scale registers should be single VGPRs (extracted from vector<1xf8E8M0FNU>)
+                # Scale register: either a single VGPR (scalar f8E8M0FNU)
+                # or a single VGPR containing 4 packed bytes (vector<4xf8E8M0FNU>).
+                # In both cases it maps to a single VGPR register.
                 if isinstance(scale_a_reg, (list, tuple)):
                     scale_a_vreg = scale_a_reg[0] if len(scale_a_reg) > 0 else None
                 else:
@@ -390,6 +404,8 @@ class _MemoryHandlers:
                     acc_regs if acc_regs and len(acc_regs) == 4 else None,
                     cbsz=cbsz,
                     blgp=blgp,
+                    scales_idx_a=scales_idx_a,
+                    scales_idx_b=scales_idx_b,
                 )
 
                 # Track result in SSA mapping

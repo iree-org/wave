@@ -16,12 +16,15 @@ import torch
 from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+from wave_lang.kernel.wave.schedules import (
+    get_mxfp4_dbuf_schedule,
+    get_mxfp4_asymmetric_schedule,
+)
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
-
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from utils import parse_args, list_tests, run_test
 
 
@@ -44,7 +47,7 @@ def test_dbuf_4wave_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 4 waves, no stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=4)
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(2, 2))
     schedule = get_mxfp4_dbuf_schedule(use_stagger=False)
 
     options.print_ir_after = "all" if is_debug else []
@@ -61,7 +64,7 @@ def test_dbuf_8wave_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=8)
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
     schedule = get_mxfp4_dbuf_schedule(use_stagger=True)
 
     options.print_ir_after = "all" if is_debug else []
@@ -70,6 +73,31 @@ def test_dbuf_8wave_mxfp_gemm(
 
     _run_mxfp_gemm(gemm, shape)
     print("MXFP GEMM double-buffer 8-wave test passed!")
+
+
+def test_dbuf_4wave_mxfp_asymmetric_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Asymmetric-prefetch MXFP4 GEMM: A through LDS (2x prefetch), B direct from global."""
+    gemm, options = get_tagged_mxfp4_gemm(
+        shape, block, wave_shape=(1, 4), b_address_space=GLOBAL_ADDRESS_SPACE
+    )
+    options.print_mlir_file = "gemm_mxfp4_dbuf_4wave_asymmetric.mlir"
+    options.print_mlir = True
+    options.dump_binaries = "build/binaries"
+    options.dump_intermediates = "build/intermediates"
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.use_water_backend = True
+    schedule = get_mxfp4_asymmetric_schedule()
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    _run_mxfp_gemm(gemm, shape)
+    print("MXFP GEMM asymmetric-prefetch 4-wave test passed!")
 
 
 if __name__ == "__main__":

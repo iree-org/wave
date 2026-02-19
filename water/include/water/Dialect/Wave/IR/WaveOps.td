@@ -352,7 +352,8 @@ def AllocateOp : WaveOp<"allocate", [
 
   let arguments = !con((ins
     Arg<Optional<WaveMemoryType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>,
+        "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset,
     Arg<DefaultValuedAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
       "Padding added to the last dimension of distributed shape in number of elements">:$padding,
@@ -379,17 +380,22 @@ def ExtractOp : WaveOp<"extract",
     is not intended for use in user code. As such, it intentionally does not
     implement the interfaces for type and index dataflow analyses as it only
     appears after those. It does, however, implement the elements per thread
-    interface as it is needed for lowering to vectors.
+    interface as it is needed for lowering to vectors. User code should use
+    `extract_slice` instead.
 
     When lowered, extracts a single element from the vector that corresponds
     to lowered register-resident tensor, producing a 1-element vector.
-    Therefore, the result tensor is always indexed by one dimension.
+    Therefore, the result tensor is indexed by one less dimension that the
+    source tensor.
 
-    TODO: we don't have a good way of verifying this, but the indexing symbol
-    of the result must be the indexing symbol for which the size
-    (second element of the index expression) is greater than 1 when such a
+    TODO: we don't have a good way of verifying this, but the shape dimension
+    removed from the result must be the only one with non-unit index step
+    (second element of the index expression) when such a
     symbol exists (and presumably the last / the one mapped to thread X
     otherwise).
+
+    TODO: this operation leaks the internal abstraction of vector registers.
+    Consider regrouping it with `reshape` into a single relayout operation.
   }];
 
   let arguments = !con((ins
@@ -417,9 +423,9 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 
   let arguments = (ins
     Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
-    Arg<WaveExprListAttr>:$offset,
-    Arg<WaveExprListAttr>:$size,
-    Arg<WaveExprListAttr>:$stride
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$offset,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$size,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr]>>:$stride
   );
 
   let results = (outs
@@ -578,6 +584,56 @@ def ShuffleOp : WaveOp<"shuffle", [
 // Miscellaneous operations
 //-----------------------------------------------------------------------------
 
+def ApplyExprOp : WaveOp<"apply_expr",
+    [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+     CompatibleOperandsAndResultsShapeOpTrait,
+     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
+    WaveArithmeticOpDoc {
+  let summary = "Apply a symbolic expression to one or more register values";
+  let description = [{
+    Applies a symbolic expression to one or more register-resident tensor
+    values. The expression is specified as a `WaveExprListAttr` containing an
+    affine map. Symbols in the expression correspond to one of the operands or
+    to an external symbolic constant. An optional `combinator` may be provided
+    to combine multiple results of the affine map together in a non-affine way.
+    If not provided, the map must have a single result. If a comparison
+    combinator is provided, the map must have exactly two results. For min/max
+    combinators, the map must have at least one result.
+
+    All operands must have the same type and indexing dimensions. The result
+    type is the same as the operand types except for comparison combinators
+    where it may be an arbitrary integer type, though only the last bit of
+    this type will be set if the comparison is true.
+
+    TODO(#901): tighten the constraint on comparison result to be i1, which is
+    currently impossible because python typing is broken.
+
+    Operand symbols are represented using `WaveOperandAttr` (`#wave.operand`)
+    with the operand index (0 for first operand, 1 for second, etc.). In
+    expressions they appear as `_Operand_0`, `_Operand_1`, etc. External
+    symbolic constants use `WaveSymbolAttr` (`#wave.symbol`).
+  }] # baseDescription;
+
+  // Accept both WaveTensorType (before PropagateElementsPerThread) and
+  // 1D vectors (after). We cannot use Variadic<WaveTensorInRegister> because
+  // Variadic requires a Type and not a TypeConstraint.
+  let arguments = !con((ins
+    Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,
+    Arg<WaveExprListAttrOf<[WaveSymbolAttr, WaveOperandAttr]>, "Expression to apply">:$expr,
+    Arg<OptionalAttr<WaveApplyExprCombinatorAttr>, "Combinator to apply">:$combinator
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Result">:$result
+  );
+
+  let assemblyFormat =
+    "`(` $arguments `)` ($combinator^)? $expr " # commonArgumentsSyntax
+    # "attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def CastOp : WaveOp<"cast", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
@@ -678,7 +734,6 @@ def SelfIndexOp : WaveOp<"self_index", [
   let assemblyFormat =
     "custom<SingleSymbol>($dim) " # commonArgumentsSyntax # " attr-dict `:`"
     " type($result)";
-
   let hasVerifier = 1;
 }
 

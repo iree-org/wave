@@ -771,10 +771,9 @@ def test_wmma_with_tensor_load_delay():
 
     # CHECK:            %[[ITER_COND:.*]] = affine.apply #[[MAP1]]()[%[[ITER_ARG]]]
     # CHECK:            %[[COND1:.*]] = arith.cmpi eq, %[[ITER_COND]], %[[C0]] : index
-    # CHECK:            scf.if %[[COND1]] {
-    # CHECK-NEXT:         scf.if %[[COND0]] {
+    # CHECK:            %[[COND_ANDED:.*]] = arith.andi %[[COND1]], %[[COND0]] : i1
+    # CHECK:            scf.if %[[COND_ANDED]] {
     # CHECK-NEXT:             rocdl.s.barrier.signal id = -3
-    # CHECK-NEXT:         }
     # CHECK-NEXT:       }
 
     # CHECK-COUNT-4:    rocdl.wmma

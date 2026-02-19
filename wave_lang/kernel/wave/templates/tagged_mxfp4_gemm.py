@@ -25,8 +25,10 @@ from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_par
 def get_tagged_mxfp4_gemm(
     shape: tuple[int, int, int] = (1024, 1024, 8192),
     block_shape: tuple[int, int, int] = (256, 256, 256),
+    wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
-    num_waves: int = 8,
+    a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -36,7 +38,7 @@ def get_tagged_mxfp4_gemm(
         shape: (M, N, K) problem dimensions.
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         mfma_variant: Scaled MMA instruction type.
-        num_waves: Waves per workgroup (4 or 8).
+        wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
 
     Returns:
         (kernel_function, WaveCompileOptions)
@@ -47,30 +49,26 @@ def get_tagged_mxfp4_gemm(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
+    B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
+    C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
 
-    if num_waves == 8:
-        # 8 waves: 4 M-tiles x 2 N-tiles
-        constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-    else:
-        # 4 waves: 2 M-tiles x 2 N-tiles
-        constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-        constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / wave_shape[0])]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        a: tkl.Memory[M, K / 2, A_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, B_ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -94,7 +92,9 @@ def get_tagged_mxfp4_gemm(
         tkw.write(repeat, c)
 
     hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        A_ADDRESS_SPACE: a_address_space,
+        B_ADDRESS_SPACE: b_address_space,
+        C_ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],

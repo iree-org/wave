@@ -14,6 +14,7 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
+    get_splitk_gemm_kernel,
     get_streamk_gemm_kernel,
 )
 
@@ -2492,3 +2493,28 @@ def test_streamk_gemm():
     # CHECK:           llvm.store volatile %{{.+}}, %{{.+}} : vector<1xf32>, !llvm.ptr
 
     # CHECK:           llvm.load volatile %{{.+}} : !llvm.ptr -> vector<1xf32>
+
+
+@run_test
+def test_splitk_gemm():
+    splitk_gemm, hyperparams = get_splitk_gemm_kernel(
+        shape=(256, 256, 256),
+        num_splits=4,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        block_shape=(64, 64, 32),
+        waves_per_block=(2, 2),
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    splitk_gemm = wave_compile(options, splitk_gemm)
+    print(splitk_gemm.asm)
+
+    # CHECK-LABEL:    test_splitk_gemm
+    # CHECK:          func.func @splitk_gemm
+    # CHECK:            scf.for
+    # CHECK:              amdgpu.mfma
+    # CHECK:            memref.atomic_rmw addf

@@ -11,6 +11,7 @@ Usage:
     python 7.3_mxfp4_gemm_preshuffle_B.py --list_tests
 """
 
+
 import torch
 
 import wave_lang.kernel.wave as tkw
@@ -567,7 +568,6 @@ def _run_preshuffleB_gemm(
 
     torch.testing.assert_close(torch_out, out.cpu(), check_dtype=False)
     print(f"PreshuffleB {num_waves}-wave scheduled GEMM test passed!")
-
     # Benchmark: warmup + timed iterations
     warmup_iters, bench_iters = 50, 100
     for _ in range(warmup_iters):

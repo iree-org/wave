@@ -7,13 +7,14 @@ mlir operations of wave and other dialects.
 """
 
 from __future__ import annotations
-import dill
-import torch.fx as fx
-import sys
-from typing import TYPE_CHECKING, Sequence
-import sympy
 import argparse
+import dill
+import sys
+import torch.fx as fx
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Sequence
+
+import sympy
 
 if __name__ == "__main__":
     # Add parent directory to sys.path to enable relative imports when running standalone
@@ -30,6 +31,7 @@ if __name__ == "__main__":
 from attr_type_converter import (
     convert_index_mapping_array_to_sympy,
     dtype_to_mlir_scalar_type,
+    get_operand_symbol_placeholders,
     preprocess_symbols,
     symbol_name_to_attribute,
 )
@@ -60,6 +62,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import (
 
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
+    ApplyExpr,
     Extract,
     ExtractSlice,
     get_custom,
@@ -72,7 +75,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
-    SelectOp,
+    ReduceOp as Reduce,
     SelfIndex,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
@@ -101,8 +104,10 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
+        ApplyExprOp,
         SubOp,
         AllocateOp,
+        BroadcastOp,
         CastOp,
         DivOp,
         ReciprocalOp,
@@ -117,6 +122,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelectOp,
         SelfIndexOp,
         ShuffleOp,
         SumOp,
@@ -139,6 +145,7 @@ try:
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
+        convert_sympy_to_affine_map_and_combinator,
     )
     from water_mlir.water_mlir.dialects import arith, func, wave, amdgpu
     from water_mlir.water_mlir.dialects.transform import interpreter
@@ -149,13 +156,15 @@ except Exception as e:
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
+    "apply_expr": ApplyExprOp,
+    "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
     "extract": ExtractOp,
     "extract_slice": ExtractSliceOp,
-    "max": MaxOp,
-    "min": MinOp,
+    "maximum": MaxOp,
+    "minimum": MinOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
@@ -168,7 +177,7 @@ WAVE_OP_CONSTRUCTORS = {
     "output": YieldOp,
     "write": WriteOp,
     "permute": PermuteOp,
-    "max_element": MaxElementOp,
+    "max": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
     "self_index": SelfIndexOp,
@@ -184,6 +193,8 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    # 'bool' is an alias for 'i1'.
+    "bool": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
     "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
@@ -665,6 +676,20 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
+                elif isinstance(node, Reduce):
+                    if isinstance(node.arg, Sequence):
+                        raise NotImplementedError(
+                            "Only single-operand reductions are currently supported."
+                        )
+                    mlir_op = op_builder(
+                        result_type,
+                        *create_mlir_operands(),
+                        scope=wave.WaveReductionScopeAttr.get(
+                            wave.WaveReductionScope.Block
+                            if node.block
+                            else wave.WaveReductionScope.Warp
+                        ),
+                    )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.
                     parent_value = None
@@ -740,6 +765,44 @@ def _emit_ops_from_graph(
                     mode = wave.WaveShuffleModeAttr.get(node.mode.value)
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), offset, width, mode
+                    )
+                elif isinstance(node, ApplyExpr):
+                    reg = node.register_
+                    if not isinstance(reg, Sequence):
+                        reg = [reg]
+
+                    placeholders = get_operand_symbol_placeholders(len(reg))
+                    sympy_expr = node.expr(*list(placeholders.keys()))
+
+                    # Sort all free_symbols by name for deterministic symbol order in the expr_list.
+                    ordered_symbols = sorted(
+                        sympy_expr.free_symbols, key=lambda s: s.name
+                    )
+                    symbol_mapping = preprocess_symbols(ordered_symbols)
+                    affine_map, combinator = convert_sympy_to_affine_map_and_combinator(
+                        sympy_expr, [symbol.name for symbol in symbol_mapping.keys()]
+                    )
+                    symbol_attrs = [
+                        (
+                            placeholders[orig_sym]
+                            if orig_sym in placeholders
+                            else symbol_name_to_attribute(new_sym.name)
+                        )
+                        for orig_sym, new_sym in symbol_mapping.items()
+                    ]
+                    expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
+                    operands = [get_single_mapped_value(arg) for arg in reg]
+                    # TODO: need to add automatic constructor of WaveApplyExprCombinatorAttr
+                    # from enum.
+                    mlir_op = op_builder(
+                        result_type,
+                        operands,
+                        expr_attr,
+                        combinator=(
+                            wave.WaveApplyExprCombinatorAttr.get(combinator)
+                            if combinator is not None
+                            else None
+                        ),
                     )
                 else:
                     try:
@@ -990,9 +1053,11 @@ def _create_kernel_module(
     func_type = ir.FunctionType.get(arg_types, [])
     with ir.InsertionPoint(module.body):
         func_op = func.FuncOp("kernel", func_type)
-        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
-        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
-        # print([(str(k), v) for k, v in options.subs.items()])
+        # Validate that all non-int mappings are address spaces (either
+        # SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE). These mappings can be
+        # dropped safely because the information has been encoded in either
+        # `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the
+        # kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
         for k, v in options.subs.items():
             if not isinstance(v, int):
                 if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):

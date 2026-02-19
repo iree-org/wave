@@ -248,7 +248,7 @@ func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<
 
 // must provide the full triple (start, step, stride)
 func.func @index_attr_wrong_attr_type(%arg0: f32) {
-  // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr or WaveIterSymbolAtt}}
+  // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr, WaveIterSymbolAttr or WaveOperandAttr}}
   wave.register %arg0 index [{X : <[#wave.workgroup_dim<x>] -> (WG0)>}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
@@ -339,7 +339,7 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
 
 
 func.func @empty_distributed_shape() {
-  // expected-error @below {{wave expression attribute must have at least one dimension}}
+  // expected-error @below {{distributed shape must have at least one result}}
   %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> ()>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
@@ -565,10 +565,10 @@ func.func @extract_vector_result_not_one_element(%src: vector<4xf32>) {
 
 // -----
 
-func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) attributes {
+func.func @extract_result_same_rank_as_source(%src: !wave.tensor<[@M, @N] of f32>) attributes {
   wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16}>
 } {
-  // expected-error @below {{result must be a 1-dimensional tensor, got}}
+  // expected-error @below {{result tensor must have one less dimension than source}}
   wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
   return
 }
@@ -578,6 +578,14 @@ func.func @extract_result_not_1d_tensor(%src: !wave.tensor<[@M, @N] of f32>) att
 func.func @extract_source_not_fully_specified(%src: !wave.tensor<any of f32>) {
   // expected-error @below {{source tensor type must be fully specified}}
   %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<any of f32>) -> !wave.tensor<[@X] of f32>
+  return
+}
+
+// -----
+
+func.func @extract_target_not_fully_specified(%src: !wave.tensor<[@X] of f32>) {
+  // expected-error @below {{target tensor type must be fully specified}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@X] of f32>) -> !wave.tensor<any of f32>
   return
 }
 
@@ -933,4 +941,67 @@ func.func @permute_result_not_permutation(%arg0: !wave.tensor<[@M, @N] of f32, <
   // expected-error @below {{'wave.permute' op input dimension 'M' is not present in result shape}}
   wave.permute %arg0 : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@N, @K] of f32, <register>>
   return
+}
+
+// -----
+
+// Test apply_expr with too many result expressions (no combinator).
+func.func @apply_expr_multi_result(%arg0: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{in absence of a combinator, expression must produce exactly one result, but got 2}}
+  "wave.apply_expr"(%arg0) {expr = #wave.expr_list<[#wave.operand<0>] -> (_Operand_0, _Operand_0 + 1)>} : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+func.func @apply_expr_unused_operand(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
+  // expected-warning @below {{operand #1 is not used in the expression}}
+  "wave.apply_expr"(%arg0, %arg1) {expr = #wave.expr_list<[#wave.operand<0>] -> (_Operand_0 + 1)>} : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return
+}
+
+// -----
+
+func.func @apply_expr_operand_overflow(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{expression uses operand #2 but there are only 2 operands}}
+  wave.apply_expr(%arg0, %arg1) <[#wave.operand<0>, #wave.operand<1>, #wave.operand<2>] -> (_Operand_0 + _Operand_1 + _Operand_2)> : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+func.func @apply_expr_non_integer_result(%arg0: !wave.tensor<[@M] of f32>) {
+  // expected-error @below {{operates on integers only}}
+  wave.apply_expr(%arg0) <[#wave.operand<0>] -> (_Operand_0 + 1)> : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+}
+
+// -----
+
+func.func @apply_expr_symbol_not_in_hyperparam(%arg0: !wave.tensor<[@M] of i32>) attributes { wave.hyperparameters = #wave.hyperparameters<{M = 42}>} {
+  // expected-error @below {{op attribute "expr" uses symbolic value #wave.symbol<"Z"> not provided as a hyperparameter}}
+  // expected-note @below {{available symbols: M}}
+  wave.apply_expr(%arg0) <[#wave.symbol<"Z">, #wave.operand<0>] -> (Z + _Operand_0)> : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+  return
+}
+
+// -----
+
+func.func @apply_expr_non_register_operand(%arg0: !wave.tensor<[@M] of i32, <global>>) {
+  // expected-error @below {{tensor operands must be in register or unspecified address space}}
+  wave.apply_expr(%arg0) <[#wave.operand<0>] -> (_Operand_0 + 1)> : (!wave.tensor<[@M] of i32, <global>>) -> !wave.tensor<[@M] of i32>
+  return
+}
+
+// -----
+
+// Test apply_expr with min/max combinator and zero results.
+func.func @apply_expr_minmax_zero_results(%arg0: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{for min/max combinators, expression must produce at least one result}}
+  wave.apply_expr(%arg0) max<[#wave.operand<0>] -> ()> : (!wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i32>
+}
+
+// -----
+
+// Test apply_expr with comparison combinator and one result (requires exactly two).
+func.func @apply_expr_comparison_one_result(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
+  // expected-error @below {{for comparison combinators, expression must produce exactly two results}}
+  wave.apply_expr(%arg0, %arg1) gt<[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0)> : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i1>
 }

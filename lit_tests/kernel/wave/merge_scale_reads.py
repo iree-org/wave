@@ -13,6 +13,10 @@ should combine the expanded scalar reads into wider vector loads:
 
 The shuffle layout requires K/32 >= 64 (i.e. K >= 2048) for the groups to
 land contiguously in the row-major [M, K/32] scale tensor.
+
+Also verifies that the opsel_scaled_mfma pass enables byte selection in
+amdgpu.scaled_mfma, replacing scalar scale operands with vector operands
+and scalesIdxA/scalesIdxB attributes for efficient hardware extraction.
 """
 
 import wave_lang.kernel.lang as tkl
@@ -181,3 +185,11 @@ def test_preshuffle_scale_merge_block_k_256():
 
     # No unmerged scalar scale loads from global should remain.
     # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+
+    # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
+    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands.  Check %REG[1] as a simple check that we are doing a non-zero index
+    # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[1] * %{{.*}}) * (%{{.*}}[1] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+
+    # Verify that we're not using scalar scale extracts (the old pattern)
+    # If opsel is working, we should NOT see vector.extract before scaled_mfma
+    # CHECK-NOT: vector.extract %{{.*}}[0] : f8E8M0FNU

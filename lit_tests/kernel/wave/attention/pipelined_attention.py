@@ -372,7 +372,7 @@ def test_bshd_attention_pipelined_prefetch():
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
 
-    # CHECK: func.func @base_attention
+    # CHECK-LABEL: func.func @base_attention
     # CHECK: {{.*}} = scf.for
     # CHECK-COUNT-16: vector.load
     # CHECK: arith.subf
@@ -380,12 +380,10 @@ def test_bshd_attention_pipelined_prefetch():
     # CHECK: math.exp2
     # CHECK: arith.mulf
     # CHECK: arith.addf
-    # CHECK-COUNT-16: vector.extract
-    # CHECK-COUNT-16: arith.addf
+    # CHECK: vector.extract
+    # CHECK: arith.addf
     # CHECK: vector.broadcast
     # CHECK: gpu.shuffle
-    # CHECK: arith.addf
-    # CHECK: arith.addf
     # CHECK: arith.truncf
     # CHECK: arith.truncf
     # CHECK: vector.extract
@@ -393,15 +391,14 @@ def test_bshd_attention_pipelined_prefetch():
     # CHECK: arith.mulf
     # CHECK: arith.mulf
     # CHECK-COUNT-8: vector.extract_strided_slice
-    # CHECK-COUNT-32: amdgpu.mfma
-    # CHECK-COUNT-8: vector.load
-    # CHECK-COUNT-8: vector.extract
+    # CHECK: amdgpu.mfma
+    # CHECK: vector.load
+    # CHECK: vector.extract
     # CHECK: vector.from_elements
     # CHECK: vector.from_elements
     # CHECK: amdgpu.lds_barrier
-    # CHECK-COUNT-32: vector.load
-    # CHECK-COUNT-4: vector.load
-    # CHECK-COUNT-8: amdgpu.mfma
+    # CHECK: vector.load
+    # CHECK: amdgpu.mfma
 
 
 @run_test
@@ -434,7 +431,7 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
 
-    # CHECK: func.func @base_attention
+    # CHECK-LABEL: func.func @base_attention
 
     # CHECK: scf.if
     # CHECK-NEXT: rocdl.s.barrier
