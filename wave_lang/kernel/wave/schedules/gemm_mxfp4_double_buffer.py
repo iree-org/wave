@@ -252,8 +252,27 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
     return mxfp4_dbuf_schedule
 
 
-def get_mxfp4_dbuf_hipblaslt_schedule():
-    """Return a double-buffered MXFP4 schedule for wave_compile()."""
+def get_mxfp4_asymmetric_schedule():
+    """Return an asymmetric-prefetch MXFP4 schedule for wave_compile().
+
+    Asymmetric data paths:
+      - A (data + scale): global -> LDS -> VGPRs, prefetch depth 2
+        (triple-buffered in LDS).
+      - B (data + scale): global -> VGPRs directly (no LDS).
+
+    3-stage pipeline:
+      Stage 0: Async global-to-LDS prefetch for A and A_scale.
+      Stage 1: Global-to-VGPR loads for B and B_scale;
+               LDS-to-VGPR loads for first M-partition of A.
+      Stage 2: LDS-to-VGPR loads for second M-partition of A;
+               bitcasts; scaled MMA accumulation.
+
+    The main loop interleaves MMA with memory operations:
+      First MMA half: interleaved with B loads and second-partition A reads.
+      Second MMA half: interleaved with B_scale loads and next-iteration
+                       first-partition A reads (plus G2S for the iteration
+                       after next).
+    """
     M = tkl.sym.M
 
     @wave_schedule.wave_schedule()
@@ -505,11 +524,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             ),
         ]
 
-        # Barrier 3 (insert_at_end): loop backedge between C2 and next
-        #   iteration's C0.  No vmcnt ops outstanding after C2 (only
-        #   lgkmcnt from the LDS reads), so SharedMemoryBarrier suffices.
-        # tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
-
         #################### EPILOGUE ####################
 
         # Filter nodes for EPILOGUE stage
@@ -545,6 +559,7 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
             """Utility to split nodes by name containing '1_2' and '2_2'."""
             itr0 = []
             itr1 = []
+            breakpoint()
             for node in nodes:
                 value = getattr(node, key)
                 if "1_2" in value:
@@ -643,10 +658,6 @@ def get_mxfp4_dbuf_hipblaslt_schedule():
 
         clusters += epilogue_clusters_itr0
         clusters += prologue_clusters
-        # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.EPILOGUE, clusters)
-        # Unroll factor requires per-GEMM tuning:
-        # unroll_factor = 2
-        # tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
     return mxfp4_dbuf_schedule
