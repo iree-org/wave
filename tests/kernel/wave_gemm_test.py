@@ -3664,7 +3664,9 @@ def testSplitKMxfp4Gemm(
     w_t_gpu = w.T.contiguous().cuda()
     x_scales_gpu = x_scales.cuda()
     w_scales_gpu = w_scales.cuda()
-    c_gpu = device_zeros(m, n, dtype=torch.float32)
+    c_gpu = device_zeros(m, n, dtype=torch.bfloat16)
 
     splitk_gemm(x_gpu, x_scales_gpu, w_t_gpu, w_scales_gpu, c_gpu)
-    assert_close(c_gpu.cpu(), torch_ref, rtol=1e-3, atol=1e-2)
+    assert_close(
+        c_gpu.cpu().to(torch.float32), torch_ref, rtol=5e-2, atol=5e-2
+    )

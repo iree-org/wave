@@ -343,6 +343,16 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoadLDS(loadOp, "buffer_load_dwordx4");
       })
 
+
+      // Buffer atomic operations
+      .Case<BUFFER_ATOMIC_PK_ADD_BF16>([&](auto atomicOp) {
+        return emitBufferStore(atomicOp, "buffer_atomic_pk_add_bf16");
+      })
+      .Case<BUFFER_ATOMIC_ADD_F32>([&](auto atomicOp) {
+        return emitBufferStore(atomicOp, "buffer_atomic_add_f32");
+      })
+
+      // Buffer store operations
       .Case<BUFFER_STORE_DWORD>([&](auto storeOp) {
         return emitBufferStore(storeOp, "buffer_store_dword");
       })
@@ -667,6 +677,77 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format(mnemonic, operands);
           })
 
+
+      // V_CMP_* operations: write to VCC implicitly, need explicit vcc in asm.
+      // Also handles literal legalization (since isVOP3NoLiteral doesn't cover
+      // v_cmp — the generic literal handler doesn't add the vcc prefix).
+      .Case<V_CMP_EQ_U32, V_CMP_NE_U32, V_CMP_LT_U32, V_CMP_LE_U32,
+            V_CMP_GT_U32, V_CMP_GE_U32, V_CMP_EQ_I32, V_CMP_NE_I32,
+            V_CMP_LT_I32, V_CMP_LE_I32, V_CMP_GT_I32, V_CMP_GE_I32,
+            V_CMP_EQ_F32, V_CMP_NE_F32, V_CMP_LT_F32, V_CMP_LE_F32,
+            V_CMP_GT_F32, V_CMP_GE_F32>(
+          [&](auto cmpOp) -> std::optional<std::string> {
+            llvm::StringRef opName = cmpOp->getName().getStringRef();
+            llvm::StringRef mnemonic = opName;
+            if (opName.starts_with("waveasm."))
+              mnemonic = opName.drop_front(8);
+            std::string prefix;
+            llvm::SmallVector<std::string> operands;
+            operands.push_back("vcc");
+            for (Value operand : cmpOp->getOperands()) {
+              auto [isLit, val] = getLiteralValue(operand);
+              if (isLit && !isInlineConstant(val)) {
+                std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+                prefix = "  v_mov_b32 " + scratch + ", " +
+                         std::to_string(val) + "\n";
+                operands.push_back(scratch);
+                peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+              } else {
+                operands.push_back(resolveValue(operand));
+              }
+            }
+            return prefix + formatter.format(mnemonic, operands);
+          })
+
+      // V_CNDMASK_B32: VOP2 form uses implicit VCC — drop the 3rd source
+      // and legalize any non-inline literal in src0/src1 to a scratch VGPR.
+      .Case<V_CNDMASK_B32>(
+          [&](V_CNDMASK_B32 cndOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(cndOp.getDst());
+            std::string src0 = resolveValue(cndOp.getSrc0());
+            std::string src1 = resolveValue(cndOp.getSrc1());
+            std::string prefix;
+            auto [isLit0, val0] = getLiteralValue(cndOp.getSrc0());
+            if (isLit0 && !isInlineConstant(val0)) {
+              std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+              prefix = "  v_mov_b32 " + scratch + ", " +
+                       std::to_string(val0) + "\n";
+              src0 = scratch;
+              peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            }
+            auto [isLit1, val1] = getLiteralValue(cndOp.getSrc1());
+            if (isLit1 && !isInlineConstant(val1)) {
+              std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+              prefix += "  v_mov_b32 " + scratch + ", " +
+                        std::to_string(val1) + "\n";
+              src1 = scratch;
+              peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            }
+            llvm::SmallVector<std::string> operands = {dst, src0, src1};
+            return prefix + formatter.format("v_cndmask_b32", operands);
+          })
+
+      // V_CVT_BF16_F32: emit as v_cvt_pk_bf16_f32 dst, src, 0
+      .Case<V_CVT_BF16_F32>(
+          [&](V_CVT_BF16_F32 cvtOp) -> std::optional<std::string> {
+            llvm::SmallVector<std::string> operands;
+            operands.push_back(resolveValue(cvtOp.getDst()));
+            operands.push_back(resolveValue(cvtOp.getSrc()));
+            operands.push_back("0");
+            return formatter.format("v_cvt_pk_bf16_f32", operands);
+          })
+
+      // Default: use the operation's mnemonic with standard format
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
         llvm::StringRef opName = defaultOp->getName().getStringRef();
         llvm::StringRef mnemonic = opName;
@@ -699,6 +780,96 @@ std::string KernelGenerator::generateComment(CommentOp commentOp) {
 std::string KernelGenerator::generateRaw(RawOp rawOp) {
   return formatter.formatRaw(rawOp.getText());
 }
+
+
+// Check if an instruction is a VOP3 that doesn't support literal operands
+static bool isVOP3NoLiteral(llvm::StringRef mnemonic) {
+  // VOP3 instructions that don't support literal operands
+  // This includes most v_* integer instructions when not in VOP2/VOP1 form
+  return mnemonic.starts_with("v_mul_lo") || mnemonic.starts_with("v_mul_hi") ||
+         mnemonic.starts_with("v_mad") || mnemonic.starts_with("v_fma") ||
+         mnemonic.starts_with("v_lshl") || mnemonic.starts_with("v_lshr") ||
+         mnemonic.starts_with("v_ashr") || mnemonic.starts_with("v_bfe") ||
+         mnemonic.starts_with("v_bfi") || mnemonic.starts_with("v_alignbit") ||
+         mnemonic.starts_with("v_alignbyte") ||
+         mnemonic.starts_with("v_min") || mnemonic.starts_with("v_max") ||
+         mnemonic.starts_with("v_cvt_pk");
+}
+
+llvm::SmallVector<std::string>
+KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
+  llvm::SmallVector<std::string> lines;
+
+  // Get the operation name and extract the instruction mnemonic
+  llvm::StringRef opName = op->getName().getStringRef();
+  llvm::StringRef mnemonic = opName;
+  if (opName.starts_with("waveasm.")) {
+    mnemonic = opName.drop_front(8);
+  }
+
+  // Check if this is a VOP3 that doesn't support literals
+  if (!isVOP3NoLiteral(mnemonic)) {
+    // Use normal generation
+    if (auto line = generateOp(op)) {
+      lines.push_back(*line);
+    }
+    return lines;
+  }
+
+  // Check operands for literals outside inline range
+  bool needsLiteralLoad = false;
+  int64_t literalValue = 0;
+  int literalOperandIdx = -1;
+
+  for (int i = 0; i < static_cast<int>(op->getNumOperands()); ++i) {
+    auto [isLiteral, val] = getLiteralValue(op->getOperand(i));
+    if (isLiteral && !isInlineConstant(val)) {
+      needsLiteralLoad = true;
+      literalValue = val;
+      literalOperandIdx = i;
+      break; // Only handle first non-inline literal
+    }
+  }
+
+  if (!needsLiteralLoad) {
+    // All literals are inline constants, use normal generation
+    if (auto line = generateOp(op)) {
+      lines.push_back(*line);
+    }
+    return lines;
+  }
+
+  // Emit v_mov_b32 to load the literal into scratch VGPR
+  // This matches the Python backend approach in kernel_expr_emitter.py
+  std::string scratchReg = formatVGPRRange(kScratchVGPR, 1);
+  lines.push_back("  v_mov_b32 " + scratchReg + ", " +
+                  std::to_string(literalValue));
+
+  // Now generate the instruction with scratch VGPR instead of literal
+  llvm::SmallVector<std::string> operands;
+
+  // Results come first
+  for (Value result : op->getResults()) {
+    operands.push_back(resolveValue(result));
+  }
+
+  // Then input operands, replacing the literal with scratch register
+  for (int i = 0; i < static_cast<int>(op->getNumOperands()); ++i) {
+    if (i == literalOperandIdx) {
+      operands.push_back(scratchReg);
+    } else {
+      operands.push_back(resolveValue(op->getOperand(i)));
+    }
+  }
+
+  lines.push_back(formatter.format(mnemonic, operands));
+
+  // Track that we used the scratch VGPR (update peak if needed)
+  peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+
+  return lines;
+}
+
 
 llvm::SmallVector<std::string> KernelGenerator::generate() {
   llvm::SmallVector<std::string> lines;

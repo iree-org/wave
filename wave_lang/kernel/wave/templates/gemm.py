@@ -321,7 +321,7 @@ def get_splitk_mxfp4_gemm_kernel(
         a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -338,7 +338,8 @@ def get_splitk_mxfp4_gemm_kernel(
             acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
             return acc
 
-        tkw.atomic_add(repeat, c)
+        repeat_bf16 = tkw.cast(repeat, tkl.bf16)
+        tkw.atomic_add(repeat_bf16, c)
 
     hyperparams = {
         # Use global address space to work around a compiler bug where

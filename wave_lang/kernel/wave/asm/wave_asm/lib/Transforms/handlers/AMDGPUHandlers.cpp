@@ -14,7 +14,9 @@
 #include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/Support/Debug.h"
@@ -998,6 +1000,174 @@ LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx) {
   auto result = V_READFIRSTLANE_B32::create(builder, loc, sregType, *src);
   ctx.getMapper().mapValue(op->getResult(0), result);
 
+  return success();
+}
+
+LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
+  auto atomicOp = cast<memref::AtomicRMWOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto valueMapped = ctx.getMapper().getMapped(atomicOp.getValue());
+  if (!valueMapped) {
+    return op->emitError("atomic_rmw value not mapped");
+  }
+
+  auto memrefType = atomicOp.getMemRefType();
+  Type elementType = memrefType.getElementType();
+  int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
+
+  auto kind = atomicOp.getKind();
+  if (kind != arith::AtomicRMWKind::addf && kind != arith::AtomicRMWKind::addi) {
+    return op->emitError("unsupported atomic_rmw kind; only addf/addi supported");
+  }
+
+  // Compute voffset from indices (byte offset into the buffer)
+  auto indices = atomicOp.getIndices();
+  Value voffset;
+  SmallVector<int64_t, 4> strides;
+  int64_t memrefOffset;
+  int64_t instOffset = 0;
+
+  if (succeeded(memrefType.getStridesAndOffset(strides, memrefOffset))) {
+    for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
+      auto idxMapped = ctx.getMapper().getMapped(indices[i]);
+      if (!idxMapped)
+        continue;
+
+      Value idx = *idxMapped;
+      int64_t strideBytes = strides[i] * elementBytes;
+      if (strideBytes == 0)
+        continue;
+
+      int64_t constAddend = ctx.getConstOffset(indices[i]);
+      if (constAddend != 0) {
+        instOffset += constAddend * strideBytes;
+      }
+
+      Value dimOffset;
+      if (strideBytes == 1) {
+        dimOffset = idx;
+      } else if ((strideBytes & (strideBytes - 1)) == 0) {
+        int shift = 0;
+        int64_t temp = strideBytes;
+        while (temp > 1) { shift++; temp >>= 1; }
+        auto shiftImm =
+            ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+        dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                          shiftImm, idx);
+      } else {
+        auto strideImm = ConstantOp::create(
+            builder, loc, ctx.createImmType(strideBytes), strideBytes);
+        dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                         idx, strideImm);
+      }
+
+      if (!voffset) {
+        voffset = dimOffset;
+      } else {
+        voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                    voffset, dimOffset);
+      }
+    }
+  } else if (!indices.empty()) {
+    if (auto mapped = ctx.getMapper().getMapped(indices[0])) {
+      voffset = *mapped;
+    }
+  }
+
+  if (!voffset) {
+    auto immType = ctx.createImmType(0);
+    voffset = ConstantOp::create(builder, loc, immType, 0);
+  }
+
+  // Get SRD for the target memref
+  Value srd;
+  if (auto srdIdx = ctx.getSRDIndex(atomicOp.getMemref())) {
+    auto sregType = ctx.createSRegType(4, 4);
+    srd = PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
+  } else if (auto mapped = ctx.getMapper().getMapped(atomicOp.getMemref())) {
+    srd = *mapped;
+  } else {
+    auto sregType = ctx.createSRegType(4, 4);
+    srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+  }
+
+  if (elementType.isBF16()) {
+    // buffer_atomic_pk_add_bf16 operates on 32-bit aligned addresses
+    // with 2 packed bf16 values. We need to:
+    // 1. Convert f32 → bf16 (the truncf handler defers vector conversions)
+    // 2. Compute which half (lo/hi) of the 32-bit word our bf16 falls in
+    // 3. Pack the value accordingly (with zero in the other half)
+    // 4. Align the address to 32-bit boundary
+
+    auto vregType = ctx.createVRegType();
+
+    // The value may still be f32 if the truncf handler deferred the
+    // conversion for vector types. Convert to bf16 here.
+    Value bf16Value = V_CVT_BF16_F32::create(builder, loc, vregType,
+                                              *valueMapped);
+    valueMapped = bf16Value;
+
+    // Compute aligned voffset: clear bit 1 to get 32-bit aligned address.
+    // We AND with ~2 (0xFFFF_FFFE for the relevant bit, but since offsets
+    // are byte addresses, we use ~3 for 4-byte alignment).
+    // instOffset alignment: ensure the instruction offset is 4-byte aligned
+    int64_t positionFromInstOffset = instOffset & 2;
+    int64_t alignedInstOffset = instOffset & ~3;
+
+    // Extract position from the dynamic voffset component
+    // position = voffset & 2
+    auto immTwo = ConstantOp::create(builder, loc, ctx.createImmType(2), 2);
+    Value position = V_AND_B32::create(builder, loc, vregType,
+                                       voffset, immTwo);
+
+    // Compute aligned voffset: voffset & ~3
+    auto immNeg4 = ConstantOp::create(builder, loc,
+                                       ctx.createImmType(-4), -4);
+    Value alignedVoffset = V_AND_B32::create(builder, loc, vregType,
+                                              voffset, immNeg4);
+
+    // If position from instOffset is nonzero, fold it into the dynamic check
+    if (positionFromInstOffset != 0) {
+      auto immPos = ConstantOp::create(builder, loc,
+                                        ctx.createImmType(positionFromInstOffset),
+                                        positionFromInstOffset);
+      position = V_ADD_U32::create(builder, loc, vregType, position, immPos);
+      // Re-check: position = (position + posFromInst) & 2
+      position = V_AND_B32::create(builder, loc, vregType, position, immTwo);
+    }
+
+    // Pack the bf16 value: if position == 2, shift left by 16
+    // v_cmp_eq_u32 position, 2  → sets VCC
+    // v_lshlrev_b32 shifted, 16, value
+    // v_cndmask_b32 packed, value, shifted, vcc
+    auto immSixteen = ConstantOp::create(builder, loc,
+                                          ctx.createImmType(16), 16);
+    Value shifted = V_LSHLREV_B32::create(builder, loc, vregType,
+                                           immSixteen, *valueMapped);
+
+    V_CMP_EQ_U32::create(builder, loc, position, immTwo);
+
+    // Use s[0:1] as dummy VCC placeholder (VCC is implicit for cndmask)
+    auto sregType = ctx.createSRegType(2, 2);
+    auto vcc = PrecoloredSRegOp::create(builder, loc, sregType, 106, 2);
+
+    Value packed = V_CNDMASK_B32::create(builder, loc, vregType,
+                                          *valueMapped, shifted, vcc);
+
+    BUFFER_ATOMIC_PK_ADD_BF16::create(builder, loc, packed, srd,
+                                       alignedVoffset, alignedInstOffset);
+  } else if (elementType.isF32()) {
+    BUFFER_ATOMIC_ADD_F32::create(builder, loc, *valueMapped, srd,
+                                   voffset, instOffset);
+  } else {
+    return op->emitError("unsupported element type for atomic_rmw: ")
+           << elementType;
+  }
+
+  // Map the result (the old value) - for atomic_add we don't typically use it
+  ctx.getMapper().mapValue(atomicOp.getResult(), *valueMapped);
   return success();
 }
 

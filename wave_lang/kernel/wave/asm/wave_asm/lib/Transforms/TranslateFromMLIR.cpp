@@ -375,6 +375,10 @@ LogicalResult handleArithShRSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithTruncI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMinSI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMaxSI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMinUI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMaxUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithAddF(Operation *op, TranslationContext &ctx);
@@ -383,6 +387,8 @@ LogicalResult handleArithMulF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithDivF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithNegF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithCmpF(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx);
 
 // Math handlers (implemented in handlers/MathHandlers.cpp)
 LogicalResult handleMathFma(Operation *op, TranslationContext &ctx);
@@ -1299,6 +1305,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferStore(Operation *op, TranslationContext &ctx);
+LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx);
 LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
@@ -1409,6 +1416,12 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::ExtSIOp, handleArithExtSI);
   REGISTER_HANDLER(arith::TruncIOp, handleArithTruncI);
 
+  // Arith dialect - min/max
+  REGISTER_HANDLER(arith::MinSIOp, handleArithMinSI);
+  REGISTER_HANDLER(arith::MaxSIOp, handleArithMaxSI);
+  REGISTER_HANDLER(arith::MinUIOp, handleArithMinUI);
+  REGISTER_HANDLER(arith::MaxUIOp, handleArithMaxUI);
+
   // Arith dialect - comparison and select
   REGISTER_HANDLER(arith::CmpIOp, handleArithCmpI);
   REGISTER_HANDLER(arith::SelectOp, handleArithSelect);
@@ -1420,6 +1433,8 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::DivFOp, handleArithDivF);
   REGISTER_HANDLER(arith::NegFOp, handleArithNegF);
   REGISTER_HANDLER(arith::CmpFOp, handleArithCmpF);
+  REGISTER_HANDLER(arith::TruncFOp, handleArithTruncF);
+  REGISTER_HANDLER(arith::ExtFOp, handleArithExtF);
 
   // Math dialect
   REGISTER_HANDLER(math::FmaOp, handleMathFma);
@@ -1451,6 +1466,9 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(amdgpu::GatherToLDSOp, handleGatherToLds);
   REGISTER_HANDLER(amdgpu::RawBufferLoadOp, handleRawBufferLoad);
   REGISTER_HANDLER(amdgpu::RawBufferStoreOp, handleRawBufferStore);
+
+  // MemRef atomic operations
+  REGISTER_HANDLER(memref::AtomicRMWOp, handleMemRefAtomicRMW);
 
   // ROCDL dialect
   REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);
