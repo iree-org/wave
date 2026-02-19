@@ -1104,13 +1104,13 @@ def read_with_mapping_kernel(
 ):
     # Create a permutation mapping for read that transposes dimensions
     # Memory has shape [M, N], register will have shape [N, M]
-    # Iterator i (position 0) corresponds to M, iterator j (position 1) corresponds to N
+    # inputs = memory dimensions, outputs = register dimensions
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     transpose_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: i, N: j},  # Memory dimension M uses iterator i, dimension N uses iterator j
-        outputs={N: j, M: i},  # Register dimension N uses iterator j, dimension M uses iterator i
+        inputs={M: j, N: i},  # Memory[M,N]: M→iterator(1), N→iterator(0) gives permutation [1,0]
+        outputs={N: i, M: j},  # Register[N,M]: N→iterator(0), M→iterator(1)
     )
 
     # Read with transpose mapping
@@ -1176,13 +1176,13 @@ def write_with_mapping_kernel(
 ):
     # Create a permutation mapping for write that transposes dimensions
     # Register has shape [N, M], memory has shape [M, N]
-    # Iterator i (position 0) corresponds to N, iterator j (position 1) corresponds to M
+    # inputs = register dimensions, outputs = memory dimensions
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     transpose_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: j, N: i},  # Memory dimension M uses iterator j, dimension N uses iterator i
-        outputs={N: i, M: j},  # Register dimension N uses iterator i, dimension M uses iterator j
+        inputs={N: i, M: j},  # Register[N,M]: N→iterator(0), M→iterator(1)
+        outputs={M: j, N: i},  # Memory[M,N]: M→iterator(1), N→iterator(0) gives permutation [1,0]
     )
 
     # Read from memory (no mapping)
