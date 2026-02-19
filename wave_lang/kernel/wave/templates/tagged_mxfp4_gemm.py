@@ -17,6 +17,8 @@ Required tags: k_loop, read_a, read_a_scale, read_b, read_b_scale,
 bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale, scaled_mma.
 """
 
+from sympy import Piecewise, ceiling, floor
+
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
@@ -33,6 +35,7 @@ def get_tagged_mxfp4_gemm(
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    reorder_workgroups=True,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -65,6 +68,41 @@ def get_tagged_mxfp4_gemm(
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    if reorder_workgroups:
+        # Workgroup reordering based on SP3 example: group by 32 along N dim
+        wg0, wg1 = WORKGROUP_0, WORKGROUP_1
+        num_wg_0 = ceiling(M / BLOCK_M)
+        num_wg_1 = ceiling(N / BLOCK_N)
+
+        # Flatten in column-major order
+        flat_wg_index = wg0 + wg1 * num_wg_0
+        group_index = flat_wg_index // 32
+
+        # Main case, forming full groups of 32 tiles along N
+        main_new_wg0 = group_index % num_wg_0
+        main_new_wg1 = (group_index // num_wg_0) * 32 + flat_wg_index % 32
+
+        # Tailing case, when N tiles is not a multiple of 32
+        full_tiles_n = floor(num_wg_1 / 32) * 32
+        tail_tiles_n = num_wg_1 - full_tiles_n
+        total_full = full_tiles_n * num_wg_0
+        tail_linear = flat_wg_index - total_full
+        tail_new_wg0 = tail_linear // tail_tiles_n
+        tail_new_wg1 = full_tiles_n + tail_linear % tail_tiles_n
+
+        # Select tail path if we can no longer form full groups
+        new_wg0 = Piecewise(
+            (tail_new_wg0, (flat_wg_index >= total_full) & (tail_tiles_n > 0)),
+            (main_new_wg0, True),
+        )
+        new_wg1 = Piecewise(
+            (tail_new_wg1, (flat_wg_index >= total_full) & (tail_tiles_n > 0)),
+            (main_new_wg1, True),
+        )
+
+        constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
+        constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
 
     @tkw.wave(constraints)
     def gemm(
