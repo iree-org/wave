@@ -1179,8 +1179,8 @@ def write_with_mapping_kernel(
     j = tkw.IndexMapping.iterator(1)
     transpose_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: i, N: j},  # Memory b has shape [M, N]
-        outputs={N: i, M: j},  # Value (register a_reg) has shape [N, M]
+        inputs={M: j, N: i},  # Memory b has shape [M, N], M maps to iterator j, N maps to iterator i
+        outputs={N: i, M: j},  # Value (register a_reg) has shape [N, M], N maps to iterator i, M maps to iterator j
     )
 
     # Read from memory (no mapping)
