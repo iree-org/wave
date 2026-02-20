@@ -1111,7 +1111,7 @@ def read_with_mapping_kernel(
     k = tkw.IndexMapping.iterator(2)
     cyclic_mapping = tkw.IndexMapping(
         num_iterators=3,
-        inputs={M: k, N: i, K: j},  # Memory[M,N,K]: M→iter(2), N→iter(0), K→iter(1) gives permutation [1,2,0]
+        inputs={M: k, N: i, K: j},  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
         outputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
     )
 
@@ -1188,7 +1188,7 @@ def write_with_mapping_kernel(
     cyclic_mapping = tkw.IndexMapping(
         num_iterators=3,
         inputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
-        outputs={M: k, N: i, K: j},  # Memory[M,N,K]: M→iter(2), N→iter(0), K→iter(1) gives permutation [1,2,0]
+        outputs={M: k, N: i, K: j},  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
     )
 
     # Read from memory (no mapping)
