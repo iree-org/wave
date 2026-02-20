@@ -709,10 +709,9 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   unsigned startIdx = isOperandReference ? 1 : 0;
   for (auto [idx, operandType] :
        llvm::enumerate(op->getOperandTypes().drop_front(startIdx))) {
-    std::string operandName = "operand #" + std::to_string(idx + startIdx);
-    if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
-                                       referenceType, operandName,
-                                       operandType)))
+    if (failed(verifyElementTypesMatch(
+            op->getLoc(), referenceName, referenceType,
+            "operand #" + llvm::Twine(idx + startIdx), operandType)))
       return llvm::failure();
   }
 
@@ -721,9 +720,9 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   startIdx = !isOperandReference ? 1 : 0;
   for (auto [idx, resultType] :
        llvm::enumerate(op->getResultTypes().drop_front(startIdx))) {
-    std::string resultName = "result #" + std::to_string(idx + startIdx);
-    if (failed(verifyElementTypesMatch(op->getLoc(), referenceName,
-                                       referenceType, resultName, resultType)))
+    if (failed(verifyElementTypesMatch(
+            op->getLoc(), referenceName, referenceType,
+            "result #" + llvm::Twine(idx + startIdx), resultType)))
       return llvm::failure();
   }
 
