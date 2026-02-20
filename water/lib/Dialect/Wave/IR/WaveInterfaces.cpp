@@ -254,17 +254,6 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
   return changeResult;
 }
 
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                         FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
-
 // Propagate type information from the reduction input type by removing the
 // reduction axis from it to the given type. Report errors to `errs` using
 // `toName` to identify the target type.
