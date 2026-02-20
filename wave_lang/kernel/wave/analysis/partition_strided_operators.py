@@ -528,9 +528,6 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                         continue
                 else:
                     diff = sym_simplify(raw_diff)
-                    # Numeric fallback for reads whose index expressions
-                    # are complex (e.g. from a prior merge of mapped reads)
-                    # but no longer carry an explicit mapping.
                     if diff != ept and diff != -ept:
                         nv = _numeric_eval_constant(raw_diff, _memo=eval_memo)
                         if nv is not None:

@@ -822,6 +822,9 @@ def compile_launchable_to_mlir(
 
     # Replace scalar extract+bitcast scale chains on scaled_mfma ops
     # with vector-level bitcast and opsel byte selection.
+    # Without the opsel pass, the b_scale loads regressed to
+    # buffer_load_ubyte (16 of them), and the scale values passed
+    # to v_mfma_scale are loaded as individual bytes rather than dwords.
     apply_opsel_scaled_mfma(mb.module_op)
     if options.canonicalize:
         canonicalize_module(mb.module_op)

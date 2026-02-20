@@ -23,6 +23,41 @@ from ..._support.indexing import (
 )
 
 
+# Candidate values for numeric probing.  Straddle power-of-2 boundaries
+# (e.g. 31/32/33) to catch floor/Mod discontinuities that would expose
+# non-constant expressions.
+_PROBE_POOL = (
+    # fmt: off
+    0,   1,   2,   3,   4,   5,              # small values
+    7,   8,   9,  13,  15,  16,  17,         # near 8/16 boundaries
+   23,  24,  25,  31,  32,  33,  37,         # near 32 boundary
+   47,  48,  63,  64,  65,  96,  97,         # near 64 boundary
+  127, 128, 129, 191, 255, 256, 257,         # near 128/256 boundaries
+  383, 511, 512, 513, 767, 1023, 1024, 1025,
+    # near 512/1024 boundaries
+    # fmt: on
+)
+
+# Co-prime strides used to generate linearly independent probe combinations
+# from _PROBE_POOL, reducing the chance of accidental collisions.
+_STRIDES = (1, 3, 7, 11, 13, 17, 19, 23)
+
+# Sentinel values that indicate a probe produced an undefined result.
+_BAD_ATOMS = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
+
+# Mapping from sympy function names to Python callables, used by
+# sympy.lambdify to numerically evaluate expressions with floor/Mod/etc.
+_LAMBDIFY_MODULES = {
+    "Mod": op.mod,
+    "floor": math.floor,
+    "ceiling": math.ceil,
+    "xor": op.xor,
+    "Min": min,
+    "Max": max,
+    "Abs": abs,
+}
+
+
 ####################################################################
 # Interval-arithmetic simplification for floor/Mod expressions.
 ####################################################################
@@ -130,9 +165,6 @@ def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     return expr
 
 
-####################################################################
-
-
 def get_min_expr(
     expr1: Optional[IndexExpr], expr2: Optional[IndexExpr]
 ) -> Optional[IndexExpr]:
@@ -203,68 +235,6 @@ def strip_out_of_scope_induction_symbols(
             seq.size = safe_subs(seq.size, zero_subs)
             seq.stride = safe_subs(seq.stride, zero_subs)
     return cleaned
-
-
-####################################################################
-# Numeric evaluation of symbolic expressions via probing.
-####################################################################
-
-_PROBE_POOL = (
-    0,
-    1,
-    2,
-    3,
-    4,
-    5,
-    7,
-    8,
-    9,
-    13,
-    15,
-    16,
-    17,
-    23,
-    24,
-    25,
-    31,
-    32,
-    33,
-    37,
-    47,
-    48,
-    63,
-    64,
-    65,
-    96,
-    97,
-    127,
-    128,
-    129,
-    191,
-    255,
-    256,
-    257,
-    383,
-    511,
-    512,
-    513,
-    767,
-    1023,
-    1024,
-    1025,
-)
-_STRIDES = (1, 3, 7, 11, 13, 17, 19, 23)
-_BAD_ATOMS = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
-
-_LAMBDIFY_MODULES = {
-    "Mod": op.mod,
-    "floor": math.floor,
-    "ceiling": math.ceil,
-    "xor": op.xor,
-    "Min": min,
-    "Max": max,
-    "Abs": abs,
-}
 
 
 def _compile_evaluator(expr):

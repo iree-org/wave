@@ -219,7 +219,7 @@ def _transform_scale_memory(
     alloc.update_arg("distributed_shape", (total_bytes, 1))
     alloc.update_arg("padding", 0)
 
-    # --- Transform writes ---
+    # Transform writes
     # The global read KEEPS its preshuffle mapping, so data arrives in
     # logical order.  We transform the write index so each logical byte
     # at (k, m) is stored at its preshuffle physical offset in the 1D LDS.

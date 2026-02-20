@@ -295,9 +295,9 @@ def get_preshuffle_kernel():
         },
     )
 
-    # TODO: The read side matches aiter. The only difference is on the write side for a_scale 
-    #     (how data gets into LDS). Wave uses 8 byte loads + 8 byte stores, while AITER 
-    #     uses 2 DMA dword loads. 
+    # TODO: The read side matches aiter. The only difference is on the write side for a_scale
+    #     (how data gets into LDS). Wave uses 8 byte loads + 8 byte stores, while AITER
+    #     uses 2 DMA dword loads.
     # The analysis report covers what's needed to close that gap.
     @tkw.wave(constraints)
     def mxfp4_gemm_preshuffle(
