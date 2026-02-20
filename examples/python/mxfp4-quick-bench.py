@@ -235,12 +235,17 @@ def _check_splitk_correctness(
     abs_diff = (c_sk_f32 - c_ref).abs()
     max_diff = abs_diff.max().item()
     mean_diff = abs_diff.mean().item()
-    # Both vanilla (f32) and split-K (bf16 atomic) are approximate vs truth.
-    # The bf16 format has ULP of 0.25 at magnitude 4 and 0.5 at magnitude 8,
-    # so small-magnitude outputs can have absolute errors up to ~2 ULP from
-    # the truncation on each atomic add.  rtol covers large-magnitude elements;
-    # atol=2.0 covers the small-magnitude tail.
-    rtol, atol = 0.02, 2.0
+    # Split-K with bf16 atomics: each split casts its f32 partial to bf16 before
+    # the atomic add, introducing up to 0.5 ULP of bf16 error per split.  With
+    # num_splits splits the worst-case absolute error on any element is
+    #   num_splits * bf16_eps * max(|partial|)
+    # where bf16_eps = 2^-7.  The partial magnitudes are bounded by the global
+    # maximum of the reference output (tight when there is no cancellation; the
+    # cancellation case produces a small output from large partials, but the
+    # error on that element is still well within this bound empirically).
+    bf16_eps = 2**-7
+    atol = num_splits * bf16_eps * max(c_ref.abs().max().item(), 1.0)
+    rtol = 0.0
     ok = bool(torch.allclose(c_sk_f32, c_ref, rtol=rtol, atol=atol))
 
     info = f"max_diff={max_diff:.4f} mean_diff={mean_diff:.4f}"
