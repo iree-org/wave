@@ -467,9 +467,10 @@ def ReshapeOp : WaveOp<"reshape", [
     multiple times to produce portions of the result.
 
     TODO: this operation is tightly connected to `extract`, likely misnamed, and
-    is up for redesign. There is a suspicion that the usage of
-    `target_vector_shape` of the python equivalent is dependent on the case
-    above and may capture the _source_ vector shape instead.
+    is up for redesign. The usage of `target_vector_shape` of the python
+    equivalent is **inconsistent** and in some cases is used for the _source_
+    vector shape instead in a blatant violation of any reasonable semantic
+    contract (#942). This will **NOT** be modeled here.
   }];
 
   let arguments = !con((ins

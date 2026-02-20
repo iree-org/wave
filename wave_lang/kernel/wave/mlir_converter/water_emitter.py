@@ -496,7 +496,7 @@ def _convert_vector_shapes(
     """Converts a dictionary of index symbols mapped to integers to a dictionary attribute."""
     resolved = _resolve_vector_shapes_for_attr(shapes, subs)
     i64 = ir.IntegerType.get_signless(64)
-    dict = {k.name: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
+    dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
     return ir.DictAttr.get(dict)
 
 
@@ -557,21 +557,21 @@ def _emit_ops_from_graph(
                 """
                 mlir_operands = []
                 for arg in fx_node.args:
-                    if isinstance(arg, Sequence):
-                        mlir_operands.extend(
-                            mlir_arg
-                            for subarg in arg
-                            if (
-                                mlir_arg := get_single_mapped_value(
-                                    subarg, allow_missing=True
-                                )
+                    args = (
+                        arg
+                        if isinstance(arg, Sequence) and not isinstance(arg, str)
+                        else [arg]
+                    )
+                    mlir_operands.extend(
+                        mlir_arg
+                        for subarg in args
+                        if (
+                            mlir_arg := get_single_mapped_value(
+                                subarg, allow_missing=True
                             )
-                            is not None
                         )
-                    elif (
-                        mlir_arg := get_single_mapped_value(arg, allow_missing=True)
-                    ) is not None:
-                        mlir_operands.append(mlir_arg)
+                        is not None
+                    )
                 return mlir_operands
 
             if isinstance(node, GetResult):

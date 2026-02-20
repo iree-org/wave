@@ -48,7 +48,7 @@ func.func @reshape_3d(%tensor: !wave.tensor<[@A, @B, @C] of f16>) -> !wave.tenso
 // CHECK-LABEL: @reshape_multiple_vectors
 func.func @reshape_multiple_vectors(%vec1: vector<4xf32>, %vec2: vector<4xf32>) -> vector<8xf32> {
   // CHECK: wave.reshape
-  %0 = wave.reshape %vec1, %vec2 {target_vector_shape = {X = 8}} : vector<4xf32> to vector<8xf32>
+  %0 = wave.reshape %vec1, %vec2 {target_vector_shape = {}} : vector<4xf32> to vector<8xf32>
   return %0 : vector<8xf32>
 }
 

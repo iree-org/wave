@@ -1172,6 +1172,7 @@ public:
       return success();
     }
 
+    // Split case: extract a slice from a single operand.
     auto targetType = cast<VectorType>(
         getTypeConverter()->convertType(op.getResult().getType()));
     assert(static_cast<uint64_t>(targetType.getNumElements()) ==

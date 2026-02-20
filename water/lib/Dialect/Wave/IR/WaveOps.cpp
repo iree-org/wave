@@ -1866,6 +1866,7 @@ FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // Concat case: result elements = sum of operand elements.
   if (operandElements.size() != 1) {
     uint64_t totalNumberOfElements = 0;
     for (wave::ElementsPerThreadLatticeValue element : operandElements) {
@@ -1884,6 +1885,7 @@ FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadForward(
         /*mutableName=*/"result", errs);
   }
 
+  // Split case: result elements = operand elements / num_slices.
   FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
       operandElements[0], resultElements[0]);
   if (succeeded(result)) {
@@ -1899,6 +1901,7 @@ FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // Concat case: each operand gets result elements / num_operands.
   if (operandElements.size() != 1) {
     FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
         resultElements[0], operandElements[0]);
@@ -1915,6 +1918,7 @@ FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadBackward(
         /*immutableValues=*/{}, operandElements, "result", "", "operand", errs);
   }
 
+  // Split case: operand elements = result elements * num_slices.
   FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
       resultElements[0], operandElements[0]);
   if (succeeded(result)) {
@@ -1954,7 +1958,7 @@ LogicalResult ReshapeOp::verify() {
   // more than one.
   auto sourceVecType = llvm::dyn_cast<VectorType>(sourceType);
   auto resultVecType = llvm::dyn_cast<VectorType>(getResult().getType());
-  if (resultVecType && sourceType) {
+  if (resultVecType && sourceVecType) {
     int64_t resultNumElems = resultVecType.getNumElements();
     int64_t operandNumElems = sourceVecType.getNumElements();
     if (getSource().size() > 1) {

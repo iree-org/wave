@@ -1043,7 +1043,7 @@ func.func @reshape_element_count_mismatch(%arg0: vector<4xf32>) {
 
 // -----
 
-func.func @reshape_element_count_concat_mismatch(%arg0: vector<4xf32>) {
+func.func @reshape_invalid_element_count(%arg0: vector<4xf32>) {
   // expected-error @below {{the total number of elements must remain the same or be a concatenation}}
   wave.reshape %arg0, %arg0 {target_vector_shape = {}} : vector<4xf32> to vector<6xf32>
 }
@@ -1057,7 +1057,7 @@ func.func @reshape_target_vector_shape_missing_dimension(%arg0: !wave.tensor<[@A
 
 // -----
 
-func.func @reshape_target_vector_shape_spurious_dimension(%arg0: !wave.tensor<[@A] of f32>) {
+func.func @reshape_target_vector_shape_spurious_dimension2(%arg0: !wave.tensor<[@A] of f32>) {
   // expected-error @below {{target_vector_shape contains symbol B that is not present in the result tensor type}}
   wave.reshape %arg0 {target_vector_shape = {A = 4, B = 16}} : !wave.tensor<[@A] of f32> to !wave.tensor<[@A] of f32>
 }
