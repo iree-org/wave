@@ -379,6 +379,14 @@ func.func @write_with_bounds(%memo: !wave.tensor<[@M] of f32>, %val: !wave.tenso
   return
 }
 
+// Sparse bounds: only M needs masking.
+// CHECK-LABEL: @write_with_sparse_bounds
+func.func @write_with_sparse_bounds(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // CHECK:       wave.read_write_bounds
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+  return
+}
+
 // CHECK-LABEL: @cast_wave_tensor
 func.func @cast_wave_tensor(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of bf16> {
   // CHECK: wave.cast

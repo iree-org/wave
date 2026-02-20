@@ -1531,9 +1531,12 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
   return success();
 }
 
-// Check that if the given read/write operation has bound expressions specified,
-// each symbolic dimension of the WaveTensorType has exactly one bound
-// expression.
+// Verify that every key in the bounds dictionary names a symbolic dimension of
+// the WaveTensorType and that each value is a single-result WaveExprListAttr.
+// The dictionary may be sparse: only dimensions that actually require masking
+// (e.g. because the tile size does not evenly divide the dimension) need an
+// entry. Dimensions without an entry are assumed to be fully in-bounds and
+// will not generate mask operations during lowering.
 static LogicalResult verifyReadWriteBounds(Location loc,
                                            wave::WaveTensorType boundedType,
                                            DictionaryAttr bounds) {
@@ -1545,12 +1548,12 @@ static LogicalResult verifyReadWriteBounds(Location loc,
   // TODO: consider refactoring bounds and other dictionary-like attributes to
   // be indexed by symbol expressions rather than string attributes to avoid
   // string comparisons everywhere.
-  SmallVector<StringRef> requiredSymbolNames = llvm::map_to_vector(
+  SmallVector<StringRef> validSymbolNames = llvm::map_to_vector(
       boundedType.getShape(),
       [](wave::WaveSymbolAttr symbol) { return symbol.getName(); });
-  llvm::StringSet<> knownSymbolNames;
+
   for (NamedAttribute value : bounds) {
-    if (!llvm::is_contained(requiredSymbolNames, value.getName().strref())) {
+    if (!llvm::is_contained(validSymbolNames, value.getName().strref())) {
       return emitError(loc)
              << "'bounds' specified for a symbol " << value.getName()
              << " not used in the "
@@ -1566,15 +1569,6 @@ static LogicalResult verifyReadWriteBounds(Location loc,
       return emitError(loc)
              << "'bounds' must only contain single-result expressions";
     }
-
-    knownSymbolNames.insert(value.getName().strref());
-  }
-  for (StringRef requiredName : requiredSymbolNames) {
-    if (knownSymbolNames.contains(requiredName))
-      continue;
-
-    return emitError(loc) << "bounds not provided for memory tensor symbol '"
-                          << requiredName << "'";
   }
 
   return success();

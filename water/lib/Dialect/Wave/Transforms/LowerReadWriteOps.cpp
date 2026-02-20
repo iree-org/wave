@@ -107,12 +107,15 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
   IntegerType i1Type = IntegerType::get(rewriter.getContext(), 1);
   VectorType maskType = VectorType::get({elementsPerThread}, i1Type);
 
-  // finalMask is the AND of per-dimension bound checks.
+  // finalMask is the AND of per-dimension bound checks. The bounds dict may
+  // be sparse: only dimensions that require masking have an entry. Dimensions
+  // without an entry are fully in-bounds and are skipped.
   Value finalMask;
   for (uint64_t d = 0; d < rank; ++d) {
     StringRef name = orderedSyms[d].getName();
     Attribute a = boundsDict.getMapping().get(name);
-    assert(a && "bounds dict missing entry for dimension symbol");
+    if (!a)
+      continue;
     auto boundAttr = cast<wave::WaveExprListAttr>(a);
     // Materialize bounds.
     FailureOr<SmallVector<Value>> boundValsFo = wave::materializeAffine(
