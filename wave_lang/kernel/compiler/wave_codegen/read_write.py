@@ -511,6 +511,7 @@ def _create_vec_read_write(
             mem, offset_th = _linearize_memref(
                 mem, start_indices_wg, start_indices_th, strides
             )
+            mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
         if linearize_shared_mem:
             mem = _linearize_shared_mem(mem)
             linearized_index = {
@@ -520,18 +521,9 @@ def _create_vec_read_write(
 
         indices = [offset_th] if buffer_ops_enabled else start_indices
         if is_read:
-            if buffer_ops_enabled:
-                i32_indices = [arith_d.index_cast(uint32, idx) for idx in indices]
-                return amdgpu_d.raw_buffer_load(
-                    vector_type, mem, i32_indices, bounds_check=True
-                )
             return vector_d.load(vector_type, mem, indices)
         else:
-            if buffer_ops_enabled:
-                i32_indices = [arith_d.index_cast(uint32, idx) for idx in indices]
-                amdgpu_d.raw_buffer_store(value, mem, i32_indices, bounds_check=True)
-            else:
-                vector_d.store(value, mem, indices)
+            vector_d.store(value, mem, indices)
             return
 
     zero = get_constant_attr(0, element_type)
@@ -555,6 +547,7 @@ def _create_vec_read_write(
         mem, offset_th = _linearize_memref(
             mem, start_indices_wg, start_indices_th, strides
         )
+        mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
 
     indices = [offset_th] if buffer_ops_enabled else start_indices
 
@@ -588,49 +581,28 @@ def _create_vec_read_write(
         if splatted_mask:
             # mask is same for all of them, can just pick the first index
             selected_index = extract(selected_index, 0)
-            i32_selected = arith_d.index_cast(uint32, selected_index)
 
             if is_read:
-                return amdgpu_d.raw_buffer_load(
-                    vector_type,
-                    mem,
-                    indices=[i32_selected],
-                    bounds_check=True,
-                )
+                return vector_d.load(vector_type, mem, indices=[selected_index])
 
             else:
-                amdgpu_d.raw_buffer_store(
-                    value,
-                    mem,
-                    indices=[i32_selected],
-                    bounds_check=True,
-                )
+                vector_d.store(value, mem, indices=[selected_index])
                 return
 
         for i in range(elements_per_thread):
             # mask is not same for all elements, need to unroll
-            this_index = extract(selected_index, i)
-            i32_this = arith_d.index_cast(uint32, this_index)
+            this_index = extract(selected_index, i)  # this element
 
+            # Unmasked load, using selected_index
             singlenumvec_type = VectorType.get([1], vector_type.element_type)
             if is_read:
-                elem = amdgpu_d.raw_buffer_load(
-                    singlenumvec_type,
-                    mem,
-                    indices=[i32_this],
-                    bounds_check=True,
-                )
+                elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
                 elem = extract(elem, 0)
                 elems.append(elem)
             else:
                 elem = extract(value, i)
                 single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
-                amdgpu_d.raw_buffer_store(
-                    single_num_vector,
-                    mem,
-                    indices=[i32_this],
-                    bounds_check=True,
-                )
+                vector_d.store(single_num_vector, mem, indices=[this_index])
 
         if is_read:
             # now make a vector from all the elements loaded
