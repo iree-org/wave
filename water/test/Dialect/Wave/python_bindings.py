@@ -237,6 +237,42 @@ with ir.Context() as ctx:
     assert len(mapping_attr_2) == 1
     assert mapping_attr_2[wave.WaveSymbolAttr.get("M")] == expr_attr
 
+    expr_attr_2 = wave.WaveExprListAttr.get(
+        [wave.WaveSymbolAttr.get("A")],
+        ir.AffineMap.get(0, 1, [ir.AffineExpr.get_constant(1)]),
+    )
+    mapping_attr_ordered = wave.WaveSymbolMappingAttr.get(
+        {"M": expr_attr, "A": expr_attr_2}
+    )
+    assert mapping_attr_ordered[0][0] == wave.WaveSymbolAttr.get("M")
+    assert mapping_attr_ordered[0][1] == expr_attr
+    assert mapping_attr_ordered[1][0] == wave.WaveSymbolAttr.get("A")
+    assert mapping_attr_ordered[1][1] == expr_attr_2
+    assert "M" in mapping_attr_ordered
+    assert "N" not in mapping_attr_ordered
+    assert wave.WaveSymbolAttr.get("A") in mapping_attr_ordered
+
+    try:
+        mapping_attr_ordered[42]
+    except IndexError as e:
+        assert "Index out of range." in str(e)
+    else:
+        assert False, "Expected to fail with IndexError."
+
+    try:
+        mapping_attr_ordered["N"]
+    except KeyError as e:
+        assert "Key not found." in str(e)
+    else:
+        assert False, "Expected to fail with KeyError."
+
+    try:
+        mapping_attr_ordered[wave.WaveSymbolAttr.get("B")]
+    except KeyError as e:
+        assert "Key not found." in str(e)
+    else:
+        assert False, "Expected to fail with KeyError."
+
     try:
         wave.WaveSymbolMappingAttr.get({3: expr_attr})
     except TypeError as e:

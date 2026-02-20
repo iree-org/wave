@@ -690,19 +690,20 @@ struct PyWaveSymbolMappingAttr
           values.reserve(symDimDict.size());
 
           for (auto [key, value] : symDimDict) {
-            nb::handle key_handle = key;
+            nb::handle keyHandle = key;
             MlirAttribute keyAttr;
-            try {
-              keyAttr = nb::cast<MlirAttribute>(key_handle);
-            } catch (const nb::cast_error &e) {
-              if (!nb::isinstance<nb::str>(key_handle)) {
-                throw nb::type_error("Symbolic dimension dictionary key must "
-                                     "be a string or a WaveSymbolAttr");
-              }
-              std::string symbolicDim = nb::cast<std::string>(key_handle);
+            if (nb::isinstance<nb::str>(keyHandle)) {
+              std::string symbolicDim = nb::cast<std::string>(keyHandle);
               keyAttr = mlirWaveSymbolAttrGet(
                   context->get(),
                   mlirStringRefCreate(symbolicDim.data(), symbolicDim.size()));
+            } else {
+              try {
+                keyAttr = nb::cast<MlirAttribute>(keyHandle);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error("Symbolic dimension dictionary key must "
+                                     "be a string or a WaveSymbolAttr");
+              }
             }
 
             MlirAttribute valueAttr;
@@ -730,6 +731,13 @@ struct PyWaveSymbolMappingAttr
         "Gets a wave.WaveSymbolMappingAttr from parameters.");
     c.def("__contains__", [](MlirAttribute self, MlirAttribute key) {
       return !mlirAttributeIsNull(mlirWaveSymbolMappingAttrLookup(self, key));
+    });
+    c.def("__contains__", [](MlirAttribute self, std::string key) {
+      MlirAttribute keyAttr =
+          mlirWaveSymbolAttrGet(mlirAttributeGetContext(self),
+                                mlirStringRefCreate(key.data(), key.size()));
+      return !mlirAttributeIsNull(
+          mlirWaveSymbolMappingAttrLookup(self, keyAttr));
     });
     c.def("__len__", [](MlirAttribute self) -> intptr_t {
       return mlirWaveSymbolMappingAttrGetNumEntries(self);

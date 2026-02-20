@@ -91,7 +91,7 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 ///                  bound_d(elements_per_thread))
 ///          foreach d in dimensions.
 ///
-/// whenever a bounds dictionary is provided. When it is not provided, return a
+/// whenever a bounds mapping is provided. When it is not provided, return a
 /// null mask. If the vectorized dimension cannot be identified, return failure.
 static FailureOr<Value>
 buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
@@ -310,7 +310,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
                            Type memoryTypeArg, VectorType vectorType) {
   int64_t elementsPerThread = vectorType.getNumElements();
 
-  wave::WaveSymbolMappingAttr boundsDict = op.getBoundsAttr();
+  wave::WaveSymbolMappingAttr boundsMapping = op.getBoundsAttr();
   wave::WaveHyperparameterAttr hyper =
       static_cast<const wave::WaveTypeConverter &>(*typeConverter)
           .getHyperparameters();
@@ -364,7 +364,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   SmallVector<Value> startIndices = std::move(*maybeStartIndices);
 
   FailureOr<Value> mask =
-      buildMask(op->getLoc(), boundsDict, orderedSyms, rewriter, indexDict,
+      buildMask(op->getLoc(), boundsMapping, orderedSyms, rewriter, indexDict,
                 hyper, startIndices, elementsPerThread);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");
