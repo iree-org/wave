@@ -5,6 +5,8 @@
 
 from copy import deepcopy
 from functools import lru_cache
+import math
+import operator as op
 from typing import Optional
 
 import sympy
@@ -201,3 +203,185 @@ def strip_out_of_scope_induction_symbols(
             seq.size = safe_subs(seq.size, zero_subs)
             seq.stride = safe_subs(seq.stride, zero_subs)
     return cleaned
+
+
+####################################################################
+# Numeric evaluation of symbolic expressions via probing.
+####################################################################
+
+_PROBE_POOL = (
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    13,
+    15,
+    16,
+    17,
+    23,
+    24,
+    25,
+    31,
+    32,
+    33,
+    37,
+    47,
+    48,
+    63,
+    64,
+    65,
+    96,
+    97,
+    127,
+    128,
+    129,
+    191,
+    255,
+    256,
+    257,
+    383,
+    511,
+    512,
+    513,
+    767,
+    1023,
+    1024,
+    1025,
+)
+_STRIDES = (1, 3, 7, 11, 13, 17, 19, 23)
+_BAD_ATOMS = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
+
+_LAMBDIFY_MODULES = {
+    "Mod": op.mod,
+    "floor": math.floor,
+    "ceiling": math.ceil,
+    "xor": op.xor,
+    "Min": min,
+    "Max": max,
+    "Abs": abs,
+}
+
+
+def _compile_evaluator(expr):
+    """Compile a sympy expression into a fast Python callable.
+
+    Returns (free_symbols_tuple, callable) or ((), None) if the expression
+    has no free symbols.  The callable maps integer arguments to an integer
+    result using pure Python arithmetic (operator.mod, math.floor).
+    """
+    free = tuple(sorted(expr.free_symbols, key=lambda s: s.name))
+    if not free:
+        return free, None
+    f = sympy.lambdify(free, expr, modules=[_LAMBDIFY_MODULES])
+    return free, f
+
+
+# TODO: Presburger arithmetic (MLIR's IntegerRelation) for a formal proof.
+# correct by construction but much heavier
+def _numeric_eval_constant(expr, num_samples: int = 48, _memo: dict = None):
+    """Check if a symbolic expression is a constant via numeric probing.
+
+    Uses lambdify to compile the expression into fast Python arithmetic,
+    then probes with diverse integer values to check constancy.
+    Returns that integer when consistent, ``None`` otherwise.
+
+    This is useful as a fallback when ``sympy.simplify`` is too slow or
+    unable to reduce complex floor/Mod expressions (e.g. preshuffle
+    index formulas).
+
+    Not a formal proof (but rational design choice) a non-constant expression that
+    coincidentally returns the same value for all probes would be a false positive.
+    For the domain this compiler operates in (thread IDs 0-63, tile sizes that are
+    powers of 2 up to 1024, workgroup sizes up to 1024)
+
+    The probe pool straddles powers-of-2 boundaries (15/16/17,
+    63/64/65, 127/128/129, 255/256/257, 511/512/513, 1023/1024/1025)
+    to catch floor/Mod discontinuities at common tile sizes up to 1024.
+
+    Pass a ``_memo`` dict to cache results across calls within a loop
+    (e.g. the O(n²) pair scan in merge_contiguous_reads).
+    """
+    if _memo is not None:
+        key = id(expr)
+        cached = _memo.get(key)
+        if cached is not None:
+            return cached
+
+    result = _numeric_eval_constant_impl(expr, num_samples)
+
+    if _memo is not None:
+        _memo[key] = result
+    return result
+
+
+def _numeric_eval_constant_impl(expr, num_samples: int = 48):
+    """Core implementation of _numeric_eval_constant."""
+    try:
+        free, evaluator = _compile_evaluator(expr)
+    except Exception:
+        free, evaluator = (), None
+
+    if not free:
+        if expr.has(*_BAD_ATOMS):
+            return None
+        if expr.is_integer is not True:
+            return None
+        try:
+            return int(expr)
+        except (TypeError, ValueError):
+            return None
+
+    n_probes = len(_PROBE_POOL)
+    n_strides = len(_STRIDES)
+    strides = [_STRIDES[i % n_strides] for i in range(len(free))]
+
+    first_val = None
+    for trial in range(num_samples):
+        args = [
+            _PROBE_POOL[(trial * strides[i] + i) % n_probes] for i in range(len(free))
+        ]
+
+        if evaluator is not None:
+            try:
+                result = evaluator(*args)
+            except (ZeroDivisionError, ValueError, OverflowError, TypeError):
+                return None
+            except NameError:
+                evaluator = None
+
+            if isinstance(result, bool):
+                return None
+            if isinstance(result, float):
+                if not result.is_integer():
+                    return None
+                val = int(result)
+            elif isinstance(result, int):
+                val = result
+            else:
+                evaluator = None
+
+        if evaluator is None:
+            subs = dict(zip(free, args))
+            result = expr.subs(subs)
+            if result.free_symbols:
+                return None
+            if result.has(*_BAD_ATOMS):
+                return None
+            if result.is_integer is not True:
+                return None
+            try:
+                val = int(result)
+            except (TypeError, ValueError):
+                return None
+
+        if first_val is None:
+            first_val = val
+        elif val != first_val:
+            return None
+
+    return first_val
