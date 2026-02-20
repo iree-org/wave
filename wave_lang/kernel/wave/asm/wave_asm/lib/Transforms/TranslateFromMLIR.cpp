@@ -957,6 +957,166 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+/// Handle vector.maskedload - emit buffer_load with optional mask handling.
+/// This is used for global memory reads with IndexMappings (e.g. preshuffled
+/// scales in MXFP4 split-K GEMM).  The implementation mirrors the global
+/// path of handleVectorLoad; the mask is ignored because the Wave frontend
+/// guarantees the access is in-bounds when the mask is true and the
+/// buffer SRD bounds check handles the out-of-bounds case.
+LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
+  auto maskedLoadOp = cast<vector::MaskedLoadOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto memrefType = cast<MemRefType>(maskedLoadOp.getBase().getType());
+  auto vectorType = maskedLoadOp.getVectorType();
+  int64_t numBytes = getVectorBytes(vectorType);
+
+  if (numBytes <= 0) {
+    return op->emitError(
+        "vector.maskedload with zero-size vector type is invalid");
+  }
+
+  // Compute voffset as byte offset from indices and strides
+  Value voffset;
+  auto indices = maskedLoadOp.getIndices();
+  Type elementType = memrefType.getElementType();
+  int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
+
+  SmallVector<int64_t, 4> strides;
+  int64_t offset;
+  int64_t instOffset = 0;
+  if (succeeded(memrefType.getStridesAndOffset(strides, offset))) {
+    for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
+      auto idxMapped = ctx.getMapper().getMapped(indices[i]);
+      if (!idxMapped)
+        continue;
+
+      Value idx = *idxMapped;
+      int64_t strideBytes = strides[i] * elementBytes;
+
+      if (strideBytes == 0)
+        continue;
+
+      int64_t constAddend = ctx.getConstOffset(indices[i]);
+      if (constAddend != 0) {
+        instOffset += constAddend * strideBytes;
+      }
+
+      Value dimOffset;
+      if (strideBytes == 1) {
+        dimOffset = idx;
+      } else if ((strideBytes & (strideBytes - 1)) == 0) {
+        int shift = 0;
+        int64_t temp = strideBytes;
+        while (temp > 1) {
+          shift++;
+          temp >>= 1;
+        }
+        auto shiftImm =
+            ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+        dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                          shiftImm, idx);
+      } else {
+        auto strideImm = ConstantOp::create(
+            builder, loc, ctx.createImmType(strideBytes), strideBytes);
+        dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                         idx, strideImm);
+      }
+
+      if (!voffset) {
+        voffset = dimOffset;
+      } else {
+        voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(), voffset,
+                                    dimOffset);
+      }
+    }
+  } else {
+    if (!indices.empty()) {
+      if (auto mapped = ctx.getMapper().getMapped(indices[0])) {
+        voffset = *mapped;
+      }
+    }
+  }
+
+  if (!voffset) {
+    auto immType = ctx.createImmType(0);
+    voffset = ConstantOp::create(builder, loc, immType, 0);
+  }
+
+  // Get SRD for this memref
+  Value srd;
+  if (auto srdIdx = ctx.getSRDIndex(maskedLoadOp.getBase())) {
+    auto sregType = ctx.createSRegType(4, 4);
+    srd = PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
+  } else if (auto mapped = ctx.getMapper().getMapped(maskedLoadOp.getBase())) {
+    srd = *mapped;
+  } else {
+    auto sregType = ctx.createSRegType(4, 4);
+    srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+  }
+
+  // Emit buffer_load instruction(s)
+  SmallVector<Value, 4> loadResults;
+  int64_t bytesRemaining = numBytes;
+  int64_t currentOffset = 0;
+
+  while (bytesRemaining > 0) {
+    int64_t loadBytes;
+    int64_t loadDwords;
+
+    if (bytesRemaining >= 16) {
+      loadBytes = 16;
+      loadDwords = 4;
+    } else if (bytesRemaining >= 8) {
+      loadBytes = 8;
+      loadDwords = 2;
+    } else if (bytesRemaining >= 4) {
+      loadBytes = 4;
+      loadDwords = 1;
+    } else {
+      loadBytes = bytesRemaining;
+      loadDwords = 1;
+    }
+
+    auto loadVregType =
+        ctx.createVRegType(loadDwords, loadDwords > 1 ? loadDwords : 1);
+
+    int64_t totalOffset = instOffset + currentOffset;
+    Operation *loadInstr;
+    if (loadBytes == 1) {
+      loadInstr = BUFFER_LOAD_UBYTE::create(
+          builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+    } else if (loadBytes == 2) {
+      loadInstr = BUFFER_LOAD_USHORT::create(
+          builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+    } else if (loadDwords == 4) {
+      loadInstr = BUFFER_LOAD_DWORDX4::create(
+          builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+    } else if (loadDwords == 2) {
+      loadInstr = BUFFER_LOAD_DWORDX2::create(
+          builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+    } else {
+      loadInstr = BUFFER_LOAD_DWORD::create(
+          builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+    }
+
+    loadResults.push_back(loadInstr->getResult(0));
+    bytesRemaining -= loadBytes;
+    currentOffset += loadBytes;
+  }
+
+  if (!loadResults.empty()) {
+    ctx.getMapper().mapValue(maskedLoadOp.getResult(), loadResults[0]);
+
+    if (loadResults.size() > 1) {
+      ctx.registerSplitResults(maskedLoadOp.getResult(), loadResults);
+    }
+  }
+
+  return success();
+}
+
 /// Handle vector.store - emit buffer_store or ds_write
 /// Splits large stores (> 16 bytes) into multiple buffer_store_dwordx4
 /// instructions
@@ -1499,6 +1659,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // Vector dialect
   REGISTER_HANDLER(vector::LoadOp, handleVectorLoad);
+  REGISTER_HANDLER(vector::MaskedLoadOp, handleVectorMaskedLoad);
   REGISTER_HANDLER(vector::StoreOp, handleVectorStore);
   REGISTER_HANDLER(vector::ExtractStridedSliceOp,
                    handleVectorExtractStridedSlice);

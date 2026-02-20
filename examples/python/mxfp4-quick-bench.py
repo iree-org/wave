@@ -4,12 +4,13 @@ MXFP4 GEMM Quick Benchmark
 Compares MXFP4 GEMM kernels on one or more problem sizes.
 All kernels are unscheduled (no double-buffer pipelining) unless noted.
 
-  1. vanilla              : unshuffled scales, all through LDS, no schedule
-  2. preshuffle-scales    : shuffled scales read from GLOBAL, B through LDS, no schedule
-  3. preshuffle-B         : preshuffled B read from GLOBAL, unshuffled scales through LDS, no schedule
-  4. preshuffle-all       : preshuffled scales + preshuffled B, "all opts except scheduling"
-  5. splitk               : split-K via wave_asm, unshuffled scales, bf16 out
-  6. splitk-preshuffle-B  : split-K via wave_asm + preshuffled B, unshuffled scales, bf16 out
+  1. vanilla                  : unshuffled scales, all through LDS, no schedule
+  2. preshuffle-scales        : shuffled scales read from GLOBAL, B through LDS, no schedule
+  3. preshuffle-B             : preshuffled B read from GLOBAL, unshuffled scales through LDS, no schedule
+  4. preshuffle-all           : preshuffled scales + preshuffled B, "all opts except scheduling"
+  5. splitk                   : split-K via wave_asm, unshuffled scales, bf16 out
+  6. splitk-preshuffle-scales : split-K via wave_asm + preshuffled scales, bf16 out
+  7. splitk-preshuffle-B      : split-K via wave_asm + preshuffled B, unshuffled scales, bf16 out
 
 Throughput is reported in TFLOPS using 2*M*N*K as the FLOP count.
 
@@ -103,6 +104,7 @@ KERNELS = [
     "preshuffle-B",
     "preshuffle-all",
     "splitk",
+    "splitk-preshuffle-scales",
     "splitk-preshuffle-B",
 ]
 _COL_W = {"shape": 22, "kernel": 22, "ms": 10, "tflops": 10, "ratio": 10}
@@ -286,7 +288,7 @@ def _build_noschedule_kernel(m, n, k, block_m, block_n, block_k,
 
 
 def _get_splitk_handle(m, n, k, block_m, block_n, block_k, num_splits, compiler,
-                        preshuffle_B: bool = False):
+                        preshuffle_B: bool = False, preshuffle_scales: bool = False):
     """Compile a split-K MXFP4 GEMM kernel via the wave_asm backend."""
     import wave_runtime
 
@@ -296,12 +298,14 @@ def _get_splitk_handle(m, n, k, block_m, block_n, block_k, num_splits, compiler,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
         block_shape=(block_m, block_n, block_k),
         preshuffle_B=preshuffle_B,
+        preshuffle_scales=preshuffle_scales,
     )
 
     # The template defaults to GLOBAL_ADDRESS_SPACE to work around a shared-
     # memory index bug, but the C++ ASM backend requires A/scales in SHARED +
     # GatherToLDS.  For preshuffle_B, B must stay in GLOBAL so the mapping can
     # read directly from the preshuffled layout without going through LDS.
+    # For preshuffle_scales, a_scale/b_scale are already GLOBAL in the template.
     hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
     if preshuffle_B:
         hyperparams[tkl.sym.B_ADDRESS_SPACE] = GLOBAL_ADDRESS_SPACE
@@ -595,7 +599,33 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         _print_failed_row(shape_str, "splitk", reason=str(e))
 
     # ------------------------------------------------------------------
-    # 6. Splitk-preshuffle-B — wave_asm splitk + preshuffled B, bf16 out
+    # 6. Splitk-preshuffle-scales — wave_asm splitk + preshuffled scales, bf16 out
+    # ------------------------------------------------------------------
+    try:
+        handle_ps_scales = _get_splitk_handle(
+            m, n, k, block_m, block_n, block_k, num_splits, compiler,
+            preshuffle_B=False, preshuffle_scales=True,
+        )
+        c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
+        _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
+        torch.cuda.synchronize()
+        if ref_f32 is not None:
+            _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-scales", num_splits=num_splits)
+
+        def run_sk_ps_scales():
+            c_bf16.zero_()
+            _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
+
+        avg_ms = _bench(run_sk_ps_scales, warmup, iters)
+        results["splitk-preshuffle-scales"] = avg_ms
+        _print_row(shape_str, "splitk-preshuffle-scales", avg_ms, _tflops(m, n, k, avg_ms),
+                   _ratio(vanilla_ms, avg_ms))
+    except Exception as e:
+        results["splitk-preshuffle-scales"] = None
+        _print_failed_row(shape_str, "splitk-preshuffle-scales", reason=str(e))
+
+    # ------------------------------------------------------------------
+    # 7. Splitk-preshuffle-B — wave_asm splitk + preshuffled B, bf16 out
     # ------------------------------------------------------------------
     try:
         handle_ps = _get_splitk_handle(

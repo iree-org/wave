@@ -251,6 +251,7 @@ def get_splitk_mxfp4_gemm_kernel(
     block_shape: Optional[tuple[int, int, int]] = None,
     waves_per_block: Optional[tuple[int, int]] = None,
     preshuffle_B: bool = False,
+    preshuffle_scales: bool = False,
 ):
     """
     Creates a split-K MXFP4 GEMM kernel that parallelizes the K dimension
@@ -271,6 +272,9 @@ def get_splitk_mxfp4_gemm_kernel(
         waves_per_block: (waves_M, waves_N) waves per workgroup.
         preshuffle_B: If True, read B with the aiter preshuffled IndexMapping.
             The caller must pre-shuffle b with preshuffle_b_aiter().
+        preshuffle_scales: If True, read a_scale and b_scale from GLOBAL memory
+            using the e8m0_shuffle IndexMapping.  The caller must pre-shuffle
+            scales with e8m0_shuffle().
     """
 
     if not block_shape:
@@ -300,8 +304,10 @@ def get_splitk_mxfp4_gemm_kernel(
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
     B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
     K_PACKED = tkl.sym.K_PACKED
+    K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
 
     k_packed_val = k // 2
+    k_scale_shuffled_val = (((k // 32) + 7) // 8) * 8
 
     b_preshuffle_mapping = None
     if preshuffle_B:
@@ -318,6 +324,43 @@ def get_splitk_mxfp4_gemm_kernel(
             },
             outputs={N: n_it, K: k_it},
         )
+
+    a_scale_mapping = None
+    b_scale_mapping = None
+    if preshuffle_scales:
+        i = tkw.IndexMapping.iterator(0)
+        j = tkw.IndexMapping.iterator(1)
+        _flat_a = (
+            (j // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (i // 8) * 256
+            + ((i % 8) % 4) * 64
+            + ((j % 32) % 16) * 4
+            + (((i % 8) // 4) * 2)
+            + ((j % 32) // 16)
+        )
+        a_scale_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={M: _flat_a // k_scale_shuffled_val, K: _flat_a % k_scale_shuffled_val},
+            outputs={K: i, M: j},
+        )
+        kk = tkw.IndexMapping.iterator(0)
+        n_s = tkw.IndexMapping.iterator(1)
+        _flat_b = (
+            (n_s // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (kk // 8) * 256
+            + ((kk % 8) % 4) * 64
+            + ((n_s % 32) % 16) * 4
+            + (((kk % 8) // 4) * 2)
+            + ((n_s % 32) // 16)
+        )
+        b_scale_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={N: _flat_b // k_scale_shuffled_val, K: _flat_b % k_scale_shuffled_val},
+            outputs={K: kk, N: n_s},
+        )
+
+    a_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
+    b_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -341,9 +384,9 @@ def get_splitk_mxfp4_gemm_kernel(
     @tkw.wave(constraints)
     def splitk_mxfp4_gemm(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, a_scale_space, tkl.i8],
         b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, b_scale_space, tkl.i8],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -352,11 +395,11 @@ def get_splitk_mxfp4_gemm_kernel(
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a)
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
-            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping)
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
             b_reg = tkw.read(b, mapping=b_preshuffle_mapping)
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
-            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.read(b_scale, mapping=b_scale_mapping)
             b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
             acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
             return acc
@@ -387,6 +430,8 @@ def get_splitk_mxfp4_gemm_kernel(
 
     if preshuffle_B:
         hyperparams[K_PACKED] = k_packed_val
+    if preshuffle_scales:
+        hyperparams[K_SCALE_SHUFFLED] = k_scale_shuffled_val
 
     hyperparams.update(get_default_scheduling_params())
 
