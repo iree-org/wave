@@ -713,7 +713,7 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
   // errors are reported at the opening `<`.
   auto loc = parser.getCurrentLocation();
 
-  // Parse: `<` (key `:` value (`,` key `:` value)*)? `>`
+  // Parse: `<` (key `=` value (`,` key `=` value)*)? `>`
   if (parser.parseLess())
     return {};
 

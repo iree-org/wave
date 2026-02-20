@@ -46,7 +46,7 @@ def WaveSymbolMappingOp
   let summary = "Test op that holds a WaveSymbolMappingAttr";
   let arguments = (ins
     WaveSymbolMappingAttr:$mapping,
-    OptionalAttr<I64Attr>:$expected_num_results
+    OptionalAttr<ConfinedAttr<I64Attr, [IntMinValue<0>]>>:$expected_num_results
   );
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
