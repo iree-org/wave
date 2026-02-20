@@ -206,9 +206,6 @@ def gemm_progressive_roundtrip():
             "remove_chained_getresult",
             "decompose_vmma_ops",
             "decompose_dot_mma",
-            "generate_bounds_exprs",
-            "location_check_pass",
-            "merge_contiguous_reads",
         }
     )
 
