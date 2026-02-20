@@ -1669,6 +1669,13 @@ wave::ReadOp::propagateElementsPerThreadBackward(
 LogicalResult wave::RegisterOp::verify() {
   Type type = getResult().getType();
   auto tensorType = dyn_cast<WaveTensorType>(type);
+  auto elementType = tensorType ? tensorType.getElementType()
+                                : cast<VectorType>(type).getElementType();
+  Type initType = getInit().getType();
+  if (elementType != initType) {
+    return emitOpError() << "expected the type of the init value to match the "
+                            "elemental type of the result";
+  }
   if (!tensorType)
     return success();
 

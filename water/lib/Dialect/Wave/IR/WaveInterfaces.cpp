@@ -685,8 +685,8 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
                          kResultNamePrefix, os.str());
 }
 
-llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
-    Operation *op) {
+llvm::LogicalResult
+wave::detail::verifyEqualElementTypesOpTrait(Operation *op) {
   if (op->getNumOperands() == 0 && op->getNumResults() == 0)
     return llvm::success();
 
@@ -710,7 +710,7 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   for (unsigned idx = startIdx; idx < op->getNumOperands(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "operand #" + llvm::Twine(idx), op->getOperandTypes()[idx])))
+            "operand #" + std::to_string(idx), op->getOperandTypes()[idx])))
       return llvm::failure();
   }
 
@@ -720,7 +720,7 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   for (unsigned idx = startIdx; idx < op->getNumResults(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "result #" + llvm::Twine(idx), op->getResultTypes()[idx])))
+            "result #" + std::to_string(idx), op->getResultTypes()[idx])))
       return llvm::failure();
   }
 

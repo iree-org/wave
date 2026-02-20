@@ -63,7 +63,7 @@ func.func @invalid_register_type(%arg0: f32) {
 // -----
 
 func.func @register_type_mismatch(%arg0: f32) {
-  // expected-error @below {{expected operand #0 and result #0 elemental types to match}}
+  // expected-error @below {{expected the type of the init value to match the elemental type of the result}}
   "wave.register"(%arg0) : (f32) -> !wave.tensor<[@A, @B] of bf16>
 }
 
