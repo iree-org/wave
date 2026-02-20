@@ -372,11 +372,6 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         )
         loop_scaled_mma = tkw.filter_nodes(scaled_mma, subgraph=pipeline_loop.KERNEL)
 
-        # Partition by K dimension for interleaving compute with memory ops.
-        # NOTE: Bitcasts MUST also be partitioned by K to match their producer
-        # shared loads, otherwise reorder_graph fails with
-        # "Cannot find producer(s)" because bitcasts in an earlier cluster
-        # would depend on shared loads in a later cluster.
         loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
             loop_scaled_mma, dim=K, num_partitions=2
         )
@@ -780,18 +775,7 @@ def get_mxfp4_dbuf_mixed_pingpong_schedule(use_stagger: bool = True):
         # Used as the memory_counter_wait threshold placed after gather_to_lds.
         independent_global_count = len(loop_global_to_shared)
 
-        # =====================================================================
         # Build clusters
-        #
-        # Cluster 0: barrier → gather_to_lds → memory_wait(N_gather)
-        #            → SAFE loads/bitcasts → second barrier
-        # Cluster 1: SAFE MFMAs → DEPENDENT loads/bitcasts → DEPENDENT MFMAs
-        #            → barrier (before K=1)
-        # Cluster 2: SAFE loads/bitcasts (K=1) → second barrier
-        # Cluster 3: SAFE MFMAs (K=1) → DEPENDENT loads/bitcasts (K=1)
-        #            → DEPENDENT MFMAs (K=1)
-        # =====================================================================
-
         # Cluster 0
         cluster_0_ops = [
             tkw.SchedulingBarrier([]),

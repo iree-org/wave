@@ -44,8 +44,7 @@ def _run_mxfp_gemm(gemm, shape):
     x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
     out = torch.zeros(x.shape[0], w.shape[1], dtype=torch.float32).cuda()
 
-    for _ in range(100):
-        gemm(x, x_scales, w.T.contiguous(), w_scales, out)
+    gemm(x, x_scales, w.T.contiguous(), w_scales, out)
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
@@ -108,7 +107,21 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger.
-    Another variant of ping pong schedule for 8 waves, with stagger. This variant hides the latency added by the second barrier for large shapes.
+
+    A variant of the ping-pong schedule that hides the latency of the extra
+    WorkgroupBarrier required for large shapes. With staggering, the two
+    clusters of waves write to LDS at different times, so a second barrier is
+    needed to ensure all writes are visible before any wave reads. This
+    schedule overlaps that barrier with useful work by splitting LDS loads:
+
+      - "Safe" loads: rows this wave wrote itself — readable immediately after
+        memory_counter_wait, before the global WorkgroupBarrier.
+      - "Dependent" loads: rows written by other waves — deferred until after
+        the global WorkgroupBarrier.
+
+    This lets the MFMAs on the safe operands start firing as soon as the
+    barrier releases, effectively hiding the second barrier's latency behind
+    the early loads and compute.
     """
     gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
     options.specialize = True
@@ -121,7 +134,7 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm(gemm, shape)
-    print("MXFP GEMM double-buffer 8-wave ping pong test passed!")
+    print("MXFP GEMM double-buffer 8-wave mixed ping pong test passed!")
 
 
 def test_dbuf_4wave_mxfp_asymmetric_gemm(
