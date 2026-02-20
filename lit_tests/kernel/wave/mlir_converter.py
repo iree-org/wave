@@ -1099,37 +1099,41 @@ def mlir_converter_permute():
 
 @wave.wave(constraints)
 def read_with_mapping_kernel(
-    a: Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
-    b: Memory[N, M, ADDRESS_SPACE_C, tkl.f16],
+    a: Memory[M, N, K, ADDRESS_SPACE_A, tkl.f16],
+    b: Memory[N, K, M, ADDRESS_SPACE_C, tkl.f16],
 ):
-    # Create a permutation mapping for read that transposes dimensions
-    # Memory has shape [M, N], register will have shape [N, M]
+    # Create a cyclic permutation mapping for read: (d0, d1, d2) -> (d1, d2, d0)
+    # Memory has shape [M, N, K], register will have shape [N, K, M]
+    # This is a non-self-inverse permutation (requires 3 applications to return to identity)
     # inputs = memory dimensions, outputs = register dimensions
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
-    transpose_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={M: j, N: i},  # Memory[M,N]: M→iterator(1), N→iterator(0) gives permutation [1,0]
-        outputs={N: i, M: j},  # Register[N,M]: N→iterator(0), M→iterator(1)
+    k = tkw.IndexMapping.iterator(2)
+    cyclic_mapping = tkw.IndexMapping(
+        num_iterators=3,
+        inputs={M: k, N: i, K: j},  # Memory[M,N,K]: M→iter(2), N→iter(0), K→iter(1) gives permutation [1,2,0]
+        outputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
     )
 
-    # Read with transpose mapping
-    a_reg = wave.read(a, mapping=transpose_mapping)
-    # Write to transposed memory
+    # Read with cyclic permutation mapping
+    a_reg = wave.read(a, mapping=cyclic_mapping)
+    # Write to permuted memory
     wave.write(a_reg, b)
 
 
 @run_test
 def mlir_converter_read_with_mapping():
-    """Test MLIR converter with read operation using permutation mapping."""
+    """Test MLIR converter with read operation using cyclic permutation mapping."""
     # Set parameters for compilation
     subs = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
+        BLOCK_K: 64,
         M: 128,
         N: 128,
+        K: 128,
     }
 
     # Compile the kernel to get the trace
@@ -1159,49 +1163,53 @@ def mlir_converter_read_with_mapping():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_read_with_mapping
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @M] of f16, <global>>)
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N, @K] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @K, @M] of f16, <global>>)
 
     # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
-    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1) -> (d1, d0)>
-    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@N, @M] of f16, <register>>
+    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1, d2) -> (d1, d2, d0)>
+    # CHECK-SAME: (!wave.tensor<[@M, @N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K, @M] of f16, <register>>
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
-    # CHECK-SAME: (!wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@N, @M] of f16, <global>>)
+    # CHECK-SAME: (!wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@N, @K, @M] of f16, <global>>)
 
 
 @wave.wave(constraints)
 def write_with_mapping_kernel(
-    a: Memory[N, M, ADDRESS_SPACE_A, tkl.f16],
-    b: Memory[M, N, ADDRESS_SPACE_C, tkl.f16],
+    a: Memory[N, K, M, ADDRESS_SPACE_A, tkl.f16],
+    b: Memory[M, N, K, ADDRESS_SPACE_C, tkl.f16],
 ):
-    # Create a permutation mapping for write that transposes dimensions
-    # Register has shape [N, M], memory has shape [M, N]
+    # Create a cyclic permutation mapping for write: (d0, d1, d2) -> (d1, d2, d0)
+    # Register has shape [N, K, M], memory has shape [M, N, K]
+    # This is a non-self-inverse permutation (requires 3 applications to return to identity)
     # inputs = register dimensions, outputs = memory dimensions
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
-    transpose_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={N: i, M: j},  # Register[N,M]: N→iterator(0), M→iterator(1)
-        outputs={M: j, N: i},  # Memory[M,N]: M→iterator(1), N→iterator(0) gives permutation [1,0]
+    k = tkw.IndexMapping.iterator(2)
+    cyclic_mapping = tkw.IndexMapping(
+        num_iterators=3,
+        inputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
+        outputs={M: k, N: i, K: j},  # Memory[M,N,K]: M→iter(2), N→iter(0), K→iter(1) gives permutation [1,2,0]
     )
 
     # Read from memory (no mapping)
     a_reg = wave.read(a)
-    # Write with transpose mapping
-    wave.write(a_reg, b, mapping=transpose_mapping)
+    # Write with cyclic permutation mapping
+    wave.write(a_reg, b, mapping=cyclic_mapping)
 
 
 @run_test
 def mlir_converter_write_with_mapping():
-    """Test MLIR converter with write operation using permutation mapping."""
+    """Test MLIR converter with write operation using cyclic permutation mapping."""
     # Set parameters for compilation
     subs = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
+        BLOCK_K: 64,
         M: 128,
         N: 128,
+        K: 128,
     }
 
     # Compile the kernel to get the trace
@@ -1231,11 +1239,11 @@ def mlir_converter_write_with_mapping():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_write_with_mapping
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@N, @M] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>)
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@N, @K, @M] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N, @K] of f16, <global>>)
 
     # CHECK: %[[READ:.*]] = wave.read %[[ARG0]]
-    # CHECK-SAME: (!wave.tensor<[@N, @M] of f16, <global>>) -> !wave.tensor<[@N, @M] of f16, <register>>
+    # CHECK-SAME: (!wave.tensor<[@N, @K, @M] of f16, <global>>) -> !wave.tensor<[@N, @K, @M] of f16, <register>>
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
-    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1) -> (d1, d0)>
-    # CHECK-SAME: (!wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>)
+    # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1, d2) -> (d1, d2, d0)>
+    # CHECK-SAME: (!wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@M, @N, @K] of f16, <global>>)
