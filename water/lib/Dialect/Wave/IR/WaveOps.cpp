@@ -2137,6 +2137,28 @@ LogicalResult WriteOp::verify() {
                            getMappingAttr());
 }
 
+FailureOr<ChangeResult>
+WriteOp::propagateForward(ArrayRef<wave::WaveTensorType>,
+                          MutableArrayRef<wave::WaveTensorType>,
+                          raw_ostream &) {
+  // WriteOp has no results; forward propagation only updates result types.
+  return ChangeResult::NoChange;
+}
+
+FailureOr<ChangeResult>
+WriteOp::propagateBackward(MutableArrayRef<wave::WaveTensorType> operandTypes,
+                           ArrayRef<wave::WaveTensorType> resultTypes,
+                           raw_ostream &errs) {
+  return propagateTypesWithMapping(operandTypes[1], operandTypes[0], "memory",
+                                   "value", /*fromIsMemory=*/true,
+                                   getMappingAttr(), errs) |
+         propagateTypesWithMapping(operandTypes[0], operandTypes[1], "value",
+                                   "memory", /*fromIsMemory=*/false,
+                                   getMappingAttr(), errs);
+}
+
+LogicalResult WriteOp::finalizeTypeInference() { return success(); }
+
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,

@@ -249,6 +249,48 @@ normalform.module [#wave.normal_form<full_func_boundary>] {
 // CHECK: #wave.normal_form<full_func_boundary>
 normalform.module [#wave.normal_form<full_func_boundary>] {
 
+// CHECK-LABEL: @propagate_read_forward
+// ReadOp: forward propagation from memory to result (value).
+func.func @propagate_read_forward(%mem: !wave.tensor<[@M, @N] of f32, <global>>) {
+  // CHECK: (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  %0 = wave.read %mem : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<any of f32, <register>>
+  return
+}
+
+// CHECK-LABEL: @propagate_read_backward
+// ReadOp: backward propagation from result to memory operand.
+func.func @propagate_read_backward() {
+  %mem = water_test.wave_tensor : !wave.tensor<any of f32, <global>>
+  // CHECK: (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  %0 = wave.read %mem : (!wave.tensor<any of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// CHECK-LABEL: @propagate_write_backward_memory_to_value
+// WriteOp: backward propagation from memory to value operand.
+func.func @propagate_write_backward_memory_to_value(%mem: !wave.tensor<[@M, @N] of f32, <global>>) {
+  %val = water_test.wave_tensor : !wave.tensor<any of f32, <register>>
+  // CHECK: wave.write %{{.*}}, %{{.*}} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+  wave.write %val, %mem : !wave.tensor<any of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+  return
+}
+
+// CHECK-LABEL: @propagate_write_backward_value_to_memory
+// WriteOp: backward propagation from value to memory operand.
+func.func @propagate_write_backward_value_to_memory(%val: !wave.tensor<[@M, @N] of f32, <register>>) {
+  %mem = water_test.wave_tensor : !wave.tensor<any of f32, <global>>
+  // CHECK: wave.write %{{.*}}, %{{.*}} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+  wave.write %val, %mem : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<any of f32, <global>>
+  return
+}
+
+}
+
+// -----
+
+// CHECK: #wave.normal_form<full_func_boundary>
+normalform.module [#wave.normal_form<full_func_boundary>] {
+
 // CHECK-LABEL: @propagate_permute_forward
 func.func @propagate_permute_forward(%a: !wave.tensor<[@B, @M, @N] of f32, <register>>) {
   // Result type is specified at parse time (required to be fully-specified).
@@ -344,6 +386,32 @@ normalform.module [#wave.normal_form<full_func_boundary>] {
     // CHECK: (!wave.tensor<[@C, @B, @D, @A] of f32, <global>>) -> !wave.tensor<[@A, @B, @C, @D] of f32, <register>>
     wave.read %mem { mapping = #wave.expr_list<[](d0,d1,d2,d3)->(d3,d1,d0,d2)> }
       : (!wave.tensor<any of f32, <global>>) -> !wave.tensor<[@A, @B, @C, @D] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>] {
+  // CHECK-LABEL: @write_with_mapping_backward_memory_to_value
+  func.func @write_with_mapping_backward_memory_to_value(%mem: !wave.tensor<[@A, @B, @C, @D] of f32, <global>>) {
+    %val = water_test.wave_tensor : !wave.tensor<any of f32, <register>>
+    // CHECK: wave.write %{{.*}}, %{{.*}} : !wave.tensor<[@D, @B, @A, @C] of f32, <register>>, !wave.tensor<[@A, @B, @C, @D] of f32, <global>>
+    wave.write %val, %mem { mapping = #wave.expr_list<[](d0,d1,d2,d3)->(d3,d1,d0,d2)> }
+      : !wave.tensor<any of f32, <register>>, !wave.tensor<[@A, @B, @C, @D] of f32, <global>>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>] {
+  // CHECK-LABEL: @write_with_mapping_backward_value_to_memory
+  func.func @write_with_mapping_backward_value_to_memory(%val: !wave.tensor<[@A, @B, @C, @D] of f32, <register>>) {
+    %mem = water_test.wave_tensor : !wave.tensor<any of f32, <global>>
+    // CHECK: wave.write %{{.*}}, %{{.*}} : !wave.tensor<[@A, @B, @C, @D] of f32, <register>>, !wave.tensor<[@C, @B, @D, @A] of f32, <global>>
+    wave.write %val, %mem { mapping = #wave.expr_list<[](d0,d1,d2,d3)->(d3,d1,d0,d2)> }
+      : !wave.tensor<[@A, @B, @C, @D] of f32, <register>>, !wave.tensor<any of f32, <global>>
     return
   }
 }

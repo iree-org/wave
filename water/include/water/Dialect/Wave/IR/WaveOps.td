@@ -570,7 +570,7 @@ def RegisterOp : WaveOp<"register", [
 }
 
 def WriteOp : WaveOp<"write", [
-    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
     RequiresSidewaysBackwardPropagationOpTrait]> {
