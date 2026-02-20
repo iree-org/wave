@@ -715,6 +715,37 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return prefix + formatter.format(mnemonic, operands);
           })
 
+      // V_ADD_U32: VOP2 commutative. The assembler only accepts a non-inline
+      // literal in the src0 slot, not src1. When a large literal appears in
+      // src1, commute the operands. If a large literal appears in src0,
+      // emit as-is (the assembler handles that slot). If somehow both sources
+      // are non-inline literals, fall back to materializing src1 in a scratch
+      // VGPR (should not occur in practice).
+      .Case<V_ADD_U32>(
+          [&](V_ADD_U32 addOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(addOp.getDst());
+            std::string src0 = resolveValue(addOp.getSrc0());
+            std::string src1 = resolveValue(addOp.getSrc1());
+            auto [isLit0, val0] = getLiteralValue(addOp.getSrc0());
+            auto [isLit1, val1] = getLiteralValue(addOp.getSrc1());
+            std::string prefix;
+            if (isLit1 && !isInlineConstant(val1)) {
+              if (isLit0 && !isInlineConstant(val0)) {
+                // Both non-inline: materialize src1 into scratch VGPR
+                std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+                prefix = "  v_mov_b32 " + scratch + ", " +
+                         std::to_string(val1) + "\n";
+                src1 = scratch;
+                peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+              } else {
+                // Commute: move the literal to src0 where the assembler allows it
+                std::swap(src0, src1);
+              }
+            }
+            llvm::SmallVector<std::string> operands = {dst, src0, src1};
+            return prefix + formatter.format("v_add_u32", operands);
+          })
+
       // V_CNDMASK_B32: VOP2 form uses implicit VCC — drop the 3rd source
       // and legalize any non-inline literal in src0/src1 to a scratch VGPR.
       .Case<V_CNDMASK_B32>(
