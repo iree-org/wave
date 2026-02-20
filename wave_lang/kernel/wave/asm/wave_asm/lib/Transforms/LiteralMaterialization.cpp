@@ -49,6 +49,11 @@ static bool needsLiteralMaterialization(llvm::StringRef mnemonic) {
     return false;
   if (mnemonic.starts_with("v_cmp_"))
     return false;
+  // v_cndmask_b32 is a VOP2 instruction with implicit VCC condition; it has
+  // a dedicated handler in generateOp that drops the condition operand and
+  // materializes any non-inline literals in src0/src1 as needed.
+  if (mnemonic == "v_cndmask_b32")
+    return false;
   if (getVOP2Instructions().count(mnemonic))
     return false;
   return true;
