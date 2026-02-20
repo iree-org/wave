@@ -222,19 +222,25 @@ func.func @read_register_propagation(%mem: !wave.tensor<[@M] of f16, <shared>>) 
 
 // -----
 
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @mma_compute_lhs_from_rhs
 func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
   // LHS without elements_per_thread - will be computed from RHS + MMA constraints.
   %lhs_init = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<8xf16>
   %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
 
   // RHS properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@N, @K] of f16, <global>>) -> vector<8xf16>
   %rhs = wave.read %mem1 {elements_per_thread = 8} : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
 
   // ACC properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
   %acc = wave.read %mem2 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
   // LHS elements_per_thread computed via MMA backward propagation.
+  // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
   %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
@@ -242,19 +248,25 @@ func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global
 
 // -----
 
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @mma_compute_rhs_from_lhs
 func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
   // LHS properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K] of f16, <global>>) -> vector<8xf16>
   %lhs = wave.read %mem1 {elements_per_thread = 8} : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
 
   // RHS without elements_per_thread - will be computed from LHS + MMA constraints.
   %rhs_init = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<8xf16>
   %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
 
   // ACC properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
   %acc = wave.read %mem2 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
   // RHS elements_per_thread computed via MMA backward propagation.
+  // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
   %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
@@ -263,19 +275,25 @@ func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global
 // -----
 
 // Test MMA can compute both LHS and RHS when both are uninitialized
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @mma_compute_both_lhs_rhs
   func.func @mma_compute_both_lhs_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@N, @K] of f16, <global>>, %mem3: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
     // Both LHS and RHS without elements_per_thread - can compute from MMA formulas.
     %lhs_init = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<8xf16>
     %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
     %rhs_init = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<8xf16>
     %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
 
     // ACC properly initialized through read operation.
+    // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
     %acc = wave.read %mem3 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // With proper MMA formulas, we can now compute both LHS and RHS from constraints,
     // so this should succeed instead of failing.
+    // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
     %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     return
   }
