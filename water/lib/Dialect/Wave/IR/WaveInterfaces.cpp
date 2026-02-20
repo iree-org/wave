@@ -707,22 +707,20 @@ llvm::LogicalResult wave::detail::verifyEqualElementTypesOpTrait(
   // Verify all operand element types match (skip operand #0 if it's the
   // reference to avoid redundant check)
   unsigned startIdx = isOperandReference ? 1 : 0;
-  for (auto [idx, operandType] :
-       llvm::enumerate(op->getOperandTypes().drop_front(startIdx))) {
+  for (unsigned idx = startIdx; idx < op->getNumOperands(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "operand #" + llvm::Twine(idx + startIdx), operandType)))
+            "operand #" + llvm::Twine(idx), op->getOperandTypes()[idx])))
       return llvm::failure();
   }
 
   // Verify all result element types match (skip result #0 if it's the
   // reference to avoid redundant check)
   startIdx = !isOperandReference ? 1 : 0;
-  for (auto [idx, resultType] :
-       llvm::enumerate(op->getResultTypes().drop_front(startIdx))) {
+  for (unsigned idx = startIdx; idx < op->getNumResults(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "result #" + llvm::Twine(idx + startIdx), resultType)))
+            "result #" + llvm::Twine(idx), op->getResultTypes()[idx])))
       return llvm::failure();
   }
 
