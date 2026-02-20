@@ -16,6 +16,7 @@
 #include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Target/AMDGCN/ABI.h"
 #include "waveasm/Target/AMDGCN/RegisterInfo.h"
 #include "waveasm/Transforms/RegAlloc.h"
 
@@ -28,6 +29,8 @@
 using namespace mlir;
 
 namespace waveasm {
+
+using namespace abi;
 
 //===----------------------------------------------------------------------===//
 // Kernel Generator Implementation (Pure SSA)
