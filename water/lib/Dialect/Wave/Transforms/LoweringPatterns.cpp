@@ -1108,6 +1108,93 @@ public:
   }
 };
 
+class ReshapeOpLoweringPattern : public OpConversionPattern<wave::ReshapeOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ReshapeOp op, wave::ReshapeOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::all_of(adaptor.getSource().getType(), [](Type type) {
+          return type.isSignlessIntOrIndexOrFloat() || isa<VectorType>(type);
+        })) {
+      return rewriter.notifyMatchFailure(
+          op, "expected all source operands to be vectors or scalars");
+    }
+
+    if (adaptor.getSource().size() != 1) {
+      // The verifier checks that all operand types match.
+      Type operandType = adaptor.getSource()[0].getType();
+      bool operandTypeIsScalar = operandType.isIntOrIndexOrFloat();
+      VectorType operandVectorType = dyn_cast<VectorType>(operandType);
+      if (operandTypeIsScalar ||
+          (operandVectorType && operandVectorType.getNumElements() == 1)) {
+        SmallVector<Value> individualValues;
+        for (Value source : adaptor.getSource()) {
+          if (operandTypeIsScalar) {
+            individualValues.push_back(source);
+          } else {
+            individualValues.push_back(
+                vector::ExtractOp::create(rewriter, op.getLoc(), source, 0));
+          }
+        }
+        Value full = vector::FromElementsOp::create(
+            rewriter, op.getLoc(), op.getResult().getType(), individualValues);
+        rewriter.replaceOp(op, full);
+        return success();
+      }
+
+      auto convertedType = cast<VectorType>(
+          getTypeConverter()->convertType(op.getResult().getType()));
+      auto zeros = [&] {
+        if (auto intType =
+                dyn_cast<IntegerType>(convertedType.getElementType())) {
+          return SplatElementsAttr::get(convertedType,
+                                        APInt(intType.getWidth(), 0));
+        } else if (auto floatType =
+                       dyn_cast<FloatType>(convertedType.getElementType())) {
+          return SplatElementsAttr::get(
+              convertedType, APFloat(floatType.getFloatSemantics(), 0));
+        } else {
+          llvm_unreachable("unsupported element type");
+        }
+      }();
+      // TODO: consider using `vector.shuffle` for concatenation. For now being
+      // consistent with pywave.
+      Value concatenated =
+          arith::ConstantOp::create(rewriter, op.getLoc(), zeros);
+      for (auto [i, source] : llvm::enumerate(adaptor.getSource())) {
+        concatenated = vector::InsertStridedSliceOp::create(
+            rewriter, op.getLoc(), source, concatenated,
+            /*offsets=*/i * operandVectorType.getNumElements(), /*strides=*/1);
+      }
+      rewriter.replaceOp(op, concatenated);
+      return success();
+    }
+
+    // Split case: extract a slice from a single operand.
+    auto targetType = cast<VectorType>(
+        getTypeConverter()->convertType(op.getResult().getType()));
+    assert(static_cast<uint64_t>(targetType.getNumElements()) ==
+               static_cast<uint64_t>(
+                   cast<VectorType>(adaptor.getSource()[0].getType())
+                       .getNumElements()) /
+                   op.getNumSlices() &&
+           "vector size mismatch");
+    if ((cast<VectorType>(adaptor.getSource()[0].getType()).getNumElements() %
+         op.getNumSlices()) != 0) {
+      return rewriter.notifyMatchFailure(op,
+                                         "imperfectly divisible vector size");
+    }
+    Value extracted = vector::ExtractStridedSliceOp::create(
+        rewriter, op.getLoc(), adaptor.getSource()[0],
+        /*offsets=*/op.getLogicalSlice() * targetType.getNumElements(),
+        /*sizes=*/targetType.getNumElements(), /*strides=*/1);
+    rewriter.replaceOp(op, extracted);
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
@@ -1121,6 +1208,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
       IterateOpLoweringPattern,
       PermuteOpLoweringPattern,
       RegisterOpLoweringPattern,
+      ReshapeOpLoweringPattern,
       SelectOpLoweringPattern,
       SelfIndexOpLoweringPattern,
       ShuffleOpLoweringPattern

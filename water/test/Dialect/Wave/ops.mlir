@@ -31,6 +31,27 @@ func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor
   return %0 : !wave.tensor<[@A, @B] of f16>
 }
 
+// CHECK-LABEL: @reshape
+func.func @reshape(%tensor: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@B, @A] of f32> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %tensor  {target_vector_shape = {A = 4, B = 2}}  : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@B, @A] of f32>
+  return %0 : !wave.tensor<[@B, @A] of f32>
+}
+
+// CHECK-LABEL: @reshape_3d
+func.func @reshape_3d(%tensor: !wave.tensor<[@A, @B, @C] of f16>) -> !wave.tensor<[@C, @A, @B] of f16> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %tensor {target_vector_shape = {C = 4, A = 2, B = 2}} : !wave.tensor<[@A, @B, @C] of f16> to !wave.tensor<[@C, @A, @B] of f16>
+  return %0 : !wave.tensor<[@C, @A, @B] of f16>
+}
+
+// CHECK-LABEL: @reshape_multiple_vectors
+func.func @reshape_multiple_vectors(%vec1: vector<4xf32>, %vec2: vector<4xf32>) -> vector<8xf32> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %vec1, %vec2 {target_vector_shape = {}} : vector<4xf32> to vector<8xf32>
+  return %0 : vector<8xf32>
+}
+
 // CHECK-LABEL: @extract_static
 func.func @extract_static(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32> {
   // CHECK: wave.extract

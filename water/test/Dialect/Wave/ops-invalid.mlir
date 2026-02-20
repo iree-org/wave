@@ -898,6 +898,7 @@ func.func @permute_unknown_dimension(%arg0: !wave.tensor<[@M, @N] of f32, <regis
   return
 }
 
+
 // -----
 
 // Test that permute result shape with one unknown dimension fails
@@ -966,6 +967,7 @@ func.func @apply_expr_non_integer_result(%arg0: !wave.tensor<[@M] of f32>) {
 
 // -----
 
+
 func.func @apply_expr_symbol_not_in_hyperparam(%arg0: !wave.tensor<[@M] of i32>) attributes { wave.hyperparameters = #wave.hyperparameters<{M = 42}>} {
   // expected-error @below {{op attribute "expr" uses symbolic value #wave.symbol<"Z"> not provided as a hyperparameter}}
   // expected-note @below {{available symbols: M}}
@@ -995,4 +997,75 @@ func.func @apply_expr_minmax_zero_results(%arg0: !wave.tensor<[@M] of i32>) {
 func.func @apply_expr_comparison_one_result(%arg0: !wave.tensor<[@M] of i32>, %arg1: !wave.tensor<[@M] of i32>) {
   // expected-error @below {{for comparison combinators, expression must produce exactly two results}}
   wave.apply_expr(%arg0, %arg1) gt<[#wave.operand<0>, #wave.operand<1>] -> (_Operand_0)> : (!wave.tensor<[@M] of i32>, !wave.tensor<[@M] of i32>) -> !wave.tensor<[@M] of i1>
+}
+
+// -----
+
+func.func @reshape_no_source() {
+  // expected-error @below {{expected at least one source operand}}
+  "wave.reshape"() {target_vector_shape = {}} : () -> !wave.tensor<[@A, @B] of f32, <register>>
+}
+
+// -----
+
+func.func @reshape_unequal_source_types(%arg0: !wave.tensor<[@A, @B] of f32>, %arg1: vector<4xf32>, %arg2: vector<4xf32>) {
+  // expected-error @below {{expected source and result elemental types to match, got 'f32', 'f16'}}
+  "wave.reshape"(%arg1, %arg2) {target_vector_shape = {}} : (vector<4xf32>, vector<4xf32>) -> vector<8xf16>
+}
+
+// -----
+
+func.func @reshape_mixed_vector_types(%arg0: vector<4xf32>, %arg1: vector<8xf32>) {
+  // expected-error @below {{expected all source operands to have the same type}}
+  "wave.reshape"(%arg0, %arg1) {target_vector_shape = {}} : (vector<4xf32>, vector<8xf32>) -> vector<12xf32>
+}
+
+// -----
+
+func.func @reshape_element_type_mismatch(%tensor: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{expected source and result elemental types to match}}
+  wave.reshape %tensor {target_vector_shape = {}} : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@B, @A] of f16>
+}
+
+// -----
+
+func.func @reshape_element_count_mismatch(%arg0: vector<4xf32>) {
+  // expected-error @below {{the total number of elements must remain the same or be a concatenation}}
+  wave.reshape %arg0, %arg0 {target_vector_shape = {}} : vector<4xf32> to vector<6xf32>
+}
+
+// -----
+
+func.func @reshape_element_count_mismatch(%arg0: vector<4xf32>) {
+  // expected-error @below {{expects operand vector to have 12 elements, got 4}}
+  wave.reshape %arg0 {target_vector_shape = {}, num_slices = 2} : vector<4xf32> to vector<6xf32>
+}
+
+// -----
+
+func.func @reshape_invalid_element_count(%arg0: vector<4xf32>) {
+  // expected-error @below {{the total number of elements must remain the same or be a concatenation}}
+  wave.reshape %arg0, %arg0 {target_vector_shape = {}} : vector<4xf32> to vector<6xf32>
+}
+
+// -----
+
+func.func @reshape_target_vector_shape_missing_dimension(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{target_vector_shape must contain at least the last dimension of the result tensor type}}
+  wave.reshape %arg0 {target_vector_shape = {}} : !wave.tensor<[@A] of f32> to !wave.tensor<[@A] of f32>
+}
+
+// -----
+
+func.func @reshape_target_vector_shape_spurious_dimension2(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{target_vector_shape contains symbol B that is not present in the result tensor type}}
+  wave.reshape %arg0 {target_vector_shape = {A = 4, B = 16}} : !wave.tensor<[@A] of f32> to !wave.tensor<[@A] of f32>
+}
+
+// -----
+
+func.func @reshape_logical_slice_too_large(%arg0: vector<8xf32>) {
+  // expected-error @below {{expected logical slice to be less than the number of slices}}
+  wave.reshape %arg0 {target_vector_shape = {}, logical_slice = 2, num_slices = 2} : vector<8xf32> to vector<4xf32>
+  return
 }

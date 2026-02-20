@@ -74,6 +74,29 @@ static void printRegisterOpTypes(OpAsmPrinter &printer, Operation *,
   printer.printType(resultType);
 }
 
+// Parse a single type and use it for all operands.
+static ParseResult
+parseReusedType(OpAsmParser &parser, SmallVectorImpl<Type> &types,
+                SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands) {
+  Type singleType;
+  if (failed(parser.parseType(singleType)))
+    return failure();
+
+  types.append(operands.size(), singleType);
+  return success();
+}
+
+// Print the first type assuming all types are equal.
+static void printReusedType(OpAsmPrinter &printer, Operation *, TypeRange types,
+                            ValueRange) {
+  printer.printType(types[0]);
+#ifndef NDEBUG
+  for (unsigned i = 1, e = types.size(); i < e; ++i) {
+    assert(types[i] == types[0] && "expected all types to be equal");
+  }
+#endif // NDEBUG
+}
+
 // Parse an @-symbol and interpret it as a wave symbol.
 static ParseResult parseSingleSymbol(OpAsmParser &parser,
                                      wave::WaveSymbolAttr &symbolAttr) {
@@ -1814,6 +1837,170 @@ LogicalResult ExtractSliceOp::verify() {
                          << stride.getNumSymbols() << " symbols";
   }
 
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// ReshapeOp
+//-----------------------------------------------------------------------------
+
+// Handle top/bottom state propagation: bottom does not affect the result, top
+// sets the result to top. Return failure if "from" is neither bottom nor top.
+static FailureOr<ChangeResult> propagateElementsPerThreadLatticeEdges(
+    const wave::ElementsPerThreadLatticeValue &from,
+    wave::ElementsPerThreadLatticeValue &to) {
+  if (from.isBottom()) {
+    return ChangeResult::NoChange;
+  }
+  if (from.isTop()) {
+    if (to.isTop()) {
+      return ChangeResult::NoChange;
+    }
+    to = from;
+    return ChangeResult::Change;
+  }
+  return failure();
+}
+
+FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // Concat case: result elements = sum of operand elements.
+  if (operandElements.size() != 1) {
+    uint64_t totalNumberOfElements = 0;
+    for (wave::ElementsPerThreadLatticeValue element : operandElements) {
+      FailureOr<ChangeResult> result =
+          propagateElementsPerThreadLatticeEdges(element, resultElements[0]);
+      if (succeeded(result))
+        return *result;
+
+      totalNumberOfElements += element.getValue();
+    }
+    return detail::checkAndPropagateElementsPerThreadFromConstant(
+        wave::ElementsPerThreadLatticeValue(totalNumberOfElements),
+        /*immutableValues=*/{}, resultElements,
+        /*fromName=*/"sum of operand elements per thread",
+        /*immutableName=*/"",
+        /*mutableName=*/"result", errs);
+  }
+
+  // Split case: result elements = operand elements / num_slices.
+  FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
+      operandElements[0], resultElements[0]);
+  if (succeeded(result)) {
+    return *result;
+  }
+  return detail::checkAndPropagateElementsPerThreadFromConstant(
+      wave::ElementsPerThreadLatticeValue(operandElements[0].getValue() /
+                                          getNumSlices()),
+      /*immutableValues=*/{}, resultElements, "operand", "", "result", errs);
+}
+
+FailureOr<ChangeResult> ReshapeOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  // Concat case: each operand gets result elements / num_operands.
+  if (operandElements.size() != 1) {
+    FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
+        resultElements[0], operandElements[0]);
+    if (succeeded(result)) {
+      return *result;
+    }
+
+    assert((resultElements[0].getValue() % operandElements.size() == 0) &&
+           "result elements per thread must be divisible by the number of "
+           "operands");
+    return detail::checkAndPropagateElementsPerThreadFromConstant(
+        wave::ElementsPerThreadLatticeValue(resultElements[0].getValue() /
+                                            operandElements.size()),
+        /*immutableValues=*/{}, operandElements, "result", "", "operand", errs);
+  }
+
+  // Split case: operand elements = result elements * num_slices.
+  FailureOr<ChangeResult> result = propagateElementsPerThreadLatticeEdges(
+      resultElements[0], operandElements[0]);
+  if (succeeded(result)) {
+    return *result;
+  }
+  return detail::checkAndPropagateElementsPerThreadFromConstant(
+      wave::ElementsPerThreadLatticeValue(resultElements[0].getValue() *
+                                          getNumSlices()),
+      /*immutableValues=*/{}, operandElements, "result", "", "operand", errs);
+}
+
+LogicalResult ReshapeOp::verify() {
+  if (getSource().empty()) {
+    return emitOpError() << "expected at least one source operand";
+  }
+
+  Type sourceType = getSource().front().getType();
+  for (unsigned i = 1, e = getSource().size(); i < e; ++i) {
+    Type currentSourceType = getSource()[i].getType();
+    if (currentSourceType != sourceType) {
+      return emitOpError()
+             << "expected all source operands to have the same type";
+    }
+  }
+
+  if (failed(detail::verifyElementTypesMatch(
+          getLoc(), "source", sourceType, "result", getResult().getType()))) {
+    return failure();
+  }
+
+  if (getLogicalSlice() >= getNumSlices()) {
+    return emitOpError()
+           << "expected logical slice to be less than the number of slices";
+  }
+
+  // We already verified that source types are equal vector types if there's
+  // more than one.
+  auto sourceVecType = llvm::dyn_cast<VectorType>(sourceType);
+  auto resultVecType = llvm::dyn_cast<VectorType>(getResult().getType());
+  if (resultVecType && sourceVecType) {
+    int64_t resultNumElems = resultVecType.getNumElements();
+    int64_t operandNumElems = sourceVecType.getNumElements();
+    if (getSource().size() > 1) {
+      unsigned numOperands = getSource().size();
+
+      if (!(operandNumElems == resultNumElems ||
+            (operandNumElems * numOperands == resultNumElems))) {
+        return emitOpError() << "the total number of elements must remain the "
+                                "same or be a concatenation";
+      }
+    } else {
+      if (static_cast<uint64_t>(operandNumElems) !=
+          resultNumElems * getNumSlices()) {
+        return emitOpError() << "expects operand vector to have "
+                             << resultNumElems * getNumSlices()
+                             << " elements, got " << operandNumElems;
+      }
+    }
+  }
+
+  auto sourceTensorType = dyn_cast<WaveTensorType>(sourceType);
+  auto resultTensorType = dyn_cast<WaveTensorType>(getResult().getType());
+  if (!sourceTensorType || !resultTensorType ||
+      !sourceTensorType.getFullySpecified() ||
+      !resultTensorType.getFullySpecified()) {
+    return success();
+  }
+
+  if (!getTargetVectorShape().contains(
+          resultTensorType.getShape().back().getName())) {
+    return emitOpError() << "target_vector_shape must contain at least the "
+                            "last dimension of the result tensor type";
+  }
+  for (auto symbol : getTargetVectorShape()) {
+    if (llvm::none_of(resultTensorType.getShape(), [symbol](WaveSymbolAttr s) {
+          return s.getName() == symbol.getName();
+        })) {
+      return emitOpError() << "target_vector_shape contains symbol "
+                           << symbol.getName().strref()
+                           << " that is not present in the result tensor type";
+    }
+  }
   return success();
 }
 

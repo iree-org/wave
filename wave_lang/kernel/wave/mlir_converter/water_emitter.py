@@ -76,6 +76,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Placeholder,
     Placeholder,
     ReduceOp as Reduce,
+    Reshape,
     SelfIndex,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
@@ -111,6 +112,7 @@ try:
         CastOp,
         DivOp,
         ReciprocalOp,
+        ReshapeOp,
         Exp2Op,
         ExtractOp,
         ExtractSliceOp,
@@ -169,6 +171,7 @@ WAVE_OP_CONSTRUCTORS = {
     "mul": MulOp,
     "div": DivOp,
     "reciprocal": ReciprocalOp,
+    "reshape": ReshapeOp,
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
@@ -487,6 +490,16 @@ def _convert_to_wave_expr_list_tuple(
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
 
 
+def _convert_vector_shapes(
+    shapes: dict[IndexSymbol, int | IndexExpr], subs: dict[IndexExpr, Any] = {}
+) -> ir.DictAttr:
+    """Converts a dictionary of index symbols mapped to integers to a dictionary attribute."""
+    resolved = _resolve_vector_shapes_for_attr(shapes, subs)
+    i64 = ir.IntegerType.get_signless(64)
+    dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
+    return ir.DictAttr.get(dict)
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -527,6 +540,10 @@ def _emit_ops_from_graph(
                 Raises a RuntimeError if the value is not found and allow_missing is False.
                 """
                 if (mlir_args := value_map.get(node)) is not None:
+                    if len(mlir_args) == 0:
+                        if allow_missing:
+                            return None
+                        raise RuntimeError(f"Empty mapping for node {node}")
                     assert len(mlir_args) == 1, "A single-result node is expected."
                     return mlir_args[0]
                 if allow_missing:
@@ -540,10 +557,21 @@ def _emit_ops_from_graph(
                 """
                 mlir_operands = []
                 for arg in fx_node.args:
-                    if (
-                        mlir_arg := get_single_mapped_value(arg, allow_missing=True)
-                    ) is not None:
-                        mlir_operands.append(mlir_arg)
+                    args = (
+                        arg
+                        if isinstance(arg, Sequence) and not isinstance(arg, str)
+                        else [arg]
+                    )
+                    mlir_operands.extend(
+                        mlir_arg
+                        for subarg in args
+                        if (
+                            mlir_arg := get_single_mapped_value(
+                                subarg, allow_missing=True
+                            )
+                        )
+                        is not None
+                    )
                 return mlir_operands
 
             if isinstance(node, GetResult):
@@ -804,13 +832,28 @@ def _emit_ops_from_graph(
                             else None
                         ),
                     )
+                elif isinstance(node, Reshape):
+                    # FIXME(#873): temporary fix to work around a malformed op.
+                    if isinstance(node.target_vector_shape, int):
+                        target_vector_shape = {
+                            node.type.symbolic_shape[-1]: node.target_vector_shape
+                        }
+                    else:
+                        target_vector_shape = node.target_vector_shape
+                    mlir_op = op_builder(
+                        result_type,
+                        source=create_mlir_operands(),
+                        target_vector_shape=_convert_vector_shapes(target_vector_shape),
+                        logical_slice=node.logical_slice,
+                        num_slices=node.num_slices,
+                    )
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
-                    except Exception:
+                    except Exception as e:
                         raise RuntimeError(
                             f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
-                        )
+                        ) from e
 
             if mlir_op is None:
                 raise NotImplementedError(
@@ -860,10 +903,7 @@ def _emit_wave_constraints(
 
         shape_dict = None
         if constraint.vector_shapes:
-            resolved = _resolve_vector_shapes_for_attr(constraint.vector_shapes, subs)
-            i64 = ir.IntegerType.get_signless(64)
-            dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
-            shape_dict = ir.DictAttr.get(dict)
+            shape_dict = _convert_vector_shapes(constraint.vector_shapes, subs)
 
         attr = HardwareConstraintAttr.get(
             threads_per_wave=constraint.threads_per_wave,

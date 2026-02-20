@@ -548,6 +548,77 @@ def multi_result_handling():
 
 
 @run_test
+def mlir_converter_reshape():
+    """Test MLIR converter with reshape kernel."""
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
+    ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 8, N: 8},
+            waves_per_block=(2, 2, 1),
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def reshape(
+        a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE_B, tkl.f16],
+    ):
+        a_reg = tkw.read(a)
+        b_reg = tkw.reshape(a_reg, {M: 256, N: 8})
+        tkw.write(b_reg, b)
+        return
+
+    subs = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, reshape)
+
+    # Get the trace from the compiled kernel
+    trace = compiled_kernel.compiled_graph
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+
+    if diagnostics:
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    # CHECK-LABEL: mlir_converter_reshape
+    # CHECK: wave.read
+    # CHECK: wave.reshape
+    # CHECK: wave.write
+    # CHECK: return
+    print(mlir_output)
+
+
+@run_test
 def mlir_converter_sum():
     """Test MLIR converter with sum kernel."""
 

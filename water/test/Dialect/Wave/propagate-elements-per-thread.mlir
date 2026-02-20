@@ -539,3 +539,107 @@ normalform.module [#wave.normal_form<full_types>] {
     return
   }
 }
+
+// -----
+
+// Reshape forward propagation: single operand, num_slices=2 -> result EPT = operand EPT / 2.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_forward_single_operand_num_slices
+func.func @reshape_forward_single_operand_num_slices(
+    %mem: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  // Read 8 elements per thread.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f32, <global>>) -> vector<8xf32>
+  %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+
+  // Reshape with num_slices=2: result EPT = 8 / 2 = 4.
+  // CHECK: wave.reshape {{.*}} : vector<8xf32> to vector<4xf32>
+  %reshaped = wave.reshape %reg {target_vector_shape = {M = 4}, num_slices = 2}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  return
+}
+}
+
+// -----
+
+// Reshape backward propagation: write fixes result EPT, operand gets result EPT * num_slices.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_backward_single_result_num_slices
+func.func @reshape_backward_single_result_num_slices(
+    %mem: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  %c0 = arith.constant 0.0 : f32
+  // Register gets EPT from backward: write 4, reshape * 2 -> operand 8.
+  // CHECK: wave.register {{.*}} : vector<8xf32>
+  %reg = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+
+  // Reshape num_slices=2: result has 4, so operand gets 4 * 2 = 8.
+  // CHECK: wave.reshape {{.*}} : vector<8xf32> to vector<4xf32>
+  %reshaped = wave.reshape %reg {target_vector_shape = {M = 4}, num_slices = 2}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  // CHECK: wave.write {{.*}} : vector<4xf32>, !wave.tensor<[@M] of f32, <global>>
+  wave.write %reshaped, %out_mem {elements_per_thread = 4}
+    : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+  return
+}
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_forward_multiple_operands
+func.func @reshape_forward_multiple_operands(
+    %mem1: !wave.tensor<[@M] of f32, <global>>,
+    %mem2: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  %reg1 = wave.read %mem1 {elements_per_thread = 4} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+  %reg2 = wave.read %mem2 {elements_per_thread = 4} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+
+  // CHECK: wave.reshape {{.*}} : vector<4xf32> to vector<8xf32>
+  %reshaped = wave.reshape %reg1, %reg2 {target_vector_shape = {M = 8}}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  return
+}
+}
+
+// -----
+// Backward propagation: write fixes result EPT, reshape with two operands, each operand gets result EPT / 2
+
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_backward_multiple_operands
+func.func @reshape_backward_multiple_operands(
+    %mem1: !wave.tensor<[@M] of f32, <global>>,
+    %mem2: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  %c0 = arith.constant 0.0 : f32
+  // Both registers should get 4 elements per thread from backward: write 8, reshape 2 operands -> 8 / 2 = 4.
+  // CHECK: wave.register {{.*}} : vector<4xf32>
+  %reg1 = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+  // CHECK: wave.register {{.*}} : vector<4xf32>
+  %reg2 = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+
+  // Reshape with two operands: each operand gets result EPT / 2.
+  // CHECK: wave.reshape {{.*}} : vector<4xf32> to vector<8xf32>
+  %reshaped = wave.reshape %reg1, %reg2 {target_vector_shape = {M = 8}}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  // CHECK: wave.write {{.*}} : vector<8xf32>, !wave.tensor<[@M] of f32, <global>>
+  wave.write %reshaped, %out_mem {elements_per_thread = 8}
+    : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+
+  return
+}
+}
