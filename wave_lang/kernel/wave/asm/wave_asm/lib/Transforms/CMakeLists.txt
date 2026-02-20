@@ -20,6 +20,8 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   Ticketing.cpp
   HazardMitigation.cpp
   AssemblyEmitter.cpp
+  MetadataEmitter.cpp
+  LiteralMaterialization.cpp
   TranslateFromMLIR.cpp
   RegionBuilder.cpp
   ScopedCSE.cpp

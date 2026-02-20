@@ -40,9 +40,24 @@ namespace waveasm {
 // Handler Implementations
 //===----------------------------------------------------------------------===//
 
-/// Handle memref.alloc - track LDS allocation
+/// Handle memref.alloc - track LDS allocation and assign base offset
+///
+/// Each LDS memref.alloc is assigned a cumulative byte offset so that
+/// operations (vector.load, vector.store, gather_to_lds) can compute the
+/// correct LDS address.  Two patterns exist in practice:
+///
+///   (a) memref.alloc of a raw byte buffer + memref.view with byte offset
+///       -> handleMemRefView sets the offset from the view's byteShift
+///
+///   (b) memref.alloc of a typed, shaped buffer (e.g. memref<256x128xi8, 3>)
+///       -> no memref.view follows; we must set the offset here
+///
+/// Pattern (b) is used by MXFP4 scheduled GEMM kernels that allocate
+/// separate data and scale buffers for double-buffering.
 LogicalResult handleMemRefAlloc(Operation *op, TranslationContext &ctx) {
   auto allocOp = cast<memref::AllocOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
 
   // Check if this is an LDS allocation (workgroup address space)
   auto memrefType = allocOp.getResult().getType();
@@ -59,6 +74,20 @@ LogicalResult handleMemRefAlloc(Operation *op, TranslationContext &ctx) {
 
     // Track the total LDS size for the kernel descriptor
     ctx.addLDSSize(allocSize);
+
+    // For typed shaped LDS allocations (pattern b), set the LDS base offset
+    // so that vector.load/store and gather_to_lds handlers can compute the
+    // correct LDS address.  Skip 1-D i8 buffers (pattern a) since those use
+    // memref.view which sets the offset from the view's byteShift.
+    bool isRawByteBuffer =
+        (memrefType.getRank() == 1 && memrefType.getElementType().isInteger(8));
+    if (!isRawByteBuffer) {
+      int64_t baseOffset = ctx.getLDSAllocOffset();
+      auto immType = ctx.createImmType(baseOffset);
+      auto offsetVal = ConstantOp::create(builder, loc, immType, baseOffset);
+      ctx.setLDSBaseOffset(allocOp.getResult(), offsetVal);
+      ctx.advanceLDSAllocOffset(allocSize);
+    }
   }
 
   return success();

@@ -1277,6 +1277,8 @@ LogicalResult handleSCFYield(Operation *op, TranslationContext &ctx);
 
 // From AMDGPUHandlers.cpp
 LogicalResult handleAMDGPULdsBarrier(Operation *op, TranslationContext &ctx);
+LogicalResult handleAMDGPUMemoryCounterWait(Operation *op,
+                                            TranslationContext &ctx);
 LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx);
 LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx);
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx);
@@ -1284,6 +1286,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferStore(Operation *op, TranslationContext &ctx);
 LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
+LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
+LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
@@ -1426,6 +1430,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // AMDGPU dialect
   REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
+  REGISTER_HANDLER(amdgpu::MemoryCounterWaitOp, handleAMDGPUMemoryCounterWait);
   REGISTER_HANDLER(amdgpu::MFMAOp, handleAMDGPUMfma);
   REGISTER_HANDLER(amdgpu::ScaledMFMAOp, handleAMDGPUScaledMfma);
   REGISTER_HANDLER(amdgpu::FatRawBufferCastOp, handleFatRawBufferCast);
@@ -1435,6 +1440,8 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // ROCDL dialect
   REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);
+  REGISTER_HANDLER(ROCDL::SBarrierOp, handleROCDLSBarrier);
+  REGISTER_HANDLER(ROCDL::SetPrioOp, handleROCDLSetPrio);
   REGISTER_HANDLER(ROCDL::SWaitcntOp, handleSWaitcnt);
 
   // IREE/Stream dialect (unregistered operations)

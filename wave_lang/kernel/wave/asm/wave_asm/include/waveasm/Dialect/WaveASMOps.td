@@ -998,8 +998,21 @@ def WaveASM_S_BARRIER : WAVEASMOp<"s_barrier", [WaveASM_ControlFlowOp]> {
   let assemblyFormat = "attr-dict";
 }
 
-def WaveASM_S_NOP : WaveASM_CountedWaitOp<"s_nop"> {
+// Ops that take a single integer operand but are not memory waits.
+// Structurally identical to CountedWaitOp (same arguments and format)
+// but semantically distinct: these are scalar control ops, not waitcnts.
+class WaveASM_CountedScalarOp<string mnemonic> :
+  WAVEASMOp<mnemonic, [WaveASM_ControlFlowOp]> {
+  let arguments = (ins I32Attr:$count);
+  let assemblyFormat = "$count attr-dict";
+}
+
+def WaveASM_S_NOP : WaveASM_CountedScalarOp<"s_nop"> {
   let summary = "No operation (wait cycles)";
+}
+
+def WaveASM_S_SETPRIO : WaveASM_CountedScalarOp<"s_setprio"> {
+  let summary = "Set wave priority level (0=default, 1-3=elevated)";
 }
 
 //===----------------------------------------------------------------------===//

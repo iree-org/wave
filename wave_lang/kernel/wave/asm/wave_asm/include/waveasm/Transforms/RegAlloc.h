@@ -78,6 +78,11 @@ public:
     }
   }
 
+  /// Check if a register is currently in the free list
+  bool isFree(int64_t reg) const {
+    return std::find(freeList.begin(), freeList.end(), reg) != freeList.end();
+  }
+
   /// Reserve a specific register (for precoloring)
   void reserve(int64_t reg, int64_t size) {
     for (int64_t i = 0; i < size; ++i) {

@@ -518,6 +518,12 @@ public:
   /// Get the total LDS size requirement
   int64_t getTotalLDSSize() const { return totalLDSSize; }
 
+  /// Get the current LDS allocation byte offset (for typed allocs)
+  int64_t getLDSAllocOffset() const { return ldsAllocOffset; }
+
+  /// Advance the LDS allocation offset by the given number of bytes
+  void advanceLDSAllocOffset(int64_t size) { ldsAllocOffset += size; }
+
   //===--------------------------------------------------------------------===//
   // System Register Usage Tracking (for kernel descriptor metadata)
   //===--------------------------------------------------------------------===//
@@ -643,6 +649,10 @@ private:
   int64_t nextSwizzleSRDIndex =
       -1; // Will be computed in emitSRDPrologue(), after all regular SRDs
   int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
+  // Running byte offset for typed LDS allocations (pattern b in
+  // handleMemRefAlloc). Reset implicitly: a fresh TranslationContext is
+  // created per gpu.func in translateModule / createProgramFromFunc.
+  int64_t ldsAllocOffset = 0;
   bool srdPrologueEmitted = false;
   // System register usage tracking
   bool usesWorkgroupIdX = false;

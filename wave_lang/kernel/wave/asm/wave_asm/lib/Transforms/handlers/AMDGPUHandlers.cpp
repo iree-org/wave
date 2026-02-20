@@ -40,6 +40,47 @@ LogicalResult handleAMDGPULdsBarrier(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+/// Handle amdgpu.memory_counter_wait - emit s_waitcnt vmcnt(N)
+/// This op waits for N outstanding VMEM loads to complete.  It is used by the
+/// double-buffer schedule to synchronize global-to-LDS prefetch with the next
+/// stage of the pipeline.
+LogicalResult handleAMDGPUMemoryCounterWait(Operation *op,
+                                            TranslationContext &ctx) {
+  auto waitOp = cast<amdgpu::MemoryCounterWaitOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  if (auto loadAttr = waitOp.getLoadAttr()) {
+    int64_t vmcnt = loadAttr.getInt();
+    S_WAITCNT_VMCNT::create(builder, loc, vmcnt);
+  }
+  if (auto dsAttr = waitOp.getDsAttr()) {
+    int64_t lgkmcnt = dsAttr.getInt();
+    S_WAITCNT_LGKMCNT::create(builder, loc, lgkmcnt);
+  }
+  return success();
+}
+
+/// Handle rocdl.s.barrier - emit s_barrier
+LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx) {
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+  S_BARRIER::create(builder, loc);
+  return success();
+}
+
+/// Handle rocdl.s.setprio - emit s_setprio <priority>
+LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx) {
+  auto setPrioOp = cast<ROCDL::SetPrioOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  int32_t priority = setPrioOp.getPriority();
+  S_SETPRIO::create(builder, loc, priority);
+
+  return success();
+}
+
 LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx) {
   auto mfmaOp = cast<amdgpu::MFMAOp>(op);
   auto &builder = ctx.getBuilder();

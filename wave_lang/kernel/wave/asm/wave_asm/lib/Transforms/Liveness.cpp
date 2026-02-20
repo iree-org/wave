@@ -146,7 +146,14 @@ LivenessInfo computeLiveness(ProgramOp program) {
       range.end = defPoint;
     }
 
-    // For loop op block args, extend live range to cover entire loop body
+    // For loop op block args, extend live range to cover entire loop body.
+    // Also extend to the first op after the LoopOp so that the block_arg's
+    // register stays reserved through the loop exit transition. Loop results
+    // are tied to block args (they share the same physical register), and
+    // their def points are one position after the loop body's terminator.
+    // Without this extension, the block_arg would be freed one point before
+    // the loop result re-claims the register, causing a re-allocation that
+    // leads to register pressure inflation from fragmentation.
     if (auto blockArg = dyn_cast<BlockArgument>(value)) {
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       if (parentOp && isa<LoopOp>(parentOp)) {
@@ -156,6 +163,21 @@ LivenessInfo computeLiveness(ProgramOp program) {
           auto termIt = opToIdx.find(terminator);
           if (termIt != opToIdx.end()) {
             range.end = std::max(range.end, termIt->second);
+          }
+        }
+
+        // Extend to the next sibling op after the LoopOp. This bridges
+        // the gap between the block_arg (which ends at the terminator)
+        // and the loop_result (which starts at the next sibling). Since
+        // they're tied, the physical register is shared and this doesn't
+        // actually increase physical register usage. Without this, the
+        // register is freed and immediately re-reserved, which causes
+        // fragmentation and allocation failure.
+        Operation *nextSibling = parentOp->getNextNode();
+        if (nextSibling) {
+          auto nextIt = opToIdx.find(nextSibling);
+          if (nextIt != opToIdx.end()) {
+            range.end = std::max(range.end, nextIt->second);
           }
         }
       }

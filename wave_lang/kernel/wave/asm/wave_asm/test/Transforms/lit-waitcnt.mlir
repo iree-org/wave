@@ -99,11 +99,13 @@ waveasm.program @existing_waitcnt_observed target = #waveasm.target<#waveasm.gfx
   // CHECK: waveasm.buffer_load_dword
   %load1 = waveasm.buffer_load_dword %srd, %voff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
 
-  // Pre-existing waitcnt - pass should observe this and not emit redundant waits
+  // Pre-existing waitcnt - pass observes this and knows VMEM is drained.
+  // No LGKM ops were issued, so barrier needs no additional lgkmcnt wait.
   // CHECK: waveasm.s_waitcnt_vmcnt 0
   waveasm.s_waitcnt_vmcnt 0
 
-  // Barrier follows - no additional waitcnt needed since vmcnt(0) already observed
+  // Barrier follows - no additional waitcnt needed since vmcnt(0) already
+  // observed and no LGKM operations are outstanding.
   // CHECK-NOT: waveasm.s_waitcnt
   // CHECK: waveasm.s_barrier
   waveasm.s_barrier

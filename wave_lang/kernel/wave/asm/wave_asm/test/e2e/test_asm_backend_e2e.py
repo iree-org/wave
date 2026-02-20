@@ -17,6 +17,8 @@ Tests included:
 4. test_mma_multi_wave_cpp_backend - Multi-wave MMA
 5. test_gemm_cpp_backend - Full GEMM with K-loop
 6. test_mxfp4_scaled_gemm_cpp_backend - MXFP4 scaled GEMM (gfx950+ only)
+7. test_dbuf_4wave_mxfp4_gemm_cpp_backend - Double-buffered MXFP4 GEMM, 4 waves (gfx950+)
+8. test_dbuf_8wave_mxfp4_gemm_cpp_backend - Double-buffered MXFP4 GEMM, 8 waves (gfx950+)
 
 Run with:
     # Run all e2e tests with C++ backend (default, requires GPU)
@@ -1310,6 +1312,179 @@ def test_mxfp4_scaled_gemm_cpp_backend(
         c_cpu,
         check_dtype=False,
         msg=f"MXFP4 GEMM {m}x{n}x{k} ({g2s_str}, {backend}) failed numerical validation",
+    )
+
+
+# =============================================================================
+# Test: MXFP4 Double-Buffered Scheduled GEMM (from 7.1_schedule.py)
+# =============================================================================
+
+
+def _dbuf_mxfp4_helper(
+    shape,
+    block,
+    num_waves,
+    use_stagger,
+    compiler,
+    backend,
+    dump_asm,
+):
+    """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
+
+    Mirrors the 7.1_schedule.py examples using get_tagged_mxfp4_gemm
+    (tagged kernel template) + get_mxfp4_dbuf_schedule (double-buffer
+    schedule with 2-stage pipeline and K-partitioned clusters).
+
+    This exercises the C++ ASM backend on MLIR produced by the full
+    Wave scheduling pipeline (MANUAL schedule + wave_schedule clusters).
+    """
+    if not is_cdna4():
+        pytest.skip("MXFP4 double-buffered GEMM only supported on gfx950+ (CDNA4)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+
+    from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
+    from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    from wave_lang.kernel.wave.utils.mxfp_utils import (
+        generate_gemm_afp4wfp4_inputs,
+        torchScaledGemmMXFP4,
+    )
+
+    # Get tagged kernel + options (same as 7.1_schedule.py)
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, num_waves=num_waves)
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
+
+    # Override to ASM backend for C++ compilation path
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
+    options = set_default_run_config(options)
+
+    # Generate MXFP4 inputs and reference output
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x, w = x.cuda(), w.cuda()
+    x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
+    c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
+
+    # Capture MLIR with schedule applied
+    kernel_info = capture_wave_kernel_info(options, gemm, schedule=schedule)
+
+    # Verify MLIR contains scaled_mfma operation
+    assert (
+        "amdgpu.scaled_mfma" in kernel_info.mlir_text
+    ), "Expected amdgpu.scaled_mfma operation in MLIR"
+
+    waves_str = f"{num_waves}wave"
+    stagger_str = "stagger" if use_stagger else "no_stagger"
+    m, n, k = shape
+    test_id = f"mxfp4_dbuf_{waves_str}_{m}x{n}x{k}_{stagger_str}"
+
+    # Compile with C++ backend
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    # Verify assembly contains scaled MFMA instruction
+    assert (
+        "v_mfma_scale_f32_16x16x128_f8f6f4" in cpp_result.asm_text
+    ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
+
+    # Dump assembly if requested
+    if dump_asm and cpp_result.asm_text:
+        with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+            f.write(cpp_result.asm_text)
+        with open(f"/tmp/{test_id}.mlir", "w") as f:
+            f.write(kernel_info.mlir_text)
+
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+
+    # Use Wave compiler's launch info
+    block_size = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    # Execute on GPU
+    # Kernel signature: (a, a_scale, b, b_scale, c)
+    run_with_wave_runtime(
+        binary_path=cpp_result.binary_path,
+        inputs=[x, x_scales, w.T.contiguous(), w_scales],
+        outputs=[c],
+        grid=grid,
+        block=block_size,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Numerical correctness validation (same tolerance as existing MXFP4 test)
+    c_cpu = c.cpu()
+    torch_out_cpu = torch_out.cpu() if torch_out.is_cuda else torch_out
+    torch.testing.assert_close(
+        torch_out_cpu,
+        c_cpu,
+        check_dtype=False,
+        msg=f"MXFP4 double-buffered {waves_str} GEMM {m}x{n}x{k} "
+        f"({stagger_str}, {backend}) failed numerical validation",
+    )
+
+
+@pytest.mark.xfail(
+    reason="C++ backend linear scan register allocator exceeds VGPR limit "
+    "(~898 VGPRs needed vs 256 limit) for the full MXFP4 double-buffered "
+    "kernel with 64 accumulator iter_args + 8 memref iter_args",
+    strict=True,
+)
+def test_dbuf_4wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
+    """End-to-end test for double-buffered MXFP4 GEMM with 4 waves.
+
+    Mirrors: test_dbuf_4wave_mxfp_gemm from examples/python/7.1_schedule.py
+
+    4-wave configuration (2 M-tiles x 2 N-tiles), no stagger.
+    Uses tagged kernel template + double-buffer schedule with 2-stage
+    pipeline and K-dimension partitioning for memory/compute interleaving.
+    """
+    _dbuf_mxfp4_helper(
+        shape=(1024, 1024, 8192),
+        block=(256, 256, 256),
+        num_waves=4,
+        use_stagger=False,
+        compiler=compiler,
+        backend=backend,
+        dump_asm=dump_asm,
+    )
+
+
+@pytest.mark.xfail(
+    reason="C++ backend register allocator needs ~260 VGPRs for 8-wave MXFP4 "
+    "double-buffered kernel (exceeds 256 limit). Needs AccVGPR support to "
+    "move accumulator VGPRs off the regular VGPR budget.",
+    strict=True,
+)
+def test_dbuf_8wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
+    """End-to-end test for double-buffered MXFP4 GEMM with 8 waves.
+
+    Mirrors: test_dbuf_8wave_mxfp_gemm from examples/python/7.1_schedule.py
+
+    8-wave configuration (4 M-tiles x 2 N-tiles), with stagger.
+    Uses tagged kernel template + double-buffer schedule with 2-stage
+    pipeline, K-dimension partitioning, and wave staggering for better
+    overlap.
+    """
+    _dbuf_mxfp4_helper(
+        shape=(1024, 1024, 8192),
+        block=(256, 256, 256),
+        num_waves=8,
+        use_stagger=True,
+        compiler=compiler,
+        backend=backend,
+        dump_asm=dump_asm,
     )
 
 

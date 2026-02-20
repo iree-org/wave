@@ -4,6 +4,15 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+//===----------------------------------------------------------------------===//
+// Kernel Generator - AMDGCN Assembly Code Generation
+//
+// Core code generation from WaveASM IR to AMDGCN assembly text.
+// Handles value resolution, TypeSwitch-based op dispatch, and the main
+// generate() loop. InstructionFormatter, MetadataEmitter, and literal
+// materialization logic live in separate files.
+//===----------------------------------------------------------------------===//
+
 #include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
@@ -21,384 +30,6 @@ using namespace mlir;
 namespace waveasm {
 
 //===----------------------------------------------------------------------===//
-// Instruction Formatter Implementation
-//===----------------------------------------------------------------------===//
-
-std::string InstructionFormatter::format(llvm::StringRef name,
-                                         llvm::ArrayRef<std::string> operands) {
-  std::string result = "  " + name.str();
-
-  if (!operands.empty()) {
-    result += " ";
-    for (size_t i = 0; i < operands.size(); ++i) {
-      if (i > 0)
-        result += ", ";
-      result += operands[i];
-    }
-  }
-
-  return result;
-}
-
-std::string InstructionFormatter::formatLabel(llvm::StringRef label) {
-  return label.str() + ":";
-}
-
-std::string InstructionFormatter::formatComment(llvm::StringRef text) {
-  return "  ; " + text.str();
-}
-
-std::string InstructionFormatter::formatWaitcnt(std::optional<int64_t> vmcnt,
-                                                std::optional<int64_t> lgkmcnt,
-                                                std::optional<int64_t> expcnt) {
-  std::string result = "  s_waitcnt";
-  llvm::SmallVector<std::string> counts;
-
-  if (vmcnt.has_value()) {
-    counts.push_back("vmcnt(" + std::to_string(*vmcnt) + ")");
-  }
-  if (lgkmcnt.has_value()) {
-    counts.push_back("lgkmcnt(" + std::to_string(*lgkmcnt) + ")");
-  }
-  if (expcnt.has_value()) {
-    counts.push_back("expcnt(" + std::to_string(*expcnt) + ")");
-  }
-
-  if (!counts.empty()) {
-    result += " ";
-    for (size_t i = 0; i < counts.size(); ++i) {
-      if (i > 0)
-        result += " & ";
-      result += counts[i];
-    }
-  }
-
-  return result;
-}
-
-std::string InstructionFormatter::formatBarrier() { return "  s_barrier"; }
-
-std::string InstructionFormatter::formatEndpgm() { return "  s_endpgm"; }
-
-std::string InstructionFormatter::formatRaw(llvm::StringRef text) {
-  return "  " + text.str();
-}
-
-//===----------------------------------------------------------------------===//
-// Metadata Emitter Implementation
-//===----------------------------------------------------------------------===//
-
-MetadataEmitter::MetadataEmitter(ProgramOp program, TargetAttrInterface target)
-    : program(program), target(target) {}
-
-llvm::SmallVector<std::string> MetadataEmitter::emitPrologue() {
-  llvm::SmallVector<std::string> lines;
-
-  // Target directive
-  lines.push_back(target.getTargetDirective().str());
-  lines.push_back("");
-
-  // Text section
-  lines.push_back(".text");
-  lines.push_back("");
-
-  // Kernel symbol
-  std::string symName = program.getSymName().str();
-  lines.push_back(".protected " + symName);
-  lines.push_back(".globl " + symName);
-  lines.push_back(".p2align 8");
-  lines.push_back(".type " + symName + ",@function");
-  lines.push_back(symName + ":");
-
-  return lines;
-}
-
-llvm::SmallVector<std::string> MetadataEmitter::emitEpilogue(int64_t peakVGPRs,
-                                                             int64_t peakSGPRs,
-                                                             int64_t ldsSize) {
-  llvm::SmallVector<std::string> lines;
-
-  // Kernel descriptor
-  auto descriptor = emitKernelDescriptor(peakVGPRs, peakSGPRs, ldsSize);
-  lines.append(descriptor.begin(), descriptor.end());
-
-  lines.push_back("");
-
-  // Metadata YAML
-  auto metadata = emitMetadataYAML(peakVGPRs, peakSGPRs, ldsSize);
-  lines.append(metadata.begin(), metadata.end());
-
-  return lines;
-}
-
-/// Scan program operations to detect system register usage
-static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
-                                    bool &usesWorkgroupIdY,
-                                    bool &usesWorkgroupIdZ,
-                                    bool &usesWorkitemId) {
-  usesWorkgroupIdX = false;
-  usesWorkgroupIdY = false;
-  usesWorkgroupIdZ = false;
-  usesWorkitemId = false;
-
-  // Compute user SGPR count to determine where workgroup IDs are located
-  // User SGPRs = 2 (kernarg ptr) + preloaded args (on gfx950+)
-  auto targetAttr = program.getTarget();
-  auto targetKind = targetAttr.getTargetKind();
-  bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetKind);
-
-  int64_t numArgs = 2; // Default to 2 pointers
-  if (auto numArgsAttr =
-          program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
-    numArgs = numArgsAttr.getInt();
-  }
-
-  int64_t userSgprCount = 2; // Base: kernarg ptr
-  if (isGfx950) {
-    userSgprCount = 2 + numArgs * 2; // kernarg ptr + preloaded args
-  }
-
-  // Workgroup IDs are at system SGPR positions (after user SGPRs)
-  int64_t wgIdXIndex = userSgprCount;
-  int64_t wgIdYIndex = userSgprCount + 1;
-  int64_t wgIdZIndex = userSgprCount + 2;
-
-  // Scan for system register usage by looking at precolored SGPRs.
-  // Workgroup IDs are passed in single SGPRs (size=1) at indices after user
-  // SGPRs. SRDs use 4-SGPR quads (size=4), so we filter those out.
-  //
-  // Note: workitem_id is NOT set when v_mbcnt is used, because wave kernels
-  // compute thread IDs from the exec mask, not from hardware-provided v0.
-  program.walk([&](Operation *op) {
-    if (auto precolored = dyn_cast<PrecoloredSRegOp>(op)) {
-      int64_t idx = precolored.getIndex();
-      int64_t size = precolored.getSize();
-      // Only single SGPRs (size=1) are workgroup IDs, not SRD quads (size=4)
-      if (size == 1) {
-        if (idx == wgIdXIndex)
-          usesWorkgroupIdX = true;
-        else if (idx == wgIdYIndex)
-          usesWorkgroupIdY = true;
-        else if (idx == wgIdZIndex)
-          usesWorkgroupIdZ = true;
-      }
-    }
-  });
-}
-
-llvm::SmallVector<std::string>
-MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
-                                      int64_t ldsSize) {
-  llvm::SmallVector<std::string> lines;
-  std::string symName = program.getSymName().str();
-
-  // Scan for system register usage
-  bool usesWorkgroupIdX, usesWorkgroupIdY, usesWorkgroupIdZ, usesWorkitemId;
-  scanSystemRegisterUsage(program, usesWorkgroupIdX, usesWorkgroupIdY,
-                          usesWorkgroupIdZ, usesWorkitemId);
-
-  lines.push_back("");
-  lines.push_back(".section .rodata,#alloc");
-  lines.push_back(".p2align 6");
-  lines.push_back(".amdhsa_kernel " + symName);
-
-  // Compute LDS block size (granularity of 128 bytes)
-  int64_t ldsBlocks = (ldsSize + 127) / 128;
-  lines.push_back("  .amdhsa_group_segment_fixed_size " +
-                  std::to_string(ldsBlocks * 128));
-  lines.push_back("  .amdhsa_private_segment_fixed_size 0");
-
-  // User SGPR settings - match Python backend format
-  // For gfx95* with preloading: user_sgpr_count = 2 (kernarg ptr) + 4 (preload)
-  // = 6 For other targets: user_sgpr_count = 2 (just kernarg ptr)
-  auto targetAttr = program.getTarget();
-
-  auto targetKind = targetAttr.getTargetKind();
-  // Determine preload length based on actual kernel args
-  int64_t preloadLength = program.getKernargPreloadLength();
-  bool usePreloading = llvm::isa<GFX950TargetAttr>(targetKind);
-
-  // If no explicit preload length but we're on gfx95*, use actual kernel arg
-  // count
-  if (usePreloading && preloadLength == 0) {
-    int64_t numArgs = 2; // Default to 2 pointers
-    if (auto numArgsAttr =
-            program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
-      numArgs = numArgsAttr.getInt();
-    }
-    preloadLength = numArgs * 2; // 2 SGPRs per pointer
-  }
-
-  int64_t userSgprCount = 2; // Base: kernarg segment pointer
-  if (usePreloading && preloadLength > 0) {
-    userSgprCount = 2 + preloadLength; // kernarg ptr + preloaded args
-  }
-
-  lines.push_back("  .amdhsa_user_sgpr_count " + std::to_string(userSgprCount));
-  lines.push_back("  .amdhsa_user_sgpr_dispatch_ptr 0");
-  lines.push_back("  .amdhsa_user_sgpr_queue_ptr 0");
-  lines.push_back("  .amdhsa_user_sgpr_kernarg_segment_ptr 1");
-  lines.push_back("  .amdhsa_user_sgpr_dispatch_id 0");
-
-  // Kernel argument preloading (gfx95*)
-  // Preloads kernel args directly into SGPRs, saving ~100 cycles at kernel
-  // start
-  if (usePreloading && preloadLength > 0) {
-    lines.push_back("  .amdhsa_user_sgpr_kernarg_preload_length " +
-                    std::to_string(preloadLength));
-    lines.push_back("  .amdhsa_user_sgpr_kernarg_preload_offset 0");
-  }
-
-  lines.push_back("  .amdhsa_user_sgpr_private_segment_size 0");
-
-  // Stack and private segment settings
-  lines.push_back("  .amdhsa_uses_dynamic_stack 0");
-  lines.push_back("  .amdhsa_enable_private_segment 0");
-
-  // Compute VGPR and SGPR counts
-  // gfx940/gfx942/gfx950: VGPRs allocated in groups of 8
-  // other GFX9: VGPRs allocated in groups of 4
-  int64_t vgprGranularity = 4;
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
-    vgprGranularity = 8;
-  }
-  int64_t nextFreeVGPR =
-      ((peakVGPRs + vgprGranularity - 1) / vgprGranularity) * vgprGranularity;
-
-  int64_t sgprGranularity = 8;
-  int64_t nextFreeSGPR =
-      ((peakSGPRs + sgprGranularity - 1) / sgprGranularity) * sgprGranularity;
-  // Cap to max for target (targetAttr/targetId already declared above)
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
-    nextFreeSGPR = std::min(nextFreeSGPR, int64_t(102));
-  }
-
-  // Accumulator offset (required for gfx9 targets) - must come before
-  // next_free_vgpr
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
-    // accum_offset must be in range [4, 256] and multiple of 4
-    int64_t accumOffset = std::max(int64_t(4), ((nextFreeVGPR + 3) / 4) * 4);
-    lines.push_back("  .amdhsa_accum_offset " + std::to_string(accumOffset));
-  }
-
-  // Register counts
-  lines.push_back("  .amdhsa_next_free_vgpr " + std::to_string(nextFreeVGPR));
-  lines.push_back("  .amdhsa_next_free_sgpr " + std::to_string(nextFreeSGPR));
-
-  // System SGPR settings - enable workgroup IDs based on kernel usage
-  lines.push_back("  .amdhsa_system_sgpr_workgroup_id_x " +
-                  std::to_string(usesWorkgroupIdX ? 1 : 0));
-  lines.push_back("  .amdhsa_system_sgpr_workgroup_id_y " +
-                  std::to_string(usesWorkgroupIdY ? 1 : 0));
-  lines.push_back("  .amdhsa_system_sgpr_workgroup_id_z " +
-                  std::to_string(usesWorkgroupIdZ ? 1 : 0));
-
-  // System VGPR settings - workitem ID dimension
-  // Policy (matching Python abi.py):
-  // - Single-wave workgroup (wg_y==1 and wg_z==1): request 0 (lane ID via
-  // mbcnt)
-  // - Multi-wave workgroup (wg_y>1 or wg_z>1): request 1 (flat workitem ID in
-  // v0)
-  int64_t systemVgprWorkitemId = 0;
-  auto workgroupSize = program.getWorkgroupSize();
-  if (workgroupSize.has_value() && workgroupSize->size() >= 2) {
-    int64_t wgY = 1, wgZ = 1;
-    if (auto intAttr = dyn_cast<IntegerAttr>((*workgroupSize)[1])) {
-      wgY = intAttr.getInt();
-    }
-    if (workgroupSize->size() >= 3) {
-      if (auto intAttr = dyn_cast<IntegerAttr>((*workgroupSize)[2])) {
-        wgZ = intAttr.getInt();
-      }
-    }
-    if (wgY > 1 || wgZ > 1) {
-      systemVgprWorkitemId = 1;
-    }
-  }
-  lines.push_back("  .amdhsa_system_vgpr_workitem_id " +
-                  std::to_string(systemVgprWorkitemId));
-
-  // Denorm mode (matching Python)
-  lines.push_back("  .amdhsa_float_denorm_mode_32 3");
-  lines.push_back("  .amdhsa_float_denorm_mode_16_64 3");
-
-  lines.push_back(".end_amdhsa_kernel");
-
-  return lines;
-}
-
-llvm::SmallVector<std::string>
-MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
-                                  int64_t ldsSize) {
-  llvm::SmallVector<std::string> lines;
-  std::string symName = program.getSymName().str();
-
-  lines.push_back(".amdgpu_metadata");
-  lines.push_back("---");
-  lines.push_back("amdhsa.version:");
-  lines.push_back("  - 1");
-  lines.push_back("  - 2");
-  lines.push_back("amdhsa.kernels:");
-  lines.push_back("  - .name: " + symName);
-  lines.push_back("    .symbol: " + symName + ".kd");
-
-  // Generate .args based on kernel arguments (each 8-byte pointer)
-  // First, try to get the actual number of kernel args from the attribute
-  int64_t numArgs = 2; // Default fallback
-  if (auto numArgsAttr =
-          program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
-    numArgs = numArgsAttr.getInt();
-  } else {
-    // Legacy: compute from kernarg preload length (gfx950+)
-    int64_t kernargPreload = program.getKernargPreloadLength();
-    if (kernargPreload > 0) {
-      numArgs = kernargPreload / 2; // 2 SGPRs per pointer
-    }
-  }
-  int64_t kernargSize = numArgs * 8; // 8 bytes per pointer arg
-  lines.push_back("    .args:");
-  for (int64_t i = 0; i < numArgs; ++i) {
-    lines.push_back("      - .name:       arg" + std::to_string(i) + "_ptr");
-    lines.push_back("        .offset:     " + std::to_string(i * 8));
-    lines.push_back("        .size:       8");
-    lines.push_back("        .value_kind: global_buffer");
-    lines.push_back("        .value_type: 'i8*'");
-  }
-
-  lines.push_back("    .kernarg_segment_size: " + std::to_string(kernargSize));
-  lines.push_back("    .group_segment_fixed_size: " + std::to_string(ldsSize));
-  lines.push_back("    .private_segment_fixed_size: 0");
-  lines.push_back("    .kernarg_segment_align: 8");
-
-  // Wave size
-  int64_t waveSizeVal = target.getDefaultWaveSize();
-  lines.push_back("    .wavefront_size: " + std::to_string(waveSizeVal));
-
-  // VGPR/SGPR counts
-  lines.push_back("    .sgpr_count: " + std::to_string(peakSGPRs));
-  lines.push_back("    .vgpr_count: " + std::to_string(peakVGPRs));
-
-  // Max flat workgroup size
-  auto workgroupSize = program.getWorkgroupSize();
-  int64_t maxFlatSize = 256; // Default
-  if (workgroupSize.has_value()) {
-    maxFlatSize = 1;
-    for (Attribute attr : *workgroupSize) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
-        maxFlatSize *= intAttr.getInt();
-      }
-    }
-  }
-  lines.push_back("    .max_flat_workgroup_size: " +
-                  std::to_string(maxFlatSize));
-
-  lines.push_back("...");
-  lines.push_back(".end_amdgpu_metadata");
-
-  return lines;
-}
-
-//===----------------------------------------------------------------------===//
 // Kernel Generator Implementation (Pure SSA)
 //===----------------------------------------------------------------------===//
 
@@ -407,21 +38,9 @@ KernelGenerator::KernelGenerator(ProgramOp program,
                                  TargetAttrInterface target)
     : program(program), mapping(mapping), target(target) {}
 
-// Check if a literal value is within the inline constant range
-// AMDGCN inline constants: -16 to 64 (inclusive), plus special values
-static bool isInlineConstant(int64_t val) {
-  // Standard inline constant range
-  if (val >= -16 && val <= 64)
-    return true;
-  // Special float values encoded as integers (0.5, 1.0, 2.0, 4.0, etc.)
-  // For simplicity, we just check the common integer range
-  return false;
-}
-
 std::string KernelGenerator::resolveValue(Value value) {
   Type ty = value.getType();
 
-  // Handle physical registers (already assigned)
   if (auto pvreg = dyn_cast<PVRegType>(ty)) {
     return formatVGPRRange(pvreg.getIndex(), pvreg.getSize());
   }
@@ -429,7 +48,6 @@ std::string KernelGenerator::resolveValue(Value value) {
     return formatSGPRRange(psreg.getIndex(), psreg.getSize());
   }
 
-  // Handle virtual registers (look up in mapping)
   if (isVirtualRegType(ty)) {
     int64_t physIdx = mapping.getPhysReg(value);
     if (physIdx >= 0) {
@@ -440,16 +58,12 @@ std::string KernelGenerator::resolveValue(Value value) {
         return formatSGPRRange(physIdx, size);
       }
     }
-    // Fallback: use SSA value notation (for debugging)
     return "%<ssa>";
   }
 
-  // Handle immediates
   if (isa<ImmType>(ty)) {
-    // For immediates, we need to get the value from the defining op
     if (auto defOp = value.getDefiningOp()) {
       if (auto constOp = dyn_cast<ConstantOp>(defOp)) {
-        // Cast to signed int64_t to handle negative values correctly
         int64_t val = static_cast<int64_t>(constOp.getValue());
         return std::to_string(val);
       }
@@ -460,7 +74,6 @@ std::string KernelGenerator::resolveValue(Value value) {
   return "<unknown>";
 }
 
-// Check if an operand value is a literal outside inline constant range
 std::pair<bool, int64_t> KernelGenerator::getLiteralValue(Value value) {
   Type ty = value.getType();
   if (isa<ImmType>(ty)) {
@@ -478,8 +91,6 @@ std::pair<bool, int64_t> KernelGenerator::getLiteralValue(Value value) {
 // TypeSwitch-based Operation Code Generation
 //===----------------------------------------------------------------------===//
 
-// Helper for emitting buffer load to LDS (gather-to-LDS) instructions.
-// Layout: (voffset, srd, soffset) with optional instOffset and 'lds' modifier.
 std::string KernelGenerator::emitBufferLoadLDS(Operation *op,
                                                llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -499,7 +110,6 @@ std::string KernelGenerator::emitBufferLoadLDS(Operation *op,
   return result;
 }
 
-// Helper for emitting buffer load instructions
 std::string KernelGenerator::emitBufferLoad(Operation *op,
                                             llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -521,7 +131,6 @@ std::string KernelGenerator::emitBufferLoad(Operation *op,
   return result;
 }
 
-// Helper for emitting buffer store instructions
 std::string KernelGenerator::emitBufferStore(Operation *op,
                                              llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -540,7 +149,6 @@ std::string KernelGenerator::emitBufferStore(Operation *op,
   return result;
 }
 
-// Helper for emitting global load instructions
 std::string KernelGenerator::emitGlobalLoad(Operation *op,
                                             llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -559,7 +167,6 @@ std::string KernelGenerator::emitGlobalLoad(Operation *op,
   return result;
 }
 
-// Helper for emitting global store instructions
 std::string KernelGenerator::emitGlobalStore(Operation *op,
                                              llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -572,7 +179,6 @@ std::string KernelGenerator::emitGlobalStore(Operation *op,
   return result;
 }
 
-// Helper for emitting LDS read instructions
 std::string KernelGenerator::emitLDSRead(Operation *op,
                                          llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -593,7 +199,6 @@ std::string KernelGenerator::emitLDSRead(Operation *op,
   return result;
 }
 
-// Helper for emitting LDS write instructions
 std::string KernelGenerator::emitLDSWrite(Operation *op,
                                           llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
@@ -611,18 +216,13 @@ std::string KernelGenerator::emitLDSWrite(Operation *op,
   return result;
 }
 
-// Helper for emitting default instruction format
-/// Resolve a value to assembly, using only the first register if the value
-/// is a multi-register type but the instruction expects a scalar operand.
 std::string KernelGenerator::resolveScalarValue(Value value) {
   Type ty = value.getType();
-  // For multi-register physical VGPRs, use only the first register
   if (auto pvreg = dyn_cast<PVRegType>(ty)) {
     if (pvreg.getSize() > 1) {
       return formatVGPRRange(pvreg.getIndex(), 1);
     }
   }
-  // For multi-register physical SGPRs, use only the first register
   if (auto psreg = dyn_cast<PSRegType>(ty)) {
     if (psreg.getSize() > 1) {
       return formatSGPRRange(psreg.getIndex(), 1);
@@ -635,8 +235,6 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
                                                llvm::StringRef mnemonic) {
   llvm::SmallVector<std::string> operands;
 
-  // Check if this instruction produces a single scalar result
-  // (VALU/SALU ops with 1-register results)
   bool isScalarOp = false;
   if (op->getNumResults() == 1) {
     Type resTy = op->getResult(0).getType();
@@ -655,8 +253,6 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
     operands.push_back(resolveValue(result));
   }
   for (Value operand : op->getOperands()) {
-    // For scalar ops, if an operand is a multi-reg value (e.g., CSE folded
-    // a scalar zero with a vector zero), use only the first register
     if (isScalarOp) {
       operands.push_back(resolveScalarValue(operand));
     } else {
@@ -666,13 +262,10 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
   return formatter.format(mnemonic, operands);
 }
 
-/// Helper to emit scaled MFMA instructions with cbsz/blgp format modifiers.
-/// Shared between 16x16x128 and 32x32x64 variants to avoid code duplication.
 std::optional<std::string>
 KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
   std::string line = emitDefaultFormat(scaledOp, mnemonic);
-  // Read cbsz/blgp from attributes set by the MLIR handler
-  int32_t cbsz = 4; // Default to FP4
+  int32_t cbsz = 4;
   int32_t blgp = 4;
   if (auto cbszAttr = scaledOp->getAttrOfType<IntegerAttr>("cbsz"))
     cbsz = cbszAttr.getInt();
@@ -683,15 +276,11 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
 }
 
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
-  // Use TypeSwitch for type-safe dispatch
-  // This replaces the string-based mnemonic matching with proper type dispatch
   return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
-      // Skip non-instruction ops
       .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
             PrecoloredSRegOp, ConstantOp, PackOp, ExtractOp>(
           [](auto) { return std::nullopt; })
 
-      // Wait count operations
       .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
         std::optional<int64_t> vmcnt, lgkmcnt, expcnt;
         if (auto vmAttr = waitcntOp.getVmcntAttr())
@@ -715,7 +304,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                                        std::nullopt);
       })
 
-      // Buffer load operations
       .Case<BUFFER_LOAD_DWORD>([&](auto loadOp) {
         return emitBufferLoad(loadOp, "buffer_load_dword");
       })
@@ -729,7 +317,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoad(loadOp, "buffer_load_dwordx4");
       })
 
-      // Byte/short buffer loads (for sub-dword vector.load, e.g. vector<1xi8>)
       .Case<BUFFER_LOAD_UBYTE>([&](auto loadOp) {
         return emitBufferLoad(loadOp, "buffer_load_ubyte");
       })
@@ -737,7 +324,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoad(loadOp, "buffer_load_ushort");
       })
 
-      // Buffer load to LDS (gather-to-LDS) — shared helper avoids duplication
+      // Buffer load to LDS (gather-to-LDS) -- shared helper avoids duplication
       .Case<BUFFER_LOAD_DWORD_LDS>([&](auto loadOp) {
         return emitBufferLoadLDS(loadOp, "buffer_load_dword");
       })
@@ -745,7 +332,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoadLDS(loadOp, "buffer_load_dwordx4");
       })
 
-      // Buffer store operations
       .Case<BUFFER_STORE_DWORD>([&](auto storeOp) {
         return emitBufferStore(storeOp, "buffer_store_dword");
       })
@@ -759,7 +345,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferStore(storeOp, "buffer_store_dwordx4");
       })
 
-      // Global load operations
       .Case<GLOBAL_LOAD_DWORD>([&](auto loadOp) {
         return emitGlobalLoad(loadOp, "global_load_dword");
       })
@@ -773,7 +358,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitGlobalLoad(loadOp, "global_load_dwordx4");
       })
 
-      // Global store operations
       .Case<GLOBAL_STORE_DWORD>([&](auto storeOp) {
         return emitGlobalStore(storeOp, "global_store_dword");
       })
@@ -787,7 +371,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitGlobalStore(storeOp, "global_store_dwordx4");
       })
 
-      // LDS read operations
       .Case<DS_READ_B32>(
           [&](auto readOp) { return emitLDSRead(readOp, "ds_read_b32"); })
       .Case<DS_READ_B64>(
@@ -799,7 +382,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       .Case<DS_READ_U16>(
           [&](auto readOp) { return emitLDSRead(readOp, "ds_read_u16"); })
 
-      // LDS write operations
       .Case<DS_WRITE_B32>(
           [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b32"); })
       .Case<DS_WRITE_B64>(
@@ -811,7 +393,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       .Case<DS_WRITE_B16>(
           [&](auto writeOp) { return emitLDSWrite(writeOp, "ds_write_b16"); })
 
-      // M0 register operations
       .Case<S_MOV_B32_M0>([&](S_MOV_B32_M0 movOp) {
         std::string result = "  s_mov_b32 m0";
         if (movOp->getNumOperands() >= 1) {
@@ -820,7 +401,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return result;
       })
 
-      // Branch operations
       .Case<S_BRANCH>([&](S_BRANCH branchOp) {
         return std::string("  s_branch ") +
                branchOp.getTarget().getRootReference().str();
@@ -834,16 +414,17 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                branchOp.getTarget().getRootReference().str();
       })
 
-      // NOP operation
       .Case<S_NOP>([&](S_NOP nopOp) {
         return std::string("  s_nop ") + std::to_string(nopOp.getCount());
       })
 
-      // Barrier and endpgm
+      .Case<S_SETPRIO>([&](S_SETPRIO prioOp) {
+        return std::string("  s_setprio ") + std::to_string(prioOp.getCount());
+      })
+
       .Case<S_BARRIER>([](auto) { return std::string("  s_barrier"); })
       .Case<S_ENDPGM>([](auto) { return std::string("  s_endpgm"); })
 
-      // V_MOV_B32 with multi-element handling
       .Case<V_MOV_B32>([&](V_MOV_B32 movOp) -> std::optional<std::string> {
         Value result = movOp.getDst();
         int64_t size = getRegSize(result.getType());
@@ -869,8 +450,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitDefaultFormat(movOp, "v_mov_b32");
       })
 
-      // Scaled MFMA: append cbsz and blgp modifiers for data format.
-      // Shared lambda to avoid duplication between 16x16x128 and 32x32x64.
       .Case<V_MFMA_SCALE_F32_16X16X128_F8F6F4>(
           [&](auto scaledOp) -> std::optional<std::string> {
             return emitScaledMFMA(scaledOp,
@@ -881,29 +460,16 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return emitScaledMFMA(scaledOp, "v_mfma_scale_f32_32x32x64_f8f6f4");
           })
 
-      // Region-based control flow: loops are emitted as
-      // label + body + conditional branch (label-based loop at assembly level)
       .Case<LoopOp>([&](LoopOp loopOp) -> std::optional<std::string> {
-        // Generate a unique loop label (per-kernel counter)
         std::string labelName = "L_loop_" + std::to_string(loopLabelCounter++);
 
         std::string buf;
         llvm::raw_string_ostream os(buf);
         os << labelName << ":\n";
 
-        // Emit all operations in the loop body
         Block &body = loopOp.getBodyBlock();
         for (Operation &bodyOp : body) {
-          // Skip the terminator (ConditionOp) - handle it specially
           if (auto condOp = dyn_cast<ConditionOp>(&bodyOp)) {
-            // Emit SGPR/VGPR rotation copies for iter_args that need to be
-            // moved to different physical registers (e.g., double-buffer
-            // cross-swap). s_mov_b32 does NOT clobber SCC, so it's safe to
-            // emit between s_cmp and s_cbranch.
-            //
-            // Algorithm: detect which iter_args need copies (source phys reg
-            // != destination block arg phys reg), then emit a parallel swap
-            // using a temporary for cycles.
             {
               unsigned numArgs = body.getNumArguments();
               unsigned numIter = condOp.getIterArgs().size();
@@ -911,7 +477,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                      "ConditionOp iter_args count must match body block "
                      "argument count for correct register rotation");
 
-              // Collect pending copies: (dstReg, srcReg, isSGPR)
               struct CopyInfo {
                 int64_t dst;
                 int64_t src;
@@ -919,9 +484,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               };
               SmallVector<CopyInfo> pendingCopies;
 
-              // Helper: extract (physRegIndex, isSGPR) from a Value.
-              // Works for physical types (PSRegType, PVRegType) and virtual
-              // types (via the mapping). Returns {-1, false} if unresolvable.
               auto getPhysRegInfo = [&](Value val) -> std::pair<int64_t, bool> {
                 Type ty = val.getType();
                 if (auto psreg = dyn_cast<PSRegType>(ty))
@@ -943,34 +505,20 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 }
               }
 
-              // Emit copies for loop-carried value swaps. Detect 2-element swap
-              // cycles (A->B, B->A) and use a temporary register to implement
-              // a parallel swap. Multiple independent swap pairs are handled.
-              //
-              // Algorithm: find swap pairs in the pending copies, emit each
-              // pair using 3 s_mov_b32 instructions (tmp=A, A=B, B=tmp).
-              // Non-swap copies are emitted directly.
               SmallVector<bool> handled(pendingCopies.size(), false);
 
-              // First pass: find and emit swap pairs
               for (size_t i = 0; i < pendingCopies.size(); ++i) {
                 if (handled[i])
                   continue;
                 for (size_t j = i + 1; j < pendingCopies.size(); ++j) {
                   if (handled[j])
                     continue;
-                  // Check if (i, j) form a swap pair
                   if (pendingCopies[i].dst == pendingCopies[j].src &&
                       pendingCopies[j].dst == pendingCopies[i].src) {
                     if (pendingCopies[i].isSGPR && pendingCopies[j].isSGPR) {
-                      // Emit 3-instruction swap using a temporary SGPR.
-                      // Use peakSGPRs as the scratch register -- it is
-                      // guaranteed to be beyond all allocated SGPRs (computed
-                      // in a pre-pass over the entire IR before code gen).
                       int64_t regA = pendingCopies[i].dst;
                       int64_t regB = pendingCopies[j].dst;
                       int64_t tmp = peakSGPRs;
-                      // Update peak to account for the scratch register
                       peakSGPRs = std::max(peakSGPRs, tmp + 1);
                       os << "  s_mov_b32 s" << tmp << ", s" << regA << "\n";
                       os << "  s_mov_b32 s" << regA << ", s" << regB << "\n";
@@ -979,9 +527,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                       handled[j] = true;
                       break;
                     }
-                    // VGPR swap cycles are not yet supported. If we encounter
-                    // one, the two independent copies would produce incorrect
-                    // results (second copy reads overwritten value).
                     assert(!((!pendingCopies[i].isSGPR) &&
                              (!pendingCopies[j].isSGPR)) &&
                            "VGPR swap cycles in iter_args are not supported; "
@@ -990,7 +535,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 }
               }
 
-              // Second pass: emit remaining non-swap copies
               for (size_t i = 0; i < pendingCopies.size(); ++i) {
                 if (handled[i])
                   continue;
@@ -1005,18 +549,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               }
             }
 
-            // ConditionOp: emit conditional branch back to loop label.
-            // INVARIANT: The SCC flag must be set by the s_cmp immediately
-            // preceding this ConditionOp. No SCC-clobbering instructions
-            // (s_add, s_and, s_waitcnt, etc.) may be inserted between the
-            // s_cmp and this branch. Hazard mitigation and waitcnt insertion
-            // passes must respect this constraint (s_waitcnt and s_nop do
-            // not clobber SCC and are safe).
             os << "  s_cbranch_scc1 " << labelName;
             break;
           }
 
-          // Recursively generate assembly for body operations
           auto instrLines = generateOpWithLiteralHandling(&bodyOp);
           for (const auto &line : instrLines) {
             os << line << "\n";
@@ -1026,13 +562,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return os.str();
       })
       .Case<IfOp>([&](IfOp ifOp) -> std::optional<std::string> {
-        // Structured if-then-else emission:
-        // s_cbranch_scc0 L_else / L_endif
-        // <then body>
-        // s_branch L_endif (if else exists)
-        // L_else: (if else exists)
-        // <else body>
-        // L_endif:
         int labelId = loopLabelCounter++;
         std::string elseLabel = "L_if_else_" + std::to_string(labelId);
         std::string endLabel = "L_if_end_" + std::to_string(labelId);
@@ -1040,14 +569,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         std::string buf;
         llvm::raw_string_ostream os(buf);
 
-        // Branch to else/end if condition is false
         if (ifOp.hasElse()) {
           os << "  s_cbranch_scc0 " << elseLabel << "\n";
         } else {
           os << "  s_cbranch_scc0 " << endLabel << "\n";
         }
 
-        // Emit then region
         for (Operation &thenOp : ifOp.getThenBlock()) {
           if (isa<YieldOp>(&thenOp))
             continue;
@@ -1057,7 +584,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           }
         }
 
-        // Emit else region if present
         if (ifOp.hasElse()) {
           os << "  s_branch " << endLabel << "\n";
           os << elseLabel << ":\n";
@@ -1075,14 +601,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return os.str();
       })
       .Case<ConditionOp>([&](ConditionOp) -> std::optional<std::string> {
-        return std::nullopt; // Handled by parent LoopOp
+        return std::nullopt;
       })
-      .Case<YieldOp>([&](YieldOp) -> std::optional<std::string> {
-        return std::nullopt; // Handled by parent IfOp
-      })
-      // S_CMP operations: set SCC (no destination register)
-      // The IR has a result (SCC value) but the assembly only has 2 source
-      // operands
+      .Case<YieldOp>(
+          [&](YieldOp) -> std::optional<std::string> { return std::nullopt; })
       .Case<S_CMP_LT_U32, S_CMP_EQ_U32, S_CMP_LE_U32, S_CMP_GT_U32,
             S_CMP_GE_U32, S_CMP_LT_I32, S_CMP_EQ_I32, S_CMP_LE_I32,
             S_CMP_GT_I32, S_CMP_GE_I32>(
@@ -1092,7 +614,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             if (opName.starts_with("waveasm.")) {
               mnemonic = opName.drop_front(8);
             }
-            // Emit only the 2 source operands (skip the SCC result)
             llvm::SmallVector<std::string> operands;
             for (Value operand : cmpOp->getOperands()) {
               operands.push_back(resolveValue(operand));
@@ -1100,13 +621,23 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format(mnemonic, operands);
           })
 
-      // Default: use the operation's mnemonic with standard format
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
         llvm::StringRef opName = defaultOp->getName().getStringRef();
         llvm::StringRef mnemonic = opName;
         if (opName.starts_with("waveasm.")) {
           mnemonic = opName.drop_front(8);
         }
+
+        if (mnemonic.starts_with("v_cmp_")) {
+          std::string mnem64 = (mnemonic + "_e64").str();
+          llvm::SmallVector<std::string> operands;
+          operands.push_back("vcc");
+          for (Value operand : defaultOp->getOperands()) {
+            operands.push_back(resolveValue(operand));
+          }
+          return formatter.format(mnem64, operands);
+        }
+
         return emitDefaultFormat(defaultOp, mnemonic);
       });
 }
@@ -1123,104 +654,13 @@ std::string KernelGenerator::generateRaw(RawOp rawOp) {
   return formatter.formatRaw(rawOp.getText());
 }
 
-// Check if an instruction is a VOP3 that doesn't support literal operands
-static bool isVOP3NoLiteral(llvm::StringRef mnemonic) {
-  // VOP3 instructions that don't support literal operands
-  // This includes most v_* integer instructions when not in VOP2/VOP1 form
-  return mnemonic.starts_with("v_mul_lo") || mnemonic.starts_with("v_mul_hi") ||
-         mnemonic.starts_with("v_mad") || mnemonic.starts_with("v_fma") ||
-         mnemonic.starts_with("v_lshl") || mnemonic.starts_with("v_lshr") ||
-         mnemonic.starts_with("v_ashr") || mnemonic.starts_with("v_bfe") ||
-         mnemonic.starts_with("v_bfi") || mnemonic.starts_with("v_alignbit") ||
-         mnemonic.starts_with("v_alignbyte");
-}
-
-llvm::SmallVector<std::string>
-KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
-  llvm::SmallVector<std::string> lines;
-
-  // Get the operation name and extract the instruction mnemonic
-  llvm::StringRef opName = op->getName().getStringRef();
-  llvm::StringRef mnemonic = opName;
-  if (opName.starts_with("waveasm.")) {
-    mnemonic = opName.drop_front(8);
-  }
-
-  // Check if this is a VOP3 that doesn't support literals
-  if (!isVOP3NoLiteral(mnemonic)) {
-    // Use normal generation
-    if (auto line = generateOp(op)) {
-      lines.push_back(*line);
-    }
-    return lines;
-  }
-
-  // Check operands for literals outside inline range
-  bool needsLiteralLoad = false;
-  int64_t literalValue = 0;
-  int literalOperandIdx = -1;
-
-  for (int i = 0; i < static_cast<int>(op->getNumOperands()); ++i) {
-    auto [isLiteral, val] = getLiteralValue(op->getOperand(i));
-    if (isLiteral && !isInlineConstant(val)) {
-      needsLiteralLoad = true;
-      literalValue = val;
-      literalOperandIdx = i;
-      break; // Only handle first non-inline literal
-    }
-  }
-
-  if (!needsLiteralLoad) {
-    // All literals are inline constants, use normal generation
-    if (auto line = generateOp(op)) {
-      lines.push_back(*line);
-    }
-    return lines;
-  }
-
-  // Emit v_mov_b32 to load the literal into scratch VGPR
-  // This matches the Python backend approach in kernel_expr_emitter.py
-  std::string scratchReg = formatVGPRRange(kScratchVGPR, 1);
-  lines.push_back("  v_mov_b32 " + scratchReg + ", " +
-                  std::to_string(literalValue));
-
-  // Now generate the instruction with scratch VGPR instead of literal
-  llvm::SmallVector<std::string> operands;
-
-  // Results come first
-  for (Value result : op->getResults()) {
-    operands.push_back(resolveValue(result));
-  }
-
-  // Then input operands, replacing the literal with scratch register
-  for (int i = 0; i < static_cast<int>(op->getNumOperands()); ++i) {
-    if (i == literalOperandIdx) {
-      operands.push_back(scratchReg);
-    } else {
-      operands.push_back(resolveValue(op->getOperand(i)));
-    }
-  }
-
-  lines.push_back(formatter.format(mnemonic, operands));
-
-  // Track that we used the scratch VGPR (update peak if needed)
-  peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
-
-  return lines;
-}
-
 llvm::SmallVector<std::string> KernelGenerator::generate() {
   llvm::SmallVector<std::string> lines;
 
-  // Emit prologue
   MetadataEmitter metaEmitter(program, target);
   auto prologue = metaEmitter.emitPrologue();
   lines.append(prologue.begin(), prologue.end());
 
-  // Pre-compute peak register usage from the IR before code generation.
-  // This is needed so that the SGPR swap emission in LoopOp can use peakSGPRs
-  // to pick a safe scratch register that doesn't conflict with any allocated
-  // register.
   peakVGPRs = 0;
   peakSGPRs = 0;
   program.walk([&](Operation *preOp) {
@@ -1250,11 +690,9 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
     }
   });
   peakVGPRs = std::max(peakVGPRs, int64_t(1));
-  peakSGPRs = std::max(peakSGPRs, int64_t(2)); // Kernarg pointer minimum
+  peakSGPRs = std::max(peakSGPRs, int64_t(2));
 
-  // Generate code for each operation
   for (Operation &op : program.getBodyBlock()) {
-    // Handle special ops first
     if (auto labelOp = dyn_cast<LabelOp>(op)) {
       lines.push_back(generateLabel(labelOp));
       continue;
@@ -1268,12 +706,11 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
       continue;
     }
 
-    // Generate instruction (with literal handling for VOP3 ops)
+    // Generate instruction (with literal handling for VALU ops)
     auto instrLines = generateOpWithLiteralHandling(&op);
     lines.append(instrLines.begin(), instrLines.end());
   }
 
-  // Emit epilogue
   int64_t ldsSize = program.getLdsSize().value_or(0);
   auto epilogue = metaEmitter.emitEpilogue(peakVGPRs, peakSGPRs, ldsSize);
   lines.append(epilogue.begin(), epilogue.end());
@@ -1298,17 +735,14 @@ LogicalResult writeAssembly(ProgramOp program, const PhysicalMapping &mapping,
 
 LogicalResult writeAssembly(ProgramOp program, const PhysicalMapping &mapping,
                             llvm::raw_ostream &os) {
-  // Get target
   auto targetAttr = program.getTarget();
   if (!targetAttr) {
     return program.emitError() << "target attribute not specified";
   }
 
-  // Generate assembly
   KernelGenerator generator(program, mapping, targetAttr.getTargetKind());
   auto lines = generator.generate();
 
-  // Write to stream
   for (const auto &line : lines) {
     os << line << "\n";
   }

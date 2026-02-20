@@ -11,10 +11,28 @@
 // memory operations. Each memory operation is assigned a monotonically
 // increasing ticket. When a value is used, the pass computes the minimum
 // wait threshold and inserts s_waitcnt if required.
+//
+// Key optimizations over a naive approach:
+// 1. Incremental wait tracking: when new loads are issued after a wait,
+//    we increment the last-wait threshold instead of resetting it. This
+//    correctly recognizes that values loaded BEFORE the last wait are still
+//    ready, avoiding unnecessary waitcnt insertions.
+// 2. Latency-covering for LGKM: for ds_read (LDS) loads, if enough
+//    instructions separate the load from its use, we skip fine-grained
+//    lgkmcnt(N>0) waits since the data has certainly arrived. This matches
+//    how hand-tuned kernels (e.g., AITER) rely on latency hiding.
+// 3. Barrier handling uses "full drain" checks (hasOutstandingVmem/Lgkm)
+//    to correctly insert vmcnt(0)/lgkmcnt(0) before barriers.
+// 4. Loop back-edge (ConditionOp) does NOT reset wait tracking, allowing
+//    waits from the end of one iteration to carry to the next, eliminating
+//    redundant waitcnts at loop tops.
 //===----------------------------------------------------------------------===//
 
+#include "waveasm/Dialect/WaveASMAttrs.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
+#include "waveasm/Dialect/WaveASMInterfaces.h"
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Transforms/Liveness.h"
 #include "waveasm/Transforms/Passes.h"
 
 #include "mlir/IR/Builders.h"
@@ -32,27 +50,35 @@ namespace {
 // Ticketing System
 //===----------------------------------------------------------------------===//
 
-/// Tracks memory operation tickets for waitcnt insertion
+/// Tracks memory operation tickets for waitcnt insertion.
+///
+/// The ticket system maps each load operation to a monotonically increasing
+/// ticket number. The hardware vmcnt/lgkmcnt counters track outstanding
+/// loads in FIFO order, so vmcnt(N) means "wait until at most N loads are
+/// outstanding" (the N most recent). To wait for ticket T, we need
+/// vmcnt(lastTicket - T), which allows (lastTicket - T) newer loads to
+/// remain outstanding while guaranteeing T (and older) have completed.
 class Ticketing {
 public:
   Ticketing() = default;
 
-  /// Issue a new VMEM ticket, returns the ticket number
-  /// Also invalidates any previous wait tracking since new loads are pending
+  /// Issue a new VMEM ticket, returns the ticket number.
+  /// A new load shifts the meaning of previous waits: if we previously
+  /// waited for vmcnt(N), that now effectively means vmcnt(N+1) since
+  /// one more operation is outstanding. We increment (not reset) the
+  /// last wait value to reflect this.
   int64_t nextVmemTicket() {
     ++lastVmemTicket;
-    // A new load after a previous wait means we need to wait again
-    // Reset the wait tracking to reflect this
-    lastVmemWait = std::nullopt;
+    if (lastVmemWait.has_value())
+      ++(*lastVmemWait);
     return lastVmemTicket;
   }
 
-  /// Issue a new LGKM ticket, returns the ticket number
-  /// Also invalidates any previous wait tracking since new loads are pending
+  /// Issue a new LGKM ticket, returns the ticket number.
   int64_t nextLgkmTicket() {
     ++lastLgkmTicket;
-    // A new load after a previous wait means we need to wait again
-    lastLgkmWait = std::nullopt;
+    if (lastLgkmWait.has_value())
+      ++(*lastLgkmWait);
     return lastLgkmTicket;
   }
 
@@ -63,15 +89,13 @@ public:
   int64_t getLastLgkmTicket() const { return lastLgkmTicket; }
 
   /// Compute the vmcnt threshold needed to wait for a given ticket.
-  /// Returns std::nullopt if no wait is needed (already satisfied by
-  /// a previous stricter wait).
+  /// Returns std::nullopt if no wait is needed (already satisfied).
   std::optional<int64_t> computeVmemWait(int64_t requiredTicket) {
     if (requiredTicket < 0 || lastVmemTicket < 0)
       return std::nullopt;
 
     int64_t threshold = std::max(int64_t(0), lastVmemTicket - requiredTicket);
 
-    // Check if a previous wait already covers this
     if (lastVmemWait.has_value() && *lastVmemWait <= threshold)
       return std::nullopt;
 
@@ -91,6 +115,21 @@ public:
     return threshold;
   }
 
+  /// Check if any VMEM operations are outstanding since the last full drain.
+  /// Used for barrier pre-waits where we need vmcnt(0).
+  bool hasOutstandingVmem() const {
+    if (lastVmemTicket < 0)
+      return false;
+    return !lastVmemWait.has_value() || *lastVmemWait > 0;
+  }
+
+  /// Check if any LGKM operations are outstanding since the last full drain.
+  bool hasOutstandingLgkm() const {
+    if (lastLgkmTicket < 0)
+      return false;
+    return !lastLgkmWait.has_value() || *lastLgkmWait > 0;
+  }
+
   /// Record that a vmem wait was emitted with the given threshold
   void observeVmemWait(int64_t threshold) {
     if (!lastVmemWait.has_value() || threshold < *lastVmemWait)
@@ -103,7 +142,7 @@ public:
       lastLgkmWait = threshold;
   }
 
-  /// Reset wait tracking (e.g., at control flow boundaries)
+  /// Reset wait tracking (e.g., at loop entry from outside)
   void resetWaits() {
     lastVmemWait = std::nullopt;
     lastLgkmWait = std::nullopt;
@@ -128,8 +167,8 @@ enum class MemOpKind {
   LgkmStore  // ds_write
 };
 
-/// Classify an operation by its memory type using MLIR op types
-MemOpKind classifyMemOp(Operation *op) {
+/// Classify an operation by its memory type using MLIR op types.
+MemOpKind classifyMemOp(const Operation *op) {
   // VMEM loads (buffer, global, flat)
   if (isa<BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX3,
           BUFFER_LOAD_DWORDX4, BUFFER_LOAD_UBYTE, BUFFER_LOAD_SBYTE,
@@ -173,6 +212,21 @@ MemOpKind classifyMemOp(Operation *op) {
 // InsertWaitcnt Pass
 //===----------------------------------------------------------------------===//
 
+/// Per-program mutable state shared across all handler methods.
+struct WaitcntState {
+  Ticketing ticketing;
+  llvm::DenseMap<Value, std::pair<MemOpKind, int64_t>> valueTickets;
+  llvm::DenseMap<Value, int64_t> loadDefIndex;
+  int64_t opIndex = 0;
+  int64_t maxLgkmcnt = 15;
+  int64_t maxVmcnt = 63;
+
+  int64_t capLgkmcnt(int64_t v) const {
+    return v > maxLgkmcnt ? int64_t(0) : v;
+  }
+  int64_t capVmcnt(int64_t v) const { return v > maxVmcnt ? int64_t(0) : v; }
+};
+
 struct InsertWaitcntPass
     : public PassWrapper<InsertWaitcntPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InsertWaitcntPass)
@@ -189,250 +243,358 @@ struct InsertWaitcntPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-
-    // Process each program
     module.walk([&](ProgramOp program) { processProgram(program); });
   }
 
 private:
   bool insertAfterLoads = false;
 
-  // Statistics
+  /// Minimum number of IR operations between an LGKM load and its use for
+  /// latency covering. ds_read (LDS) latency is ~20-40 cycles on CDNA.
+  ///
+  /// HEURISTIC ASSUMPTION: This counts IR operations, not hardware cycles.
+  /// A single MFMA is 32+ cycles but counts as 1 op. This is conservative
+  /// for MFMA-heavy kernels (where 40 ops >> 40 cycles) but borderline for
+  /// kernels with only short VALU ops. For correctness, the threshold is
+  /// intentionally set at the high end of LDS latency; if this proves too
+  /// aggressive for VALU-only sequences, reduce to ~20.
+  static constexpr int64_t kMinOpsForLgkmLatency = 40;
+
   unsigned numVmemOps = 0;
   unsigned numLgkmOps = 0;
   unsigned numWaitcntInserted = 0;
 
+  //===--------------------------------------------------------------------===//
+  // Handler: observe pre-existing waitcnt instructions
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if the op was a waitcnt and was consumed.
+  bool observeExistingWaitcnt(Operation *op, WaitcntState &st) {
+    if (auto waitcnt = dyn_cast<S_WAITCNT>(op)) {
+      if (auto a = waitcnt.getVmcntAttr())
+        st.ticketing.observeVmemWait(a.getValue().getSExtValue());
+      if (auto a = waitcnt.getLgkmcntAttr())
+        st.ticketing.observeLgkmWait(a.getValue().getSExtValue());
+      return true;
+    }
+    if (auto waitcnt = dyn_cast<S_WAITCNT_VMCNT>(op)) {
+      if (auto a = waitcnt.getCountAttr())
+        st.ticketing.observeVmemWait(a.getValue().getSExtValue());
+      return true;
+    }
+    if (auto waitcnt = dyn_cast<S_WAITCNT_LGKMCNT>(op)) {
+      if (auto a = waitcnt.getCountAttr())
+        st.ticketing.observeLgkmWait(a.getValue().getSExtValue());
+      return true;
+    }
+    return false;
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Handler: barrier synchronization
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if the op was a barrier and was consumed.
+  bool handleBarrier(Operation *op, WaitcntState &st) {
+    if (!isa<S_BARRIER>(op))
+      return false;
+
+    bool needVmem = st.ticketing.hasOutstandingVmem();
+    bool needLgkm = st.ticketing.hasOutstandingLgkm();
+
+    if (needVmem || needLgkm) {
+      OpBuilder builder(op->getContext());
+      builder.setInsertionPoint(op);
+      if (needVmem && needLgkm) {
+        S_WAITCNT::create(builder, op->getLoc(), builder.getI32IntegerAttr(0),
+                          builder.getI32IntegerAttr(0), IntegerAttr());
+      } else if (needVmem) {
+        S_WAITCNT_VMCNT::create(builder, op->getLoc(), 0);
+      } else {
+        S_WAITCNT_LGKMCNT::create(builder, op->getLoc(), 0);
+      }
+      numWaitcntInserted++;
+    }
+
+    st.ticketing.observeVmemWait(0);
+    st.ticketing.observeLgkmWait(0);
+    return true;
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Handler: memory operations (loads and stores)
+  //===--------------------------------------------------------------------===//
+
+  void handleMemoryOp(Operation *op, MemOpKind kind, WaitcntState &st) {
+    // For stores, check operands BEFORE incrementing ticket counter
+    if (kind == MemOpKind::VmemStore || kind == MemOpKind::LgkmStore)
+      emitWaitsForStoreOperands(op, st);
+
+    // Only LOADS increment the counter (vmcnt/lgkmcnt track loads, not stores)
+    int64_t ticket = -1;
+    if (kind == MemOpKind::VmemLoad) {
+      ticket = st.ticketing.nextVmemTicket();
+      numVmemOps++;
+    } else if (kind == MemOpKind::LgkmLoad) {
+      ticket = st.ticketing.nextLgkmTicket();
+      numLgkmOps++;
+    } else {
+      numVmemOps++;
+    }
+
+    for (Value result : op->getResults()) {
+      st.valueTickets[result] = {kind, ticket};
+      if (kind == MemOpKind::VmemLoad || kind == MemOpKind::LgkmLoad)
+        st.loadDefIndex[result] = st.opIndex;
+    }
+
+    if (insertAfterLoads &&
+        (kind == MemOpKind::VmemLoad || kind == MemOpKind::LgkmLoad)) {
+      OpBuilder builder(op->getContext());
+      builder.setInsertionPointAfter(op);
+      if (kind == MemOpKind::VmemLoad) {
+        S_WAITCNT_VMCNT::create(builder, op->getLoc(),
+                                builder.getI32IntegerAttr(0));
+        st.ticketing.observeVmemWait(0);
+      } else {
+        S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
+                                  builder.getI32IntegerAttr(0));
+        st.ticketing.observeLgkmWait(0);
+      }
+      numWaitcntInserted++;
+    }
+  }
+
+  void emitWaitsForStoreOperands(Operation *op, WaitcntState &st) {
+    std::optional<int64_t> neededVmcnt;
+    std::optional<int64_t> neededLgkmcnt;
+
+    for (Value operand : op->getOperands()) {
+      auto it = st.valueTickets.find(operand);
+      if (it == st.valueTickets.end())
+        continue;
+      auto [opKind, opTicket] = it->second;
+      if (opKind == MemOpKind::VmemLoad) {
+        auto wait = st.ticketing.computeVmemWait(opTicket);
+        if (wait.has_value() && (!neededVmcnt || *wait < *neededVmcnt))
+          neededVmcnt = wait;
+      } else if (opKind == MemOpKind::LgkmLoad) {
+        auto wait = st.ticketing.computeLgkmWait(opTicket);
+        if (wait.has_value() && (!neededLgkmcnt || *wait < *neededLgkmcnt))
+          neededLgkmcnt = wait;
+      }
+    }
+
+    if (!neededVmcnt && !neededLgkmcnt)
+      return;
+
+    emitWaitcnt(op, neededVmcnt, neededLgkmcnt, st);
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Handler: non-memory operations (VALU, SALU, etc.)
+  //===--------------------------------------------------------------------===//
+
+  void handleNonMemoryOp(Operation *op, WaitcntState &st) {
+    std::optional<int64_t> neededVmcnt;
+    std::optional<int64_t> neededLgkmcnt;
+
+    for (Value operand : op->getOperands()) {
+      auto it = st.valueTickets.find(operand);
+      if (it == st.valueTickets.end())
+        continue;
+      auto [opKind, ticket] = it->second;
+
+      if (opKind == MemOpKind::VmemLoad) {
+        auto wait = st.ticketing.computeVmemWait(ticket);
+        if (wait.has_value() && (!neededVmcnt || *wait < *neededVmcnt))
+          neededVmcnt = wait;
+      } else if (opKind == MemOpKind::LgkmLoad) {
+        auto wait = st.ticketing.computeLgkmWait(ticket);
+        if (wait.has_value()) {
+          if (*wait > 0) {
+            auto defIt = st.loadDefIndex.find(operand);
+            if (defIt != st.loadDefIndex.end()) {
+              int64_t gap = st.opIndex - defIt->second;
+              if (gap >= kMinOpsForLgkmLatency)
+                continue;
+            }
+          }
+          if (!neededLgkmcnt || *wait < *neededLgkmcnt)
+            neededLgkmcnt = wait;
+        }
+      }
+    }
+
+    if (neededVmcnt || neededLgkmcnt)
+      emitWaitcnt(op, neededVmcnt, neededLgkmcnt, st);
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Handler: loop boundary reset
+  //===--------------------------------------------------------------------===//
+
+  void handleLoopBoundary(Operation *op, WaitcntState &st) {
+    // Reset at loop ENTRY (LoopOp) since pending waits from before the loop
+    // may not be valid inside. Do NOT reset at ConditionOp (loop back-edge)
+    // because waits from the end of one iteration ARE valid at the start
+    // of the next -- the hardware state is continuous.
+    if (isa<LoopOp>(op) || op->getName().getStringRef().contains("branch")) {
+      st.ticketing.resetWaits();
+    }
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Shared helper: emit s_waitcnt with cap and tracking
+  //===--------------------------------------------------------------------===//
+
+  void emitWaitcnt(Operation *op, std::optional<int64_t> neededVmcnt,
+                   std::optional<int64_t> neededLgkmcnt, WaitcntState &st) {
+    OpBuilder builder(op->getContext());
+    builder.setInsertionPoint(op);
+
+    int64_t vmcntVal = neededVmcnt ? st.capVmcnt(*neededVmcnt) : 0;
+    int64_t lgkmcntVal = neededLgkmcnt ? st.capLgkmcnt(*neededLgkmcnt) : 0;
+
+    if (neededVmcnt && neededLgkmcnt) {
+      S_WAITCNT::create(builder, op->getLoc(),
+                        builder.getI32IntegerAttr(vmcntVal),
+                        builder.getI32IntegerAttr(lgkmcntVal), IntegerAttr());
+      st.ticketing.observeVmemWait(vmcntVal);
+      st.ticketing.observeLgkmWait(lgkmcntVal);
+    } else if (neededVmcnt) {
+      S_WAITCNT_VMCNT::create(builder, op->getLoc(),
+                              builder.getI32IntegerAttr(vmcntVal));
+      st.ticketing.observeVmemWait(vmcntVal);
+    } else {
+      S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
+                                builder.getI32IntegerAttr(lgkmcntVal));
+      st.ticketing.observeLgkmWait(lgkmcntVal);
+    }
+    numWaitcntInserted++;
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Top-level per-program dispatcher
+  //===--------------------------------------------------------------------===//
+
   void processProgram(ProgramOp program) {
-    Ticketing ticketing;
+    WaitcntState st;
 
-    // Map from Value to the ticket that produces it
-    llvm::DenseMap<Value, std::pair<MemOpKind, int64_t>> valueTickets;
+    if (auto targetAttr = program.getTarget()) {
+      TargetAttrInterface targetKind = targetAttr.getTargetKind();
+      st.maxLgkmcnt = targetKind.getMaxLgkmcnt();
+      st.maxVmcnt = targetKind.getMaxVmcnt();
+    }
 
-    // Walk through operations in order
-    program.walk([&](Operation *op) {
-      // Skip the program op itself
-      if (isa<ProgramOp>(op))
-        return;
+    llvm::SmallVector<Operation *> allOps;
+    collectOpsRecursive(program.getBodyBlock(), allOps);
 
-      // Observe pre-existing waitcnt instructions (from translation or prior
-      // passes) This prevents emitting redundant waits
-      if (auto waitcnt = dyn_cast<S_WAITCNT>(op)) {
-        auto vmcntAttr = waitcnt.getVmcntAttr();
-        auto lgkmcntAttr = waitcnt.getLgkmcntAttr();
-        if (vmcntAttr) {
-          ticketing.observeVmemWait(vmcntAttr.getValue().getSExtValue());
-        }
-        if (lgkmcntAttr) {
-          ticketing.observeLgkmWait(lgkmcntAttr.getValue().getSExtValue());
-        }
-        return;
-      }
+    for (Operation *op : allOps) {
+      ++st.opIndex;
 
-      if (auto waitcnt = dyn_cast<S_WAITCNT_VMCNT>(op)) {
-        auto countAttr = waitcnt.getCountAttr();
-        if (countAttr) {
-          ticketing.observeVmemWait(countAttr.getValue().getSExtValue());
-        }
-        return;
-      }
+      if (observeExistingWaitcnt(op, st))
+        continue;
+      if (handleBarrier(op, st))
+        continue;
 
-      if (auto waitcnt = dyn_cast<S_WAITCNT_LGKMCNT>(op)) {
-        auto countAttr = waitcnt.getCountAttr();
-        if (countAttr) {
-          ticketing.observeLgkmWait(countAttr.getValue().getSExtValue());
-        }
-        return;
-      }
-
-      // Barriers require all memory to be synchronized before execution.
-      // Insert waits for any outstanding VMEM/LGKM operations before the
-      // barrier.
-      if (isa<S_BARRIER>(op)) {
-        // Check if we need waits before this barrier
-        auto vmemWait = ticketing.computeVmemWait(0);
-        auto lgkmWait = ticketing.computeLgkmWait(0);
-
-        if (vmemWait.has_value() || lgkmWait.has_value()) {
-          OpBuilder builder(op->getContext());
-          builder.setInsertionPoint(op);
-
-          if (vmemWait.has_value() && lgkmWait.has_value()) {
-            S_WAITCNT::create(builder, op->getLoc(),
-                              builder.getI32IntegerAttr(0),
-                              builder.getI32IntegerAttr(0), IntegerAttr());
-          } else if (vmemWait.has_value()) {
-            S_WAITCNT_VMCNT::create(builder, op->getLoc(), 0);
-          } else {
-            S_WAITCNT_LGKMCNT::create(builder, op->getLoc(), 0);
-          }
-          numWaitcntInserted++;
-        }
-
-        // Observe that a full drain occurred
-        ticketing.observeVmemWait(0);
-        ticketing.observeLgkmWait(0);
-        return;
-      }
-
-      // Check if this is a memory operation
       MemOpKind kind = classifyMemOp(op);
-
       if (kind != MemOpKind::None) {
-        // For stores, check operands BEFORE incrementing ticket counter
-        // This ensures correct wait thresholds are computed
-        if (kind == MemOpKind::VmemStore || kind == MemOpKind::LgkmStore) {
-          std::optional<int64_t> neededVmcnt;
-          std::optional<int64_t> neededLgkmcnt;
-
-          for (Value operand : op->getOperands()) {
-            auto it = valueTickets.find(operand);
-            if (it == valueTickets.end())
-              continue;
-
-            auto [opKind, opTicket] = it->second;
-
-            if (opKind == MemOpKind::VmemLoad) {
-              auto wait = ticketing.computeVmemWait(opTicket);
-              if (wait.has_value()) {
-                if (!neededVmcnt.has_value() || *wait < *neededVmcnt)
-                  neededVmcnt = wait;
-              }
-            } else if (opKind == MemOpKind::LgkmLoad) {
-              auto wait = ticketing.computeLgkmWait(opTicket);
-              if (wait.has_value()) {
-                if (!neededLgkmcnt.has_value() || *wait < *neededLgkmcnt)
-                  neededLgkmcnt = wait;
-              }
-            }
-          }
-
-          // Insert waitcnt before the store if needed
-          if (neededVmcnt.has_value() || neededLgkmcnt.has_value()) {
-            OpBuilder builder(op->getContext());
-            builder.setInsertionPoint(op);
-
-            if (neededVmcnt.has_value() && neededLgkmcnt.has_value()) {
-              S_WAITCNT::create(builder, op->getLoc(),
-                                builder.getI32IntegerAttr(*neededVmcnt),
-                                builder.getI32IntegerAttr(*neededLgkmcnt),
-                                IntegerAttr());
-              ticketing.observeVmemWait(*neededVmcnt);
-              ticketing.observeLgkmWait(*neededLgkmcnt);
-            } else if (neededVmcnt.has_value()) {
-              S_WAITCNT_VMCNT::create(builder, op->getLoc(),
-                                      builder.getI32IntegerAttr(*neededVmcnt));
-              ticketing.observeVmemWait(*neededVmcnt);
-            } else {
-              S_WAITCNT_LGKMCNT::create(
-                  builder, op->getLoc(),
-                  builder.getI32IntegerAttr(*neededLgkmcnt));
-              ticketing.observeLgkmWait(*neededLgkmcnt);
-            }
-            numWaitcntInserted++;
-          }
-        }
-
-        // Now increment the ticket counter for this memory op
-        // NOTE: Only LOADS increment the counter because vmcnt/lgkmcnt only
-        // track outstanding loads, not stores. Stores don't affect these
-        // counters.
-        int64_t ticket = -1;
-        if (kind == MemOpKind::VmemLoad) {
-          ticket = ticketing.nextVmemTicket();
-          numVmemOps++;
-        } else if (kind == MemOpKind::LgkmLoad) {
-          ticket = ticketing.nextLgkmTicket();
-          numLgkmOps++;
-        } else {
-          // Stores don't get tickets (they don't affect vmcnt/lgkmcnt)
-          numVmemOps++;
-        }
-
-        // Map results to tickets (for loads)
-        for (Value result : op->getResults()) {
-          valueTickets[result] = {kind, ticket};
-        }
-
-        // For conservative mode, insert wait immediately after loads
-        if (insertAfterLoads &&
-            (kind == MemOpKind::VmemLoad || kind == MemOpKind::LgkmLoad)) {
-          OpBuilder builder(op->getContext());
-          builder.setInsertionPointAfter(op);
-
-          if (kind == MemOpKind::VmemLoad) {
-            S_WAITCNT_VMCNT::create(builder, op->getLoc(),
-                                    builder.getI32IntegerAttr(0));
-            ticketing.observeVmemWait(0);
-          } else {
-            S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
-                                      builder.getI32IntegerAttr(0));
-            ticketing.observeLgkmWait(0);
-          }
-          numWaitcntInserted++;
-        }
-        return;
+        handleMemoryOp(op, kind, st);
+        continue;
       }
 
-      // For non-memory operations, check if any operands require waits
-      std::optional<int64_t> neededVmcnt;
-      std::optional<int64_t> neededLgkmcnt;
+      handleNonMemoryOp(op, st);
+      handleLoopBoundary(op, st);
+    }
 
-      for (Value operand : op->getOperands()) {
-        auto it = valueTickets.find(operand);
-        if (it == valueTickets.end())
-          continue;
+    combineAdjacentWaitcnts(program);
+  }
 
-        auto [opKind, ticket] = it->second;
-
-        if (opKind == MemOpKind::VmemLoad) {
-          auto wait = ticketing.computeVmemWait(ticket);
-          if (wait.has_value()) {
-            if (!neededVmcnt.has_value() || *wait < *neededVmcnt)
-              neededVmcnt = wait;
-          }
-        } else if (opKind == MemOpKind::LgkmLoad) {
-          auto wait = ticketing.computeLgkmWait(ticket);
-          if (wait.has_value()) {
-            if (!neededLgkmcnt.has_value() || *wait < *neededLgkmcnt)
-              neededLgkmcnt = wait;
-          }
-        }
+  /// Merge any adjacent waitcnt-like operations into a single S_WAITCNT.
+  ///
+  /// For each field (vmcnt/lgkmcnt/expcnt), the merged op keeps the minimum
+  /// threshold contributed by the pair, which is equivalent to executing both
+  /// waits back-to-back without intervening instructions.
+  void combineAdjacentWaitcnts(ProgramOp program) {
+    // Helpers to extract individual counter values from waitcnt ops.
+    auto getVmcntFromOp = [](Operation *op) -> int64_t {
+      if (auto w = dyn_cast<S_WAITCNT_VMCNT>(op))
+        return w.getCountAttr().getValue().getSExtValue();
+      if (auto w = dyn_cast<S_WAITCNT>(op)) {
+        if (auto attr = w.getVmcntAttr())
+          return attr.getValue().getSExtValue();
       }
-
-      // Insert waitcnt if needed
-      if (neededVmcnt.has_value() || neededLgkmcnt.has_value()) {
-        OpBuilder builder(op->getContext());
-        builder.setInsertionPoint(op);
-
-        // Use combined s_waitcnt if both are needed
-        if (neededVmcnt.has_value() && neededLgkmcnt.has_value()) {
-          S_WAITCNT::create(
-              builder, op->getLoc(), builder.getI32IntegerAttr(*neededVmcnt),
-              builder.getI32IntegerAttr(*neededLgkmcnt), IntegerAttr());
-          ticketing.observeVmemWait(*neededVmcnt);
-          ticketing.observeLgkmWait(*neededLgkmcnt);
-        } else if (neededVmcnt.has_value()) {
-          S_WAITCNT_VMCNT::create(builder, op->getLoc(),
-                                  builder.getI32IntegerAttr(*neededVmcnt));
-          ticketing.observeVmemWait(*neededVmcnt);
-        } else {
-          S_WAITCNT_LGKMCNT::create(builder, op->getLoc(),
-                                    builder.getI32IntegerAttr(*neededLgkmcnt));
-          ticketing.observeLgkmWait(*neededLgkmcnt);
-        }
-        numWaitcntInserted++;
+      return -1;
+    };
+    auto getLgkmcntFromOp = [](Operation *op) -> int64_t {
+      if (auto w = dyn_cast<S_WAITCNT_LGKMCNT>(op))
+        return w.getCountAttr().getValue().getSExtValue();
+      if (auto w = dyn_cast<S_WAITCNT>(op)) {
+        if (auto attr = w.getLgkmcntAttr())
+          return attr.getValue().getSExtValue();
       }
-
-      // Reset waits at loop boundaries and branches.
-      // We reset at LoopOp (loop entry) and ConditionOp (loop back-edge)
-      // since pending waits from before the loop may not be valid inside,
-      // and vice versa. We do NOT reset at IfOp/YieldOp to avoid
-      // unnecessary s_waitcnt insertions inside straight-line if-then-else.
-      if (isa<LoopOp, ConditionOp>(op) ||
-          op->getName().getStringRef().contains("branch")) {
-        ticketing.resetWaits();
+      return -1;
+    };
+    auto getExpcntFromOp = [](Operation *op) -> int64_t {
+      if (auto w = dyn_cast<S_WAITCNT>(op)) {
+        if (auto attr = w.getExpcntAttr())
+          return attr.getValue().getSExtValue();
       }
-    });
+      return -1;
+    };
+
+    auto isWaitcntLike = [](Operation *op) {
+      return isa<S_WAITCNT, S_WAITCNT_VMCNT, S_WAITCNT_LGKMCNT>(op);
+    };
+
+    llvm::SmallVector<std::pair<Operation *, Operation *>> toCombine;
+
+    llvm::SmallVector<Operation *> combineOps;
+    collectOpsRecursive(program.getBodyBlock(), combineOps);
+
+    for (Operation *op : combineOps) {
+      Operation *next = op->getNextNode();
+      if (!next || !isWaitcntLike(op) || !isWaitcntLike(next))
+        continue;
+      toCombine.push_back({op, next});
+    }
+
+    llvm::DenseSet<Operation *> erased;
+    for (auto [first, second] : toCombine) {
+      if (erased.contains(first) || erased.contains(second))
+        continue;
+
+      // Collect fields from both ops, taking min where both contribute.
+      int64_t vm1 = getVmcntFromOp(first), vm2 = getVmcntFromOp(second);
+      int64_t lk1 = getLgkmcntFromOp(first), lk2 = getLgkmcntFromOp(second);
+      int64_t ex1 = getExpcntFromOp(first), ex2 = getExpcntFromOp(second);
+
+      auto merge = [](int64_t a, int64_t b) -> int64_t {
+        if (a < 0)
+          return b;
+        if (b < 0)
+          return a;
+        return std::min(a, b);
+      };
+      int64_t vmcntVal = merge(vm1, vm2);
+      int64_t lgkmcntVal = merge(lk1, lk2);
+      int64_t expcntVal = merge(ex1, ex2);
+
+      OpBuilder builder(first->getContext());
+      builder.setInsertionPoint(first);
+
+      auto optAttr = [&](int64_t v) -> IntegerAttr {
+        return v >= 0 ? builder.getI32IntegerAttr(v) : IntegerAttr();
+      };
+      S_WAITCNT::create(builder, first->getLoc(), optAttr(vmcntVal),
+                        optAttr(lgkmcntVal), optAttr(expcntVal));
+
+      erased.insert(first);
+      erased.insert(second);
+      second->erase();
+      first->erase();
+    }
   }
 };
 

@@ -118,13 +118,15 @@ static LogicalResult allocateRegClass(
           physReg = mappingIt->second;
           mapping.valueToPhysReg[range.reg] = *physReg;
 
-          // IMPORTANT: Extend the physical register's lifetime to cover the
-          // tied result. The tied-to operand may have a shorter lifetime
-          // (e.g., %55 ends at op2), but the tied result (%56) may live longer
-          // (used in iteration 2). Without this extension, the physical
-          // register would be freed too early when the tied-to operand expires.
+          // Extend the physical register's lifetime to cover the tied result.
+          // The tied-to operand may have a shorter lifetime (e.g., %55 ends
+          // at op2), but the tied result (%56) may live longer (used in
+          // iteration 2). Without this extension, the physical register would
+          // be freed too early when the tied-to operand expires.
+          bool foundInActive = false;
           for (size_t i = 0; i < active.size(); ++i) {
             if (active[i].physReg == *physReg) {
+              foundInActive = true;
               if (range.end > active[i].endPoint) {
                 // Update end point and re-sort the affected portion
                 active[i].endPoint = range.end;
@@ -139,6 +141,21 @@ static LogicalResult allocateRegClass(
               }
               break;
             }
+          }
+
+          if (!foundInActive) {
+            // Two cases reach here:
+            // (a) Precolored tying (MFMA): the tied-to value is precolored
+            //     and was never in the active list. Its physReg is already
+            //     reserved in the pool. pool.reserve is a safe no-op.
+            // (b) Loop boundary: the tied-to virtual value expired from
+            //     active and its registers were returned to the pool.
+            //     The physReg MUST still be free (not re-allocated).
+            bool tiedToPrecolored = precoloredValues.contains(tiedTo);
+            assert((tiedToPrecolored || pool.isFree(*physReg)) &&
+                   "Tied register was re-allocated before re-reservation");
+            pool.reserve(*physReg, range.size);
+            insertActiveRange(active, {range.end, range, *physReg});
           }
 
           stats.rangesAllocated++;

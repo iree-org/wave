@@ -119,6 +119,12 @@ private:
   llvm::SmallVector<std::string>
   generateOpWithLiteralHandling(mlir::Operation *op);
 
+  /// Emit a v_mov_b32 to materialize a literal into scratch VGPR, then
+  /// emit the instruction with the scratch register replacing the literal.
+  void emitMaterializedLiteral(llvm::SmallVector<std::string> &lines,
+                               mlir::Operation *op, llvm::StringRef mnemonic,
+                               int literalOperandIdx, int64_t literalValue);
+
   /// Generate code for a label op
   std::string generateLabel(LabelOp labelOp);
 

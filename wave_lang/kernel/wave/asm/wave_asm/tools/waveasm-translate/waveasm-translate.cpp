@@ -125,6 +125,16 @@ static llvm::cl::opt<int64_t>
     subgroupSize("subgroup-size", llvm::cl::desc("Subgroup (wavefront) size"),
                  llvm::cl::init(64));
 
+static llvm::cl::opt<int64_t>
+    maxVGPRs("max-vgprs",
+             llvm::cl::desc("Maximum VGPRs for register allocation"),
+             llvm::cl::init(256));
+
+static llvm::cl::opt<int64_t>
+    maxSGPRs("max-sgprs",
+             llvm::cl::desc("Maximum SGPRs for register allocation"),
+             llvm::cl::init(104));
+
 //===----------------------------------------------------------------------===//
 // Main Function
 //===----------------------------------------------------------------------===//
@@ -238,7 +248,7 @@ int main(int argc, char **argv) {
   // see the final register assignments.  Matches compare_backends.py order:
   // LinearScan -> Waitcnt -> Hazard.
   if (runLinearScan) {
-    pm.addPass(waveasm::createWAVEASMLinearScanPass());
+    pm.addPass(waveasm::createWAVEASMLinearScanPass(maxVGPRs, maxSGPRs));
     // After register allocation, physical register types (pvreg/psreg) replace
     // virtual types (vreg/sreg). The MLIR RegionBranchOpInterface verifier
     // checks exact type equality between entry operands and block arguments,
