@@ -45,6 +45,8 @@ bool areAllSymbolMappingValuesAllowed(WaveSymbolMappingAttr mapping) {
   return llvm::all_of(mapping.getValues(), llvm::IsaPred<ValueTypes...>);
 }
 
+/// Check that all expression lists used as values of the mapping have exactly
+/// `n` results. Does NOT emit diagnostics. Intended ONLY for use in a trait.
 static inline bool
 areAllSymbolMappingValuesNResultExprLists(WaveSymbolMappingAttr mapping,
                                           unsigned n) {

@@ -142,7 +142,7 @@ func.func private @duplicate_key() attributes {test.map = #dup_key}
 
 // -----
 
-// expected-error @below {{ attribute 'index_mapping' failed to satisfy constraint: symbol mapping with WaveIndexMappingAttr values}}
+// expected-error @below {{attribute 'index_mapping' failed to satisfy constraint: symbol mapping with WaveIndexMappingAttr values}}
 water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>>}
 
 // -----
