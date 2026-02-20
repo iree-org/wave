@@ -26,6 +26,7 @@
 #include "Handlers.h"
 
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "llvm/Support/Debug.h"
@@ -76,9 +77,16 @@ LogicalResult handleVectorExtract(Operation *op, TranslationContext &ctx) {
     auto elemReg = PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
     ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
   } else {
-    // Virtual VGPR or other type - use waveasm.extract op
-    // This will be lowered to proper register offset during register allocation
-    auto elemType = ctx.createVRegType(1, 1);
+    // Virtual VGPR or other type - use waveasm.extract op.
+    // Preserve AGPR type when the source is AGPR so that downstream
+    // handlers (e.g. handleMemRefAtomicRMW) can detect the need to emit
+    // v_accvgpr_read_b32 before using the value in VALU instructions.
+    Type elemType;
+    if (isAGPRType(srcType)) {
+      elemType = ctx.createARegType(1, 1);
+    } else {
+      elemType = ctx.createVRegType(1, 1);
+    }
     auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
                                            builder.getI64IntegerAttr(index));
     ctx.getMapper().mapValue(extractOp.getResult(), extractWaveOp.getResult());

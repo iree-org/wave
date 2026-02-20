@@ -1104,7 +1104,13 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
     auto vregType = ctx.createVRegType();
 
     // The value may still be f32 if the truncf handler deferred the
-    // conversion for vector types. Convert to bf16 here.
+    // conversion for vector types. If the source is in an AGPR (e.g. an
+    // MFMA accumulator element extracted via waveasm.extract), read it to
+    // a VGPR first — V_CVT_BF16_F32 requires a VGPR source.
+    if (isAGPRType(valueMapped->getType())) {
+      valueMapped =
+          V_ACCVGPR_READ_B32::create(builder, loc, vregType, *valueMapped);
+    }
     Value bf16Value = V_CVT_BF16_F32::create(builder, loc, vregType,
                                               *valueMapped);
     valueMapped = bf16Value;
