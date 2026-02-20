@@ -71,7 +71,7 @@ namespace llvm {
 // result of the combination is also failure.
 llvm::FailureOr<mlir::ChangeResult> static inline
 operator|(llvm::FailureOr<mlir::ChangeResult> lhs,
-          FailureOr<mlir::ChangeResult> rhs) {
+          llvm::FailureOr<mlir::ChangeResult> rhs) {
   if (llvm::failed(lhs) || llvm::failed(rhs))
     return llvm::failure();
   return *lhs | *rhs;
