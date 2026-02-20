@@ -603,11 +603,6 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
     (strings) to a WaveExprListAttr specifying the bounds of the read/write
     operations this is attached to. The dictionary may be sparse: only
     dimensions that require masking need an entry.
-
-    Example:
-    ```
-    #wave.read_write_bounds<{M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}>
-    ```
   }];
 
   let parameters = (ins "::mlir::DictionaryAttr":$mapping);
