@@ -1021,12 +1021,17 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
 /// constraints or MMA shapes. The first argument indicates for which operation
 /// the constraints are being used, which is in particular necessary to only
 /// apply tiling constraints inside the relevant loops.
+template <typename RangeT>
 static void mixInThreadIndependentConstraints(
-    Operation *where, uint64_t threadsPerWave,
-    llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
+    Operation *where, uint64_t threadsPerWave, RangeT &&indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
     llvm::SmallVector<NamedAttribute> &symbolMappings) {
+
+  static_assert(
+      std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
+                     wave::WaveSymbolAttr>,
+      "expected a range of WaveSymbolAttr");
   for (wave::WaveSymbolAttr symbol : indexingSymbols) {
     auto it = symbolConstraints.find(symbol);
     if (it == symbolConstraints.end())
@@ -1094,7 +1099,7 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
-// Append index mappings with offset=0, step=1 and stride=1 to the
+// Append index mappings with offset=0, size=1 and stride=1 to the
 // `symbolMappings` list for each entry in `indexingSymbols`.
 static void
 appendDefaultIndexMapping(MLIRContext *context,
@@ -1200,14 +1205,18 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
+  ArrayRef<wave::WaveSymbolAttr> batchSymbols =
+      resultType.getShape().drop_back(2);
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
-      {mSymbol, nSymbol, kSymbol}, initObject.symbolConstraints,
-      operandSymbolMappings);
+      llvm::concat<const WaveSymbolAttr>(batchSymbols,
+                                         ArrayRef{mSymbol, nSymbol, kSymbol}),
+      initObject.symbolConstraints, operandSymbolMappings);
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
-      {mSymbol, nSymbol}, initObject.symbolConstraints,
-      accumulatorSymbolMappings);
+      llvm::concat<const WaveSymbolAttr>(batchSymbols,
+                                         ArrayRef{mSymbol, nSymbol}),
+      initObject.symbolConstraints, accumulatorSymbolMappings);
 
   // Create the LHS and RHS mappings that are not using symbols
   // irrelevant for them.
@@ -1287,6 +1296,9 @@ LogicalResult MmaOp::verify() {
     return emitOpError()
            << "expects all operands and results to have the same rank";
   }
+
+  if (lhsType.getRank() < 2)
+    return emitOpError() << "expects at least 2D operands for MMA";
 
   SmallVector<int> batchDims =
       llvm::to_vector(llvm::seq<int>(0, lhsType.getRank() - 2));

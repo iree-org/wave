@@ -42,6 +42,13 @@ func.func @mismatch_dim_rhs_acc(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave
 
 // -----
 
+func.func @mma_1d(%lhs: !wave.tensor<[@A] of f16>, %rhs: !wave.tensor<[@B] of f16>, %acc: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expects at least 2D operands for MMA}}
+  wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@A] of f16>, !wave.tensor<[@B] of f16>, !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_types>] {
   func.func @mma_3d_mismatch(%a: !wave.tensor<[@M, @K, @B] of f16>,
                              %b: !wave.tensor<[@N, @K, @B] of f16>,
