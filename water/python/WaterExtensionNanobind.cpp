@@ -8,6 +8,7 @@
 #include "mlir-c/BuiltinAttributes.h"
 #include "mlir-c/BuiltinTypes.h"
 #include "mlir-c/IR.h"
+#include "mlir-c/Support.h"
 #include "mlir/Bindings/Python/IRCore.h"
 #include "mlir/Bindings/Python/Nanobind.h"
 #include "water/c/Dialects.h"
@@ -664,17 +665,17 @@ struct PyWaveExprListAttr
 };
 
 //===---------------------------------------------------------------------===//
-// WaveReadWriteBoundsAttr
+// WaveSymbolMappingAttr
 //===---------------------------------------------------------------------===//
 
-struct PyWaveReadWriteBoundsAttr
+struct PyWaveSymbolMappingAttr
     : mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyConcreteAttribute<
-          PyWaveReadWriteBoundsAttr> {
+          PyWaveSymbolMappingAttr> {
   static constexpr IsAFunctionTy isaFunction =
-      mlirAttributeIsAWaveReadWriteBoundsAttr;
+      mlirAttributeIsAWaveSymbolMappingAttr;
   static constexpr GetTypeIDFunctionTy getTypeIdFunction =
-      mlirWaveReadWriteBoundsAttrGetTypeID;
-  static constexpr const char *pyClassName = "WaveReadWriteBoundsAttr";
+      mlirWaveSymbolMappingAttrGetTypeID;
+  static constexpr const char *pyClassName = "WaveSymbolMappingAttr";
   using PyConcreteAttribute::PyConcreteAttribute;
 
   static void bindDerived(ClassTy &c) {
@@ -683,47 +684,87 @@ struct PyWaveReadWriteBoundsAttr
         [](const nb::dict &symDimDict,
            mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
                context) {
-          std::vector<MlirNamedAttribute> namedAttrs;
-          namedAttrs.reserve(symDimDict.size());
+          std::vector<MlirAttribute> keys;
+          std::vector<MlirAttribute> values;
+          keys.reserve(symDimDict.size());
+          values.reserve(symDimDict.size());
 
           for (auto [key, value] : symDimDict) {
-            // Get the key (symbolic dimension)
-            nb::handle key_handle = key;
-            if (!nb::isinstance<nb::str>(key_handle)) {
-              throw nb::type_error(
-                  "Symbolic dimension dictionary key must be a string");
+            nb::handle keyHandle = key;
+            MlirAttribute keyAttr;
+            if (nb::isinstance<nb::str>(keyHandle)) {
+              std::string symbolicDim = nb::cast<std::string>(keyHandle);
+              keyAttr = mlirWaveSymbolAttrGet(
+                  context->get(),
+                  mlirStringRefCreate(symbolicDim.data(), symbolicDim.size()));
+            } else {
+              try {
+                keyAttr = nb::cast<MlirAttribute>(keyHandle);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error("Symbolic dimension dictionary key must "
+                                     "be a string or a WaveSymbolAttr");
+              }
             }
-            std::string symbolicDim = nb::cast<std::string>(key_handle);
 
-            // Get the value (bound expression)
-            MlirAttribute attr;
+            MlirAttribute valueAttr;
             try {
-              attr = nb::cast<MlirAttribute>(value);
+              valueAttr = nb::cast<MlirAttribute>(value);
             } catch (const nb::cast_error &e) {
               throw nb::type_error(
                   "Symbolic dimension dictionary value must be an attribute");
             }
-            if (!mlirAttributeIsAWaveExprListAttr(attr)) {
+            if (!mlirAttributeIsAWaveExprListAttr(valueAttr)) {
               throw nb::type_error("Symbolic dimension dictionary value must "
                                    "be a WaveExprListAttr");
             }
 
-            namedAttrs.push_back(mlirNamedAttributeGet(
-                mlirIdentifierGet(context->get(),
-                                  mlirStringRefCreate(symbolicDim.data(),
-                                                      symbolicDim.size())),
-                attr));
+            keys.push_back(keyAttr);
+            values.push_back(valueAttr);
           }
 
-          return PyWaveReadWriteBoundsAttr(
+          return PyWaveSymbolMappingAttr(
               context->getRef(),
-              mlirWaveReadWriteBoundsAttrGet(mlirDictionaryAttrGet(
-                  context->get(), namedAttrs.size(), namedAttrs.data())));
+              mlirWaveSymbolMappingAttrGet(context->get(), keys.size(),
+                                           keys.data(), values.data()));
         },
         nb::arg("sym_dim_dict"), nb::arg("context") = nb::none(),
-        "Gets a wave.WaveReadWriteBoundsAttr from parameters.");
-    c.def_prop_ro("mapping", [](MlirAttribute self) {
-      return mlirWaveReadWriteBoundsAttrGetMapping(self);
+        "Gets a wave.WaveSymbolMappingAttr from parameters.");
+    c.def("__contains__", [](MlirAttribute self, MlirAttribute key) {
+      return !mlirAttributeIsNull(mlirWaveSymbolMappingAttrLookup(self, key));
+    });
+    c.def("__contains__", [](MlirAttribute self, std::string key) {
+      MlirAttribute keyAttr =
+          mlirWaveSymbolAttrGet(mlirAttributeGetContext(self),
+                                mlirStringRefCreate(key.data(), key.size()));
+      return !mlirAttributeIsNull(
+          mlirWaveSymbolMappingAttrLookup(self, keyAttr));
+    });
+    c.def("__len__", [](MlirAttribute self) -> intptr_t {
+      return mlirWaveSymbolMappingAttrGetNumEntries(self);
+    });
+    c.def("__getitem__", [](MlirAttribute self, MlirAttribute key) {
+      MlirAttribute value = mlirWaveSymbolMappingAttrLookup(self, key);
+      if (mlirAttributeIsNull(value)) {
+        throw nb::key_error("Key not found.");
+      }
+      return value;
+    });
+    c.def("__getitem__", [](MlirAttribute self, std::string key) {
+      MlirAttribute keyAttr =
+          mlirWaveSymbolAttrGet(mlirAttributeGetContext(self),
+                                mlirStringRefCreate(key.data(), key.size()));
+      MlirAttribute value = mlirWaveSymbolMappingAttrLookup(self, keyAttr);
+      if (mlirAttributeIsNull(value)) {
+        throw nb::key_error("Key not found.");
+      }
+      return value;
+    });
+    c.def("__getitem__", [](MlirAttribute self, intptr_t index) {
+      if (index < 0 || index >= mlirWaveSymbolMappingAttrGetNumEntries(self)) {
+        throw nb::index_error("Index out of range.");
+      }
+      return nb::make_tuple(mlirWaveSymbolMappingAttrGetKey(self, index),
+                            mlirWaveSymbolMappingAttrGetValue(self, index));
     });
   }
 };
@@ -1091,7 +1132,7 @@ NB_MODULE(_waterDialects, m) {
   PyWaveApplyExprCombinatorAttr::bind(d);
   PyWaveMmaKindAttr::bind(d);
   PyWaveExprListAttr::bind(d);
-  PyWaveReadWriteBoundsAttr::bind(d);
+  PyWaveSymbolMappingAttr::bind(d);
   PyWaveTensorType::bind(d);
   PyHardwareConstraintAttr::bind(d);
   PyDeviceConstraintAttr::bind(d);

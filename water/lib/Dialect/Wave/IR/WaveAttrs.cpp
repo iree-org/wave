@@ -705,6 +705,95 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// WaveSymbolMappingAttr
+//===----------------------------------------------------------------------===//
+
+WaveSymbolMappingAttr WaveSymbolMappingAttr::get(
+    MLIRContext *context,
+    ArrayRef<std::pair<WaveSymbolAttr, Attribute>> entries) {
+  SmallVector<WaveSymbolAttr> keys;
+  SmallVector<Attribute> values;
+  keys.reserve(entries.size());
+  values.reserve(entries.size());
+  for (auto &[k, v] : entries) {
+    keys.push_back(k);
+    values.push_back(v);
+  }
+  return Base::get(context, keys, values);
+}
+
+Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
+  // Capture the location before consuming any tokens so that verification
+  // errors are reported at the opening `<`.
+  auto loc = parser.getCurrentLocation();
+
+  // Parse: `<` (key `=` value (`,` key `=` value)*)? `>`
+  if (parser.parseLess())
+    return {};
+
+  SmallVector<WaveSymbolAttr> keys;
+  SmallVector<Attribute> values;
+
+  // Handle empty mapping: `<>`.
+  if (failed(parser.parseOptionalGreater())) {
+    do {
+      StringAttr nameAttr;
+      Attribute value;
+      if (failed(parser.parseSymbolName(nameAttr)) || parser.parseEqual() ||
+          failed(parser.parseAttribute(value)))
+        return {};
+      keys.push_back(WaveSymbolAttr::get(parser.getContext(), nameAttr));
+      values.push_back(value);
+    } while (succeeded(parser.parseOptionalComma()));
+
+    if (parser.parseGreater())
+      return {};
+  }
+
+  // Use getChecked so that verify failures are reported as proper parse errors
+  // rather than assertions.
+  return getChecked([&]() { return parser.emitError(loc); },
+                    parser.getContext(), keys, values);
+}
+
+void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
+  printer << "<";
+  llvm::interleaveComma(llvm::zip(getKeys(), getValues()), printer,
+                        [&](auto pair) {
+                          printer.printSymbolName(std::get<0>(pair).getName());
+                          printer << " = ";
+                          printer.printAttribute(std::get<1>(pair));
+                        });
+  printer << ">";
+}
+
+LogicalResult
+WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                              ArrayRef<WaveSymbolAttr> keys,
+                              ArrayRef<Attribute> values) {
+  if (keys.size() != values.size())
+    return emitError() << "keys and values arrays must have the same size, got "
+                       << keys.size() << " keys and " << values.size()
+                       << " values";
+
+  llvm::SmallPtrSet<Attribute, 8> seen;
+  for (WaveSymbolAttr key : keys) {
+    if (!seen.insert(key).second)
+      return emitError() << "duplicate key: " << key;
+  }
+
+  return success();
+}
+
+Attribute WaveSymbolMappingAttr::lookupImpl(WaveSymbolAttr key) const {
+  for (auto [k, v] : llvm::zip(getKeys(), getValues())) {
+    if (k == key)
+      return v;
+  }
+  return {};
+}
+
 void wave::WaveDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST

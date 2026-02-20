@@ -15,7 +15,10 @@ import torch
 
 from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
+from wave_lang.kernel.wave.templates import (
+    get_tagged_mxfp4_gemm,
+    get_tagged_mxfp4_gemm_preshuffle_b,
+)
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
     get_mxfp4_asymmetric_schedule,
@@ -23,6 +26,8 @@ from wave_lang.kernel.wave.schedules import (
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
+    b_preshuffle,
+    e8m0_shuffle,
 )
 from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from utils import parse_args, list_tests, run_test
@@ -38,6 +43,25 @@ def _run_mxfp_gemm(gemm, shape):
     out = torch.zeros(x.shape[0], w.shape[1], dtype=torch.float32).cuda()
 
     gemm(x, x_scales, w.T.contiguous(), w_scales, out)
+    torch.testing.assert_close(
+        torch_out, out.cpu(), check_dtype=False, check_device=False
+    )
+
+
+def _run_mxfp_gemm_preshuffle_b(gemm, shape):
+    """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference."""
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    x, w_t_ps = x.cuda(), w_t_ps.cuda()
+    x_scales, w_scales_ps = x_scales.cuda(), w_scales_ps.cuda()
+    out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32).cuda()
+
+    gemm(x, x_scales, w_t_ps, w_scales_ps, out)
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
@@ -98,6 +122,25 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm(
 
     _run_mxfp_gemm(gemm, shape)
     print("MXFP GEMM asymmetric-prefetch 4-wave test passed!")
+
+
+def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Asymmetric MXFP4 GEMM with preshuffled B data and B scales."""
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.dump_intermediates = "build/intermediates"
+    schedule = get_mxfp4_asymmetric_schedule()
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    _run_mxfp_gemm_preshuffle_b(gemm, shape)
+    print("MXFP GEMM preshuffle-B 4-wave test passed!")
 
 
 if __name__ == "__main__":

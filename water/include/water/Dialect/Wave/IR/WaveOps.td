@@ -436,6 +436,68 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
   let hasVerifier = 1;
 }
 
+def ReshapeOp : WaveOp<"reshape", [
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>]> {
+  let summary = "Reshapes a tensor";
+  let description = [{
+    **CAUTION**: This is a legacy internal operation not expected to be used in
+    the frontend, only to be constructed by the compiler during the transitional
+    period. As such, it does not implement the interfaces for type inference and
+    index propagation as it is expected to only appear after those.
+
+    Changes the vectorized register representation of a tensor to use
+    the vector sized specified in the target vector shape. When register-resident
+    tensors are lowered to vectors, this may become an operation that composes
+    multiple vectors into a single vector.
+
+    This operation is an amalgamation of two distinct cases:
+
+      1. Concat-style reshape creates a tensor with an extra dimension from
+         multiple tensors. This lowers to a concatenation of vectors.
+      2. Split-style reshape extracts a subtensor from a larger tensor and
+         removes one dimension.
+
+    The asymmetry is due to the fact that this operation is intended for 1D
+    vectors obtained from vectorizing a specific dimension. Non-vectorized
+    dimensions are handled by loops or split into multiple operations. When the
+    source doesn't involve the vectorized dimension, it gets produced by
+    repeating the operation and `reshape` thus has multiple operands. When the
+    source involves the vectorized dimension and the result doesn't (or no
+    longer vectorizes the same dimension), the `reshape` itself gets replicated
+    multiple times to produce portions of the result.
+
+    TODO: this operation is tightly connected to `extract`, likely misnamed, and
+    is up for redesign. The usage of `target_vector_shape` of the python
+    equivalent is **inconsistent** and in some cases is used for the _source_
+    vector shape instead in a blatant violation of any reasonable semantic
+    contract (#942). This will **NOT** be modeled here.
+  }];
+
+  let arguments = !con((ins
+    // TODO: cannot use WaveTensorInRegister here because it's not a Type, requires
+    // an upstream change to Variadic to allow TypeConstraint.
+    Arg<Variadic<AnyType>,
+        "Tensor to reshape, potentially composed from a sequence "
+        "of registers">:$source,
+    Arg<DictionaryAttr, "Target vector shape">:$target_vector_shape,
+    Arg<DefaultValuedAttr<
+        ConfinedAttr<I64Attr, [IntMinValue<0>]>, "0">,
+        "Logical slice">:$logical_slice,
+    Arg<DefaultValuedAttr<
+        ConfinedAttr<I64Attr, [IntMinValue<1>]>, "1">,
+        "Number of slices">:$num_slices
+  ), commonArguments);
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Reshaped tensor">:$result
+  );
+
+  let assemblyFormat =
+    "$source" # commonArgumentsSyntax  # "attr-dict `:` "
+    "custom<ReusedType>(type($source), ref($source)) `to` qualified(type($result))";
+  let hasVerifier = 1;
+}
+
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
@@ -451,8 +513,8 @@ def ReadOp : WaveOp<"read", [
     Arg<WaveMemoryType, "Memory to read from">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
-    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
-        "Bound expressions for each symbolic dimension">:$bounds,
+    Arg<OptionalAttr<WaveSymbolMappingToNResultExprListAttr<1>>,
+        "Bound expressions for symbolic dimensions that need masking">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms
   ), commonArguments);
@@ -517,8 +579,8 @@ def WriteOp : WaveOp<"write", [
     Arg<WaveMemoryType, "Memory to write into">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
-    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
-        "Bound expressions for each symbolic dimension">:$bounds,
+    Arg<OptionalAttr<WaveSymbolMappingToNResultExprListAttr<1>>,
+        "Bound expressions for symbolic dimensions that need masking">:$bounds,
     Arg<OptionalAttr<WaveSymbolArrayAttr>,
         "Ordered dimension symbols from memory type shape">:$ordered_syms
   ), commonArguments);

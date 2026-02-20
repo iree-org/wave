@@ -613,9 +613,9 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
         // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
         // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 32)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
         N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
-      }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
-        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
       // Bounds for dim 0.
       // CHECK: %[[DIM0_SIZE:.+]] = affine.apply affine_map<() -> (100)>()
@@ -648,13 +648,41 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     %v = wave.read %mem index [{
         M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 8, 64)>,
         N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)>
-      }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
-        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
       // CHECK: %[[MASK:.+]] = arith.andi {{.*}}, {{.*}}
       // CHECK: %[[PAD:.*]] = arith.constant {{.*}} : f16
       // CHECK: vector.transfer_read {{.*}}[{{.*}}, {{.*}}], %[[PAD]], %[[MASK]] {in_bounds = [true], permutation_map = affine_map<(d0, d1) -> (d0)>} : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
+    return
+  }
+}
+
+// -----
+
+// Sparse bounds: only M needs masking, N is fully tiled (no entry).
+// The mask should only check the M dimension — no arith.andi.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: @lower_read_sparse_bounds
+  func.func @lower_read_sparse_bounds(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 100, N = 64}>} {
+    %v = wave.read %mem index [{
+        // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
+        // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
+        // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1)>()[%[[BIDX_X]], %[[TIDX_X]]]
+        M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
+        N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
+      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
+      : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
+      // Only M dimension produces a mask — no andi needed.
+      // CHECK: %[[DIM0_SIZE:.+]] = affine.apply affine_map<() -> (100)>()
+      // CHECK: %[[DIM0_CMP:.+]] = arith.cmpi slt, %[[ROW]], %[[DIM0_SIZE]]
+      // CHECK: %[[MASK:.+]] = vector.broadcast %[[DIM0_CMP]] : i1 to vector<4xi1>
+      // CHECK-NOT: arith.andi
+      // CHECK: %[[CST0:.+]] = arith.constant dense<0.000000e+00> : vector<4xf16>
+      // CHECK: vector.maskedload %{{.*}}[%[[ROW]], %{{.*}}], %[[MASK]], %[[CST0]]
     return
   }
 }
@@ -1503,5 +1531,85 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
       M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 1)>
     }] : vector<8xi32>
     return %0 : vector<8xi32>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: multiple 1-element vectors to vector (vector.from_elements with extract).
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_single_elem_vectors_to_vector
+  func.func @lower_reshape_single_elem_vectors_to_vector() -> vector<3xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %v0 = wave.register %c0 : vector<1xf32>
+    %c1 = arith.constant 1.0 : f32
+    %v1 = wave.register %c1 : vector<1xf32>
+    %c2 = arith.constant 2.0 : f32
+    %v2 = wave.register %c2 : vector<1xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ONE:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: %[[TWO:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: %[[THREE:.+]] = vector.extract %{{.*}}[0] : f32 from vector<1xf32>
+    // CHECK: vector.from_elements %[[ONE]], %[[TWO]], %[[THREE]] : vector<3xf32>
+    %0 = wave.reshape %v0, %v1, %v2 {target_vector_shape = {}} : vector<1xf32> to vector<3xf32>
+    return %0 : vector<3xf32>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: multiple vectors concatenated (zeros + vector.insert_strided_slice).
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_concat_vectors
+  func.func @lower_reshape_concat_vectors() -> vector<8xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %v0 = wave.register %c0 : vector<4xf32>
+    %c1 = arith.constant 1.0 : f32
+    %v1 = wave.register %c1 : vector<4xf32>
+    // CHECK: %[[SLICE1:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK: %[[SLICE2:.+]] = arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ZEROS:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+    // CHECK: %[[ONE:.+]] = vector.insert_strided_slice %[[SLICE1]], %[[ZEROS]] {offsets = [0], strides = [1]}
+    // CHECK: vector.insert_strided_slice %[[SLICE2]], %[[ONE]] {offsets = [4], strides = [1]}
+    %0 = wave.reshape %v0, %v1 {target_vector_shape = {}} : vector<4xf32> to vector<8xf32>
+    return %0 : vector<8xf32>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: multiple vectors concatenated (zeros + vector.insert_strided_slice), i16 element type.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_concat_vectors_i16
+  func.func @lower_reshape_concat_vectors_i16() -> vector<8xi16> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0 : i16
+    %v0 = wave.register %c0 : vector<4xi16>
+    %c1 = arith.constant 1 : i16
+    %v1 = wave.register %c1 : vector<4xi16>
+    // CHECK: %[[SLICE1:.+]] = arith.constant dense<0> : vector<4xi16>
+    // CHECK: %[[SLICE2:.+]] = arith.constant dense<1> : vector<4xi16>
+    // CHECK-NOT: wave.reshape
+    // CHECK: %[[ZEROS:.+]] = arith.constant dense<0> : vector<8xi16>
+    // CHECK: %[[ONE:.+]] = vector.insert_strided_slice %[[SLICE1]], %[[ZEROS]] {offsets = [0], strides = [1]}
+    // CHECK: vector.insert_strided_slice %[[SLICE2]], %[[ONE]] {offsets = [4], strides = [1]}
+    %0 = wave.reshape %v0, %v1 {target_vector_shape = {}} : vector<4xi16> to vector<8xi16>
+    return %0 : vector<8xi16>
+  }
+}
+
+// -----
+
+// Test wave.reshape lowering: single source, extract slice (vector.extract_strided_slice).
+// Single-source case: offset = logical_slice * target_num_elements; extract that slice.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_reshape_extract_slice
+  func.func @lower_reshape_extract_slice() -> vector<4xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %vec = wave.register %c0 : vector<8xf32>
+    // CHECK-NOT: wave.reshape
+    // CHECK: vector.extract_strided_slice %{{.*}} {offsets = [4], sizes = [4], strides = [1]}
+    %0 = wave.reshape %vec {target_vector_shape = {}, logical_slice = 1, num_slices = 2} : vector<8xf32> to vector<4xf32>
+    return %0 : vector<4xf32>
   }
 }

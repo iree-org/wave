@@ -82,3 +82,17 @@ waveasm.program @mfma_16x16 target = #waveasm.target<#waveasm.gfx942, 5> abi = #
 
   waveasm.s_endpgm
 }
+
+// Test 5: MFMA with AGPR accumulator - result tied to AGPR.
+// CHECK-LABEL: waveasm.program @mfma_agpr_tied
+waveasm.program @mfma_agpr_tied target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
+  %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>
+  %b = waveasm.precolored.vreg 4, 4 : !waveasm.pvreg<4, 4>
+  // CHECK: waveasm.precolored.areg 24, 4 : !waveasm.pareg<24, 4>
+  %acc0 = waveasm.precolored.areg 24, 4 : !waveasm.pareg<24, 4>
+
+  // CHECK: waveasm.v_mfma_f32_16x16x16_f16 {{.*}} -> !waveasm.pareg<24, 4>
+  %acc1 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %acc0 : !waveasm.pvreg<0, 4>, !waveasm.pvreg<4, 4>, !waveasm.pareg<24, 4> -> !waveasm.areg<4, 4>
+
+  waveasm.s_endpgm
+}

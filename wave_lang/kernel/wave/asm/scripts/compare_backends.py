@@ -24,10 +24,12 @@ Requirements:
 """
 
 import argparse
+import copy
 import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,21 @@ from wave_lang.kernel.wave.perf.benchmark_asm_backend import (
     create_gemm_schedule,
 )
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+
+# Shared parity analysis from the unified benchmark script
+try:
+    # When running from repo root
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+    from bench_mxfp4_comparison import (
+        ParityConfig,
+        LoopStructure,
+        analyze_loop_structure as _analyze_loop_structure,
+    )
+except ImportError:
+    # Stub fallback if bench_mxfp4_comparison is not on the path
+    _analyze_loop_structure = None
+    ParityConfig = None
+    LoopStructure = None
 
 
 # =============================================================================
@@ -179,6 +196,141 @@ class InstructionMetrics:
     ds_write: int = 0
     m0_setup: int = 0
     readfirstlane: int = 0
+
+
+MXFP4_CONFIGS = {
+    "4wave": {
+        "name": "mxfp4_4wave",
+        "shape": (1024, 1024, 8192),
+        "block": (256, 256, 256),
+        "num_waves": 4,
+        "wave_m": 128,
+        "wave_n": 128,
+        "use_stagger": False,
+    },
+    "8wave": {
+        "name": "mxfp4_8wave",
+        "shape": (1024, 1024, 8192),
+        "block": (256, 256, 256),
+        "num_waves": 8,
+        "wave_m": 64,
+        "wave_n": 128,
+        "use_stagger": True,
+    },
+}
+
+
+def _capture_mlir_from_kernel(kernel, options, schedule=None) -> Optional[str]:
+    """Capture MLIR text for a wave kernel using the internal trace path."""
+    from wave_lang.kernel.wave.compile import _trace_launchable_and_get_kernel_signature
+    from wave_lang.kernel._support.indexing import IndexingContext
+
+    try:
+        with IndexingContext() as idxc:
+            idxc.set_subs(options.subs)
+            kernel.initialize_wave_constraints()
+            kernel.initialize_symbolic_constraints()
+            kernel.initialize_workgroup_constraints()
+            result = _trace_launchable_and_get_kernel_signature(
+                kernel, options, schedule
+            )
+            mb = result[0]
+            return mb.module_op.get_asm(enable_debug_info=False)
+    except Exception:
+        return None
+
+
+def compile_kernel_with_options(
+    kernel,
+    base_options,
+    backend: str,
+    output_dir: Optional[Path] = None,
+    schedule=None,
+) -> BackendResult:
+    """Compile a wave kernel with explicit options for llvm/asm backends."""
+    options = copy.deepcopy(base_options)
+    options.backend = backend
+    options.compile_to_mlir = False
+    if backend == "asm":
+        options.wave_runtime = True
+    if output_dir:
+        options.dump_intermediates = str(output_dir)
+
+    try:
+        if schedule:
+            result = wave_compile(options, kernel, schedule)
+        else:
+            result = wave_compile(options, kernel)
+    except Exception as e:
+        return BackendResult(
+            backend=backend,
+            raw_asm=f"{backend} backend error: {e}",
+            hsaco_path=None,
+            disasm=None,
+            vgpr_count=0,
+            sgpr_count=0,
+            lds_size=0,
+        )
+
+    raw_asm = ""
+    hsaco_path = None
+    disasm = None
+    rocmasm_content = None
+
+    if backend == "asm":
+        raw_asm = getattr(result, "asm", "") or ""
+        hsaco_path = getattr(result, "gpu_binary_path", None)
+    else:
+        hsaco_path = getattr(result, "gpu_binary_path", None)
+        search_dirs = []
+        if output_dir:
+            search_dirs.append(Path(output_dir))
+        if hsaco_path:
+            search_dirs.append(Path(hsaco_path).parent)
+        for search_dir in search_dirs:
+            if search_dir.exists():
+                rocmasm_files = list(search_dir.glob("*.rocmasm"))
+                if rocmasm_files:
+                    try:
+                        rocmasm_content = rocmasm_files[0].read_text()
+                        break
+                    except Exception:
+                        pass
+
+    if hsaco_path and Path(hsaco_path).exists():
+        try:
+            disasm = subprocess.check_output(
+                ["/opt/rocm/llvm/bin/llvm-objdump", "-d", hsaco_path],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    if backend == "llvm" and not raw_asm and disasm:
+        raw_asm = disasm
+
+    if backend == "asm" and raw_asm:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(raw_asm)
+    elif backend == "llvm" and rocmasm_content:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(rocmasm_content)
+    elif backend == "llvm" and hsaco_path:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage_from_hsaco(hsaco_path)
+    else:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(disasm or raw_asm)
+
+    if backend == "llvm" and rocmasm_content:
+        raw_asm = rocmasm_content
+
+    return BackendResult(
+        backend=backend,
+        raw_asm=raw_asm,
+        hsaco_path=hsaco_path,
+        disasm=disasm,
+        vgpr_count=vgpr_count,
+        sgpr_count=sgpr_count,
+        lds_size=lds_size,
+    )
 
 
 def load_benchmark_config(name: str) -> dict:
@@ -464,6 +616,8 @@ def compile_cpp_backend(
             "--waveasm-peephole",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-linear-scan",
+            "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
+            "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
             "--waveasm-insert-waitcnt",
             "--waveasm-hazard-mitigation",
             "--emit-assembly",
@@ -967,6 +1121,82 @@ def format_resource_comparison(
     return "\n".join(lines)
 
 
+def format_llvm_cpp_metrics_comparison(
+    llvm_metrics: InstructionMetrics, cpp_metrics: InstructionMetrics
+) -> str:
+    """Format LLVM vs C++ metrics comparison."""
+    lines = []
+    lines.append("=" * 90)
+    lines.append("Instruction Metrics Comparison")
+    lines.append("=" * 90)
+    lines.append(
+        f"{'Category':<25} {'LLVM':>10} {'C++':>10} {'Diff':>10} {'C++/LLVM':>10}"
+    )
+    lines.append("-" * 90)
+
+    def row(name, llvm_val, cpp_val):
+        diff = cpp_val - llvm_val
+        diff_str = f"+{diff}" if diff > 0 else str(diff)
+        ratio = f"{cpp_val/llvm_val:.2f}x" if llvm_val > 0 else "N/A"
+        return f"{name:<25} {llvm_val:>10} {cpp_val:>10} {diff_str:>10} {ratio:>10}"
+
+    lines.append(row("Total Instructions", llvm_metrics.total, cpp_metrics.total))
+    lines.append("-" * 90)
+    lines.append(row("Scalar ALU (SALU)", llvm_metrics.salu, cpp_metrics.salu))
+    lines.append(row("Vector ALU (VALU)", llvm_metrics.valu, cpp_metrics.valu))
+    lines.append(row("Vector Memory (VMEM)", llvm_metrics.vmem, cpp_metrics.vmem))
+    lines.append(row("Scalar Memory (SMEM)", llvm_metrics.smem, cpp_metrics.smem))
+    lines.append(row("LDS/GDS (DS)", llvm_metrics.ds, cpp_metrics.ds))
+    lines.append(row("Matrix Ops (MFMA)", llvm_metrics.mfma, cpp_metrics.mfma))
+    lines.append(row("Branch/Control", llvm_metrics.branch, cpp_metrics.branch))
+    lines.append(row("Waits (s_waitcnt)", llvm_metrics.wait, cpp_metrics.wait))
+    lines.append(row("Barriers (s_barrier)", llvm_metrics.barrier, cpp_metrics.barrier))
+    lines.append(row("NOPs (s_nop)", llvm_metrics.nop, cpp_metrics.nop))
+    lines.append(row("Other", llvm_metrics.other, cpp_metrics.other))
+    lines.append("-" * 90)
+    lines.append("Specific Patterns:")
+    lines.append(
+        row(
+            "  buffer_load...lds",
+            llvm_metrics.buffer_load_lds,
+            cpp_metrics.buffer_load_lds,
+        )
+    )
+    lines.append(row("  ds_read*", llvm_metrics.ds_read, cpp_metrics.ds_read))
+    lines.append(row("  ds_write*", llvm_metrics.ds_write, cpp_metrics.ds_write))
+    lines.append(
+        row("  M0 setup (s_mov m0)", llvm_metrics.m0_setup, cpp_metrics.m0_setup)
+    )
+    lines.append(
+        row("  v_readfirstlane", llvm_metrics.readfirstlane, cpp_metrics.readfirstlane)
+    )
+    lines.append("=" * 90)
+    return "\n".join(lines)
+
+
+def format_llvm_cpp_resource_comparison(
+    llvm_result: BackendResult, cpp_result: BackendResult
+) -> str:
+    """Format LLVM vs C++ resource comparison."""
+    lines = []
+    lines.append("=" * 70)
+    lines.append("Resource Usage Comparison")
+    lines.append("=" * 70)
+    lines.append(f"{'Resource':<25} {'LLVM':>10} {'C++':>10} {'Diff':>10}")
+    lines.append("-" * 70)
+
+    def row(name, llvm_val, cpp_val):
+        diff = cpp_val - llvm_val
+        diff_str = f"+{diff}" if diff > 0 else str(diff)
+        return f"{name:<25} {llvm_val:>10} {cpp_val:>10} {diff_str:>10}"
+
+    lines.append(row("VGPRs", llvm_result.vgpr_count, cpp_result.vgpr_count))
+    lines.append(row("SGPRs", llvm_result.sgpr_count, cpp_result.sgpr_count))
+    lines.append(row("LDS (bytes)", llvm_result.lds_size, cpp_result.lds_size))
+    lines.append("=" * 70)
+    return "\n".join(lines)
+
+
 def find_context_around_pattern(
     asm_text: str,
     pattern: str,
@@ -1151,6 +1381,278 @@ def generate_report(
     return "\n".join(lines)
 
 
+def run_mxfp4_comparison(
+    key: str,
+    output_dir: Path,
+    include_cpp: bool,
+):
+    """Run llvm/asm/cpp comparison for an MXFP4 dbuf kernel variant."""
+    from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
+    from wave_lang.kernel.wave.schedules import (
+        get_mxfp4_dbuf_schedule,
+        get_mxfp4_aiter_style_schedule,
+    )
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    cfg = MXFP4_CONFIGS[key]
+    case_dir = output_dir / cfg["name"]
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use the aiter-style schedule for 4-wave configs (4 K-partitions,
+    # 16 MFMAs per barrier, no stagger).  Keep the double-buffer schedule
+    # for 8-wave configs.
+    if cfg["num_waves"] <= 4:
+        schedule = get_mxfp4_aiter_style_schedule()
+    else:
+        schedule = get_mxfp4_dbuf_schedule(use_stagger=cfg["use_stagger"])
+
+    # Create a *fresh* kernel + options for each backend.  The wave kernel
+    # object is stateful and mutated during tracing/lowering, so reusing it
+    # across two compile_kernel_with_options calls corrupts internal state and
+    # causes the second compilation to silently fail (returning 0 metrics).
+
+    def _fresh_options():
+        """Return a fresh (kernel, options) pair for this MXFP4 config."""
+        _nw = cfg["num_waves"]
+        gemm, opts = get_tagged_mxfp4_gemm(cfg["shape"], cfg["block"], num_waves=_nw)
+        opts = set_default_run_config(opts)
+        opts.compile_to_mlir = False
+        opts.wave_runtime = True
+        return gemm, opts
+
+    print("\n" + "=" * 80)
+    print(f"LLVM vs C++ - {cfg['name']}")
+    print("=" * 80)
+    print(f"Shape: {cfg['shape']}")
+    print(f"Block: {cfg['block']}")
+    print(f"Waves: {cfg['num_waves']} (stagger={cfg['use_stagger']})")
+    print(f"Output directory: {case_dir}")
+
+    # LLVM backend -- must pass schedule (double-buffered pipeline requires it)
+    print("\n>>> Compiling LLVM backend (with schedule)...")
+    llvm_gemm, llvm_opts = _fresh_options()
+    llvm_result = compile_kernel_with_options(
+        llvm_gemm,
+        llvm_opts,
+        "llvm",
+        output_dir=case_dir / "llvm_intermediates",
+        schedule=schedule,
+    )
+    print(
+        f"  Resources: VGPR={llvm_result.vgpr_count}, SGPR={llvm_result.sgpr_count}, LDS={llvm_result.lds_size}"
+    )
+
+    # Python ASM backend currently doesn't support this MXFP4 dbuf path reliably.
+    print("\n>>> Skipping ASM backend for MXFP4 dbuf kernels (known unsupported path)")
+
+    cpp_result = None
+    if include_cpp:
+        print("\n>>> Compiling C++ waveasm-translate backend...")
+        cpp_gemm, cpp_opts = _fresh_options()
+        cpp_opts.backend = "asm"
+        mlir_text = _capture_mlir_from_kernel(cpp_gemm, cpp_opts, schedule=schedule)
+        if mlir_text:
+            (case_dir / "cpp_intermediates").mkdir(parents=True, exist_ok=True)
+            (case_dir / "cpp_intermediates" / "input.mlir").write_text(mlir_text)
+            cpp_result = compile_cpp_backend(
+                mlir_text,
+                target=get_default_arch(),
+                output_dir=case_dir / "cpp_intermediates",
+            )
+            if cpp_result.raw_asm.startswith("C++ backend error"):
+                print(f"  Error: {cpp_result.raw_asm}")
+            else:
+                print(
+                    f"  Resources: VGPR={cpp_result.vgpr_count}, SGPR={cpp_result.sgpr_count}, LDS={cpp_result.lds_size}"
+                )
+        else:
+            print("  Error: Failed to capture MLIR for C++ backend")
+
+    llvm_text = llvm_result.raw_asm or llvm_result.disasm or ""
+    llvm_metrics = compute_metrics(llvm_text)
+    cpp_metrics = None
+    if cpp_result and not cpp_result.raw_asm.startswith("C++ backend error"):
+        cpp_metrics = compute_metrics(cpp_result.raw_asm)
+
+    # Loop structure analysis (if available from parity harness)
+    llvm_loop = None
+    cpp_loop = None
+    if _analyze_loop_structure is not None:
+        llvm_loop = _analyze_loop_structure(llvm_text)
+        if cpp_result and cpp_metrics:
+            cpp_loop = _analyze_loop_structure(cpp_result.raw_asm)
+
+    # Save parity manifest (Phase 2 - config equivalence)
+    report_cfg = {
+        "m": cfg["shape"][0],
+        "n": cfg["shape"][1],
+        "k": cfg["shape"][2],
+        "block_m": cfg["block"][0],
+        "block_n": cfg["block"][1],
+        "block_k": cfg["block"][2],
+        "wave_m": cfg["wave_m"],
+        "wave_n": cfg["wave_n"],
+        "num_waves": cfg["num_waves"],
+        "use_stagger": cfg["use_stagger"],
+        "schedule": "aiter_style" if cfg["num_waves"] <= 4 else "dbuf",
+        "arch": get_default_arch(),
+    }
+    manifest_path = case_dir / "parity_manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(report_cfg, f, indent=2)
+
+    # Save artifacts
+    (case_dir / "llvm_asm.s").write_text(llvm_text)
+    if llvm_result.disasm:
+        (case_dir / "llvm_disasm.s").write_text(llvm_result.disasm)
+    if cpp_result and not cpp_result.raw_asm.startswith("C++ backend error"):
+        (case_dir / "cpp_asm.s").write_text(cpp_result.raw_asm)
+        if cpp_result.disasm:
+            (case_dir / "cpp_disasm.s").write_text(cpp_result.disasm)
+
+    if cpp_result and cpp_metrics:
+        metrics_table = format_llvm_cpp_metrics_comparison(llvm_metrics, cpp_metrics)
+        resource_table = format_llvm_cpp_resource_comparison(llvm_result, cpp_result)
+        report_lines = [
+            "=" * 80,
+            "LLVM vs C++ Backend Assembly Comparison Report",
+            "=" * 80,
+            "",
+            "Configuration:",
+            f"  Name: {cfg['name']}",
+            f"  Shape: M={report_cfg['m']}, N={report_cfg['n']}, K={report_cfg['k']}",
+            f"  Blocks: BLOCK_M={report_cfg['block_m']}, BLOCK_N={report_cfg['block_n']}, BLOCK_K={report_cfg['block_k']}",
+            f"  Waves: WAVE_M={report_cfg['wave_m']}, WAVE_N={report_cfg['wave_n']}",
+            f"  Waves/WG: {cfg['num_waves']}",
+            f"  Schedule: {report_cfg['schedule']}",
+            f"  Architecture: {get_default_arch()}",
+            "",
+            metrics_table,
+            "",
+            resource_table,
+        ]
+
+        # Append loop structure if available
+        if llvm_loop is not None and cpp_loop is not None:
+            report_lines.append("")
+            report_lines.append("=" * 70)
+            report_lines.append("Loop Structure Analysis")
+            report_lines.append("=" * 70)
+            report_lines.append(
+                f"{'Metric':<30s} {'LLVM':>12s} {'C++':>12s} {'Diff':>12s}"
+            )
+            report_lines.append("-" * 70)
+
+            def _lrow(label, llvm_val, cpp_val, fmt="d"):
+                diff = cpp_val - llvm_val
+                diff_s = f"+{diff}" if diff > 0 else str(diff)
+                if fmt == "d":
+                    return f"{label:<30s} {int(llvm_val):>12d} {int(cpp_val):>12d} {diff_s:>12s}"
+                else:
+                    return (
+                        f"{label:<30s} {llvm_val:>12.2f} {cpp_val:>12.2f} {diff_s:>12s}"
+                    )
+
+            report_lines.append(
+                _lrow("Loop count", llvm_loop.loop_count, cpp_loop.loop_count)
+            )
+            report_lines.append(
+                _lrow(
+                    "Loop body instructions",
+                    llvm_loop.loop_body_instructions,
+                    cpp_loop.loop_body_instructions,
+                )
+            )
+            report_lines.append(
+                _lrow(
+                    "Prologue instructions",
+                    llvm_loop.prologue_instructions,
+                    cpp_loop.prologue_instructions,
+                )
+            )
+            report_lines.append(
+                _lrow(
+                    "Epilogue instructions",
+                    llvm_loop.epilogue_instructions,
+                    cpp_loop.epilogue_instructions,
+                )
+            )
+            report_lines.append("-" * 70)
+            report_lines.append(
+                _lrow("  Loop MFMA", llvm_loop.loop_mfma, cpp_loop.loop_mfma)
+            )
+            report_lines.append(
+                _lrow("  Loop VMEM", llvm_loop.loop_vmem, cpp_loop.loop_vmem)
+            )
+            report_lines.append(_lrow("  Loop DS", llvm_loop.loop_ds, cpp_loop.loop_ds))
+            report_lines.append(
+                _lrow("  Loop SALU", llvm_loop.loop_salu, cpp_loop.loop_salu)
+            )
+            report_lines.append(
+                _lrow("  Loop VALU", llvm_loop.loop_valu, cpp_loop.loop_valu)
+            )
+            report_lines.append(
+                _lrow("  Loop waits", llvm_loop.loop_wait, cpp_loop.loop_wait)
+            )
+            report_lines.append(
+                _lrow("  Loop barriers", llvm_loop.loop_barrier, cpp_loop.loop_barrier)
+            )
+            report_lines.append(
+                _lrow("  Loop NOPs", llvm_loop.loop_nop, cpp_loop.loop_nop)
+            )
+            report_lines.append("-" * 70)
+            report_lines.append(
+                _lrow(
+                    "MFMA density", llvm_loop.mfma_density, cpp_loop.mfma_density, ".2f"
+                )
+            )
+            report_lines.append(
+                _lrow(
+                    "Prefetch loads",
+                    llvm_loop.prefetch_loads_before_first_mfma,
+                    cpp_loop.prefetch_loads_before_first_mfma,
+                )
+            )
+            report_lines.append("=" * 70)
+
+        report_lines.append("")
+        report_lines.append("=" * 70)
+        report_lines.append("Preliminary Analysis")
+        report_lines.append("=" * 70)
+
+        if llvm_metrics.total > 0:
+            cpp_overhead_ratio = cpp_metrics.total / llvm_metrics.total
+            report_lines.append(
+                f"C++ vs LLVM instruction ratio: {cpp_overhead_ratio:.2f}x ({cpp_metrics.total - llvm_metrics.total:+d} instructions)"
+            )
+        else:
+            report_lines.append(
+                "LLVM metrics unavailable (compile/metadata issue), cannot compute ratios."
+            )
+        report_lines.append("=" * 70)
+        report = "\n".join(report_lines)
+    else:
+        report = (
+            "LLVM vs C++ comparison could not be completed because C++ backend "
+            "compilation failed. See console output for details."
+        )
+    (case_dir / "comparison_report.txt").write_text(report)
+    if cpp_result and cpp_metrics:
+        print("\n" + format_llvm_cpp_metrics_comparison(llvm_metrics, cpp_metrics))
+        print("\n" + format_llvm_cpp_resource_comparison(llvm_result, cpp_result))
+        # Print loop structure if available
+        if llvm_loop and cpp_loop:
+            print(
+                f"\nLoop Structure: LLVM body={llvm_loop.loop_body_instructions}, "
+                f"C++ body={cpp_loop.loop_body_instructions}, "
+                f"LLVM MFMA_density={llvm_loop.mfma_density:.2f}, "
+                f"C++ MFMA_density={cpp_loop.mfma_density:.2f}"
+            )
+    else:
+        print("\nC++ backend failed; skipped LLVM vs C++ metrics table.")
+    print(f"\nSaved: {case_dir / 'comparison_report.txt'}, {manifest_path}")
+
+
 def main():
     # Disable cache to ensure fresh compilation for each run
     # (moved from module level to avoid side effects at import time)
@@ -1202,7 +1704,21 @@ Examples:
         action="store_true",
         help="Include C++ waveasm-translate backend in comparison",
     )
+    parser.add_argument(
+        "--mxfp4",
+        choices=["4wave", "8wave", "both"],
+        help="Compare MXFP4 dbuf kernels (4-wave / 8-wave / both)",
+    )
     args = parser.parse_args()
+
+    if args.mxfp4:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        keys = ["4wave", "8wave"] if args.mxfp4 == "both" else [args.mxfp4]
+        for key in keys:
+            run_mxfp4_comparison(key, output_dir, include_cpp=args.cpp)
+        print("\n>>> Done!")
+        return
 
     # Determine configuration
     if args.benchmark:

@@ -38,6 +38,8 @@ static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
     return PVRegType::get(ctx, physReg, vreg.getSize());
   if (auto sreg = dyn_cast<SRegType>(virtualType))
     return PSRegType::get(ctx, physReg, sreg.getSize());
+  if (auto areg = dyn_cast<ARegType>(virtualType))
+    return PARegType::get(ctx, physReg, areg.getSize());
   return virtualType;
 }
 
@@ -52,8 +54,8 @@ struct LinearScanPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinearScanPass)
 
   LinearScanPass() = default;
-  LinearScanPass(int64_t maxVGPRs, int64_t maxSGPRs)
-      : maxVGPRs(maxVGPRs), maxSGPRs(maxSGPRs) {}
+  LinearScanPass(int64_t maxVGPRs, int64_t maxSGPRs, int64_t maxAGPRs)
+      : maxVGPRs(maxVGPRs), maxSGPRs(maxSGPRs), maxAGPRs(maxAGPRs) {}
 
   StringRef getArgument() const override { return "waveasm-linear-scan"; }
 
@@ -75,6 +77,7 @@ struct LinearScanPass
 private:
   int64_t maxVGPRs = 256;
   int64_t maxSGPRs = 104;
+  int64_t maxAGPRs = 256;
 
   /// Create a fresh zero-initialized copy of a duplicate init arg to ensure
   /// unique physical registers. This is used when CSE merges identical
@@ -95,6 +98,12 @@ private:
     auto immType = ImmType::get(loopOp->getContext(), 0);
     Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
 
+    if (isAGPRType(initArg.getType())) {
+      // AGPR zero-init: V_MOV_B32 with ARegType destination.
+      // The assembly emitter will produce v_accvgpr_write_b32 aN, 0.
+      auto aregType = cast<ARegType>(initArg.getType());
+      return V_MOV_B32::create(copyBuilder, loc, aregType, zeroImm);
+    }
     if (isVGPRType(initArg.getType())) {
       auto vregType = cast<VRegType>(initArg.getType());
       return V_MOV_B32::create(copyBuilder, loc, vregType, zeroImm);
@@ -120,6 +129,7 @@ private:
     llvm::DenseMap<Value, int64_t> precoloredValues;
     llvm::DenseSet<int64_t> reservedVGPRs;
     llvm::DenseSet<int64_t> reservedSGPRs;
+    llvm::DenseSet<int64_t> reservedAGPRs;
 
     // Collect tied operand pairs from MFMA ops
     // tiedPairs[result] = accumulator (result should get same phys reg as acc)
@@ -154,6 +164,13 @@ private:
         for (int64_t i = 0; i < size; ++i) {
           reservedSGPRs.insert(physIdx + i);
         }
+      } else if (auto precoloredAReg = dyn_cast<PrecoloredARegOp>(op)) {
+        int64_t physIdx = precoloredAReg.getIndex();
+        int64_t size = precoloredAReg.getSize();
+        precoloredValues[precoloredAReg.getResult()] = physIdx;
+        for (int64_t i = 0; i < size; ++i) {
+          reservedAGPRs.insert(physIdx + i);
+        }
       } else if (op->hasTrait<OpTrait::MFMAOp>() && op->getNumResults() > 0) {
         // For MFMA with VGPR accumulator, tie result to accumulator
         Value acc = getMFMAAccumulator(op);
@@ -164,7 +181,10 @@ private:
           collectFailed = true;
           return;
         }
-        if (isVGPRType(acc.getType())) {
+        if ((isVGPRType(acc.getType()) &&
+             isVGPRType(op->getResult(0).getType())) ||
+            (isAGPRType(acc.getType()) &&
+             isAGPRType(op->getResult(0).getType()))) {
           // Result should be allocated to same physical register as accumulator
           tiedPairs[op->getResult(0)] = acc;
         }
@@ -227,8 +247,8 @@ private:
     });
 
     // Create allocator with precolored values and tied operands
-    LinearScanRegAlloc allocator(maxVGPRs, maxSGPRs, reservedVGPRs,
-                                 reservedSGPRs);
+    LinearScanRegAlloc allocator(maxVGPRs, maxSGPRs, maxAGPRs, reservedVGPRs,
+                                 reservedSGPRs, reservedAGPRs);
     for (const auto &[value, physIdx] : precoloredValues) {
       allocator.precolorValue(value, physIdx);
     }
@@ -257,6 +277,8 @@ private:
       Type srcType = source.getType();
       if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
         sourcePhysReg = pvreg.getIndex();
+      } else if (auto pareg = dyn_cast<PARegType>(srcType)) {
+        sourcePhysReg = pareg.getIndex();
       } else {
         sourcePhysReg = mapping.getPhysReg(source);
       }
@@ -373,8 +395,9 @@ std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass() {
 }
 
 std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
-                                                        int64_t maxSGPRs) {
-  return std::make_unique<LinearScanPass>(maxVGPRs, maxSGPRs);
+                                                        int64_t maxSGPRs,
+                                                        int64_t maxAGPRs) {
+  return std::make_unique<LinearScanPass>(maxVGPRs, maxSGPRs, maxAGPRs);
 }
 
 } // namespace waveasm

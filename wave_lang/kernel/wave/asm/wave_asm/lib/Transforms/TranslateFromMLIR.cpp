@@ -57,6 +57,10 @@ SRegType TranslationContext::createSRegType(int64_t size, int64_t alignment) {
   return SRegType::get(builder.getContext(), size, alignment);
 }
 
+ARegType TranslationContext::createARegType(int64_t size, int64_t alignment) {
+  return ARegType::get(builder.getContext(), size, alignment);
+}
+
 ImmType TranslationContext::createImmType(int64_t value) {
   return ImmType::get(builder.getContext(), value);
 }
@@ -1217,6 +1221,16 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
         storeData = splitResults[splitIndex];
       }
 
+      // If the data source is an AGPR (from MFMA accumulator), we need to
+      // move it to a VGPR before storing. MUBUF store instructions require
+      // VGPR sources. Emit v_accvgpr_read_b32 to a temporary VGPR.
+      if (isAGPRType(storeData.getType())) {
+        auto vregType =
+            ctx.createVRegType(storeDwords, storeDwords > 1 ? storeDwords : 1);
+        storeData =
+            V_ACCVGPR_READ_B32::create(builder, loc, vregType, storeData);
+      }
+
       // Use instOffset attribute instead of computing new voffset
       // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
       // instruction
@@ -1277,6 +1291,8 @@ LogicalResult handleSCFYield(Operation *op, TranslationContext &ctx);
 
 // From AMDGPUHandlers.cpp
 LogicalResult handleAMDGPULdsBarrier(Operation *op, TranslationContext &ctx);
+LogicalResult handleAMDGPUMemoryCounterWait(Operation *op,
+                                            TranslationContext &ctx);
 LogicalResult handleAMDGPUMfma(Operation *op, TranslationContext &ctx);
 LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx);
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx);
@@ -1284,6 +1300,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferStore(Operation *op, TranslationContext &ctx);
 LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
+LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
+LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
@@ -1426,6 +1444,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // AMDGPU dialect
   REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
+  REGISTER_HANDLER(amdgpu::MemoryCounterWaitOp, handleAMDGPUMemoryCounterWait);
   REGISTER_HANDLER(amdgpu::MFMAOp, handleAMDGPUMfma);
   REGISTER_HANDLER(amdgpu::ScaledMFMAOp, handleAMDGPUScaledMfma);
   REGISTER_HANDLER(amdgpu::FatRawBufferCastOp, handleFatRawBufferCast);
@@ -1435,6 +1454,8 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // ROCDL dialect
   REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);
+  REGISTER_HANDLER(ROCDL::SBarrierOp, handleROCDLSBarrier);
+  REGISTER_HANDLER(ROCDL::SetPrioOp, handleROCDLSetPrio);
   REGISTER_HANDLER(ROCDL::SWaitcntOp, handleSWaitcnt);
 
   // IREE/Stream dialect (unregistered operations)

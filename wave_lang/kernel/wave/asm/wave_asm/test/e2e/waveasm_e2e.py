@@ -198,6 +198,8 @@ class WaveASMCompiler:
             "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-linear-scan",  # Run register allocation
+            "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
+            "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
             "--waveasm-insert-waitcnt",  # Insert wait instructions
             "--waveasm-hazard-mitigation",  # Handle hazards
             "--emit-assembly",  # Emit AMDGCN assembly
@@ -424,7 +426,7 @@ def capture_wave_mlir(options, kernel_func) -> str:
     return mlir_text
 
 
-def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
+def capture_wave_kernel_info(options, kernel_func, schedule=None) -> CapturedKernelInfo:
     """
     Capture MLIR and kernel launch info from Wave compilation.
 
@@ -434,6 +436,7 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
     Args:
         options: WaveCompileOptions
         kernel_func: Decorated wave kernel function
+        schedule: Optional WaveSchedule to apply during compilation
 
     Returns:
         CapturedKernelInfo with all launch information
@@ -458,7 +461,9 @@ def capture_wave_kernel_info(options, kernel_func) -> CapturedKernelInfo:
         kernel_func.initialize_workgroup_constraints()
 
         # Trace and get MLIR - this populates options.kernel_launch_info
-        result = _trace_launchable_and_get_kernel_signature(kernel_func, options)
+        result = _trace_launchable_and_get_kernel_signature(
+            kernel_func, options, schedule=schedule
+        )
         mb = result[0]
 
         # Get full MLIR text (Python bindings can parse stream dialect)

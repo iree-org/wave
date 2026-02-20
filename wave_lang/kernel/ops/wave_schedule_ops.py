@@ -200,6 +200,7 @@ def interleave_ops(
     interleaved_ops: Any,
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
+    start_after_groups: list[list[int]] | None = None,
 ): ...
 
 
@@ -259,6 +260,7 @@ def interleave_operations(
     interleaved_ops: list | list[list],
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
+    start_after_groups: list[list[int]] | None = None,
 ) -> list:
     """Interleave operations with flexible per-group patterns."""
     # Normalize inputs to lists
@@ -271,19 +273,25 @@ def interleave_operations(
         start_offsets = [0] * len(interleaved_ops)
     elif isinstance(start_offsets, int):
         start_offsets = [start_offsets] * len(interleaved_ops)
+    if start_after_groups is None:
+        start_after_groups = [[] for _ in interleaved_ops]
     # Track counters for each group
     counters = [0] * len(interleaved_ops)
     result = []
     for i, base_op in enumerate(base_ops):
         result.append(base_op)
         # Check each group for insertion
-        for group_idx, (ops, interval, offset) in enumerate(
-            zip(interleaved_ops, intervals, start_offsets)
+        for group_idx, (ops, interval, offset, depends_on) in enumerate(
+            zip(interleaved_ops, intervals, start_offsets, start_after_groups)
         ):
-            # Check if we should insert from this group
+            # All dependent groups must be fully exhausted first
+            deps_satisfied = all(
+                counters[dep] >= len(interleaved_ops[dep]) for dep in depends_on
+            )
             if (
-                i >= offset
-                and (i - offset + 1) % interval == 0
+                deps_satisfied
+                and i >= offset
+                and (i - offset) % interval == 0
                 and counters[group_idx] < len(ops)
             ):
                 result.append(ops[counters[group_idx]])

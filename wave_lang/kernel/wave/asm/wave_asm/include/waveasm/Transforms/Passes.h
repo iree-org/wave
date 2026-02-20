@@ -25,7 +25,8 @@ std::unique_ptr<mlir::Pass> createWAVEASMLivenessPass();
 /// Create the linear scan register allocation pass
 std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass();
 std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
-                                                        int64_t maxSGPRs);
+                                                        int64_t maxSGPRs,
+                                                        int64_t maxAGPRs);
 
 /// Create the hazard mitigation pass
 std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass();

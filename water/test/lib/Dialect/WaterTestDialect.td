@@ -38,4 +38,16 @@ def WaveFailPropagationOp
   let assemblyFormat = "$in1 `,` $in2 attr-dict `:` functional-type(operands, results)";
 }
 
+// Dummy op used to test WaveSymbolMappingAttr with different types of values.
+def WaveSymbolMappingOp
+    : Op<WaterTestDialect, "wave_symbol_mapping"> {
+  let summary = "Test op that holds a WaveSymbolMappingAttr of expr lists";
+  let arguments = (ins
+    OptionalAttr<WaveSymbolMappingAttrOf<[WaveExprListAttr]>>:$mapping,
+    OptionalAttr<WaveSymbolMappingAttrOf<[WaveIndexMappingAttr]>>:$index_mapping,
+    OptionalAttr<WaveSymbolMappingToNResultExprListAttr<3>>:$three_results_mapping
+  );
+  let assemblyFormat = "attr-dict";
+}
+
 #endif // WATER_TEST_LIB_DIALECT_WATERTESTDIALECT

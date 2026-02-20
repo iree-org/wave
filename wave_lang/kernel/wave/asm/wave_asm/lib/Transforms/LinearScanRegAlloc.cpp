@@ -88,11 +88,13 @@ static std::optional<int64_t> tryAllocate(RegPool &pool, int64_t size,
 
 /// Allocate registers for a single register class (VGPR or SGPR).
 /// This is the core linear scan algorithm, parameterized by register class.
-static LogicalResult allocateRegClass(
-    ArrayRef<LiveRange> ranges, RegPool &pool, PhysicalMapping &mapping,
-    AllocationStats &stats, const llvm::DenseMap<Value, Value> &tiedOperands,
-    const llvm::DenseMap<Value, int64_t> &precoloredValues, bool isVGPR,
-    ProgramOp program, int64_t maxRegs, int64_t maxPressure) {
+static LogicalResult
+allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
+                 PhysicalMapping &mapping, AllocationStats &stats,
+                 const llvm::DenseMap<Value, Value> &tiedOperands,
+                 const llvm::DenseMap<Value, int64_t> &precoloredValues,
+                 llvm::StringRef regClassName, ProgramOp program,
+                 int64_t maxRegs, int64_t maxPressure) {
 
   llvm::SmallVector<ActiveRange> active;
 
@@ -118,13 +120,15 @@ static LogicalResult allocateRegClass(
           physReg = mappingIt->second;
           mapping.valueToPhysReg[range.reg] = *physReg;
 
-          // IMPORTANT: Extend the physical register's lifetime to cover the
-          // tied result. The tied-to operand may have a shorter lifetime
-          // (e.g., %55 ends at op2), but the tied result (%56) may live longer
-          // (used in iteration 2). Without this extension, the physical
-          // register would be freed too early when the tied-to operand expires.
+          // Extend the physical register's lifetime to cover the tied result.
+          // The tied-to operand may have a shorter lifetime (e.g., %55 ends
+          // at op2), but the tied result (%56) may live longer (used in
+          // iteration 2). Without this extension, the physical register would
+          // be freed too early when the tied-to operand expires.
+          bool foundInActive = false;
           for (size_t i = 0; i < active.size(); ++i) {
             if (active[i].physReg == *physReg) {
+              foundInActive = true;
               if (range.end > active[i].endPoint) {
                 // Update end point and re-sort the affected portion
                 active[i].endPoint = range.end;
@@ -141,6 +145,21 @@ static LogicalResult allocateRegClass(
             }
           }
 
+          if (!foundInActive) {
+            // Two cases reach here:
+            // (a) Precolored tying (MFMA): the tied-to value is precolored
+            //     and was never in the active list. Its physReg is already
+            //     reserved in the pool. pool.reserve is a safe no-op.
+            // (b) Loop boundary: the tied-to virtual value expired from
+            //     active and its registers were returned to the pool.
+            //     The physReg MUST still be free (not re-allocated).
+            bool tiedToPrecolored = precoloredValues.contains(tiedTo);
+            assert((tiedToPrecolored || pool.isFree(*physReg)) &&
+                   "Tied register was re-allocated before re-reservation");
+            pool.reserve(*physReg, range.size);
+            insertActiveRange(active, {range.end, range, *physReg});
+          }
+
           stats.rangesAllocated++;
           continue;
         }
@@ -153,7 +172,7 @@ static LogicalResult allocateRegClass(
 
     if (!physReg) {
       return program.emitOpError()
-             << "Failed to allocate " << (isVGPR ? "VGPR" : "SGPR")
+             << "Failed to allocate " << regClassName
              << " for value. Peak pressure: " << maxPressure
              << ", limit: " << maxRegs;
     }
@@ -189,16 +208,21 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
 
   stats.totalVRegs = liveness.vregRanges.size();
   stats.totalSRegs = liveness.sregRanges.size();
+  stats.totalARegs = liveness.aregRanges.size();
 
   // Step 3: Create register pools with reserved registers
   RegPool vgprPool(RegClass::VGPR, maxVGPRs, reservedVGPRs);
   RegPool sgprPool(RegClass::SGPR, maxSGPRs, reservedSGPRs);
+  RegPool agprPool(RegClass::AGPR, maxAGPRs, reservedAGPRs);
 
   // Step 4: Handle precolored values (from ABI args like tid, kernarg)
   for (const auto &[value, physIdx] : precoloredValues) {
     if (isVGPRType(value.getType())) {
       mapping.valueToPhysReg[value] = physIdx;
       vgprPool.reserve(physIdx, getRegSize(value.getType()));
+    } else if (isAGPRType(value.getType())) {
+      mapping.valueToPhysReg[value] = physIdx;
+      agprPool.reserve(physIdx, getRegSize(value.getType()));
     } else if (isSGPRType(value.getType())) {
       mapping.valueToPhysReg[value] = physIdx;
       sgprPool.reserve(physIdx, getRegSize(value.getType()));
@@ -207,21 +231,27 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
 
   // Step 5: Allocate VGPRs using linear scan
   if (failed(allocateRegClass(liveness.vregRanges, vgprPool, mapping, stats,
-                              tiedOperands, precoloredValues,
-                              /*isVGPR=*/true, program, maxVGPRs,
-                              liveness.maxVRegPressure))) {
+                              tiedOperands, precoloredValues, "VGPR", program,
+                              maxVGPRs, liveness.maxVRegPressure))) {
     return failure();
   }
   stats.peakVGPRs = vgprPool.getPeakUsage();
 
   // Step 6: Allocate SGPRs using linear scan
   if (failed(allocateRegClass(liveness.sregRanges, sgprPool, mapping, stats,
-                              tiedOperands, precoloredValues,
-                              /*isVGPR=*/false, program, maxSGPRs,
-                              liveness.maxSRegPressure))) {
+                              tiedOperands, precoloredValues, "SGPR", program,
+                              maxSGPRs, liveness.maxSRegPressure))) {
     return failure();
   }
   stats.peakSGPRs = sgprPool.getPeakUsage();
+
+  // Step 7: Allocate AGPRs using linear scan
+  if (failed(allocateRegClass(liveness.aregRanges, agprPool, mapping, stats,
+                              tiedOperands, precoloredValues, "AGPR", program,
+                              maxAGPRs, liveness.maxARegPressure))) {
+    return failure();
+  }
+  stats.peakAGPRs = agprPool.getPeakUsage();
 
   return std::make_pair(mapping, stats);
 }

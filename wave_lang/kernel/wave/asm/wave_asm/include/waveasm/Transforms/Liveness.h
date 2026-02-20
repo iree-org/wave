@@ -77,6 +77,9 @@ struct LivenessInfo {
   /// SGPR ranges sorted by start point (for linear scan)
   llvm::SmallVector<LiveRange> sregRanges;
 
+  /// AGPR ranges sorted by start point (for linear scan)
+  llvm::SmallVector<LiveRange> aregRanges;
+
   /// Definition points for each register
   llvm::DenseMap<mlir::Value, int64_t> defPoints;
 
@@ -88,6 +91,9 @@ struct LivenessInfo {
 
   /// Maximum SGPR pressure (peak overlapping SGPRs)
   int64_t maxSRegPressure = 0;
+
+  /// Maximum AGPR pressure (peak overlapping AGPRs)
+  int64_t maxARegPressure = 0;
 
   /// Get live range for a value
   const LiveRange *getRange(mlir::Value value) const {

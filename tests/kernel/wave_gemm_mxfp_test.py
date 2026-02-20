@@ -26,7 +26,10 @@ from wave_lang.kernel.wave.utils.general_utils import (
 from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
-from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
+from wave_lang.kernel.wave.templates import (
+    get_tagged_mxfp4_gemm,
+    get_tagged_mxfp4_gemm_preshuffle_b,
+)
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
     get_mxfp4_asymmetric_schedule,
@@ -37,6 +40,8 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
     mxfp4_to_f32,
     e8m0_to_f32,
     torchScaledGemmMXFP4,
+    b_preshuffle,
+    e8m0_shuffle,
 )
 
 from .common.utils import (
@@ -701,6 +706,55 @@ def testScaledGemmMXFP4AsymmetricSchedule(
     w_t = w.T.contiguous()
     gemm(x, x_scales, w_t, w_scales, out)
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 1024, 8192)],
+)
+@pytest.mark.parametrize(
+    "block_shape",
+    [(256, 256, 256)],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+@use_water_backend_bool("use_water_backend")
+def testScaledGemmMXFP4PreshuffleB(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    mfma_variant: ScaledMMAType,
+    use_water_backend: bool,
+):
+    """End-to-end test for MXFP4 GEMM with preshuffled B data and B scales."""
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block_shape,
+        wave_shape=(1, 4),
+        mfma_variant=mfma_variant,
+    )
+    schedule = get_mxfp4_asymmetric_schedule()
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.use_water_backend = use_water_backend
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
+    gemm(x, x_scales, w_t_ps, w_scales_ps, out)
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 

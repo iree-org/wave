@@ -478,22 +478,24 @@ def get_mxfp4_asymmetric_schedule():
                 loop_g2v_b,
                 loop_shared_load_a_1,
                 loop_shared_load_a_scale_1,
+                loop_g2v_b_scale,
             ],
-            intervals=[4, 4, 4],
+            intervals=[4, 4, 2, 4],
+            start_offsets=[0, 3, 2, 0],
+            start_after_groups=[[], [], [1], [0]],
         )
 
-        # Second half: g2v_b_scale (buffer_load_dword), shared_load_a_0
-        # (ds_read_b128), and shared_load_a_scale_0 (ds_read_b32)
-        # interleaved every 4 MFMAs with staggered offsets.
         interleaved_mma_1 = tkw.interleave_operations(
             base_ops=loop_scaled_mma_1,
             interleaved_ops=[
-                loop_g2v_b_scale,
+                loop_g2s_a,
                 loop_shared_load_a_0,
                 loop_shared_load_a_scale_0,
+                loop_g2s_a_scale,
             ],
-            intervals=[4, 4, 4],
-            start_offsets=[0, 0, 1],
+            intervals=[4, 4, 2, 4],
+            start_offsets=[0, 3, 2, 0],
+            start_after_groups=[[], [], [1], [0]],
         )
 
         clusters = [
@@ -514,8 +516,6 @@ def get_mxfp4_asymmetric_schedule():
                     loop_bitcast_a_scale_1,
                     tkw.SchedulingBarrier([]),
                     interleaved_mma_1,
-                    loop_g2s_a,
-                    loop_g2s_a_scale,
                     tkw.MemoryCounterWaitBarrier(load=n_b_loads, ds=0),
                     loop_shared_load_a_0,
                     loop_shared_load_a_scale_0,

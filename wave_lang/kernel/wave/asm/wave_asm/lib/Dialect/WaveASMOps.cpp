@@ -70,6 +70,19 @@ static int64_t getMFMAAccumulatorSize(llvm::StringRef mnemonic) {
   return 4;
 }
 
+/// Helper to get register vector width for VGPR/AGPR virtual/physical types.
+static std::optional<int64_t> getVectorRegSize(Type type) {
+  if (auto vregType = dyn_cast<VRegType>(type))
+    return vregType.getSize();
+  if (auto pvregType = dyn_cast<PVRegType>(type))
+    return pvregType.getSize();
+  if (auto aregType = dyn_cast<ARegType>(type))
+    return aregType.getSize();
+  if (auto paregType = dyn_cast<PARegType>(type))
+    return paregType.getSize();
+  return std::nullopt;
+}
+
 /// Verifier for MFMA operations - validates accumulator size matches expected.
 /// This is a template that works for all MFMAOp subclasses.
 template <typename MFMAOpType>
@@ -83,12 +96,7 @@ static LogicalResult verifyMFMAOp(MFMAOpType op) {
     return success();
 
   // Get register size from type
-  int64_t accSize = 1;
-  if (auto vregType = dyn_cast<VRegType>(accType)) {
-    accSize = vregType.getSize();
-  } else if (auto pvregType = dyn_cast<PVRegType>(accType)) {
-    accSize = pvregType.getSize();
-  }
+  int64_t accSize = getVectorRegSize(accType).value_or(1);
 
   // Get expected accumulator size from the operation name
   llvm::StringRef mnemonic = op->getName().getStringRef();
@@ -105,17 +113,47 @@ static LogicalResult verifyMFMAOp(MFMAOpType op) {
   // Verify result type matches accumulator type (tied operand constraint)
   Value dst = op.getDst();
   Type dstType = dst.getType();
-  int64_t dstSize = 1;
-  if (auto vregType = dyn_cast<VRegType>(dstType)) {
-    dstSize = vregType.getSize();
-  } else if (auto pvregType = dyn_cast<PVRegType>(dstType)) {
-    dstSize = pvregType.getSize();
-  }
+  int64_t dstSize = getVectorRegSize(dstType).value_or(1);
 
   if (dstSize != expectedSize) {
     return op.emitOpError()
            << "result size mismatch: expected " << expectedSize
            << " registers but got " << dstSize << " for " << mnemonic;
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Extract Operation Verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult ExtractOp::verify() {
+  Type vectorType = getVector().getType();
+  Type resultType = getResult().getType();
+  int64_t index = getIndex();
+
+  if (index < 0) {
+    return emitOpError() << "index must be non-negative, got " << index;
+  }
+
+  // Preserve vector register bank (VGPR <-> VGPR, AGPR <-> AGPR).
+  if (isAGPRType(vectorType) != isAGPRType(resultType)) {
+    return emitOpError()
+           << "result register class must match source register class: source "
+           << vectorType << ", result " << resultType;
+  }
+
+  int64_t vectorSize = getRegSize(vectorType);
+  int64_t resultSize = getRegSize(resultType);
+  if (resultSize > vectorSize) {
+    return emitOpError() << "result width (" << resultSize
+                         << ") exceeds source width (" << vectorSize << ")";
+  }
+  if (index > vectorSize - resultSize) {
+    return emitOpError() << "extract range [" << index << ", "
+                         << (index + resultSize) << ") exceeds source width "
+                         << vectorSize;
   }
 
   return success();

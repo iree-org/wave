@@ -595,32 +595,90 @@ class WaveExprListAttrOf<list<AttrDef> inputTypes> : Attr<
   let returnType = WaveExprListAttr.returnType;
 }
 
+//-----------------------------------------------------------------------------
+// Symbol mapping attribute
+//-----------------------------------------------------------------------------
 
-def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
-  let mnemonic = "read_write_bounds";
+def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
+  let mnemonic = "symbol_mapping";
   let description = [{
-    This attribute contains a dictionary mapping from symbolic dimension (strings)
-    to a WaveExprListAttr specifying the bounds of the read/write operations
-    this is attached to.
+    An ordered mapping from `WaveSymbolAttr` keys to arbitrary attribute values.
+    The ordering of entries is guaranteed to be persistent, implemented as two
+    co-indexed arrays: `keys[i]` maps to `values[i]`.
 
     Example:
+    ```mlir
+    #wave.symbol_mapping<
+      @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>,
+      @N = #wave.expr_list<[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>
+    >
     ```
-    #wave.read_write_bounds<{M = #wave.expr_list<[BLOCK_M] -> BLOCK_M * 2>}>
-    ```
+
+    Use `WaveSymbolMappingAttrOf` to restrict the allowed value types at
+    the op definition level, similar to `WaveExprListAttrOf`.
   }];
 
-  let parameters = (ins "::mlir::DictionaryAttr":$mapping);
-  let assemblyFormat = "`<` $mapping `>`";
+  let parameters = (ins
+    ArrayRefParameter<"::wave::WaveSymbolAttr">:$keys,
+    ArrayRefParameter<"::mlir::Attribute">:$values
+  );
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+
+  let builders = [
+    AttrBuilder<(ins
+      "::llvm::ArrayRef<std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>>"
+      :$entries)>
+  ];
 
   let extraClassDeclaration = [{
-    /// Check if a symbolic dimension exists in the mapping
-    bool hasSymbol(::llvm::StringRef symbolicDim) const {
-      return getMapping().get(symbolicDim) != nullptr;
+    /// Look up the attribute associated with `key`.
+    /// Returns a null attribute if the key is absent.
+    template <typename T = ::mlir::Attribute>
+    T lookup(::wave::WaveSymbolAttr key) const {
+      return ::llvm::dyn_cast_or_null<T>(lookupImpl(key));
+    }
+    ::mlir::Attribute lookupImpl(::wave::WaveSymbolAttr key) const;
+
+    /// Check if a symbolic dimension exists in the mapping.
+    bool hasSymbol(::wave::WaveSymbolAttr key) const {
+      return static_cast<bool>(lookup(key));
     }
 
-    /// Get the number of symbols in the mapping
-    size_t getNumSymbols() const { return getMapping().size(); }
+    /// Get the number of entries in the mapping.
+    size_t getNumEntries() const { return getKeys().size(); }
+
+    WaveSymbolMappingAttr getValue() const { return *this; }
   }];
+}
+
+class WaveSymbolMappingAllowedValuesPred<list<AttrDef> valueTypes>
+  : CPred<"::wave::detail::areAllSymbolMappingValuesAllowed<"
+  # !interleave(!foreach(entry, valueTypes, entry.cppType), ", ")
+  # ">(::llvm::cast<::wave::WaveSymbolMappingAttr>($_self))">;
+
+class WaveSymbolMappingToNResultExprListPred<int n>
+  : CPred<"::wave::detail::areAllSymbolMappingValuesNResultExprLists("
+          "::llvm::cast<::wave::WaveSymbolMappingAttr>($_self), " # n # ")">;
+
+class WaveSymbolMappingAttrOf<list<AttrDef> valueTypes> : Attr<
+  And<[WaveSymbolMappingAttr.predicate,
+       WaveSymbolMappingAllowedValuesPred<valueTypes>]>,
+  "symbol mapping with "
+  # !interleave(!foreach(entry, valueTypes, entry.cppClassName), ", ")
+  # " values"> {
+  let storageType = WaveSymbolMappingAttr.cppType;
+  let returnType = WaveSymbolMappingAttr.returnType;
+}
+
+class WaveSymbolMappingToNResultExprListAttr<int n> : Attr<
+  And<[WaveSymbolMappingAttr.predicate,
+       WaveSymbolMappingAllowedValuesPred<[WaveExprListAttr]>,
+       WaveSymbolMappingToNResultExprListPred<n>]>,
+  "symbol mapping with " # n # "-result expr list values"> {
+  let storageType = WaveSymbolMappingAttr.cppType;
+  let returnType = WaveSymbolMappingAttr.returnType;
 }
 
 #endif // WATER_DIALECT_WAVE_WAVEATTRS

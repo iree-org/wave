@@ -67,3 +67,44 @@ func.func private @mapping_duplicate_symbols() attributes { wave_test.index = #w
 
 // CHECK: #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>
 func.func private @iter_symbol_in_expr() attributes { wave_test.index = #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>}
+
+// CHECK-LABEL: func.func private @empty_mapping
+// CHECK: test.map = #wave.symbol_mapping<>
+func.func private @empty_mapping() attributes {
+  test.map = #wave.symbol_mapping<>
+}
+
+// CHECK-LABEL: func.func private @single_entry
+// CHECK: #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
+func.func private @single_entry() attributes {
+  test.map = #wave.symbol_mapping<
+    @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>
+  >
+}
+
+// CHECK-LABEL: func.func private @two_entries_ordering
+// CHECK: #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, @N = #wave.expr_list<[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>>
+func.func private @two_entries_ordering() attributes {
+  test.map = #wave.symbol_mapping<
+    @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>,
+    @N = #wave.expr_list<[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>
+  >
+}
+
+// CHECK-LABEL: func.func private @three_results_per_value
+// CHECK: #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>>
+func.func private @three_results_per_value() attributes {
+  test.map = #wave.symbol_mapping<
+    @M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>
+  >
+}
+
+// CHECK-LABEL: @index_mapping
+// CHECK: #wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, BLOCK_M)>, @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, BLOCK_N)>>
+func.func private @index_mapping() {
+  water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<
+    @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, BLOCK_M)>,
+    @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, BLOCK_N)>
+  >}
+  return
+}
