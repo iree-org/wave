@@ -693,7 +693,7 @@ wave::detail::verifyEqualElementTypesOpTrait(Operation *op) {
   // Get the reference type from the first operand if available, otherwise from
   // the first result
   Type referenceType;
-  std::string referenceName;
+  llvm::StringRef referenceName;
   bool isOperandReference = false;
   if (op->getNumOperands() > 0) {
     referenceType = op->getOperandTypes()[0];
@@ -710,7 +710,7 @@ wave::detail::verifyEqualElementTypesOpTrait(Operation *op) {
   for (unsigned idx = startIdx; idx < op->getNumOperands(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "operand #" + std::to_string(idx), op->getOperandTypes()[idx])))
+            "operand #" + llvm::Twine(idx), op->getOperandTypes()[idx])))
       return llvm::failure();
   }
 
@@ -720,7 +720,7 @@ wave::detail::verifyEqualElementTypesOpTrait(Operation *op) {
   for (unsigned idx = startIdx; idx < op->getNumResults(); ++idx) {
     if (failed(verifyElementTypesMatch(
             op->getLoc(), referenceName, referenceType,
-            "result #" + std::to_string(idx), op->getResultTypes()[idx])))
+            "result #" + llvm::Twine(idx), op->getResultTypes()[idx])))
       return llvm::failure();
   }
 

@@ -599,6 +599,14 @@ func.func @extract_dimension_mismatch(%src: !wave.tensor<[@M, @N] of f32>) {
 
 // -----
 
+func.func @extract_element_type_mismatch(%src: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{expected operand #0 and result #0 elemental types to match}}
+  %0 = wave.extract %src[#wave.expr_list<[] -> (0)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M] of f16>
+  return
+}
+
+// -----
+
 func.func @extract_slice_mismatch_offset_size(%memory: !wave.tensor<[@A, @B] of f16>) {
   // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 2, and stride rank 1}}
   wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
