@@ -107,7 +107,7 @@ KERNELS = [
     "splitk-preshuffle-scales",
     "splitk-preshuffle-B",
 ]
-_COL_W = {"shape": 22, "kernel": 22, "ms": 10, "tflops": 10, "ratio": 10}
+_COL_W = {"shape": 22, "kernel": 22, "ms": 10, "tflops": 10, "ratio": 10, "check": 8}
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +397,7 @@ def _print_header():
         f"{'ms':>{_COL_W['ms']}}"
         f"{'TFLOPS':>{_COL_W['tflops']}}"
         f"{'vs vanilla':>{_COL_W['ratio']}}"
+        f"{'check':>{_COL_W['check']}}"
     )
     print("-" * sum(_COL_W.values()))
 
@@ -408,18 +409,19 @@ def _print_row(shape_str, kernel, avg_ms, tfl, ratio_str):
         f"{avg_ms:>{_COL_W['ms']}.3f}"
         f"{tfl:>{_COL_W['tflops']}.2f}"
         f"{ratio_str:>{_COL_W['ratio']}}"
+        f"{'OK':>{_COL_W['check']}}"
     )
     sys.stdout.flush()
 
 
 def _print_failed_row(shape_str, kernel, reason="FAILED"):
-    short = reason.split("\n")[0][:_COL_W["ratio"]]
     print(
         f"{shape_str:<{_COL_W['shape']}}"
         f"{kernel:<{_COL_W['kernel']}}"
         f"{'':>{_COL_W['ms']}}"
         f"{'':>{_COL_W['tflops']}}"
-        f"{short:>{_COL_W['ratio']}}"
+        f"{'':>{_COL_W['ratio']}}"
+        f"{'FAIL':>{_COL_W['check']}}"
     )
     print(f"  [error] {reason}", file=sys.stderr)
     sys.stdout.flush()
@@ -431,18 +433,33 @@ def _ratio(baseline_ms, avg_ms):
 
 def _correctness_check(ref_f32, got, name, num_splits=1):
     """Check got (f32 or bf16) against ref_f32.  Raises on failure."""
-    got_f32 = got.float() if got.dtype != torch.float32 else got
-    if got.dtype == torch.bfloat16:
-        bf16_eps = 2 ** -7
-        atol = num_splits * bf16_eps * max(ref_f32.abs().max().item(), 1.0)
-        rtol = 0.0
-    else:
-        atol = 1e-2
-        rtol = 1e-2
-    if not torch.allclose(got_f32.cpu(), ref_f32.cpu(), rtol=rtol, atol=atol):
-        diff = (got_f32.cpu() - ref_f32.cpu()).abs()
+    got_f32 = got.float().cpu()
+    ref_cpu = ref_f32.cpu()
+    diff = (got_f32 - ref_cpu).abs()
+    max_diff = diff.max().item()
+    ref_max = ref_cpu.abs().max().item()
+    got_max = got_f32.abs().max().item()
+
+    if got_max == 0.0 and ref_max > 0.01:
         raise RuntimeError(
-            f"{name} correctness FAIL  max_diff={diff.max():.4f}  atol={atol:.4f}"
+            f"{name} correctness FAIL: output is all zeros "
+            f"(ref_max={ref_max:.2f})"
+        )
+
+    if got.dtype == torch.bfloat16:
+        # bf16 split-K truncation + FP4 MMA imprecision vs torch reference.
+        # Use 1% of output magnitude as the absolute floor, plus a per-split
+        # component for the bf16 atomic add truncation.
+        atol = max(1.0, num_splits * 1.0) + ref_max * 1e-2
+        rtol = 5e-2
+    else:
+        atol = ref_max * 1e-3
+        rtol = 1e-2
+
+    if not torch.allclose(got_f32, ref_cpu, rtol=rtol, atol=atol):
+        raise RuntimeError(
+            f"{name} correctness FAIL  max_diff={max_diff:.4f}  "
+            f"atol={atol:.4f}  ref_max={ref_max:.2f}  got_max={got_max:.2f}"
         )
 
 
@@ -462,6 +479,9 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
     w_scales_sh = e8m0_shuffle(w_scales)
     w_ps = preshuffle_b_aiter(w)
 
+    # Always compute an independent torch reference for correctness checks.
+    ref_f32 = reference_mxfp4_gemm(x, w, x_scales, w_scales)
+
     x_gpu = x.cuda()
     w_gpu = w.cuda()
     w_ps_gpu = w_ps.cuda()
@@ -471,7 +491,6 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
     w_scales_sh_gpu = w_scales_sh.cuda()
 
     vanilla_ms = None
-    ref_f32 = None  # computed lazily from vanilla result
 
     # ------------------------------------------------------------------
     # 1. Vanilla — unshuffled scales, all through LDS, no schedule
@@ -484,7 +503,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
         vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c)
         torch.cuda.synchronize()
-        ref_f32 = c.cpu()
+        _correctness_check(ref_f32, c, "vanilla")
 
         avg_ms = _bench(
             lambda: vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c),
@@ -507,8 +526,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
         fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c, "preshuffle-scales")
+        _correctness_check(ref_f32, c, "preshuffle-scales")
 
         avg_ms = _bench(
             lambda: fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c),
@@ -532,8 +550,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
         fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c, "preshuffle-B")
+        _correctness_check(ref_f32, c, "preshuffle-B")
 
         avg_ms = _bench(
             lambda: fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c),
@@ -558,8 +575,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
         fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c, "preshuffle-all")
+        _correctness_check(ref_f32, c, "preshuffle-all")
 
         avg_ms = _bench(
             lambda: fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c),
@@ -583,8 +599,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
         _run_splitk(handle, x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_bf16)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c_bf16, "splitk", num_splits=num_splits)
+        _correctness_check(ref_f32, c_bf16, "splitk", num_splits=num_splits)
 
         def run_sk():
             c_bf16.zero_()
@@ -609,8 +624,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
         _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-scales", num_splits=num_splits)
+        _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-scales", num_splits=num_splits)
 
         def run_sk_ps_scales():
             c_bf16.zero_()
@@ -635,8 +649,7 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
         c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
         _run_splitk(handle_ps, x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c_bf16)
         torch.cuda.synchronize()
-        if ref_f32 is not None:
-            _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-B", num_splits=num_splits)
+        _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-B", num_splits=num_splits)
 
         def run_sk_ps():
             c_bf16.zero_()
