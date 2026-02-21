@@ -325,11 +325,14 @@ the LLM.
 
 ## Key Design Properties
 
-1. **No abstraction gap.** The LLM sees actual IR, not a lossy summary.
-2. **Zero new languages.** Move commands are trivial to parse and validate.
-3. **Graceful degradation.** Invalid moves are warnings, not errors.
-4. **Iterative refinement.** The LLM can observe the effect of its moves and
-   adjust, rather than producing a one-shot schedule.
-5. **Transparent.** Every move is logged. Easy to inspect, replay, and debug.
-6. **Extensible metrics.** Adding a new metric is just adding a field to
-   `SchedulingMetrics` — no DSL changes needed.
+1. **No abstraction gap.** The LLM sees actual MLIR IR, not a lossy summary.
+2. **Zero new languages.** Three move commands, trivial to parse and validate.
+3. **Fast feedback.** Invalid moves abort the round immediately with a clear
+   error report; the LLM learns from mistakes without silent corruption.
+4. **Iterative refinement.** The LLM observes metrics after each round and
+   adjusts, rather than producing a one-shot schedule.
+5. **Closed loop with hardware.** Optional `rocprof` integration feeds real
+   per-instruction latencies back, grounding the LLM in measured data.
+6. **Transparent.** Every move is logged. Easy to inspect, replay, and debug.
+7. **Extensible metrics.** Adding a new metric is just a field in
+   `SchedulingMetrics` — no protocol changes needed.
