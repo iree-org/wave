@@ -9,7 +9,10 @@
 #include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/IR/Builders.h"
+#include "llvm/Support/Debug.h"
 #include <algorithm>
+
+#define DEBUG_TYPE "waveasm-liveness"
 
 using namespace mlir;
 
@@ -35,9 +38,13 @@ void collectOpsRecursive(Block &block,
 // Pressure Computation
 //===----------------------------------------------------------------------===//
 
-int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
-  if (ranges.empty())
+int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
+                           int64_t *peakPoint) {
+  if (ranges.empty()) {
+    if (peakPoint)
+      *peakPoint = 0;
     return 0;
+  }
 
   // Create events: (point, delta, isStart)
   llvm::SmallVector<std::tuple<int64_t, int64_t, bool>> events;
@@ -57,6 +64,7 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
 
   int64_t currentPressure = 0;
   int64_t maxPressure = 0;
+  int64_t bestPoint = 0;
 
   // Reasonable upper bound for register pressure (no GPU has this many regs)
   constexpr int64_t kMaxReasonablePressure = 1000000;
@@ -70,10 +78,119 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
     assert(currentPressure < kMaxReasonablePressure &&
            "Register pressure exceeds reasonable bounds - possible overflow");
 
-    maxPressure = std::max(maxPressure, currentPressure);
+    if (currentPressure > maxPressure) {
+      maxPressure = currentPressure;
+      bestPoint = point;
+    }
   }
 
+  if (peakPoint)
+    *peakPoint = bestPoint;
   return maxPressure;
+}
+
+int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
+  return computeMaxPressure(ranges, /*peakPoint=*/nullptr);
+}
+
+void dumpPeakPressureInfo(const LivenessInfo &info,
+                          llvm::ArrayRef<Operation *> ops, RegClass regClass) {
+  llvm::ArrayRef<LiveRange> ranges;
+  const char *className = "VGPR";
+  if (regClass == RegClass::VGPR) {
+    ranges = info.vregRanges;
+    className = "VGPR";
+  } else if (regClass == RegClass::SGPR) {
+    ranges = info.sregRanges;
+    className = "SGPR";
+  } else {
+    ranges = info.aregRanges;
+    className = "AGPR";
+  }
+  if (ranges.empty())
+    return;
+
+  // Reuse the shared sweep algorithm to find peak point.
+  int64_t peakPoint = 0;
+  int64_t maxPressure = computeMaxPressure(ranges, &peakPoint);
+
+  // Collect all ranges alive at the peak point
+  struct LiveAtPeak {
+    Value value;
+    int64_t start;
+    int64_t end;
+    int64_t size;
+    int64_t length;
+  };
+  llvm::SmallVector<LiveAtPeak> liveAtPeak;
+  for (const auto &r : ranges) {
+    if (r.start <= peakPoint && r.end >= peakPoint) {
+      liveAtPeak.push_back({r.reg, r.start, r.end, r.size, r.end - r.start});
+    }
+  }
+
+  llvm::sort(liveAtPeak, [](const LiveAtPeak &a, const LiveAtPeak &b) {
+    return a.length > b.length;
+  });
+
+  llvm::StringRef peakOpName = "<unknown>";
+  if (peakPoint >= 0 && peakPoint < static_cast<int64_t>(ops.size())) {
+    peakOpName = ops[peakPoint]->getName().getStringRef();
+  }
+
+  int64_t totalRegs = 0;
+  for (const auto &l : liveAtPeak)
+    totalRegs += l.size;
+
+  LLVM_DEBUG({
+    llvm::dbgs()
+        << "\n============================================================\n";
+    llvm::dbgs() << className << " Peak Pressure Analysis\n";
+    llvm::dbgs()
+        << "============================================================\n";
+    llvm::dbgs() << "Peak point: " << peakPoint << " (op: " << peakOpName
+                 << ")\n";
+    llvm::dbgs() << "Peak pressure: " << maxPressure << " " << className
+                 << "s\n";
+    llvm::dbgs() << "Live ranges at peak: " << liveAtPeak.size()
+                 << " (total regs: " << totalRegs << ")\n\n";
+
+    llvm::StringMap<int64_t> categoryRegs;
+    llvm::StringMap<int64_t> categoryCounts;
+    for (const auto &l : liveAtPeak) {
+      llvm::StringRef cat = "<block_arg>";
+      if (auto defOp = l.value.getDefiningOp()) {
+        cat = defOp->getName().getStringRef();
+      }
+      categoryRegs[cat] += l.size;
+      categoryCounts[cat]++;
+    }
+
+    llvm::dbgs() << "By defining op type:\n";
+    llvm::SmallVector<std::pair<llvm::StringRef, int64_t>> cats;
+    for (const auto &kv : categoryRegs)
+      cats.push_back({kv.first(), kv.second});
+    llvm::sort(
+        cats, [](const auto &a, const auto &b) { return a.second > b.second; });
+    for (const auto &[cat, regs] : cats) {
+      llvm::dbgs() << "  " << cat << ": " << regs << " regs ("
+                   << categoryCounts[cat] << " values)\n";
+    }
+
+    constexpr size_t kTopN = 10;
+    llvm::dbgs() << "\nTop " << kTopN << " longest-lived ranges at peak:\n";
+    for (size_t i = 0; i < std::min(liveAtPeak.size(), kTopN); ++i) {
+      const auto &l = liveAtPeak[i];
+      llvm::StringRef defName = "<block_arg>";
+      if (auto defOp = l.value.getDefiningOp())
+        defName = defOp->getName().getStringRef();
+      llvm::dbgs() << "  " << (i + 1) << ". [" << l.start << ", " << l.end
+                   << "] size=" << l.size << " len=" << l.length
+                   << " def=" << defName << "\n";
+    }
+    llvm::dbgs()
+        << "============================================================\n\n";
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -224,7 +341,7 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // Any value used inside a loop body is used on EVERY iteration, so its
   // live range must extend from its definition to the end of the loop body.
   // We cannot shorten this to just the last use point because the linear
-  // scan allocator processes the loop body only once -- if we freed the
+  // scan allocator processes the loop body only once — if we freed the
   // register after the use point, a later op could take it, but the next
   // iteration would still read from the original register.
   for (const auto &[value, defPoint] : info.defPoints) {
@@ -295,6 +412,64 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // region-based control flow (LoopOp/IfOp), Pass 2 and Pass 2b above
   // already handle all necessary live range extensions by directly inspecting
   // the region structure.
+
+  // Pass 3b: Mark tied LoopOp values for pressure de-duplication.
+  //
+  // LoopOp results, condition iter_args, and block args are all tied to the
+  // same physical register. The pressure computation would double/triple
+  // count them at overlap points. We mark tied "secondary" values (loop
+  // results and condition iter_args) by setting their size to 0 in the
+  // pressure computation -- the block arg's range already accounts for
+  // the full physical register occupancy.
+  //
+  // Important: we do NOT remove them from info.ranges (the allocator needs
+  // them for tied-operand processing). We only zero their size so the
+  // sweep-based pressure computation doesn't count them. The allocator
+  // must not rely on `size` from these zeroed entries; it should use
+  // the type-based size instead for allocation decisions.
+  program.walk([&](LoopOp loopOp) {
+    Block &bodyBlock = loopOp.getBodyBlock();
+    auto condOp = dyn_cast<ConditionOp>(bodyBlock.getTerminator());
+    if (!condOp) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Pass 3b: LoopOp body has non-ConditionOp terminator ("
+                 << bodyBlock.getTerminator()->getName() << "), skipping "
+                 << "tied-value de-duplication. Loop results may be "
+                 << "double-counted in pressure.\n");
+      return;
+    }
+
+    for (unsigned i = 0; i < bodyBlock.getNumArguments(); ++i) {
+      BlockArgument blockArg = bodyBlock.getArgument(i);
+      auto baIt = info.ranges.find(blockArg);
+      if (baIt == info.ranges.end())
+        continue;
+
+      // Zero-size loop result (tied to block arg, shares same register)
+      if (i < loopOp->getNumResults()) {
+        Value loopResult = loopOp->getResult(i);
+        auto lrIt = info.ranges.find(loopResult);
+        if (lrIt != info.ranges.end()) {
+          // Extend block arg range to cover the loop result's range
+          baIt->second.start = std::min(baIt->second.start, lrIt->second.start);
+          baIt->second.end = std::max(baIt->second.end, lrIt->second.end);
+          // Zero the result's size for pressure computation
+          lrIt->second.size = 0;
+        }
+      }
+
+      // Zero-size condition iter_arg (tied to block arg)
+      if (i < condOp.getIterArgs().size()) {
+        Value iterArg = condOp.getIterArgs()[i];
+        auto iaIt = info.ranges.find(iterArg);
+        if (iaIt != info.ranges.end()) {
+          baIt->second.start = std::min(baIt->second.start, iaIt->second.start);
+          baIt->second.end = std::max(baIt->second.end, iaIt->second.end);
+          iaIt->second.size = 0;
+        }
+      }
+    }
+  });
 
   // Pass 4: Categorize ranges by register class and sort by start
   for (const auto &[value, range] : info.ranges) {

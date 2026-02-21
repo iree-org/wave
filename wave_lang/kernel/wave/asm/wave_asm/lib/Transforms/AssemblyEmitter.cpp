@@ -276,6 +276,32 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
 std::optional<std::string>
 KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
   std::string line = emitDefaultFormat(scaledOp, mnemonic);
+
+  // Emit op_sel/op_sel_hi from scalesIdxA/scalesIdxB attributes.
+  // op_sel[0] = scalesIdxA bit 0, op_sel[1] = scalesIdxB bit 0
+  // op_sel_hi[0] = scalesIdxA bit 1, op_sel_hi[1] = scalesIdxB bit 1
+  int32_t opSelA = 0, opSelB = 0;
+  if (auto a = scaledOp->getAttrOfType<IntegerAttr>("op_sel_a"))
+    opSelA = a.getInt();
+  if (auto b = scaledOp->getAttrOfType<IntegerAttr>("op_sel_b"))
+    opSelB = b.getInt();
+
+  int32_t selLo0 = opSelA & 1;
+  int32_t selLo1 = opSelB & 1;
+  int32_t selHi0 = (opSelA >> 1) & 1;
+  int32_t selHi1 = (opSelB >> 1) & 1;
+
+  // Third element is always 0 (accumulator operand op_sel, which is unused
+  // for scaled MFMA instructions on CDNA3/CDNA4).
+  if (selLo0 || selLo1) {
+    line += " op_sel:[" + std::to_string(selLo0) + "," +
+            std::to_string(selLo1) + ",0]";
+  }
+  if (selHi0 || selHi1) {
+    line += " op_sel_hi:[" + std::to_string(selHi0) + "," +
+            std::to_string(selHi1) + ",0]";
+  }
+
   int32_t cbsz = 4;
   int32_t blgp = 4;
   if (auto cbszAttr = scaledOp->getAttrOfType<IntegerAttr>("cbsz"))

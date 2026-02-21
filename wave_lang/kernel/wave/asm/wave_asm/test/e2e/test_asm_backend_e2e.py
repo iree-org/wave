@@ -636,9 +636,9 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
         func_name=kernel_name,
     )
 
-    # Validate: C = A @ B^T
-    expected = torch.matmul(a.float(), b.float().T)
-    assert_close(c, expected, atol=1e-4, rtol=1e-4)
+    # Validate: C = A @ B^T (compute on CPU to avoid GPU OOM for large shapes)
+    expected = torch.matmul(a.float().cpu(), b.float().cpu().T)
+    assert_close(c.cpu(), expected, atol=1e-4, rtol=1e-4)
 
 
 # =============================================================================
@@ -1346,12 +1346,14 @@ def _dbuf_mxfp4_helper(
 
     import torch
 
-    from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
+    from wave_lang.kernel.wave.templates import (
+        get_tagged_mxfp4_gemm,
+        get_tagged_mxfp4_gemm_preshuffle_b,
+    )
     from wave_lang.kernel.wave.schedules import (
         get_mxfp4_dbuf_schedule,
         get_mxfp4_asymmetric_schedule,
     )
-    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         generate_gemm_afp4wfp4_inputs,
@@ -1359,15 +1361,13 @@ def _dbuf_mxfp4_helper(
     )
 
     # Get tagged kernel + options (same as 7.1_schedule.py)
-    # Use asymmetric schedule with wave_shape=(1,4) for 4-wave
-    # (B direct from global, A through LDS, matching AITER layout),
+    # Use preshuffle B + asymmetric schedule with wave_shape=(1,4) for 4-wave,
     # standard double-buffer with wave_shape=(4,2) for 8-wave.
     if num_waves <= 4:
-        gemm, options = get_tagged_mxfp4_gemm(
+        gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
             shape,
             block,
             wave_shape=(1, 4),
-            b_address_space=GLOBAL_ADDRESS_SPACE,
         )
         schedule = get_mxfp4_asymmetric_schedule()
     else:
@@ -1433,9 +1433,16 @@ def _dbuf_mxfp4_helper(
 
     # Execute on GPU
     # Kernel signature: (a, a_scale, b, b_scale, c)
+    # For preshuffle B: transform B data and B scales to preshuffled layout
+    if num_waves <= 4:
+        w_input = b_preshuffle(w.T.contiguous()).contiguous()
+        w_scales_input = e8m0_shuffle(w_scales).contiguous()
+    else:
+        w_input = w.T.contiguous()
+        w_scales_input = w_scales
     run_with_wave_runtime(
         binary_path=cpp_result.binary_path,
-        inputs=[x, x_scales, w.T.contiguous(), w_scales],
+        inputs=[x, x_scales, w_input, w_scales_input],
         outputs=[c],
         grid=grid,
         block=block_size,
@@ -1456,15 +1463,15 @@ def _dbuf_mxfp4_helper(
 
 
 @pytest.mark.xfail(
-    reason="Asymmetric schedule with wave_shape=(1,4) requires ~330 VGPRs, "
-    "exceeding the 256 hardware encoding limit. Needs LDS spilling or "
-    "liveness tied-value coalescing to fit.",
+    reason="Asymmetric schedule with wave_shape=(1,4) requires ~323 VGPRs, "
+    "exceeding the 256 hardware encoding limit. Needs LDS scale layout "
+    "fix or spilling to resolve.",
 )
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
     Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4) and
-    B direct from global (no LDS). Currently xfail due to VGPR pressure.
+    B direct from global (no LDS).
     """
     _dbuf_mxfp4_helper(
         shape=(1024, 1024, 8192),

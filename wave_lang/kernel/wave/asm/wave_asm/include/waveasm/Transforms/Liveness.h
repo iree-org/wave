@@ -125,6 +125,18 @@ LivenessInfo computeLiveness(ProgramOp program);
 /// Compute maximum register pressure using sweep algorithm
 int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges);
 
+/// Compute maximum register pressure and the instruction index where the
+/// peak occurs.  If \p peakPoint is non-null, the index is written there.
+int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
+                           int64_t *peakPoint);
+
+/// Dump detailed peak pressure information for diagnostics.
+/// Shows which values are live at the peak point, categorized by defining op.
+/// Output is gated behind LLVM_DEBUG (use -debug-only=waveasm-liveness).
+void dumpPeakPressureInfo(const LivenessInfo &info,
+                          llvm::ArrayRef<mlir::Operation *> ops,
+                          RegClass regClass);
+
 /// Validate that the program is in SSA form
 /// Each virtual register should be defined exactly once
 /// (with exceptions for loop control and accumulator registers)
