@@ -82,7 +82,6 @@ python -m conductor.extract_ir --metrics
 | `move TAG before TAG` | `move v_add_u32_1 before v_add_u32_0` |
 | `move TAG after TAG` | `move buffer_load_dwordx4_0 after ds_read_b128_2` |
 | `swap TAG TAG` | `swap v_mfma_f32_16x16x16_f16_0 ds_read_b128_1` |
-| `done` | LLM is satisfied with current schedule. |
 
 ## Environment variables
 

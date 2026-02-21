@@ -11,7 +11,7 @@ import requests
 
 API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 BASE_URL: str = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL: str = "google/gemini-2.5-flash-preview"
+DEFAULT_MODEL: str = "deepseek/deepseek-v3.2"
 
 _REQUEST_TIMEOUT = 120
 _MAX_RETRIES = 3
@@ -19,7 +19,7 @@ _RETRY_BACKOFF = 2.0
 
 # Valid move command pattern: move/swap with tag operands.
 _MOVE_RE = re.compile(
-    r"^(move\s+\S+\s+(?:before|after)\s+\S+|swap\s+\S+\s+\S+|done)$", re.IGNORECASE
+    r"^(move\s+\S+\s+(?:before|after)\s+\S+|swap\s+\S+\s+\S+)$", re.IGNORECASE
 )
 
 SYSTEM_PROMPT = """\
@@ -39,7 +39,6 @@ Key latencies:
 Rules:
 - Issue move commands, one per line.
 - Commands: "move TAG_A after TAG_B", "move TAG_A before TAG_B", "swap TAG_A TAG_B".
-- Say "done" (alone on a line) when satisfied.
 - Do NOT output anything else — no explanations, no markdown, just commands.
 - Moves that break SSA dominance will be rejected; you will see the error.
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
@@ -235,10 +234,6 @@ def run_scheduling_loop(
         commands = parse_commands(response)
         if not commands:
             log("  No valid commands parsed, stopping.")
-            break
-
-        if len(commands) == 1 and commands[0].lower() == "done":
-            log("  LLM says done.")
             break
 
         error = None
