@@ -68,6 +68,7 @@ from .in_thread_transpose import in_thread_transpose
 from .location_check_pass import location_check_pass
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
+from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
 from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
@@ -486,6 +487,7 @@ def build_graph_passes(
             partial(in_thread_transpose, trace, launchable.constraints, options),
             partial(global_to_shared_gathers, trace, launchable.constraints),
             partial(minimize_global_loads, trace, launchable.constraints),
+            partial(preshuffle_scale_to_shared, trace, launchable.constraints),
             # Wave specialization
             partial(specialize_kernel, trace, launchable.constraints, options),
             partial(gather_to_shared, trace, launchable.constraints, options),
@@ -820,6 +822,9 @@ def compile_launchable_to_mlir(
 
     # Replace scalar extract+bitcast scale chains on scaled_mfma ops
     # with vector-level bitcast and opsel byte selection.
+    # Without the opsel pass, the b_scale loads regressed to
+    # buffer_load_ubyte (16 of them), and the scale values passed
+    # to v_mfma_scale are loaded as individual bytes rather than dwords.
     apply_opsel_scaled_mfma(mb.module_op)
     if options.canonicalize:
         canonicalize_module(mb.module_op)

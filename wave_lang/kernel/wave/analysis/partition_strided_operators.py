@@ -39,6 +39,7 @@ from ..utils.mma_utils import (
     simplify_index,
 )
 from ..utils.symbol_utils import (
+    _numeric_eval_constant,
     simplify as sym_simplify,
     subs_idxc,
 )
@@ -434,7 +435,11 @@ def _get_physical_start(
         physical = transform_index_on_mapping(
             custom.mapping, symbolic_shape, custom.index, is_read=True
         )
+        if not all(dim in physical for dim in symbolic_dims):
+            return None
         return {dim: physical[dim] for dim in symbolic_dims}
+    if not all(dim in custom.index for dim in symbolic_dims):
+        return None
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
@@ -493,12 +498,17 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
         read_infos = []
         for custom, node in customs:
             phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
+            if phys_start is None:
+                continue
             flat_offset = sum(
                 phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
             )
             read_infos.append((flat_offset, phys_start, custom, node))
 
         # Try all pairs to find contiguous ones (diff == ept).
+        # Local memo for _numeric_eval_constant: expressions from reads in
+        # the same group share structure, so caching avoids redundant probing.
+        eval_memo = {}
         merged = set()
         for i in range(len(read_infos)):
             if i in merged:
@@ -509,9 +519,26 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 off1, phys1, custom1, node1 = read_infos[i]
                 off2, phys2, custom2, node2 = read_infos[j]
 
-                # Check both orderings: i before j and j before i.
                 raw_diff = off2 - off1
-                diff = sym_simplify(raw_diff)
+
+                # For reads with non-identity mappings (e.g. preshuffle
+                # scales), the flat-offset diff contains complex floor/Mod
+                # expressions that sympy.simplify cannot reduce.  Use fast
+                # numeric probing instead.
+                has_complex_mapping = (
+                    custom1.mapping is not None and not custom1.has_identity_mapping()
+                )
+                if has_complex_mapping:
+                    diff = _numeric_eval_constant(raw_diff, _memo=eval_memo)
+                    if diff is None:
+                        continue
+                else:
+                    diff = sym_simplify(raw_diff)
+                    if diff != ept and diff != -ept:
+                        nv = _numeric_eval_constant(raw_diff, _memo=eval_memo)
+                        if nv is not None:
+                            diff = nv
+
                 if diff == ept:
                     lo_phys, hi_phys = phys1, phys2
                     lo_custom, hi_custom = custom1, custom2
@@ -527,7 +554,17 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 merge_dim = None
                 for dim in symbolic_dims:
                     raw_d = hi_phys[dim] - lo_phys[dim]
-                    d = sym_simplify(raw_d)
+                    if has_complex_mapping:
+                        d = _numeric_eval_constant(raw_d, _memo=eval_memo)
+                        if d is None:
+                            merge_dim = None
+                            break
+                    else:
+                        d = sym_simplify(raw_d)
+                        if d != ept and d != 0:
+                            nv = _numeric_eval_constant(raw_d, _memo=eval_memo)
+                            if nv is not None:
+                                d = nv
                     if d == ept:
                         merge_dim = dim
                     elif not (d == 0):

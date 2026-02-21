@@ -511,6 +511,14 @@ def gather_to_shared(
         read, write = reads_writes[0]
         logger.info(f"processing read={read}, write={write}")
 
+        # Without this flag, gather_to_shared would subsequently try to process
+        #   these same reads — it would attempt to convert them into GatherToLDS
+        #   ops with its own layout logic, which would conflict with the preshuffle layout already set up.
+        #   This would either break the preshuffle LDS layout or cause a compilation error.
+        if read.fx_node.meta.get("skip_gather_to_shared", False):
+            logger.info("skipping read flagged by preshuffle_scale_to_shared")
+            continue
+
         if not read.has_identity_mapping() and is_gather(read):
             logger.info("non-identity read mapping and gather is not supported yet")
             continue
