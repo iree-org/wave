@@ -2,11 +2,9 @@
 
 // CONDUCTOR: swap v_add_u32_0 v_lshlrev_b32_0
 
+// Three independent ops (all read from %v0/%c4) — swap is safe.
 
-// Original order: v_add_u32_0, v_add_u32_1, v_lshlrev_b32_0.
-// After swap(0, 2): v_lshlrev_b32_0, v_add_u32_1, v_add_u32_0.
-
-// CHECK: sym_name = "test_swap"
+// CHECK-LABEL: waveasm.program @test_swap
 // CHECK: waveasm.v_lshlrev_b32{{.*}}loc("v_lshlrev_b32_0")
 // CHECK: waveasm.v_add_u32{{.*}}loc("v_add_u32_1")
 // CHECK: waveasm.v_add_u32{{.*}}loc("v_add_u32_0")
@@ -15,8 +13,8 @@ waveasm.program @test_swap target = #waveasm.target<#waveasm.gfx942, 5> abi = #w
   %c4 = waveasm.constant 4 : !waveasm.imm<4>
 
   %a0 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg
-  %a1 = waveasm.v_add_u32 %a0, %c4 : !waveasm.vreg, !waveasm.imm<4> -> !waveasm.vreg
-  %s0 = waveasm.v_lshlrev_b32 %c4, %a1 : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+  %a1 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg
+  %s0 = waveasm.v_lshlrev_b32 %c4, %v0 : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }

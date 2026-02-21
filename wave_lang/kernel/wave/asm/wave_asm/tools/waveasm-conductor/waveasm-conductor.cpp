@@ -19,6 +19,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/Support/CommandLine.h"
@@ -106,6 +107,12 @@ int main(int argc, char **argv) {
   if (!result.success) {
     llvm::errs() << "conductor: command " << result.failedCommand << ": "
                  << result.error << "\n";
+    return 1;
+  }
+
+  // Verify the module after moves (catches broken dominance, etc.).
+  if (failed(mlir::verify(*module))) {
+    llvm::errs() << "conductor: verification failed after applying moves\n";
     return 1;
   }
 
