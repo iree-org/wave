@@ -31,7 +31,6 @@ wave_root = Path(__file__).parent.parent
 sys.path.insert(0, str(wave_root))
 
 from conductor.extract_ir import (
-    find_waveasm_translate,
     run_waveasm_translate,
     count_asm_metrics,
     capture_kernel_mlir,
@@ -46,8 +45,25 @@ def find_waveasm_conductor() -> str:
         return env_path
 
     candidates = [
-        wave_root / "wave_lang" / "kernel" / "wave" / "asm" / "wave_asm" / "build" / "tools" / "waveasm-conductor" / "waveasm-conductor",
-        wave_root / "wave_lang" / "kernel" / "wave" / "asm" / "wave_asm" / "build" / "bin" / "waveasm-conductor",
+        wave_root
+        / "wave_lang"
+        / "kernel"
+        / "wave"
+        / "asm"
+        / "wave_asm"
+        / "build"
+        / "tools"
+        / "waveasm-conductor"
+        / "waveasm-conductor",
+        wave_root
+        / "wave_lang"
+        / "kernel"
+        / "wave"
+        / "asm"
+        / "wave_asm"
+        / "build"
+        / "bin"
+        / "waveasm-conductor",
     ]
     for p in candidates:
         if p.exists():
@@ -88,9 +104,7 @@ class Conductor:
         header = "\n".join(f"// CONDUCTOR: {cmd}" for cmd in commands)
         full_input = header + "\n\n" + tagged_ir
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".mlir", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
             f.write(full_input)
             input_path = f.name
 
@@ -148,20 +162,49 @@ def main():
         description="Conductor: WaveASM instruction scheduling driver."
     )
     parser.add_argument(
-        "--moves", nargs="*", default=None,
+        "--moves",
+        nargs="*",
+        default=None,
         help="Move commands (e.g. 'swap A B', 'move X after Y').",
     )
     parser.add_argument(
-        "--moves-file", type=str, default=None,
+        "--moves-file",
+        type=str,
+        default=None,
         help="Read move commands from a file (one per line).",
     )
     parser.add_argument(
-        "--metrics", action="store_true",
+        "--metrics",
+        action="store_true",
         help="Print assembly metrics after scheduling.",
     )
     parser.add_argument(
-        "--tag-only", action="store_true",
+        "--tag-only",
+        action="store_true",
         help="Only show tagged IR, then exit.",
+    )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Run the LLM-guided scheduling loop.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="OpenRouter model ID for --llm mode.",
+    )
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=5,
+        help="Maximum LLM scheduling rounds (default: 5).",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="LLM sampling temperature (default: 0.7).",
     )
     args = parser.parse_args()
 
@@ -188,6 +231,28 @@ def main():
 
     if args.tag_only:
         print(conductor.tag())
+        return
+
+    if args.llm:
+        from conductor.llm import run_scheduling_loop, DEFAULT_MODEL
+
+        model = args.model or DEFAULT_MODEL
+        print(f"Running LLM scheduling loop (model={model})...", file=sys.stderr)
+        result = run_scheduling_loop(
+            conductor,
+            max_rounds=args.max_rounds,
+            model=model,
+            temperature=args.temperature,
+        )
+        print("\n=== LLM Scheduling Result ===")
+        print(f"  rounds: {result['rounds']}")
+        print(f"  commands: {result['commands']}")
+        print("  baseline:")
+        for k, v in result["baseline_metrics"].items():
+            print(f"    {k}: {v}")
+        print("  best:")
+        for k, v in result["metrics"].items():
+            print(f"    {k}: {v}")
         return
 
     if commands:

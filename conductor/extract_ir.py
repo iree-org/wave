@@ -36,8 +36,25 @@ def find_waveasm_translate() -> str:
         return env_path
 
     candidates = [
-        wave_root / "wave_lang" / "kernel" / "wave" / "asm" / "wave_asm" / "build" / "tools" / "waveasm-translate" / "waveasm-translate",
-        wave_root / "wave_lang" / "kernel" / "wave" / "asm" / "wave_asm" / "build" / "bin" / "waveasm-translate",
+        wave_root
+        / "wave_lang"
+        / "kernel"
+        / "wave"
+        / "asm"
+        / "wave_asm"
+        / "build"
+        / "tools"
+        / "waveasm-translate"
+        / "waveasm-translate",
+        wave_root
+        / "wave_lang"
+        / "kernel"
+        / "wave"
+        / "asm"
+        / "wave_asm"
+        / "build"
+        / "bin"
+        / "waveasm-translate",
     ]
     for p in candidates:
         if p.exists():
@@ -121,8 +138,12 @@ def capture_kernel_mlir() -> tuple:
 
     options = WaveCompileOptions(
         subs={
-            M: m, N: n, K: k,
-            BLOCK_M: block_m, BLOCK_N: block_n, BLOCK_K: block_k,
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M: block_m,
+            BLOCK_N: block_n,
+            BLOCK_K: block_k,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
@@ -169,7 +190,9 @@ def capture_kernel_mlir() -> tuple:
     raise ValueError("No kernel function found in MLIR")
 
 
-def run_waveasm_translate(mlir_text: str, workgroup_size: tuple, extra_flags: list = None) -> tuple:
+def run_waveasm_translate(
+    mlir_text: str, workgroup_size: tuple, extra_flags: list = None
+) -> tuple:
     """
     Run waveasm-translate with given flags.
 
@@ -292,15 +315,20 @@ def main():
         description="Extract WaveASM IR at the Conductor scheduling stage."
     )
     parser.add_argument(
-        "--dump-input-mlir", action="store_true",
+        "--dump-input-mlir",
+        action="store_true",
         help="Also dump the input MLIR (before waveasm-translate).",
     )
     parser.add_argument(
-        "--output", "-o", type=str, default=None,
+        "--output",
+        "-o",
+        type=str,
+        default=None,
         help="Write WaveASM IR to file instead of stdout.",
     )
     parser.add_argument(
-        "--metrics", action="store_true",
+        "--metrics",
+        action="store_true",
         help="Also run full pipeline and print baseline metrics.",
     )
     args = parser.parse_args()
@@ -319,8 +347,11 @@ def main():
     waveasm_ir = run_pre_scheduling_pipeline(mlir_text, wg_size)
     print(f"  WaveASM IR: {len(waveasm_ir)} chars", file=sys.stderr)
 
-    op_count = sum(1 for line in waveasm_ir.split("\n")
-                   if "waveasm." in line and not line.strip().startswith("//"))
+    op_count = sum(
+        1
+        for line in waveasm_ir.split("\n")
+        if "waveasm." in line and not line.strip().startswith("//")
+    )
     print(f"  WaveASM ops: {op_count}", file=sys.stderr)
 
     if args.output:
