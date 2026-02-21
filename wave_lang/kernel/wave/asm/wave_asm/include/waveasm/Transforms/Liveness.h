@@ -40,6 +40,13 @@ struct LiveRange {
   /// Register class (VGPR or SGPR)
   RegClass regClass = RegClass::VGPR;
 
+  /// Tied equivalence class ID. Values that must share the same physical
+  /// register (loop block args, results, condition iter_args, MFMA acc ties)
+  /// belong to the same class. -1 means the value is standalone (not tied).
+  /// The pressure computation counts each class only once; the allocator
+  /// uses this to enforce coalescing constraints.
+  int64_t tiedClassId = -1;
+
   /// Check if this range overlaps with another
   bool overlaps(const LiveRange &other) const {
     return !(end < other.start || other.end < start);
@@ -51,6 +58,9 @@ struct LiveRange {
   /// Get the duration of this range
   int64_t length() const { return end - start + 1; }
 
+  /// Whether this value is tied to other values sharing a physical register.
+  bool isTied() const { return tiedClassId >= 0; }
+
   /// Validate invariants: end >= start, size > 0, alignment > 0
   bool isValid() const { return end >= start && size > 0 && alignment > 0; }
 
@@ -59,6 +69,81 @@ struct LiveRange {
     assert(end >= start && "Invalid live range: end < start");
     assert(size > 0 && "Invalid live range: size must be positive");
     assert(alignment > 0 && "Invalid live range: alignment must be positive");
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Tied Value Equivalence Classes
+//===----------------------------------------------------------------------===//
+
+/// A single equivalence class of values that share a physical register.
+///
+/// Loop block args, loop results, condition iter_args, and init args are all
+/// tied to the same physical register. MFMA accumulator ties also create
+/// equivalence classes. Instead of zeroing sizes on secondary members (which
+/// violates LiveRange invariants), we group them into classes and let the
+/// pressure computation count each class exactly once.
+struct TiedClass {
+  /// Unique ID for this class (index into TiedValueClasses::classes).
+  int64_t id = 0;
+
+  /// All values in this class.
+  llvm::SmallVector<mlir::Value> members;
+
+  /// The canonical representative (the value whose range envelope is used
+  /// for pressure). Typically the loop body block arg.
+  mlir::Value canonical;
+
+  /// Physical register size for this class (all members have the same size).
+  int64_t size = 1;
+
+  /// Alignment requirement.
+  int64_t alignment = 1;
+
+  /// Register class.
+  RegClass regClass = RegClass::VGPR;
+
+  /// Envelope range: the union of all member live ranges.
+  /// Pressure is counted once over [envelopeStart, envelopeEnd].
+  int64_t envelopeStart = 0;
+  int64_t envelopeEnd = 0;
+};
+
+/// Collection of all tied equivalence classes for a program.
+///
+/// Built during liveness analysis. Consumed by both the pressure sweep
+/// (to avoid double-counting) and the register allocator (for tie
+/// constraints). This is the single source of truth for tied-value
+/// relationships, replacing ad-hoc size zeroing and ad-hoc tiedPairs maps.
+struct TiedValueClasses {
+  /// All equivalence classes.
+  llvm::SmallVector<TiedClass> classes;
+
+  /// Map from Value to its class ID. Values not in any class are absent.
+  llvm::DenseMap<mlir::Value, int64_t> valueToClassId;
+
+  /// Map from Value to the value it should be tied to during allocation.
+  /// This is the flattened "result -> operand" map that the allocator needs.
+  /// For a class {init_arg, block_arg, iter_arg, loop_result}, this contains:
+  ///   block_arg -> init_arg
+  ///   iter_arg  -> block_arg
+  ///   loop_result -> block_arg
+  llvm::DenseMap<mlir::Value, mlir::Value> tiedPairs;
+
+  /// Get the class for a value, or nullptr if the value is standalone.
+  const TiedClass *getClass(mlir::Value value) const {
+    auto it = valueToClassId.find(value);
+    if (it == valueToClassId.end())
+      return nullptr;
+    return &classes[it->second];
+  }
+
+  /// Check whether a value is the canonical representative of its class.
+  bool isCanonical(mlir::Value value) const {
+    auto it = valueToClassId.find(value);
+    if (it == valueToClassId.end())
+      return true; // standalone values are trivially canonical
+    return classes[it->second].canonical == value;
   }
 };
 
@@ -79,6 +164,11 @@ struct LivenessInfo {
 
   /// AGPR ranges sorted by start point (for linear scan)
   llvm::SmallVector<LiveRange> aregRanges;
+
+  /// Tied value equivalence classes. Built during liveness analysis.
+  /// Used by pressure computation (count each class once) and by the
+  /// register allocator (for tie constraints).
+  TiedValueClasses tiedClasses;
 
   /// Definition points for each register
   llvm::DenseMap<mlir::Value, int64_t> defPoints;
@@ -122,13 +212,13 @@ void collectOpsRecursive(mlir::Block &block,
 /// @return Complete liveness information
 LivenessInfo computeLiveness(ProgramOp program);
 
-/// Compute maximum register pressure using sweep algorithm
-int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges);
-
-/// Compute maximum register pressure and the instruction index where the
-/// peak occurs.  If \p peakPoint is non-null, the index is written there.
+/// Compute maximum register pressure using sweep algorithm.
+/// This is the class-aware version: values belonging to tied equivalence
+/// classes are counted once per class (using the class envelope), not once
+/// per member. Standalone values are counted normally.
 int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
-                           int64_t *peakPoint);
+                           const TiedValueClasses &tiedClasses,
+                           int64_t *peakPoint = nullptr);
 
 /// Dump detailed peak pressure information for diagnostics.
 /// Shows which values are live at the peak point, categorized by defining op.

@@ -39,6 +39,7 @@ void collectOpsRecursive(Block &block,
 //===----------------------------------------------------------------------===//
 
 int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
+                           const TiedValueClasses &tiedClasses,
                            int64_t *peakPoint) {
   if (ranges.empty()) {
     if (peakPoint)
@@ -46,19 +47,32 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
     return 0;
   }
 
-  // Create events: (point, delta, isStart)
+  // Build sweep events. For tied equivalence classes, emit ONE set of
+  // events using the class envelope (the union of all member ranges)
+  // and the class size. For standalone values, emit events normally.
+  // This ensures each physical register is counted exactly once.
   llvm::SmallVector<std::tuple<int64_t, int64_t, bool>> events;
+  llvm::DenseSet<int64_t> emittedClassIds;
 
   for (const auto &r : ranges) {
-    events.push_back({r.start, r.size, true});     // Start: add
-    events.push_back({r.end + 1, -r.size, false}); // End+1: remove
+    if (r.tiedClassId >= 0) {
+      // Tied value: emit events only for the class envelope, once per class.
+      if (emittedClassIds.insert(r.tiedClassId).second) {
+        const TiedClass &cls = tiedClasses.classes[r.tiedClassId];
+        events.push_back({cls.envelopeStart, cls.size, true});
+        events.push_back({cls.envelopeEnd + 1, -cls.size, false});
+      }
+    } else {
+      // Standalone value: emit events using its own range and size.
+      events.push_back({r.start, r.size, true});
+      events.push_back({r.end + 1, -r.size, false});
+    }
   }
 
-  // Sort by point, then starts before ends
+  // Sort by point, then ends before starts at the same point
   llvm::sort(events, [](const auto &a, const auto &b) {
     if (std::get<0>(a) != std::get<0>(b))
       return std::get<0>(a) < std::get<0>(b);
-    // At same point, process ends before starts to avoid counting both
     return !std::get<2>(a) && std::get<2>(b);
   });
 
@@ -66,13 +80,11 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
   int64_t maxPressure = 0;
   int64_t bestPoint = 0;
 
-  // Reasonable upper bound for register pressure (no GPU has this many regs)
   constexpr int64_t kMaxReasonablePressure = 1000000;
 
   for (const auto &[point, delta, isStart] : events) {
     currentPressure += delta;
 
-    // Sanity check for overflow or computation errors
     assert(currentPressure >= 0 &&
            "Negative register pressure - possible overflow or bug");
     assert(currentPressure < kMaxReasonablePressure &&
@@ -87,10 +99,6 @@ int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges,
   if (peakPoint)
     *peakPoint = bestPoint;
   return maxPressure;
-}
-
-int64_t computeMaxPressure(llvm::ArrayRef<LiveRange> ranges) {
-  return computeMaxPressure(ranges, /*peakPoint=*/nullptr);
 }
 
 void dumpPeakPressureInfo(const LivenessInfo &info,
@@ -110,9 +118,9 @@ void dumpPeakPressureInfo(const LivenessInfo &info,
   if (ranges.empty())
     return;
 
-  // Reuse the shared sweep algorithm to find peak point.
   int64_t peakPoint = 0;
-  int64_t maxPressure = computeMaxPressure(ranges, &peakPoint);
+  int64_t maxPressure =
+      computeMaxPressure(ranges, info.tiedClasses, &peakPoint);
 
   // Collect all ranges alive at the peak point
   struct LiveAtPeak {
@@ -413,20 +421,18 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // already handle all necessary live range extensions by directly inspecting
   // the region structure.
 
-  // Pass 3b: Mark tied LoopOp values for pressure de-duplication.
+  // Pass 3b: Build tied equivalence classes for pressure de-duplication.
   //
   // LoopOp results, condition iter_args, and block args are all tied to the
-  // same physical register. The pressure computation would double/triple
-  // count them at overlap points. We mark tied "secondary" values (loop
-  // results and condition iter_args) by setting their size to 0 in the
-  // pressure computation -- the block arg's range already accounts for
-  // the full physical register occupancy.
+  // same physical register. Instead of zeroing sizes (which violates
+  // LiveRange invariants and risks allocator asserts), we group them into
+  // equivalence classes. Each class has an envelope range (the union of all
+  // member ranges) and the pressure sweep counts each class exactly once.
   //
-  // Important: we do NOT remove them from info.ranges (the allocator needs
-  // them for tied-operand processing). We only zero their size so the
-  // sweep-based pressure computation doesn't count them. The allocator
-  // must not rely on `size` from these zeroed entries; it should use
-  // the type-based size instead for allocation decisions.
+  // All LiveRange::size values remain correct for the allocator. The
+  // tiedClassId field on each range identifies its class membership.
+  auto &tc = info.tiedClasses;
+
   program.walk([&](LoopOp loopOp) {
     Block &bodyBlock = loopOp.getBodyBlock();
     auto condOp = dyn_cast<ConditionOp>(bodyBlock.getTerminator());
@@ -434,8 +440,7 @@ LivenessInfo computeLiveness(ProgramOp program) {
       LLVM_DEBUG(llvm::dbgs()
                  << "Pass 3b: LoopOp body has non-ConditionOp terminator ("
                  << bodyBlock.getTerminator()->getName() << "), skipping "
-                 << "tied-value de-duplication. Loop results may be "
-                 << "double-counted in pressure.\n");
+                 << "tied-value class construction.\n");
       return;
     }
 
@@ -445,28 +450,92 @@ LivenessInfo computeLiveness(ProgramOp program) {
       if (baIt == info.ranges.end())
         continue;
 
-      // Zero-size loop result (tied to block arg, shares same register)
+      // Check if this block arg is already in a class (e.g., from an
+      // MFMA tie on a nested loop). If so, extend that class.
+      int64_t classId = -1;
+      auto existingIt = tc.valueToClassId.find(blockArg);
+      if (existingIt != tc.valueToClassId.end()) {
+        classId = existingIt->second;
+      }
+
+      // Collect all values that share this physical register.
+      llvm::SmallVector<Value> members;
+      members.push_back(blockArg);
+
+      // Init arg -> block arg
+      if (i < loopOp.getInitArgs().size()) {
+        Value initArg = loopOp.getInitArgs()[i];
+        if (info.ranges.contains(initArg))
+          members.push_back(initArg);
+      }
+
+      // Loop result -> block arg
       if (i < loopOp->getNumResults()) {
         Value loopResult = loopOp->getResult(i);
-        auto lrIt = info.ranges.find(loopResult);
-        if (lrIt != info.ranges.end()) {
-          // Extend block arg range to cover the loop result's range
-          baIt->second.start = std::min(baIt->second.start, lrIt->second.start);
-          baIt->second.end = std::max(baIt->second.end, lrIt->second.end);
-          // Zero the result's size for pressure computation
-          lrIt->second.size = 0;
+        if (info.ranges.contains(loopResult))
+          members.push_back(loopResult);
+      }
+
+      // Condition iter_arg -> block arg
+      if (i < condOp.getIterArgs().size()) {
+        Value iterArg = condOp.getIterArgs()[i];
+        if (info.ranges.contains(iterArg))
+          members.push_back(iterArg);
+      }
+
+      if (members.size() <= 1)
+        continue; // No ties to form a class.
+
+      // Create or extend the class.
+      if (classId < 0) {
+        classId = static_cast<int64_t>(tc.classes.size());
+        tc.classes.push_back({});
+        tc.classes.back().id = classId;
+        tc.classes.back().canonical = blockArg;
+        tc.classes.back().size = baIt->second.size;
+        tc.classes.back().alignment = baIt->second.alignment;
+        tc.classes.back().regClass = baIt->second.regClass;
+        tc.classes.back().envelopeStart = baIt->second.start;
+        tc.classes.back().envelopeEnd = baIt->second.end;
+      }
+
+      TiedClass &cls = tc.classes[classId];
+
+      // Add all members to the class and compute envelope.
+      for (Value member : members) {
+        if (tc.valueToClassId.contains(member))
+          continue; // Already in this or another class.
+        tc.valueToClassId[member] = classId;
+        cls.members.push_back(member);
+
+        auto rangeIt = info.ranges.find(member);
+        if (rangeIt != info.ranges.end()) {
+          cls.envelopeStart =
+              std::min(cls.envelopeStart, rangeIt->second.start);
+          cls.envelopeEnd = std::max(cls.envelopeEnd, rangeIt->second.end);
+          // Tag the range with its class ID.
+          rangeIt->second.tiedClassId = classId;
         }
       }
 
-      // Zero-size condition iter_arg (tied to block arg)
+      // Build tiedPairs for the allocator:
+      //   block_arg -> init_arg
+      //   iter_arg  -> block_arg
+      //   loop_result -> block_arg
+      if (i < loopOp.getInitArgs().size()) {
+        Value initArg = loopOp.getInitArgs()[i];
+        if (info.ranges.contains(initArg))
+          tc.tiedPairs[blockArg] = initArg;
+      }
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        auto iaIt = info.ranges.find(iterArg);
-        if (iaIt != info.ranges.end()) {
-          baIt->second.start = std::min(baIt->second.start, iaIt->second.start);
-          baIt->second.end = std::max(baIt->second.end, iaIt->second.end);
-          iaIt->second.size = 0;
-        }
+        if (info.ranges.contains(iterArg) && !tc.tiedPairs.contains(iterArg))
+          tc.tiedPairs[iterArg] = blockArg;
+      }
+      if (i < loopOp->getNumResults()) {
+        Value loopResult = loopOp->getResult(i);
+        if (info.ranges.contains(loopResult))
+          tc.tiedPairs[loopResult] = blockArg;
       }
     }
   });
@@ -493,10 +562,10 @@ LivenessInfo computeLiveness(ProgramOp program) {
   llvm::sort(info.sregRanges, sortByStart);
   llvm::sort(info.aregRanges, sortByStart);
 
-  // Pass 5: Compute pressure
-  info.maxVRegPressure = computeMaxPressure(info.vregRanges);
-  info.maxSRegPressure = computeMaxPressure(info.sregRanges);
-  info.maxARegPressure = computeMaxPressure(info.aregRanges);
+  // Pass 5: Compute pressure (class-aware: each tied class counted once)
+  info.maxVRegPressure = computeMaxPressure(info.vregRanges, info.tiedClasses);
+  info.maxSRegPressure = computeMaxPressure(info.sregRanges, info.tiedClasses);
+  info.maxARegPressure = computeMaxPressure(info.aregRanges, info.tiedClasses);
 
   return info;
 }

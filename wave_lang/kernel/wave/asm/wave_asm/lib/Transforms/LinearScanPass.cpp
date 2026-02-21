@@ -194,64 +194,37 @@ private:
     if (collectFailed)
       return failure();
 
-    // Add tied constraints for loop ops: block args share registers with
-    // init args, and condition iter_args share registers with block args.
+    // Handle duplicate init args: if CSE merged identical zero-initialized
+    // accumulators, multiple block args may be tied to the same init value.
+    // Each block arg needs its own physical register, so insert copies.
+    // This must run before liveness analysis since it modifies the IR.
     program.walk([&](LoopOp loopOp) {
       Block &bodyBlock = loopOp.getBodyBlock();
-      auto condOp = dyn_cast<ConditionOp>(bodyBlock.getTerminator());
-      if (!condOp)
-        return;
-
-      // Track which init arg values have been used, to detect duplicates.
-      // If multiple block args are tied to the same init arg (e.g., after
-      // CSE merges identical zero-initialized accumulators), insert copies
-      // so each gets a unique physical register.
       llvm::DenseSet<Value> usedInitArgs;
 
       for (unsigned i = 0; i < bodyBlock.getNumArguments(); ++i) {
-        BlockArgument blockArg = bodyBlock.getArgument(i);
-
-        // Tie block arg to init arg (with copy if duplicate)
         if (i < loopOp.getInitArgs().size()) {
           Value initArg = loopOp.getInitArgs()[i];
-
           if (usedInitArgs.contains(initArg)) {
-            // Duplicate init arg: create a fresh zero-init to get a unique
-            // value. This ensures each block arg gets its own phys register.
-            // We re-initialize from the zero immediate rather than copying
-            // the multi-register init arg (v_mov_b32 can't copy a vector).
             Value copy = createZeroInitCopy(loopOp, initArg);
             if (copy) {
               loopOp.getInitArgsMutable()[i].set(copy);
-              initArg = copy;
             }
           }
-          usedInitArgs.insert(initArg);
-          tiedPairs[blockArg] = initArg;
-        }
-
-        // Tie condition iter_arg to block arg (skip if MFMA already tied it)
-        if (i < condOp.getIterArgs().size()) {
-          Value iterArg = condOp.getIterArgs()[i];
-          if (!tiedPairs.contains(iterArg)) {
-            tiedPairs[iterArg] = blockArg;
-          }
-        }
-
-        // Tie loop result to block arg (the result is the value that
-        // exits the loop, must be same register as the block arg)
-        if (i < loopOp->getNumResults()) {
-          tiedPairs[loopOp->getResult(i)] = blockArg;
+          usedInitArgs.insert(loopOp.getInitArgs()[i]);
         }
       }
     });
 
-    // Create allocator with precolored values and tied operands
+    // Create allocator with precolored values and tied operands.
+    // MFMA ties come from the local tiedPairs map; loop ties come from
+    // the TiedValueClasses built during liveness analysis (see below).
     LinearScanRegAlloc allocator(maxVGPRs, maxSGPRs, maxAGPRs, reservedVGPRs,
                                  reservedSGPRs, reservedAGPRs);
     for (const auto &[value, physIdx] : precoloredValues) {
       allocator.precolorValue(value, physIdx);
     }
+    // Add MFMA accumulator ties (these aren't loop ties -- keep them separate)
     for (const auto &[result, acc] : tiedPairs) {
       allocator.addTiedOperand(result, acc);
     }

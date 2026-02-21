@@ -203,8 +203,19 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
     return program.emitOpError() << "SSA validation failed before allocation";
   }
 
-  // Step 2: Compute liveness
+  // Step 2: Compute liveness (builds tied equivalence classes)
   LivenessInfo liveness = computeLiveness(program);
+
+  // Merge loop tied pairs from liveness into the allocator's tiedOperands.
+  // The liveness analysis builds TiedValueClasses with a tiedPairs map
+  // that captures loop block_arg/init_arg/iter_arg/result relationships.
+  // MFMA ties were added externally via addTiedOperand() and are already
+  // in tiedOperands; loop ties come from liveness and are merged here.
+  for (const auto &[result, operand] : liveness.tiedClasses.tiedPairs) {
+    if (!tiedOperands.contains(result)) {
+      tiedOperands[result] = operand;
+    }
+  }
 
   stats.totalVRegs = liveness.vregRanges.size();
   stats.totalSRegs = liveness.sregRanges.size();
