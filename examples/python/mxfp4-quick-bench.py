@@ -98,7 +98,18 @@ preshuffle_b_aiter = _mod73.preshuffle_b_aiter
 # Helpers
 # ---------------------------------------------------------------------------
 
-KERNELS = [
+# Comment out entries to skip them in the benchmark.
+ENABLED_KERNELS = [
+    "vanilla",
+    "preshuffle-scales",
+    # "preshuffle-B",
+    # "preshuffle-all",
+    "splitk",
+    "splitk-preshuffle-scales",
+    # "splitk-preshuffle-B",
+]
+
+ALL_KERNELS = [
     "vanilla",
     "preshuffle-scales",
     "preshuffle-B",
@@ -475,193 +486,211 @@ def bench_shape(m, n, k, block_m, block_n, block_k, num_splits, warmup, iters, c
     x, w, x_scales, w_scales = generate_mxfp4_inputs(
         (m, n, k), device=torch.device("cpu")
     )
-    x_scales_sh = e8m0_shuffle(x_scales)
-    w_scales_sh = e8m0_shuffle(w_scales)
-    w_ps = preshuffle_b_aiter(w)
-
     # Always compute an independent torch reference for correctness checks.
     ref_f32 = reference_mxfp4_gemm(x, w, x_scales, w_scales)
 
+    need_shuffled_scales = any(
+        k in ENABLED_KERNELS
+        for k in ("preshuffle-scales", "preshuffle-all",
+                   "splitk-preshuffle-scales")
+    )
+    need_preshuffle_B = any(
+        k in ENABLED_KERNELS
+        for k in ("preshuffle-B", "preshuffle-all", "splitk-preshuffle-B")
+    )
+
     x_gpu = x.cuda()
     w_gpu = w.cuda()
-    w_ps_gpu = w_ps.cuda()
     x_scales_gpu = x_scales.cuda()
     w_scales_gpu = w_scales.cuda()
-    x_scales_sh_gpu = x_scales_sh.cuda()
-    w_scales_sh_gpu = w_scales_sh.cuda()
+
+    if need_shuffled_scales:
+        x_scales_sh = e8m0_shuffle(x_scales)
+        w_scales_sh = e8m0_shuffle(w_scales)
+        x_scales_sh_gpu = x_scales_sh.cuda()
+        w_scales_sh_gpu = w_scales_sh.cuda()
+
+    if need_preshuffle_B:
+        w_ps = preshuffle_b_aiter(w)
+        w_ps_gpu = w_ps.cuda()
 
     vanilla_ms = None
 
     # ------------------------------------------------------------------
     # 1. Vanilla — unshuffled scales, all through LDS, no schedule
     # ------------------------------------------------------------------
-    vanilla_fn = None
-    try:
-        vanilla_fn = _compile_vanilla_or_preshuffle(
-            get_vanilla_kernel(), m, n, k, block_m, block_n, block_k
-        )
-        c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
-        vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c, "vanilla")
+    if "vanilla" in ENABLED_KERNELS:
+        try:
+            vanilla_fn = _compile_vanilla_or_preshuffle(
+                get_vanilla_kernel(), m, n, k, block_m, block_n, block_k
+            )
+            c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+            vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c, "vanilla")
 
-        avg_ms = _bench(
-            lambda: vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c),
-            warmup, iters,
-        )
-        results["vanilla"] = avg_ms
-        vanilla_ms = avg_ms
-        _print_row(shape_str, "vanilla", avg_ms, _tflops(m, n, k, avg_ms), "-")
-    except Exception as e:
-        results["vanilla"] = None
-        _print_failed_row(shape_str, "vanilla", reason=str(e))
+            avg_ms = _bench(
+                lambda: vanilla_fn(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c),
+                warmup, iters,
+            )
+            results["vanilla"] = avg_ms
+            vanilla_ms = avg_ms
+            _print_row(shape_str, "vanilla", avg_ms, _tflops(m, n, k, avg_ms), "-")
+        except Exception as e:
+            results["vanilla"] = None
+            _print_failed_row(shape_str, "vanilla", reason=str(e))
 
     # ------------------------------------------------------------------
     # 2. Preshuffle-scales — shuffled scales from GLOBAL, B through LDS, no schedule
     # ------------------------------------------------------------------
-    try:
-        fn = _compile_vanilla_or_preshuffle(
-            get_preshuffle_kernel(), m, n, k, block_m, block_n, block_k
-        )
-        c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
-        fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c, "preshuffle-scales")
+    if "preshuffle-scales" in ENABLED_KERNELS:
+        try:
+            fn = _compile_vanilla_or_preshuffle(
+                get_preshuffle_kernel(), m, n, k, block_m, block_n, block_k
+            )
+            c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+            fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c, "preshuffle-scales")
 
-        avg_ms = _bench(
-            lambda: fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c),
-            warmup, iters,
-        )
-        results["preshuffle-scales"] = avg_ms
-        _print_row(shape_str, "preshuffle-scales", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["preshuffle-scales"] = None
-        _print_failed_row(shape_str, "preshuffle-scales", reason=str(e))
+            avg_ms = _bench(
+                lambda: fn(x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c),
+                warmup, iters,
+            )
+            results["preshuffle-scales"] = avg_ms
+            _print_row(shape_str, "preshuffle-scales", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["preshuffle-scales"] = None
+            _print_failed_row(shape_str, "preshuffle-scales", reason=str(e))
 
     # ------------------------------------------------------------------
     # 3. Preshuffle-B — preshuffled B from GLOBAL, unshuffled scales, no schedule
     # ------------------------------------------------------------------
-    try:
-        fn = _build_noschedule_kernel(
-            m, n, k, block_m, block_n, block_k,
-            preshuffle_scales=False, preshuffle_B=True,
-        )
-        c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
-        fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c, "preshuffle-B")
+    if "preshuffle-B" in ENABLED_KERNELS:
+        try:
+            fn = _build_noschedule_kernel(
+                m, n, k, block_m, block_n, block_k,
+                preshuffle_scales=False, preshuffle_B=True,
+            )
+            c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+            fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c, "preshuffle-B")
 
-        avg_ms = _bench(
-            lambda: fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c),
-            warmup, iters,
-        )
-        results["preshuffle-B"] = avg_ms
-        _print_row(shape_str, "preshuffle-B", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["preshuffle-B"] = None
-        _print_failed_row(shape_str, "preshuffle-B", reason=str(e))
+            avg_ms = _bench(
+                lambda: fn(x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c),
+                warmup, iters,
+            )
+            results["preshuffle-B"] = avg_ms
+            _print_row(shape_str, "preshuffle-B", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["preshuffle-B"] = None
+            _print_failed_row(shape_str, "preshuffle-B", reason=str(e))
 
     # ------------------------------------------------------------------
     # 4. Preshuffle-all — preshuffled scales + preshuffled B, no schedule
-    #    ("all optimizations except scheduling")
     # ------------------------------------------------------------------
-    try:
-        fn = _build_noschedule_kernel(
-            m, n, k, block_m, block_n, block_k,
-            preshuffle_scales=True, preshuffle_B=True,
-        )
-        c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
-        fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c, "preshuffle-all")
+    if "preshuffle-all" in ENABLED_KERNELS:
+        try:
+            fn = _build_noschedule_kernel(
+                m, n, k, block_m, block_n, block_k,
+                preshuffle_scales=True, preshuffle_B=True,
+            )
+            c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+            fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c, "preshuffle-all")
 
-        avg_ms = _bench(
-            lambda: fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c),
-            warmup, iters,
-        )
-        results["preshuffle-all"] = avg_ms
-        _print_row(shape_str, "preshuffle-all", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["preshuffle-all"] = None
-        _print_failed_row(shape_str, "preshuffle-all", reason=str(e))
+            avg_ms = _bench(
+                lambda: fn(x_gpu, x_scales_sh_gpu, w_ps_gpu, w_scales_sh_gpu, c),
+                warmup, iters,
+            )
+            results["preshuffle-all"] = avg_ms
+            _print_row(shape_str, "preshuffle-all", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["preshuffle-all"] = None
+            _print_failed_row(shape_str, "preshuffle-all", reason=str(e))
 
     # ------------------------------------------------------------------
     # 5. Splitk — wave_asm backend, unshuffled scales, bf16 out
     # ------------------------------------------------------------------
-    try:
-        handle = _get_splitk_handle(
-            m, n, k, block_m, block_n, block_k, num_splits, compiler,
-            preshuffle_B=False,
-        )
-        c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
-        _run_splitk(handle, x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_bf16)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c_bf16, "splitk", num_splits=num_splits)
-
-        def run_sk():
-            c_bf16.zero_()
+    if "splitk" in ENABLED_KERNELS:
+        try:
+            handle = _get_splitk_handle(
+                m, n, k, block_m, block_n, block_k, num_splits, compiler,
+                preshuffle_B=False,
+            )
+            c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
             _run_splitk(handle, x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_bf16)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c_bf16, "splitk", num_splits=num_splits)
 
-        avg_ms = _bench(run_sk, warmup, iters)
-        results["splitk"] = avg_ms
-        _print_row(shape_str, "splitk", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["splitk"] = None
-        _print_failed_row(shape_str, "splitk", reason=str(e))
+            def run_sk():
+                c_bf16.zero_()
+                _run_splitk(handle, x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_bf16)
+
+            avg_ms = _bench(run_sk, warmup, iters)
+            results["splitk"] = avg_ms
+            _print_row(shape_str, "splitk", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["splitk"] = None
+            _print_failed_row(shape_str, "splitk", reason=str(e))
 
     # ------------------------------------------------------------------
     # 6. Splitk-preshuffle-scales — wave_asm splitk + preshuffled scales, bf16 out
     # ------------------------------------------------------------------
-    try:
-        handle_ps_scales = _get_splitk_handle(
-            m, n, k, block_m, block_n, block_k, num_splits, compiler,
-            preshuffle_B=False, preshuffle_scales=True,
-        )
-        c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
-        _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-scales", num_splits=num_splits)
-
-        def run_sk_ps_scales():
-            c_bf16.zero_()
+    if "splitk-preshuffle-scales" in ENABLED_KERNELS:
+        try:
+            handle_ps_scales = _get_splitk_handle(
+                m, n, k, block_m, block_n, block_k, num_splits, compiler,
+                preshuffle_B=False, preshuffle_scales=True,
+            )
+            c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
             _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-scales", num_splits=num_splits)
 
-        avg_ms = _bench(run_sk_ps_scales, warmup, iters)
-        results["splitk-preshuffle-scales"] = avg_ms
-        _print_row(shape_str, "splitk-preshuffle-scales", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["splitk-preshuffle-scales"] = None
-        _print_failed_row(shape_str, "splitk-preshuffle-scales", reason=str(e))
+            def run_sk_ps_scales():
+                c_bf16.zero_()
+                _run_splitk(handle_ps_scales, x_gpu, x_scales_sh_gpu, w_gpu, w_scales_sh_gpu, c_bf16)
+
+            avg_ms = _bench(run_sk_ps_scales, warmup, iters)
+            results["splitk-preshuffle-scales"] = avg_ms
+            _print_row(shape_str, "splitk-preshuffle-scales", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["splitk-preshuffle-scales"] = None
+            _print_failed_row(shape_str, "splitk-preshuffle-scales", reason=str(e))
 
     # ------------------------------------------------------------------
     # 7. Splitk-preshuffle-B — wave_asm splitk + preshuffled B, bf16 out
     # ------------------------------------------------------------------
-    try:
-        handle_ps = _get_splitk_handle(
-            m, n, k, block_m, block_n, block_k, num_splits, compiler,
-            preshuffle_B=True,
-        )
-        c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
-        _run_splitk(handle_ps, x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c_bf16)
-        torch.cuda.synchronize()
-        _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-B", num_splits=num_splits)
-
-        def run_sk_ps():
-            c_bf16.zero_()
+    if "splitk-preshuffle-B" in ENABLED_KERNELS:
+        try:
+            handle_ps = _get_splitk_handle(
+                m, n, k, block_m, block_n, block_k, num_splits, compiler,
+                preshuffle_B=True,
+            )
+            c_bf16 = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
             _run_splitk(handle_ps, x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c_bf16)
+            torch.cuda.synchronize()
+            _correctness_check(ref_f32, c_bf16, "splitk-preshuffle-B", num_splits=num_splits)
 
-        avg_ms = _bench(run_sk_ps, warmup, iters)
-        results["splitk-preshuffle-B"] = avg_ms
-        _print_row(shape_str, "splitk-preshuffle-B", avg_ms, _tflops(m, n, k, avg_ms),
-                   _ratio(vanilla_ms, avg_ms))
-    except Exception as e:
-        results["splitk-preshuffle-B"] = None
-        _print_failed_row(shape_str, "splitk-preshuffle-B", reason=str(e))
+            def run_sk_ps():
+                c_bf16.zero_()
+                _run_splitk(handle_ps, x_gpu, x_scales_gpu, w_ps_gpu, w_scales_gpu, c_bf16)
+
+            avg_ms = _bench(run_sk_ps, warmup, iters)
+            results["splitk-preshuffle-B"] = avg_ms
+            _print_row(shape_str, "splitk-preshuffle-B", avg_ms, _tflops(m, n, k, avg_ms),
+                       _ratio(vanilla_ms, avg_ms))
+        except Exception as e:
+            results["splitk-preshuffle-B"] = None
+            _print_failed_row(shape_str, "splitk-preshuffle-B", reason=str(e))
 
     return results
 
@@ -727,7 +756,7 @@ def main():
         print()
         print("=" * sum(_COL_W.values()))
         print(f"Summary: {len(shapes)} shapes")
-        for kernel in KERNELS:
+        for kernel in ENABLED_KERNELS:
             vals = [r[kernel] for _, _, _, r in all_results if r.get(kernel) is not None]
             if vals:
                 avg = sum(vals) / len(vals)
