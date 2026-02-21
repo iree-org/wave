@@ -60,10 +60,12 @@ def _is_preshuffle_mapping(mapping) -> bool:
         return False
     if len(mapping.output_mapping) != 2:
         return False
+    if len(mapping.input_mapping) != 2:
+        return False
     if not (mapping.is_output_identity() and not mapping.is_input_identity()):
         return False
     # Preshuffle input expressions always contain floor and Mod from the
-    # e8m0 shuffle formula.  Simple offsets (i + CTA_OFFSET) don't.
+    # e8m0 shuffle formula.
     input_atoms = set()
     for expr in mapping.input_mapping.values():
         input_atoms.update(type(a) for a in sympy.preorder_traversal(expr))
