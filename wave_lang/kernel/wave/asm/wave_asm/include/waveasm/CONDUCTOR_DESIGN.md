@@ -116,6 +116,11 @@ nops_inserted: 3
 waitcnts_inserted: 12
 total_instructions: 87
 
+--- Warnings from previous round ---
+(none, or e.g.:
+  "warn: move I8 after I12 — moved LDS read after LDS write, same base address
+   info: move I3 after I7 — address computation moved away from consumer I4")
+
 --- Error from previous round (if any) ---
 (none, or e.g.:
   "Applied successfully: move I5 after I1, move I8 before I3
@@ -174,6 +179,32 @@ All moves reverted.
 
 This gives the LLM a clear signal about what went wrong and a complete picture
 of which commands were valid up to the failure point.
+
+### Warnings
+
+Some moves are structurally valid (dominance holds) but **potentially
+dangerous**. These are applied but reported as warnings with severity levels,
+so the LLM can decide whether to keep or reconsider them.
+
+| Severity | Example | Meaning |
+|----------|---------|---------|
+| `info` | Moving address computation away from its consumer. | Unusual but harmless. |
+| `warn` | Moving a memory read after a memory write. | May be valid (different addresses) but could introduce a WAR hazard. |
+| `warn` | Moving an op past a barrier. | Barrier ordering is usually intentional. |
+| `critical` | Moving a memory write after another write to the same buffer. | Likely WAW hazard; almost certainly wrong unless offsets are provably disjoint. |
+
+The system performs lightweight alias analysis where possible (e.g. comparing
+buffer SRD operands and constant offsets) to reduce false warnings. When it
+cannot prove safety, it warns and lets the LLM proceed — the metrics from the
+compilation round will reveal whether the move was actually beneficial.
+
+Warnings are reported alongside metrics in the next round:
+
+```
+--- Warnings ---
+warn: move I8 after I12 — moved LDS read (I8) after LDS write (I12), same base address
+info: move I3 after I7 — address computation moved away from consumer I4
+```
 
 ## Metrics Collection
 
