@@ -58,7 +58,16 @@ def _is_preshuffle_mapping(mapping) -> bool:
     (physical coords are shuffled)."""
     if mapping is None:
         return False
-    return mapping.is_output_identity() and not mapping.is_input_identity()
+    if len(mapping.output_mapping) != 2:
+        return False
+    if not (mapping.is_output_identity() and not mapping.is_input_identity()):
+        return False
+    # Preshuffle input expressions always contain floor and Mod from the
+    # e8m0 shuffle formula.  Simple offsets (i + CTA_OFFSET) don't.
+    input_atoms = set()
+    for expr in mapping.input_mapping.values():
+        input_atoms.update(type(a) for a in sympy.preorder_traversal(expr))
+    return sympy.floor in input_atoms and sympy.Mod in input_atoms
 
 
 def _create_wide_read_1d(

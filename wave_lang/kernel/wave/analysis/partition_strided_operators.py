@@ -435,7 +435,11 @@ def _get_physical_start(
         physical = transform_index_on_mapping(
             custom.mapping, symbolic_shape, custom.index, is_read=True
         )
+        if not all(dim in physical for dim in symbolic_dims):
+            return None
         return {dim: physical[dim] for dim in symbolic_dims}
+    if not all(dim in custom.index for dim in symbolic_dims):
+        return None
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
@@ -494,6 +498,8 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
         read_infos = []
         for custom, node in customs:
             phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
+            if phys_start is None:
+                continue
             flat_offset = sum(
                 phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
             )
