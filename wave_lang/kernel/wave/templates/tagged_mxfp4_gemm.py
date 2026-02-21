@@ -36,6 +36,7 @@ def get_tagged_mxfp4_gemm(
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     reorder_workgroups=True,
+    group_size=32,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -71,7 +72,7 @@ def get_tagged_mxfp4_gemm(
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
     if reorder_workgroups:
-        # Workgroup reordering based on SP3 example: group by GROUP_SIZE_N along N dim
+        # Workgroup reordering: group by GROUP_SIZE_N along N.
         wg0, wg1 = WORKGROUP_0, WORKGROUP_1
         num_wg_0 = ceiling(M / BLOCK_M)
         num_wg_1 = ceiling(N / BLOCK_N)
@@ -143,7 +144,7 @@ def get_tagged_mxfp4_gemm(
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
-        GROUP_SIZE_N: 32,
+        GROUP_SIZE_N: group_size,
         M: shape[0],
         N: shape[1],
         K: shape[2],
