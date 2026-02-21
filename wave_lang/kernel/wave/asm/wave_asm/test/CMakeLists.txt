@@ -14,6 +14,7 @@ configure_lit_site_cfg(
 
 set(WAVEASM_TEST_DEPENDS
   waveasm-translate
+  waveasm-conductor
 )
 
 add_lit_testsuite(check-waveasm "Running the waveasm regression tests"

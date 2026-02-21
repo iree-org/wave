@@ -51,6 +51,7 @@ add_definitions(${LLVM_DEFINITIONS})
 set(WAVEASM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(WAVEASM_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(WAVEASM_TOOLS_DIR ${CMAKE_CURRENT_BINARY_DIR}/tools/waveasm-translate)
+set(WAVEASM_CONDUCTOR_DIR ${CMAKE_CURRENT_BINARY_DIR}/tools/waveasm-conductor)
 
 #-------------------------------------------------------------------------------
 # Directory Configuration
