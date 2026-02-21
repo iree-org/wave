@@ -1,7 +1,7 @@
 // RUN: waveasm-conductor --print-debug-locs-inline %s | FileCheck %s
 
 // CONDUCTOR: swap v_add_u32_0 v_lshlrev_b32_0
-// CONDUCTOR: done
+
 
 // Original order: v_add_u32_0, v_add_u32_1, v_lshlrev_b32_0.
 // After swap(0, 2): v_lshlrev_b32_0, v_add_u32_1, v_add_u32_0.

@@ -1,7 +1,7 @@
 // RUN: not waveasm-conductor %s 2>&1 | FileCheck %s
 
 // CONDUCTOR: move nonexistent_tag_42 after v_add_u32_0
-// CONDUCTOR: done
+
 
 // CHECK: conductor: command 0: unknown tag 'nonexistent_tag_42'
 

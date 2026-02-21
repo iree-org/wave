@@ -1,7 +1,7 @@
 // RUN: waveasm-conductor --print-debug-locs-inline %s | FileCheck %s
 
 // CONDUCTOR: move v_add_u32_0 after v_lshlrev_b32_0
-// CONDUCTOR: done
+
 
 // Original order: v_add_u32_0, v_add_u32_1, v_lshlrev_b32_0.
 // After move: v_add_u32_1, v_lshlrev_b32_0, v_add_u32_0.

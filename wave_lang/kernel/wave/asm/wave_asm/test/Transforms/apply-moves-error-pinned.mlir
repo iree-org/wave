@@ -1,7 +1,7 @@
 // RUN: not waveasm-conductor %s 2>&1 | FileCheck %s
 
 // CONDUCTOR: move s_endpgm_0 before v_add_u32_0
-// CONDUCTOR: done
+
 
 // CHECK: conductor: command 0: cannot move pinned op 's_endpgm_0'
 

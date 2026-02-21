@@ -70,8 +70,6 @@ ParseResult parseConductorCommands(llvm::StringRef text) {
     if (!trimmed.starts_with("// CONDUCTOR:"))
       continue;
     StringRef raw = trimmed.drop_front(strlen("// CONDUCTOR:")).trim();
-    if (raw == "done")
-      break;
     if (raw.empty())
       continue;
 

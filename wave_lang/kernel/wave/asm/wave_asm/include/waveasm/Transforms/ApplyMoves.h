@@ -52,7 +52,7 @@ struct ParseResult {
 
 /// Parse CONDUCTOR command lines from raw file text.
 /// Scans for lines matching `// CONDUCTOR: <command>` and parses them
-/// into typed Command structs until `done` or end of input.
+/// into typed Command structs.
 ParseResult parseConductorCommands(llvm::StringRef text);
 
 /// Apply a sequence of parsed Conductor commands to a tagged module.
