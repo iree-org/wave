@@ -63,9 +63,14 @@ int main(int argc, char **argv) {
   }
 
   llvm::StringRef rawText = (*inputFileOrErr)->getBuffer();
-  auto commands = waveasm::parseConductorCommands(rawText);
+  auto parseResult = waveasm::parseConductorCommands(rawText);
 
-  if (commands.empty()) {
+  if (!parseResult.success) {
+    llvm::errs() << "conductor: parse error at command "
+                 << parseResult.failedLine << ": " << parseResult.error << "\n";
+    return 1;
+  }
+  if (parseResult.commands.empty()) {
     llvm::errs() << "No CONDUCTOR commands found in input\n";
     return 1;
   }
@@ -96,7 +101,8 @@ int main(int argc, char **argv) {
   }
 
   // Apply the move commands.
-  waveasm::MoveResult result = waveasm::applyMoves(*module, commands);
+  waveasm::MoveResult result =
+      waveasm::applyMoves(*module, parseResult.commands);
   if (!result.success) {
     llvm::errs() << "conductor: command " << result.failedCommand << ": "
                  << result.error << "\n";

@@ -37,7 +37,7 @@ llvm::StringMap<Operation *> buildTagMap(ModuleOp module) {
   return map;
 }
 
-/// Validate that an op can be moved (not pinned, resolves to a tag).
+/// Validate that an op can be moved (not pinned).
 std::string validateMovable(Operation *op, StringRef tag) {
   if (isPinned(op))
     return ("cannot move pinned op '" + tag + "'").str();
@@ -56,128 +56,148 @@ std::string validateSameBlock(Operation *a, StringRef tagA, Operation *b,
 
 namespace waveasm {
 
-llvm::SmallVector<std::string> parseConductorCommands(llvm::StringRef text) {
-  llvm::SmallVector<std::string> commands;
+ParseResult parseConductorCommands(llvm::StringRef text) {
+  ParseResult result;
+  result.success = true;
+  result.failedLine = 0;
+
   llvm::SmallVector<StringRef> lines;
   text.split(lines, '\n');
 
+  unsigned cmdIdx = 0;
   for (StringRef line : lines) {
     StringRef trimmed = line.ltrim();
     if (!trimmed.starts_with("// CONDUCTOR:"))
       continue;
-    StringRef cmd = trimmed.drop_front(strlen("// CONDUCTOR:")).trim();
-    if (cmd == "done")
+    StringRef raw = trimmed.drop_front(strlen("// CONDUCTOR:")).trim();
+    if (raw == "done")
       break;
-    if (!cmd.empty())
-      commands.push_back(cmd.str());
+    if (raw.empty())
+      continue;
+
+    if (raw.starts_with("move ")) {
+      StringRef rest = raw.drop_front(strlen("move "));
+      auto [tag, rest2] = rest.split(' ');
+      auto [direction, refTag] = rest2.split(' ');
+
+      if (tag.empty() || refTag.empty() || direction.empty()) {
+        result.success = false;
+        result.error = ("malformed move command: '" + raw + "'").str();
+        result.failedLine = cmdIdx;
+        return result;
+      }
+
+      if (direction == "before") {
+        result.commands.push_back(MoveBefore{tag.str(), refTag.str()});
+      } else if (direction == "after") {
+        result.commands.push_back(MoveAfter{tag.str(), refTag.str()});
+      } else {
+        result.success = false;
+        result.error =
+            ("expected 'after' or 'before', got '" + direction + "'").str();
+        result.failedLine = cmdIdx;
+        return result;
+      }
+
+    } else if (raw.starts_with("swap ")) {
+      StringRef rest = raw.drop_front(strlen("swap "));
+      auto [tag1, tag2] = rest.split(' ');
+
+      if (tag1.empty() || tag2.empty()) {
+        result.success = false;
+        result.error = ("malformed swap command: '" + raw + "'").str();
+        result.failedLine = cmdIdx;
+        return result;
+      }
+
+      result.commands.push_back(Swap{tag1.str(), tag2.str()});
+
+    } else {
+      result.success = false;
+      result.error = ("unknown command: '" + raw + "'").str();
+      result.failedLine = cmdIdx;
+      return result;
+    }
+
+    ++cmdIdx;
   }
-  return commands;
+
+  return result;
 }
 
-MoveResult applyMoves(ModuleOp module, llvm::ArrayRef<std::string> commands) {
+/// Resolve two tags, validate movability and same-block constraint.
+/// On success sets op1/op2 and returns empty string.
+static std::string
+resolveAndValidate(const llvm::StringMap<Operation *> &tagMap, StringRef tag,
+                   StringRef ref, bool checkRefMovable, Operation *&op1,
+                   Operation *&op2) {
+  auto it1 = tagMap.find(tag);
+  if (it1 == tagMap.end())
+    return ("unknown tag '" + tag + "'").str();
+  auto it2 = tagMap.find(ref);
+  if (it2 == tagMap.end())
+    return ("unknown tag '" + ref + "'").str();
+
+  op1 = it1->second;
+  op2 = it2->second;
+
+  std::string err = validateMovable(op1, tag);
+  if (!err.empty())
+    return err;
+  if (checkRefMovable) {
+    err = validateMovable(op2, ref);
+    if (!err.empty())
+      return err;
+  }
+  return validateSameBlock(op1, tag, op2, ref);
+}
+
+MoveResult applyMoves(ModuleOp module, llvm::ArrayRef<Command> commands) {
   auto tagMap = buildTagMap(module);
 
   for (auto [idx, cmd] : llvm::enumerate(commands)) {
-    StringRef line(cmd);
-    StringRef rest;
-
     auto fail = [&](const std::string &msg) -> MoveResult {
       return {false, msg, static_cast<unsigned>(idx)};
     };
 
-    if (line.starts_with("move ")) {
-      rest = line.drop_front(strlen("move "));
+    Operation *op1 = nullptr, *op2 = nullptr;
 
-      // Parse: <tag> (after|before) <tag>.
-      StringRef tag1, direction, tag2;
-      std::tie(tag1, rest) = rest.split(' ');
-      std::tie(direction, tag2) = rest.split(' ');
+    if (auto *move = std::get_if<MoveBefore>(&cmd)) {
+      std::string err =
+          resolveAndValidate(tagMap, move->tag, move->refTag, false, op1, op2);
+      if (!err.empty())
+        return fail(err);
+      op1->moveBefore(op2);
+      LDBG() << "move " << move->tag << " before " << move->refTag;
 
-      if (tag1.empty() || tag2.empty() || direction.empty())
-        return fail("malformed move command: '" + cmd + "'");
+    } else if (auto *move = std::get_if<MoveAfter>(&cmd)) {
+      std::string err =
+          resolveAndValidate(tagMap, move->tag, move->refTag, false, op1, op2);
+      if (!err.empty())
+        return fail(err);
+      op1->moveAfter(op2);
+      LDBG() << "move " << move->tag << " after " << move->refTag;
 
-      if (direction != "after" && direction != "before")
-        return fail("expected 'after' or 'before', got '" + direction.str() +
-                    "'");
-
-      auto it1 = tagMap.find(tag1);
-      if (it1 == tagMap.end())
-        return fail("unknown tag '" + tag1.str() + "'");
-      auto it2 = tagMap.find(tag2);
-      if (it2 == tagMap.end())
-        return fail("unknown tag '" + tag2.str() + "'");
-
-      Operation *op1 = it1->second;
-      Operation *op2 = it2->second;
-
-      std::string err = validateMovable(op1, tag1);
+    } else if (auto *swap = std::get_if<Swap>(&cmd)) {
+      std::string err =
+          resolveAndValidate(tagMap, swap->tag1, swap->tag2, true, op1, op2);
       if (!err.empty())
         return fail(err);
 
-      err = validateSameBlock(op1, tag1, op2, tag2);
-      if (!err.empty())
-        return fail(err);
-
-      if (direction == "after")
-        op1->moveAfter(op2);
-      else
-        op1->moveBefore(op2);
-
-      LDBG() << "move " << tag1 << " " << direction << " " << tag2;
-
-    } else if (line.starts_with("swap ")) {
-      rest = line.drop_front(strlen("swap "));
-
-      StringRef tag1, tag2;
-      std::tie(tag1, tag2) = rest.split(' ');
-
-      if (tag1.empty() || tag2.empty())
-        return fail("malformed swap command: '" + cmd + "'");
-
-      auto it1 = tagMap.find(tag1);
-      if (it1 == tagMap.end())
-        return fail("unknown tag '" + tag1.str() + "'");
-      auto it2 = tagMap.find(tag2);
-      if (it2 == tagMap.end())
-        return fail("unknown tag '" + tag2.str() + "'");
-
-      Operation *op1 = it1->second;
-      Operation *op2 = it2->second;
-
-      std::string err = validateMovable(op1, tag1);
-      if (!err.empty())
-        return fail(err);
-      err = validateMovable(op2, tag2);
-      if (!err.empty())
-        return fail(err);
-
-      err = validateSameBlock(op1, tag1, op2, tag2);
-      if (!err.empty())
-        return fail(err);
-
-      // Swap: move op1 after op2, then move op2 to op1's original position.
+      // Swap by considering adjacency cases.
       Operation *op1Next = op1->getNextNode();
       if (op1Next == op2) {
-        // Adjacent: just swap order.
         op1->moveAfter(op2);
+      } else if (op2->getNextNode() == op1) {
+        op2->moveAfter(op1);
       } else {
-        Operation *op2Next = op2->getNextNode();
-        if (op2Next == op1) {
-          op2->moveAfter(op1);
-        } else {
-          // Non-adjacent: use a stable reference point.
-          op1->moveAfter(op2);
-          if (op1Next)
-            op2->moveBefore(op1Next);
-          else
-            op2->moveBefore(op2->getBlock(), op2->getBlock()->end());
-        }
+        op1->moveAfter(op2);
+        if (op1Next)
+          op2->moveBefore(op1Next);
+        else
+          op2->moveBefore(op2->getBlock(), op2->getBlock()->end());
       }
-
-      LDBG() << "swap " << tag1 << " " << tag2;
-
-    } else {
-      return fail("unknown command: '" + cmd + "'");
+      LDBG() << "swap " << swap->tag1 << " " << swap->tag2;
     }
   }
 
