@@ -305,6 +305,58 @@ waitcnts > fewer nops. This ordering is configurable.
 - **Nested regions**: Tags are scoped per region. The LLM sees one region at a
   time (typically the innermost loop body).
 
+## Parallel Search with Checkpoints
+
+Individual LLM calls have high latency but the API supports many concurrent
+requests. Instead of running a single sequential loop, launch **P parallel
+agents**, each exploring a different scheduling trajectory from the same
+starting IR.
+
+```
+           ┌─ Agent 1 ─── round 1 ─── round 2 ─── ...
+           │
+tagged IR ─┼─ Agent 2 ─── round 1 ─── round 2 ─── ...
+           │
+           ├─ Agent 3 ─── round 1 ─── round 2 ─── ...
+           │
+           └─ Agent P ─── round 1 ─── round 2 ─── ...
+                              │
+                          checkpoint
+```
+
+At **checkpoints** (every K rounds), collect metrics from all agents, rank
+them, and keep the **top-k**. The surviving agents continue from their current
+state; the rest are terminated. New agents can be spawned from the top-k states
+to refill the pool, optionally with varied system prompts (e.g. "prioritize
+register pressure" vs "prioritize latency hiding").
+
+```
+for checkpoint in 1..num_checkpoints:
+    // all agents run K rounds in parallel.
+    results = await all_agents(K rounds each)
+
+    // rank by metrics, keep top-k.
+    ranked = sort(results, by=metrics)
+    survivors = ranked[:top_k]
+
+    // respawn from survivors to refill pool.
+    agents = []
+    for state in survivors:
+        agents.append(continue_agent(state))
+        agents.append(fork_agent(state, varied_prompt))  // optional diversity.
+
+best = survivors[0]
+```
+
+This turns the scheduling search into a **beam search** over move sequences.
+The validation + metrics infrastructure is unchanged — each agent is just an
+independent instance of the iterative loop. The only coordination is at
+checkpoints where we compare metrics and prune.
+
+Parallelism is free in terms of wall-clock time (bounded by the slowest agent
+per checkpoint) and the compile-and-measure step is CPU-local and fast (~ms
+per clone).
+
 ## Caching
 
 Final move sequences are cached by SHA-256 of the **tagged IR text** (before
