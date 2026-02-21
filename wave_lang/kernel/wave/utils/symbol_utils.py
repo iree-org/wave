@@ -22,6 +22,80 @@ from ..._support.indexing import (
 
 
 ####################################################################
+# Affine-expression uniformity decomposition
+####################################################################
+
+
+def decompose_affine_by_uniformity(
+    expr: IndexExpr | int,
+    symbol_classes: list[set],
+) -> list[IndexExpr]:
+    """Decompose a polynomial expression into additive components by symbol uniformity.
+
+    Given symbol classes ``[C0, C1, ..., Cn]`` ordered from most-uniform
+    (e.g. workgroup IDs) to least-uniform (e.g. induction variables),
+    produces ``n + 1`` components ``[part_0, ..., part_n, remainder]``
+    such that ``sum(parts) == expr``.
+
+    *  ``part_k`` ideally depends only on symbols from ``C_k``.
+    *  ``remainder`` contains thread-dependent terms and constants.
+    *  Cross-class terms (e.g. ``WG * IV``) are cascaded to the next
+       less-uniform class during validation.
+
+    This generalises two-way (workgroup / thread) and three-way
+    (workgroup / induction-var / thread) index splits into a single
+    N-way routine.
+
+    Args:
+        expr: Sympy expression (or plain int) to decompose.
+        symbol_classes: Ordered list of symbol sets, most-uniform first.
+
+    Returns:
+        List of ``n + 1`` IndexExprs (one per class + remainder).
+    """
+    zero = sympy.sympify(0)
+    n = len(symbol_classes)
+
+    if isinstance(expr, (int, float)):
+        return [zero] * n + [sympy.sympify(expr)]
+
+    if not isinstance(expr, sympy.Basic):
+        expr = sympy.sympify(expr)
+
+    # Progressive remainders: r[k] = expr with classes 0..k-1 zeroed out.
+    zero_subs: dict = {}
+    remainders = [expr]
+    for cls in symbol_classes:
+        zero_subs.update({s: 0 for s in cls})
+        remainders.append(safe_subs(expr, zero_subs))
+
+    # component[k] = r[k] - r[k+1]: the part attributable to class k.
+    components: list[IndexExpr] = []
+    for k in range(n):
+        components.append(sympy.simplify(remainders[k] - remainders[k + 1]))
+    components.append(remainders[n])  # remainder
+
+    # Cascade validation: component[k] must only contain symbols from
+    # classes 0..k.  If it has symbols from "below", merge into the next
+    # less-uniform component.
+    allowed: set = set()
+    for k in range(n):
+        allowed = allowed | symbol_classes[k]
+        if components[k] == zero:
+            continue
+        actual = (
+            components[k].free_symbols
+            if isinstance(components[k], sympy.Basic)
+            else set()
+        )
+        if actual - allowed:
+            components[k + 1] = sympy.simplify(components[k + 1] + components[k])
+            components[k] = zero
+
+    return components
+
+
+####################################################################
 # Interval-arithmetic simplification for floor/Mod expressions.
 ####################################################################
 

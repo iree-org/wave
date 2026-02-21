@@ -75,7 +75,11 @@ from ...lang.wave_types import IndexSymbol
 from ...wave.compile_options import WaveCompileOptions
 from ...wave.constraints import Constraint, HardwareConstraint, TilingConstraint
 from ...wave.utils.general_utils import get_hardware_constraint
-from ...wave.utils.symbol_utils import subs_idxc, is_literal
+from ...wave.utils.symbol_utils import (
+    decompose_affine_by_uniformity,
+    subs_idxc,
+    is_literal,
+)
 
 logger = get_logger("wave.ops_location_check")
 
@@ -596,6 +600,103 @@ def add_emitter_subs(
     dynamics.update(dynamic_values)
     dynamics.update(emitter.dynamic_dims)
     return dynamics
+
+
+def get_uniformity_classes(
+    emitter: WaveEmitter,
+) -> list[set]:
+    """Return symbol sets ordered from most-uniform to least-uniform.
+
+    The returned list is suitable for passing to
+    :func:`decompose_affine_by_uniformity` or
+    :func:`gen_sympy_index_decomposed`.
+
+    Currently returns up to two classes:
+      * ``{WORKGROUP_0, WORKGROUP_1, WORKGROUP_2}``
+      * induction-variable symbols (if the emitter is inside a loop)
+
+    Thread-ID symbols and dynamic values are the implicit *remainder*
+    (most divergent) and need not be listed.
+    """
+    wg = {WORKGROUP_0, WORKGROUP_1, WORKGROUP_2}
+    classes: list[set] = [wg]
+    iv_syms = set(emitter.get_induction_vars_and_syms()[1])
+    if iv_syms:
+        classes.append(iv_syms)
+    return classes
+
+
+def gen_sympy_index_decomposed(
+    emitter: WaveEmitter,
+    expr: "sympy.Expr",
+    dynamic_values: dict = {},
+    uniform_sym_classes: list[set] | None = None,
+) -> tuple[Value, list[Value]]:
+    """Lower a sympy expression to MLIR with automatic uniformity decomposition.
+
+    Decomposes *expr* into additive components by uniformity class, emits
+    each component via :func:`gen_sympy_index`, and combines them so that
+    uniform (SGPR-eligible) contributions are separate ``arith.addi`` ops.
+    This lets the AMDGPU backend keep uniform parts in SGPRs and
+    potentially fold them into hardware instruction fields (e.g. soffset).
+
+    Args:
+        emitter: The current wave emitter (provides symbol bindings).
+        expr: Sympy expression to lower.
+        dynamic_values: Extra symbol-to-Value mappings.
+        uniform_sym_classes: Override for uniformity classes.  When
+            ``None``, uses :func:`get_uniformity_classes`.
+
+    Returns:
+        ``(combined, components)`` where *combined* is the final MLIR
+        Value (sum of all components) and *components* is a list of
+        per-class Values (one per class + remainder).
+    """
+    import sympy as _sympy
+
+    subs = add_emitter_subs(emitter, dynamic_values)
+    classes = uniform_sym_classes or get_uniformity_classes(emitter)
+    parts = decompose_affine_by_uniformity(expr, classes)
+
+    zero = _sympy.sympify(0)
+    component_values = [gen_sympy_index(subs, p) for p in parts]
+
+    # Combine: sum uniform components first (SGPR + SGPR stays SGPR),
+    # then add the divergent remainder last (VGPR + SGPR).
+    overflow_flags = (
+        arith_d.IntegerOverflowFlags.nsw | arith_d.IntegerOverflowFlags.nuw
+    )
+    uniform_sum = None
+    for cv in component_values[:-1]:
+        if _is_zero(cv):
+            continue
+        if uniform_sum is None:
+            uniform_sum = cv
+        else:
+            uniform_sum = arith_d.addi(uniform_sum, cv, overflow_flags=overflow_flags)
+
+    remainder = component_values[-1]
+
+    if uniform_sum is None:
+        combined = remainder
+    elif _is_zero(remainder):
+        combined = uniform_sum
+    else:
+        combined = arith_d.addi(remainder, uniform_sum, overflow_flags=overflow_flags)
+
+    return combined, component_values
+
+
+def _is_zero(val: Value) -> bool:
+    """Return True if *val* is a constant-zero index."""
+    if not hasattr(val, "owner") or not hasattr(val.owner, "opview"):
+        return False
+    op = val.owner.opview
+    if isinstance(op, arith_d.ConstantOp):
+        v = op.attributes["value"]
+        if isinstance(v, IntegerAttr) and int(v) == 0:
+            return True
+    return False
 
 
 _emulate_ceildiv = bool(int(environ.get("WAVE_EMULATE_CEILDIV", 0)))
