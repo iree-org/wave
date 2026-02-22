@@ -107,12 +107,18 @@ int main(int argc, char **argv) {
   if (!result.success) {
     llvm::errs() << "conductor: command " << result.failedCommand << ": "
                  << result.error << "\n";
+    llvm::errs() << "--- IR after partial moves ---\n";
+    module->print(llvm::errs());
+    llvm::errs() << "--- end IR ---\n";
     return 1;
   }
 
   // Verify the module after moves (catches broken dominance, etc.).
   if (failed(mlir::verify(*module))) {
     llvm::errs() << "conductor: verification failed after applying moves\n";
+    llvm::errs() << "--- IR at verification failure ---\n";
+    module->print(llvm::errs());
+    llvm::errs() << "--- end IR ---\n";
     return 1;
   }
 

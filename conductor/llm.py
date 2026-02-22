@@ -406,9 +406,17 @@ def run_scheduling_loop(
         nonlocal best_metrics, best_commands
         log(f"  [tool] evaluate_moves({moves})\n")
         try:
-            reordered_ir, metrics = conductor.evaluate_with_ir(moves)
+            tagged = conductor.tag()
+            reordered_ir = conductor.apply_moves(tagged, moves)
         except RuntimeError as e:
             log(f"  [error] {e}\n")
+            return json.dumps({"error": str(e)})
+        try:
+            asm = conductor.compile_to_asm(reordered_ir)
+            metrics = conductor.get_metrics(asm)
+        except RuntimeError as e:
+            log(f"  [error] {e}\n")
+            log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
         log(f"  --- Updated IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
