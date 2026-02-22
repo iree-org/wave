@@ -180,7 +180,102 @@ TOOLS = [
 ]
 
 
-def _chat(
+_TRANSIENT_ERRORS = (
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectTimeout,
+)
+
+
+def _stream_request(
+    payload: dict[str, Any],
+    on_token: Callable[[str], None] | None,
+    on_thinking: Callable[[str], None] | None,
+) -> Message:
+    """Execute a streaming chat request and assemble the response message."""
+    resp = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        json=payload,
+        stream=True,
+        timeout=_REQUEST_TIMEOUT,
+    )
+    if resp.status_code >= 400:
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason}: {resp.text}",
+            response=resp,
+        )
+
+    content_chunks: list[str] = []
+    reasoning_chunks: list[str] = []
+    tool_calls_by_index: dict[int, dict[str, Any]] = {}
+    usage: dict[str, Any] | None = None
+
+    for line in resp.iter_lines():
+        if not line or not line.startswith(b"data: "):
+            continue
+        data = line[6:]
+        if data == b"[DONE]":
+            break
+        chunk = json.loads(data)
+        if "usage" in chunk:
+            usage = chunk["usage"]
+        choices = chunk.get("choices")
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {})
+
+        # Reasoning tokens (two OpenRouter formats).
+        reasoning_texts: list[str] = []
+        for detail in delta.get("reasoning_details", []):
+            text = detail.get("text", "")
+            if text:
+                reasoning_texts.append(text)
+        rc = delta.get("reasoning_content", "")
+        if rc:
+            reasoning_texts.append(rc)
+        for text in reasoning_texts:
+            if on_thinking is not None:
+                on_thinking(text)
+            reasoning_chunks.append(text)
+
+        # Content tokens.
+        token = delta.get("content", "")
+        if token:
+            if on_token is not None:
+                on_token(token)
+            content_chunks.append(token)
+
+        # Tool call deltas.
+        for tc_delta in delta.get("tool_calls", []):
+            idx = tc_delta["index"]
+            if idx not in tool_calls_by_index:
+                tool_calls_by_index[idx] = {
+                    "id": tc_delta.get("id", ""),
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                }
+            tc = tool_calls_by_index[idx]
+            func_delta = tc_delta.get("function", {})
+            if func_delta.get("name"):
+                tc["function"]["name"] += func_delta["name"]
+            if func_delta.get("arguments"):
+                tc["function"]["arguments"] += func_delta["arguments"]
+
+    result: Message = {"role": "assistant", "content": "".join(content_chunks)}
+    if reasoning_chunks:
+        result["reasoning"] = "".join(reasoning_chunks)
+    if tool_calls_by_index:
+        result["tool_calls"] = [
+            tool_calls_by_index[i] for i in sorted(tool_calls_by_index)
+        ]
+    if usage is not None:
+        result["usage"] = usage
+    return result
+
+
+def chat(
     messages: list[Message],
     model: str,
     temperature: float = 0.7,
@@ -189,7 +284,11 @@ def _chat(
     tools: list[dict] | None = None,
     log: Callable[[str], None] = _default_log,
 ) -> Message:
-    """Send a streaming chat completion request. Returns the full response message."""
+    """Send a chat completion request. Returns the full response message dict.
+
+    Handles payload construction, retries on transient errors, usage
+    recording, and streaming log output.
+    """
     if not API_KEY:
         raise RuntimeError(
             "OPENROUTER_API_KEY not set. Export it before running the LLM loop."
@@ -206,18 +305,40 @@ def _chat(
     if reasoning_effort is not None:
         payload["reasoning"] = {"enabled": True, "effort": reasoning_effort}
     if tools:
-        payload["tools"] = tools
+        payload["tools"] = [dict(t) for t in tools]
+
+    # Streaming callbacks that manage [thinking]/[/thinking] delimiters.
+    in_reasoning = False
+
+    def on_thinking(text: str) -> None:
+        nonlocal in_reasoning
+        if not in_reasoning:
+            log("\n  [thinking] ")
+            in_reasoning = True
+        log(text)
+
+    def on_token(text: str) -> None:
+        nonlocal in_reasoning
+        if in_reasoning:
+            log("\n  [/thinking]\n")
+            in_reasoning = False
 
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.post(
-                f"{BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                json=payload,
-                stream=True,
-                timeout=_REQUEST_TIMEOUT,
-            )
-            if resp.status_code >= 500:
+            result = _stream_request(payload, on_token, on_thinking)
+            if in_reasoning:
+                log("\n  [/thinking]\n")
+
+            if "usage" in result:
+                _record_usage(model, result["usage"])
+                pt = result["usage"].get("prompt_tokens", "?")
+                ct = result["usage"].get("completion_tokens", "?")
+                log(f"\n  [tokens] prompt={pt} completion={ct}\n")
+            return result
+
+        except requests.HTTPError as exc:
+            resp = exc.response
+            if resp is not None and resp.status_code >= 500:
                 if attempt < _MAX_RETRIES - 1:
                     wait = _RETRY_BACKOFF * (attempt + 1)
                     log(
@@ -225,93 +346,8 @@ def _chat(
                     )
                     time.sleep(wait)
                     continue
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"OpenRouter API error {resp.status_code}: {resp.text}"
-                )
-
-            # Stream and accumulate content, reasoning, and tool calls.
-            content_chunks: list[str] = []
-            reasoning_chunks: list[str] = []
-            tool_calls_by_index: dict[int, dict[str, Any]] = {}
-            usage = None
-            in_reasoning = False
-
-            for line in resp.iter_lines():
-                if not line or not line.startswith(b"data: "):
-                    continue
-                data = line[6:]
-                if data == b"[DONE]":
-                    break
-                chunk = json.loads(data)
-                if "usage" in chunk:
-                    usage = chunk["usage"]
-                choices = chunk.get("choices")
-                if not choices:
-                    continue
-                delta = choices[0].get("delta", {})
-
-                # Reasoning tokens (two OpenRouter formats).
-                for detail in delta.get("reasoning_details", []):
-                    text = detail.get("text", "")
-                    if text:
-                        if not in_reasoning:
-                            log("\n  [thinking] ")
-                            in_reasoning = True
-                        log(text)
-                        reasoning_chunks.append(text)
-                rc = delta.get("reasoning_content", "")
-                if rc:
-                    if not in_reasoning:
-                        log("\n  [thinking] ")
-                        in_reasoning = True
-                    log(rc)
-                    reasoning_chunks.append(rc)
-
-                # Content tokens.
-                token = delta.get("content", "")
-                if token:
-                    if in_reasoning:
-                        log("\n  [/thinking]\n")
-                        in_reasoning = False
-                    content_chunks.append(token)
-
-                # Tool call deltas.
-                for tc_delta in delta.get("tool_calls", []):
-                    idx = tc_delta["index"]
-                    if idx not in tool_calls_by_index:
-                        tool_calls_by_index[idx] = {
-                            "id": tc_delta.get("id", ""),
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    tc = tool_calls_by_index[idx]
-                    func_delta = tc_delta.get("function", {})
-                    if func_delta.get("name"):
-                        tc["function"]["name"] += func_delta["name"]
-                    if func_delta.get("arguments"):
-                        tc["function"]["arguments"] += func_delta["arguments"]
-
-            if in_reasoning:
-                log("\n  [/thinking]\n")
-
-            result: Message = {"role": "assistant", "content": "".join(content_chunks)}
-            if tool_calls_by_index:
-                result["tool_calls"] = [
-                    tool_calls_by_index[i] for i in sorted(tool_calls_by_index)
-                ]
-            if usage:
-                _record_usage(model, usage)
-                pt = usage.get("prompt_tokens", "?")
-                ct = usage.get("completion_tokens", "?")
-                log(f"\n  [tokens] prompt={pt} completion={ct}\n")
-            return result
-
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-            requests.exceptions.ChunkedEncodingError,
-        ):
+            raise
+        except _TRANSIENT_ERRORS:
             if attempt < _MAX_RETRIES - 1:
                 wait = _RETRY_BACKOFF * (attempt + 1)
                 log(f"\n  [retry] connection error, waiting {wait:.0f}s...\n")
@@ -390,7 +426,7 @@ def run_scheduling_loop(
         for round_num in range(1, max_rounds + 1):
             log(f"\n--- Round {round_num}/{max_rounds} ---\n")
 
-            response = _chat(
+            response = chat(
                 messages,
                 model=model,
                 temperature=temperature,
