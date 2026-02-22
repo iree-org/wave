@@ -37,28 +37,22 @@ SYSTEM_PROMPT = """\
 You are an expert GPU instruction scheduler for AMD CDNA/RDNA architectures.
 
 You will receive WaveASM MLIR IR with tagged instructions (loc("tag_name")).
-Your job is to reorder instructions to:
-1. Hide memory latency by interleaving loads with independent compute.
-2. Reduce register pressure so the linear-scan allocator succeeds.
-3. Minimize the number of s_waitcnt and s_nop instructions inserted by later passes.
+Your job is to reorder instructions to hide memory latency and reduce register pressure.
 
-Key latencies:
-- Global loads (buffer_load): ~100 cycles.
-- LDS loads (ds_read): ~20 cycles.
-- MFMA (16x16): ~32 cycles, (32x32): ~64 cycles.
+Key latencies: global loads ~100 cycles, LDS loads ~20 cycles, MFMA 16x16 ~32 cycles.
 
-Rules:
-- Issue move commands, one per line.
-- Commands: "move TAG_A after TAG_B", "move TAG_A before TAG_B", "swap TAG_A TAG_B".
-- Do NOT output anything else — no explanations, no markdown, just commands.
-- Moves that break SSA dominance will be rejected; you will see the error.
+Commands (one per line, nothing else):
+  move TAG_A after TAG_B
+  move TAG_A before TAG_B
+  swap TAG_A TAG_B
+
+Constraints:
+- Moves that break SSA dominance will be rejected.
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
 
-Strategy tips:
-- Move global loads earlier to start memory fetches sooner.
-- Interleave LDS reads between MFMAs to hide LDS latency behind MFMA execution.
-- Keep address computations close to their consumers.
-- Avoid clustering same-type ops (all loads together, all MFMAs together).\
+IMPORTANT: Work incrementally. Issue 1-3 moves per round, observe the metrics, \
+then adjust. Do not try to solve everything at once. Each round you will see \
+updated metrics so you can evaluate what worked.\
 """
 
 
@@ -85,7 +79,10 @@ def _chat(
         "stream_options": {"include_usage": True},
     }
     if reasoning_effort is not None:
-        payload["reasoning"] = {"enabled": True, "effort": reasoning_effort}
+        payload["reasoning"] = {
+            "enabled": True,
+            "effort": reasoning_effort,
+        }
 
     for attempt in range(_MAX_RETRIES):
         try:
@@ -233,7 +230,7 @@ def run_scheduling_loop(
     max_rounds: int = 5,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
-    reasoning_effort: str | None = "high",
+    reasoning_effort: str | None = "medium",
     log: Callable[[str], None] = _default_log,
 ) -> dict:
     """
