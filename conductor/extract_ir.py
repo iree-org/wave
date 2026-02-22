@@ -70,6 +70,48 @@ def get_target() -> str:
     return os.environ.get("WAVE_DEFAULT_ARCH", "gfx942")
 
 
+def capture_mxfp4_kernel_mlir() -> tuple:
+    """Capture MLIR from a double-buffered 4-wave MXFP4 GEMM kernel.
+
+    Returns (mlir_text, workgroup_size).
+    """
+    from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
+    from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    # Same config as test_dbuf_4wave_mxfp4_gemm_cpp_backend.
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape=(1024, 1024, 8192),
+        block_shape=(256, 256, 256),
+        wave_shape=(1, 4),
+    )
+    schedule = get_mxfp4_asymmetric_schedule()
+
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
+    options = set_default_run_config(options)
+
+    # Reuse the test helper that handles opsel + canonicalize.
+    sys.path.insert(
+        0,
+        str(
+            wave_root
+            / "wave_lang"
+            / "kernel"
+            / "wave"
+            / "asm"
+            / "wave_asm"
+            / "test"
+            / "e2e"
+        ),
+    )
+    from waveasm_e2e import capture_wave_kernel_info
+
+    info = capture_wave_kernel_info(options, gemm, schedule=schedule)
+    return info.mlir_text, info.workgroup_size
+
+
 def capture_kernel_mlir() -> tuple:
     """
     Capture MLIR from a multi-wave GEMM kernel.
@@ -338,10 +380,20 @@ def main():
         action="store_true",
         help="Also run full pipeline and print baseline metrics.",
     )
+    parser.add_argument(
+        "--kernel",
+        type=str,
+        default="gemm",
+        choices=["gemm", "mxfp4"],
+        help="Kernel to capture (default: gemm).",
+    )
     args = parser.parse_args()
 
-    print("Capturing kernel MLIR...", file=sys.stderr)
-    mlir_text, wg_size = capture_kernel_mlir()
+    capture_fn = (
+        capture_mxfp4_kernel_mlir if args.kernel == "mxfp4" else capture_kernel_mlir
+    )
+    print(f"Capturing {args.kernel} kernel MLIR...", file=sys.stderr)
+    mlir_text, wg_size = capture_fn()
     print(f"  workgroup_size: {wg_size}", file=sys.stderr)
     print(f"  input MLIR: {len(mlir_text)} chars", file=sys.stderr)
 

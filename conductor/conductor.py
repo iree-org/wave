@@ -217,6 +217,13 @@ def main():
         default="high",
         help="Reasoning effort for models that support it (default: high).",
     )
+    parser.add_argument(
+        "--kernel",
+        type=str,
+        default="gemm",
+        choices=["gemm", "mxfp4"],
+        help="Kernel to capture (default: gemm).",
+    )
     args = parser.parse_args()
 
     # Collect commands from both sources.
@@ -230,8 +237,13 @@ def main():
             if line.strip() and not line.strip().startswith("#")
         )
 
-    print("Capturing kernel MLIR...", file=sys.stderr)
-    mlir_text, wg_size = capture_kernel_mlir()
+    from conductor.extract_ir import capture_mxfp4_kernel_mlir
+
+    capture_fn = (
+        capture_mxfp4_kernel_mlir if args.kernel == "mxfp4" else capture_kernel_mlir
+    )
+    print(f"Capturing {args.kernel} kernel MLIR...", file=sys.stderr)
+    mlir_text, wg_size = capture_fn()
     print(f"  workgroup_size: {wg_size}", file=sys.stderr)
 
     print("Running pre-scheduling pipeline...", file=sys.stderr)
