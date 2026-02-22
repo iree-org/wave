@@ -5,8 +5,7 @@
 // v_add_u32_1 uses the result of v_add_u32_0, so moving _0 after _1
 // breaks dominance.
 
-// CHECK: does not dominate this use
-// CHECK: conductor: verification failed after applying moves
+// CHECK: moving 'v_add_u32_0' breaks dominance: result used by 'v_add_u32_1' which now appears before the definition
 
 waveasm.program @test_dominance target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>

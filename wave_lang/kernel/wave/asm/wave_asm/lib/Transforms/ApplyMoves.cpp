@@ -10,6 +10,7 @@
 
 #include "waveasm/Transforms/ApplyMoves.h"
 
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Location.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -49,6 +50,44 @@ std::string validateSameBlock(Operation *a, StringRef tagA, Operation *b,
                               StringRef tagB) {
   if (a->getBlock() != b->getBlock())
     return ("'" + tagA + "' and '" + tagB + "' are in different blocks").str();
+  return "";
+}
+
+/// Get a human-readable name for an operation (tag or mnemonic).
+std::string opName(Operation *op) {
+  if (auto nameLoc = dyn_cast<NameLoc>(op->getLoc()))
+    return nameLoc.getName().str();
+  return op->getName().getStringRef().str();
+}
+
+/// Check SSA dominance for a single op after it has been moved.
+/// Verifies: (1) all operands are defined above the op,
+///           (2) all results are defined before their users.
+std::string checkDominance(Operation *op) {
+  DominanceInfo domInfo(op->getParentOfType<ModuleOp>());
+
+  // Check that every operand still dominates this op.
+  for (Value operand : op->getOperands()) {
+    if (!domInfo.properlyDominates(operand, op)) {
+      std::string defName = "block-arg";
+      if (auto *defOp = operand.getDefiningOp())
+        defName = opName(defOp);
+      return "moving '" + opName(op) + "' breaks dominance: operand from '" +
+             defName + "' no longer defined before use";
+    }
+  }
+
+  // Check that every user of this op's results is still dominated.
+  for (Value result : op->getResults()) {
+    for (Operation *user : result.getUsers()) {
+      if (!domInfo.properlyDominates(op, user)) {
+        return "moving '" + opName(op) +
+               "' breaks dominance: result used by '" + opName(user) +
+               "' which now appears before the definition";
+      }
+    }
+  }
+
   return "";
 }
 
@@ -167,6 +206,9 @@ MoveResult applyMoves(ModuleOp module, llvm::ArrayRef<Command> commands) {
         return fail(err);
       op1->moveBefore(op2);
       LDBG() << "move " << move->tag << " before " << move->refTag;
+      err = checkDominance(op1);
+      if (!err.empty())
+        return fail(err);
 
     } else if (auto *move = std::get_if<MoveAfter>(&cmd)) {
       std::string err =
@@ -175,6 +217,9 @@ MoveResult applyMoves(ModuleOp module, llvm::ArrayRef<Command> commands) {
         return fail(err);
       op1->moveAfter(op2);
       LDBG() << "move " << move->tag << " after " << move->refTag;
+      err = checkDominance(op1);
+      if (!err.empty())
+        return fail(err);
 
     } else if (auto *swap = std::get_if<Swap>(&cmd)) {
       std::string err =
@@ -196,6 +241,12 @@ MoveResult applyMoves(ModuleOp module, llvm::ArrayRef<Command> commands) {
           op2->moveBefore(op2->getBlock(), op2->getBlock()->end());
       }
       LDBG() << "swap " << swap->tag1 << " " << swap->tag2;
+      err = checkDominance(op1);
+      if (!err.empty())
+        return fail(err);
+      err = checkDominance(op2);
+      if (!err.empty())
+        return fail(err);
     }
   }
 
