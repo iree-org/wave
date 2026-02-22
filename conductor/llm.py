@@ -417,7 +417,8 @@ def run_scheduling_loop(
     baseline = conductor.baseline()
     log(f"  baseline: {baseline}\n")
 
-    current_ir = conductor.tag()
+    initial_ir = conductor.tag()
+    current_ir = initial_ir
     log(f"  --- Tagged IR ---\n{current_ir.strip()}\n  --- End IR ---\n")
 
     best_metrics = dict(baseline)
@@ -562,6 +563,12 @@ def run_scheduling_loop(
         f"  tokens: {usage.tokens} (in={usage.input_tokens} out={usage.output_tokens})\n"
         f"  cost: ${usage.cost:.4f}\n"
     )
+
+    ir_diff = _context_diff(initial_ir, current_ir)
+    if ir_diff:
+        log(f"\n=== IR Diff (original → final) ===\n{ir_diff}\n")
+    else:
+        log("\n=== No IR changes ===\n")
 
     return {
         "metrics": best_metrics,
