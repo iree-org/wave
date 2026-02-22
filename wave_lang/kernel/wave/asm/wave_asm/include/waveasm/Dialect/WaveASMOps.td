@@ -680,7 +680,19 @@ def WaveASM_S_SEXT_I32_I16 : SALUUnaryOp<"s_sext_i32_i16">;
 //===----------------------------------------------------------------------===//
 
 // Arithmetic
-def WaveASM_S_ADD_U32 : SALUBinaryOp<"s_add_u32">;
+// s_add_u32 and s_addc_u32 set SCC (carry flag) as a side effect,
+// so they must NOT be marked Pure (prevents DCE of SRD base adjustments
+// that write to precolored registers without SSA users).
+def WaveASM_S_ADD_U32 : WAVEASMOp<"s_add_u32", [WaveASM_ArithmeticOp]> {
+  let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_AnySGPR:$dst);
+  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst)";
+}
+def WaveASM_S_ADDC_U32 : WAVEASMOp<"s_addc_u32", [WaveASM_ArithmeticOp]> {
+  let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_AnySGPR:$dst);
+  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst)";
+}
 def WaveASM_S_ADD_I32 : SALUBinaryOp<"s_add_i32">;
 def WaveASM_S_SUB_U32 : SALUBinaryOp<"s_sub_u32">;
 def WaveASM_S_SUB_I32 : SALUBinaryOp<"s_sub_i32">;

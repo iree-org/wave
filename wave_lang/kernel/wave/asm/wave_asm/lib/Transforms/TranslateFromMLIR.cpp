@@ -242,9 +242,11 @@ void TranslationContext::emitSRDPrologue() {
                               std::to_string(preloadBase + 1) + "]";
       RawOp::create(builder, loc, movB64Str);
 
-      // Fill size and stride
+      // Fill size and stride (clamp to 32-bit max for >4GB buffers;
+      // per-workgroup SRD adjustment handles the actual addressing)
+      int64_t clampedSize = std::min(pending.bufferSize, (int64_t)0xFFFFFFFF);
       std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(pending.bufferSize);
+                               ", 0x" + llvm::utohexstr(clampedSize);
       RawOp::create(builder, loc, movSizeStr);
 
       std::string movStrideStr =
@@ -285,9 +287,11 @@ void TranslationContext::emitSRDPrologue() {
       auto srdType = createSRegType(4, 4);
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
-      // Fill size
+      // Fill size (clamp to 32-bit max for >4GB buffers;
+      // per-workgroup SRD adjustment handles the actual addressing)
+      int64_t clampedSize = std::min(pending.bufferSize, (int64_t)0xFFFFFFFF);
       std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(pending.bufferSize);
+                               ", 0x" + llvm::utohexstr(clampedSize);
       RawOp::create(builder, loc, movSizeStr);
 
       // Fill stride descriptor
@@ -1271,7 +1275,70 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
 
     // Get SRD for this memref - look up from binding or use tracked SRD
     Value srd;
-    if (auto srdIdx = ctx.getSRDIndex(storeOp.getBase())) {
+
+    // Check for pending per-workgroup SRD base adjustment (from linearized
+    // reinterpret_cast for >4GB output buffers). Emitted inline here so the
+    // SALU ops survive DCE — their results go straight into the precolored
+    // SRD that is immediately consumed by buffer_store.
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(storeOp.getBase())) {
+      int64_t N = ctx.getNextSwizzleSRDIndex();
+      auto *mlirCtx = builder.getContext();
+
+      // Copy source SRD base to new SRD
+      std::string copyBase = "s_mov_b64 s[" + std::to_string(N) + ":" +
+                             std::to_string(N + 1) + "], s[" +
+                             std::to_string(adj->srcSrdBase) + ":" +
+                             std::to_string(adj->srcSrdBase + 1) + "]";
+      RawOp::create(builder, loc, copyBase);
+
+      // Get element offset → SGPR via v_readfirstlane_b32
+      Value offsetVal = adj->elementOffset;
+      auto tmpType = PSRegType::get(mlirCtx, N + 3, 1);
+      if (isVGPRType(offsetVal.getType())) {
+        offsetVal =
+            V_READFIRSTLANE_B32::create(builder, loc, tmpType, offsetVal);
+      } else {
+        offsetVal = S_MOV_B32::create(builder, loc, tmpType, offsetVal);
+      }
+
+      // 64-bit byte offset = element_offset * elementBytes
+      auto elemSizeImm =
+          ConstantOp::create(builder, loc, ctx.createImmType(adj->elementBytes),
+                             adj->elementBytes);
+      auto hiType = PSRegType::get(mlirCtx, N + 2, 1);
+      auto loType = PSRegType::get(mlirCtx, N + 3, 1);
+      // mul_hi MUST come before mul_i32 (both read offsetVal at s[N+3];
+      // mul_i32 overwrites it with byteOffLo)
+      auto byteOffHi =
+          S_MUL_HI_U32::create(builder, loc, hiType, offsetVal, elemSizeImm);
+      auto byteOffLo =
+          S_MUL_I32::create(builder, loc, loType, offsetVal, elemSizeImm);
+
+      // Adjust SRD base: s_add_u32 (sets SCC) + s_addc_u32 (reads SCC).
+      // Non-Pure S_ADD_U32/S_ADDC_U32 anchor the chain and prevent DCE.
+      auto base0Type = PSRegType::get(mlirCtx, N, 1);
+      auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
+      auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
+      auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
+      S_ADD_U32::create(builder, loc, base0Type, base0, byteOffLo);
+      S_ADDC_U32::create(builder, loc, base1Type, base1, byteOffHi);
+
+      // Set num_records and stride
+      auto memrefType = cast<MemRefType>(storeOp.getBase().getType());
+      int64_t bufferSize = computeBufferSizeFromMemRef(memrefType);
+      int64_t clampedSize = std::min(bufferSize, (int64_t)0xFFFFFFFF);
+      std::string movSize = "s_mov_b32 s" + std::to_string(N + 2) + ", 0x" +
+                            llvm::utohexstr(clampedSize);
+      RawOp::create(builder, loc, movSize);
+      std::string movStride =
+          "s_mov_b32 s" + std::to_string(N + 3) + ", 0x20000";
+      RawOp::create(builder, loc, movStride);
+
+      auto srdType = ctx.createSRegType(4, 4);
+      srd = PrecoloredSRegOp::create(builder, loc, srdType, N, 4);
+      ctx.setSRDIndex(storeOp.getBase(), N);
+      ctx.clearPendingSRDBaseAdjust(storeOp.getBase());
+    } else if (auto srdIdx = ctx.getSRDIndex(storeOp.getBase())) {
       auto sregType = ctx.createSRegType(4, 4);
       srd = PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
     } else if (auto mapped = ctx.getMapper().getMapped(storeOp.getBase())) {

@@ -511,6 +511,32 @@ public:
     return ldsBaseOffsetMap.contains(memref);
   }
 
+  /// Track a pending per-workgroup SRD base adjustment for a linearized memref
+  struct PendingSRDBaseAdjust {
+    mlir::Value elementOffset;
+    int64_t srcSrdBase;
+    int64_t elementBytes;
+  };
+
+  void setPendingSRDBaseAdjust(mlir::Value memref, mlir::Value elemOffset,
+                               int64_t srcSrdBase, int64_t elementBytes) {
+    pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes};
+  }
+
+  /// Get a pending SRD base adjustment (returns nullptr if none)
+  const PendingSRDBaseAdjust *
+  getPendingSRDBaseAdjust(mlir::Value memref) const {
+    auto it = pendingSRDBaseAdjustMap.find(memref);
+    if (it != pendingSRDBaseAdjustMap.end())
+      return &it->second;
+    return nullptr;
+  }
+
+  /// Clear a pending SRD base adjustment after it has been applied
+  void clearPendingSRDBaseAdjust(mlir::Value memref) {
+    pendingSRDBaseAdjustMap.erase(memref);
+  }
+
   //===--------------------------------------------------------------------===//
   // LDS Size Tracking (for kernel descriptor)
   //===--------------------------------------------------------------------===//
@@ -645,6 +671,8 @@ private:
       constOffsetMap; // value -> constant offset (for buffer store offset:N)
   llvm::DenseMap<mlir::Value, mlir::Value>
       ldsBaseOffsetMap; // memref -> LDS byte offset from memref.view
+
+  llvm::DenseMap<mlir::Value, PendingSRDBaseAdjust> pendingSRDBaseAdjustMap;
   llvm::SmallVector<PendingSRD, 4> pendingSRDs;
   llvm::StringMap<mlir::Value> exprCache;
   int64_t nextSRDIndex =

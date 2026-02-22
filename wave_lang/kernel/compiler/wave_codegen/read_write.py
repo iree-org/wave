@@ -565,6 +565,13 @@ def _create_vec_read_write(
                 mem, start_indices_wg, start_indices_th, strides
             )
             mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+        elif is_global_mem and not is_read:
+            # Linearize global writes to fold workgroup offsets into the memref
+            # base pointer, preventing voffset overflow for >4GB output buffers.
+            # Skip _cast_buffer_and_encode_stride (no fat_raw_buffer needed).
+            mem, offset_th = _linearize_memref(
+                mem, start_indices_wg, start_indices_th, strides
+            )
         if linearize_shared_mem:
             mem = _linearize_shared_mem(mem)
             linearized_index = {
@@ -572,7 +579,11 @@ def _create_vec_read_write(
             }
             start_indices, _, _ = _build_start_indices(emitter, linearized_index)
 
-        indices = [offset_th] if buffer_ops_enabled else start_indices
+        indices = (
+            [offset_th]
+            if (buffer_ops_enabled or offset_th is not None)
+            else start_indices
+        )
         if is_read:
             return vector_d.load(vector_type, mem, indices)
         else:
@@ -601,8 +612,14 @@ def _create_vec_read_write(
             mem, start_indices_wg, start_indices_th, strides
         )
         mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+    elif is_global_mem and not is_read:
+        mem, offset_th = _linearize_memref(
+            mem, start_indices_wg, start_indices_th, strides
+        )
 
-    indices = [offset_th] if buffer_ops_enabled else start_indices
+    indices = (
+        [offset_th] if (buffer_ops_enabled or offset_th is not None) else start_indices
+    )
 
     if no_masked_load_store_ops:
         # find the index at which memory out of bounds of buffer
