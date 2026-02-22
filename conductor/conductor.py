@@ -224,6 +224,13 @@ def main():
         help="Reasoning effort for models that support it (default: low).",
     )
     parser.add_argument(
+        "--provider",
+        type=str,
+        default="openrouter",
+        choices=["openrouter", "cursor"],
+        help="LLM provider (default: openrouter).",
+    )
+    parser.add_argument(
         "--kernel",
         type=str,
         default="gemm",
@@ -266,16 +273,18 @@ def main():
 
     if args.llm:
         from conductor.llm import run_scheduling_loop
-        from conductor.providers.openrouter import DEFAULT_MODEL
 
-        model = args.model or DEFAULT_MODEL
-        print(f"Running LLM scheduling loop (model={model})...", file=sys.stderr)
+        print(
+            f"Running LLM scheduling loop (provider={args.provider})...",
+            file=sys.stderr,
+        )
         result = run_scheduling_loop(
             conductor,
             max_rounds=args.max_rounds,
-            model=model,
+            model=args.model,
             temperature=args.temperature,
             reasoning_effort=args.reasoning_effort,
+            provider=args.provider,
         )
         print("\n=== LLM Scheduling Result ===")
         print(f"  rounds: {result['rounds']}")

@@ -4,12 +4,14 @@ import difflib
 import json
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 
 from conductor.providers.openrouter import (
     DEFAULT_MODEL,
+    Counters,
     Message,
     Stats,
-    chat,
+    chat as openrouter_chat,
 )
 from conductor.tools import Param, ToolRegistry
 
@@ -99,12 +101,24 @@ def format_initial_prompt(
     return "\n".join(parts)
 
 
+_NUDGE_NATIVE = (
+    "You must use the evaluate_moves tool to test "
+    "scheduling ideas, or call done when finished. "
+    "Do not write tool calls as text."
+)
+_NUDGE_TEXT = (
+    "You must output a ```json block to evaluate moves or call done. "
+    "Use the format described in the OUTPUT FORMAT section."
+)
+
+
 def run_scheduling_loop(
     conductor,
     max_rounds: int = 10,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     temperature: float = 0.7,
     reasoning_effort: str | None = "high",
+    provider: str = "openrouter",
     log: Callable[[str], None] = _default_log,
 ) -> dict:
     """
@@ -114,8 +128,27 @@ def run_scheduling_loop(
     scheduling ideas. Conversation history (including reasoning) is preserved
     across rounds.
 
+    Args:
+        provider: "openrouter" (default) or "cursor".
+
     Returns dict with keys: metrics, commands, rounds, baseline_metrics, usage.
     """
+    # Provider setup.
+    if provider == "cursor":
+        from conductor.providers import cursor_agent
+
+        chat_fn = cursor_agent.chat
+        cursor_agent.reset()
+        model = model or cursor_agent.DEFAULT_MODEL
+        system_prompt = SYSTEM_PROMPT + cursor_agent.TOOL_CALL_FORMAT
+        nudge_msg = _NUDGE_TEXT
+    else:
+        chat_fn = openrouter_chat
+        model = model or DEFAULT_MODEL
+        system_prompt = SYSTEM_PROMPT
+        nudge_msg = _NUDGE_NATIVE
+
+    log(f"Provider: {provider}, model: {model}\n")
     log("Computing baseline metrics...\n")
     baseline = conductor.baseline()
     log(f"  baseline: {baseline}\n")
@@ -210,7 +243,7 @@ def run_scheduling_loop(
     )
 
     messages: list[Message] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": format_initial_prompt(
@@ -219,16 +252,19 @@ def run_scheduling_loop(
         },
     ]
 
-    with Stats() as stats:
+    use_native_tools = provider != "cursor"
+    stats_ctx = Stats() if use_native_tools else nullcontext(None)
+
+    with stats_ctx as stats:
         for round_num in range(1, max_rounds + 1):
             log(f"\n--- Round {round_num}/{max_rounds} ---\n")
 
-            response = chat(
+            response = chat_fn(
                 messages,
                 model=model,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
-                tools=registry.definitions(),
+                tools=registry.definitions() if use_native_tools else None,
                 log=log,
             )
             messages.append(response)
@@ -239,19 +275,8 @@ def run_scheduling_loop(
 
             tool_calls = response.get("tool_calls")
             if not tool_calls:
-                # Model should always call a tool (evaluate_moves or done).
-                # If it didn't, nudge it to use the proper tool interface.
                 log("  [retry] No tool call, nudging model...\n")
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "You must use the evaluate_moves tool to test "
-                            "scheduling ideas, or call done when finished. "
-                            "Do not write tool calls as text."
-                        ),
-                    }
-                )
+                messages.append({"role": "user", "content": nudge_msg})
                 continue
 
             for tc in tool_calls:
@@ -270,12 +295,13 @@ def run_scheduling_loop(
             if finished:
                 break
 
-    usage = stats.counters
-    log(
-        f"\n=== Usage ===\n"
-        f"  tokens: {usage.tokens} (in={usage.input_tokens} out={usage.output_tokens})\n"
-        f"  cost: ${usage.cost:.4f}\n"
-    )
+    usage: Counters | None = stats.counters if stats else None
+    if usage:
+        log(
+            f"\n=== Usage ===\n"
+            f"  tokens: {usage.tokens} (in={usage.input_tokens} out={usage.output_tokens})\n"
+            f"  cost: ${usage.cost:.4f}\n"
+        )
 
     ir_diff = _context_diff(initial_ir, current_ir)
     if ir_diff:
