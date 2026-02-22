@@ -188,6 +188,37 @@ _TRANSIENT_ERRORS = (
 )
 
 
+def _with_retry(
+    func: Callable[..., Any],
+    log: Callable[[str], None],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Call *func* with retries on transient network errors and 5xx."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return func(*args, **kwargs)
+        except requests.HTTPError as exc:
+            resp = exc.response
+            if resp is not None and resp.status_code >= 500:
+                if attempt < _MAX_RETRIES - 1:
+                    wait = _RETRY_BACKOFF * (attempt + 1)
+                    log(
+                        f"\n  [retry] server {resp.status_code}, waiting {wait:.0f}s...\n"
+                    )
+                    time.sleep(wait)
+                    continue
+            raise
+        except _TRANSIENT_ERRORS:
+            if attempt < _MAX_RETRIES - 1:
+                wait = _RETRY_BACKOFF * (attempt + 1)
+                log(f"\n  [retry] connection error, waiting {wait:.0f}s...\n")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("Unreachable")
+
+
 def _stream_request(
     payload: dict[str, Any],
     on_token: Callable[[str], None] | None,
@@ -323,39 +354,16 @@ def chat(
             log("\n  [/thinking]\n")
             in_reasoning = False
 
-    for attempt in range(_MAX_RETRIES):
-        try:
-            result = _stream_request(payload, on_token, on_thinking)
-            if in_reasoning:
-                log("\n  [/thinking]\n")
+    result: Message = _with_retry(_stream_request, log, payload, on_token, on_thinking)
+    if in_reasoning:
+        log("\n  [/thinking]\n")
 
-            if "usage" in result:
-                _record_usage(model, result["usage"])
-                pt = result["usage"].get("prompt_tokens", "?")
-                ct = result["usage"].get("completion_tokens", "?")
-                log(f"\n  [tokens] prompt={pt} completion={ct}\n")
-            return result
-
-        except requests.HTTPError as exc:
-            resp = exc.response
-            if resp is not None and resp.status_code >= 500:
-                if attempt < _MAX_RETRIES - 1:
-                    wait = _RETRY_BACKOFF * (attempt + 1)
-                    log(
-                        f"\n  [retry] server {resp.status_code}, waiting {wait:.0f}s...\n"
-                    )
-                    time.sleep(wait)
-                    continue
-            raise
-        except _TRANSIENT_ERRORS:
-            if attempt < _MAX_RETRIES - 1:
-                wait = _RETRY_BACKOFF * (attempt + 1)
-                log(f"\n  [retry] connection error, waiting {wait:.0f}s...\n")
-                time.sleep(wait)
-            else:
-                raise
-
-    raise RuntimeError("Unreachable")
+    if "usage" in result:
+        _record_usage(model, result["usage"])
+        pt = result["usage"].get("prompt_tokens", "?")
+        ct = result["usage"].get("completion_tokens", "?")
+        log(f"\n  [tokens] prompt={pt} completion={ct}\n")
+    return result
 
 
 def format_initial_prompt(
