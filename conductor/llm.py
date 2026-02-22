@@ -417,22 +417,21 @@ def run_scheduling_loop(
     baseline = conductor.baseline()
     log(f"  baseline: {baseline}\n")
 
-    tagged_ir = conductor.tag()
-    log(f"  --- Tagged IR ---\n{tagged_ir.strip()}\n  --- End IR ---\n")
+    current_ir = conductor.tag()
+    log(f"  --- Tagged IR ---\n{current_ir.strip()}\n  --- End IR ---\n")
 
     best_metrics = dict(baseline)
-    best_commands: list[str] = []
+    all_commands: list[str] = []
     finished = False
 
     # Build tool registry with closures over loop state.
     registry = ToolRegistry()
 
     def _evaluate_moves(moves: list[str]) -> str:
-        nonlocal best_metrics, best_commands
+        nonlocal best_metrics, all_commands, current_ir
         log(f"  [tool] evaluate_moves({moves})\n")
         try:
-            tagged = conductor.tag()
-            reordered_ir = conductor.apply_moves(tagged, moves)
+            reordered_ir = conductor.apply_moves(current_ir, moves)
         except RuntimeError as e:
             log(f"  [error] {e}\n")
             return json.dumps({"error": str(e)})
@@ -441,17 +440,15 @@ def run_scheduling_loop(
             metrics = conductor.get_metrics(asm)
         except RuntimeError as e:
             log(f"  [error] {e}\n")
-            # log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
-        # ir_diff = _context_diff(tagged, reordered_ir)
-        # if ir_diff:
-        #     log(f"  --- IR diff ---\n{ir_diff}  --- End diff ---\n")
+        # Moves succeeded — update state.
+        current_ir = reordered_ir
+        all_commands.extend(moves)
         improved = _is_better(metrics, best_metrics)
         if improved:
             log("  Improvement!\n")
             best_metrics = metrics
-            best_commands = moves
         return json.dumps(
             {
                 "metrics": metrics,
@@ -503,7 +500,7 @@ def run_scheduling_loop(
         {
             "role": "user",
             "content": format_initial_prompt(
-                tagged_ir, baseline, target=conductor.target
+                current_ir, baseline, target=conductor.target
             ),
         },
     ]
@@ -568,7 +565,7 @@ def run_scheduling_loop(
 
     return {
         "metrics": best_metrics,
-        "commands": best_commands,
+        "commands": all_commands,
         "rounds": round_num,
         "baseline_metrics": baseline,
         "usage": usage,
