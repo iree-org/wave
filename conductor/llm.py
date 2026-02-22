@@ -13,6 +13,8 @@ from typing import Any
 
 import requests
 
+from conductor.tools import Param, ToolRegistry
+
 API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 BASE_URL: str = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL: str = "deepseek/deepseek-v3.2"
@@ -153,54 +155,6 @@ then decide your next moves. You can call the tool multiple times.
 When you are satisfied with the schedule or have no more ideas, call the `done` \
 tool to finish.\
 """
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "evaluate_moves",
-            "description": (
-                "Apply a list of move/swap commands to the tagged IR, "
-                "compile through the post-scheduling pipeline, and return "
-                "assembly metrics. Commands are applied in order."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "moves": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "List of move commands, e.g. "
-                            '["move tag_A after tag_B", "swap tag_C tag_D"].'
-                        ),
-                    }
-                },
-                "required": ["moves"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "done",
-            "description": (
-                "Call this when you are finished scheduling. "
-                "Provide a short summary of what you tried."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "Brief summary of scheduling attempts.",
-                    }
-                },
-                "required": ["summary"],
-            },
-        },
-    },
-]
 
 
 _TRANSIENT_ERRORS = (
@@ -442,6 +396,69 @@ def run_scheduling_loop(
 
     best_metrics = dict(baseline)
     best_commands: list[str] = []
+    finished = False
+
+    # Build tool registry with closures over loop state.
+    registry = ToolRegistry()
+
+    def _evaluate_moves(moves: list[str]) -> str:
+        nonlocal best_metrics, best_commands
+        log(f"  [tool] evaluate_moves({moves})\n")
+        try:
+            metrics = conductor.evaluate(moves)
+        except RuntimeError as e:
+            log(f"  [error] {e}\n")
+            return json.dumps({"error": str(e)})
+        log(f"  [result] {metrics}\n")
+        if _is_better(metrics, best_metrics):
+            log("  Improvement!\n")
+            best_metrics = metrics
+            best_commands = moves
+        return json.dumps(
+            {
+                "metrics": metrics,
+                "improved": _is_better(metrics, best_metrics)
+                or metrics == best_metrics,
+            }
+        )
+
+    def _done(summary: str) -> str:
+        nonlocal finished
+        log(f"  [done] {summary}\n")
+        finished = True
+        return json.dumps({"status": "ok"})
+
+    registry.add(
+        name="evaluate_moves",
+        description=(
+            "Apply a list of move/swap commands to the tagged IR, "
+            "compile through the post-scheduling pipeline, and return "
+            "assembly metrics. Commands are applied in order."
+        ),
+        params=[
+            Param(
+                name="moves",
+                description=(
+                    "List of move commands, e.g. "
+                    '["move tag_A after tag_B", "swap tag_C tag_D"].'
+                ),
+                type="array",
+                items={"type": "string"},
+            ),
+        ],
+        func=_evaluate_moves,
+    )
+    registry.add(
+        name="done",
+        description=(
+            "Call this when you are finished scheduling. "
+            "Provide a short summary of what you tried."
+        ),
+        params=[
+            Param(name="summary", description="Brief summary of scheduling attempts."),
+        ],
+        func=_done,
+    )
 
     messages: list[Message] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -462,7 +479,7 @@ def run_scheduling_loop(
                 model=model,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
-                tools=TOOLS,
+                tools=registry.definitions(),
                 log=log,
             )
             messages.append(response)
@@ -488,52 +505,20 @@ def run_scheduling_loop(
                 )
                 continue
 
-            # Process each tool call.
-            done = False
             for tc in tool_calls:
-                name = tc["function"]["name"]
-                try:
-                    args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    tool_result = {"error": "Malformed JSON arguments."}
-                    log(f"  [tool] {name}: malformed args\n")
-                else:
-                    if name == "done":
-                        summary = args.get("summary", "")
-                        log(f"  [done] {summary}\n")
-                        tool_result = {"status": "ok"}
-                        done = True
-                    elif name == "evaluate_moves":
-                        moves = args.get("moves", [])
-                        log(f"  [tool] evaluate_moves({moves})\n")
-                        try:
-                            metrics = conductor.evaluate(moves)
-                            log(f"  [result] {metrics}\n")
-                            if _is_better(metrics, best_metrics):
-                                log("  Improvement!\n")
-                                best_metrics = metrics
-                                best_commands = moves
-                            tool_result = {
-                                "metrics": metrics,
-                                "improved": _is_better(metrics, best_metrics)
-                                or metrics == best_metrics,
-                            }
-                        except RuntimeError as e:
-                            tool_result = {"error": str(e)}
-                            log(f"  [error] {e}\n")
-                    else:
-                        tool_result = {"error": f"Unknown tool: {name}"}
-                        log(f"  [tool] unknown: {name}\n")
-
+                result = registry.execute(
+                    tc["function"]["name"],
+                    tc["function"]["arguments"],
+                )
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": json.dumps(tool_result),
+                        "content": result,
                     }
                 )
 
-            if done:
+            if finished:
                 break
 
     usage = stats.counters

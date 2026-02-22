@@ -16,6 +16,7 @@ from conductor.extract_ir import (
     capture_kernel_mlir,
 )
 from conductor.llm import run_scheduling_loop, Stats, Counters
+from conductor.tools import Param, ToolDef, ToolRegistry
 
 __all__ = [
     "Conductor",
@@ -29,4 +30,7 @@ __all__ = [
     "run_scheduling_loop",
     "Stats",
     "Counters",
+    "Param",
+    "ToolDef",
+    "ToolRegistry",
 ]
