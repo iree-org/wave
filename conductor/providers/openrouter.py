@@ -254,6 +254,7 @@ def chat(
     reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
     log: Callable[[str], None] | None = None,
+    session: Any = None,
 ) -> Message:
     """Send a chat completion request. Returns the full response message dict.
 

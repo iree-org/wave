@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 Message = dict[str, Any]
@@ -162,17 +163,12 @@ def event_is_error(ev: dict) -> bool:
     return ev.get("is_error", False) or ev.get("subtype") == "error"
 
 
-# ---- Module-level session state ----
+@dataclass
+class Session:
+    """Opaque session handle passed between caller and provider."""
 
-_session_id: str | None = None
-_sent_count: int = 0
-
-
-def reset() -> None:
-    """Reset session state for a new scheduling loop."""
-    global _session_id, _sent_count
-    _session_id = None
-    _sent_count = 0
+    id: str | None = None
+    sent: int = 0
 
 
 def chat(
@@ -183,21 +179,24 @@ def chat(
     reasoning_effort: str | None = None,
     tools: list[dict] | None = None,
     log: Callable[[str], None] | None = None,
+    session: Session | None = None,
 ) -> Message:
     """Send a chat turn via cursor-agent CLI.
 
-    Maintains session state across calls.  Tool calls are extracted from
-    the model's text output (fenced JSON blocks).
+    The caller owns the ``Session`` object and passes it back on each
+    call.  Tool calls are extracted from fenced JSON blocks in the
+    model's text output.
     """
-    global _session_id, _sent_count
     if log is None:
         log = lambda _: None
+    if session is None:
+        session = Session()
 
-    prompt = _build_text(messages, _sent_count)
-    _sent_count = len(messages)
+    prompt = _build_text(messages, session.sent)
 
-    sid, content = _run(prompt, model, _session_id, log)
-    _session_id = sid
+    sid, content = _run(prompt, model, session.id, log)
+    session.id = sid
+    session.sent = len(messages)
 
     if content:
         preview = content[:300] + "..." if len(content) > 300 else content
@@ -207,5 +206,6 @@ def chat(
     result: Message = {"role": "assistant", "content": content}
     if tool_calls:
         result["tool_calls"] = tool_calls
+    result["session"] = session
 
     return result

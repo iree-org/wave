@@ -138,7 +138,6 @@ def run_scheduling_loop(
         from conductor.providers import cursor_agent
 
         chat_fn = cursor_agent.chat
-        cursor_agent.reset()
         model = model or cursor_agent.DEFAULT_MODEL
         system_prompt = SYSTEM_PROMPT + cursor_agent.TOOL_CALL_FORMAT
         nudge_msg = _NUDGE_TEXT
@@ -254,6 +253,7 @@ def run_scheduling_loop(
 
     use_native_tools = provider != "cursor"
     stats_ctx = Stats() if use_native_tools else nullcontext(None)
+    session = None  # Opaque handle
 
     with stats_ctx as stats:
         for round_num in range(1, max_rounds + 1):
@@ -266,7 +266,9 @@ def run_scheduling_loop(
                 reasoning_effort=reasoning_effort,
                 tools=registry.definitions() if use_native_tools else None,
                 log=log,
+                session=session,
             )
+            session = response.pop("session", session)
             messages.append(response)
 
             content = response.get("content", "")
