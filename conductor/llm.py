@@ -130,12 +130,25 @@ def _noop_log(_msg: str) -> None:
 
 
 SYSTEM_PROMPT = """\
-You are an expert GPU instruction scheduler for AMD CDNA/RDNA architectures.
+You are an expert GPU instruction scheduler for AMD CDNA architectures.
 
 You will receive WaveASM MLIR IR with tagged instructions (loc("tag_name")).
 Your job is to reorder instructions to hide memory latency and reduce register pressure.
 
-Key latencies: global loads ~100 cycles, LDS loads ~20 cycles, MFMA 16x16 ~32 cycles.
+Latencies (cycles):
+  global_load/buffer_load: ~100    LDS (ds_read/ds_write): ~20
+  MFMA F16 16x16x16: 16           MFMA F16 32x32x8: 32
+  MFMA F8/F4 16x16x128: 16-32     MFMA F8/F4 32x32x64: 32-64
+  scaled_mfma (MXFP4): same as above
+  VALU: 1 (transcendentals: 2)    SALU: 1
+
+Scheduling strategy:
+- Issue global loads as early as possible, defer s_waitcnt to just before use.
+- Interleave LDS reads with MFMA: ~20 cycles of MFMA hides one LDS read.
+- Fill cycles between dependent MFMAs with independent loads or VALU.
+- MFMA accumulator chains (same opcode, SrcC=prev vDst) need 0 extra NOPs.
+- Fewer s_waitcnt and s_nop in the final assembly = better schedule.
+- Lower peak VGPRs = higher occupancy (key breakpoints: 128, 96, 80, 64).
 
 You have an `evaluate_moves` tool. Call it with a list of move command strings.
 Each command is one of:
@@ -143,7 +156,7 @@ Each command is one of:
   "move TAG_A before TAG_B"
   "swap TAG_A TAG_B"
 
-The tool will apply the moves, compile, and return metrics.
+The tool will apply the moves, compile, and return metrics + updated IR.
 
 Constraints:
 - All moves must stay within the same basic block. Never move across blocks.
@@ -351,8 +364,7 @@ def format_initial_prompt(
 ) -> str:
     """Format the initial user message with IR and baseline metrics."""
     parts = [
-        f"TARGET: {target} (wave64, 512 vgpr, 106 sgpr, 512 agpr)",
-        "LATENCY: vmem=100, lds=20, mfma_16x16=32, mfma_32x32=64",
+        f"TARGET: {target} (wave64, 256 vgpr + 256 agpr, 102 sgpr)",
         "",
         "--- Tagged IR ---",
         tagged_ir.strip(),
@@ -364,7 +376,8 @@ def format_initial_prompt(
     parts.extend(
         [
             "",
-            "GOAL: Minimize register pressure and hide memory latency.",
+            "GOAL: Reduce s_waitcnt and s_nop count (better latency hiding),",
+            "then reduce peak VGPRs (higher occupancy).",
             "Use the evaluate_moves tool to try reorderings.",
         ]
     )
