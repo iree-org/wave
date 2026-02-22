@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -16,6 +17,16 @@ DEFAULT_MODEL: str = "deepseek/deepseek-v3.2"
 _REQUEST_TIMEOUT = 120
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2.0
+
+
+def _default_log(msg: str) -> None:
+    """Default logger: print to stderr without trailing newline."""
+    print(msg, file=sys.stderr, end="", flush=True)
+
+
+def _noop_log(_msg: str) -> None:
+    pass
+
 
 # Valid move command pattern: move/swap with tag operands.
 _MOVE_RE = re.compile(
@@ -56,6 +67,8 @@ def _chat(
     model: str,
     temperature: float = 0.7,
     max_tokens: int = 2048,
+    reasoning_effort: str | None = None,
+    log: Callable[[str], None] = _default_log,
 ) -> str:
     """Send a chat completion request to OpenRouter. Returns content text."""
     if not API_KEY:
@@ -63,7 +76,7 @@ def _chat(
             "OPENROUTER_API_KEY not set. Export it before running the LLM loop."
         )
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
@@ -71,6 +84,8 @@ def _chat(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if reasoning_effort is not None:
+        payload["reasoning"] = {"enabled": True, "effort": reasoning_effort}
 
     for attempt in range(_MAX_RETRIES):
         try:
@@ -84,9 +99,8 @@ def _chat(
             if resp.status_code >= 500:
                 if attempt < _MAX_RETRIES - 1:
                     wait = _RETRY_BACKOFF * (attempt + 1)
-                    print(
-                        f"  [retry] server {resp.status_code}, waiting {wait:.0f}s...",
-                        file=sys.stderr,
+                    log(
+                        f"\n  [retry] server {resp.status_code}, waiting {wait:.0f}s...\n"
                     )
                     time.sleep(wait)
                     continue
@@ -95,9 +109,12 @@ def _chat(
                     f"OpenRouter API error {resp.status_code}: {resp.text}"
                 )
 
-            # Stream and accumulate content.
-            chunks: list[str] = []
+            # Stream and accumulate content + reasoning.
+            content_chunks: list[str] = []
+            reasoning_chunks: list[str] = []
             usage = None
+            in_reasoning = False
+
             for line in resp.iter_lines():
                 if not line or not line.startswith(b"data: "):
                     continue
@@ -111,15 +128,40 @@ def _chat(
                 if not choices:
                     continue
                 delta = choices[0].get("delta", {})
+
+                # Reasoning tokens (two OpenRouter formats).
+                for detail in delta.get("reasoning_details", []):
+                    text = detail.get("text", "")
+                    if text:
+                        if not in_reasoning:
+                            log("\n  [thinking] ")
+                            in_reasoning = True
+                        log(text)
+                        reasoning_chunks.append(text)
+                rc = delta.get("reasoning_content", "")
+                if rc:
+                    if not in_reasoning:
+                        log("\n  [thinking] ")
+                        in_reasoning = True
+                    log(rc)
+                    reasoning_chunks.append(rc)
+
+                # Content tokens.
                 token = delta.get("content", "")
                 if token:
-                    chunks.append(token)
+                    if in_reasoning:
+                        log("\n  [/thinking]\n")
+                        in_reasoning = False
+                    content_chunks.append(token)
 
-            content = "".join(chunks)
+            if in_reasoning:
+                log("\n  [/thinking]\n")
+
+            content = "".join(content_chunks)
             if usage:
                 pt = usage.get("prompt_tokens", "?")
                 ct = usage.get("completion_tokens", "?")
-                print(f"  [tokens] prompt={pt} completion={ct}", file=sys.stderr)
+                log(f"\n  [tokens] prompt={pt} completion={ct}\n")
             return content
 
         except (
@@ -129,10 +171,7 @@ def _chat(
         ):
             if attempt < _MAX_RETRIES - 1:
                 wait = _RETRY_BACKOFF * (attempt + 1)
-                print(
-                    f"  [retry] connection error, waiting {wait:.0f}s...",
-                    file=sys.stderr,
-                )
+                log(f"\n  [retry] connection error, waiting {wait:.0f}s...\n")
                 time.sleep(wait)
             else:
                 raise
@@ -194,24 +233,20 @@ def run_scheduling_loop(
     max_rounds: int = 5,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
-    verbose: bool = True,
+    reasoning_effort: str | None = "high",
+    log: Callable[[str], None] = _default_log,
 ) -> dict:
     """
     Run the iterative LLM scheduling loop.
 
     Returns dict with keys: metrics, commands, rounds, baseline_metrics.
     """
-
-    def log(msg: str) -> None:
-        if verbose:
-            print(msg, file=sys.stderr)
-
-    log("Computing baseline metrics...")
+    log("Computing baseline metrics...\n")
     baseline = conductor.baseline()
-    log(f"  baseline: {baseline}")
+    log(f"  baseline: {baseline}\n")
 
     tagged_ir = conductor.tag()
-    log(f"  tagged IR: {len(tagged_ir)} chars")
+    log(f"  tagged IR: {len(tagged_ir)} chars\n")
 
     best_metrics = dict(baseline)
     best_commands: list[str] = []
@@ -219,34 +254,40 @@ def run_scheduling_loop(
     error: str | None = None
 
     for round_num in range(1, max_rounds + 1):
-        log(f"\n--- Round {round_num}/{max_rounds} ---")
+        log(f"\n--- Round {round_num}/{max_rounds} ---\n")
 
         prompt = format_prompt(
             tagged_ir, best_metrics, round_num, error=error, target=conductor.target
         )
         messages.append({"role": "user", "content": prompt})
 
-        log("  Querying LLM...")
-        response = _chat(messages, model=model, temperature=temperature)
+        log("  Querying LLM...\n")
+        response = _chat(
+            messages,
+            model=model,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            log=log,
+        )
         messages.append({"role": "assistant", "content": response})
-        log(f"  Response:\n{response}")
+        log(f"  Response:\n{response}\n")
 
         commands = parse_commands(response)
         if not commands:
-            log("  No valid commands parsed, stopping.")
+            log("  No valid commands parsed, stopping.\n")
             break
 
         error = None
         try:
             metrics = conductor.evaluate(commands)
-            log(f"  metrics: {metrics}")
+            log(f"  metrics: {metrics}\n")
 
             if _is_better(metrics, best_metrics):
-                log("  Improvement found!")
+                log("  Improvement found!\n")
                 best_metrics = metrics
                 best_commands = commands
             else:
-                log("  No improvement, reverting.")
+                log("  No improvement, reverting.\n")
                 error = (
                     f"Round {round_num} regressed metrics. "
                     f"Previous best: {best_metrics}, this round: {metrics}. "
@@ -254,7 +295,7 @@ def run_scheduling_loop(
                 )
         except RuntimeError as e:
             error_msg = str(e)
-            log(f"  Error: {error_msg}")
+            log(f"  Error: {error_msg}\n")
             error = error_msg
 
     return {

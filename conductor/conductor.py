@@ -206,6 +206,12 @@ def main():
         default=0.7,
         help="LLM sampling temperature (default: 0.7).",
     )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        default="high",
+        help="Reasoning effort for models that support it (default: high).",
+    )
     args = parser.parse_args()
 
     # Collect commands from both sources.
@@ -243,6 +249,7 @@ def main():
             max_rounds=args.max_rounds,
             model=model,
             temperature=args.temperature,
+            reasoning_effort=args.reasoning_effort,
         )
         print("\n=== LLM Scheduling Result ===")
         print(f"  rounds: {result['rounds']}")
