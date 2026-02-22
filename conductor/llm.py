@@ -1,5 +1,6 @@
 """OpenRouter LLM client and iterative scheduling loop for Conductor."""
 
+import difflib
 import json
 import os
 import sys
@@ -432,7 +433,9 @@ def run_scheduling_loop(
             log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
-        log(f"  --- Updated IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
+        ir_diff = _context_diff(tagged, reordered_ir)
+        if ir_diff:
+            log(f"  --- IR diff ---\n{ir_diff}  --- End diff ---\n")
         improved = _is_better(metrics, best_metrics)
         if improved:
             log("  Improvement!\n")
@@ -559,6 +562,14 @@ def run_scheduling_loop(
         "baseline_metrics": baseline,
         "usage": usage,
     }
+
+
+def _context_diff(before: str, after: str, n: int = 10) -> str:
+    """Return a unified diff of changed lines with ±n lines of context."""
+    a = before.splitlines(keepends=True)
+    b = after.splitlines(keepends=True)
+    diff = difflib.unified_diff(a, b, fromfile="before", tofile="after", n=n)
+    return "".join(diff)
 
 
 def _is_better(new: dict, old: dict) -> bool:
