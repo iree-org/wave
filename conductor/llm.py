@@ -146,7 +146,8 @@ Each command is one of:
 The tool will apply the moves, compile, and return metrics.
 
 Constraints:
-- Moves that break SSA dominance will be rejected.
+- All moves must stay within the same basic block. Never move across blocks.
+- Moves must preserve SSA dominance: a value must be defined before all its uses.
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
 
 Work incrementally: try 1-3 moves per tool call, read the resulting metrics, \
