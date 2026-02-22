@@ -83,6 +83,8 @@ def capture_kernel_mlir() -> tuple:
         SHARED_ADDRESS_SPACE,
     )
     from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+    from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel._support.indexing import IndexingContext
     from wave_lang.kernel.wave.compile import _trace_launchable_and_get_kernel_signature
@@ -136,18 +138,23 @@ def capture_kernel_mlir() -> tuple:
     m, n, k = 256, 256, 256
     block_k = 16
 
+    subs = {
+        M: m,
+        N: n,
+        K: k,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+    }
+    subs.update(get_default_scheduling_params())
+
     options = WaveCompileOptions(
-        subs={
-            M: m,
-            N: n,
-            K: k,
-            BLOCK_M: block_m,
-            BLOCK_N: block_n,
-            BLOCK_K: block_k,
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-        },
+        subs=subs,
         canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
+        use_scheduling_barriers=True,
         backend="asm",
         wave_runtime=True,
         compile_to_mlir=False,
