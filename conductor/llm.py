@@ -162,6 +162,11 @@ The tool will apply the moves, compile, and return metrics + updated IR.
 Constraints:
 - All moves must stay within the same basic block. Never move across blocks.
 - Moves must preserve SSA dominance: a value must be defined before all its uses.
+  Before proposing any move, trace the SSA def-use chains for the instruction
+  you want to move. Check: (1) every operand (%val) it consumes is still
+  defined above it after the move, and (2) every result it produces is still
+  above all its users after the move. If either check fails, the move is
+  illegal — pick a different one.
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
 
 Work incrementally: try 1-3 moves per tool call, read the resulting metrics, \
@@ -433,9 +438,9 @@ def run_scheduling_loop(
             # log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
-        ir_diff = _context_diff(tagged, reordered_ir)
-        if ir_diff:
-            log(f"  --- IR diff ---\n{ir_diff}  --- End diff ---\n")
+        # ir_diff = _context_diff(tagged, reordered_ir)
+        # if ir_diff:
+        #     log(f"  --- IR diff ---\n{ir_diff}  --- End diff ---\n")
         improved = _is_better(metrics, best_metrics)
         if improved:
             log("  Improvement!\n")
