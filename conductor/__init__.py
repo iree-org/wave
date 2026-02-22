@@ -16,7 +16,8 @@ from conductor.extract_ir import (
     capture_kernel_mlir,
     capture_mxfp4_kernel_mlir,
 )
-from conductor.llm import run_scheduling_loop, Stats, Counters
+from conductor.llm import run_scheduling_loop
+from conductor.providers.openrouter import Stats, Counters
 from conductor.tools import Param, ToolDef, ToolRegistry
 
 __all__ = [

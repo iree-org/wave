@@ -265,7 +265,8 @@ def main():
         return
 
     if args.llm:
-        from conductor.llm import run_scheduling_loop, DEFAULT_MODEL
+        from conductor.llm import run_scheduling_loop
+        from conductor.providers.openrouter import DEFAULT_MODEL
 
         model = args.model or DEFAULT_MODEL
         print(f"Running LLM scheduling loop (model={model})...", file=sys.stderr)
