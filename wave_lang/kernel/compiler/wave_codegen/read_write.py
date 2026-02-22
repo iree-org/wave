@@ -610,8 +610,14 @@ def _create_vec_read_write(
             mem, start_indices_wg, start_indices_th, strides
         )
         mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+    elif is_global_mem and not is_read:
+        mem, offset_th = _linearize_memref(
+            mem, start_indices_wg, start_indices_th, strides
+        )
 
-    indices = [offset_th] if buffer_ops_enabled else start_indices
+    indices = (
+        [offset_th] if (buffer_ops_enabled or offset_th is not None) else start_indices
+    )
 
     if no_masked_load_store_ops:
         # find the index at which memory out of bounds of buffer
