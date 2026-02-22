@@ -260,6 +260,12 @@ def main():
         print("  best:")
         for k, v in result["metrics"].items():
             print(f"    {k}: {v}")
+        usage = result.get("usage")
+        if usage:
+            print(
+                f"  tokens: {usage.tokens} (in={usage.input_tokens} out={usage.output_tokens})"
+            )
+            print(f"  cost: ${usage.cost:.4f}")
         return
 
     if commands:

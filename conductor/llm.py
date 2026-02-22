@@ -3,8 +3,12 @@
 import json
 import os
 import sys
+import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
+from types import TracebackType
 from typing import Any
 
 import requests
@@ -18,6 +22,100 @@ _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2.0
 
 Message = dict[str, Any]
+
+
+# --- Monotonic API usage counters (thread-safe, per-model). ---
+
+
+@dataclass
+class Counters:
+    """API usage snapshot."""
+
+    tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+
+
+_counters_lock = threading.Lock()
+_counters: defaultdict[str, Counters] = defaultdict(Counters)
+
+
+def _record_usage(model: str, usage: dict[str, Any]) -> None:
+    """Accumulate token and cost from an API response."""
+    tokens = int(usage.get("total_tokens", 0))
+    input_tokens = int(usage.get("prompt_tokens", 0))
+    output_tokens = int(usage.get("completion_tokens", 0))
+    cost = usage.get("cost")
+    with _counters_lock:
+        c = _counters[model]
+        c.tokens += tokens
+        c.input_tokens += input_tokens
+        c.output_tokens += output_tokens
+        if cost is not None:
+            c.cost += float(cost)
+
+
+class Stats:
+    """Context manager that captures API usage over a scope.
+
+    Snapshots the monotonic per-model counters on entry. The ``counters``
+    property returns an aggregate delta; ``per_model`` returns per-model deltas.
+    """
+
+    def __init__(self) -> None:
+        self._start: dict[str, Counters] = {}
+
+    def __enter__(self) -> "Stats":
+        with _counters_lock:
+            self._start = {
+                m: Counters(c.tokens, c.input_tokens, c.output_tokens, c.cost)
+                for m, c in _counters.items()
+            }
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        pass
+
+    @property
+    def counters(self) -> Counters:
+        """Aggregate delta across all models since entering the context."""
+        with _counters_lock:
+            tok = sum(c.tokens for c in _counters.values()) - sum(
+                c.tokens for c in self._start.values()
+            )
+            inp = sum(c.input_tokens for c in _counters.values()) - sum(
+                c.input_tokens for c in self._start.values()
+            )
+            out = sum(c.output_tokens for c in _counters.values()) - sum(
+                c.output_tokens for c in self._start.values()
+            )
+            cst = sum(c.cost for c in _counters.values()) - sum(
+                c.cost for c in self._start.values()
+            )
+        return Counters(tokens=tok, input_tokens=inp, output_tokens=out, cost=cst)
+
+    @property
+    def per_model(self) -> defaultdict[str, Counters]:
+        """Per-model deltas since entering the context."""
+        with _counters_lock:
+            result: defaultdict[str, Counters] = defaultdict(Counters)
+            for model, current in _counters.items():
+                start = self._start.get(model, Counters())
+                delta = Counters(
+                    tokens=current.tokens - start.tokens,
+                    input_tokens=current.input_tokens - start.input_tokens,
+                    output_tokens=current.output_tokens - start.output_tokens,
+                    cost=current.cost - start.cost,
+                )
+                if delta.tokens or delta.cost:
+                    result[model] = delta
+            return result
 
 
 def _default_log(msg: str) -> None:
@@ -203,6 +301,7 @@ def _chat(
                     tool_calls_by_index[i] for i in sorted(tool_calls_by_index)
                 ]
             if usage:
+                _record_usage(model, usage)
                 pt = usage.get("prompt_tokens", "?")
                 ct = usage.get("completion_tokens", "?")
                 log(f"\n  [tokens] prompt={pt} completion={ct}\n")
@@ -265,7 +364,7 @@ def run_scheduling_loop(
     scheduling ideas. Conversation history (including reasoning) is preserved
     across rounds.
 
-    Returns dict with keys: metrics, commands, rounds, baseline_metrics.
+    Returns dict with keys: metrics, commands, rounds, baseline_metrics, usage.
     """
     log("Computing baseline metrics...\n")
     baseline = conductor.baseline()
@@ -287,72 +386,81 @@ def run_scheduling_loop(
         },
     ]
 
-    for round_num in range(1, max_rounds + 1):
-        log(f"\n--- Round {round_num}/{max_rounds} ---\n")
+    with Stats() as stats:
+        for round_num in range(1, max_rounds + 1):
+            log(f"\n--- Round {round_num}/{max_rounds} ---\n")
 
-        response = _chat(
-            messages,
-            model=model,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tools=TOOLS,
-            log=log,
-        )
-        messages.append(response)
-
-        content = response.get("content", "")
-        if content:
-            log(f"  [model] {content}\n")
-
-        tool_calls = response.get("tool_calls")
-        if not tool_calls:
-            log("  No tool call, model is done.\n")
-            break
-
-        # Process each tool call.
-        for tc in tool_calls:
-            name = tc["function"]["name"]
-            try:
-                args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
-                tool_result = {"error": "Malformed JSON arguments."}
-                log(f"  [tool] {name}: malformed args\n")
-            else:
-                if name == "evaluate_moves":
-                    moves = args.get("moves", [])
-                    log(f"  [tool] evaluate_moves({moves})\n")
-                    try:
-                        metrics = conductor.evaluate(moves)
-                        log(f"  [result] {metrics}\n")
-                        if _is_better(metrics, best_metrics):
-                            log("  Improvement!\n")
-                            best_metrics = metrics
-                            best_commands = moves
-                        tool_result = {
-                            "metrics": metrics,
-                            "improved": _is_better(metrics, best_metrics)
-                            or metrics == best_metrics,
-                        }
-                    except RuntimeError as e:
-                        tool_result = {"error": str(e)}
-                        log(f"  [error] {e}\n")
-                else:
-                    tool_result = {"error": f"Unknown tool: {name}"}
-                    log(f"  [tool] unknown: {name}\n")
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": json.dumps(tool_result),
-                }
+            response = _chat(
+                messages,
+                model=model,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                tools=TOOLS,
+                log=log,
             )
+            messages.append(response)
+
+            content = response.get("content", "")
+            if content:
+                log(f"  [model] {content}\n")
+
+            tool_calls = response.get("tool_calls")
+            if not tool_calls:
+                log("  No tool call, model is done.\n")
+                break
+
+            # Process each tool call.
+            for tc in tool_calls:
+                name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    tool_result = {"error": "Malformed JSON arguments."}
+                    log(f"  [tool] {name}: malformed args\n")
+                else:
+                    if name == "evaluate_moves":
+                        moves = args.get("moves", [])
+                        log(f"  [tool] evaluate_moves({moves})\n")
+                        try:
+                            metrics = conductor.evaluate(moves)
+                            log(f"  [result] {metrics}\n")
+                            if _is_better(metrics, best_metrics):
+                                log("  Improvement!\n")
+                                best_metrics = metrics
+                                best_commands = moves
+                            tool_result = {
+                                "metrics": metrics,
+                                "improved": _is_better(metrics, best_metrics)
+                                or metrics == best_metrics,
+                            }
+                        except RuntimeError as e:
+                            tool_result = {"error": str(e)}
+                            log(f"  [error] {e}\n")
+                    else:
+                        tool_result = {"error": f"Unknown tool: {name}"}
+                        log(f"  [tool] unknown: {name}\n")
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(tool_result),
+                    }
+                )
+
+    usage = stats.counters
+    log(
+        f"\n=== Usage ===\n"
+        f"  tokens: {usage.tokens} (in={usage.input_tokens} out={usage.output_tokens})\n"
+        f"  cost: ${usage.cost:.4f}\n"
+    )
 
     return {
         "metrics": best_metrics,
         "commands": best_commands,
         "rounds": round_num,
         "baseline_metrics": baseline,
+        "usage": usage,
     }
 
 
