@@ -148,7 +148,10 @@ Constraints:
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
 
 Work incrementally: try 1-3 moves per tool call, read the resulting metrics, \
-then decide your next moves. You can call the tool multiple times.\
+then decide your next moves. You can call the tool multiple times.
+
+When you are satisfied with the schedule or have no more ideas, call the `done` \
+tool to finish.\
 """
 
 TOOLS = [
@@ -176,7 +179,27 @@ TOOLS = [
                 "required": ["moves"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "done",
+            "description": (
+                "Call this when you are finished scheduling. "
+                "Provide a short summary of what you tried."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Brief summary of scheduling attempts.",
+                    }
+                },
+                "required": ["summary"],
+            },
+        },
+    },
 ]
 
 
@@ -450,10 +473,23 @@ def run_scheduling_loop(
 
             tool_calls = response.get("tool_calls")
             if not tool_calls:
-                log("  No tool call, model is done.\n")
-                break
+                # Model should always call a tool (evaluate_moves or done).
+                # If it didn't, nudge it to use the proper tool interface.
+                log("  [retry] No tool call, nudging model...\n")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You must use the evaluate_moves tool to test "
+                            "scheduling ideas, or call done when finished. "
+                            "Do not write tool calls as text."
+                        ),
+                    }
+                )
+                continue
 
             # Process each tool call.
+            done = False
             for tc in tool_calls:
                 name = tc["function"]["name"]
                 try:
@@ -462,7 +498,12 @@ def run_scheduling_loop(
                     tool_result = {"error": "Malformed JSON arguments."}
                     log(f"  [tool] {name}: malformed args\n")
                 else:
-                    if name == "evaluate_moves":
+                    if name == "done":
+                        summary = args.get("summary", "")
+                        log(f"  [done] {summary}\n")
+                        tool_result = {"status": "ok"}
+                        done = True
+                    elif name == "evaluate_moves":
                         moves = args.get("moves", [])
                         log(f"  [tool] evaluate_moves({moves})\n")
                         try:
@@ -491,6 +532,9 @@ def run_scheduling_loop(
                         "content": json.dumps(tool_result),
                     }
                 )
+
+            if done:
+                break
 
     usage = stats.counters
     log(
