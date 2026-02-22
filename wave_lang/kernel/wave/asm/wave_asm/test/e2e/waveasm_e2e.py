@@ -125,13 +125,6 @@ def get_waveasm_translate_path() -> Path:
 
 def get_amdclang_path() -> str:
     """Get path to amdclang++ for assembly compilation."""
-    # Check ROCM_PATH first
-    rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
-    amdclang = os.path.join(rocm_path, "bin", "amdclang++")
-
-    if os.path.exists(amdclang):
-        return amdclang
-
     # Try to find it in PATH
     try:
         result = subprocess.run(["which", "amdclang++"], capture_output=True, text=True)
@@ -139,6 +132,13 @@ def get_amdclang_path() -> str:
             return result.stdout.strip()
     except Exception:
         pass
+
+    # Do not check ROCM_PATH first, it breaks with the Rock.
+    rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+    amdclang = os.path.join(rocm_path, "bin", "amdclang++")
+
+    if os.path.exists(amdclang):
+        return amdclang
 
     raise FileNotFoundError(
         "amdclang++ not found. Ensure ROCm is installed and in PATH."
