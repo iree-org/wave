@@ -47,10 +47,10 @@ static llvm::cl::opt<bool> printDebugLocsInline(
     llvm::cl::desc("Print location information inline (pretty form)"),
     llvm::cl::init(false));
 
-static llvm::cl::opt<bool>
-    dumpIROnFailure("dump-ir-on-failure",
-                    llvm::cl::desc("Dump IR to stderr on move or verify failure"),
-                    llvm::cl::init(false));
+static llvm::cl::opt<bool> dumpIROnFailure(
+    "dump-ir-on-failure",
+    llvm::cl::desc("Dump IR to stderr on move or verify failure"),
+    llvm::cl::init(false));
 
 //===----------------------------------------------------------------------===//
 // Main Function
