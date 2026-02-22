@@ -7,7 +7,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 
 from conductor.providers.openrouter import (
-    DEFAULT_MODEL,
     Counters,
     Message,
     Stats,
@@ -138,12 +137,10 @@ def run_scheduling_loop(
         from conductor.providers import cursor_agent
 
         chat_fn = cursor_agent.chat
-        model = model or cursor_agent.DEFAULT_MODEL
         system_prompt = SYSTEM_PROMPT + cursor_agent.TOOL_CALL_FORMAT
         nudge_msg = _NUDGE_TEXT
     else:
         chat_fn = openrouter_chat
-        model = model or DEFAULT_MODEL
         system_prompt = SYSTEM_PROMPT
         nudge_msg = _NUDGE_NATIVE
 

@@ -173,7 +173,7 @@ class Session:
 
 def chat(
     messages: list[Message],
-    model: str,
+    model: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 2048,
     reasoning_effort: str | None = None,
@@ -187,6 +187,7 @@ def chat(
     call.  Tool calls are extracted from fenced JSON blocks in the
     model's text output.
     """
+    model = model or DEFAULT_MODEL
     if log is None:
         log = lambda _: None
     if session is None:

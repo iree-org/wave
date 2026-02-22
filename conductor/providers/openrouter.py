@@ -248,7 +248,7 @@ def _stream_request(
 
 def chat(
     messages: list[Message],
-    model: str,
+    model: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 2048,
     reasoning_effort: str | None = None,
@@ -261,6 +261,7 @@ def chat(
     Handles payload construction, retries on transient errors, usage
     recording, and streaming log output.
     """
+    model = model or DEFAULT_MODEL
     if not API_KEY:
         raise RuntimeError(
             "OPENROUTER_API_KEY not set. Export it before running the LLM loop."
