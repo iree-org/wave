@@ -88,6 +88,7 @@ class Conductor:
         flags = [
             "--waveasm-tag-instructions",
             "--print-debug-locs-inline",
+            "--use-nameloc-as-prefix",
         ]
         stdout, stderr, rc = run_waveasm_translate(
             self.waveasm_ir, self.workgroup_size, flags
@@ -109,7 +110,12 @@ class Conductor:
             input_path = f.name
 
         try:
-            cmd = [conductor, "--print-debug-locs-inline", input_path]
+            cmd = [
+                conductor,
+                "--print-debug-locs-inline",
+                "--use-nameloc-as-prefix",
+                input_path,
+            ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 raise RuntimeError(
@@ -250,7 +256,9 @@ def main():
     waveasm_ir = run_pre_scheduling_pipeline(mlir_text, wg_size)
     print(f"  WaveASM IR: {len(waveasm_ir)} chars", file=sys.stderr)
 
-    conductor = Conductor(waveasm_ir, wg_size)
+    from conductor.extract_ir import get_target
+
+    conductor = Conductor(waveasm_ir, wg_size, target=get_target())
 
     if args.tag_only:
         print(conductor.tag())

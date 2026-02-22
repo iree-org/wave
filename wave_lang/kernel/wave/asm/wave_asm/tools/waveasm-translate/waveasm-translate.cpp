@@ -115,6 +115,11 @@ static llvm::cl::opt<bool> printDebugLocsInline(
     llvm::cl::desc("Print location information inline (pretty form)"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> useNameLocAsPrefix(
+    "use-nameloc-as-prefix",
+    llvm::cl::desc("Print SSA IDs using NameLocs as prefixes"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool> runPreTranslationCSE(
     "mlir-cse",
     llvm::cl::desc("Run MLIR CSE before translation (reduces redundant index "
@@ -358,6 +363,8 @@ int main(int argc, char **argv) {
   } else if (printDebugLocs) {
     flags.enableDebugInfo();
   }
+  if (useNameLocAsPrefix)
+    flags.printNameLocAsPrefix();
   module->print(outputStream, flags);
 
   return 0;

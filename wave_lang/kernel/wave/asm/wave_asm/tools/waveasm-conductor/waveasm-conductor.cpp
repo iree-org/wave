@@ -52,6 +52,11 @@ static llvm::cl::opt<bool> dumpIROnFailure(
     llvm::cl::desc("Dump IR to stderr on move or verify failure"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> useNameLocAsPrefix(
+    "use-nameloc-as-prefix",
+    llvm::cl::desc("Print SSA IDs using NameLocs as prefixes"),
+    llvm::cl::init(false));
+
 //===----------------------------------------------------------------------===//
 // Main Function
 //===----------------------------------------------------------------------===//
@@ -144,6 +149,8 @@ int main(int argc, char **argv) {
     flags.enableDebugInfo(/*prettyForm=*/true);
     flags.useLocalScope();
   }
+  if (useNameLocAsPrefix)
+    flags.printNameLocAsPrefix();
   module->print(outputStream, flags);
 
   return 0;
