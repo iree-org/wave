@@ -428,8 +428,10 @@ def run_scheduling_loop(
     # Build tool registry with closures over loop state.
     registry = ToolRegistry()
 
-    def _evaluate_moves(moves: list[str]) -> str:
+    def _evaluate_moves(moves: list[str], summary: str = "") -> str:
         nonlocal best_metrics, all_commands, current_ir
+        if summary:
+            log(f"  [reason] {summary}\n")
         log(f"  [tool] evaluate_moves({moves})\n")
         try:
             reordered_ir = conductor.apply_moves(current_ir, moves)
@@ -450,13 +452,14 @@ def run_scheduling_loop(
         if improved:
             log("  Improvement!\n")
             best_metrics = metrics
-        return json.dumps(
-            {
-                "metrics": metrics,
-                "improved": improved or metrics == best_metrics,
-                "updated_ir": reordered_ir.strip(),
-            }
-        )
+        result = {
+            "metrics": metrics,
+            "improved": improved or metrics == best_metrics,
+            "updated_ir": reordered_ir.strip(),
+        }
+        if summary:
+            result["summary"] = summary
+        return json.dumps(result)
 
     def _done(summary: str) -> str:
         nonlocal finished
@@ -480,6 +483,13 @@ def run_scheduling_loop(
                 ),
                 type="array",
                 items={"type": "string"},
+            ),
+            Param(
+                name="summary",
+                description=(
+                    "Brief explanation of why these moves should help "
+                    "(e.g. 'hide LDS latency by interleaving ds_read with mfma')."
+                ),
             ),
         ],
         func=_evaluate_moves,
