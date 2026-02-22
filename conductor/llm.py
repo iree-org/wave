@@ -172,6 +172,12 @@ Constraints:
 Work incrementally: try 1-3 moves per tool call, read the resulting metrics, \
 then decide your next moves. You can call the tool multiple times.
 
+DO NOT try to build too long of a plan at once. Try 1-3 moves and see what changes.
+
+Keep your reasoning brief. For each thinking step, write at most one short \
+sentence. Do not re-analyze the entire IR — focus only on the specific move \
+you are considering and its immediate SSA neighbors.
+
 When you are satisfied with the schedule or have no more ideas, call the `done` \
 tool to finish.\
 """
@@ -395,7 +401,7 @@ def run_scheduling_loop(
     max_rounds: int = 10,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
-    reasoning_effort: str | None = "medium",
+    reasoning_effort: str | None = "high",
     log: Callable[[str], None] = _default_log,
 ) -> dict:
     """

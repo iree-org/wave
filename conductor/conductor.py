@@ -214,8 +214,8 @@ def main():
     parser.add_argument(
         "--reasoning-effort",
         type=str,
-        default="high",
-        help="Reasoning effort for models that support it (default: high).",
+        default="low",
+        help="Reasoning effort for models that support it (default: low).",
     )
     parser.add_argument(
         "--kernel",
