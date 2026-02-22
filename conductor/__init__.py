@@ -15,7 +15,7 @@ from conductor.extract_ir import (
     count_asm_metrics,
     capture_kernel_mlir,
 )
-from conductor.llm import run_scheduling_loop, parse_commands, format_prompt
+from conductor.llm import run_scheduling_loop
 
 __all__ = [
     "Conductor",
@@ -27,6 +27,4 @@ __all__ = [
     "count_asm_metrics",
     "capture_kernel_mlir",
     "run_scheduling_loop",
-    "parse_commands",
-    "format_prompt",
 ]

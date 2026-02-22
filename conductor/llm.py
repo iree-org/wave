@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import sys
 import time
 from collections.abc import Callable
@@ -18,6 +17,8 @@ _REQUEST_TIMEOUT = 120
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2.0
 
+Message = dict[str, Any]
+
 
 def _default_log(msg: str) -> None:
     """Default logger: print to stderr without trailing newline."""
@@ -28,11 +29,6 @@ def _noop_log(_msg: str) -> None:
     pass
 
 
-# Valid move command pattern: move/swap with tag operands.
-_MOVE_RE = re.compile(
-    r"^(move\s+\S+\s+(?:before|after)\s+\S+|swap\s+\S+\s+\S+)$", re.IGNORECASE
-)
-
 SYSTEM_PROMPT = """\
 You are an expert GPU instruction scheduler for AMD CDNA/RDNA architectures.
 
@@ -41,30 +37,61 @@ Your job is to reorder instructions to hide memory latency and reduce register p
 
 Key latencies: global loads ~100 cycles, LDS loads ~20 cycles, MFMA 16x16 ~32 cycles.
 
-Commands (one per line, nothing else):
-  move TAG_A after TAG_B
-  move TAG_A before TAG_B
-  swap TAG_A TAG_B
+You have an `evaluate_moves` tool. Call it with a list of move command strings.
+Each command is one of:
+  "move TAG_A after TAG_B"
+  "move TAG_A before TAG_B"
+  "swap TAG_A TAG_B"
+
+The tool will apply the moves, compile, and return metrics.
 
 Constraints:
 - Moves that break SSA dominance will be rejected.
 - Pinned ops (s_endpgm, s_barrier, condition) cannot be moved.
 
-IMPORTANT: Work incrementally. Issue 1-3 moves per round, observe the metrics, \
-then adjust. Do not try to solve everything at once. Each round you will see \
-updated metrics so you can evaluate what worked.\
+Work incrementally: try 1-3 moves per tool call, read the resulting metrics, \
+then decide your next moves. You can call the tool multiple times.\
 """
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "evaluate_moves",
+            "description": (
+                "Apply a list of move/swap commands to the tagged IR, "
+                "compile through the post-scheduling pipeline, and return "
+                "assembly metrics. Commands are applied in order."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "moves": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "List of move commands, e.g. "
+                            '["move tag_A after tag_B", "swap tag_C tag_D"].'
+                        ),
+                    }
+                },
+                "required": ["moves"],
+            },
+        },
+    }
+]
 
 
 def _chat(
-    messages: list[dict[str, Any]],
+    messages: list[Message],
     model: str,
     temperature: float = 0.7,
     max_tokens: int = 2048,
     reasoning_effort: str | None = None,
+    tools: list[dict] | None = None,
     log: Callable[[str], None] = _default_log,
-) -> str:
-    """Send a chat completion request to OpenRouter. Returns content text."""
+) -> Message:
+    """Send a streaming chat completion request. Returns the full response message."""
     if not API_KEY:
         raise RuntimeError(
             "OPENROUTER_API_KEY not set. Export it before running the LLM loop."
@@ -79,10 +106,9 @@ def _chat(
         "stream_options": {"include_usage": True},
     }
     if reasoning_effort is not None:
-        payload["reasoning"] = {
-            "enabled": True,
-            "effort": reasoning_effort,
-        }
+        payload["reasoning"] = {"enabled": True, "effort": reasoning_effort}
+    if tools:
+        payload["tools"] = tools
 
     for attempt in range(_MAX_RETRIES):
         try:
@@ -106,9 +132,10 @@ def _chat(
                     f"OpenRouter API error {resp.status_code}: {resp.text}"
                 )
 
-            # Stream and accumulate content + reasoning.
+            # Stream and accumulate content, reasoning, and tool calls.
             content_chunks: list[str] = []
             reasoning_chunks: list[str] = []
+            tool_calls_by_index: dict[int, dict[str, Any]] = {}
             usage = None
             in_reasoning = False
 
@@ -151,15 +178,35 @@ def _chat(
                         in_reasoning = False
                     content_chunks.append(token)
 
+                # Tool call deltas.
+                for tc_delta in delta.get("tool_calls", []):
+                    idx = tc_delta["index"]
+                    if idx not in tool_calls_by_index:
+                        tool_calls_by_index[idx] = {
+                            "id": tc_delta.get("id", ""),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    tc = tool_calls_by_index[idx]
+                    func_delta = tc_delta.get("function", {})
+                    if func_delta.get("name"):
+                        tc["function"]["name"] += func_delta["name"]
+                    if func_delta.get("arguments"):
+                        tc["function"]["arguments"] += func_delta["arguments"]
+
             if in_reasoning:
                 log("\n  [/thinking]\n")
 
-            content = "".join(content_chunks)
+            result: Message = {"role": "assistant", "content": "".join(content_chunks)}
+            if tool_calls_by_index:
+                result["tool_calls"] = [
+                    tool_calls_by_index[i] for i in sorted(tool_calls_by_index)
+                ]
             if usage:
                 pt = usage.get("prompt_tokens", "?")
                 ct = usage.get("completion_tokens", "?")
                 log(f"\n  [tokens] prompt={pt} completion={ct}\n")
-            return content
+            return result
 
         except (
             requests.exceptions.ConnectionError,
@@ -176,50 +223,28 @@ def _chat(
     raise RuntimeError("Unreachable")
 
 
-def parse_commands(text: str) -> list[str]:
-    """Parse move commands from LLM response. Returns list of command strings."""
-    commands = []
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # Strip markdown code fences if the model wraps output.
-        if line.startswith("```"):
-            continue
-        if _MOVE_RE.match(line):
-            commands.append(line)
-    return commands
-
-
-def format_prompt(
+def format_initial_prompt(
     tagged_ir: str,
-    metrics: dict,
-    round_num: int,
-    error: str | None = None,
+    baseline_metrics: dict,
     target: str = "gfx942",
 ) -> str:
-    """Format the user prompt for a scheduling round."""
+    """Format the initial user message with IR and baseline metrics."""
     parts = [
-        f"=== WaveASM Scheduling Round {round_num} ===",
         f"TARGET: {target} (wave64, 512 vgpr, 106 sgpr, 512 agpr)",
         "LATENCY: vmem=100, lds=20, mfma_16x16=32, mfma_32x32=64",
         "",
-        "--- IR (tagged) ---",
+        "--- Tagged IR ---",
         tagged_ir.strip(),
         "",
-        "--- Metrics ---",
+        "--- Baseline Metrics ---",
     ]
-    for k, v in metrics.items():
+    for k, v in baseline_metrics.items():
         parts.append(f"  {k}: {v}")
-
-    if error:
-        parts.extend(["", "--- Error from previous round ---", error])
-
     parts.extend(
         [
             "",
             "GOAL: Minimize register pressure and hide memory latency.",
-            "Respond with move commands, one per line.",
+            "Use the evaluate_moves tool to try reorderings.",
         ]
     )
     return "\n".join(parts)
@@ -227,14 +252,18 @@ def format_prompt(
 
 def run_scheduling_loop(
     conductor,
-    max_rounds: int = 5,
+    max_rounds: int = 10,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
     reasoning_effort: str | None = "medium",
     log: Callable[[str], None] = _default_log,
 ) -> dict:
     """
-    Run the iterative LLM scheduling loop.
+    Run the iterative LLM scheduling loop with tool use.
+
+    The LLM reasons in natural language and calls evaluate_moves to test
+    scheduling ideas. Conversation history (including reasoning) is preserved
+    across rounds.
 
     Returns dict with keys: metrics, commands, rounds, baseline_metrics.
     """
@@ -247,53 +276,77 @@ def run_scheduling_loop(
 
     best_metrics = dict(baseline)
     best_commands: list[str] = []
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    error: str | None = None
+
+    messages: list[Message] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": format_initial_prompt(
+                tagged_ir, baseline, target=conductor.target
+            ),
+        },
+    ]
 
     for round_num in range(1, max_rounds + 1):
         log(f"\n--- Round {round_num}/{max_rounds} ---\n")
 
-        prompt = format_prompt(
-            tagged_ir, best_metrics, round_num, error=error, target=conductor.target
-        )
-        messages.append({"role": "user", "content": prompt})
-
-        log("  Querying LLM...\n")
         response = _chat(
             messages,
             model=model,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            tools=TOOLS,
             log=log,
         )
-        messages.append({"role": "assistant", "content": response})
-        log(f"  Response:\n{response}\n")
+        messages.append(response)
 
-        commands = parse_commands(response)
-        if not commands:
-            log("  No valid commands parsed, stopping.\n")
+        content = response.get("content", "")
+        if content:
+            log(f"  [model] {content}\n")
+
+        tool_calls = response.get("tool_calls")
+        if not tool_calls:
+            log("  No tool call, model is done.\n")
             break
 
-        error = None
-        try:
-            metrics = conductor.evaluate(commands)
-            log(f"  metrics: {metrics}\n")
-
-            if _is_better(metrics, best_metrics):
-                log("  Improvement found!\n")
-                best_metrics = metrics
-                best_commands = commands
+        # Process each tool call.
+        for tc in tool_calls:
+            name = tc["function"]["name"]
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                tool_result = {"error": "Malformed JSON arguments."}
+                log(f"  [tool] {name}: malformed args\n")
             else:
-                log("  No improvement, reverting.\n")
-                error = (
-                    f"Round {round_num} regressed metrics. "
-                    f"Previous best: {best_metrics}, this round: {metrics}. "
-                    "Moves reverted."
-                )
-        except RuntimeError as e:
-            error_msg = str(e)
-            log(f"  Error: {error_msg}\n")
-            error = error_msg
+                if name == "evaluate_moves":
+                    moves = args.get("moves", [])
+                    log(f"  [tool] evaluate_moves({moves})\n")
+                    try:
+                        metrics = conductor.evaluate(moves)
+                        log(f"  [result] {metrics}\n")
+                        if _is_better(metrics, best_metrics):
+                            log("  Improvement!\n")
+                            best_metrics = metrics
+                            best_commands = moves
+                        tool_result = {
+                            "metrics": metrics,
+                            "improved": _is_better(metrics, best_metrics)
+                            or metrics == best_metrics,
+                        }
+                    except RuntimeError as e:
+                        tool_result = {"error": str(e)}
+                        log(f"  [error] {e}\n")
+                else:
+                    tool_result = {"error": f"Unknown tool: {name}"}
+                    log(f"  [tool] unknown: {name}\n")
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(tool_result),
+                }
+            )
 
     return {
         "metrics": best_metrics,
