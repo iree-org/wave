@@ -144,10 +144,15 @@ class Conductor:
 
         This is the main entry point for a search algorithm.
         """
+        _, metrics = self.evaluate_with_ir(commands)
+        return metrics
+
+    def evaluate_with_ir(self, commands: list) -> tuple[str, dict]:
+        """Like evaluate, but also returns the reordered tagged IR."""
         tagged = self.tag()
         reordered = self.apply_moves(tagged, commands)
         asm = self.compile_to_asm(reordered)
-        return self.get_metrics(asm)
+        return reordered, self.get_metrics(asm)
 
     def baseline(self) -> dict:
         """Evaluate with no moves (identity schedule). Caches result."""

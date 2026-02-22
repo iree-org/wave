@@ -405,20 +405,22 @@ def run_scheduling_loop(
         nonlocal best_metrics, best_commands
         log(f"  [tool] evaluate_moves({moves})\n")
         try:
-            metrics = conductor.evaluate(moves)
+            reordered_ir, metrics = conductor.evaluate_with_ir(moves)
         except RuntimeError as e:
             log(f"  [error] {e}\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
-        if _is_better(metrics, best_metrics):
+        log(f"  --- Updated IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
+        improved = _is_better(metrics, best_metrics)
+        if improved:
             log("  Improvement!\n")
             best_metrics = metrics
             best_commands = moves
         return json.dumps(
             {
                 "metrics": metrics,
-                "improved": _is_better(metrics, best_metrics)
-                or metrics == best_metrics,
+                "improved": improved or metrics == best_metrics,
+                "updated_ir": reordered_ir.strip(),
             }
         )
 
