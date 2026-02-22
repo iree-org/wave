@@ -392,7 +392,7 @@ def run_scheduling_loop(
     log(f"  baseline: {baseline}\n")
 
     tagged_ir = conductor.tag()
-    log(f"  tagged IR: {len(tagged_ir)} chars\n")
+    log(f"  --- Tagged IR ---\n{tagged_ir.strip()}\n  --- End IR ---\n")
 
     best_metrics = dict(baseline)
     best_commands: list[str] = []
