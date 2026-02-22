@@ -430,7 +430,7 @@ def run_scheduling_loop(
             metrics = conductor.get_metrics(asm)
         except RuntimeError as e:
             log(f"  [error] {e}\n")
-            log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
+            # log(f"  --- Faulty IR ---\n{reordered_ir.strip()}\n  --- End IR ---\n")
             return json.dumps({"error": str(e)})
         log(f"  [result] {metrics}\n")
         ir_diff = _context_diff(tagged, reordered_ir)
