@@ -113,130 +113,45 @@ def capture_mxfp4_kernel_mlir() -> tuple:
 
 
 def capture_kernel_mlir() -> tuple:
-    """
-    Capture MLIR from a multi-wave GEMM kernel.
+    """Capture MLIR from a manually-scheduled 8-wave GEMM kernel.
+
+    Uses get_tagged_gemm + get_two_pp_cluster_schedule for a 2-stage
+    pipelined prefetch with cluster reordering and wave staggering.
 
     Returns (mlir_text, workgroup_size).
     """
-    import wave_lang.kernel.lang as tkl
-    import wave_lang.kernel.wave as tkw
-    from wave_lang.kernel.lang.global_symbols import (
-        GLOBAL_ADDRESS_SPACE,
-        SHARED_ADDRESS_SPACE,
-    )
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
-    from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
-    from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
+    from wave_lang.kernel.wave.schedules import get_two_pp_cluster_schedule
+    from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import get_tagged_gemm
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-    from wave_lang.kernel._support.indexing import IndexingContext
-    from wave_lang.kernel.wave.compile import _trace_launchable_and_get_kernel_signature
-    from wave_lang.support.ir_imports import Context, Module, func_d
-    from wave_lang.kernel.wave.asm.mlir_analysis import (
-        walk_ops_recursively,
-        should_skip_function,
+
+    gemm, options = get_tagged_gemm(
+        shape=(4096, 4096, 4096),
+        block_shape=(128, 256, 64),
     )
-    from wave_lang.kernel.wave.utils.compile_utils import canonicalize_module
+    schedule = get_two_pp_cluster_schedule()
 
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
-
-    # 4-wave config: 2x2 waves, 32x32 wave tiles.
-    block_m, block_n, wave_m, wave_n = 64, 64, 32, 32
-    wave_size = 64
-    mma_type = tkw.MMAType.F32_16x16x16_F16
-
-    constraints = [
-        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
-        tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, wave_m),
-        tkw.WaveConstraint(N, wave_n),
-        tkw.HardwareConstraint(threads_per_wave=wave_size, mma_type=mma_type),
-    ]
-
-    @tkw.wave(constraints)
-    def gemm_kernel(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
-    m, n, k = 256, 256, 256
-    block_k = 16
-
-    subs = {
-        M: m,
-        N: n,
-        K: k,
-        BLOCK_M: block_m,
-        BLOCK_N: block_n,
-        BLOCK_K: block_k,
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-    }
-    subs.update(get_default_scheduling_params())
-
-    options = WaveCompileOptions(
-        subs=subs,
-        canonicalize=True,
-        schedule=SchedulingType.PREFETCH,
-        use_scheduling_barriers=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-        use_global_to_shared=False,
-    )
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
     options = set_default_run_config(options)
 
-    # Capture MLIR via the same path as the e2e tests.
-    with IndexingContext() as idxc:
-        idxc.set_subs(options.subs)
-        gemm_kernel.initialize_wave_constraints()
-        gemm_kernel.initialize_symbolic_constraints()
-        gemm_kernel.initialize_workgroup_constraints()
+    sys.path.insert(
+        0,
+        str(
+            wave_root
+            / "wave_lang"
+            / "kernel"
+            / "wave"
+            / "asm"
+            / "wave_asm"
+            / "test"
+            / "e2e"
+        ),
+    )
+    from waveasm_e2e import capture_wave_kernel_info
 
-        result = _trace_launchable_and_get_kernel_signature(gemm_kernel, options)
-        mb = result[0]
-
-        if options.canonicalize:
-            canonicalize_module(mb.module_op)
-
-        full_mlir = mb.module_op.get_asm(enable_debug_info=False)
-
-        launch_info = options.kernel_launch_info
-        blocks = launch_info.blocks if launch_info.blocks else [64, 1, 1]
-
-    # Extract func.func from stream wrapper.
-    with Context() as ctx:
-        ctx.allow_unregistered_dialects = True
-        module = Module.parse(full_mlir)
-
-        for fn in walk_ops_recursively(module.operation):
-            if not isinstance(fn, func_d.FuncOp):
-                continue
-            if should_skip_function(fn):
-                continue
-            func_text = fn.get_asm(print_generic_op_form=True)
-            mlir_text = "module {\n" + func_text + "\n}\n"
-            return mlir_text, tuple(blocks)
-
-    raise ValueError("No kernel function found in MLIR")
+    info = capture_wave_kernel_info(options, gemm, schedule=schedule)
+    return info.mlir_text, info.workgroup_size
 
 
 def run_waveasm_translate(
