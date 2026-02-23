@@ -328,7 +328,7 @@ normalform.module [#wave.normal_form<full_func_boundary>] {
 normalform.module [#wave.normal_form<full_func_boundary>] {
   // CHECK-LABEL: @read_with_mapping_forward
   func.func @read_with_mapping_forward(%mem: !wave.tensor<[@A, @B, @C, @D] of f32, <global>>) {
-    // CHECK: (!wave.tensor<[@A, @B, @C, @D] of f32, <global>>) -> !wave.tensor<[@C, @B, @D, @A] of f32, <register>
+    // CHECK: (!wave.tensor<[@A, @B, @C, @D] of f32, <global>>) -> !wave.tensor<[@D, @B, @A, @C] of f32, <register>
     wave.read %mem { mapping = #wave.expr_list<[](d0,d1,d2,d3)->(d3,d1,d0,d2)> }
       : (!wave.tensor<[@A, @B, @C, @D] of f32, <global>>) -> !wave.tensor<any of f32, <register>>
     return
@@ -341,7 +341,7 @@ normalform.module [#wave.normal_form<full_func_boundary>] {
   // CHECK-LABEL: @read_with_mapping_backward
   func.func @read_with_mapping_backward() {
     %mem = water_test.wave_tensor : !wave.tensor<any of f32, <global>>
-    // CHECK: (!wave.tensor<[@D, @B, @A, @C] of f32, <global>>) -> !wave.tensor<[@A, @B, @C, @D] of f32, <register>>
+    // CHECK: (!wave.tensor<[@C, @B, @D, @A] of f32, <global>>) -> !wave.tensor<[@A, @B, @C, @D] of f32, <register>>
     wave.read %mem { mapping = #wave.expr_list<[](d0,d1,d2,d3)->(d3,d1,d0,d2)> }
       : (!wave.tensor<any of f32, <global>>) -> !wave.tensor<[@A, @B, @C, @D] of f32, <register>>
     return

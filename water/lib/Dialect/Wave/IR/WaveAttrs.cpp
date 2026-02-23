@@ -232,10 +232,15 @@ static void printWithNames(llvm::raw_ostream &os, AffineExpr expr,
       // When matched, first push the string from the previous segment.
       os << StringRef(exprStr).slice(segmentStart, i);
       // Then push the replacement.
-      if (exprStr[i] == 's')
+      if (exprStr[i] == 's') {
+        assert(static_cast<size_t>(position) < symbolNames.size() &&
+               "symbol index out of bounds");
         os << symbolNames[position];
-      else
+      } else {
+        assert(static_cast<size_t>(position) < dimNames.size() &&
+               "dimension index out of bounds");
         os << dimNames[position];
+      }
       // Set i to the last symbol included in the pattern so the ++i from the
       // loop moves to the next symbol.
       i = end - 1;
@@ -591,10 +596,16 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
                     parser.parseKeyword(&dimNames.emplace_back());
                 if (failed(parseResult))
                   return parseResult;
-                if (dimNames.back()[0] == '_' &&
+                if (dimNames.back().size() >= 2 && dimNames.back()[0] == '_' &&
                     std::isupper(dimNames.back()[1])) {
                   parser.emitError(loc) << "dimension name '" << dimNames.back()
                                         << "' is reserved for internal use";
+                  return ParseResult(failure());
+                }
+                if (llvm::is_contained(llvm::drop_end(dimNames),
+                                       dimNames.back())) {
+                  parser.emitError(loc) << "dimension name '" << dimNames.back()
+                                        << "' is used more than once";
                   return ParseResult(failure());
                 }
                 if (!llvm::is_contained(symbolNames, dimNames.back()))

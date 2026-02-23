@@ -1567,7 +1567,7 @@ propagateTypesWithMapping(wave::WaveTensorType from, wave::WaveTensorType &to,
   }
 
   SmallVector<wave::WaveSymbolAttr> expectedResultShape;
-  getExpectedMemoryTypeFromMapping(from, mapping, /*inverse=*/fromIsMemory,
+  getExpectedMemoryTypeFromMapping(from, mapping, /*inverse=*/!fromIsMemory,
                                    expectedResultShape);
   constexpr llvm::StringLiteral fromNameImpliedBase =
       "implied by mapping from ";
@@ -1754,7 +1754,7 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
       valueTensorType.getFullySpecified()) {
     SmallVector<WaveSymbolAttr> expectedMemoryShape;
     getExpectedMemoryTypeFromMapping(valueTensorType, mapping,
-                                     /*inverse=*/false, expectedMemoryShape);
+                                     /*inverse=*/true, expectedMemoryShape);
     if (!llvm::equal(expectedMemoryShape, memoryTensorType.getShape())) {
       InFlightDiagnostic diag = op->emitError()
                                 << (mapping ? "the shape implied by mapping ("
@@ -1773,6 +1773,26 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
 
   if (!memoryTensorType)
     return success();
+
+  if (orderedSyms) {
+    ArrayRef<WaveSymbolAttr> shape = memoryTensorType.getShape();
+    if (orderedSyms.size() != shape.size()) {
+      return op->emitOpError()
+             << "'ordered_syms' size (" << orderedSyms.size()
+             << ") does not match memory tensor rank (" << shape.size() << ")";
+    }
+    for (auto [i, pair] : llvm::enumerate(llvm::zip(orderedSyms, shape))) {
+      auto orderedSym = cast<WaveSymbolAttr>(std::get<0>(pair));
+      WaveSymbolAttr shapeSym = std::get<1>(pair);
+      if (orderedSym.getName() != shapeSym.getName()) {
+        return op->emitOpError()
+               << "'ordered_syms' symbol at index " << i << " ('"
+               << orderedSym.getName()
+               << "') does not match memory tensor shape symbol ('"
+               << shapeSym.getName() << "')";
+      }
+    }
+  }
 
   if (failed(verifyIndexElementsPerThread(op, indexAttr, elementsPerThread,
                                           memoryTensorType, valueType)))

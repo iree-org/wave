@@ -130,8 +130,13 @@ module attributes {wave_test.symbol = #wave.symbol<"_A">}
 
 // -----
 
+// expected-error @below {{dimension name 'A' is used more than once}}
+func.func private @duplicate_dim_name() attributes { wave.test_index = #wave.expr_list<[](A, A) -> (A)>}
+
+// -----
+
 // expected-error @below {{dimension name 'A' is already used as a symbol name}}
-func.func private @duplicate_dim_name() attributes { wave_test.index = #wave.expr_list<[#wave.symbol<"A">](A) -> (A)>}
+func.func private @duplicate_dim_sym_name() attributes { wave_test.index = #wave.expr_list<[#wave.symbol<"A">](A) -> (A)>}
 
 // -----
 

@@ -516,7 +516,7 @@ def _convert_index_mapping_to_water(
             "Memory type shape is required for index mapping conversion."
         )
 
-    filtered_shape: Sequence[IndexSymbol] = []
+    filtered_shape: list[IndexSymbol] = []
     for dim in memory_shape:
         if not isinstance(dim, IndexSymbol):
             raise NotImplementedError(
@@ -538,7 +538,7 @@ def _convert_index_mapping_to_water(
     # position in that list to find numeric permutation indices
     # without parsing symbol names to extract the iterator position.
     # If we had a proper data structure instead of blindly relying
-    # on sympy symbols everywhere, this would have been a easy to
+    # on sympy symbols everywhere, this would have been an easy to
     # access property...
     ordered_iterators = [IndexMapping.iterator(i) for i in range(len(iterators))]
     permutation = [ordered_iterators.index(iter) for iter in iterators]
