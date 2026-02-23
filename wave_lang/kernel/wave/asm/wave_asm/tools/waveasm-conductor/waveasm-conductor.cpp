@@ -13,7 +13,6 @@
 
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Transforms/ApplyMoves.h"
-#include "waveasm/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -21,7 +20,6 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
-#include "mlir/Pass/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -103,15 +101,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Run tag-instructions pass to attach NameLoc tags.
-  PassManager pm(&context);
-  pm.addPass(waveasm::createWAVEASMTagInstructionsPass());
-  if (failed(pm.run(*module))) {
-    llvm::errs() << "Tag-instructions pass failed\n";
-    return 1;
-  }
-
-  // Apply the move commands.
+  // Apply the move commands (IR is expected to have NameLoc tags already).
   waveasm::MoveResult result =
       waveasm::applyMoves(*module, parseResult.commands);
   if (!result.success) {

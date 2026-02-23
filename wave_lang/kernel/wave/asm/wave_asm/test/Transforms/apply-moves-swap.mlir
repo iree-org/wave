@@ -12,9 +12,9 @@ waveasm.program @test_swap target = #waveasm.target<#waveasm.gfx942, 5> abi = #w
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %c4 = waveasm.constant 4 : !waveasm.imm<4>
 
-  %a0 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg
-  %a1 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg
-  %s0 = waveasm.v_lshlrev_b32 %c4, %v0 : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %a0 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg loc("v_add_u32_0")
+  %a1 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg loc("v_add_u32_1")
+  %s0 = waveasm.v_lshlrev_b32 %c4, %v0 : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg loc("v_lshlrev_b32_0")
 
-  waveasm.s_endpgm
+  waveasm.s_endpgm loc("s_endpgm_0")
 }

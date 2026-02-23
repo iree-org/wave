@@ -12,8 +12,8 @@ waveasm.program @test_move_before target = #waveasm.target<#waveasm.gfx942, 5> a
   %c4 = waveasm.constant 4 : !waveasm.imm<4>
   %c1 = waveasm.constant 1 : !waveasm.imm<1>
 
-  %a0 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg
-  %a1 = waveasm.v_add_u32 %v0, %c1 : !waveasm.pvreg<0>, !waveasm.imm<1> -> !waveasm.vreg
+  %a0 = waveasm.v_add_u32 %v0, %c4 : !waveasm.pvreg<0>, !waveasm.imm<4> -> !waveasm.vreg loc("v_add_u32_0")
+  %a1 = waveasm.v_add_u32 %v0, %c1 : !waveasm.pvreg<0>, !waveasm.imm<1> -> !waveasm.vreg loc("v_add_u32_1")
 
-  waveasm.s_endpgm
+  waveasm.s_endpgm loc("s_endpgm_0")
 }
