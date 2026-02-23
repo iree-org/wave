@@ -11,14 +11,30 @@
 // voffsets and SGPR soffset bumping. For each buffer_load in a loop whose
 // voffset depends on the induction variable:
 //
-//   1. Precompute the voffset at iv=initial_value (loop-invariant)
-//   2. Compute the stride per SRD group (SGPR, via v_readfirstlane)
-//   3. Carry one soffset per SRD group as SGPR iter_arg (starts at 0)
-//   4. Each iteration: soffset += stride (one s_add_u32 per SRD group)
-//   5. Set each buffer_load's soffset to the group's soffset
+//   1. Precompute the voffset at iv=initial_value (loop-invariant).
+//   2. Compute the stride per SRD group (SGPR, via v_readfirstlane).
+//   3. Carry one soffset per SRD group as SGPR iter_arg (starts at 0).
+//   4. Each iteration: soffset += stride (one s_add_u32 per SRD group).
+//   5. Set each buffer_load's soffset to the group's soffset.
 //
 // This eliminates ALL VALU address computation from the loop body.
-// AITER uses the same pattern: SRD pointer bumping with fixed voffsets.
+//
+// Why buffer-load-specific and not a general loop strength reduction:
+//
+// Buffer instructions have effective_address = SRD_base + voffset + soffset,
+// where soffset is an SGPR-only scalar offset added at zero VALU cost by the
+// hardware. The voffset captures the thread-specific part (loop-invariant),
+// and soffset captures the iteration-dependent part (uniform across threads,
+// lives in SGPR). This lets us go from N VALU/iter → 1 SALU/SRD-group/iter.
+//
+// A general strength reduction would produce v_add(base, accumulated_stride)
+// — still 1 VALU per iteration — which a subsequent buffer-load peephole
+// could split into voffset/soffset. But the only consumers of IV-dependent
+// address chains in GEMM loops are buffer_loads and LDS ops (handled by
+// LoopAddressPromotion with a different strategy: rotating precomputed VGPRs).
+// Splitting into two passes adds an abstraction boundary for one consumer.
+// If non-buffer IV-dependent VALU chains appear later, factor out the stride
+// computation (clone-at-two-IVs, subtract, readfirstlane) as shared utility.
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
