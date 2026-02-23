@@ -29,11 +29,17 @@ from typing import Optional
 
 import torch
 from wave_lang.kernel.wave.compile import wave_compile
-from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
+from wave_lang.kernel.wave.schedules import (
+    get_mxfp4_asymmetric_schedule,
+    get_mxfp4_dbuf_schedule,
+)
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
 from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import get_tagged_mxfp4_gemm
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.mxfp_utils import (
+    b_preshuffle,
+    e8m0_shuffle,
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
 )
@@ -52,12 +58,17 @@ def get_mxfp4_gemm_wave(
     shape: tuple[int, int, int],
     macrotiles: tuple[int, int, int],
 ):
-    gemm, options = get_tagged_mxfp4_gemm(shape, macrotiles)
-    schedule = get_mxfp4_dbuf_schedule(use_stagger=True)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, macrotiles, wave_shape=(1, 4)
+    )
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.dump_intermediates = "build/intermediates"
+    schedule = get_mxfp4_asymmetric_schedule()
     options = set_default_run_config(options)
-
-    compiled_gemm = wave_compile(options, gemm, schedule)
-    return compiled_gemm
+    gemm = wave_compile(options, gemm, schedule)
+    return gemm
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +160,16 @@ def run_worker(
     gemm_rt = get_mxfp4_gemm_wave(shape, macrotiles)
 
     device = torch.device("cuda")
-    x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k), device)
+    x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k))
     w_t = w.T.contiguous()
-    wave_out = torch.empty(m, n, device=device, dtype=torch.float32)
-    inputs = (x, x_scale, w_t, w_scale, wave_out)
+    w_t_ps = b_preshuffle(w_t)
+    w_scale_ps = e8m0_shuffle(w_scale)
+    x, w_t_ps = x.cuda(), w_t_ps.cuda()
+    x_scale, w_scale_ps = x_scale.cuda(), w_scale_ps.cuda()
+    wave_out = torch.empty(
+        x.shape[0], w_t_ps.shape[0], device=device, dtype=torch.float32
+    )
+    inputs = (x, x_scale, w_t_ps, w_scale_ps, wave_out)
 
     mean_us = _run_torch_benchmark(
         gemm_rt, inputs, warmup_iters=warmup_iters, benchmark_iters=benchmark_iters
@@ -165,13 +182,21 @@ def validate_mxfp4_gemm(shape: tuple[int, int, int], compiled_gemm) -> bool:
     m, n, k = shape
     try:
         device = torch.device("cuda")
-        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs(shape, device)
+        x, w, x_scale, w_scale = generate_gemm_afp4wfp4_inputs((m, n, k))
         w_t = w.T.contiguous()
-        wave_out = torch.zeros(m, n, device=device, dtype=torch.float32)
+        w_t_ps = b_preshuffle(w_t)
+        w_scale_ps = e8m0_shuffle(w_scale)
+        x, w_t_ps = x.cuda(), w_t_ps.cuda()
+        x_scale, w_scale_ps = x_scale.cuda(), w_scale_ps.cuda()
+        wave_out = torch.empty(
+            x.shape[0], w_t_ps.shape[0], device=device, dtype=torch.float32
+        )
 
-        compiled_gemm(x, x_scale, w_t, w_scale, wave_out)
+        compiled_gemm(x, x_scale, w_t_ps, w_scale_ps, wave_out)
         torch_ref = torchScaledGemmMXFP4(x, w, x_scale, w_scale)
-        torch.testing.assert_close(wave_out, torch_ref, check_device=False)
+        torch.testing.assert_close(
+            wave_out, torch_ref, check_dtype=False, check_device=False
+        )
         return True
     except Exception as e:
         raise RuntimeError(f"Validation failed for shape {shape}: {e}") from e
