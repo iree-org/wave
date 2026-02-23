@@ -100,6 +100,26 @@ static llvm::cl::opt<bool>
                  llvm::cl::desc("Emit AMDGCN assembly instead of MLIR"),
                  llvm::cl::init(false));
 
+static llvm::cl::opt<bool> runTagInstructions(
+    "waveasm-tag-instructions",
+    llvm::cl::desc("Attach stable NameLoc tags to WaveASM instructions"),
+    llvm::cl::init(false));
+
+static llvm::cl::opt<bool>
+    printDebugLocs("print-debug-locs",
+                   llvm::cl::desc("Print location information in MLIR output"),
+                   llvm::cl::init(false));
+
+static llvm::cl::opt<bool> printDebugLocsInline(
+    "print-debug-locs-inline",
+    llvm::cl::desc("Print location information inline (pretty form)"),
+    llvm::cl::init(false));
+
+static llvm::cl::opt<bool> useNameLocAsPrefix(
+    "use-nameloc-as-prefix",
+    llvm::cl::desc("Print SSA IDs using NameLocs as prefixes"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool> runPreTranslationCSE(
     "mlir-cse",
     llvm::cl::desc("Run MLIR CSE before translation (reduces redundant index "
@@ -249,6 +269,11 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Instruction tagging for Conductor scheduling infrastructure.
+  if (runTagInstructions) {
+    pm.addPass(waveasm::createWAVEASMTagInstructionsPass());
+  }
+
   // Register allocation must run before waitcnt/hazard so that those passes
   // see the final register assignments.  Matches compare_backends.py order:
   // LinearScan -> Waitcnt -> Hazard.
@@ -330,8 +355,17 @@ int main(int argc, char **argv) {
     return success ? 0 : 1;
   }
 
-  // Print the translated module (MLIR format)
-  module->print(outputStream);
+  // Print the translated module (MLIR format).
+  OpPrintingFlags flags;
+  if (printDebugLocsInline) {
+    flags.enableDebugInfo(/*prettyForm=*/true);
+    flags.useLocalScope();
+  } else if (printDebugLocs) {
+    flags.enableDebugInfo();
+  }
+  if (useNameLocAsPrefix)
+    flags.printNameLocAsPrefix();
+  module->print(outputStream, flags);
 
   return 0;
 }

@@ -250,4 +250,27 @@ def WAVEASMEmitAssembly : Pass<"waveasm-emit-assembly"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// Instruction Tagging Pass (Conductor)
+//===----------------------------------------------------------------------===//
+
+def WAVEASMTagInstructions : Pass<"waveasm-tag-instructions", "mlir::ModuleOp"> {
+  let summary = "Attach stable NameLoc tags to WaveASM instructions";
+  let description = [{
+    Tags each WaveASM operation with a NameLoc of the form
+    "<op_name>_<N>" where N is a per-op-kind counter. For example:
+    buffer_load_dwordx4_0, v_mfma_f32_16x16x16_f16_0, ds_read_b64_2.
+
+    Tags are stable across scheduling rounds — they follow the operation,
+    not the position. This is the first step of the Conductor scheduling
+    infrastructure.
+  }];
+
+  let statistics = [
+    Statistic<"numOpsTagged", "Operations tagged", "count">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 #endif // WaveASM_TRANSFORMS_PASSES

@@ -4,5 +4,4 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-add_subdirectory(waveasm-translate)
-add_subdirectory(waveasm-conductor)
+"""LLM provider backends for Conductor."""

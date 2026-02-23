@@ -57,6 +57,9 @@ std::unique_ptr<mlir::Pass> createWAVEASMPeepholePass();
 /// Create the memory offset optimization pass
 std::unique_ptr<mlir::Pass> createWAVEASMMemoryOffsetOptPass();
 
+/// Create the instruction tagging pass (Conductor infrastructure).
+std::unique_ptr<mlir::Pass> createWAVEASMTagInstructionsPass();
+
 //===----------------------------------------------------------------------===//
 // Pass Registration
 //===----------------------------------------------------------------------===//

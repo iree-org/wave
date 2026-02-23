@@ -33,8 +33,12 @@ llvm_config.with_system_environment(["HOME", "INCLUDE", "LIB", "TMP", "TEMP"])
 llvm_config.use_default_substitutions()
 
 # Add tools to the path
-tool_dirs = [config.waveasm_tools_dir, config.llvm_tools_dir]
-tools = ["waveasm-translate", "FileCheck", "count", "not"]
+tool_dirs = [
+    config.waveasm_tools_dir,
+    config.waveasm_conductor_dir,
+    config.llvm_tools_dir,
+]
+tools = ["waveasm-translate", "waveasm-conductor", "FileCheck", "count", "not"]
 llvm_config.add_tool_substitutions(tools, tool_dirs)
 
 # ROCm toolchain detection for integration tests
