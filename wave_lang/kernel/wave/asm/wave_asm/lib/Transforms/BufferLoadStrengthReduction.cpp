@@ -51,6 +51,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 
 #define DEBUG_TYPE "waveasm-buffer-load-strength-reduction"
 
@@ -210,9 +211,7 @@ static void applyStrengthReduction(LoopOp loopOp) {
   if (candidates.empty())
     return;
 
-  LLVM_DEBUG(llvm::dbgs() << "BufferLoadStrengthReduction: found "
-                          << candidates.size()
-                          << " buffer_loads to optimize\n");
+  LDBG() << "found " << candidates.size() << " buffer_loads to optimize";
 
   OpBuilder builder(loopOp);
   auto loc = loopOp.getLoc();
@@ -378,7 +377,7 @@ static void applyStrengthReduction(LoopOp loopOp) {
   }
 
   if (hasCrossRefs) {
-    LLVM_DEBUG(llvm::dbgs() << "BufferLoadStrengthReduction: reverting\n");
+    LDBG() << "cross-references detected, reverting";
     for (unsigned i = 0; i < numArgs; ++i)
       newLoop.getResult(i).replaceAllUsesWith(loopOp.getResult(i));
     newLoop.erase();
