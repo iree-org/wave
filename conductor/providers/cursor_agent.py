@@ -123,12 +123,14 @@ def _run(
     ]
     if session_id:
         cmd.extend(["--resume", session_id])
-    cmd.append(prompt)
 
     log(
-        f"  [cmd] cursor-agent --model {model} {'--resume ' + session_id if session_id else '--new'}\n"
+        f"  [cmd] cursor-agent --model {model} {'--resume ' + session_id if session_id else '--new'} ({len(prompt)} chars)\n"
     )
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    # Pipe prompt via stdin to avoid OS argument length limits.
+    proc = subprocess.run(
+        cmd, input=prompt, capture_output=True, text=True, timeout=300
+    )
 
     sid = session_id or ""
     content = ""
