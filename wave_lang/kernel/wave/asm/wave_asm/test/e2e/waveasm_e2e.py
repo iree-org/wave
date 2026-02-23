@@ -466,6 +466,21 @@ def capture_wave_kernel_info(options, kernel_func, schedule=None) -> CapturedKer
         )
         mb = result[0]
 
+        # Apply opsel optimization: replace scalar extract+bitcast scale
+        # chains on scaled_mfma ops with vector-level bitcast and opsel.
+        # This must run before MLIR is handed to the C++ backend, matching
+        # what compile.py does at line 823.
+        from wave_lang.kernel.wave.opsel_scaled_mfma import (
+            apply_opsel_scaled_mfma,
+        )
+        from wave_lang.kernel.wave.utils.compile_utils import (
+            canonicalize_module,
+        )
+
+        apply_opsel_scaled_mfma(mb.module_op)
+        if options.canonicalize:
+            canonicalize_module(mb.module_op)
+
         # Get full MLIR text (Python bindings can parse stream dialect)
         full_mlir_text = mb.module_op.get_asm(
             enable_debug_info=False,

@@ -1522,18 +1522,18 @@ for p in ["/dockerx/wave", "/dockerx/aiter"]:
         sys.path.insert(0, p)
 
 import torch
-from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-from wave_lang.kernel.wave.schedules import get_mxfp4_aiter_style_schedule
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm, get_tagged_mxfp4_gemm_preshuffle_b
+from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
 from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs
+from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs, b_preshuffle, e8m0_shuffle
 
 M, N, K = {M}, {N}, {K}
 shape = (M, N, K)
 block_shape = ({bm}, {bn}, {bk})
 
-gemm, options = get_tagged_mxfp4_gemm(shape, block_shape, num_waves={num_waves})
-schedule = get_mxfp4_aiter_style_schedule()
+gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block_shape, wave_shape=(1, 4)) if {num_waves} <= 4 else get_tagged_mxfp4_gemm(shape, block_shape, wave_shape=(4, 2))
+schedule = get_mxfp4_asymmetric_schedule()
 options = set_default_run_config(options)
 
 print("Compiling LLVM...")
@@ -1543,16 +1543,22 @@ x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
 x, w = x.cuda(), w.cuda()
 x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
 c = torch.zeros(M, N, dtype=torch.float32, device="cuda:0")
+from wave_lang.kernel.wave.utils.mxfp_utils import b_preshuffle, e8m0_shuffle
+w_ps = b_preshuffle(w.T.contiguous()).contiguous().cuda()
+ws_ps = e8m0_shuffle(w_scales).contiguous().cuda()
 
 # Warmup
 for _ in range(2):
     c.zero_()
-    compiled(x, x_scales, w.T.contiguous(), w_scales, c)
+    compiled(x, x_scales, w_ps, ws_ps, c)
 torch.cuda.synchronize()
 
 # Traced dispatch
 c.zero_()
-compiled(x, x_scales, w.T.contiguous(), w_scales, c)
+from wave_lang.kernel.wave.utils.mxfp_utils import b_preshuffle, e8m0_shuffle
+w_ps = b_preshuffle(w.T.contiguous()).contiguous().cuda()
+ws_ps = e8m0_shuffle(w_scales).contiguous().cuda()
+compiled(x, x_scales, w_ps, ws_ps, c)
 torch.cuda.synchronize()
 print("LLVM trace dispatch done")
 
@@ -1587,10 +1593,10 @@ for p in ["/dockerx/wave", "/dockerx/aiter",
         sys.path.insert(0, p)
 
 import torch
-from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-from wave_lang.kernel.wave.schedules import get_mxfp4_aiter_style_schedule
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm, get_tagged_mxfp4_gemm_preshuffle_b
+from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs
+from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs, b_preshuffle, e8m0_shuffle
 from compare_backends import get_default_arch
 from test_asm_backend_e2e import capture_wave_kernel_info
 from waveasm_e2e import WaveASMCompiler, run_with_wave_runtime
@@ -1599,8 +1605,8 @@ M, N, K = {M}, {N}, {K}
 shape = (M, N, K)
 block_shape = ({bm}, {bn}, {bk})
 
-gemm, opts = get_tagged_mxfp4_gemm(shape, block_shape, num_waves={num_waves})
-schedule = get_mxfp4_aiter_style_schedule()
+gemm, opts = get_tagged_mxfp4_gemm_preshuffle_b(shape, block_shape, wave_shape=(1, 4)) if {num_waves} <= 4 else get_tagged_mxfp4_gemm(shape, block_shape, wave_shape=(4, 2))
+schedule = get_mxfp4_asymmetric_schedule()
 opts = set_default_run_config(opts)
 opts.backend = "asm"
 opts.wave_runtime = True
@@ -1625,7 +1631,7 @@ for _ in range(2):
     c.zero_()
     run_with_wave_runtime(
         binary_path=cpp_result.binary_path,
-        inputs=[x, x_scales, w.T.contiguous(), w_scales],
+        inputs=[x, x_scales, b_preshuffle(w.T.contiguous()).contiguous().cuda(), e8m0_shuffle(w_scales).contiguous().cuda()],
         outputs=[c],
         grid=kernel_info.grid_size,
         block=kernel_info.workgroup_size,
@@ -1638,7 +1644,7 @@ torch.cuda.synchronize()
 c.zero_()
 run_with_wave_runtime(
     binary_path=cpp_result.binary_path,
-    inputs=[x, x_scales, w.T.contiguous(), w_scales],
+    inputs=[x, x_scales, b_preshuffle(w.T.contiguous()).contiguous().cuda(), e8m0_shuffle(w_scales).contiguous().cuda()],
     outputs=[c],
     grid=kernel_info.grid_size,
     block=kernel_info.workgroup_size,
@@ -1859,13 +1865,19 @@ def main():
     print(f"Output: {out_dir}")
     print("=" * 70)
 
-    # Generate shared MXFP4 inputs and reference for correctness checks
+    # Generate shared MXFP4 inputs for correctness checks and preshuffle
     torch_ref = None
     mxfp4_inputs = None
+    w_preshuffled = None
+    w_scales_preshuffled = None
     if args.check_correctness:
         print("\n>>> Generating MXFP4 inputs and torch reference...")
         x, w, x_scales, w_scales, torch_ref = generate_mxfp4_inputs_and_reference(shape)
         mxfp4_inputs = (x, w, x_scales, w_scales)
+        from wave_lang.kernel.wave.utils.mxfp_utils import b_preshuffle, e8m0_shuffle
+
+        w_preshuffled = b_preshuffle(w.T.contiguous()).contiguous()
+        w_scales_preshuffled = e8m0_shuffle(w_scales).contiguous()
         print(
             f"  Reference output: {torch_ref.shape}, "
             f"range=[{torch_ref.min().item():.4f}, {torch_ref.max().item():.4f}]"
@@ -1952,16 +1964,29 @@ def main():
     # ============================================================
     print("\n>>> LLVM backend (4-wave, f32 output)...")
     try:
-        from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-        from wave_lang.kernel.wave.schedules import get_mxfp4_aiter_style_schedule
+        from wave_lang.kernel.wave.templates import (
+            get_tagged_mxfp4_gemm,
+            get_tagged_mxfp4_gemm_preshuffle_b,
+        )
+        from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
         from wave_lang.kernel.wave.compile import wave_compile
         from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-        from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs
-
-        gemm, options = get_tagged_mxfp4_gemm(
-            shape, pcfg.block_shape, num_waves=pcfg.num_waves
+        from wave_lang.kernel.wave.utils.mxfp_utils import (
+            generate_gemm_afp4wfp4_inputs,
+            b_preshuffle,
+            e8m0_shuffle,
         )
-        schedule = get_mxfp4_aiter_style_schedule()
+
+        _ws = (1, 4) if pcfg.num_waves <= 4 else (4, 2)
+        if pcfg.num_waves <= 4:
+            gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+                shape, pcfg.block_shape, wave_shape=_ws
+            )
+        else:
+            gemm, options = get_tagged_mxfp4_gemm(
+                shape, pcfg.block_shape, wave_shape=_ws
+            )
+        schedule = get_mxfp4_asymmetric_schedule()
         options = set_default_run_config(options)
 
         # Enable dumping intermediates to capture assembly
@@ -2021,15 +2046,24 @@ def main():
             x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
         c = torch.zeros(M, N, dtype=torch.float32, device="cuda:0")
 
+        if w_preshuffled is None:
+            from wave_lang.kernel.wave.utils.mxfp_utils import (
+                b_preshuffle,
+                e8m0_shuffle,
+            )
+
+            w_preshuffled = b_preshuffle(w.T.contiguous()).contiguous()
+            w_scales_preshuffled = e8m0_shuffle(w_scales).contiguous()
+
         for _ in range(args.warmup):
             c.zero_()
-            compiled(x, x_scales, w.T.contiguous(), w_scales, c)
+            compiled(x, x_scales, w_preshuffled.cuda(), w_scales_preshuffled.cuda(), c)
         torch.cuda.synchronize()
 
         # Correctness check (after warmup, before timed region)
         if args.check_correctness and torch_ref is not None:
             c.zero_()
-            compiled(x, x_scales, w.T.contiguous(), w_scales, c)
+            compiled(x, x_scales, w_preshuffled.cuda(), w_scales_preshuffled.cuda(), c)
             torch.cuda.synchronize()
             check_correctness("LLVM 4-wave", c, torch_ref)
 
@@ -2038,7 +2072,7 @@ def main():
         start.record()
         for _ in range(args.iters):
             c.zero_()
-            compiled(x, x_scales, w.T.contiguous(), w_scales, c)
+            compiled(x, x_scales, w_preshuffled.cuda(), w_scales_preshuffled.cuda(), c)
         end.record()
         torch.cuda.synchronize()
         us = start.elapsed_time(end) * 1000 / args.iters
@@ -2065,10 +2099,17 @@ def main():
     # ============================================================
     print("\n>>> C++ ASM backend (4-wave, via waveasm-translate)...")
     try:
-        from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm
-        from wave_lang.kernel.wave.schedules import get_mxfp4_aiter_style_schedule
+        from wave_lang.kernel.wave.templates import (
+            get_tagged_mxfp4_gemm,
+            get_tagged_mxfp4_gemm_preshuffle_b,
+        )
+        from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
         from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-        from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs
+        from wave_lang.kernel.wave.utils.mxfp_utils import (
+            generate_gemm_afp4wfp4_inputs,
+            b_preshuffle,
+            e8m0_shuffle,
+        )
 
         sys.path.insert(0, "wave_lang/kernel/wave/asm/scripts")
         from compare_backends import get_default_arch
@@ -2077,10 +2118,16 @@ def main():
         from test_asm_backend_e2e import capture_wave_kernel_info
         from waveasm_e2e import WaveASMCompiler, run_with_wave_runtime
 
-        gemm2, opts2 = get_tagged_mxfp4_gemm(
-            shape, pcfg.block_shape, num_waves=pcfg.num_waves
-        )
-        schedule2 = get_mxfp4_aiter_style_schedule()
+        _ws2 = (1, 4) if pcfg.num_waves <= 4 else (4, 2)
+        if pcfg.num_waves <= 4:
+            gemm2, opts2 = get_tagged_mxfp4_gemm_preshuffle_b(
+                shape, pcfg.block_shape, wave_shape=_ws2
+            )
+        else:
+            gemm2, opts2 = get_tagged_mxfp4_gemm(
+                shape, pcfg.block_shape, wave_shape=_ws2
+            )
+        schedule2 = get_mxfp4_asymmetric_schedule()
         opts2 = set_default_run_config(opts2)
         opts2.backend = "asm"
         opts2.wave_runtime = True
@@ -2094,6 +2141,15 @@ def main():
         cpp_result = compiler.compile_full(
             kernel_info.mlir_text, kernel_info.workgroup_size
         )
+
+        # Always save generated assembly (even if assembler rejects it)
+        cpp_asm = cpp_result.asm_text or ""
+        if cpp_asm:
+            cpp_asm_path = out_dir / "cpp_4wave.s"
+            cpp_asm_path.write_text(cpp_asm)
+            print(
+                f"  Assembly dumped: {cpp_asm_path} ({len(cpp_asm.splitlines())} lines)"
+            )
 
         if not cpp_result.success:
             print(f"  C++ compile failed: {cpp_result.error_message[:200]}")
@@ -2130,7 +2186,12 @@ def main():
                 c.zero_()
                 run_with_wave_runtime(
                     binary_path=cpp_result.binary_path,
-                    inputs=[x, x_scales, w.T.contiguous(), w_scales],
+                    inputs=[
+                        x,
+                        x_scales,
+                        w_preshuffled.cuda(),
+                        w_scales_preshuffled.cuda(),
+                    ],
                     outputs=[c],
                     grid=kernel_info.grid_size,
                     block=kernel_info.workgroup_size,
@@ -2144,7 +2205,12 @@ def main():
                 c.zero_()
                 run_with_wave_runtime(
                     binary_path=cpp_result.binary_path,
-                    inputs=[x, x_scales, w.T.contiguous(), w_scales],
+                    inputs=[
+                        x,
+                        x_scales,
+                        w_preshuffled.cuda(),
+                        w_scales_preshuffled.cuda(),
+                    ],
                     outputs=[c],
                     grid=kernel_info.grid_size,
                     block=kernel_info.workgroup_size,
@@ -2161,7 +2227,12 @@ def main():
                 c.zero_()
                 run_with_wave_runtime(
                     binary_path=cpp_result.binary_path,
-                    inputs=[x, x_scales, w.T.contiguous(), w_scales],
+                    inputs=[
+                        x,
+                        x_scales,
+                        w_preshuffled.cuda(),
+                        w_scales_preshuffled.cuda(),
+                    ],
                     outputs=[c],
                     grid=kernel_info.grid_size,
                     block=kernel_info.workgroup_size,

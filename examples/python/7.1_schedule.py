@@ -21,6 +21,8 @@ from wave_lang.kernel.wave.templates import (
 )
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
+    get_mxfp4_dbuf_pingpong_schedule,
+    get_mxfp4_dbuf_mixed_pingpong_schedule,
     get_mxfp4_asymmetric_schedule,
 )
 from wave_lang.kernel.wave.utils.mxfp_utils import (
@@ -84,19 +86,55 @@ def test_dbuf_4wave_mxfp_gemm(
     print("MXFP GEMM double-buffer 4-wave test passed!")
 
 
-def test_dbuf_8wave_mxfp_gemm(
+def test_dbuf_8wave_pingpong_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
     gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
-    schedule = get_mxfp4_dbuf_schedule(use_stagger=True)
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    schedule = get_mxfp4_dbuf_pingpong_schedule(use_stagger=True, shape=shape)
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+    _run_mxfp_gemm(gemm, shape)
+    print("MXFP GEMM double-buffer 8-wave ping pong test passed!")
+
+
+def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Double-buffered MXFP4 GEMM, 8 waves, with stagger.
+
+    A variant of the ping-pong schedule that hides the latency of the extra
+    WorkgroupBarrier required for large shapes. With staggering, the two
+    clusters of waves write to LDS at different times, so a second barrier is
+    needed to ensure all writes are visible before any wave reads. This
+    schedule overlaps that barrier with useful work by splitting LDS loads:
+
+      - "Safe" loads: rows this wave wrote itself — readable immediately after
+        memory_counter_wait, before the global WorkgroupBarrier.
+      - "Dependent" loads: rows written by other waves — deferred until after
+        the global WorkgroupBarrier.
+
+    This lets the MFMAs on the safe operands start firing as soon as the
+    barrier releases, effectively hiding the second barrier's latency behind
+    the early loads and compute.
+    """
+    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    schedule = get_mxfp4_dbuf_mixed_pingpong_schedule(use_stagger=True)
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm(gemm, shape)
-    print("MXFP GEMM double-buffer 8-wave test passed!")
+    print("MXFP GEMM double-buffer 8-wave mixed ping pong test passed!")
 
 
 def test_dbuf_4wave_mxfp_asymmetric_gemm(

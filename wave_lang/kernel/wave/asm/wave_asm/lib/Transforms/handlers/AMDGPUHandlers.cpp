@@ -321,14 +321,27 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
   }
 
   // Set cbsz/blgp format code attributes based on source data types
-  // These determine the data format: FP4=4, FP6_E2M3=2, FP6_E3M2=3, FP8=0,
-  // BF8=1
   int32_t aTypeCode =
       getScaledMFMAFormatCode(scaledMfmaOp.getSourceA().getType());
   int32_t bTypeCode =
       getScaledMFMAFormatCode(scaledMfmaOp.getSourceB().getType());
   result.getDefiningOp()->setAttr("cbsz", builder.getI32IntegerAttr(aTypeCode));
   result.getDefiningOp()->setAttr("blgp", builder.getI32IntegerAttr(bTypeCode));
+
+  // Propagate scalesIdxA/scalesIdxB as op_sel/op_sel_hi attributes.
+  // These select which element of the packed scale vector is used.
+  // Hardware encoding: op_sel[0] = scalesIdxA bit 0,
+  //                    op_sel[1] = scalesIdxB bit 0,
+  //                    op_sel_hi[0] = scalesIdxA bit 1,
+  //                    op_sel_hi[1] = scalesIdxB bit 1.
+  int32_t scalesIdxA = scaledMfmaOp.getScalesIdxA();
+  int32_t scalesIdxB = scaledMfmaOp.getScalesIdxB();
+  if (scalesIdxA != 0 || scalesIdxB != 0) {
+    result.getDefiningOp()->setAttr("op_sel_a",
+                                    builder.getI32IntegerAttr(scalesIdxA));
+    result.getDefiningOp()->setAttr("op_sel_b",
+                                    builder.getI32IntegerAttr(scalesIdxB));
+  }
 
   ctx.getMapper().mapValue(scaledMfmaOp.getDestD(), result);
   return success();
