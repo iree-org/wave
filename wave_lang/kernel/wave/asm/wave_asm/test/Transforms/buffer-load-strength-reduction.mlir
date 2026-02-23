@@ -1,4 +1,4 @@
-// RUN: waveasm-translate %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --waveasm-buffer-load-strength-reduction %s 2>&1 | FileCheck %s
 //
 // Tests for the BufferLoadStrengthReduction pass.
 //
