@@ -31,7 +31,8 @@ waveasm.program @copy_kernel
 
   // Load from global memory (using saddr, voffset form)
   %saddr = waveasm.precolored.sreg 4, 2 : !waveasm.psreg<4, 2>
-  %loaded = waveasm.global_load_dword %saddr, %addr : !waveasm.psreg<4, 2>, !waveasm.pvreg<1> -> !waveasm.vreg
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+  %loaded = waveasm.global_load_dword %saddr, %addr, %soff0 : !waveasm.psreg<4, 2>, !waveasm.pvreg<1>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Store to global memory
   waveasm.global_store_dword %loaded, %saddr, %addr : !waveasm.vreg, !waveasm.psreg<4, 2>, !waveasm.pvreg<1>

@@ -134,15 +134,18 @@ class MFMAOp<string mnemonic, int accSize, list<Trait> traits = []>
   let hasVerifier = 1;
 }
 
-// VMEM Load: results = load(saddr, voffset) with optional instruction offset
+// VMEM Load: results = load(saddr, voffset, soffset) with optional instruction offset.
+// effective_address = SRD_base + voffset + soffset.
 class VMEMLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
-  // voffset can be VGPR or immediate (for constant offsets)
-  // instOffset is an optional immediate offset added to voffset (emitted as "offset:N")
+  // voffset can be VGPR or immediate (for constant offsets).
+  // soffset is an SGPR or immediate scalar offset (default 0).
+  // instOffset is an optional immediate offset added to voffset (emitted as "offset:N").
   let arguments = (ins WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
+                       WaveASM_SRegOrImm:$soffset,
                        DefaultValuedAttr<I64Attr, "0">:$instOffset);
   let results = (outs Variadic<WaveASM_AnyVGPR>:$results);
-  let assemblyFormat = "$saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($saddr) `,` type($voffset) `->` type($results)";
+  let assemblyFormat = "$saddr `,` $voffset `,` $soffset (`offset` `:` $instOffset^)? attr-dict `:` type($saddr) `,` type($voffset) `,` type($soffset) `->` type($results)";
 
   int NumResults = numResults;
 

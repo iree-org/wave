@@ -26,10 +26,11 @@ waveasm.program @simple_load_use target = #waveasm.target<#waveasm.gfx942, 5> ab
 waveasm.program @vmem_load_use target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %saddr = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %voffset = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Global load (VMEM counter)
   // CHECK: waveasm.global_load_dword
-  %loaded = waveasm.global_load_dword %saddr, %voffset : !waveasm.psreg<0, 2>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %loaded = waveasm.global_load_dword %saddr, %voffset, %soff0 : !waveasm.psreg<0, 2>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Waitcnt should be inserted before use
   // CHECK-NEXT: waveasm.s_waitcnt_vmcnt 0

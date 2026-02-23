@@ -11,9 +11,10 @@ waveasm.program @combine_vmcnt_lgkmcnt target = #waveasm.target<#waveasm.gfx942,
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %addr = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Issue both VMEM and LDS loads
-  %vmem = waveasm.buffer_load_dword %srd, %voff : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %vmem = waveasm.buffer_load_dword %srd, %voff, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
   %lds  = waveasm.ds_read_b32 %addr : !waveasm.pvreg<1> -> !waveasm.vreg
 
   // Using both results forces vmcnt and lgkmcnt waits.
@@ -35,8 +36,9 @@ waveasm.program @combine_with_barrier target = #waveasm.target<#waveasm.gfx942, 
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %addr = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
-  %vmem = waveasm.buffer_load_dword %srd, %voff : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %vmem = waveasm.buffer_load_dword %srd, %voff, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
   %lds  = waveasm.ds_read_b32 %addr : !waveasm.pvreg<1> -> !waveasm.vreg
 
   // Schedule-placed vmcnt wait

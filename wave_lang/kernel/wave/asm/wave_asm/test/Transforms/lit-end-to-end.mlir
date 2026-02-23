@@ -31,11 +31,12 @@ waveasm.program @gemm_kernel target = #waveasm.target<#waveasm.gfx942, 5> abi = 
   %byte_offset = waveasm.v_lshlrev_b32 %c4, %tid : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg
 
   // Load A and B tiles
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
   // CHECK: buffer_load_dwordx4
-  %tile_a = waveasm.buffer_load_dwordx4 %srd_a, %byte_offset : !waveasm.sreg<4>, !waveasm.vreg -> !waveasm.vreg<4, 4>
+  %tile_a = waveasm.buffer_load_dwordx4 %srd_a, %byte_offset, %soff0 : !waveasm.sreg<4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   // CHECK: buffer_load_dwordx4
-  %tile_b = waveasm.buffer_load_dwordx4 %srd_b, %byte_offset : !waveasm.sreg<4>, !waveasm.vreg -> !waveasm.vreg<4, 4>
+  %tile_b = waveasm.buffer_load_dwordx4 %srd_b, %byte_offset, %soff0 : !waveasm.sreg<4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   // Initialize accumulator
   %zero = waveasm.constant 0 : !waveasm.imm<0>

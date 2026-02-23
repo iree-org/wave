@@ -228,10 +228,14 @@ int main(int argc, char **argv) {
     pm.addPass(waveasm::createWAVEASMScopedCSEPass());
   }
 
-  // Peephole optimizations run after CSE but before waitcnt/hazard
+  // Peephole optimizations run after CSE but before waitcnt/hazard.
   if (runPeephole) {
     pm.addPass(waveasm::createWAVEASMPeepholePass());
   }
+
+  // Strength-reduce buffer_load address computation in loops: precompute
+  // voffsets and increment by constant stride each iteration.
+  pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReductionPass());
 
   // Memory offset optimization: fold constant address components into
   // memory instruction offset fields (saves VALU instructions)

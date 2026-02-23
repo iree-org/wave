@@ -35,10 +35,11 @@ waveasm.program @regalloc_multi_size target = #waveasm.target<#waveasm.gfx942, 5
   // Test: Multi-register allocations (4-wide VGPR)
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // 4-wide load should be allocated to 4 consecutive VGPRs
   // CHECK: waveasm.buffer_load_dwordx4 {{.*}} -> !waveasm.pvreg<{{[0-9]+}}, 4>
-  %loaded = waveasm.buffer_load_dwordx4 %srd, %voff : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg<4, 4>
+  %loaded = waveasm.buffer_load_dwordx4 %srd, %voff, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   waveasm.s_endpgm
 }

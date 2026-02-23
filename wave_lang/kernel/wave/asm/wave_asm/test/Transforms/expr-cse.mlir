@@ -50,14 +50,15 @@ waveasm.program @cse_arithmetic_only target = #waveasm.target<#waveasm.gfx942, 5
 waveasm.program @no_cse_memory_ops target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // First load - should NOT be eliminated
   // CHECK: waveasm.buffer_load_dword
-  %v0 = waveasm.buffer_load_dword %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %v0 = waveasm.buffer_load_dword %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Second identical load - should also remain (memory ops are not CSE-able)
   // CHECK: waveasm.buffer_load_dword
-  %v1 = waveasm.buffer_load_dword %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %v1 = waveasm.buffer_load_dword %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }

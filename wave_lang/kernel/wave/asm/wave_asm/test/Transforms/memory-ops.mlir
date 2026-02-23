@@ -9,15 +9,16 @@ waveasm.program @buffer_loads target = #waveasm.target<#waveasm.gfx942, 5> abi =
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   // Offset in VGPR
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // CHECK: waveasm.buffer_load_dword
-  %v0 = waveasm.buffer_load_dword %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %v0 = waveasm.buffer_load_dword %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // CHECK: waveasm.buffer_load_dwordx2
-  %v1 = waveasm.buffer_load_dwordx2 %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg<2>
+  %v1 = waveasm.buffer_load_dwordx2 %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg<2>
 
   // CHECK: waveasm.buffer_load_dwordx4
-  %v2 = waveasm.buffer_load_dwordx4 %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg<4, 4>
+  %v2 = waveasm.buffer_load_dwordx4 %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   waveasm.s_endpgm
 }
@@ -42,12 +43,13 @@ waveasm.program @global_loads target = #waveasm.target<#waveasm.gfx942, 5> abi =
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   // Per-lane offset in VGPR
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // CHECK: waveasm.global_load_dword
-  %v0 = waveasm.global_load_dword %sbase, %voff : !waveasm.psreg<0, 2>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %v0 = waveasm.global_load_dword %sbase, %voff, %soff0 : !waveasm.psreg<0, 2>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // CHECK: waveasm.global_load_dwordx4
-  %v1 = waveasm.global_load_dwordx4 %sbase, %voff : !waveasm.psreg<0, 2>, !waveasm.pvreg<0> -> !waveasm.vreg<4, 4>
+  %v1 = waveasm.global_load_dwordx4 %sbase, %voff, %soff0 : !waveasm.psreg<0, 2>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   waveasm.s_endpgm
 }
@@ -121,10 +123,11 @@ waveasm.program @smem_loads target = #waveasm.target<#waveasm.gfx942, 5> abi = #
 waveasm.program @mem_regalloc target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Load into virtual reg - should get allocated
   // CHECK: waveasm.buffer_load_dwordx4 {{.*}} -> !waveasm.pvreg<{{[0-9]+}}, 4>
-  %loaded = waveasm.buffer_load_dwordx4 %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg<4, 4>
+  %loaded = waveasm.buffer_load_dwordx4 %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg<4, 4>
 
   // Use the loaded data in computation
   // CHECK: waveasm.v_add_u32 {{.*}} -> !waveasm.pvreg<

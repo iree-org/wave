@@ -917,19 +917,22 @@ LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx) {
     numElements = vecType.getNumElements();
   }
 
+  auto zeroImm = builder.getType<ImmType>(0);
+  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+
   Operation *loadInstr;
   if (numElements == 1) {
     auto vregType = ctx.createVRegType(1);
     loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType},
-                                          *srcMapped, voffset);
+                                          *srcMapped, voffset, zeroConst);
   } else if (numElements == 2) {
     auto vregType = ctx.createVRegType(2, 2);
     loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType},
-                                            *srcMapped, voffset);
+                                            *srcMapped, voffset, zeroConst);
   } else if (numElements == 4) {
     auto vregType = ctx.createVRegType(4, 4);
     loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType},
-                                            *srcMapped, voffset);
+                                            *srcMapped, voffset, zeroConst);
   } else {
     return op->emitError("unsupported buffer load width");
   }

@@ -530,16 +530,19 @@ LogicalResult handleVectorTransferRead(Operation *op, TranslationContext &ctx) {
       voffset = ConstantOp::create(builder, loc, immType, 0);
     }
 
+    auto zeroImm = builder.getType<ImmType>(0);
+    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+
     Operation *loadInstr;
     if (numDwords == 1) {
       loadInstr = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType},
-                                            srd, voffset);
+                                            srd, voffset, zeroConst);
     } else if (numDwords == 2) {
       loadInstr = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{vregType},
-                                              srd, voffset);
+                                              srd, voffset, zeroConst);
     } else {
       loadInstr = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{vregType},
-                                              srd, voffset);
+                                              srd, voffset, zeroConst);
     }
     ctx.getMapper().mapValue(readOp.getResult(), loadInstr->getResult(0));
   }
@@ -876,8 +879,12 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
       srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
     }
 
-    // Split large loads into multiple buffer_load_dwordx4 (16 bytes each)
-    // Use the same voffset for all loads, with instOffset for subsequent chunks
+    // Split large loads into multiple buffer_load_dwordx4 (16 bytes each).
+    // Use the same voffset for all loads, with instOffset for subsequent
+    // chunks.
+    auto zeroImm = builder.getType<ImmType>(0);
+    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+
     SmallVector<Value, 4> loadResults;
     int64_t bytesRemaining = numBytes;
     int64_t currentOffset = 0;
@@ -915,20 +922,25 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
         // Use buffer_load_ubyte for 1-byte loads. buffer_load_dword would
         // read 4 bytes and fail SRD bounds checking when the byte is at the
         // end of a buffer (e.g. last scale byte in MXFP4).
-        loadInstr = BUFFER_LOAD_UBYTE::create(
-            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr =
+            BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{loadVregType},
+                                      srd, voffset, zeroConst, totalOffset);
       } else if (loadBytes == 2) {
-        loadInstr = BUFFER_LOAD_USHORT::create(
-            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr =
+            BUFFER_LOAD_USHORT::create(builder, loc, TypeRange{loadVregType},
+                                       srd, voffset, zeroConst, totalOffset);
       } else if (loadDwords == 4) {
-        loadInstr = BUFFER_LOAD_DWORDX4::create(
-            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr =
+            BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{loadVregType},
+                                        srd, voffset, zeroConst, totalOffset);
       } else if (loadDwords == 2) {
-        loadInstr = BUFFER_LOAD_DWORDX2::create(
-            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr =
+            BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{loadVregType},
+                                        srd, voffset, zeroConst, totalOffset);
       } else {
-        loadInstr = BUFFER_LOAD_DWORD::create(
-            builder, loc, TypeRange{loadVregType}, srd, voffset, totalOffset);
+        loadInstr =
+            BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{loadVregType},
+                                      srd, voffset, zeroConst, totalOffset);
       }
 
       loadResults.push_back(loadInstr->getResult(0));

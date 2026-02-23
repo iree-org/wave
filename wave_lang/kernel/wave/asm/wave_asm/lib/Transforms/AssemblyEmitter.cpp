@@ -122,10 +122,12 @@ std::string KernelGenerator::emitBufferLoad(Operation *op,
   for (Value res : op->getResults()) {
     vdata = resolveValue(res);
   }
-  if (op->getNumOperands() >= 2) {
+  if (op->getNumOperands() >= 3) {
     std::string voffset = resolveValue(op->getOperand(1));
     std::string srd = resolveValue(op->getOperand(0));
-    result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
+    std::string soffset = resolveValue(op->getOperand(2));
+    result +=
+        " " + vdata + ", " + voffset + ", " + srd + ", " + soffset + " offen";
     if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
       int64_t offset = instOffsetAttr.getInt();
       if (offset > 0) {
