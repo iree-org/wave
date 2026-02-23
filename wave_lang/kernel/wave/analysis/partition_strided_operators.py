@@ -519,7 +519,7 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 off1, phys1, custom1, node1 = read_infos[i]
                 off2, phys2, custom2, node2 = read_infos[j]
 
-                raw_diff = off2 - off1
+                raw_diff = subs_idxc(off2 - off1)
 
                 # For reads with non-identity mappings (e.g. preshuffle
                 # scales), the flat-offset diff contains complex floor/Mod
@@ -528,7 +528,11 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 has_complex_mapping = (
                     custom1.mapping is not None and not custom1.has_identity_mapping()
                 )
-                if has_complex_mapping:
+
+                # subs_idxc may fully resolve to a plain int.
+                if isinstance(raw_diff, (int, sympy.Integer)):
+                    diff = int(raw_diff)
+                elif has_complex_mapping:
                     diff = _numeric_eval_constant(raw_diff, _memo=eval_memo)
                     if diff is None:
                         continue
@@ -553,8 +557,10 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 # Find dimension that advances by ept.
                 merge_dim = None
                 for dim in symbolic_dims:
-                    raw_d = hi_phys[dim] - lo_phys[dim]
-                    if has_complex_mapping:
+                    raw_d = subs_idxc(hi_phys[dim] - lo_phys[dim])
+                    if isinstance(raw_d, (int, sympy.Integer)):
+                        d = int(raw_d)
+                    elif has_complex_mapping:
                         d = _numeric_eval_constant(raw_d, _memo=eval_memo)
                         if d is None:
                             merge_dim = None
