@@ -185,6 +185,30 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         outputs={N: n_it, K: k_it},
     )
 
+    # --- A scale preshuffle mapping (e8m0_shuffle) ---
+    # Maps logical (K/32, M) scale coordinates to the shuffled physical layout.
+    # Same e8m0_shuffle permutation as B scale but over the M dimension.
+    i_a = tkw.IndexMapping.iterator(0)
+    j_a = tkw.IndexMapping.iterator(1)
+
+    a_scale_flat = (
+        (j_a // 32) * ((K_SCALE_SHUFFLED // 8) * 256)
+        + (i_a // 8) * 256
+        + ((i_a % 8) % 4) * 64
+        + ((j_a % 32) % 16) * 4
+        + (((i_a % 8) // 4) * 2)
+        + ((j_a % 32) // 16)
+    )
+
+    a_scale_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={
+            M: a_scale_flat // K_SCALE_SHUFFLED,
+            K: a_scale_flat % K_SCALE_SHUFFLED,
+        },
+        outputs={K: i_a, M: j_a},
+    )
+
     # --- B scale preshuffle mapping (e8m0_shuffle) ---
     # Maps logical (N, K/32) scale coordinates to the shuffled physical layout.
     # The e8m0_shuffle does:
@@ -227,7 +251,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         ) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
-            a_scale_reg = tkw.read(a_scale, tag="read_a_scale")
+            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale")
             b_reg = tkw.read(b, mapping=b_preshuffle_mapping, tag="read_b")
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")

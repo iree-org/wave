@@ -57,13 +57,14 @@ def _run_mxfp_gemm_preshuffle_b(gemm, shape):
 
     w_t = w.T.contiguous()
     w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
     w_scales_ps = e8m0_shuffle(w_scales)
 
     x, w_t_ps = x.cuda(), w_t_ps.cuda()
-    x_scales, w_scales_ps = x_scales.cuda(), w_scales_ps.cuda()
+    x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
     out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32).cuda()
 
-    gemm(x, x_scales, w_t_ps, w_scales_ps, out)
+    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
