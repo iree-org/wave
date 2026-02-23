@@ -174,9 +174,6 @@ class GemmScheduler(BaseScheduler):
         for local_write in local_writes:
             custom = get_custom(local_write)
 
-            # Preshuffle scales are scheduled separately.
-            if custom.fx_node.meta.get("skip_gather_to_shared", False):
-                continue
             # Walk past any ExtractSlice chain to find the underlying Read.
             # Write -> ExtractSlice -> ... -> Read: walk past slices.
             producer = get_custom(custom.register_)

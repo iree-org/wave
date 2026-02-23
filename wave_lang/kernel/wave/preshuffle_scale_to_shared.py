@@ -14,15 +14,18 @@ flows through shared memory as:
       -> Shared Write (ept=N, identity)
         -> 8 x Shared Read (ept=1, scattered positions)
 
-The default [K_groups, M + pad] layout makes the shared reads scattered
-(one ds_read_u8 per byte), because the MMA access pattern spans multiple
-K-group rows and M-tile columns.
+This pass replaces the global Read + shared Write pair with direct
+GatherToLDS (DMA) operations.  The e8m0_shuffle buffer layout places
+each 32-row M-block's k-group data in 256-byte contiguous regions:
 
-This pass keeps the global read mapping intact (so data arrives correctly
-unshuffled in logical order) but transforms the LDS write indices using
-the preshuffle formula so that data is stored in physical (preshuffle)
-order in LDS.  This places each MFMA thread's 4 scale bytes at
-consecutive addresses (lane_id * 4), enabling ds_read_b32 reads.
+    flat = B * block_stride + G * 256 + K4 * 64 + M16 * 4 + P * 2 + H
+
+where block_stride = K32_full * 32, B = m//32, G = k//8.  Each DMA op
+loads one such 256-byte region (64 lanes x 4 bytes) directly into LDS
+in preshuffle order.
+
+The shared reads are transformed to use preshuffle addressing
+(constant_base + lane_id * 4), enabling ds_read_b32 reads.
 
 The preshuffle formula for logical (i=k_scale, j=m_row) is:
     flat = (j//32)*chunk + (i%4)*64 + (j%16)*4 + (i//4)*2 + ((j//16)%2)
@@ -40,13 +43,20 @@ from wave_lang.support.logging import get_logger
 from .._support.indexing import IndexSequence
 from ..ops.wave_ops import (
     ExtractSlice,
+    GatherToLDS,
     Read,
     Write,
     get_custom,
 )
 from .._support.tracing import CapturedTrace
 from .constraints import Constraint
-from .utils.general_utils import infer_dim, remove_global_indexing
+from .utils.general_utils import (
+    infer_dim,
+    get_hardware_constraint,
+    make_index_uniform_per_wave,
+    remove_global_indexing,
+    remove_thread_indexing,
+)
 from .utils.symbol_utils import subs_idxc
 
 logger = get_logger("wave.preshuffle_scale_to_shared")
@@ -204,10 +214,11 @@ def _transform_scale_memory(
     """Transform one scale memory's LDS layout to preshuffle order.
 
     Strategy:
-    1. KEEP the global read mapping (data arrives in correct logical order)
-    2. Transform WRITE indices: each logical byte at (k, m) is written to
-       its preshuffle physical position in a 1D LDS
-    3. Transform READ indices: constant_base + lane_id * 4
+    1. Remove the preshuffle mapping from the global read (the shuffled buffer
+       already has data in preshuffle order within each 256-byte region)
+    2. Emit GatherToLDS ops that DMA 256-byte contiguous regions from global
+       memory directly into LDS in preshuffle order
+    3. Transform shared READ indices: constant_base + lane_id * 4
     4. Skip gather_to_shared since we manage the LDS layout ourselves
     """
     from ..lang.global_symbols import SHARED_ADDRESS_SPACE, THREAD_0
@@ -230,67 +241,100 @@ def _transform_scale_memory(
     alloc.update_arg("distributed_shape", (total_bytes, 1))
     alloc.update_arg("padding", 0)
 
-    # Transform writes
-    # The global read KEEPS its preshuffle mapping, so data arrives in
-    # logical order.  We transform the write index so each logical byte
-    # at (k, m) is stored at its preshuffle physical offset in the 1D LDS.
+    hw = get_hardware_constraint(constraints)
+    threads_per_wave = hw.threads_per_wave
+    waves_per_block = hw.waves_per_block
+    total_threads = int(sympy.prod(hw.threads_per_block))
+    elements_per_thread = 4
+    num_waves = total_threads // threads_per_wave
+    num_m_blocks = m_count // 32
+    num_dma_ops = max(1, num_m_blocks // num_waves)
+
+    logger.info(
+        f"DMA config: {num_waves} waves x {threads_per_wave} lanes, "
+        f"{elements_per_thread} ept, "
+        f"{num_m_blocks} m-blocks, {num_dma_ops} DMA ops"
+    )
+
     all_new_writes = []
+    erased_reads = set()
+
+    sample_read = write_group[0][2]
+    global_mem_node = sample_read.memory
+    global_type = sample_read.memory_type
+    global_symbolic_shape = global_type.symbolic_shape
+    global_m_dim = infer_dim(global_symbolic_shape[0])
+    global_k_dim = infer_dim(global_symbolic_shape[1])
+    global_k32_full = int(subs_idxc(global_symbolic_shape[1]))
+    element_type = sample_read.type.dtype
+
+    global_index = remove_thread_indexing(sample_read.index)
+    m_wg = global_index[global_m_dim].start
+    k_tile = global_index[global_k_dim].start
+    bounds = sample_read.bounds
+
+    sample_write_node = write_group[0][0]
+
+    wave_id = hw.linearized_thread_id // threads_per_wave
+    lane_id = hw.linearized_thread_id % threads_per_wave
+
+    block_stride = global_k32_full * 32
+    g_offset = sympy.floor(k_tile / 8) * 256
+
+    common_id = None
+    for op_i in range(num_dma_ops):
+        b_index = op_i * num_waves + wave_id
+
+        src_flat = (
+            (sympy.floor(m_wg / 32) + b_index) * block_stride
+            + g_offset
+            + lane_id * elements_per_thread
+        )
+
+        src_row = sympy.floor(src_flat / global_k32_full)
+        src_col = sympy.Mod(src_flat, global_k32_full)
+
+        src_index = {
+            global_m_dim: IndexSequence(src_row, elements_per_thread, 1),
+            global_k_dim: IndexSequence(src_col, elements_per_thread, 1),
+        }
+
+        lds_base = b_index * 256
+        dst_index = {
+            dim_0: IndexSequence(lds_base, elements_per_thread, 1),
+            dim_1: IndexSequence(sympy.Integer(0), 1, 1),
+        }
+        dst_index = make_index_uniform_per_wave(
+            dst_index, threads_per_wave, waves_per_block
+        )
+
+        with sample_read.graph.inserting_before(sample_write_node):
+            new_write = GatherToLDS(
+                global_mem_node,
+                alloc_node,
+                src_index,
+                dst_index,
+                element_type,
+                elements_per_thread,
+                None,
+                None,
+                bounds,
+                (),
+                (),
+            ).add_to_graph(sample_read.graph, loc=sample_read.location)
+
+        if op_i == 0:
+            common_id = id(new_write)
+        new_write.pre_expansion_id = common_id
+
+        if hasattr(sample_write_node, "tag"):
+            tag = get_custom(sample_write_node).tag
+            if tag:
+                new_write.tag = tag
+
+        all_new_writes.append(new_write)
+
     for write_node, write, input_read in write_group:
-        input_read.fx_node.meta["skip_gather_to_shared"] = True
-
-        local_index = remove_global_indexing(write.index, constraints)
-        seq_d0 = local_index.get(dim_0)  # K/32 index
-        seq_d1 = local_index.get(dim_1)  # M index
-        if seq_d0 is None or seq_d1 is None:
-            all_new_writes.append(write_node)
-            continue
-
-        k_size = int(subs_idxc(seq_d0.size))
-        m_size = int(subs_idxc(seq_d1.size))
-        ept = max(k_size, m_size)
-
-        if ept == 1:
-            k_val = subs_idxc(seq_d0.start)
-            m_val = subs_idxc(seq_d1.start)
-            flat = _preshuffle_flat(k_val, m_val, k_scale_shuffled)
-            write.index = {
-                dim_0: IndexSequence(flat, 1, 1),
-                dim_1: IndexSequence(0, 1, 1),
-            }
-            all_new_writes.append(write_node)
-            continue
-
-        read_result = write.register_
-        new_writes_for_this = []
-        for i in range(ept):
-            with write.graph.inserting_before(write_node):
-                extract = ExtractSlice(read_result, [i], [1], [1]).add_to_graph(
-                    write.graph, loc=write.location, tag=write.tag
-                )
-                if m_size > 1:
-                    m_val = subs_idxc(seq_d1.start) + i
-                    k_val = subs_idxc(seq_d0.start)
-                else:
-                    m_val = subs_idxc(seq_d1.start)
-                    k_val = subs_idxc(seq_d0.start) + i
-
-                flat = _preshuffle_flat(k_val, m_val, k_scale_shuffled)
-                new_w = Write(extract, alloc_node, 1).add_to_graph(
-                    write.graph, loc=write.location, tag=write.tag
-                )
-                new_w_custom = get_custom(new_w)
-                new_w_custom.index = {
-                    dim_0: IndexSequence(flat, 1, 1),
-                    dim_1: IndexSequence(0, 1, 1),
-                }
-                if hasattr(write_node, "vector_shapes"):
-                    new_w.vector_shapes = write_node.vector_shapes
-                if hasattr(write_node, "pre_expansion_id"):
-                    new_w.pre_expansion_id = write_node.pre_expansion_id
-                new_writes_for_this.append(new_w)
-
-        all_new_writes.extend(new_writes_for_this)
-
         for user in list(write_node.users):
             user_custom = get_custom(user)
             if (
@@ -298,10 +342,16 @@ def _transform_scale_memory(
                 and user_custom._write_dependency is not None
             ):
                 new_deps = [d for d in user_custom._write_dependency if d != write_node]
-                new_deps.extend(new_writes_for_this)
+                new_deps.extend(all_new_writes)
                 user_custom.update_arg("_write_dependency", new_deps)
 
         get_custom(write_node).erase()
+
+        read_id = id(input_read.fx_node)
+        if read_id not in erased_reads:
+            erased_reads.add(read_id)
+            input_read.update_arg("mapping", None)
+            get_custom(input_read.fx_node).erase()
 
     # --- Transform reads ---
     # LDS data is now in preshuffle physical order.  Each MMA read needs
