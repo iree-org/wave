@@ -344,6 +344,46 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
 
 // -----
 
+// ordered_syms size must match memory tensor rank.
+func.func @read_ordered_syms_size_mismatch(%mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' size (2) does not match memory tensor rank (3)}}
+  %0 = wave.read %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">]}
+    : (!wave.tensor<[@M, @K, @N] of f32, <global>>) -> !wave.tensor<[@M, @K, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+// ordered_syms symbols must match memory tensor shape in order.
+func.func @read_ordered_syms_symbol_mismatch(%mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 1 ('N') does not match memory tensor shape symbol ('K')}}
+  %0 = wave.read %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">, #wave.symbol<"K">]}
+    : (!wave.tensor<[@M, @K, @N] of f32, <global>>) -> !wave.tensor<[@M, @K, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+// ordered_syms size must match memory tensor rank (wave.write).
+func.func @write_ordered_syms_size_mismatch(%val: !wave.tensor<[@M, @K, @N] of f32, <register>>, %mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' size (2) does not match memory tensor rank (3)}}
+  wave.write %val, %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">]}
+    : !wave.tensor<[@M, @K, @N] of f32, <register>>, !wave.tensor<[@M, @K, @N] of f32, <global>>
+  return
+}
+
+// -----
+
+// ordered_syms symbols must match memory tensor shape in order (wave.write).
+func.func @write_ordered_syms_symbol_mismatch(%val: !wave.tensor<[@M, @K, @N] of f32, <register>>, %mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 1 ('N') does not match memory tensor shape symbol ('K')}}
+  wave.write %val, %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">, #wave.symbol<"K">]}
+    : !wave.tensor<[@M, @K, @N] of f32, <register>>, !wave.tensor<[@M, @K, @N] of f32, <global>>
+  return
+}
+
+// -----
+
 
 func.func @empty_distributed_shape() {
   // expected-error @below {{distributed shape must have at least one result}}
