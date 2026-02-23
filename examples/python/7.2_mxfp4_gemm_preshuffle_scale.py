@@ -331,7 +331,7 @@ def get_preshuffle_kernel():
 
 def run_all_tests():
     """Run both vanilla and pre-shuffled tests and compare results."""
-    m, n, k = 512, 512, 2048
+    m, n, k = 1024, 1024, 8192  # 2048, 57344, 16384 #512, 512, 2048
     block_m, block_n, block_k = 256, 256, 256
 
     print("=" * 70)

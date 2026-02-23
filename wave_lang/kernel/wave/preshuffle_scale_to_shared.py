@@ -134,6 +134,10 @@ def _create_wide_read_1d(
         }
         if hasattr(earliest_node, "vector_shapes"):
             wide_read_node.vector_shapes = deepcopy(earliest_node.vector_shapes)
+        if sample_read.tag:
+            wide_custom.tag = sample_read.tag
+        if sample_read.expanded_dims:
+            wide_custom.expanded_dims = deepcopy(sample_read.expanded_dims)
 
     for c in range(4):
         node, read, _, _ = col_map[c]
@@ -141,8 +145,13 @@ def _create_wide_read_1d(
             extract = ExtractSlice(wide_read_node, [c], [1], [1]).add_to_graph(
                 read.graph, loc=read.location
             )
+            extract_custom = get_custom(extract)
             if hasattr(node, "vector_shapes"):
                 extract.vector_shapes = deepcopy(node.vector_shapes)
+            if read.tag:
+                extract_custom.tag = read.tag
+            if read.expanded_dims:
+                extract_custom.expanded_dims = deepcopy(read.expanded_dims)
 
         read.replace_all_uses_with(extract)
         if read.mapping is not None:
@@ -397,32 +406,14 @@ def _transform_scale_memory(
         row_groups[dword_base].append(info)
 
     remapped = 0
-    wide_reads_created = 0
-    for dword_base, group in row_groups.items():
-        if len(group) == 4:
-            col_map = {}
-            for node, read, flat_lds, cbase in group:
-                byte_within_dword = cbase % 4
-                col_map[byte_within_dword] = (node, read, flat_lds, cbase)
-            if set(col_map.keys()) == {0, 1, 2, 3}:
-                wide_flat = dword_base + sympy.Mod(THREAD_0, 64) * 4
-                _create_wide_read_1d(
-                    col_map, alloc_node, dim_0, dim_1, wide_flat, all_new_writes
-                )
-                remapped += 4
-                wide_reads_created += 1
-                continue
+    for info in read_infos:
+        node, read, flat_lds, cbase = info
+        read.index = {
+            dim_0: IndexSequence(flat_lds, 1, 1),
+            dim_1: IndexSequence(0, 1, 1),
+        }
+        if read.mapping is not None:
+            read.update_arg("mapping", None)
+        remapped += 1
 
-        for node, read, flat_lds, cbase in group:
-            read.index = {
-                dim_0: IndexSequence(flat_lds, 1, 1),
-                dim_1: IndexSequence(0, 1, 1),
-            }
-            if read.mapping is not None:
-                read.update_arg("mapping", None)
-            remapped += 1
-
-    logger.info(
-        f"Remapped {remapped} shared reads "
-        f"({wide_reads_created} wide 4-byte reads created)"
-    )
+    logger.info(f"Remapped {remapped} shared reads to preshuffle addressing")
