@@ -259,7 +259,7 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
             Recommended for 8-wave configs; disable for 4-wave.
         shape: Tuple of (M, N, K) dimensions. If provided and bigger than
-            (1024, 1024, 16384), an extra WorkgroupBarrier will be added
+            (1024, 1024, 1024), an extra WorkgroupBarrier will be added
             after the first SchedulingBarrier in cluster 0.
     """
     K = tkl.sym.K
@@ -406,10 +406,10 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         print("loop_scaled_mma_0")
         print(loop_scaled_mma_0)
 
-        # Check if shape is bigger than threshold (1024, 1024, 16384)
+        # Check if shape is bigger than threshold (1024, 1024, 1024)
         use_extra_barrier = False
         if shape is not None and len(shape) >= 3:
-            threshold = (1024, 1024, 16384)
+            threshold = (1024, 1024, 1024)
             use_extra_barrier = (
                 shape[0] > threshold[0]
                 and shape[1] > threshold[1]
