@@ -100,6 +100,11 @@ static llvm::cl::opt<bool> runBufferLoadStrengthReduction(
     llvm::cl::desc("Run buffer load strength reduction pass"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> runScalePackElimination(
+    "waveasm-scale-pack-elimination",
+    llvm::cl::desc("Eliminate BFE/LSHL_OR round-trips for B-scale iter_args"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool>
     runLoopAddressPromotion("waveasm-loop-address-promotion",
                             llvm::cl::desc("Run loop address promotion pass"),
@@ -241,6 +246,13 @@ int main(int argc, char **argv) {
   // Peephole optimizations run after CSE but before waitcnt/hazard.
   if (runPeephole) {
     pm.addPass(waveasm::createWAVEASMPeepholePass());
+  }
+
+  // Eliminate BFE/LSHL_OR round-trips for B-scale iter_args.
+  // Runs after peephole (which creates lshl_or_b32 ops) and before
+  // loop address promotion (which modifies loop structure).
+  if (runScalePackElimination) {
+    pm.addPass(waveasm::createWAVEASMScalePackEliminationPass());
   }
 
   // Strength-reduce buffer_load address computation in loops: precompute
