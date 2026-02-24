@@ -16,6 +16,7 @@
 #include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Target/AMDGCN/ABI.h"
 #include "waveasm/Target/AMDGCN/RegisterInfo.h"
 #include "waveasm/Transforms/RegAlloc.h"
 
@@ -28,6 +29,7 @@
 using namespace mlir;
 
 namespace waveasm {
+using namespace abi;
 
 //===----------------------------------------------------------------------===//
 // Kernel Generator Implementation (Pure SSA)
@@ -90,6 +92,19 @@ std::pair<bool, int64_t> KernelGenerator::getLiteralValue(Value value) {
     }
   }
   return {false, 0};
+}
+
+KernelGenerator::MaterializedOperand
+KernelGenerator::materializeLiteralOperand(Value operand, int scratchIdx) {
+  auto [isLit, val] = getLiteralValue(operand);
+  if (isLit && !isInlineConstant(val)) {
+    std::string scratch = formatVGPRRange(scratchIdx, 1);
+    std::string prefix =
+        "  v_mov_b32 " + scratch + ", " + std::to_string(val) + "\n";
+    peakVGPRs = std::max(peakVGPRs, static_cast<int64_t>(scratchIdx + 1));
+    return {scratch, prefix};
+  }
+  return {resolveValue(operand), ""};
 }
 
 //===----------------------------------------------------------------------===//
@@ -371,6 +386,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return emitBufferLoadLDS(loadOp, "buffer_load_dwordx4");
       })
 
+      // Buffer atomic operations
+      .Case<BUFFER_ATOMIC_PK_ADD_BF16>([&](auto atomicOp) {
+        return emitBufferStore(atomicOp, "buffer_atomic_pk_add_bf16");
+      })
+      .Case<BUFFER_ATOMIC_ADD_F32>([&](auto atomicOp) {
+        return emitBufferStore(atomicOp, "buffer_atomic_add_f32");
+      })
+
       .Case<BUFFER_STORE_DWORD>([&](auto storeOp) {
         return emitBufferStore(storeOp, "buffer_store_dword");
       })
@@ -382,6 +405,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       })
       .Case<BUFFER_STORE_DWORDX4>([&](auto storeOp) {
         return emitBufferStore(storeOp, "buffer_store_dwordx4");
+      })
+      .Case<BUFFER_STORE_SHORT>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_short");
+      })
+      .Case<BUFFER_STORE_BYTE>([&](auto storeOp) {
+        return emitBufferStore(storeOp, "buffer_store_byte");
       })
 
       .Case<GLOBAL_LOAD_DWORD>([&](auto loadOp) {
@@ -693,6 +722,76 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               operands.push_back(resolveValue(operand));
             }
             return formatter.format(mnemonic, operands);
+          })
+
+      // V_CMP_* operations: write to VCC implicitly, need explicit vcc in asm.
+      .Case<V_CMP_EQ_U32, V_CMP_NE_U32, V_CMP_LT_U32, V_CMP_LE_U32,
+            V_CMP_GT_U32, V_CMP_GE_U32, V_CMP_EQ_I32, V_CMP_NE_I32,
+            V_CMP_LT_I32, V_CMP_LE_I32, V_CMP_GT_I32, V_CMP_GE_I32,
+            V_CMP_EQ_F32, V_CMP_NE_F32, V_CMP_LT_F32, V_CMP_LE_F32,
+            V_CMP_GT_F32, V_CMP_GE_F32>(
+          [&](auto cmpOp) -> std::optional<std::string> {
+            llvm::StringRef opName = cmpOp->getName().getStringRef();
+            llvm::StringRef mnemonic = opName;
+            if (opName.starts_with("waveasm."))
+              mnemonic = opName.drop_front(8);
+            std::string prefix;
+            llvm::SmallVector<std::string> operands;
+            operands.push_back("vcc");
+            for (Value operand : cmpOp->getOperands()) {
+              auto mat = materializeLiteralOperand(operand, kScratchVGPR);
+              prefix += mat.prefix;
+              operands.push_back(mat.operandStr);
+            }
+            return prefix + formatter.format(mnemonic, operands);
+          })
+
+      // V_ADD_U32: VOP2 commutative — literal must be in src0.
+      .Case<V_ADD_U32>([&](V_ADD_U32 addOp) -> std::optional<std::string> {
+        std::string dst = resolveValue(addOp.getDst());
+        std::string src0 = resolveValue(addOp.getSrc0());
+        std::string src1 = resolveValue(addOp.getSrc1());
+        auto [isLit0, val0] = getLiteralValue(addOp.getSrc0());
+        auto [isLit1, val1] = getLiteralValue(addOp.getSrc1());
+        std::string prefix;
+        if (isLit1 && !isInlineConstant(val1)) {
+          if (isLit0 && !isInlineConstant(val0)) {
+            std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+            prefix =
+                "  v_mov_b32 " + scratch + ", " + std::to_string(val1) + "\n";
+            src1 = scratch;
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+          } else {
+            std::swap(src0, src1);
+          }
+        }
+        llvm::SmallVector<std::string> operands = {dst, src0, src1};
+        return prefix + formatter.format("v_add_u32", operands);
+      })
+
+      // V_CNDMASK_B32: VOP2 form uses implicit VCC — drop the 3rd source.
+      .Case<V_CNDMASK_B32>(
+          [&](V_CNDMASK_B32 cndOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(cndOp.getDst());
+            auto mat0 =
+                materializeLiteralOperand(cndOp.getSrc0(), kScratchVGPR);
+            int nextScratch =
+                mat0.prefix.empty() ? kScratchVGPR : kScratchVGPR + 1;
+            auto mat1 = materializeLiteralOperand(cndOp.getSrc1(), nextScratch);
+            std::string prefix = mat0.prefix + mat1.prefix;
+            llvm::SmallVector<std::string> operands = {dst, mat0.operandStr,
+                                                       mat1.operandStr};
+            return prefix + formatter.format("v_cndmask_b32", operands);
+          })
+
+      // V_CVT_BF16_F32: emit as v_cvt_pk_bf16_f32 dst, src, 0
+      .Case<V_CVT_BF16_F32>(
+          [&](V_CVT_BF16_F32 cvtOp) -> std::optional<std::string> {
+            llvm::SmallVector<std::string> operands;
+            operands.push_back(resolveValue(cvtOp.getDst()));
+            operands.push_back(resolveValue(cvtOp.getSrc()));
+            operands.push_back("0");
+            return formatter.format("v_cvt_pk_bf16_f32", operands);
           })
 
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {

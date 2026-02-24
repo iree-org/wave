@@ -14,7 +14,9 @@
 #include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/Support/Debug.h"
@@ -1014,6 +1016,92 @@ LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx) {
   auto result = V_READFIRSTLANE_B32::create(builder, loc, sregType, *src);
   ctx.getMapper().mapValue(op->getResult(0), result);
 
+  return success();
+}
+
+LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
+  auto atomicOp = cast<memref::AtomicRMWOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto valueMapped = ctx.getMapper().getMapped(atomicOp.getValue());
+  if (!valueMapped) {
+    return op->emitError("atomic_rmw value not mapped");
+  }
+
+  auto memrefType = atomicOp.getMemRefType();
+  Type elementType = memrefType.getElementType();
+
+  auto kind = atomicOp.getKind();
+  if (kind != arith::AtomicRMWKind::addf &&
+      kind != arith::AtomicRMWKind::addi) {
+    return op->emitError(
+        "unsupported atomic_rmw kind; only addf/addi supported");
+  }
+
+  auto [voffset, instOffset] =
+      computeVOffsetFromIndices(memrefType, atomicOp.getIndices(), ctx, loc);
+  Value srd = lookupSRD(atomicOp.getMemref(), ctx, loc);
+
+  if (elementType.isBF16()) {
+    auto vregType = ctx.createVRegType();
+
+    if (isAGPRType(valueMapped->getType())) {
+      valueMapped =
+          V_ACCVGPR_READ_B32::create(builder, loc, vregType, *valueMapped);
+    }
+    Value bf16Value =
+        V_CVT_BF16_F32::create(builder, loc, vregType, *valueMapped);
+    valueMapped = bf16Value;
+
+    int64_t positionFromInstOffset = instOffset & 2;
+    int64_t alignedInstOffset = instOffset & ~3;
+
+    auto immTwo = ConstantOp::create(builder, loc, ctx.createImmType(2), 2);
+    Value position = V_AND_B32::create(builder, loc, vregType, voffset, immTwo);
+
+    auto immNeg4 = ConstantOp::create(builder, loc, ctx.createImmType(-4), -4);
+    Value alignedVoffset =
+        V_AND_B32::create(builder, loc, vregType, voffset, immNeg4);
+
+    if (positionFromInstOffset != 0) {
+      auto immPos = ConstantOp::create(
+          builder, loc, ctx.createImmType(positionFromInstOffset),
+          positionFromInstOffset);
+      position = V_ADD_U32::create(builder, loc, vregType, position, immPos);
+      position = V_AND_B32::create(builder, loc, vregType, position, immTwo);
+    }
+
+    auto immSixteen =
+        ConstantOp::create(builder, loc, ctx.createImmType(16), 16);
+    Value shifted =
+        V_LSHLREV_B32::create(builder, loc, vregType, immSixteen, *valueMapped);
+
+    V_CMP_EQ_U32::create(builder, loc, position, immTwo);
+
+    auto sregType = ctx.createSRegType(2, 2);
+    auto vcc = PrecoloredSRegOp::create(builder, loc, sregType, 106, 2);
+
+    Value packed = V_CNDMASK_B32::create(builder, loc, vregType, *valueMapped,
+                                         shifted, vcc);
+
+    BUFFER_ATOMIC_PK_ADD_BF16::create(builder, loc, packed, srd, alignedVoffset,
+                                      alignedInstOffset);
+  } else if (elementType.isF32()) {
+    BUFFER_ATOMIC_ADD_F32::create(builder, loc, *valueMapped, srd, voffset,
+                                  instOffset);
+  } else {
+    return op->emitError("unsupported element type for atomic_rmw: ")
+           << elementType;
+  }
+
+  // NOTE: memref.atomic_rmw semantically returns the old value at the memory
+  // location, but our buffer_atomic instructions are configured without the
+  // GLC (return data) bit, so no value is returned from hardware. We map the
+  // result to the input value as a placeholder. This is safe as long as no
+  // consumer actually uses the old-value result. If a consumer does, the
+  // value will be the *new* value written, not the old one.
+  ctx.getMapper().mapValue(atomicOp.getResult(), *valueMapped);
   return success();
 }
 

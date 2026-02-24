@@ -337,6 +337,141 @@ void TranslationContext::updateSRDBufferSize(Value memref, int64_t bufferSize) {
   }
 }
 
+VOffsetResult computeVOffsetFromIndices(MemRefType memrefType,
+                                        ValueRange indices,
+                                        TranslationContext &ctx, Location loc) {
+  auto &builder = ctx.getBuilder();
+  Type elementType = memrefType.getElementType();
+  int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
+
+  Value voffset;
+  int64_t instOffset = 0;
+
+  SmallVector<int64_t, 4> strides;
+  int64_t memrefOffset;
+  if (succeeded(memrefType.getStridesAndOffset(strides, memrefOffset))) {
+    for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
+      auto idxMapped = ctx.getMapper().getMapped(indices[i]);
+      if (!idxMapped)
+        continue;
+      Value idx = *idxMapped;
+      int64_t strideBytes = strides[i] * elementBytes;
+      if (strideBytes == 0)
+        continue;
+      int64_t constAddend = ctx.getConstOffset(indices[i]);
+      if (constAddend != 0)
+        instOffset += constAddend * strideBytes;
+
+      Value dimOffset;
+      if (strideBytes == 1) {
+        dimOffset = idx;
+      } else if ((strideBytes & (strideBytes - 1)) == 0) {
+        int shift = 0;
+        int64_t temp = strideBytes;
+        while (temp > 1) {
+          shift++;
+          temp >>= 1;
+        }
+        auto shiftImm =
+            ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
+        dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
+                                          shiftImm, idx);
+      } else {
+        auto strideImm = ConstantOp::create(
+            builder, loc, ctx.createImmType(strideBytes), strideBytes);
+        dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
+                                         idx, strideImm);
+      }
+      if (!voffset) {
+        voffset = dimOffset;
+      } else {
+        voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(), voffset,
+                                    dimOffset);
+      }
+    }
+  } else {
+    if (!indices.empty()) {
+      if (auto mapped = ctx.getMapper().getMapped(indices[0]))
+        voffset = *mapped;
+    }
+  }
+  if (!voffset) {
+    auto immType = ctx.createImmType(0);
+    voffset = ConstantOp::create(builder, loc, immType, 0);
+  }
+  return {voffset, instOffset};
+}
+
+Value lookupSRD(Value memref, TranslationContext &ctx, Location loc) {
+  auto &builder = ctx.getBuilder();
+  if (auto srdIdx = ctx.getSRDIndex(memref)) {
+    auto sregType = ctx.createSRegType(4, 4);
+    return PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
+  }
+  if (auto mapped = ctx.getMapper().getMapped(memref))
+    return *mapped;
+  auto sregType = ctx.createSRegType(4, 4);
+  return PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+}
+
+SmallVector<Value, 4> emitBufferLoads(Value srd, Value voffset,
+                                      int64_t instOffset, int64_t numBytes,
+                                      TranslationContext &ctx, Location loc) {
+  auto &builder = ctx.getBuilder();
+  auto zeroImm = builder.getType<ImmType>(0);
+  auto zeroSoffset = ConstantOp::create(builder, loc, zeroImm, 0);
+
+  SmallVector<Value, 4> loadResults;
+  int64_t bytesRemaining = numBytes;
+  int64_t currentOffset = 0;
+  while (bytesRemaining > 0) {
+    int64_t loadBytes, loadDwords;
+    if (bytesRemaining >= 16) {
+      loadBytes = 16;
+      loadDwords = 4;
+    } else if (bytesRemaining >= 8) {
+      loadBytes = 8;
+      loadDwords = 2;
+    } else if (bytesRemaining >= 4) {
+      loadBytes = 4;
+      loadDwords = 1;
+    } else {
+      loadBytes = bytesRemaining;
+      loadDwords = 1;
+    }
+
+    auto loadVregType =
+        ctx.createVRegType(loadDwords, loadDwords > 1 ? loadDwords : 1);
+    int64_t totalOffset = instOffset + currentOffset;
+    Operation *loadInstr;
+    if (loadBytes == 1) {
+      loadInstr =
+          BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{loadVregType}, srd,
+                                    voffset, zeroSoffset, totalOffset);
+    } else if (loadBytes == 2) {
+      loadInstr =
+          BUFFER_LOAD_USHORT::create(builder, loc, TypeRange{loadVregType}, srd,
+                                     voffset, zeroSoffset, totalOffset);
+    } else if (loadDwords == 4) {
+      loadInstr =
+          BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{loadVregType},
+                                      srd, voffset, zeroSoffset, totalOffset);
+    } else if (loadDwords == 2) {
+      loadInstr =
+          BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{loadVregType},
+                                      srd, voffset, zeroSoffset, totalOffset);
+    } else {
+      loadInstr =
+          BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{loadVregType}, srd,
+                                    voffset, zeroSoffset, totalOffset);
+    }
+    loadResults.push_back(loadInstr->getResult(0));
+    bytesRemaining -= loadBytes;
+    currentOffset += loadBytes;
+  }
+  return loadResults;
+}
+
 } // namespace waveasm
 
 using namespace waveasm;
@@ -375,6 +510,10 @@ LogicalResult handleArithShRSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithTruncI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMinSI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMaxSI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMinUI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithMaxUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithAddF(Operation *op, TranslationContext &ctx);
@@ -383,6 +522,8 @@ LogicalResult handleArithMulF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithDivF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithNegF(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithCmpF(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx);
 
 // Math handlers (implemented in handlers/MathHandlers.cpp)
 LogicalResult handleMathFma(Operation *op, TranslationContext &ctx);
@@ -782,178 +923,14 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     ctx.getMapper().mapValue(loadOp.getResult(), readOp->getResult(0));
   } else {
     // Global load - buffer_load_dwordx* with splitting for large vectors
+    auto [voffset, instOffset] =
+        computeVOffsetFromIndices(memrefType, loadOp.getIndices(), ctx, loc);
+    Value srd = lookupSRD(loadOp.getBase(), ctx, loc);
+    auto loadResults =
+        emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
 
-    // Compute voffset as byte offset from indices and strides
-    // For memref<...xf16, strided<[stride0, stride1]>>, byte_offset =
-    //   (idx0 * stride0 + idx1 * stride1) * element_size
-    Value voffset;
-    auto indices = loadOp.getIndices();
-    Type elementType = memrefType.getElementType();
-    int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
-
-    // Get strides from the memref type
-    SmallVector<int64_t, 4> strides;
-    int64_t offset;
-    int64_t instOffset = 0; // Instruction offset for offset:N modifier
-    if (succeeded(memrefType.getStridesAndOffset(strides, offset))) {
-      // Compute linearized byte offset
-      // For a 2D memref with indices [i, j] and strides [s0, s1]:
-      // byte_offset = (i * s0 + j * s1) * element_size
-
-      // Process each index dimension
-      for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
-        auto idxMapped = ctx.getMapper().getMapped(indices[i]);
-        if (!idxMapped)
-          continue;
-
-        Value idx = *idxMapped;
-        int64_t strideBytes = strides[i] * elementBytes;
-
-        if (strideBytes == 0)
-          continue;
-
-        // Check if this index has a constant addend that can be used for
-        // instOffset This allows using "offset:N" in the instruction instead of
-        // VGPR computation
-        int64_t constAddend = ctx.getConstOffset(indices[i]);
-        if (constAddend != 0) {
-          // Add constant * stride to instruction offset
-          instOffset += constAddend * strideBytes;
-        }
-
-        Value dimOffset;
-        if (strideBytes == 1) {
-          dimOffset = idx;
-        } else if ((strideBytes & (strideBytes - 1)) == 0) {
-          // Power of 2 - use shift
-          int shift = 0;
-          int64_t temp = strideBytes;
-          while (temp > 1) {
-            shift++;
-            temp >>= 1;
-          }
-          auto shiftImm =
-              ConstantOp::create(builder, loc, ctx.createImmType(shift), shift);
-          dimOffset = V_LSHLREV_B32::create(builder, loc, ctx.createVRegType(),
-                                            shiftImm, idx);
-        } else {
-          // General case - use multiply
-          auto strideImm = ConstantOp::create(
-              builder, loc, ctx.createImmType(strideBytes), strideBytes);
-          dimOffset = V_MUL_LO_U32::create(builder, loc, ctx.createVRegType(),
-                                           idx, strideImm);
-        }
-
-        if (!voffset) {
-          voffset = dimOffset;
-        } else {
-          // Add to existing offset
-          voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
-                                      voffset, dimOffset);
-        }
-      }
-    } else {
-      // Fallback: use first index directly if strides not available
-      if (!indices.empty()) {
-        if (auto mapped = ctx.getMapper().getMapped(indices[0])) {
-          voffset = *mapped;
-        }
-      }
-    }
-
-    if (!voffset) {
-      auto immType = ctx.createImmType(0);
-      voffset = ConstantOp::create(builder, loc, immType, 0);
-    }
-
-    // Get SRD for this memref - look up from binding or use tracked SRD
-    Value srd;
-    if (auto srdIdx = ctx.getSRDIndex(loadOp.getBase())) {
-      auto sregType = ctx.createSRegType(4, 4);
-      srd = PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
-    } else if (auto mapped = ctx.getMapper().getMapped(loadOp.getBase())) {
-      srd = *mapped;
-    } else {
-      // Fallback to default SRD at s[8:11]
-      auto sregType = ctx.createSRegType(4, 4);
-      srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
-    }
-
-    // Split large loads into multiple buffer_load_dwordx4 (16 bytes each).
-    // Use the same voffset for all loads, with instOffset for subsequent
-    // chunks.
-    auto zeroImm = builder.getType<ImmType>(0);
-    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-
-    SmallVector<Value, 4> loadResults;
-    int64_t bytesRemaining = numBytes;
-    int64_t currentOffset = 0;
-
-    while (bytesRemaining > 0) {
-      int64_t loadBytes;
-      int64_t loadDwords;
-
-      if (bytesRemaining >= 16) {
-        loadBytes = 16;
-        loadDwords = 4;
-      } else if (bytesRemaining >= 8) {
-        loadBytes = 8;
-        loadDwords = 2;
-      } else if (bytesRemaining >= 4) {
-        loadBytes = 4;
-        loadDwords = 1;
-      } else {
-        // Sub-dword: 1 or 2 bytes.  buffer_load_ubyte / buffer_load_ushort
-        // zero-extend into a full 32-bit VGPR, so loadDwords stays 1.
-        loadBytes = bytesRemaining; // 1 or 2
-        loadDwords = 1;
-      }
-
-      auto loadVregType =
-          ctx.createVRegType(loadDwords, loadDwords > 1 ? loadDwords : 1);
-
-      // Use instOffset attribute instead of computing new voffset
-      // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
-      // instruction Combine the base instOffset (from affine constant addends)
-      // with currentOffset (for split loads)
-      int64_t totalOffset = instOffset + currentOffset;
-      Operation *loadInstr;
-      if (loadBytes == 1) {
-        // Use buffer_load_ubyte for 1-byte loads. buffer_load_dword would
-        // read 4 bytes and fail SRD bounds checking when the byte is at the
-        // end of a buffer (e.g. last scale byte in MXFP4).
-        loadInstr =
-            BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{loadVregType},
-                                      srd, voffset, zeroConst, totalOffset);
-      } else if (loadBytes == 2) {
-        loadInstr =
-            BUFFER_LOAD_USHORT::create(builder, loc, TypeRange{loadVregType},
-                                       srd, voffset, zeroConst, totalOffset);
-      } else if (loadDwords == 4) {
-        loadInstr =
-            BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{loadVregType},
-                                        srd, voffset, zeroConst, totalOffset);
-      } else if (loadDwords == 2) {
-        loadInstr =
-            BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{loadVregType},
-                                        srd, voffset, zeroConst, totalOffset);
-      } else {
-        loadInstr =
-            BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{loadVregType},
-                                      srd, voffset, zeroConst, totalOffset);
-      }
-
-      loadResults.push_back(loadInstr->getResult(0));
-      bytesRemaining -= loadBytes;
-      currentOffset += loadBytes;
-    }
-
-    // Map the first result to the vector.load result
-    // For composite results, also register all split results for use in stores
     if (!loadResults.empty()) {
       ctx.getMapper().mapValue(loadOp.getResult(), loadResults[0]);
-
-      // Register all split results for later use in vector.store
       if (loadResults.size() > 1) {
         ctx.registerSplitResults(loadOp.getResult(), loadResults);
       }
@@ -961,6 +938,110 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
   }
 
   return success();
+}
+
+/// Handle vector.maskedload - emit buffer_load unconditionally.
+///
+/// NOTE: The mask and passthrough operands are intentionally ignored.
+/// In the split-K GEMM context, masked loads are generated with all-true
+/// masks (the SRD is configured with correct buffer bounds, so out-of-bounds
+/// lanes return zero via hardware). If this assumption is violated, the
+/// loaded values for masked-off lanes will be incorrect.
+LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
+  auto maskedLoadOp = cast<vector::MaskedLoadOp>(op);
+  auto loc = op->getLoc();
+
+  auto memrefType = cast<MemRefType>(maskedLoadOp.getBase().getType());
+  auto vectorType = maskedLoadOp.getVectorType();
+  int64_t numBytes = getVectorBytes(vectorType);
+
+  if (numBytes <= 0) {
+    return op->emitError(
+        "vector.maskedload with zero-size vector type is invalid");
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "vector.maskedload: mask and passthrough "
+                             "operands are ignored (assuming all-true mask)\n");
+
+  auto [voffset, instOffset] = computeVOffsetFromIndices(
+      memrefType, maskedLoadOp.getIndices(), ctx, loc);
+  Value srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
+  auto loadResults =
+      emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
+
+  if (!loadResults.empty()) {
+    ctx.getMapper().mapValue(maskedLoadOp.getResult(), loadResults[0]);
+    if (loadResults.size() > 1) {
+      ctx.registerSplitResults(maskedLoadOp.getResult(), loadResults);
+    }
+  }
+
+  return success();
+}
+
+/// Convert f32 data to packed bf16 for store operations.
+/// Returns the converted data value and updates numBytes to reflect the
+/// packed bf16 size. For a single element, emits v_cvt_bf16_f32.
+/// For multiple elements, pairs adjacent f32 values and emits
+/// v_cvt_pk_bf16_f32 for each pair.
+static std::pair<Value, int64_t>
+convertF32ToBF16ForStore(Value srcData, int64_t numElems,
+                         TranslationContext &ctx, OpBuilder &builder,
+                         Location loc) {
+  Type srcType = srcData.getType();
+
+  auto extractF32Elem = [&](int64_t i) -> Value {
+    if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
+      int64_t baseIdx = pvreg.getIndex() + i;
+      auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
+      return PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
+    }
+    auto elemType = ctx.createVRegType(1, 1);
+    return ExtractOp::create(builder, loc, elemType, srcData,
+                             builder.getI64IntegerAttr(i));
+  };
+
+  if (numElems == 1) {
+    auto vregType = ctx.createVRegType();
+    Value converted =
+        V_CVT_BF16_F32::create(builder, loc, vregType, extractF32Elem(0));
+    return {converted, 2};
+  }
+
+  SmallVector<Value> packedVals;
+  for (int64_t i = 0; i < numElems; i += 2) {
+    Value elemI = extractF32Elem(i);
+    Value elemJ;
+    if (i + 1 < numElems) {
+      elemJ = extractF32Elem(i + 1);
+    } else {
+      auto immZero = ctx.createImmType(0);
+      elemJ = ConstantOp::create(builder, loc, immZero, 0);
+    }
+    auto vregType = ctx.createVRegType();
+    packedVals.push_back(
+        V_CVT_PK_BF16_F32::create(builder, loc, vregType, elemI, elemJ));
+  }
+
+  Value result;
+  if (packedVals.size() == 1) {
+    result = packedVals[0];
+  } else {
+    auto packedType = ctx.createVRegType(packedVals.size(), 1);
+    result = PackOp::create(builder, loc, packedType, packedVals);
+  }
+  int64_t newNumBytes = static_cast<int64_t>(packedVals.size()) * 4;
+
+  // For odd element counts, the last packed dword contains a trailing zero
+  // bf16 in the upper half. The caller's store loop handles subdword stores
+  // so this won't corrupt adjacent memory as long as numBytes is set to the
+  // exact bf16 byte count.
+  int64_t exactBF16Bytes = numElems * 2;
+  if (exactBF16Bytes < newNumBytes) {
+    newNumBytes = exactBF16Bytes;
+  }
+
+  return {result, newNumBytes};
 }
 
 /// Handle vector.store - emit buffer_store or ds_write
@@ -1204,6 +1285,16 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // Check if the source value has split results from a corresponding load
     auto splitResults = ctx.getSplitResults(storeOp.getValueToStore());
 
+    // BF16 store conversion: the arith.truncf handler defers vector f32->bf16
+    // conversion, so data registers may still contain f32 values.
+    if (elementType.isBF16() && data.has_value()) {
+      int64_t numElems = vectorType.getNumElements();
+      auto [converted, newNumBytes] =
+          convertF32ToBF16ForStore(*data, numElems, ctx, builder, loc);
+      data = converted;
+      numBytes = newNumBytes;
+    }
+
     // Split large stores into multiple buffer_store_dwordx4 (16 bytes each)
     // Use the same voffset for all stores, with instOffset for subsequent
     // chunks Add any constant offset from affine expressions to the base offset
@@ -1214,17 +1305,17 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
 
     while (bytesRemaining > 0) {
       int64_t storeBytes;
-      int64_t storeDwords;
 
       if (bytesRemaining >= 16) {
         storeBytes = 16;
-        storeDwords = 4;
       } else if (bytesRemaining >= 8) {
         storeBytes = 8;
-        storeDwords = 2;
-      } else {
+      } else if (bytesRemaining >= 4) {
         storeBytes = 4;
-        storeDwords = 1;
+      } else if (bytesRemaining >= 2) {
+        storeBytes = 2;
+      } else {
+        storeBytes = 1;
       }
 
       // Use the correct split result if available, otherwise use mapped data
@@ -1237,6 +1328,7 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       // move it to a VGPR before storing. MUBUF store instructions require
       // VGPR sources. Emit v_accvgpr_read_b32 to a temporary VGPR.
       if (isAGPRType(storeData.getType())) {
+        int64_t storeDwords = (storeBytes + 3) / 4;
         auto vregType =
             ctx.createVRegType(storeDwords, storeDwords > 1 ? storeDwords : 1);
         storeData =
@@ -1246,15 +1338,21 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       // Use instOffset attribute instead of computing new voffset
       // This generates "offset:N" modifier in assembly, saving a V_ADD_U32
       // instruction
-      if (storeDwords == 4) {
+      if (storeBytes >= 16) {
         BUFFER_STORE_DWORDX4::create(builder, loc, storeData, srd, voffset,
                                      currentOffset);
-      } else if (storeDwords == 2) {
+      } else if (storeBytes >= 8) {
         BUFFER_STORE_DWORDX2::create(builder, loc, storeData, srd, voffset,
                                      currentOffset);
-      } else {
+      } else if (storeBytes >= 4) {
         BUFFER_STORE_DWORD::create(builder, loc, storeData, srd, voffset,
                                    currentOffset);
+      } else if (storeBytes == 2) {
+        BUFFER_STORE_SHORT::create(builder, loc, storeData, srd, voffset,
+                                   currentOffset);
+      } else {
+        BUFFER_STORE_BYTE::create(builder, loc, storeData, srd, voffset,
+                                  currentOffset);
       }
 
       bytesRemaining -= storeBytes;
@@ -1311,6 +1409,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleRawBufferStore(Operation *op, TranslationContext &ctx);
+LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx);
 LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
@@ -1420,6 +1519,10 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::ExtUIOp, handleArithExtUI);
   REGISTER_HANDLER(arith::ExtSIOp, handleArithExtSI);
   REGISTER_HANDLER(arith::TruncIOp, handleArithTruncI);
+  REGISTER_HANDLER(arith::MinSIOp, handleArithMinSI);
+  REGISTER_HANDLER(arith::MaxSIOp, handleArithMaxSI);
+  REGISTER_HANDLER(arith::MinUIOp, handleArithMinUI);
+  REGISTER_HANDLER(arith::MaxUIOp, handleArithMaxUI);
 
   // Arith dialect - comparison and select
   REGISTER_HANDLER(arith::CmpIOp, handleArithCmpI);
@@ -1432,6 +1535,8 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::DivFOp, handleArithDivF);
   REGISTER_HANDLER(arith::NegFOp, handleArithNegF);
   REGISTER_HANDLER(arith::CmpFOp, handleArithCmpF);
+  REGISTER_HANDLER(arith::TruncFOp, handleArithTruncF);
+  REGISTER_HANDLER(arith::ExtFOp, handleArithExtF);
 
   // Math dialect
   REGISTER_HANDLER(math::FmaOp, handleMathFma);
@@ -1441,6 +1546,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
 
   // Vector dialect
   REGISTER_HANDLER(vector::LoadOp, handleVectorLoad);
+  REGISTER_HANDLER(vector::MaskedLoadOp, handleVectorMaskedLoad);
   REGISTER_HANDLER(vector::StoreOp, handleVectorStore);
   REGISTER_HANDLER(vector::ExtractStridedSliceOp,
                    handleVectorExtractStridedSlice);
@@ -1463,6 +1569,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(amdgpu::GatherToLDSOp, handleGatherToLds);
   REGISTER_HANDLER(amdgpu::RawBufferLoadOp, handleRawBufferLoad);
   REGISTER_HANDLER(amdgpu::RawBufferStoreOp, handleRawBufferStore);
+  REGISTER_HANDLER(memref::AtomicRMWOp, handleMemRefAtomicRMW);
 
   // ROCDL dialect
   REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);

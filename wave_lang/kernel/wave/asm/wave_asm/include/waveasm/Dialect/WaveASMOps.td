@@ -424,6 +424,7 @@ def WaveASM_V_CVT_F32_F64 : VALUUnaryOp<"v_cvt_f32_f64">;
 def WaveASM_V_CVT_F64_F32 : VALUUnaryOp<"v_cvt_f64_f32">;
 def WaveASM_V_CVT_F32_BF16 : VALUUnaryOp<"v_cvt_f32_bf16">;
 def WaveASM_V_CVT_BF16_F32 : VALUUnaryOp<"v_cvt_bf16_f32">;
+def WaveASM_V_CVT_PK_BF16_F32 : VALUBinaryOp<"v_cvt_pk_bf16_f32">;
 
 // Transcendentals
 def WaveASM_V_RCP_F32 : VALUUnaryOp<"v_rcp_f32">;
@@ -889,6 +890,25 @@ def WaveASM_S_MOV_B32_M0 : WAVEASMOp<"s_mov_b32_m0", [WaveASM_SpecialRegOp]> {
   let arguments = (ins WaveASM_SRegOrImm:$src);
   let assemblyFormat = "$src attr-dict `:` type($src)";
 }
+
+//===----------------------------------------------------------------------===//
+// VMEM Atomic Instructions
+//===----------------------------------------------------------------------===//
+
+// Buffer atomic: atomically add packed bf16 values to memory.
+// vdata contains 2 packed bf16 values in a 32-bit VGPR.
+// The instruction atomically adds both bf16 values to the corresponding
+// bf16 halves at the 32-bit aligned memory address.
+class VMEMAtomicOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+  let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
+                       DefaultValuedAttr<I64Attr, "0">:$instOffset);
+  let assemblyFormat = "$data `,` $saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($data) `,` type($saddr) `,` type($voffset)";
+  let hasVerifier = 1;
+}
+
+def WaveASM_BUFFER_ATOMIC_PK_ADD_BF16 : VMEMAtomicOp<"buffer_atomic_pk_add_bf16">;
+def WaveASM_BUFFER_ATOMIC_ADD_F32 : VMEMAtomicOp<"buffer_atomic_add_f32">;
 
 //===----------------------------------------------------------------------===//
 // VMEM Store Instructions
