@@ -45,7 +45,6 @@
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
@@ -295,7 +294,7 @@ static void applyLoopAddressPromotion(LoopOp loopOp) {
 }
 
 struct LoopAddressPromotionPass
-    : public PassWrapper<LoopAddressPromotionPass, OperationPass<ModuleOp>> {
+    : public PassWrapper<LoopAddressPromotionPass, OperationPass<>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LoopAddressPromotionPass)
 
   StringRef getArgument() const override {
@@ -307,8 +306,8 @@ struct LoopAddressPromotionPass
   }
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    module.walk([](LoopOp loopOp) { applyLoopAddressPromotion(loopOp); });
+    getOperation()->walk(
+        [](LoopOp loopOp) { applyLoopAddressPromotion(loopOp); });
   }
 };
 
