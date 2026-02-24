@@ -133,7 +133,7 @@ static std::optional<PackChain> findPackChain(V_LSHL_OR_B32 outerOp,
     return std::nullopt;
 
   // All 4 bytes must be distinct block arguments.
-  llvm::DenseSet<unsigned> indices;
+  llvm::SmallDenseSet<unsigned, 4> indices;
   indices.insert(byte0.getArgNumber());
   indices.insert(byte1.getArgNumber());
   indices.insert(byte2.getArgNumber());
@@ -188,7 +188,7 @@ static std::optional<Value> verifyBFEGroup(llvm::ArrayRef<unsigned> argIndices,
 /// Check that the byte block arguments have no uses other than the pack
 /// chain ops. This ensures removing them is safe.
 static bool byteArgsOnlyUsedByPackChain(PackChain &chain, Block &body) {
-  llvm::DenseSet<Operation *> packOps;
+  llvm::SmallDenseSet<Operation *, 4> packOps;
   packOps.insert(chain.innerOp.getOperation());
   packOps.insert(chain.middleOp.getOperation());
   packOps.insert(chain.outerOp.getOperation());
@@ -252,13 +252,13 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   LDBG() << "found " << chains.size() << " pack chains to eliminate";
 
   // Step 5: Collect indices of byte args to remove (sorted descending).
-  llvm::DenseSet<unsigned> removedArgIndices;
+  llvm::SmallDenseSet<unsigned, 8> removedArgIndices;
   for (auto &chain : chains)
     for (unsigned i : llvm::seq(4u))
       removedArgIndices.insert(chain.byteArgIdx[i]);
 
   // Collect operations to skip during cloning (pack chain ops + dead BFEs).
-  llvm::DenseSet<Operation *> opsToSkip;
+  llvm::SmallDenseSet<Operation *, 8> opsToSkip;
   for (auto &chain : chains) {
     opsToSkip.insert(chain.innerOp.getOperation());
     opsToSkip.insert(chain.middleOp.getOperation());
