@@ -615,6 +615,8 @@ def compile_cpp_backend(
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
             "--waveasm-scale-pack-elimination",
+            "--waveasm-licm",
+            "--waveasm-m0-redundancy-elim",
             "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-loop-address-promotion",

@@ -7,10 +7,10 @@
 //===----------------------------------------------------------------------===//
 // Peephole Optimization Pass
 //
-// This pass implements peephole optimizations for WAVEASM IR:
-// 1. Instruction fusion: lshl + add -> v_mad_u32_u24
-// 2. Dead code elimination
-// 3. Redundant move elimination
+// This pass implements local pattern-based peephole optimizations for WAVEASM
+// IR: instruction fusion, strength reduction, constant folding, and redundant
+// move elimination.  Region-level optimizations (LICM, M0 redundancy) live in
+// their own passes.
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
@@ -20,7 +20,6 @@
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -1039,8 +1038,7 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
 // Peephole Optimization Pass
 //===----------------------------------------------------------------------===//
 
-struct PeepholePass
-    : public PassWrapper<PeepholePass, OperationPass<ModuleOp>> {
+struct PeepholePass : public PassWrapper<PeepholePass, OperationPass<>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PeepholePass)
 
   PeepholePass() = default;
@@ -1052,12 +1050,12 @@ struct PeepholePass
   }
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    MLIRContext *ctx = module.getContext();
+    Operation *op = getOperation();
+    MLIRContext *ctx = op->getContext();
 
     RewritePatternSet patterns(ctx);
 
-    // Add all peephole patterns
+    // Add all peephole patterns.
     patterns.add<
         // clang-format off
         AddNegToSubPattern,
@@ -1082,91 +1080,11 @@ struct PeepholePass
         // clang-format on
         >(ctx);
 
-    // Apply patterns greedily
-    if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
+    // Apply patterns greedily.
+    if (failed(applyPatternsGreedily(op, std::move(patterns)))) {
       signalPassFailure();
       return;
     }
-
-    // Loop-invariant code motion (LICM): hoist VALU instructions whose
-    // operands all dominate the loop out of LoopOp bodies.  This matches
-    // the aiter pattern where all LDS address computation is in the
-    // prologue and zero VALU appears in the hot loop.
-    // Post-order: process inner loops first so ops hoisted from inner to
-    // outer loop bodies get a second chance to be hoisted further out.
-    module.walk<WalkOrder::PostOrder>([](LoopOp loopOp) {
-      Block &body = loopOp.getBodyBlock();
-      Region *loopRegion = &loopOp.getBodyRegion();
-
-      // Check if a value dominates the loop (defined outside the region).
-      auto dominatesLoop = [&](Value val) -> bool {
-        if (auto *defOp = val.getDefiningOp())
-          return defOp->getParentRegion() != loopRegion;
-        // Block arguments of the loop body do NOT dominate (they're
-        // loop-carried values that change each iteration).
-        if (auto blockArg = dyn_cast<BlockArgument>(val))
-          return blockArg.getOwner()->getParentOp() != loopOp.getOperation();
-        return false;
-      };
-
-      // Check if an op is a VALU (address computation) that's safe to hoist.
-      auto isHoistableVALU = [](Operation *op) -> bool {
-        return isa<V_LSHLREV_B32, V_ADD_U32, V_MUL_LO_U32, V_AND_B32, V_OR_B32,
-                   V_LSHL_ADD_U32, V_LSHRREV_B32>(op);
-      };
-
-      // Iteratively collect and hoist: after hoisting a batch, new ops
-      // may become hoistable (their producer was just hoisted).
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        SmallVector<Operation *> toHoist;
-        for (Operation &op : body) {
-          if (!isHoistableVALU(&op))
-            continue;
-          bool allDominate = llvm::all_of(
-              op.getOperands(), [&](Value v) { return dominatesLoop(v); });
-          if (allDominate)
-            toHoist.push_back(&op);
-        }
-        for (Operation *op : toHoist) {
-          op->moveBefore(loopOp);
-          changed = true;
-        }
-      }
-    });
-
-    // After LICM and pattern-based optimizations, eliminate redundant M0
-    // writes.  Track the last M0 source value and skip writes that set M0
-    // to the same value.  This requires sequential analysis, not a rewrite
-    // pattern.
-    module.walk([](ProgramOp program) {
-      program.walk([](Block *block) {
-        Value lastM0Source;
-        SmallVector<Operation *, 8> toErase;
-
-        for (Operation &op : *block) {
-          auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
-          if (!m0Op)
-            continue;
-
-          if (m0Op->getNumOperands() < 1)
-            continue;
-
-          Value src = m0Op->getOperand(0);
-
-          // If M0 already holds this value, the write is redundant
-          if (src == lastM0Source) {
-            toErase.push_back(m0Op);
-          } else {
-            lastM0Source = src;
-          }
-        }
-
-        for (auto *op : toErase)
-          op->erase();
-      });
-    });
   }
 };
 

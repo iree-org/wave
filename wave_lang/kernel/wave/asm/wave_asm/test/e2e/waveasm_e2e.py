@@ -197,6 +197,8 @@ class WaveASMCompiler:
             "--waveasm-scoped-cse",  # Run CSE
             "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
             "--waveasm-scale-pack-elimination",
+            "--waveasm-licm",  # Hoist loop-invariant VALU address ops
+            "--waveasm-m0-redundancy-elim",  # Eliminate redundant M0 writes
             "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-loop-address-promotion",

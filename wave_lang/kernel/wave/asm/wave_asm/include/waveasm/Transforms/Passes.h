@@ -51,8 +51,14 @@ createWAVEASMTranslateFromMLIRPass(llvm::StringRef targetId);
 /// Create the scoped CSE pass
 std::unique_ptr<mlir::Pass> createWAVEASMScopedCSEPass();
 
-/// Create the peephole optimization pass
+/// Create the peephole optimization pass.
 std::unique_ptr<mlir::Pass> createWAVEASMPeepholePass();
+
+/// Create the LICM pass (hoist VALU address ops out of loops).
+std::unique_ptr<mlir::Pass> createWAVEASMLICMPass();
+
+/// Create the M0 redundancy elimination pass.
+std::unique_ptr<mlir::Pass> createWAVEASMM0RedundancyElimPass();
 
 /// Create the buffer load strength reduction pass.
 std::unique_ptr<mlir::Pass> createWAVEASMBufferLoadStrengthReductionPass();

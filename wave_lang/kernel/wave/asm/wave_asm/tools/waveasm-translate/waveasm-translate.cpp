@@ -89,6 +89,16 @@ static llvm::cl::opt<bool>
                 llvm::cl::desc("Run peephole optimizations"),
                 llvm::cl::init(false));
 
+static llvm::cl::opt<bool>
+    runLICM("waveasm-licm",
+            llvm::cl::desc("Hoist loop-invariant VALU address ops"),
+            llvm::cl::init(false));
+
+static llvm::cl::opt<bool> runM0RedundancyElim(
+    "waveasm-m0-redundancy-elim",
+    llvm::cl::desc("Eliminate redundant M0 register writes"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool> runMemoryOffsetOpt(
     "waveasm-memory-offset-opt",
     llvm::cl::desc("Fold constant address components into memory instruction "
@@ -253,6 +263,16 @@ int main(int argc, char **argv) {
   // loop address promotion (which modifies loop structure).
   if (runScalePackElimination) {
     pm.addPass(waveasm::createWAVEASMScalePackEliminationPass());
+  }
+
+  // LICM after peephole so fused ops (e.g. v_lshl_add_u32) get hoisted.
+  if (runLICM) {
+    pm.addPass(mlir::createLoopInvariantCodeMotionPass());
+  }
+
+  // M0 redundancy elimination after LICM so hoisted M0 writes get cleaned up.
+  if (runM0RedundancyElim) {
+    pm.addPass(waveasm::createWAVEASMM0RedundancyElim());
   }
 
   // Strength-reduce buffer_load address computation in loops: precompute
