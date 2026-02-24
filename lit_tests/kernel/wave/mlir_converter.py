@@ -1362,44 +1362,58 @@ def mlir_converter_permute():
     # CHECK-SAME: !wave.tensor<[@N, @M] of f16, <register>>, !wave.tensor<[@N, @M] of f16, <global>>
 
 
-@wave.wave(constraints)
-def read_with_mapping_kernel(
-    a: Memory[M, N, K, ADDRESS_SPACE_A, tkl.f16],
-    b: Memory[N, K, M, ADDRESS_SPACE_C, tkl.f16],
-):
-    # Create a cyclic permutation mapping for read: (d0, d1, d2) -> (d1, d2, d0)
-    # Memory has shape [M, N, K], register will have shape [N, K, M]
-    # This is a non-self-inverse permutation (requires 3 applications to return to identity)
-    # inputs = memory dimensions, outputs = register dimensions
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    k = tkw.IndexMapping.iterator(2)
-    cyclic_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={
-            M: k,
-            N: i,
-            K: j,
-        },  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
-        outputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
-    )
-
-    # Read with cyclic permutation mapping
-    a_reg = wave.read(a, mapping=cyclic_mapping)
-    # Write to permuted memory
-    wave.write(a_reg, b)
-
-
 @run_test
 def mlir_converter_read_with_mapping():
     """Test MLIR converter with read operation using cyclic permutation mapping."""
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 64, N: 64, K: 32},
+        ),
+    ]
+
+    @wave.wave(constraints)
+    def read_with_mapping_kernel(
+        a: Memory[M, N, K, ADDRESS_SPACE_A, tkl.f16],
+        b: Memory[N, K, M, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        # Create a cyclic permutation mapping for read: (d0, d1, d2) -> (d1, d2, d0)
+        # Memory has shape [M, N, K], register will have shape [N, K, M]
+        # This is a non-self-inverse permutation (requires 3 applications to return to identity)
+        # inputs = memory dimensions, outputs = register dimensions
+        i = tkw.IndexMapping.iterator(0)
+        j = tkw.IndexMapping.iterator(1)
+        k = tkw.IndexMapping.iterator(2)
+        cyclic_mapping = tkw.IndexMapping(
+            num_iterators=3,
+            inputs={
+                M: k,
+                N: i,
+                K: j,
+            },  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
+            outputs={
+                N: i,
+                K: j,
+                M: k,
+            },  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
+        )
+
+        # Read with cyclic permutation mapping
+        a_reg = wave.read(a, mapping=cyclic_mapping)
+        # Write to permuted memory
+        wave.write(a_reg, b)
+
     # Set parameters for compilation
     subs = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
-        BLOCK_K: 64,
         M: 128,
         N: 128,
         K: 128,
@@ -1439,47 +1453,61 @@ def mlir_converter_read_with_mapping():
     # CHECK-SAME: (!wave.tensor<[@M, @N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K, @M] of f16, <register>>
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
-    # CHECK-SAME: (!wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@N, @K, @M] of f16, <global>>)
-
-
-@wave.wave(constraints)
-def write_with_mapping_kernel(
-    a: Memory[N, K, M, ADDRESS_SPACE_A, tkl.f16],
-    b: Memory[M, N, K, ADDRESS_SPACE_C, tkl.f16],
-):
-    # Create a cyclic permutation mapping for write: (d0, d1, d2) -> (d1, d2, d0)
-    # Register has shape [N, K, M], memory has shape [M, N, K]
-    # This is a non-self-inverse permutation (requires 3 applications to return to identity)
-    # inputs = register dimensions, outputs = memory dimensions
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    k = tkw.IndexMapping.iterator(2)
-    cyclic_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={N: i, K: j, M: k},  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
-        outputs={
-            M: k,
-            N: i,
-            K: j,
-        },  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
-    )
-
-    # Read from memory (no mapping)
-    a_reg = wave.read(a)
-    # Write with cyclic permutation mapping
-    wave.write(a_reg, b, mapping=cyclic_mapping)
+    # CHECK-SAME: !wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@N, @K, @M] of f16, <global>>
 
 
 @run_test
 def mlir_converter_write_with_mapping():
     """Test MLIR converter with write operation using cyclic permutation mapping."""
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 64, N: 64, K: 32},
+        ),
+    ]
+
+    @wave.wave(constraints)
+    def write_with_mapping_kernel(
+        a: Memory[N, K, M, ADDRESS_SPACE_A, tkl.f16],
+        b: Memory[M, N, K, ADDRESS_SPACE_C, tkl.f16],
+    ):
+        # Create a cyclic permutation mapping for write: (d0, d1, d2) -> (d1, d2, d0)
+        # Register has shape [N, K, M], memory has shape [M, N, K]
+        # This is a non-self-inverse permutation (requires 3 applications to return to identity)
+        # inputs = register dimensions, outputs = memory dimensions
+        i = tkw.IndexMapping.iterator(0)
+        j = tkw.IndexMapping.iterator(1)
+        k = tkw.IndexMapping.iterator(2)
+        cyclic_mapping = tkw.IndexMapping(
+            num_iterators=3,
+            inputs={
+                N: i,
+                K: j,
+                M: k,
+            },  # Register[N,K,M]: N→iter(0), K→iter(1), M→iter(2)
+            outputs={
+                M: k,
+                N: i,
+                K: j,
+            },  # Memory[M,N,K]: permutation maps (d0,d1,d2) -> (d1,d2,d0)
+        )
+
+        # Read from memory (no mapping)
+        a_reg = wave.read(a)
+        # Write with cyclic permutation mapping
+        wave.write(a_reg, b, mapping=cyclic_mapping)
+
     # Set parameters for compilation
     subs = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
-        BLOCK_K: 64,
         M: 128,
         N: 128,
         K: 128,
@@ -1519,4 +1547,4 @@ def mlir_converter_write_with_mapping():
 
     # CHECK: wave.write %[[READ]], %[[ARG1]]
     # CHECK-SAME: mapping = #wave.expr_list<[](d0, d1, d2) -> (d1, d2, d0)>
-    # CHECK-SAME: (!wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@M, @N, @K] of f16, <global>>)
+    # CHECK-SAME: !wave.tensor<[@N, @K, @M] of f16, <register>>, !wave.tensor<[@M, @N, @K] of f16, <global>>

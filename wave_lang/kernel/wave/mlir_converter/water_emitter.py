@@ -532,7 +532,9 @@ def _convert_index_mapping_to_water(
 
     # Consecutive iterators are assigned to the value (non-memory)
     # shape, and their order may be different in the memory shape.
-    # The mapping is therefore (d0, d1, d2, ...) -> (iterator positions).
+    # The mapping is therefore (d0, d1, d2, ...) -> (iterator positions)
+    # inverted because, in water, the mapping goes the from memory shape
+    # to the value shape.
     #
     # Construct a list of iterators in order and look up for
     # position in that list to find numeric permutation indices
@@ -542,7 +544,10 @@ def _convert_index_mapping_to_water(
     # access property...
     ordered_iterators = [IndexMapping.iterator(i) for i in range(len(iterators))]
     permutation = [ordered_iterators.index(iter) for iter in iterators]
-    return wave.WaveExprListAttr.get([], ir.AffineMap.get_permutation(permutation))
+    inverse_permutation = [permutation.index(i) for i in range(len(permutation))]
+    return wave.WaveExprListAttr.get(
+        [], ir.AffineMap.get_permutation(inverse_permutation)
+    )
 
 
 def _emit_ops_from_graph(
