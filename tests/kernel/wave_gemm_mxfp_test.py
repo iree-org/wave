@@ -751,10 +751,11 @@ def testScaledGemmMXFP4PreshuffleB(
 
     w_t = w.T.contiguous()
     w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
     w_scales_ps = e8m0_shuffle(w_scales)
 
     out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
-    gemm(x, x_scales, w_t_ps, w_scales_ps, out)
+    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 
