@@ -57,6 +57,9 @@ std::unique_ptr<mlir::Pass> createWAVEASMPeepholePass();
 /// Create the buffer load strength reduction pass.
 std::unique_ptr<mlir::Pass> createWAVEASMBufferLoadStrengthReductionPass();
 
+/// Create the loop address promotion pass.
+std::unique_ptr<mlir::Pass> createWAVEASMLoopAddressPromotionPass();
+
 /// Create the memory offset optimization pass
 std::unique_ptr<mlir::Pass> createWAVEASMMemoryOffsetOptPass();
 
