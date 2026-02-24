@@ -32,7 +32,7 @@ waveasm.program @basic_strength_reduction
 
   // The new loop should have an extra iter_arg for soffset.
   // CHECK: waveasm.loop
-  // CHECK-SAME: !waveasm.sreg
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
@@ -40,10 +40,10 @@ waveasm.program @basic_strength_reduction
     %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
     %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
 
-    // After strength reduction, this buffer_load should use a precomputed
-    // voffset (defined before the loop) and an soffset iter_arg (not imm<0>).
-    // CHECK: waveasm.buffer_load_dword
-    // CHECK-NOT: !waveasm.imm<0> ->
+    // Soffset is a loop-carried sreg, bumped each iteration, fed back via condition.
+    // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+    // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+    // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_SOFF]]) :
     %val = waveasm.buffer_load_dword %srd, %voff, %soff0
         : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
 
@@ -119,10 +119,14 @@ waveasm.program @two_srd_groups
   %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
   %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
 
-  // Two SRD groups -> 2 extra soffset iter_args.
-  // Original: 2 iter_args (iv, acc). After: 4 (iv, acc, soff_a, soff_b).
+  // Two SRD groups -> 2 extra soffset iter_args, independently carried.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF_A:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF_B:%[a-z0-9]+]] : !waveasm.psreg<4, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_A:%[0-9]+]] = waveasm.s_add_u32 [[SOFF_A]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_B:%[0-9]+]] = waveasm.s_add_u32 [[SOFF_B]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_A]], [[NEXT_B]]) :
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
@@ -168,12 +172,13 @@ waveasm.program @shared_srd_group
   %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
 
   // One SRD group (same stride=16) -> 1 extra soffset iter_arg.
-  // Original: 2 iter_args. After: 3 (iv, acc, soff).
-  // Both buffer_loads must use the same soffset (3rd block arg).
+  // Both loads share the same loop-carried soffset.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
-  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]]
-  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF]]
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_SOFF]]) :
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
@@ -232,12 +237,10 @@ waveasm.program @soffset_increment
 
     %new_acc = waveasm.v_add_u32 %acc, %val : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
 
-    // After transformation, the original v_mov_b32/v_add_u32/v_lshlrev_b32
-    // VALU chain should still be cloned (dead code), but there should be an
-    // s_add_u32 for soffset bumping inside the loop.
-    // CHECK: waveasm.s_add_u32
-    // CHECK: waveasm.s_add_u32
-    // CHECK: waveasm.condition
+    // Trace the loop-carried soffset: load uses it, s_add bumps it, condition feeds it back.
+    // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+    // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+    // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_SOFF]]) :
     %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
     %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %new_acc) : !waveasm.sreg, !waveasm.vreg
@@ -268,8 +271,11 @@ waveasm.program @stride_precompute
 
   // Before the loop: stride=16 materialized as constant + s_mov_b32.
   // CHECK: waveasm.constant 16
-  // CHECK: waveasm.s_mov_b32
+  // CHECK: [[STRIDE:%[0-9]+]] = waveasm.s_mov_b32 {{.*}} : !waveasm.imm<16> -> !waveasm.sreg
   // CHECK: waveasm.loop
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], [[STRIDE]] : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, [[NEXT_SOFF]]) :
   %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
 
     %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
@@ -371,13 +377,14 @@ waveasm.program @multi_dword_load
   // Should add 1 soffset iter_arg (3 total).
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dwordx4 {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_SOFF]]) :
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
     %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
     %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
-
-    // CHECK: waveasm.buffer_load_dwordx4
     %v0, %v1, %v2, %v3 = waveasm.buffer_load_dwordx4 %srd, %voff, %soff0
         : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0>
         -> !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
@@ -415,14 +422,13 @@ waveasm.program @nonzero_inst_offset
   // Should still transform — instOffset is independent of soffset.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] offset : 2048 : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, [[NEXT_SOFF]]) :
   %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
 
     %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
     %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
-
-    // instOffset:2048 must be preserved after transformation.
-    // CHECK: waveasm.buffer_load_dword
-    // CHECK-SAME: offset : 2048
     %val = waveasm.buffer_load_dword %srd, %voff, %soff0 offset : 2048
         : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
 
@@ -456,10 +462,14 @@ waveasm.program @different_strides_same_srd
   %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
   %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
 
-  // Same SRD, different strides -> 2 soffset iter_args.
-  // Original: 2 iter_args (iv, acc). After: 4 (iv, acc, soff_a, soff_b).
+  // Same SRD, different strides -> 2 independent loop-carried soffsets.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF_A:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF_B:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_A:%[0-9]+]] = waveasm.s_add_u32 [[SOFF_A]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_B:%[0-9]+]] = waveasm.s_add_u32 [[SOFF_B]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_A]], [[NEXT_B]]) :
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
@@ -509,6 +519,11 @@ waveasm.program @lds_load_strength_reduction
   // New loop should have an extra iter_arg for soffset.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.sreg) {
+  // m0 write preserved, soffset is loop-carried sreg.
+  // CHECK: waveasm.s_mov_b32_m0
+  // CHECK: waveasm.buffer_load_dwordx4_lds {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.sreg
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, [[NEXT_SOFF]]) :
   %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
 
     %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
@@ -517,10 +532,6 @@ waveasm.program @lds_load_strength_reduction
     // s_mov_b32_m0 sets LDS offset — should be preserved untouched.
     %m0_val = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
     waveasm.s_mov_b32_m0 %m0_val : !waveasm.sreg
-
-    // After strength reduction, the LDS load soffset should be an iter_arg.
-    // CHECK: waveasm.buffer_load_dwordx4_lds
-    // CHECK-NOT: !waveasm.imm<0>
     waveasm.buffer_load_dwordx4_lds %voff, %srd, %soff0
         : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
 
@@ -556,7 +567,8 @@ waveasm.program @lds_load_no_transform
   // CHECK-SAME: -> !waveasm.sreg {
   %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
 
-    // voffset is just %tid — no IV dependency.
+    // voffset is just %tid — no IV dependency. Soffset stays imm<0>.
+    // CHECK: waveasm.buffer_load_dword_lds {{.*}}, {{.*}}, {{.*}} : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.imm<0>
     waveasm.buffer_load_dword_lds %tid, %srd, %soff0
         : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.imm<0>
 
