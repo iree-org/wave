@@ -49,6 +49,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
@@ -108,8 +109,8 @@ findRotationGroups(Block &body, ValueRange condIterArgs) {
   unsigned numArgs = blockArgs.size();
 
   SmallVector<int> sigma(numArgs, -1);
-  for (unsigned i = 0; i < numArgs; ++i) {
-    for (unsigned j = 0; j < numArgs; ++j) {
+  for (unsigned i : llvm::seq(numArgs)) {
+    for (unsigned j : llvm::seq(numArgs)) {
       if (condIterArgs[i] == blockArgs[j]) {
         sigma[i] = j;
         break;
@@ -119,7 +120,7 @@ findRotationGroups(Block &body, ValueRange condIterArgs) {
 
   llvm::DenseSet<unsigned> visited;
   SmallVector<SmallVector<unsigned>> rotationGroups;
-  for (unsigned i = 0; i < numArgs; ++i) {
+  for (unsigned i : llvm::seq(numArgs)) {
     if (visited.count(i) || sigma[i] < 0)
       continue;
     if (!isSGPRType(blockArgs[i].getType()))
@@ -160,12 +161,9 @@ analyzeLoopAddressPromotion(LoopOp loopOp) {
 
   SmallVector<std::pair<int, int>> argToGroupAndPos(numArgs,
                                                     std::make_pair(-1, -1));
-  for (unsigned gi = 0; gi < rotationGroups.size(); ++gi) {
-    for (unsigned pi = 0; pi < rotationGroups[gi].size(); ++pi) {
-      unsigned argIdx = rotationGroups[gi][pi];
+  for (auto [gi, grp] : llvm::enumerate(rotationGroups))
+    for (auto [pi, argIdx] : llvm::enumerate(grp))
       argToGroupAndPos[argIdx] = {static_cast<int>(gi), static_cast<int>(pi)};
-    }
-  }
 
   Region *loopRegion = &loopOp.getBodyRegion();
   SmallVector<PromotableAddressAdd> promotableAdds;
@@ -236,7 +234,7 @@ static void applyLoopAddressPromotion(LoopOp loopOp) {
     auto &grp = plan.rotationGroups[pa.groupIdx];
     SmallVector<Value> precomputed;
     precomputed.reserve(grp.size());
-    for (unsigned k = 0; k < grp.size(); ++k) {
+    for (unsigned k : llvm::seq<unsigned>(grp.size())) {
       unsigned rotIdx = (pa.posInGroup + k) % grp.size();
       Value sInit = initArgs[grp[rotIdx]];
       auto preAdd =
@@ -256,13 +254,12 @@ static void applyLoopAddressPromotion(LoopOp loopOp) {
 
   IRMapping mapping;
   auto oldBlockArgs = plan.body->getArguments();
-  for (unsigned i = 0; i < plan.numArgs; ++i)
+  for (unsigned i : llvm::seq(plan.numArgs))
     mapping.map(oldBlockArgs[i], newBody.getArgument(i));
 
   unsigned newArgBase = plan.numArgs;
   llvm::DenseSet<Operation *> promotedOps;
-  for (unsigned pi = 0; pi < plan.promotableAdds.size(); ++pi) {
-    auto &pa = plan.promotableAdds[pi];
+  for (auto &pa : plan.promotableAdds) {
     promotedOps.insert(pa.addOp.getOperation());
     mapping.map(pa.addOp.getResult(), newBody.getArgument(newArgBase));
     newArgBase += plan.rotationGroups[pa.groupIdx].size();
@@ -285,14 +282,14 @@ static void applyLoopAddressPromotion(LoopOp loopOp) {
   newArgBase = plan.numArgs;
   for (auto &pa : plan.promotableAdds) {
     unsigned N = plan.rotationGroups[pa.groupIdx].size();
-    for (unsigned k = 1; k <= N; ++k)
+    for (unsigned k : llvm::seq(1u, N + 1))
       newCondIterArgs.push_back(newBody.getArgument(newArgBase + (k % N)));
     newArgBase += N;
   }
 
   ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
 
-  for (unsigned i = 0; i < plan.numArgs; ++i)
+  for (unsigned i : llvm::seq(plan.numArgs))
     plan.loopOp.getResult(i).replaceAllUsesWith(newLoop.getResult(i));
   plan.loopOp.erase();
 }
