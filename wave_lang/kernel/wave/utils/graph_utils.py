@@ -394,6 +394,16 @@ def _check_nodes_equivalent(
                     f"field '{f.name}' mismatch: {check_result.error}",
                 )
 
+    if isinstance(lhs_custom, Output):
+        # Special handling because the above will not iterate through
+        # the property `yielded_values`.
+        if not (
+            check_result := _check_payloads_equivalent(
+                lhs_custom.yielded_values, rhs_custom.yielded_values, subs, node_map
+            )
+        ):
+            return Failure(f"yielded_values mismatch: {check_result.error}")
+
     # Check dynamically-set index attribute.
     # Directional: reference absent is OK (index may not yet be set in early
     # pipeline stages), but reference present and actual absent means loss.
@@ -901,23 +911,20 @@ def get_users(
                         break
             continue
         if isinstance(custom, Output):
-            # Map output to get result
-            return_vals = custom.return_vals[0]
+            return_vals = custom.yielded_values
             parent_region = custom.graph.parent_op
-            if not isinstance(return_vals, (list, tuple)):
-                if parent_region.users:
-                    users.append(next(iter(parent_region.users)))
-            else:
-                # Handles case where DCE eliminate unused GetResult.
-                get_results = {
-                    get_custom(x).res_idx: x
-                    for x in parent_region.users
-                    if isinstance(get_custom(x), GetResult)
-                }
+            get_results = {
+                get_custom(x).res_idx: x
+                for x in parent_region.users
+                if isinstance(get_custom(x), GetResult)
+            }
+            if get_results:
                 output_idx = return_vals.index(node)
                 # Sometime IterArg only used within the tkw.Reduction region
                 if output_idx in get_results:
                     users.append(get_results[output_idx])
+            elif parent_region.users:
+                users.append(next(iter(parent_region.users)))
             continue
         if isinstance(custom, Conditional):
             region = custom
@@ -1035,27 +1042,19 @@ def get_inputs(
             # Map get result to output
             iteration_subgraph = region.get_root_graph().subgraphs[region.subgraph_name]
             if len(region.init_args) == 1:
-                outputs = region.outputs(iteration_subgraph)
-                if isinstance(outputs, Sequence):
-                    inputs += outputs
-                else:
-                    inputs.append(outputs)
+                inputs += region.outputs(iteration_subgraph)
             else:
                 inputs.append(region.outputs(iteration_subgraph)[custom.res_idx])
         elif isinstance(parent_op, Conditional):
             region = parent_op
-            # Map get result to output
             conditional_subgraph = region.get_root_graph().subgraphs[
                 region.subgraph_name
             ]
             outputs = region.outputs(conditional_subgraph)
-            if isinstance(outputs, Sequence):
-                if len(outputs) == 1:
-                    inputs.append(outputs[0])
-                else:
-                    inputs.append(outputs[custom.res_idx])
+            if len(outputs) == 1:
+                inputs.append(outputs[0])
             else:
-                inputs.append(outputs)
+                inputs.append(outputs[custom.res_idx])
         else:
             raise ValueError(
                 f"GetResult must be using an Iterate or Conditional, but\n{custom}\nis using\n{parent_op}"

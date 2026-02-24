@@ -266,8 +266,6 @@ def handle_region_entry(
     if isinstance(new_node, GetResult):
         assert len(inputs) == 1, f"Expected one input, got {inputs}"
         outputs = region_node.outputs(inputs[0].graph)
-        if not isinstance(outputs, Sequence):
-            outputs = [outputs]
         if region_node not in region_context:
             region_context[region_node] = RegionOpInfo(region_node)
         result_index = compute_result_index(
@@ -411,10 +409,9 @@ def add_to_outputs(node: CustomOp, new_node: CustomOp):
     get_result = [x for x in users if isinstance(get_custom(x), GetResult)]
     assert len(get_result) == 1, f"Expected one GetResult, got {get_result}"
     result_index = get_result[0].result_index
-    if len(output.return_vals[0]) < result_index:
-        new_return_vals = output.return_vals[0] + [None] * (
-            result_index - len(output.return_vals[0]) + 1
-        )
+    new_return_vals = output.yielded_values
+    if len(new_return_vals) <= result_index:
+        new_return_vals += [None] * (result_index - len(new_return_vals) + 1)
     new_return_vals[result_index] = new_node
     output.return_vals = [new_return_vals]
 
@@ -844,11 +841,7 @@ def _fixup_region_node_common(
     if all(x is None for x in output.return_vals):
         return
 
-    return_vals = output.return_vals[0]
-    if isinstance(return_vals, Sequence):
-        return_vals = [get_custom(x) for x in return_vals]
-    else:
-        return_vals = [get_custom(return_vals)]
+    return_vals = [get_custom(x) for x in output.yielded_values]
 
     new_outputs = _fixup_build_new_args_from_sorted_dict(
         region_info.outputs, expansion_context, handle_mma=handle_mma

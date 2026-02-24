@@ -28,7 +28,7 @@ def remap_iter_args(
     Add a mapping of iter_args to the output return values in order to keep track
     of how uses need to be updated for unrolled iterations.
     """
-    for iter_arg, return_val in zip(iter_args, output.return_vals[0]):
+    for iter_arg, return_val in zip(iter_args, output.yielded_values):
         value_use_map[iter_arg] = return_val
 
 

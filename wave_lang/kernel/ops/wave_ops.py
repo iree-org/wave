@@ -1416,7 +1416,7 @@ class Output(CustomOp):
     traced function.
     """
 
-    return_vals: Sequence[Any]
+    return_vals: Sequence[Any] = field(compare=False)
     tkw_op_name: str = field(default="output", init=False)
 
     @classmethod
@@ -1441,6 +1441,14 @@ class Output(CustomOp):
         if loc is not None:
             self.fx_node.location = loc
         return self.fx_node
+
+    @property
+    def yielded_values(self) -> list[Any]:
+        """Yielded values as a list."""
+        inner = self.return_vals[0]
+        if not isinstance(inner, Sequence):
+            return [inner]
+        return list(inner)
 
     @property
     def has_side_effects(self) -> bool:
@@ -2364,7 +2372,7 @@ class NestedRegionOp(CustomOp):
 
         output = get_custom(graph.output_node())
         assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
+        return output.yielded_values
 
     def infer_type(self, *args):
         if self.init_args is not None:
@@ -2464,16 +2472,7 @@ class Conditional(NestedRegionOp):
             subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
             return_node = get_custom(subgraph.output_node())
             assert isinstance(return_node, Output)
-            # return_vals is the output node's args tuple.
-            # return_vals[0] is either a single fx.Node (one return value) or
-            # a tuple of fx.Nodes (multiple return values)
-            return_vals = return_node.return_vals[0]
-            assert isinstance(
-                return_vals, (fx.Node, tuple)
-            ), f"Expected fx.Node or tuple of fx.Nodes, got {type(return_vals)}"
-            if not isinstance(return_vals, Sequence):
-                return_vals = [return_vals]
-            for return_val in return_vals:
+            for return_val in return_node.yielded_values:
                 return_dims = get_custom(return_val).indexing_dims
                 expand_dims.append(return_dims)
             if len(expand_dims) == 1:
@@ -2502,10 +2501,7 @@ class Iterate(NestedRegionOp):
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         return_node = get_custom(subgraph.output_node())
         assert isinstance(return_node, Output)
-        return_vals = return_node.return_vals[0]
-        if not isinstance(return_vals, Sequence):
-            return_vals = [return_vals]
-        for return_val in return_vals:
+        for return_val in return_node.yielded_values:
             return_dims = get_custom(return_val).indexing_dims
             reduced_dims = [dims for dims in return_dims if dims != self.axis]
             expand_dims.append(reduced_dims)
@@ -2525,11 +2521,8 @@ class Iterate(NestedRegionOp):
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         output = get_custom(subgraph.output_node())
         assert isinstance(output, Output)
-        return_vals = output.return_vals[0]
-        if not isinstance(return_vals, Sequence):
-            return_vals = [return_vals]
         result = []
-        for val in return_vals:
+        for val in output.yielded_values:
             custom_val = get_custom(val)
             if isinstance(custom_val, (MMA, ScaledMMA)):
                 idx = getattr(custom_val, "acc_index", None)

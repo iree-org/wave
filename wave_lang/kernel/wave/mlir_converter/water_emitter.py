@@ -36,8 +36,6 @@ from attr_type_converter import (
     symbol_name_to_attribute,
 )
 
-from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
-
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
@@ -53,6 +51,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
 from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.lang.wave_types import Memory, Register, IndexMapping
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
+from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.utils.symbol_utils import (
@@ -728,8 +727,6 @@ def _emit_ops_from_graph(
                     result_types = []
                     result_locs = []
                     outputs = node.outputs()
-                    if not isinstance(outputs, Sequence):
-                        outputs = [outputs]
                     for fx_output in outputs:
                         output = get_custom(fx_output)
                         output.infer_type()

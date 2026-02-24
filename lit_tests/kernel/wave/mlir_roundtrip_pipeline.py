@@ -199,8 +199,6 @@ def gemm_progressive_roundtrip():
             "construct_index_mapping",
             "debug_log_write_replace",
             "promote_placeholders",
-            "set_node_indices",
-            "reorder_workgroups",
         }
     )
 

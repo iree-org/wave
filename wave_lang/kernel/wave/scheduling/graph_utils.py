@@ -412,7 +412,7 @@ def create_scheduling_edges(
     and placeholder nodes.
     """
     # Create edges from outputs to iter args.
-    for return_val, iter_arg in zip(get_custom(output).return_vals[0], iter_args):
+    for return_val, iter_arg in zip(get_custom(output).yielded_values, iter_args):
         iter_arg.args = (return_val,)
     graph.erase_node(output)
     edges = []
