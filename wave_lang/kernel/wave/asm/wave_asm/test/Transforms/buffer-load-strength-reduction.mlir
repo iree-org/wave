@@ -485,3 +485,85 @@ waveasm.program @different_strides_same_srd
 
   waveasm.s_endpgm
 }
+
+// ---- LDS load: buffer_load_dwordx4_lds with IV-dependent voffset ----
+// Gather-to-LDS loads have operand order (voffset, srd, soffset) and no VGPR
+// results. The pass should still optimize the IV-dependent voffset chain.
+
+// CHECK-LABEL: @lds_load_strength_reduction
+waveasm.program @lds_load_strength_reduction
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %four = waveasm.constant 4 : !waveasm.imm<4>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // New loop should have an extra iter_arg for soffset.
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.sreg) {
+  %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
+
+    %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
+    %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    // s_mov_b32_m0 sets LDS offset — should be preserved untouched.
+    %m0_val = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+    waveasm.s_mov_b32_m0 %m0_val : !waveasm.sreg
+
+    // After strength reduction, the LDS load soffset should be an iter_arg.
+    // CHECK: waveasm.buffer_load_dwordx4_lds
+    // CHECK-NOT: !waveasm.imm<0>
+    waveasm.buffer_load_dwordx4_lds %voff, %srd, %soff0
+        : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.sreg
+  }
+
+  waveasm.s_endpgm
+}
+
+// ---- LDS load: loop-invariant voffset — no transformation ----
+// The buffer_load_dword_lds voffset is just %tid (no IV dependency), so the
+// pass should leave the loop untouched.
+
+// CHECK-LABEL: @lds_load_no_transform
+waveasm.program @lds_load_no_transform
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // Loop unchanged: still 1 iter_arg (no soffset added).
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> !waveasm.sreg {
+  %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
+
+    // voffset is just %tid — no IV dependency.
+    waveasm.buffer_load_dword_lds %tid, %srd, %soff0
+        : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.sreg
+  }
+
+  waveasm.s_endpgm
+}

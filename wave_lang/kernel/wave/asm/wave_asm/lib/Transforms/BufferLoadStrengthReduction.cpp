@@ -73,6 +73,17 @@ static bool isBufferLoad(Operation *op) {
              BUFFER_LOAD_DWORDX4, BUFFER_LOAD_UBYTE, BUFFER_LOAD_USHORT>(op);
 }
 
+static bool isBufferLoadLDS(Operation *op) {
+  return isa<BUFFER_LOAD_DWORD_LDS, BUFFER_LOAD_DWORDX4_LDS>(op);
+}
+
+// VMEMLoadOp:       (saddr=0, voffset=1, soffset=2).
+// VMEMToLDSLoadOp:  (voffset=0, srd=1, soffset=2).
+static unsigned getVoffsetIdx(Operation *op) {
+  return isBufferLoadLDS(op) ? 0 : 1;
+}
+static unsigned getSrdIdx(Operation *op) { return isBufferLoadLDS(op) ? 1 : 0; }
+
 static bool isDefinedInLoop(Value val, Region *loopRegion) {
   if (auto *defOp = val.getDefiningOp())
     return defOp->getParentRegion() == loopRegion;
@@ -327,13 +338,13 @@ static void applyStrengthReduction(LoopOp loopOp) {
   llvm::SetVector<Operation *> allDeps;
 
   for (Operation &op : body) {
-    if (!isBufferLoad(&op))
+    if (!isBufferLoad(&op) && !isBufferLoadLDS(&op))
       continue;
-    if (op.getNumOperands() < 3) // saddr, voffset, soffset.
+    if (op.getNumOperands() < 3)
       continue;
 
-    Value voffset = op.getOperand(1);
-    Value srd = op.getOperand(0);
+    Value voffset = op.getOperand(getVoffsetIdx(&op));
+    Value srd = op.getOperand(getSrdIdx(&op));
 
     if (!isDefinedInLoop(voffset, loopRegion))
       continue;
@@ -453,33 +464,25 @@ static void applyStrengthReduction(LoopOp loopOp) {
   for (unsigned i = 0; i < numArgs; ++i)
     mapping.map(body.getArgument(i), newBody.getArgument(i));
 
-  // Clone loop body.
+  // Clone loop body, tracking Operation* mapping for result-less ops.
   OpBuilder bodyBuilder = OpBuilder::atBlockBegin(&newBody);
+  DenseMap<Operation *, Operation *> opMapping;
   for (Operation &op : body) {
     if (isa<ConditionOp>(&op))
       continue;
-    bodyBuilder.clone(op, mapping);
+    Operation *cloned = bodyBuilder.clone(op, mapping);
+    opMapping[&op] = cloned;
   }
 
   // Patch buffer_loads: set voffset to precomputed value, soffset to iter_arg.
   for (unsigned i = 0; i < candidates.size(); ++i) {
-    // Find the cloned buffer_load via the mapping. The lookup must succeed
-    // because we cloned the entire loop body above.
-    Operation *clonedLoad = nullptr;
-    for (Value result : candidates[i].loadOp->getResults()) {
-      Value clonedResult = mapping.lookupOrNull(result);
-      assert(clonedResult && "cloned load result not found in mapping");
-      clonedLoad = clonedResult.getDefiningOp();
-      break;
-    }
-    if (!clonedLoad)
-      continue;
+    Operation *clonedLoad = opMapping.lookup(candidates[i].loadOp);
+    assert(clonedLoad && "cloned load not found in op mapping");
 
-    // Replace voffset (operand 1) with precomputed initial voffset
-    // (defined before the loop, accessible inside).
-    clonedLoad->setOperand(1, initialVoffsets[i]);
+    // Replace voffset with precomputed initial value.
+    clonedLoad->setOperand(getVoffsetIdx(clonedLoad), initialVoffsets[i]);
 
-    // Replace soffset (operand 2) with the group's soffset iter_arg.
+    // Replace soffset (always operand 2) with the group's soffset iter_arg.
     unsigned groupIdx = candidateGroupIdx[i];
     Value soffsetArg = newBody.getArgument(soffsetArgBase + groupIdx);
     clonedLoad->setOperand(2, soffsetArg);
