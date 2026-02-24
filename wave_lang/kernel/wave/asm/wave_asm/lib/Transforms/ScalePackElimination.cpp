@@ -10,6 +10,10 @@
 // Eliminates redundant BFE->iter_arg->LSHL_OR round-trips for B-scale values
 // in scaled MFMA loops.
 //
+// TODO: This should ideally be done at the vector dialect level (before
+// lowering to waveasm), where the byte-extract/repack pattern is more
+// explicit and easier to canonicalize away.
+//
 // Pattern:
 //   Before the loop:
 //     %init_dword = buffer_load_dword ...
