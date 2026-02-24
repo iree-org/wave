@@ -76,7 +76,9 @@ def _format_frame(
         if source_line:
             lines.append(f"    {source_line}")
             if frame.start_col > 0:
-                lines.append(f"    {' ' * (frame.start_col - 1)}^")
+                lines.append(
+                    f"    {' ' * (frame.start_col)}^{'~' * (frame.end_col - frame.start_col - 1)}"
+                )
 
     elif isinstance(frame, NameLocation):
         if frame.child_location is not None:
@@ -117,10 +119,8 @@ def format_diagnostic(diag: MLIRDiagnostic, use_color: bool = True) -> str:
         lines.append(f"{colors['bold']}MLIRDiagnostic{colors['reset']}: {message}")
 
     # Stack trace
-    lines.append("Traceback (Wave DSL source):")
-    if not location:
-        lines.append("  <missing location>")
-    else:
+    if location:
+        lines.append("Traceback (Wave DSL source):")
         for frame in location:
             _format_frame(frame, lines)
 
@@ -214,8 +214,9 @@ def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    test_diagnostic_emission: bool = False,
     pipeline: str = "",
+    *,
+    test_diagnostic_emission: str = "no",
 ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
@@ -241,7 +242,7 @@ def emit_wave_dialect(
     args = [sys.executable, str(child)]
 
     if test_diagnostic_emission:
-        args.append("--test-diagnostic-emission")
+        args.append(f"--test-diagnostic-emission={test_diagnostic_emission}")
 
     proc = subprocess.Popen(
         args,

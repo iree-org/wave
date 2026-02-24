@@ -93,7 +93,7 @@ def failure_to_parse_override_mlir():
     _, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     assert len(diagnostics) == 1
-    # CHECK: Unable to parse module assembly
+    # CHECK: expected operation name in quotes
     print(format_diagnostics([diagnostics[0]], use_color=False))
 
 
