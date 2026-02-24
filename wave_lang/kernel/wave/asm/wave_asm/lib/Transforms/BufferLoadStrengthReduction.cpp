@@ -463,10 +463,12 @@ static void applyStrengthReduction(LoopOp loopOp) {
 
   // Patch buffer_loads: set voffset to precomputed value, soffset to iter_arg.
   for (unsigned i = 0; i < candidates.size(); ++i) {
-    // Find the cloned buffer_load.
+    // Find the cloned buffer_load via the mapping. The lookup must succeed
+    // because we cloned the entire loop body above.
     Operation *clonedLoad = nullptr;
     for (Value result : candidates[i].loadOp->getResults()) {
-      Value clonedResult = mapping.lookup(result);
+      Value clonedResult = mapping.lookupOrNull(result);
+      assert(clonedResult && "cloned load result not found in mapping");
       clonedLoad = clonedResult.getDefiningOp();
       break;
     }
@@ -487,6 +489,9 @@ static void applyStrengthReduction(LoopOp loopOp) {
   // and s_cmp -> s_cbranch must have no SCC-clobbering ops between them).
   // Find the cloned s_cmp/s_add for IV (the ops that produce the condition)
   // and insert soffset updates before them.
+  // NOTE: s_add_u32 wraps at 2^32. For typical GEMM loops (stride < 2^20,
+  // iterations < 2^12), soffset stays well within 32 bits. If the product
+  // stride*iterations overflows 2^32, the buffer address will be wrong.
   Value newCond = mapping.lookup(condOp.getCondition());
 
   // Insert soffset updates before the s_cmp that produces the condition.

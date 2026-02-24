@@ -167,10 +167,13 @@ waveasm.program @shared_srd_group
   %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
   %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
 
-  // One SRD group (same stride) -> 1 extra soffset iter_arg.
+  // One SRD group (same stride=16) -> 1 extra soffset iter_arg.
   // Original: 2 iter_args. After: 3 (iv, acc, soff).
+  // Both buffer_loads must use the same soffset (3rd block arg).
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]]
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF]]
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
@@ -340,6 +343,92 @@ waveasm.program @non_uniform_stride
     %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
     %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %new_acc) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}
+
+// ---- Multi-dword load (buffer_load_dwordx4) ----
+// Verify the pass handles multi-result loads correctly.
+
+// CHECK-LABEL: @multi_dword_load
+waveasm.program @multi_dword_load
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %four = waveasm.constant 4 : !waveasm.imm<4>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+  %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
+
+  // Should add 1 soffset iter_arg (3 total).
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
+  %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
+      : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+
+    %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
+    %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    // CHECK: waveasm.buffer_load_dwordx4
+    %v0, %v1, %v2, %v3 = waveasm.buffer_load_dwordx4 %srd, %voff, %soff0
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0>
+        -> !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
+
+    %new_acc = waveasm.v_add_u32 %acc, %v0 : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %new_acc) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}
+
+// ---- Non-zero instOffset preserved ----
+// buffer_load with instOffset should still be transformed; the offset field
+// is orthogonal to the soffset/voffset split.
+
+// CHECK-LABEL: @nonzero_inst_offset
+waveasm.program @nonzero_inst_offset
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %four = waveasm.constant 4 : !waveasm.imm<4>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // Should still transform — instOffset is independent of soffset.
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.sreg) {
+  %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
+
+    %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
+    %voff = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    // instOffset:2048 must be preserved after transformation.
+    // CHECK: waveasm.buffer_load_dword
+    // CHECK-SAME: offset : 2048
+    %val = waveasm.buffer_load_dword %srd, %voff, %soff0 offset : 2048
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.sreg
   }
 
   waveasm.s_endpgm
