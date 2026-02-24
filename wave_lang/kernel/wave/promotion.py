@@ -82,7 +82,9 @@ def apply_promotion_pattern(
             get_custom(memory).type.address_space != allocate_node.address_space
         ):
             # Moves memory to top of graph after allocate to avoid non-dominating operands.
-            move_node_after(custom_node.memory, allocate_node.fx_node)
+            # Skip if the memory already precedes the allocate (e.g. top-of-graph placeholders).
+            if custom_node.memory > allocate_node.fx_node:
+                move_node_after(custom_node.memory, allocate_node.fx_node)
             # We move CustomOp/Read up to the last write_to_shared_mem S.T
             # all reads from shared mem happens only after all read from globals
             # and write to shared mem happen. Which will minimize lds_barrier count.
