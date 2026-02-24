@@ -197,3 +197,322 @@ waveasm.program @test_add_neg_to_sub target = #waveasm.target<#waveasm.gfx942, 5
   waveasm.buffer_store_dword %result, %srd, %a : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
   waveasm.s_endpgm
 }
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — direct scalar shift in voffset.
+//
+//   v_lshlrev_b32(4, sgpr) + v_add_u32(shifted, vbase)
+//   → s_lshl_b32(sgpr, 4) into soffset, vbase as voffset.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_direct
+waveasm.program @test_lds_soffset_direct target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %vbase = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %sgpr = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+
+  %shifted = waveasm.v_lshlrev_b32 %c4, %sgpr : !waveasm.imm<4>, !waveasm.sreg -> !waveasm.vreg
+  %combined = waveasm.v_add_u32 %shifted, %vbase : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  // Scalar shift extracted into soffset; vbase used directly.
+  // CHECK: waveasm.s_lshl_b32
+  // CHECK-NOT: waveasm.v_lshlrev_b32
+  // CHECK-NOT: waveasm.v_add_u32
+  // CHECK: waveasm.buffer_load_dword_lds {{.*}} : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.sreg
+  waveasm.buffer_load_dword_lds %combined, %srd, %c0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — nested v_add_u32 (Case 2).
+//
+//   v_add_u32(v_add_u32(thread, v_lshlrev(4, sgpr)), row)
+//   → s_lshl_b32(sgpr, 4) into soffset, v_add_u32(thread, row) as voffset.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_nested
+waveasm.program @test_lds_soffset_nested target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %thread = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %row = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %sgpr = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+
+  %shifted = waveasm.v_lshlrev_b32 %c4, %sgpr : !waveasm.imm<4>, !waveasm.sreg -> !waveasm.vreg
+  %inner = waveasm.v_add_u32 %thread, %shifted : !waveasm.pvreg<0>, !waveasm.vreg -> !waveasm.vreg
+  %outer = waveasm.v_add_u32 %inner, %row : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  // Scalar shift extracted; remaining VGPR bases combined into new voffset.
+  // CHECK: waveasm.s_lshl_b32
+  // CHECK: waveasm.v_add_u32 {{.*}} : !waveasm.pvreg<0>, !waveasm.pvreg<1>
+  // CHECK: waveasm.buffer_load_dwordx4_lds {{.*}} : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.sreg
+  waveasm.buffer_load_dwordx4_lds %outer, %srd, %c0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — shift in v_lshl_add_u32 addend (Case 3).
+//
+//   v_add_u32(v_lshl_add_u32(vgpr, 2, v_lshlrev(4, sgpr)), row)
+//   → s_lshl_b32 into soffset, v_lshl_add_u32(vgpr, 2, 0)+row as voffset.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_lshl_add
+waveasm.program @test_lds_soffset_lshl_add target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %vgpr = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %row = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c2 = waveasm.constant 2 : !waveasm.imm<2>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %sgpr = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+
+  %shifted = waveasm.v_lshlrev_b32 %c4, %sgpr : !waveasm.imm<4>, !waveasm.sreg -> !waveasm.vreg
+  %fused = waveasm.v_lshl_add_u32 %vgpr, %c2, %shifted : !waveasm.pvreg<0>, !waveasm.imm<2>, !waveasm.vreg -> !waveasm.vreg
+  %outer = waveasm.v_add_u32 %fused, %row : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  // Scalar shift extracted; v_lshl_add_u32 gets zero as addend.
+  // CHECK: waveasm.s_lshl_b32
+  // CHECK-NOT: waveasm.v_lshlrev_b32
+  // CHECK: waveasm.v_lshl_add_u32 {{.*}} : !waveasm.pvreg<0>, !waveasm.imm<2>, !waveasm.imm<0>
+  // CHECK: waveasm.buffer_load_dword_lds {{.*}} : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.sreg
+  waveasm.buffer_load_dword_lds %outer, %srd, %c0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — no transform when soffset non-zero.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_no_transform
+waveasm.program @test_lds_soffset_no_transform target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %vbase = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %sgpr = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+  %soff = waveasm.s_mov_b32 %c4 : !waveasm.imm<4> -> !waveasm.sreg
+
+  %shifted = waveasm.v_lshlrev_b32 %c4, %sgpr : !waveasm.imm<4>, !waveasm.sreg -> !waveasm.vreg
+  %combined = waveasm.v_add_u32 %shifted, %vbase : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  // soffset already non-zero — pattern should not fire.
+  // Also, LshlAddPattern is blocked by the LDS guard.
+  // CHECK-NOT: waveasm.s_lshl_b32
+  // CHECK-NOT: waveasm.v_lshl_add_u32
+  // CHECK: waveasm.buffer_load_dword_lds
+  waveasm.buffer_load_dword_lds %combined, %srd, %soff : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BFEPackIdentityPattern — pack of 4 byte BFEs from same source = nop.
+//
+//   lshl_or(bfe(x,24,8), 24, lshl_or(bfe(x,16,8), 16,
+//     lshl_or(bfe(x,8,8), 8, bfe(x,0,8)))) → x
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_bfe_pack_identity
+waveasm.program @test_bfe_pack_identity target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c8 = waveasm.constant 8 : !waveasm.imm<8>
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+  %c24 = waveasm.constant 24 : !waveasm.imm<24>
+
+  // Extract 4 bytes from the same dword.
+  %b0 = waveasm.v_bfe_u32 %src, %c0, %c8 : !waveasm.pvreg<0>, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+  %b1 = waveasm.v_bfe_u32 %src, %c8, %c8 : !waveasm.pvreg<0>, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+  %b2 = waveasm.v_bfe_u32 %src, %c16, %c8 : !waveasm.pvreg<0>, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+  %b3 = waveasm.v_bfe_u32 %src, %c24, %c8 : !waveasm.pvreg<0>, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+  // Pack them back — should be replaced with %src.
+  %inner = waveasm.v_lshl_or_b32 %b1, %c8, %b0 : !waveasm.vreg, !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+  %middle = waveasm.v_lshl_or_b32 %b2, %c16, %inner : !waveasm.vreg, !waveasm.imm<16>, !waveasm.vreg -> !waveasm.vreg
+  %packed = waveasm.v_lshl_or_b32 %b3, %c24, %middle : !waveasm.vreg, !waveasm.imm<24>, !waveasm.vreg -> !waveasm.vreg
+
+  // The entire BFE+pack chain should be eliminated.
+  // CHECK-NOT: waveasm.v_bfe_u32
+  // CHECK-NOT: waveasm.v_lshl_or_b32
+  // CHECK: waveasm.buffer_store_dword {{.*}} : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+  waveasm.buffer_store_dword %packed, %srd, %src : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BFEPackIdentityPattern — no transform when BFEs have different sources.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_bfe_pack_no_transform
+waveasm.program @test_bfe_pack_no_transform target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %src1 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %src2 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c8 = waveasm.constant 8 : !waveasm.imm<8>
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+  %c24 = waveasm.constant 24 : !waveasm.imm<24>
+
+  // BFEs extract from two different source dwords.
+  %b0 = waveasm.v_bfe_u32 %src1, %c0, %c8 : !waveasm.pvreg<0>, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+  %b1 = waveasm.v_bfe_u32 %src2, %c8, %c8 : !waveasm.pvreg<1>, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+  %b2 = waveasm.v_bfe_u32 %src1, %c16, %c8 : !waveasm.pvreg<0>, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+  %b3 = waveasm.v_bfe_u32 %src1, %c24, %c8 : !waveasm.pvreg<0>, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+  %inner = waveasm.v_lshl_or_b32 %b1, %c8, %b0 : !waveasm.vreg, !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+  %middle = waveasm.v_lshl_or_b32 %b2, %c16, %inner : !waveasm.vreg, !waveasm.imm<16>, !waveasm.vreg -> !waveasm.vreg
+  %packed = waveasm.v_lshl_or_b32 %b3, %c24, %middle : !waveasm.vreg, !waveasm.imm<24>, !waveasm.vreg -> !waveasm.vreg
+
+  // Pack chain should remain — different source dwords.  All 3 lshl_or survive.
+  // CHECK: waveasm.v_lshl_or_b32
+  // CHECK: waveasm.v_lshl_or_b32
+  // CHECK: waveasm.v_lshl_or_b32
+  // CHECK: waveasm.buffer_store_dword
+  waveasm.buffer_store_dword %packed, %srd, %src1 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: LICM — hoist chain of VALU address ops out of loop.
+//
+// Both v_lshlrev_b32 and v_add_u32 use only loop-external values.
+// After LICM pass 1 hoists the shift, pass 2 hoists the add (iterative).
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_licm_chain
+waveasm.program @test_licm_chain
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // Peephole fuses shift+add into v_lshl_add_u32, then LICM hoists it.
+  // CHECK: waveasm.v_lshl_add_u32
+  // CHECK: waveasm.loop
+  // CHECK-NOT: waveasm.v_lshl_add_u32
+  // CHECK: waveasm.buffer_store_dword
+  %r = waveasm.loop(%iv = %init_iv)
+      : (!waveasm.sreg) -> (!waveasm.sreg) {
+
+    // All operands are loop-external — both should be hoisted.
+    %shifted = waveasm.v_lshlrev_b32 %c4, %v0 : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg
+    %addr = waveasm.v_add_u32 %shifted, %v1 : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+    waveasm.buffer_store_dword %addr, %srd, %v0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.sreg
+  }
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: LICM — no hoist when operand is a loop-carried block argument.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_licm_no_hoist
+waveasm.program @test_licm_no_hoist
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+  %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
+
+  // v_add_u32 uses block arg %acc — must stay inside the loop.
+  // CHECK: waveasm.loop
+  // CHECK: waveasm.v_add_u32
+  %r:2 = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
+      : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+
+    %addr = waveasm.v_add_u32 %v0, %acc : !waveasm.pvreg<0>, !waveasm.vreg -> !waveasm.vreg
+    waveasm.buffer_store_dword %addr, %srd, %v0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %addr) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — reversed operand order in v_add_u32.
+//
+// Same as Case 1 but with v_add_u32(%vbase, %shifted) instead of
+// v_add_u32(%shifted, %vbase).  Verifies commutative operand matching.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_reversed
+waveasm.program @test_lds_soffset_reversed target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %vbase = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %sgpr = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
+
+  %shifted = waveasm.v_lshlrev_b32 %c4, %sgpr : !waveasm.imm<4>, !waveasm.sreg -> !waveasm.vreg
+  // Reversed operand order: vbase first, shifted second.
+  %combined = waveasm.v_add_u32 %vbase, %shifted : !waveasm.pvreg<0>, !waveasm.vreg -> !waveasm.vreg
+
+  // CHECK: waveasm.s_lshl_b32
+  // CHECK-NOT: waveasm.v_lshlrev_b32
+  // CHECK-NOT: waveasm.v_add_u32
+  // CHECK: waveasm.buffer_load_dword_lds {{.*}} : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.sreg
+  waveasm.buffer_load_dword_lds %combined, %srd, %c0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: BufferLoadLDSSoffsetPattern — no transform when shift base is VGPR.
+//
+// The pattern requires the shift base to be SGPR (scalar) so it can become
+// soffset.  A VGPR shift base should be left alone.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_lds_soffset_vgpr_base
+waveasm.program @test_lds_soffset_vgpr_base target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+
+  // Shift base is VGPR, not SGPR — cannot go into soffset.
+  %shifted = waveasm.v_lshlrev_b32 %c4, %v0 : !waveasm.imm<4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %combined = waveasm.v_add_u32 %shifted, %v1 : !waveasm.vreg, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  // No soffset extraction — shift+add fused by LshlAddPattern instead.
+  // CHECK-NOT: waveasm.s_lshl_b32
+  // CHECK: waveasm.v_lshl_add_u32
+  // CHECK: waveasm.buffer_load_dword_lds
+  waveasm.buffer_load_dword_lds %combined, %srd, %c0 : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.imm<0>
+
+  waveasm.s_endpgm
+}
