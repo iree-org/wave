@@ -50,6 +50,8 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
@@ -161,7 +163,7 @@ static std::optional<Value> verifyBFEGroup(llvm::ArrayRef<unsigned> argIndices,
   static const int64_t expectedOffsets[] = {0, 8, 16, 24};
 
   Value commonSource;
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i : llvm::seq(4u)) {
     unsigned idx = argIndices[i];
     if (idx >= values.size())
       return std::nullopt;
@@ -191,7 +193,7 @@ static bool byteArgsOnlyUsedByPackChain(PackChain &chain, Block &body) {
   packOps.insert(chain.middleOp.getOperation());
   packOps.insert(chain.outerOp.getOperation());
 
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i : llvm::seq(4u)) {
     Value arg = body.getArgument(chain.byteArgIdx[i]);
     for (OpOperand &use : arg.getUses()) {
       if (!packOps.contains(use.getOwner()))
@@ -252,7 +254,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   // Step 5: Collect indices of byte args to remove (sorted descending).
   llvm::DenseSet<unsigned> removedArgIndices;
   for (auto &chain : chains)
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i : llvm::seq(4u))
       removedArgIndices.insert(chain.byteArgIdx[i]);
 
   // Collect operations to skip during cloning (pack chain ops + dead BFEs).
@@ -265,7 +267,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
 
   // Also mark yield-side BFE ops as skippable (if single-use for the yield).
   for (auto &chain : chains) {
-    for (unsigned i = 0; i < 4; ++i) {
+    for (unsigned i : llvm::seq(4u)) {
       Value yieldVal = condIterArgs[chain.byteArgIdx[i]];
       if (auto bfe = yieldVal.getDefiningOp<V_BFE_U32>())
         if (bfe.getResult().hasOneUse())
@@ -278,7 +280,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   // Map from old arg index to new arg index.
   SmallVector<int> oldToNewArgIdx(numArgs, -1);
   unsigned newIdx = 0;
-  for (unsigned i = 0; i < numArgs; ++i) {
+  for (unsigned i : llvm::seq(numArgs)) {
     if (!removedArgIndices.contains(i)) {
       newInitArgs.push_back(initArgs[i]);
       oldToNewArgIdx[i] = newIdx++;
@@ -299,15 +301,15 @@ static void eliminateScalePackChains(LoopOp loopOp) {
 
   // Step 8: Build IRMapping from old block args to new.
   IRMapping mapping;
-  for (unsigned i = 0; i < numArgs; ++i) {
+  for (unsigned i : llvm::seq(numArgs)) {
     if (oldToNewArgIdx[i] >= 0)
       mapping.map(body.getArgument(i), newBody.getArgument(oldToNewArgIdx[i]));
   }
 
   // Map pack chain outputs to the new dword block args.
-  for (unsigned ci = 0; ci < chains.size(); ++ci) {
+  for (auto [ci, chain] : llvm::enumerate(chains)) {
     Value dwordArg = newBody.getArgument(chainNewArgIdx[ci]);
-    mapping.map(chains[ci].outerOp.getResult(), dwordArg);
+    mapping.map(chain.outerOp.getResult(), dwordArg);
   }
 
   // Step 9: Clone body (skipping removed ops).
@@ -323,7 +325,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   // Step 10: Build new ConditionOp.
   Value newCond = mapping.lookup(condOp.getCondition());
   SmallVector<Value> newCondIterArgs;
-  for (unsigned i = 0; i < numArgs; ++i) {
+  for (unsigned i : llvm::seq(numArgs)) {
     if (removedArgIndices.contains(i))
       continue;
     newCondIterArgs.push_back(mapping.lookup(condIterArgs[i]));
@@ -335,16 +337,16 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
 
   // Step 11: Replace old loop results with new loop results.
-  for (unsigned i = 0; i < numArgs; ++i) {
+  for (unsigned i : llvm::seq(numArgs)) {
     if (oldToNewArgIdx[i] >= 0) {
       loopOp.getResult(i).replaceAllUsesWith(
           newLoop.getResult(oldToNewArgIdx[i]));
     } else if (!loopOp.getResult(i).use_empty()) {
       // This result corresponded to a removed byte arg. Extract the byte
       // from the chain's dword result for any post-loop uses.
-      for (unsigned ci = 0; ci < chains.size(); ++ci) {
-        for (unsigned bi = 0; bi < 4; ++bi) {
-          if (chains[ci].byteArgIdx[bi] != i)
+      for (auto [ci, chain] : llvm::enumerate(chains)) {
+        for (unsigned bi : llvm::seq(4u)) {
+          if (chain.byteArgIdx[bi] != i)
             continue;
           OpBuilder postBuilder(builder.getContext());
           postBuilder.setInsertionPointAfter(newLoop);
