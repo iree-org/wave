@@ -249,12 +249,6 @@ int main(int argc, char **argv) {
     pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReductionPass());
   }
 
-  // Loop address promotion: replace per-iteration v_add_u32 LDS address
-  // computation with precomputed rotating VGPR iter_args.
-  if (runLoopAddressPromotion) {
-    pm.addPass(waveasm::createWAVEASMLoopAddressPromotionPass());
-  }
-
   // Memory offset optimization: fold constant address components into
   // memory instruction offset fields (saves VALU instructions)
   if (runMemoryOffsetOpt) {
@@ -269,6 +263,12 @@ int main(int argc, char **argv) {
     if (runScopedCSE) {
       pm.addPass(waveasm::createWAVEASMScopedCSEPass());
     }
+  }
+
+  // Loop address promotion: replace per-iteration v_add_u32 LDS address
+  // computation with precomputed rotating VGPR iter_args.
+  if (runLoopAddressPromotion) {
+    pm.addPass(waveasm::createWAVEASMLoopAddressPromotionPass());
   }
 
   // Register allocation must run before waitcnt/hazard so that those passes

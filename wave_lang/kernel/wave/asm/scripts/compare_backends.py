@@ -616,6 +616,7 @@ def compile_cpp_backend(
             "--waveasm-peephole",
             "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
+            "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan",
             "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
             "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
