@@ -6,9 +6,10 @@
 waveasm.program @vmem_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // VMEM load
-  %loaded = waveasm.buffer_load_dword %srd, %voff : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %loaded = waveasm.buffer_load_dword %srd, %voff, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Waitcnt should be inserted before using the loaded value
   // CHECK: waveasm.buffer_load_dword
@@ -58,12 +59,13 @@ waveasm.program @multiple_loads target = #waveasm.target<#waveasm.gfx942, 5> abi
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %voff1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Multiple VMEM loads in flight
   // CHECK: waveasm.buffer_load_dword
   // CHECK: waveasm.buffer_load_dword
-  %load1 = waveasm.buffer_load_dword %srd, %voff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
-  %load2 = waveasm.buffer_load_dword %srd, %voff1 : !waveasm.psreg<0, 4>, !waveasm.pvreg<1> -> !waveasm.vreg
+  %load1 = waveasm.buffer_load_dword %srd, %voff0, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
+  %load2 = waveasm.buffer_load_dword %srd, %voff1, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<1>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Waitcnt before using results
   // CHECK: waveasm.s_waitcnt
@@ -76,10 +78,11 @@ waveasm.program @multiple_loads target = #waveasm.target<#waveasm.gfx942, 5> abi
 waveasm.program @barrier_waitcnt_insertion target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // VMEM load followed by barrier
   // CHECK: waveasm.buffer_load_dword
-  %load1 = waveasm.buffer_load_dword %srd, %voff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %load1 = waveasm.buffer_load_dword %srd, %voff0, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Ticketing pass should insert s_waitcnt before the barrier
   // to ensure all memory operations are complete before synchronization
@@ -94,10 +97,11 @@ waveasm.program @barrier_waitcnt_insertion target = #waveasm.target<#waveasm.gfx
 waveasm.program @existing_waitcnt_observed target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // VMEM load
   // CHECK: waveasm.buffer_load_dword
-  %load1 = waveasm.buffer_load_dword %srd, %voff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %load1 = waveasm.buffer_load_dword %srd, %voff0, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   // Pre-existing waitcnt - pass observes this and knows VMEM is drained.
   // No LGKM ops were issued, so barrier needs no additional lgkmcnt wait.

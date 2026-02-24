@@ -10,6 +10,7 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -64,5 +65,17 @@ llvm::LogicalResult computeWavesPerBlockFromConstraints(
     llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
 
 } // namespace wave
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+llvm::FailureOr<mlir::ChangeResult> static inline
+operator|(llvm::FailureOr<mlir::ChangeResult> lhs,
+          FailureOr<mlir::ChangeResult> rhs) {
+  if (llvm::failed(lhs) || llvm::failed(rhs))
+    return llvm::failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
 
 #endif // WATER_DIALECT_WAVE_IR_WAVEUTILS_H

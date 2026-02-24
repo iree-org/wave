@@ -130,6 +130,28 @@ module attributes {wave_test.symbol = #wave.symbol<"_A">}
 
 // -----
 
+// expected-error @below {{dimension name 'A' is used more than once}}
+func.func private @duplicate_dim_name() attributes { wave.test_index = #wave.expr_list<[](A, A) -> (A)>}
+
+// -----
+
+// expected-error @below {{dimension name 'A' is already used as a symbol name}}
+func.func private @duplicate_dim_sym_name() attributes { wave_test.index = #wave.expr_list<[#wave.symbol<"A">](A) -> (A)>}
+
+// -----
+
+// expected-error @below {{dimension name '_A' is reserved for internal use}}
+func.func private @reserved_dim_name() attributes { wave_test.index = #wave.expr_list<[](_A) -> (_A)>}
+
+// -----
+
+// Using the reserved name that iter<"K"> expands to.
+// expected-error @below {{dimension name '_Iter_K' is reserved for internal use}}
+func.func private @reserved_dim_name2() attributes { wave_test.index = #wave.expr_list<[#wave.iter<"K">](_Iter_K) -> (_Iter_K)>}
+
+
+// -----
+
 // expected-error @below {{duplicate symbol #wave.symbol<"A"> in shape}}
 "wave_test.create_tensor"() {fully_specified = true, shape = [@A, @B, @A]} : () -> ()
 

@@ -171,12 +171,12 @@ def test_gemm():
     # CHECK-SAME: index={M: $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $WG1*BLOCK_N + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1})
 
     # iterate subgraph:
-    # CHECK:      %b
-    # CHECK-NEXT: %a
     # CHECK: %acc_M:0_N:0_K:0
     # CHECK-NEXT: %acc_M:0_N:1_K:0
     # CHECK-NEXT: %acc_M:1_N:0_K:0
     # CHECK-NEXT: %acc_M:1_N:1_K:0
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_37
     # CHECK-SAME: (%a, 8, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %shared_memory_barrier_1
@@ -230,12 +230,12 @@ def test_gemm():
 
     # iterate subgraph (custom format):
     # CHECK: Custom format:
-    # CHECK-NEXT: placeholder(_name=b, _type=Memory[N, K].of(f16))
-    # CHECK-NEXT: placeholder(_name=a
     # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:0_N:1_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b, _type=Memory[N, K].of(f16))
     # CHECK-NEXT: read(memory=a, elements_per_thread=8,
     # CHECK-SAME: index={M: $WG0*BLOCK_M + Mod(16*$T1 + 32*$T2 + floor($T0/8), 64) : 1 : 1, K: ARGK*BLOCK_K + 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: shared_memory_barrier

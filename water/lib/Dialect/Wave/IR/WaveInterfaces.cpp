@@ -208,6 +208,18 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
   return ChangeResult::Change;
 }
 
+FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
+    ArrayRef<wave::WaveSymbolAttr> from, wave::WaveTensorType &to,
+    llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  llvm::FailureOr<ChangeResult> res =
+      ::checkPropagateShapeConflict(from, to, fromName, toName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+
+  to = to.copyShapeFrom(from);
+  return ChangeResult::Change;
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     llvm::ArrayRef<wave::WaveTensorType> from,
     llvm::MutableArrayRef<wave::WaveTensorType> to, llvm::StringRef fromName,
@@ -241,17 +253,6 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
   }
   return changeResult;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                         FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Propagate type information from the reduction input type by removing the
 // reduction axis from it to the given type. Report errors to `errs` using

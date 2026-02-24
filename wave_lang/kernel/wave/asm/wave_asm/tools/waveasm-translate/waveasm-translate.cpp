@@ -95,6 +95,11 @@ static llvm::cl::opt<bool> runMemoryOffsetOpt(
                    "offset fields"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> runBufferLoadStrengthReduction(
+    "waveasm-buffer-load-strength-reduction",
+    llvm::cl::desc("Run buffer load strength reduction pass"),
+    llvm::cl::init(false));
+
 static llvm::cl::opt<bool>
     emitAssembly("emit-assembly",
                  llvm::cl::desc("Emit AMDGCN assembly instead of MLIR"),
@@ -228,9 +233,15 @@ int main(int argc, char **argv) {
     pm.addPass(waveasm::createWAVEASMScopedCSEPass());
   }
 
-  // Peephole optimizations run after CSE but before waitcnt/hazard
+  // Peephole optimizations run after CSE but before waitcnt/hazard.
   if (runPeephole) {
     pm.addPass(waveasm::createWAVEASMPeepholePass());
+  }
+
+  // Strength-reduce buffer_load address computation in loops: precompute
+  // voffsets and increment by constant stride each iteration.
+  if (runBufferLoadStrengthReduction) {
+    pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReductionPass());
   }
 
   // Memory offset optimization: fold constant address components into

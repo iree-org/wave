@@ -638,9 +638,6 @@ struct PyWaveExprListAttr
             throw nb::value_error("Expected symbols to have as many "
                                   "entries as map have symbols.");
           }
-          if (mlirAffineMapGetNumDims(map) != 0) {
-            throw nb::value_error("Maps should not involve dimensions.");
-          }
           MlirContext context = mlirAffineMapGetContext(map);
           return PyWaveExprListAttr(
               mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::PyMlirContext::

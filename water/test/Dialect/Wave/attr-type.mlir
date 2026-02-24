@@ -65,6 +65,35 @@ func.func private @mapping_duplicate_symbols() attributes { wave_test.index = #w
     #wave.symbol<"B">, #wave.symbol<"A">,
     #wave.symbol<"A">, #wave.iter<"B">] -> (A ceildiv B + B - A, 1, 1)> }
 
+// CHECK-LABEL: @dims_in_expr_list
+// CHECK-SAME:  #wave.expr_list<[](d0, d1, d2) -> (d0, d1 + d2, d0 + 42)>
+func.func private @dims_in_expr_list() attributes { wave_test.index = #wave.expr_list<[](d0, d1, d2) -> (d0, d1 + d2, d0 + 42)>}
+
+// CHECK-LABEL: @dims_and_symbols_in_expr_list
+// CHECK-SAME:  #wave.expr_list<[#wave.symbol<"A">, #wave.symbol<"B">](d0, d1) -> (d1 + A, B + 42, d0)>
+func.func private @dims_and_symbols_in_expr_list() attributes {
+  wave_test.index = #wave.expr_list<[#wave.symbol<"A">, #wave.symbol<"B">](d0, d1) -> (A + d1, B + 42, d0)>
+}
+
+// CHECK-LABEL: @unused_dims_in_expr_list
+// CHECK-SAME:  #wave.expr_list<[](d0, d1) -> (d1)>
+func.func private @unused_dims_in_expr_list() attributes {
+  wave_test.index = #wave.expr_list<[](d0, d1) -> (d1)>
+}
+
+// Unlike symbol names, dimension names are not preserved.
+// CHECK-LABEL: @custom_dim_names_in_expr_list
+// CHECK-SAME:  #wave.expr_list<[](d0, d1, d2, d3) -> (d0, d1 + d2, 42)>
+func.func private @custom_dim_names_in_expr_list() attributes {
+  wave_test.index = #wave.expr_list<[](A, B, C, D) -> (A, B + C, 42)>
+}
+
+// CHECK-LABEL: @empty_dim_names_in_expr_list
+// CHECK-SAME:  #wave.expr_list<[] -> (42)>
+func.func private @empty_dim_names_in_expr_list() attributes {
+  wave_test.index = #wave.expr_list<[]() -> (42)>
+}
+
 // CHECK: #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>
 func.func private @iter_symbol_in_expr() attributes { wave_test.index = #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>}
 

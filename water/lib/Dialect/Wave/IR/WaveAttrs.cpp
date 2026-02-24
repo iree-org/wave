@@ -48,8 +48,10 @@ using namespace wave;
 constexpr llvm::StringLiteral kNullExpr = "NULL";
 
 /// Helper function to parse an affine wave expression with the wave
-/// symbol names passed in `names`.
-static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
+/// symbol names passed in `symbolNames` and dimension names passed in
+/// `dimNames`.
+static ParseResult parseExprWithNames(ArrayRef<StringRef> symbolNames,
+                                      ArrayRef<StringRef> dimNames,
                                       AffineExpr &outExpr, AsmParser &parser,
                                       bool allowNull = false) {
   MLIRContext *context = parser.getContext();
@@ -61,9 +63,11 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
   }
 
   SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
-  symbolSet.reserve(names.size());
-  for (auto [i, nm] : llvm::enumerate(names))
+  symbolSet.reserve(symbolNames.size() + dimNames.size());
+  for (auto [i, nm] : llvm::enumerate(symbolNames))
     symbolSet.emplace_back(nm, getAffineSymbolExpr(i, context));
+  for (auto [i, nm] : llvm::enumerate(dimNames))
+    symbolSet.emplace_back(nm, getAffineDimExpr(i, context));
   return parser.parseAffineExpr(symbolSet, outExpr);
 };
 
@@ -192,36 +196,58 @@ WaveIndexMappingAttr::getChecked(function_ref<InFlightDiagnostic()> emitError,
   return Base::getChecked(emitError, context, symbols, start, step, stride);
 }
 
-// Helper function to render an affine map result to a string.
-// It textually substitutes 's<i>' occurrences with the corresponding names from
-// the provided `names` array.
-std::string stringifyWithNames(AffineMap map, ArrayRef<StringRef> names) {
-  if (!map)
-    return "<" + kNullExpr.str() + ">";
-  AffineExpr expr = map.getResult(0);
+// Helper function printing an affine expression with custom symbol and
+// dimension names. It textually substitutes 's<i>' occurrences with the
+// corresponding names from the provided `symbolNames` array and 'd<i>'
+// occurrences with the corresponding names from the provided `dimNames` array.
+static void printWithNames(llvm::raw_ostream &os, AffineExpr expr,
+                           ArrayRef<StringRef> symbolNames,
+                           ArrayRef<StringRef> dimNames = {}) {
+  if (!expr) {
+    os << "<" << kNullExpr.str() << ">";
+    return;
+  }
   std::string exprStr;
-  llvm::raw_string_ostream os(exprStr);
-  expr.print(os);
-  os.flush();
-  for (auto [i, nm] : llvm::enumerate(names)) {
-    std::string pattern = "s" + std::to_string(i);
-    size_t pos = 0;
-    while ((pos = exprStr.find(pattern, pos)) != std::string::npos) {
+  llvm::raw_string_ostream exprOs(exprStr);
+  expr.print(exprOs);
+  exprOs.flush();
+
+  size_t segmentStart = 0;
+  for (size_t i = 0, e = exprStr.size(); i < e; ++i) {
+    if (exprStr[i] == 's' || exprStr[i] == 'd') {
+      size_t end = i + 1;
+      for (; end < e && std::isdigit(exprStr[end]); ++end)
+        ;
+      int position;
       // Replace only when 'pattern' is a complete token (not embedded
       // inside a longer identifier or number). We approximate token
       // boundaries by checking that adjacent characters are non-alphanumeric.
-      bool isWhole = (pos == 0 || !std::isalnum(exprStr[pos - 1])) &&
-                     (pos + pattern.length() == exprStr.length() ||
-                      !std::isalnum(exprStr[pos + pattern.length()]));
-      if (isWhole) {
-        exprStr.replace(pos, pattern.length(), nm.str());
-        pos += nm.size();
+      bool isWhole = (i == 0 || !std::isalnum(exprStr[i - 1])) &&
+                     (end == e || !std::isalnum(exprStr[end])) &&
+                     llvm::to_integer(StringRef(exprStr).slice(i + 1, end),
+                                      position, /*Base=*/10);
+      if (!isWhole)
+        continue;
+
+      // When matched, first push the string from the previous segment.
+      os << StringRef(exprStr).slice(segmentStart, i);
+      // Then push the replacement.
+      if (exprStr[i] == 's') {
+        assert(static_cast<size_t>(position) < symbolNames.size() &&
+               "symbol index out of bounds");
+        os << symbolNames[position];
       } else {
-        pos += pattern.length();
+        assert(static_cast<size_t>(position) < dimNames.size() &&
+               "dimension index out of bounds");
+        os << dimNames[position];
       }
+      // Set i to the last symbol included in the pattern so the ++i from the
+      // loop moves to the next symbol.
+      i = end - 1;
+      segmentStart = end;
     }
   }
-  return exprStr;
+  os << StringRef(exprStr).slice(segmentStart, std::string::npos);
 }
 
 // Populate `names` with the names of symbols to be used in the expression
@@ -295,13 +321,14 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   AffineExpr startExpr;
   AffineExpr stepExpr;
   AffineExpr strideExpr;
-  if (failed(parseExprWithNames(symbolNames, startExpr, parser,
+  if (failed(parseExprWithNames(symbolNames, /*dimNames=*/{}, startExpr, parser,
                                 /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, stepExpr, parser,
+      failed(parseExprWithNames(symbolNames, /*dimNames=*/{}, stepExpr, parser,
                                 /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, strideExpr, parser,
+      failed(parseExprWithNames(symbolNames, /*dimNames=*/{}, strideExpr,
+                                parser,
                                 /*allowNull=*/true)) ||
       parser.parseRParen()) {
     parser.emitError(
@@ -355,11 +382,16 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
     return;
   }
   // All three maps share the same symbol set and order.
-  std::string startStr = stringifyWithNames(getStart(), names);
-  std::string stepStr = stringifyWithNames(getStep(), names);
-  std::string strideStr = stringifyWithNames(getStride(), names);
-
-  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")>";
+  printer << "(";
+  printWithNames(printer.getStream(),
+                 getStart() ? getStart().getResult(0) : AffineExpr(), names);
+  printer << ", ";
+  printWithNames(printer.getStream(),
+                 getStep() ? getStep().getResult(0) : AffineExpr(), names);
+  printer << ", ";
+  printWithNames(printer.getStream(),
+                 getStride() ? getStride().getResult(0) : AffineExpr(), names);
+  printer << ")>";
 }
 
 LogicalResult
@@ -541,9 +573,6 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
       }))
     return {};
 
-  // Parse: '->' '(' expr (',' expr)* ')'
-  if (parser.parseArrow())
-    return {};
   MLIRContext *context = parser.getContext();
   SmallVector<llvm::SmallString<16>> owningSymbolNames;
   if (failed(getExprSymbolNames(symbolNameAttrs, symbolNames, owningSymbolNames,
@@ -554,10 +583,50 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
     return {};
   }
 
+  // Parse an optional block of `(` dim-names `)` allowing empty and non-empty
+  // lists.
+  SmallVector<StringRef> dimNames;
+  if (succeeded(parser.parseOptionalLParen())) {
+    if (failed(parser.parseOptionalRParen())) {
+      if (parser.parseCommaSeparatedList(
+              AsmParser::Delimiter::None,
+              [&]() {
+                llvm::SMLoc loc = parser.getCurrentLocation();
+                ParseResult parseResult =
+                    parser.parseKeyword(&dimNames.emplace_back());
+                if (failed(parseResult))
+                  return parseResult;
+                if (dimNames.back().size() >= 2 && dimNames.back()[0] == '_' &&
+                    std::isupper(dimNames.back()[1])) {
+                  parser.emitError(loc) << "dimension name '" << dimNames.back()
+                                        << "' is reserved for internal use";
+                  return ParseResult(failure());
+                }
+                if (llvm::is_contained(llvm::drop_end(dimNames),
+                                       dimNames.back())) {
+                  parser.emitError(loc) << "dimension name '" << dimNames.back()
+                                        << "' is used more than once";
+                  return ParseResult(failure());
+                }
+                if (!llvm::is_contained(symbolNames, dimNames.back()))
+                  return parseResult;
+                parser.emitError(loc) << "dimension name '" << dimNames.back()
+                                      << "' is already used as a symbol name";
+                return ParseResult(failure());
+              }) ||
+          parser.parseRParen())
+        return {};
+    }
+  }
+
+  // Parse: '->' '(' expr (',' expr)* ')'
+  if (parser.parseArrow())
+    return {};
+
   SmallVector<AffineExpr> results;
   auto parseOneExpr = [&]() -> ParseResult {
     AffineExpr e;
-    if (failed(parseExprWithNames(symbolNames, e, parser)))
+    if (failed(parseExprWithNames(symbolNames, dimNames, e, parser)))
       return failure();
     results.push_back(e);
     return success();
@@ -569,8 +638,8 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
     return {};
 
   // Build a single map with all result expressions.
-  auto shape = AffineMap::get(/*numDims=*/0, /*numSymbols=*/symbolNames.size(),
-                              results, context);
+  auto shape =
+      AffineMap::get(dimNames.size(), symbolNames.size(), results, context);
 
   return get(parser.getContext(), symbolNameAttrs, shape);
 }
@@ -582,7 +651,26 @@ void WaveExprListAttr::print(AsmPrinter &printer) const {
   SmallVector<StringRef> names;
   llvm::interleaveComma(symbols, printer,
                         [&](Attribute attr) { printer.printAttribute(attr); });
-  printer << "] -> (";
+  printer << "]";
+
+  SmallVector<llvm::SmallString<4>> owningDimNames = llvm::map_to_vector(
+      llvm::seq<int64_t>(getMap().getNumDims()), [&](int64_t dim) {
+        llvm::SmallString<4> name;
+        llvm::raw_svector_ostream os(name);
+        os << "d" << dim;
+        return name;
+      });
+  if (getMap().getNumDims() != 0) {
+    printer << "(";
+    llvm::interleaveComma(owningDimNames, printer, [&](StringRef name) {
+      printer.printKeywordOrString(name);
+    });
+    printer << ")";
+  }
+  SmallVector<StringRef> dimNames = llvm::map_to_vector(
+      owningDimNames,
+      [&](const llvm::SmallString<4> &name) { return StringRef(name); });
+  printer << " -> (";
 
   SmallVector<llvm::SmallString<16>> owningSymbolNames;
   if (failed(getExprSymbolNames(
@@ -594,18 +682,10 @@ void WaveExprListAttr::print(AsmPrinter &printer) const {
     return;
   }
 
-  // We have one map with N results. For each result expr, make a 1-result map
-  // so we can reuse the identical stringifyWithNames(map,names) helper.
-  AffineMap full = getMap(); // your stored map
-  for (unsigned i = 0, e = full.getNumResults(); i < e; ++i) {
-    if (i)
-      printer << ", ";
-    AffineMap one =
-        AffineMap::get(/*numDims=*/0,
-                       /*numSymbols=*/full.getNumSymbols(),
-                       /*results=*/full.getResult(i), full.getContext());
-    printer << stringifyWithNames(one, names);
-  }
+  llvm::interleaveComma(
+      getMap().getResults(), printer.getStream(), [&](AffineExpr expr) {
+        printWithNames(printer.getStream(), expr, names, dimNames);
+      });
   printer << ")>";
 }
 

@@ -388,6 +388,38 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
         return ExprResult(lhs, BitRange()); // Conservative
       }
 
+      case AffineExprKind::CeilDiv: {
+        if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
+          int64_t divisor = constRhs.getValue();
+
+          // Optimization: ceildiv(x, 2^k) = (x + 2^k - 1) >> k.
+          // Only valid for non-negative x because V_LSHRREV_B32 is a logical
+          // (unsigned) right shift. Negative values would produce a large
+          // positive result instead of the correct negative ceiling.
+          // Affine expressions in this context originate from index
+          // computations which are non-negative by construction.
+          if (isPowerOf2(divisor)) {
+            int64_t shiftAmount = log2(divisor);
+            int64_t bias = divisor - 1;
+            auto biasImm = ctx.createImmType(bias);
+            auto biasConst = ConstantOp::create(builder, loc, biasImm, bias);
+            Value biased =
+                V_ADD_U32::create(builder, loc, vregType, biasConst, lhs);
+            auto shiftAmt = ctx.createImmType(shiftAmount);
+            auto shiftConst =
+                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
+            Value shiftResult = V_LSHRREV_B32::create(builder, loc, vregType,
+                                                      shiftConst, biased);
+            BitRange resultRange =
+                lhsRange.extendForAdd(BitRange::fromConstant(bias))
+                    .shiftRight(shiftAmount);
+            ctx.setBitRange(shiftResult, resultRange);
+            return ExprResult(shiftResult, resultRange);
+          }
+        }
+        return ExprResult(lhs, BitRange());
+      }
+
       case AffineExprKind::Mod: {
         // Check if RHS is constant power of 2 -> use AND
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {

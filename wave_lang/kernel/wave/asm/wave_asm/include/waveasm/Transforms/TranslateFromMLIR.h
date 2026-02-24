@@ -684,6 +684,27 @@ bool isPowerOf2(int64_t value);
 int64_t log2(int64_t value);
 
 //===----------------------------------------------------------------------===//
+// Shared Buffer-Access Helpers
+//===----------------------------------------------------------------------===//
+
+struct VOffsetResult {
+  mlir::Value voffset;
+  int64_t instOffset;
+};
+
+VOffsetResult computeVOffsetFromIndices(mlir::MemRefType memrefType,
+                                        mlir::ValueRange indices,
+                                        TranslationContext &ctx,
+                                        mlir::Location loc);
+
+mlir::Value lookupSRD(mlir::Value memref, TranslationContext &ctx,
+                      mlir::Location loc);
+
+llvm::SmallVector<mlir::Value, 4>
+emitBufferLoads(mlir::Value srd, mlir::Value voffset, int64_t instOffset,
+                int64_t numBytes, TranslationContext &ctx, mlir::Location loc);
+
+//===----------------------------------------------------------------------===//
 // Translation Functions
 //===----------------------------------------------------------------------===//
 

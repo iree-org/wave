@@ -119,6 +119,17 @@ private:
   /// Returns (isLiteral, value) pair
   std::pair<bool, int64_t> getLiteralValue(mlir::Value value);
 
+  /// Materialize a non-inline literal operand into a scratch VGPR.
+  /// Returns the resolved operand string and any prefix v_mov_b32
+  /// instructions needed. If the operand is inline or a register, returns
+  /// it directly with an empty prefix.
+  struct MaterializedOperand {
+    std::string operandStr;
+    std::string prefix;
+  };
+  MaterializedOperand materializeLiteralOperand(mlir::Value operand,
+                                                int scratchIdx);
+
   /// Generate code for a single operation using TypeSwitch dispatch
   /// Returns (instruction_lines, needs_literal_load)
   std::optional<std::string> generateOp(mlir::Operation *op);

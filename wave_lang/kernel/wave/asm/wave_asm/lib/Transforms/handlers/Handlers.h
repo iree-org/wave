@@ -93,6 +93,14 @@ mlir::LogicalResult handleArithExtSI(mlir::Operation *op,
                                      TranslationContext &ctx);
 mlir::LogicalResult handleArithTruncI(mlir::Operation *op,
                                       TranslationContext &ctx);
+mlir::LogicalResult handleArithMinSI(mlir::Operation *op,
+                                     TranslationContext &ctx);
+mlir::LogicalResult handleArithMaxSI(mlir::Operation *op,
+                                     TranslationContext &ctx);
+mlir::LogicalResult handleArithMinUI(mlir::Operation *op,
+                                     TranslationContext &ctx);
+mlir::LogicalResult handleArithMaxUI(mlir::Operation *op,
+                                     TranslationContext &ctx);
 mlir::LogicalResult handleArithCmpI(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleArithSelect(mlir::Operation *op,
@@ -108,6 +116,10 @@ mlir::LogicalResult handleArithDivF(mlir::Operation *op,
 mlir::LogicalResult handleArithNegF(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleArithCmpF(mlir::Operation *op,
+                                    TranslationContext &ctx);
+mlir::LogicalResult handleArithTruncF(mlir::Operation *op,
+                                      TranslationContext &ctx);
+mlir::LogicalResult handleArithExtF(mlir::Operation *op,
                                     TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
@@ -162,6 +174,8 @@ mlir::LogicalResult handleRawBufferLoad(mlir::Operation *op,
                                         TranslationContext &ctx);
 mlir::LogicalResult handleRawBufferStore(mlir::Operation *op,
                                          TranslationContext &ctx);
+mlir::LogicalResult handleMemRefAtomicRMW(mlir::Operation *op,
+                                          TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // ROCDL Dialect Handlers

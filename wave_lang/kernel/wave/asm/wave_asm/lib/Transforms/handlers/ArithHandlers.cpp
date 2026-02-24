@@ -18,6 +18,7 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "waveasm-arith-handlers"
@@ -92,6 +93,22 @@ LogicalResult handleArithSubI(Operation *op, TranslationContext &ctx) {
 
 LogicalResult handleArithMulI(Operation *op, TranslationContext &ctx) {
   return handleBinaryVALU<arith::MulIOp, V_MUL_LO_U32>(op, ctx);
+}
+
+LogicalResult handleArithMinSI(Operation *op, TranslationContext &ctx) {
+  return handleBinaryVALU<arith::MinSIOp, V_MIN_I32>(op, ctx);
+}
+
+LogicalResult handleArithMaxSI(Operation *op, TranslationContext &ctx) {
+  return handleBinaryVALU<arith::MaxSIOp, V_MAX_I32>(op, ctx);
+}
+
+LogicalResult handleArithMinUI(Operation *op, TranslationContext &ctx) {
+  return handleBinaryVALU<arith::MinUIOp, V_MIN_U32>(op, ctx);
+}
+
+LogicalResult handleArithMaxUI(Operation *op, TranslationContext &ctx) {
+  return handleBinaryVALU<arith::MaxUIOp, V_MAX_U32>(op, ctx);
 }
 
 LogicalResult handleArithAndI(Operation *op, TranslationContext &ctx) {
@@ -412,6 +429,68 @@ LogicalResult handleArithCmpF(Operation *op, TranslationContext &ctx) {
   auto immOne = ctx.createImmType(1);
   auto one = ConstantOp::create(builder, loc, immOne, 1);
   ctx.getMapper().mapValue(cmpOp.getResult(), one);
+  return success();
+}
+
+LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
+  auto truncOp = cast<arith::TruncFOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto src = ctx.getMapper().getMapped(truncOp.getIn());
+  if (!src) {
+    return op->emitError("truncf source not mapped");
+  }
+
+  Type srcElemType = getElementTypeOrSelf(truncOp.getIn().getType());
+  Type dstElemType = getElementTypeOrSelf(truncOp.getResult().getType());
+
+  auto srcType = truncOp.getIn().getType();
+  auto vecType = dyn_cast<VectorType>(srcType);
+  int64_t numElems = vecType ? vecType.getNumElements() : 1;
+
+  if (numElems > 1) {
+    ctx.getMapper().mapValue(truncOp.getResult(), *src);
+  } else {
+    auto vregType = ctx.createVRegType();
+    Value result;
+    if (srcElemType.isF32() && dstElemType.isBF16()) {
+      result = V_CVT_BF16_F32::create(builder, loc, vregType, *src);
+    } else if (srcElemType.isF32() && dstElemType.isF16()) {
+      result = V_CVT_F16_F32::create(builder, loc, vregType, *src);
+    } else {
+      result = V_MOV_B32::create(builder, loc, vregType, *src);
+    }
+    ctx.getMapper().mapValue(truncOp.getResult(), result);
+  }
+  return success();
+}
+
+LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx) {
+  auto extOp = cast<arith::ExtFOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto src = ctx.getMapper().getMapped(extOp.getIn());
+  if (!src) {
+    return op->emitError("extf source not mapped");
+  }
+
+  Type srcElemType = getElementTypeOrSelf(extOp.getIn().getType());
+  Type dstElemType = getElementTypeOrSelf(extOp.getResult().getType());
+
+  auto vregType = ctx.createVRegType();
+  Value result;
+
+  if (srcElemType.isBF16() && dstElemType.isF32()) {
+    result = V_CVT_F32_BF16::create(builder, loc, vregType, *src);
+  } else if (srcElemType.isF16() && dstElemType.isF32()) {
+    result = V_CVT_F32_F16::create(builder, loc, vregType, *src);
+  } else {
+    result = V_MOV_B32::create(builder, loc, vregType, *src);
+  }
+
+  ctx.getMapper().mapValue(extOp.getResult(), result);
   return success();
 }
 

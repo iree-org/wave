@@ -9,15 +9,16 @@ waveasm.program @memory_load_operations
 
   %srd = waveasm.precolored.sreg 8 : !waveasm.sreg<4>
   %offset = waveasm.precolored.vreg 0 : !waveasm.vreg
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Buffer loads have Read effect on global memory
   // CHECK: waveasm.buffer_load_dword
-  %val1 = waveasm.buffer_load_dword %srd, %offset
-      : !waveasm.sreg<4>, !waveasm.vreg -> !waveasm.vreg
+  %val1 = waveasm.buffer_load_dword %srd, %offset, %soff0
+      : !waveasm.sreg<4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
 
   // CHECK: waveasm.buffer_load_dwordx4
-  %val2 = waveasm.buffer_load_dwordx4 %srd, %offset
-      : !waveasm.sreg<4>, !waveasm.vreg -> !waveasm.vreg<4>
+  %val2 = waveasm.buffer_load_dwordx4 %srd, %offset, %soff0
+      : !waveasm.sreg<4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg<4>
 
   waveasm.s_endpgm
 }

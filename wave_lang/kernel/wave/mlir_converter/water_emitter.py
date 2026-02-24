@@ -51,7 +51,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     WaterError,
 )
 from wave_lang.support.location_config import LocationCaptureLevel
-from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel.lang.wave_types import Memory, Register, IndexMapping
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
@@ -75,6 +75,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
+    Read,
     ReduceOp as Reduce,
     Reshape,
     SelfIndex,
@@ -500,6 +501,55 @@ def _convert_vector_shapes(
     return ir.DictAttr.get(dict)
 
 
+def _convert_index_mapping_to_water(
+    mapping: IndexMapping, memory_shape: Sequence[IndexExpr] | None, *, is_read: bool
+) -> ir.Attribute:
+    """Converts an IndexMapping to a water attribute assuming it is used for the specified shape.
+
+    Currently only supports permutation mappings. The `is_read` flag indicates
+    whether to use the input mapping (True) or output mapping (False). This is
+    due to excessively expressive design choice in pywave: the unused mapping
+    isn't actually needed beyond IndexMapping construction.
+    """
+    if memory_shape is None:
+        raise RuntimeError(
+            "Memory type shape is required for index mapping conversion."
+        )
+
+    filtered_shape: list[IndexSymbol] = []
+    for dim in memory_shape:
+        if not isinstance(dim, IndexSymbol):
+            raise NotImplementedError(
+                f"Only single-symbol shapes are currently supported, got {dim}"
+            )
+        filtered_shape.append(dim)
+    iterators: tuple[IndexExpr, ...] = (
+        # TODO: the function expects a `tuple` but doesn't actually need that, any iterable would do.
+        mapping.map_input_indices(tuple(filtered_shape))
+        if is_read
+        else mapping.map_output_indices(tuple(filtered_shape))
+    )
+
+    # Consecutive iterators are assigned to the value (non-memory)
+    # shape, and their order may be different in the memory shape.
+    # The mapping is therefore (d0, d1, d2, ...) -> (iterator positions)
+    # inverted because, in water, the mapping goes the from memory shape
+    # to the value shape.
+    #
+    # Construct a list of iterators in order and look up for
+    # position in that list to find numeric permutation indices
+    # without parsing symbol names to extract the iterator position.
+    # If we had a proper data structure instead of blindly relying
+    # on sympy symbols everywhere, this would have been an easy to
+    # access property...
+    ordered_iterators = [IndexMapping.iterator(i) for i in range(len(iterators))]
+    permutation = [ordered_iterators.index(iter) for iter in iterators]
+    inverse_permutation = [permutation.index(i) for i in range(len(permutation))]
+    return wave.WaveExprListAttr.get(
+        [], ir.AffineMap.get_permutation(inverse_permutation)
+    )
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -632,11 +682,33 @@ def _emit_ops_from_graph(
                 # (e.g. operations like Write, which do not have results
                 # and thus don't take `result_type` as argument)
                 op_builder = WAVE_OP_CONSTRUCTORS[node.tkw_op_name]
-                # TODO: Add special handling for Iterate node
                 if isinstance(node, Write):
                     mlir_op = op_builder(
                         get_single_mapped_value(node.register_),
                         get_single_mapped_value(node.memory),
+                        mapping=(
+                            _convert_index_mapping_to_water(
+                                node.mapping,
+                                node.memory_type.symbolic_shape,
+                                is_read=False,
+                            )
+                            if node.mapping
+                            else None
+                        ),
+                    )
+                elif isinstance(node, Read):
+                    mlir_op = op_builder(
+                        result_type,
+                        get_single_mapped_value(node.memory),
+                        mapping=(
+                            _convert_index_mapping_to_water(
+                                node.mapping,
+                                node.memory_type.symbolic_shape,
+                                is_read=True,
+                            )
+                            if node.mapping
+                            else None
+                        ),
                     )
                 elif isinstance(node, NewRegister):
                     dtype = getattr(node, "dtype", None)

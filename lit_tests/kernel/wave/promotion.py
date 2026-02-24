@@ -75,10 +75,10 @@ def test_read_write_equal_sizes():
         infer_types(trace)
         promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
         print_trace(trace, False)
-    # CHECK: %allocate
-    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-    # CHECK-NEXT: %a
+    # CHECK: %a
     # CHECK-NEXT: %c
+    # CHECK-NEXT: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %read
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_1
@@ -125,10 +125,10 @@ def test_read_write_equal_sizes_different_address_spaces():
         infer_types(trace)
         promote_placeholders(trace, constraints)
         print_trace(trace, False)
-    # CHECK: %allocate
-    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-    # CHECK-NEXT: %a
+    # CHECK: %a
     # CHECK-NEXT: %c
+    # CHECK-NEXT: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %read
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_1
@@ -197,9 +197,9 @@ def test_gemm():
     # CHECK-SAME: (%iterate, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
 
     # iterate subgraph:
-    # CHECK: %b
+    # CHECK: %acc
     # CHECK-NEXT: %a
-    # CHECK-NEXT: %acc
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read
     # CHECK-NEXT: %write
     # CHECK-SAME: (%read, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)

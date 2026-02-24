@@ -189,8 +189,10 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
       voffset = ConstantOp::create(builder, loc, immType, 0);
     }
 
+    auto zeroImm = builder.getType<ImmType>(0);
+    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
     auto loadInstr = BUFFER_LOAD_DWORD::create(
-        builder, loc, TypeRange{vregType}, srd, voffset);
+        builder, loc, TypeRange{vregType}, srd, voffset, zeroConst);
     ctx.getMapper().mapValue(loadOp.getResult(), loadInstr.getResult(0));
   }
 

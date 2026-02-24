@@ -11,10 +11,11 @@ waveasm.program @srd_basic target = #waveasm.target<#waveasm.gfx942, 5> abi = #w
 
   // VGPR offset for per-lane addressing
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Buffer load using SRD
-  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}} -> !waveasm.pvreg
-  %data = waveasm.buffer_load_dword %srd, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}}, %{{.*}} -> !waveasm.pvreg
+  %data = waveasm.buffer_load_dword %srd, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
@@ -35,14 +36,15 @@ waveasm.program @srd_multiple_buffers target = #waveasm.target<#waveasm.gfx942, 
   %srd_c = waveasm.precolored.sreg 8, 4 : !waveasm.psreg<8, 4>
 
   %off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Load from different buffers
-  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}} -> !waveasm.pvreg
-  %data_a = waveasm.buffer_load_dword %srd_a, %off : !waveasm.psreg<0, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
-  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}} -> !waveasm.pvreg
-  %data_b = waveasm.buffer_load_dword %srd_b, %off : !waveasm.psreg<4, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
-  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}} -> !waveasm.pvreg
-  %data_c = waveasm.buffer_load_dword %srd_c, %off : !waveasm.psreg<8, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
+  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}}, %{{.*}} -> !waveasm.pvreg
+  %data_a = waveasm.buffer_load_dword %srd_a, %off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
+  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}}, %{{.*}} -> !waveasm.pvreg
+  %data_b = waveasm.buffer_load_dword %srd_b, %off, %soff0 : !waveasm.psreg<4, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
+  // CHECK: waveasm.buffer_load_dword %{{.*}}, %{{.*}}, %{{.*}} -> !waveasm.pvreg
+  %data_c = waveasm.buffer_load_dword %srd_c, %off, %soff0 : !waveasm.psreg<8, 4>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
@@ -80,6 +82,7 @@ waveasm.program @srd_buffer_store target = #waveasm.target<#waveasm.gfx942, 5> a
 waveasm.program @srd_with_swizzle target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %base_off = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Swizzle offset computation: offset + (lane_id & swizzle_mask) * stride
   // This is typically handled by cache_swizzle_stride in the context
@@ -89,7 +92,7 @@ waveasm.program @srd_with_swizzle target = #waveasm.target<#waveasm.gfx942, 5> a
 
   // Load with swizzled offset
   // CHECK: waveasm.buffer_load_dword
-  %data = waveasm.buffer_load_dword %srd, %swizzled_off : !waveasm.psreg<0, 4>, !waveasm.vreg -> !waveasm.vreg
+  %data = waveasm.buffer_load_dword %srd, %swizzled_off, %soff0 : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
@@ -101,10 +104,11 @@ waveasm.program @global_memory_access target = #waveasm.target<#waveasm.gfx942, 
   %sbase = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   // Per-lane offset in VGPR
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
 
   // Global load: base[lane_offset]
   // CHECK: waveasm.global_load_dword
-  %data = waveasm.global_load_dword %sbase, %voff : !waveasm.psreg<0, 2>, !waveasm.pvreg<0> -> !waveasm.vreg
+  %data = waveasm.global_load_dword %sbase, %voff, %soff0 : !waveasm.psreg<0, 2>, !waveasm.pvreg<0>, !waveasm.imm<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }

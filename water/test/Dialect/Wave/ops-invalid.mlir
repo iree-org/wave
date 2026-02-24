@@ -330,7 +330,7 @@ func.func @mismatch_shape_unary(%lhs: !wave.tensor<[@A, @B] of f32>) {
 // -----
 
 func.func @mismatch_shape_read(%lhs: !wave.tensor<[@A, @B] of f32, <global>>) {
-  // expected-error @below {{expected result #0 dimension #0 (#wave.symbol<"B">) to match operand #0 dimension #0 (#wave.symbol<"A">)}}
+  // expected-error @below {{the value shape (B, C) doesn't match the memory shape (A, B)}}
   wave.read %lhs : (!wave.tensor<[@A, @B] of f32, <global>>) -> !wave.tensor<[@B, @C] of f32, <register>>
   return
 }
@@ -338,8 +338,48 @@ func.func @mismatch_shape_read(%lhs: !wave.tensor<[@A, @B] of f32, <global>>) {
 // -----
 
 func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>, %rhs: !wave.tensor<[@B, @C] of f32, <global>>) {
-  // expected-error @below {{expected operand #1 dimension #0 (#wave.symbol<"B">) to match operand #0 dimension #0 (#wave.symbol<"A">)}}
+  // expected-error @below {{the value shape (A, B) doesn't match the memory shape (B, C)}}
   wave.write %lhs, %rhs : !wave.tensor<[@A, @B] of f32, <register>>, !wave.tensor<[@B, @C] of f32, <global>>
+}
+
+// -----
+
+// ordered_syms size must match memory tensor rank.
+func.func @read_ordered_syms_size_mismatch(%mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' size (2) does not match memory tensor rank (3)}}
+  %0 = wave.read %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">]}
+    : (!wave.tensor<[@M, @K, @N] of f32, <global>>) -> !wave.tensor<[@M, @K, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+// ordered_syms symbols must match memory tensor shape in order.
+func.func @read_ordered_syms_symbol_mismatch(%mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 1 ('N') does not match memory tensor shape symbol ('K')}}
+  %0 = wave.read %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">, #wave.symbol<"K">]}
+    : (!wave.tensor<[@M, @K, @N] of f32, <global>>) -> !wave.tensor<[@M, @K, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+// ordered_syms size must match memory tensor rank (wave.write).
+func.func @write_ordered_syms_size_mismatch(%val: !wave.tensor<[@M, @K, @N] of f32, <register>>, %mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' size (2) does not match memory tensor rank (3)}}
+  wave.write %val, %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">]}
+    : !wave.tensor<[@M, @K, @N] of f32, <register>>, !wave.tensor<[@M, @K, @N] of f32, <global>>
+  return
+}
+
+// -----
+
+// ordered_syms symbols must match memory tensor shape in order (wave.write).
+func.func @write_ordered_syms_symbol_mismatch(%val: !wave.tensor<[@M, @K, @N] of f32, <register>>, %mem: !wave.tensor<[@M, @K, @N] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 1 ('N') does not match memory tensor shape symbol ('K')}}
+  wave.write %val, %mem {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">, #wave.symbol<"K">]}
+    : !wave.tensor<[@M, @K, @N] of f32, <register>>, !wave.tensor<[@M, @K, @N] of f32, <global>>
+  return
 }
 
 // -----
@@ -440,7 +480,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 func.func @read_element_type_mismatch(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>) {
-  // expected-error @below {{expected result #0 and operand #0 elemental types to match, got 'f32', 'f16'}}
+  // expected-error @below {{expected memory and register elemental types to match, got 'f16', 'f32'}}
   %0 = wave.read %mem : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf32>
   return
 }

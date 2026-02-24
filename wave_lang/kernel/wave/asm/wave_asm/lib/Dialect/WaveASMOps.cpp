@@ -362,6 +362,17 @@ LogicalResult FLAT_STORE_DWORDX3::verify() { return success(); }
 LogicalResult FLAT_STORE_DWORDX4::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
+// Explicit Verifier Definitions for VMEM Atomic Operations
+//===----------------------------------------------------------------------===//
+
+LogicalResult BUFFER_ATOMIC_PK_ADD_BF16::verify() {
+  return verifyVMEMStoreOp(*this);
+}
+LogicalResult BUFFER_ATOMIC_ADD_F32::verify() {
+  return verifyVMEMStoreOp(*this);
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen'd Operation Definitions
 //===----------------------------------------------------------------------===//
 

@@ -614,6 +614,7 @@ def compile_cpp_backend(
             "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
+            "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-linear-scan",
             "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)

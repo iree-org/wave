@@ -201,11 +201,6 @@ def gemm_progressive_roundtrip():
             "promote_placeholders",
             "set_node_indices",
             "reorder_workgroups",
-            "expand_graph",
-            "set_post_expansion_indices",
-            "remove_chained_getresult",
-            "decompose_vmma_ops",
-            "decompose_dot_mma",
         }
     )
 
