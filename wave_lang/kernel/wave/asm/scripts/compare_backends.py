@@ -614,6 +614,7 @@ def compile_cpp_backend(
             "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
+            "--waveasm-scale-pack-elimination",
             "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-loop-address-promotion",

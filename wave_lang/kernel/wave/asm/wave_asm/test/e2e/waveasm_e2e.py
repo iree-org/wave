@@ -196,6 +196,7 @@ class WaveASMCompiler:
             "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
             "--waveasm-scoped-cse",  # Run CSE
             "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
+            "--waveasm-scale-pack-elimination",
             "--waveasm-buffer-load-strength-reduction",
             "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
             "--waveasm-loop-address-promotion",
