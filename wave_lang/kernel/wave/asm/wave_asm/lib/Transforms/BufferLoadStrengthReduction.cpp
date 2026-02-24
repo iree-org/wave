@@ -11,11 +11,13 @@
 // voffsets and SGPR soffset bumping. For each buffer_load in a loop whose
 // voffset depends on the induction variable:
 //
-//   1. Precompute the voffset at iv=initial_value (loop-invariant).
-//   2. Compute the stride per SRD group (SGPR, via v_readfirstlane).
-//   3. Carry one soffset per SRD group as SGPR iter_arg (starts at 0).
-//   4. Each iteration: soffset += stride (one s_add_u32 per SRD group).
-//   5. Set each buffer_load's soffset to the group's soffset.
+//   1. Symbolically compute the constant stride per candidate by
+//      differentiating the address chain w.r.t. the induction variable.
+//   2. Group candidates by (SRD, stride); each group shares one soffset.
+//   3. Precompute each voffset at iv=initial_value (loop-invariant).
+//   4. Carry one soffset per group as SGPR iter_arg (starts at 0).
+//   5. Each iteration: soffset += stride (one s_add_u32 per group).
+//   6. Set each buffer_load's soffset to the group's soffset.
 //
 // This eliminates ALL VALU address computation from the loop body.
 //
@@ -34,7 +36,7 @@
 // LoopAddressPromotion with a different strategy: rotating precomputed VGPRs).
 // Splitting into two passes adds an abstraction boundary for one consumer.
 // If non-buffer IV-dependent VALU chains appear later, factor out the stride
-// computation (clone-at-two-IVs, subtract, readfirstlane) as shared utility.
+// computation (symbolic differentiation of address chain) as shared utility.
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
@@ -142,6 +144,160 @@ static Value cloneChainBeforeLoop(const llvm::SetVector<Operation *> &deps,
   return mapping.lookupOrDefault(targetVoffset);
 }
 
+// Symbolically compute the stride of the voffset chain w.r.t. the IV.
+// Returns the constant stride if determinable, nullopt otherwise.
+// Works by computing the "derivative" of each op: IV -> ivStep,
+// loop-invariant -> 0, add(a,b) -> da+db, lshl(a,c) -> da<<c, etc.
+// The deps SetVector is in reverse topological order (DFS from voffset),
+// so we iterate in reverse to process inputs before outputs.
+//
+// Because the result must be a compile-time integer, non-uniform strides
+// are automatically rejected. E.g. v_mul_lo_u32(tid, iv) would need
+// getConstantValue(tid) to succeed, which it cannot for a VGPR — so
+// the candidate is skipped. No runtime readfirstlane needed.
+static std::optional<int64_t>
+computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
+                    Value iv, int64_t ivStep) {
+  // Maps each Value to its per-IV-step delta (symbolic derivative).
+  // Populated in topological order; absent entries are loop-invariant
+  // (delta=0).
+  llvm::DenseMap<Value, int64_t> delta;
+  delta[iv] = ivStep;
+
+  // Values not in the map are loop-invariant (delta=0): defined outside the
+  // loop (constants, precolored VGPRs like tid) or non-IV block args
+  // (accumulators). Delta=0 means "does not change across iterations", NOT
+  // "has value 0" — so tid correctly gets delta=0 even though its per-thread
+  // value is nonzero. For linear ops (add, sub, shift) the tid contribution
+  // cancels in the derivative; for mul, we require getConstantValue on the
+  // loop-invariant operand, which rejects VGPRs like tid.
+  auto getDelta = [&](Value v) -> int64_t {
+    auto it = delta.find(v);
+    return it != delta.end() ? it->second : 0;
+  };
+
+  for (auto it = deps.rbegin(); it != deps.rend(); ++it) {
+    Operation *op = *it;
+
+    if (isa<ConstantOp>(op)) {
+      for (Value r : op->getResults())
+        delta[r] = 0;
+      continue;
+    }
+
+    if (isa<V_MOV_B32>(op)) {
+      for (Value r : op->getResults())
+        delta[r] = getDelta(op->getOperand(0));
+      continue;
+    }
+
+    // Validate shift amount is in [0, 31] (32-bit GPU ops) to avoid UB.
+    auto validShift = [](std::optional<int64_t> amt) -> std::optional<int64_t> {
+      if (!amt || *amt < 0 || *amt > 31)
+        return std::nullopt;
+      return amt;
+    };
+
+    if (isa<V_ADD_U32, V_LSHL_ADD_U32>(op)) {
+      // v_add_u32(a, b) = a + b.
+      // v_lshl_add_u32(a, b, c) = (a << b) + c.
+      // For lshl_add: treat as add(lshl(a, b), c) — but b must be constant
+      // and IV-independent for the shift to be linear.
+      if (isa<V_LSHL_ADD_U32>(op)) {
+        int64_t dSrc = getDelta(op->getOperand(0));
+        int64_t dShift = getDelta(op->getOperand(1));
+        int64_t dAdd = getDelta(op->getOperand(2));
+        if (dShift != 0)
+          return std::nullopt;
+        auto shiftAmt = validShift(getConstantValue(op->getOperand(1)));
+        if (!shiftAmt)
+          return std::nullopt;
+        for (Value r : op->getResults())
+          delta[r] = (dSrc << *shiftAmt) + dAdd;
+      } else {
+        int64_t d = getDelta(op->getOperand(0)) + getDelta(op->getOperand(1));
+        for (Value r : op->getResults())
+          delta[r] = d;
+      }
+      continue;
+    }
+
+    if (isa<V_SUB_U32>(op)) {
+      int64_t d = getDelta(op->getOperand(0)) - getDelta(op->getOperand(1));
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+
+    if (isa<V_LSHLREV_B32>(op)) {
+      // lshlrev(amt, src) = src << amt.
+      int64_t dAmt = getDelta(op->getOperand(0));
+      int64_t dSrc = getDelta(op->getOperand(1));
+      if (dAmt != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(op->getOperand(0)));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dSrc << *shiftAmt;
+      continue;
+    }
+
+    if (isa<V_LSHL_OR_B32>(op)) {
+      // lshl_or(src, amt, or_val) = (src << amt) | or_val.
+      // In address computation, OR always has disjoint bits (packed fields),
+      // so delta = (dSrc << amt) + dOr — same as lshl_add.
+      int64_t dSrc = getDelta(op->getOperand(0));
+      int64_t dShift = getDelta(op->getOperand(1));
+      int64_t dOr = getDelta(op->getOperand(2));
+      if (dShift != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(op->getOperand(1)));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = (dSrc << *shiftAmt) + dOr;
+      continue;
+    }
+
+    if (isa<V_MUL_LO_U32>(op)) {
+      // Linear only if exactly one operand depends on IV.
+      int64_t d0 = getDelta(op->getOperand(0));
+      int64_t d1 = getDelta(op->getOperand(1));
+      if (d0 != 0 && d1 != 0)
+        return std::nullopt;
+      if (d0 == 0 && d1 == 0) {
+        for (Value r : op->getResults())
+          delta[r] = 0;
+        continue;
+      }
+      // One is IV-dependent, the other must be a known constant.
+      Value constOperand = d0 == 0 ? op->getOperand(0) : op->getOperand(1);
+      int64_t dVar = d0 != 0 ? d0 : d1;
+      auto constVal = getConstantValue(constOperand);
+      if (!constVal)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dVar * *constVal;
+      continue;
+    }
+
+    // Bitwise ops (AND, OR, XOR, BFE, LSHR): nonlinear if IV-dependent.
+    bool hasIVDep = false;
+    for (Value operand : op->getOperands())
+      if (getDelta(operand) != 0)
+        hasIVDep = true;
+    if (hasIVDep)
+      return std::nullopt;
+    for (Value r : op->getResults())
+      delta[r] = 0;
+  }
+
+  auto found = delta.find(voffset);
+  return found != delta.end() ? std::optional<int64_t>(found->second)
+                              : std::nullopt;
+}
+
 struct BufferLoadInfo {
   Operation *loadOp;
   Value voffset;
@@ -217,44 +373,57 @@ static void applyStrengthReduction(LoopOp loopOp) {
   auto loc = loopOp.getLoc();
   ValueRange initArgs = loopOp.getInitArgs();
   Value ivInit = initArgs[0];
-
-  auto stepImm = builder.getType<ImmType>(*ivStep);
-  auto stepConst = ConstantOp::create(builder, loc, stepImm, *ivStep);
   auto sregType = builder.getType<SRegType>();
-  auto vregType = builder.getType<VRegType>(1, 1);
-  Value ivPlusStep =
-      S_ADD_U32::create(builder, loc, sregType, ivInit, stepConst);
 
-  // Group candidates by SRD. Compute one stride per group.
+  // Compute static stride for each candidate by symbolically differentiating
+  // the address chain w.r.t. IV. Drop candidates with non-constant strides
+  // (the voffset delta may be non-uniform across iterations).
+  SmallVector<int64_t> candidateStrides;
+  {
+    SmallVector<BufferLoadInfo> filtered;
+    for (auto &info : candidates) {
+      auto stride = computeStaticStride(info.deps, info.voffset, iv, *ivStep);
+      if (stride) {
+        candidateStrides.push_back(*stride);
+        filtered.push_back(std::move(info));
+      } else {
+        LDBG() << "skipping candidate: cannot determine constant stride";
+      }
+    }
+    candidates = std::move(filtered);
+  }
+
+  if (candidates.empty())
+    return;
+
+  // Group by (SRD, stride). Loads sharing the same SRD and same constant
+  // stride share one soffset iter_arg; different strides get separate ones.
   struct SRDGroup {
     Value srd;
-    Value strideVGPR; // stride as VGPR (from v_sub).
-    Value strideSGPR; // stride as SGPR (from v_readfirstlane).
+    int64_t stride;
+    Value strideSGPR;
   };
-  llvm::DenseMap<Value, unsigned> srdToGroupIdx;
   SmallVector<SRDGroup> groups;
   SmallVector<unsigned> candidateGroupIdx;
 
   for (unsigned i = 0; i < candidates.size(); ++i) {
-    auto it = srdToGroupIdx.find(candidates[i].srd);
-    if (it == srdToGroupIdx.end()) {
-      // Compute stride for this SRD group using the first candidate.
-      Value voff0 =
-          cloneChainBeforeLoop(candidates[i].deps, candidates[i].voffset,
-                               ivInit, loopOp, body, builder);
-      Value voff1 =
-          cloneChainBeforeLoop(candidates[i].deps, candidates[i].voffset,
-                               ivPlusStep, loopOp, body, builder);
-      Value strideVGPR =
-          V_SUB_U32::create(builder, loc, vregType, voff1, voff0);
-      Value strideSGPR =
-          V_READFIRSTLANE_B32::create(builder, loc, sregType, strideVGPR);
-
-      srdToGroupIdx[candidates[i].srd] = groups.size();
-      candidateGroupIdx.push_back(groups.size());
-      groups.push_back({candidates[i].srd, strideVGPR, strideSGPR});
+    std::optional<unsigned> matchIdx;
+    for (unsigned g = 0; g < groups.size(); ++g) {
+      if (groups[g].srd == candidates[i].srd &&
+          groups[g].stride == candidateStrides[i]) {
+        matchIdx = g;
+        break;
+      }
+    }
+    if (matchIdx) {
+      candidateGroupIdx.push_back(*matchIdx);
     } else {
-      candidateGroupIdx.push_back(it->second);
+      auto strideImm = builder.getType<ImmType>(candidateStrides[i]);
+      auto strideConst =
+          ConstantOp::create(builder, loc, strideImm, candidateStrides[i]);
+      Value strideSGPR = S_MOV_B32::create(builder, loc, sregType, strideConst);
+      candidateGroupIdx.push_back(groups.size());
+      groups.push_back({candidates[i].srd, candidateStrides[i], strideSGPR});
     }
   }
 
