@@ -251,7 +251,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
 
   LDBG() << "found " << chains.size() << " pack chains to eliminate";
 
-  // Step 5: Collect indices of byte args to remove (sorted descending).
+  // Step 5: Collect indices of byte args to remove.
   llvm::SmallDenseSet<unsigned, 8> removedArgIndices;
   for (auto &chain : chains)
     for (unsigned i : llvm::seq(4u))
@@ -361,7 +361,7 @@ static void eliminateScalePackChains(LoopOp loopOp) {
           auto bfe = V_BFE_U32::create(postBuilder, loc, vregType, dwordResult,
                                        offsetConst, widthConst);
           loopOp.getResult(i).replaceAllUsesWith(bfe);
-          goto nextResult;
+          goto nextResult; // Break out of both inner loops.
         }
       }
     }

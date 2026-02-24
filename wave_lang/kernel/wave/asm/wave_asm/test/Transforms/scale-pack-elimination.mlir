@@ -208,3 +208,179 @@ waveasm.program @no_transform_different_yield_source
 
   waveasm.s_endpgm
 }
+
+//===----------------------------------------------------------------------===//
+// Two independent pack chains in the same loop.
+// Both should be eliminated, collapsing 8 byte iter_args into 2 dwords.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: @two_chains
+waveasm.program @two_chains
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %eight = waveasm.constant 8 : !waveasm.imm<8>
+  %sixteen = waveasm.constant 16 : !waveasm.imm<16>
+  %twentyfour = waveasm.constant 24 : !waveasm.imm<24>
+  %limit = waveasm.constant 4 : !waveasm.imm<4>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %soff = waveasm.precolored.sreg 4 : !waveasm.psreg<4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // Chain A: first scale dword.
+  %dword_a = waveasm.buffer_load_dword %srd, %tid, %soff
+      : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+  %a0 = waveasm.v_bfe_u32 %dword_a, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+  %a1 = waveasm.v_bfe_u32 %dword_a, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+  %a2 = waveasm.v_bfe_u32 %dword_a, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+  %a3 = waveasm.v_bfe_u32 %dword_a, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+  // Chain B: second scale dword.
+  %dword_b = waveasm.buffer_load_dword %srd, %tid, %soff
+      : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+  %b0 = waveasm.v_bfe_u32 %dword_b, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+  %b1 = waveasm.v_bfe_u32 %dword_b, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+  %b2 = waveasm.v_bfe_u32 %dword_b, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+  %b3 = waveasm.v_bfe_u32 %dword_b, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+  // After elimination: (iv, dword_a, dword_b) = 3 iter_args instead of 9.
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.vreg) {
+  %riv, %ra0, %ra1, %ra2, %ra3, %rb0, %rb1, %rb2, %rb3 = waveasm.loop(
+      %iv = %init_iv,
+      %arg_a0 = %a0, %arg_a1 = %a1, %arg_a2 = %a2, %arg_a3 = %a3,
+      %arg_b0 = %b0, %arg_b1 = %b1, %arg_b2 = %b2, %arg_b3 = %b3)
+      : (!waveasm.sreg,
+         !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg,
+         !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg)
+     -> (!waveasm.sreg,
+         !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg,
+         !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg) {
+
+    // Pack chain A.
+    // CHECK-NOT: waveasm.v_lshl_or_b32
+    %at1 = waveasm.v_lshl_or_b32 %arg_a1, %eight, %arg_a0
+        : !waveasm.vreg, !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+    %at2 = waveasm.v_lshl_or_b32 %arg_a2, %sixteen, %at1
+        : !waveasm.vreg, !waveasm.imm<16>, !waveasm.vreg -> !waveasm.vreg
+    %packed_a = waveasm.v_lshl_or_b32 %arg_a3, %twentyfour, %at2
+        : !waveasm.vreg, !waveasm.imm<24>, !waveasm.vreg -> !waveasm.vreg
+
+    // Pack chain B.
+    %bt1 = waveasm.v_lshl_or_b32 %arg_b1, %eight, %arg_b0
+        : !waveasm.vreg, !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+    %bt2 = waveasm.v_lshl_or_b32 %arg_b2, %sixteen, %bt1
+        : !waveasm.vreg, !waveasm.imm<16>, !waveasm.vreg -> !waveasm.vreg
+    %packed_b = waveasm.v_lshl_or_b32 %arg_b3, %twentyfour, %bt2
+        : !waveasm.vreg, !waveasm.imm<24>, !waveasm.vreg -> !waveasm.vreg
+
+    // Use both packed values.
+    %use_a = waveasm.v_add_u32 %packed_a, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+    %use_b = waveasm.v_add_u32 %packed_b, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+    // Bottom: reload both dwords, extract bytes for yield.
+    // CHECK-NOT: waveasm.v_bfe_u32
+    %next_dword_a = waveasm.buffer_load_dword %srd, %tid, %soff
+        : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+    %na0 = waveasm.v_bfe_u32 %next_dword_a, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+    %na1 = waveasm.v_bfe_u32 %next_dword_a, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+    %na2 = waveasm.v_bfe_u32 %next_dword_a, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+    %na3 = waveasm.v_bfe_u32 %next_dword_a, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+    %next_dword_b = waveasm.buffer_load_dword %srd, %tid, %soff
+        : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+    %nb0 = waveasm.v_bfe_u32 %next_dword_b, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb1 = waveasm.v_bfe_u32 %next_dword_b, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb2 = waveasm.v_bfe_u32 %next_dword_b, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb3 = waveasm.v_bfe_u32 %next_dword_b, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+
+    // Yield should carry (next_iv, next_dword_a, next_dword_b).
+    // CHECK: waveasm.condition
+    // CHECK-SAME: iter_args(%{{.*}}, %{{.*}}, %{{.*}}) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
+    waveasm.condition %cond : !waveasm.sreg
+        iter_args(%next_iv, %na0, %na1, %na2, %na3, %nb0, %nb1, %nb2, %nb3)
+        : !waveasm.sreg,
+          !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg,
+          !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Post-loop uses of removed byte results.
+// The pass should insert v_bfe_u32 extractions after the loop.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: @post_loop_byte_use
+waveasm.program @post_loop_byte_use
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %eight = waveasm.constant 8 : !waveasm.imm<8>
+  %sixteen = waveasm.constant 16 : !waveasm.imm<16>
+  %twentyfour = waveasm.constant 24 : !waveasm.imm<24>
+  %limit = waveasm.constant 4 : !waveasm.imm<4>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %soff = waveasm.precolored.sreg 4 : !waveasm.psreg<4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  %init_dword = waveasm.buffer_load_dword %srd, %tid, %soff
+      : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+  %b0 = waveasm.v_bfe_u32 %init_dword, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+  %b1 = waveasm.v_bfe_u32 %init_dword, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+  %b2 = waveasm.v_bfe_u32 %init_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+  %b3 = waveasm.v_bfe_u32 %init_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+  // Loop still gets transformed (bytes only used by pack chain inside).
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg) {
+  %riv, %rb0, %rb1, %rb2, %rb3 = waveasm.loop(
+      %iv = %init_iv, %arg_b0 = %b0, %arg_b1 = %b1, %arg_b2 = %b2, %arg_b3 = %b3)
+      : (!waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg)
+     -> (!waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg) {
+
+    %t1 = waveasm.v_lshl_or_b32 %arg_b1, %eight, %arg_b0
+        : !waveasm.vreg, !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+    %t2 = waveasm.v_lshl_or_b32 %arg_b2, %sixteen, %t1
+        : !waveasm.vreg, !waveasm.imm<16>, !waveasm.vreg -> !waveasm.vreg
+    %packed = waveasm.v_lshl_or_b32 %arg_b3, %twentyfour, %t2
+        : !waveasm.vreg, !waveasm.imm<24>, !waveasm.vreg -> !waveasm.vreg
+
+    %use = waveasm.v_add_u32 %packed, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+    %next_dword = waveasm.buffer_load_dword %srd, %tid, %soff
+        : !waveasm.psreg<0, 4>, !waveasm.pvreg<0>, !waveasm.psreg<4> -> !waveasm.vreg
+    %nb0 = waveasm.v_bfe_u32 %next_dword, %zero, %eight : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb1 = waveasm.v_bfe_u32 %next_dword, %eight, %eight : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb2 = waveasm.v_bfe_u32 %next_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
+    %nb3 = waveasm.v_bfe_u32 %next_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg
+        iter_args(%next_iv, %nb0, %nb1, %nb2, %nb3)
+        : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
+  }
+
+  // Post-loop use of byte 1 (%rb1). The pass should insert a
+  // v_bfe_u32(dword_result, 8, 8) after the loop to extract byte 1.
+  // CHECK: waveasm.v_bfe_u32
+  // CHECK: waveasm.v_add_u32
+  %post = waveasm.v_add_u32 %rb1, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}
