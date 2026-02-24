@@ -20,6 +20,10 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     emit_wave_dialect,
     format_diagnostics,
 )
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_vanilla_attention_kernel,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -1180,6 +1184,126 @@ def mlir_converter_matmul():
     # CHECK: scf.for
     # CHECK-NOT: wave.mma
     # CHECK: amdgpu.mfma 32x32x8
+
+
+@run_test
+def mlir_converter_attention():
+    attention, hyperparams, _ = get_vanilla_attention_kernel(
+        AttentionShape(
+            num_query_heads=8,
+            num_kv_heads=2,
+            query_seq_len=256,
+            head_size_kv=64,
+            head_size=64,
+            kv_seq_len=256,
+        ),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+        False,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, attention)
+    trace = compiled_kernel.get_compiled_graph()
+
+    constraints = attention.constraints
+
+    # TODO: investigate why the recursion limit is hit in the emitter.
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(10000)
+
+    with Context(), Location.unknown():
+        mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    sys.setrecursionlimit(limit)
+
+    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
+
+    print(mlir_output)
+
+    # Full attention after the pass pipeline is rather long and we don't want
+    # random syntax changes affecting the test. Check the overall structure
+    # and typing, but not the exact IR.
+
+    # CHECK-LABEL: mlir_converter_attention
+    # CHECK: wave.allocate {distributed_shape = #wave.expr_list<[] -> (17408)>} : !wave.tensor<[@B, @N, @K2, @K1] of i8, <shared>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 16, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 32, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 48, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @M] of f32, <register>>
+    # CHECK-COUNT-3: wave.register {{.*}} !wave.tensor<[@B, @M, @K2] of f32, <register>>
+    # CHECK: %[[SHMEM1:.+]] = wave.allocate in %{{.*}}
+    # CHECK: %[[SHMEM2:.+]] = wave.allocate in %{{.*}}
+    # CHECK-COUNT-8: wave.read
+    # CHECK:  wave.iterate @K2 iter_args
+
+    # Marshaling through shared memory.
+    # CHECK-COUNT-8:   wave.register {{.*}} !wave.tensor<[@B, @K2, @M] of f32, <register>>
+    # CHECK:           wave.read
+    # CHECK:           amdgpu.lds_barrier
+    # CHECK:           wave.write
+    # CHECK:           wave.read
+    # CHECK:           wave.write
+    # CHECK-COUNT-8:   wave.read
+    # CHECK-COUNT-8:   wave.extract
+    # CHECK:           %[[RESHAPE1:.+]] = wave.reshape
+    # CHECK-COUNT-8:   wave.extract
+    # CHECK:           %[[RESHAPE2:.+]] = wave.reshape
+    # CHECK:           wave.write %[[RESHAPE1]], %[[SHMEM1]]
+    # CHECK:           wave.write %[[RESHAPE2]], %[[SHMEM1]]
+    # CHECK:           amdgpu.lds_barrier
+    # CHECK-COUNT-16:  wave.read %[[SHMEM1]]
+    # CHECK-COUNT-16:  wave.read %[[SHMEM2]]
+
+    # Consecutive matmuls.
+    # CHECK-COUNT-32:  wave.mma %{{.*}} (!wave.tensor<[@B, @K2, @K1] of f16, <register>>, !wave.tensor<[@B, @M, @K1] of f16, <register>>, !wave.tensor<[@B, @K2, @M] of f32, <register>>) -> !wave.tensor<[@B, @K2, @M] of f32, <register>>
+    # CHECK-COUNT-8:   wave.permute %{{.*}} !wave.tensor<[@B, @K2, @M] of f32, <register>> to !wave.tensor<[@B, @M, @K2] of f32, <register>>
+    # CHECK-COUNT-4:   wave.self_index @K2
+    # CHECK-COUNT-4:   wave.apply_expr(%{{.*}}) lt <[#wave.operand<0>, #wave.symbol<"K2">] -> (_Operand_0, K2)> {{.*}} (!wave.tensor<[@K2] of i64, <register>>) -> !wave.tensor<[@K2] of i64, <register>>
+    # CHECK-COUNT-8:   wave.broadcast {{.*}} (!wave.tensor<[@K2] of i64, <register>>) -> !wave.tensor<[@B, @M, @K2] of i64, <register>>
+    # CHECK-COUNT-8:   wave.cast {{.*}} !wave.tensor<[@B, @M, @K2] of i64, <register>> to !wave.tensor<[@B, @M, @K2] of i1, <register>>
+    # CHECK-COUNT-8:   wave.select
+    # CHECK-COUNT-8:   wave.add
+    # CHECK-COUNT-8:   wave.mul
+
+    # Lowered max reduction aspects.
+    # CHECK:           wave.extract
+    # CHECK:           wave.max
+    # CHECK:           wave.shuffle
+
+    # Post-reduction.
+    # CHECK-COUNT-2:   wave.sub
+    # CHECK-COUNT-2:   wave.exp2
+    # CHECK-COUNT-8:   wave.broadcast
+    # CHECK-COUNT-8:   wave.sub
+    # CHECK-COUNT-8:   wave.exp2
+    # CHECK-COUNT-2:   wave.mul
+
+    # Lowered sum reduction aspects.
+    # CHECK:           wave.add
+    # CHECK:           wave.extract
+    # CHECK:           wave.shuffle
+
+    # Post-reduction.
+    # CHECK-COUNT-8:   wave.cast
+    # CHECK-COUNT-8:   wave.broadcast
+    # CHECK-COUNT-8:   wave.mul
+
+    # Third matmul.
+    # CHECK-COUNT-16:  wave.mma {{.*}} (!wave.tensor<[@B, @N, @K2] of f16, <register>>, !wave.tensor<[@B, @M, @K2] of f16, <register>>, !wave.tensor<[@B, @N, @M] of f32, <register>>) -> !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK:           wave.yield
+
+    # After the loop.
+    # CHECK-COUNT-2:   wave.reciprocal
+    # CHECK-COUNT-8:   wave.broadcast
+    # CHECK-COUNT-8:   wave.mul
+    # CHECK-COUNT-8:   wave.write {{.*}}  mapping = #wave.expr_list<[](d0, d1, d2) -> (d0, d2, d1)>
 
 
 @run_test
