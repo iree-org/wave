@@ -38,6 +38,7 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 
 #define DEBUG_TYPE "waveasm-memory-offset-opt"
 
@@ -184,9 +185,8 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
           return {addr, 0};
         }
         if (check == OrOverlapCheck::Unknown) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
-                     << "non-overlapping bits for constant " << *c << "\n");
+          LDBG() << "skipping V_OR_B32 - cannot prove "
+                 << "non-overlapping bits for constant " << *c;
           return {addr, 0};
         }
       }
@@ -210,9 +210,8 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
           return {addr, 0};
         }
         if (check == OrOverlapCheck::Unknown) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
-                     << "non-overlapping bits for constant " << *c << "\n");
+          LDBG() << "skipping V_OR_B32 - cannot prove "
+                 << "non-overlapping bits for constant " << *c;
           return {addr, 0};
         }
       }
@@ -512,10 +511,9 @@ struct MemoryOffsetOptPass
       // or CSE passes that should run after this pass.
     });
 
-    LLVM_DEBUG(if (totalFolded > 0) {
-      llvm::dbgs() << "MemoryOffsetOpt: folded " << totalFolded
-                   << " constant address components into offset fields\n";
-    });
+    if (totalFolded > 0)
+      LDBG() << "folded " << totalFolded
+             << " constant address components into offset fields";
   }
 };
 
