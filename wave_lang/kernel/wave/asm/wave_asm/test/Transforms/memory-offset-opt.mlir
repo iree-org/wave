@@ -93,7 +93,8 @@ waveasm.program @test_shift_distribution target = #waveasm.target<#waveasm.gfx94
 }
 
 //===----------------------------------------------------------------------===//
-// Test: Buffer store offset exceeds limit -> NO fold
+// Test: Buffer store offset exceeds limit -> split into K_hi + K_lo
+// 8192 = 8192 + 0 (K_lo = 8192 % 4096 = 0), so no useful split.
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: waveasm.program @test_offset_limit
@@ -106,11 +107,76 @@ waveasm.program @test_offset_limit target = #waveasm.target<#waveasm.gfx942, 5> 
   %c8192 = waveasm.constant 8192 : !waveasm.imm<8192>
   %addr = waveasm.v_add_u32 %base, %c8192 : !waveasm.pvreg<1>, !waveasm.imm<8192> -> !waveasm.vreg
 
-  // Should NOT be folded because 8192 > 4095 (buffer max offset)
+  // 8192 % 4096 = 0, so K_hi = 8192 and K_lo = 0. The v_add stays.
+  // CHECK: waveasm.constant 8192
   // CHECK: waveasm.v_add_u32
   // CHECK: waveasm.buffer_store_dword
-  // CHECK-NOT: instOffset = 8192
   waveasm.buffer_store_dword %data, %srd, %addr : !waveasm.pvreg<0>, !waveasm.psreg<0, 4>, !waveasm.vreg
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Constant splitting for oversized buffer offset
+// v_add_u32(base, 5120) where 5120 > 4095
+// K_lo = 5120 % 4096 = 1024, K_hi = 4096
+// -> v_add_u32(base, 4096) offset:1024
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_constant_split_buffer
+waveasm.program @test_constant_split_buffer target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %base = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff = waveasm.precolored.sreg 4 : !waveasm.psreg<4>
+
+  // Address = base + 5120
+  %c5120 = waveasm.constant 5120 : !waveasm.imm<5120>
+  %addr = waveasm.v_add_u32 %base, %c5120 : !waveasm.pvreg<0>, !waveasm.imm<5120> -> !waveasm.vreg
+
+  // 5120 = 4096 + 1024. The v_add gets K_hi=4096, offset gets K_lo=1024.
+  // CHECK: waveasm.constant 4096
+  // CHECK: waveasm.v_add_u32 %{{.*}}, %{{.*}} : !waveasm.imm<4096>
+  // CHECK: waveasm.buffer_load_dwordx4
+  // CHECK-SAME: offset : 1024
+  %result = waveasm.buffer_load_dwordx4 %srd, %addr, %soff : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.psreg<4> -> !waveasm.vreg<4, 4>
+
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Two buffer loads differing by a small constant get the same K_hi
+// after splitting, enabling CSE to merge them downstream.
+// v_add_u32(base, 67584) -> v_add_u32(base, 65536) offset:2048
+// v_add_u32(base, 68608) -> v_add_u32(base, 65536) offset:3072
+// Both emit the same K_hi=65536, so ScopedCSE can share the v_add.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_constant_split_shared_khi
+waveasm.program @test_constant_split_shared_khi target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %base = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %soff = waveasm.precolored.sreg 4 : !waveasm.psreg<4>
+
+  %c67584 = waveasm.constant 67584 : !waveasm.imm<67584>
+  %addr1 = waveasm.v_add_u32 %base, %c67584 : !waveasm.pvreg<0>, !waveasm.imm<67584> -> !waveasm.vreg
+
+  %c68608 = waveasm.constant 68608 : !waveasm.imm<68608>
+  %addr2 = waveasm.v_add_u32 %base, %c68608 : !waveasm.pvreg<0>, !waveasm.imm<68608> -> !waveasm.vreg
+
+  // 67584 = 65536 + 2048 -> v_add(base, 65536) offset:2048
+  // 68608 = 65536 + 3072 -> v_add(base, 65536) offset:3072
+  // Both produce the same K_hi = 65536.
+  // CHECK: waveasm.constant 65536
+  // CHECK: waveasm.v_add_u32 %{{.*}}, %{{.*}} : !waveasm.imm<65536>
+  // CHECK: waveasm.buffer_load_dwordx4
+  // CHECK-SAME: offset : 2048
+  %r1 = waveasm.buffer_load_dwordx4 %srd, %addr1, %soff : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.psreg<4> -> !waveasm.vreg<4, 4>
+
+  // CHECK: waveasm.constant 65536
+  // CHECK: waveasm.v_add_u32 %{{.*}}, %{{.*}} : !waveasm.imm<65536>
+  // CHECK: waveasm.buffer_load_dwordx4
+  // CHECK-SAME: offset : 3072
+  %r2 = waveasm.buffer_load_dwordx4 %srd, %addr2, %soff : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.psreg<4> -> !waveasm.vreg<4, 4>
 
   waveasm.s_endpgm
 }
