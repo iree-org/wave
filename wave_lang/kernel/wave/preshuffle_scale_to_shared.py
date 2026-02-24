@@ -41,6 +41,7 @@ import torch.fx as fx
 from wave_lang.support.logging import get_logger
 
 from .._support.indexing import IndexSequence
+from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     ExtractSlice,
     GatherToLDS,
@@ -48,11 +49,10 @@ from ..ops.wave_ops import (
     Write,
     get_custom,
 )
-from .._support.tracing import CapturedTrace
 from .constraints import Constraint
 from .utils.general_utils import (
-    infer_dim,
     get_hardware_constraint,
+    infer_dim,
     make_index_uniform_per_wave,
     remove_global_indexing,
     remove_thread_indexing,
