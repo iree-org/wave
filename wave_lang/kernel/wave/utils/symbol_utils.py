@@ -253,7 +253,8 @@ def _compile_evaluator(expr):
 
 # TODO: Presburger arithmetic (MLIR's IntegerRelation) for a formal proof.
 # correct by construction but much heavier
-def _numeric_eval_constant(expr, num_samples: int = 48, _memo: dict = None):
+@lru_cache(maxsize=4096)
+def _numeric_eval_constant(expr, num_samples: int = 48):
     """Check if a symbolic expression is a constant via numeric probing.
 
     Uses lambdify to compile the expression into fast Python arithmetic,
@@ -273,24 +274,8 @@ def _numeric_eval_constant(expr, num_samples: int = 48, _memo: dict = None):
     63/64/65, 127/128/129, 255/256/257, 511/512/513, 1023/1024/1025)
     to catch floor/Mod discontinuities at common tile sizes up to 1024.
 
-    Pass a ``_memo`` dict to cache results across calls within a loop
-    (e.g. the O(n²) pair scan in merge_contiguous_reads).
+    Results are cached via ``@lru_cache`` (sympy expressions are immutable).
     """
-    if _memo is not None:
-        key = id(expr)
-        cached = _memo.get(key)
-        if cached is not None:
-            return cached
-
-    result = _numeric_eval_constant_impl(expr, num_samples)
-
-    if _memo is not None:
-        _memo[key] = result
-    return result
-
-
-def _numeric_eval_constant_impl(expr, num_samples: int = 48):
-    """Core implementation of _numeric_eval_constant."""
     try:
         free, evaluator = _compile_evaluator(expr)
     except Exception:

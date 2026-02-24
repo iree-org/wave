@@ -505,10 +505,6 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
             )
             read_infos.append((flat_offset, phys_start, custom, node))
 
-        # Try all pairs to find contiguous ones (diff == ept).
-        # Local memo for _numeric_eval_constant: expressions from reads in
-        # the same group share structure, so caching avoids redundant probing.
-        eval_memo = {}
         merged = set()
         for i in range(len(read_infos)):
             if i in merged:
@@ -533,13 +529,13 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 if isinstance(raw_diff, (int, sympy.Integer)):
                     diff = int(raw_diff)
                 elif has_complex_mapping:
-                    diff = _numeric_eval_constant(raw_diff, _memo=eval_memo)
+                    diff = _numeric_eval_constant(raw_diff)
                     if diff is None:
                         continue
                 else:
                     diff = sym_simplify(raw_diff)
                     if diff != ept and diff != -ept:
-                        nv = _numeric_eval_constant(raw_diff, _memo=eval_memo)
+                        nv = _numeric_eval_constant(raw_diff)
                         if nv is not None:
                             diff = nv
 
@@ -561,14 +557,14 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     if isinstance(raw_d, (int, sympy.Integer)):
                         d = int(raw_d)
                     elif has_complex_mapping:
-                        d = _numeric_eval_constant(raw_d, _memo=eval_memo)
+                        d = _numeric_eval_constant(raw_d)
                         if d is None:
                             merge_dim = None
                             break
                     else:
                         d = sym_simplify(raw_d)
                         if d != ept and d != 0:
-                            nv = _numeric_eval_constant(raw_d, _memo=eval_memo)
+                            nv = _numeric_eval_constant(raw_d)
                             if nv is not None:
                                 d = nv
                     if d == ept:
