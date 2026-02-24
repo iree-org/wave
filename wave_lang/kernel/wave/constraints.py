@@ -760,43 +760,50 @@ class WorkgroupConstraint(DistributionConstraint):
         return bound
 
 
-def _expr_contains_min_with_bound(expr: IndexExpr, bound) -> bool:
-    """Return True when *expr* (recursively) contains ``Min(bound, ...)``."""
-    if isinstance(expr, Min):
-        if any(a == bound for a in expr.args):
-            return True
-    for arg in getattr(expr, "args", ()):
-        if _expr_contains_min_with_bound(arg, bound):
-            return True
-    return False
-
-
 def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
     """Conservatively decide whether *work_bound* can exceed *dim_bound*.
 
-    Returns ``False`` (no overshoot) when we can prove that the tiled work
-    never exceeds the tensor dimension.  In particular this handles the
-    split-K pattern where ``work_bound = tile * ceiling(Min(dim, f(wg)) / tile)``
-    and ``dim`` is tile-aligned: ``ceiling(Min(dim, x) / tile) * tile <= dim``.
-
-    Falls back to ``True`` (bounds needed) when the relationship cannot be
-    determined.
+    Returns ``False`` when we can prove the tiled work never overshoots the
+    tensor dimension; ``True`` (bounds check needed) otherwise.
     """
     if work_bound == dim_bound:
         return False
+
     if isinstance(work_bound, (int, Integer)) and isinstance(dim_bound, (int, Integer)):
         return int(work_bound) > int(dim_bound)
+
+    # The Min caps the numerator at dim, so
+    #   Min(dim, x) <= dim
+    #   ceiling(Min(dim, x) / tile) <= ceiling(dim / tile) = dim / tile
+    #   tile * ceiling(Min(dim, x) / tile) <= dim
+    # as long as dim is evenly divisible by tile.
     if isinstance(dim_bound, (int, Integer)):
         dim_int = int(dim_bound)
-        if _expr_contains_min_with_bound(work_bound, dim_int):
-            tile = None
-            if isinstance(work_bound, Mul) and len(work_bound.args) == 2:
-                for a in work_bound.args:
-                    if isinstance(a, (int, Integer)):
-                        tile = int(a)
-            if tile is not None and dim_int % tile == 0:
+        tile, ceil_expr = _extract_tile_and_ceiling(work_bound)
+        if tile is not None and dim_int % tile == 0 and ceil_expr is not None:
+            numerator = (ceil_expr.args[0] * tile).simplify()
+            if isinstance(numerator, Min) and any(a == dim_int for a in numerator.args):
                 return False
+
+    # Cannot prove safety -- assume bounds check is needed.
     return True
+
+
+def _extract_tile_and_ceiling(
+    expr: IndexExpr,
+) -> tuple[int | None, IndexExpr | None]:
+    """Extract ``(tile, ceiling_expr)`` from ``tile * ceiling(...)``.
+
+    Returns ``(None, None)`` when the expression does not match.
+    """
+    if not isinstance(expr, Mul) or len(expr.args) != 2:
+        return None, None
+    a, b = expr.args
+    if isinstance(a, (int, Integer)) and isinstance(b, ceiling):
+        return int(a), b
+    if isinstance(b, (int, Integer)) and isinstance(a, ceiling):
+        return int(b), a
+    return None, None
 
 
 @dataclass

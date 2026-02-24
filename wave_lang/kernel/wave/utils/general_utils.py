@@ -173,10 +173,9 @@ def remove_global_indexing(
     tiling_constraints = [c for c in constraints if isinstance(c, TilingConstraint)]
     workgroup_ids = [WORKGROUP_0, WORKGROUP_1, WORKGROUP_2]
     subs = {w: 0 for w in workgroup_ids}
-    # Zero out tiling constraint starts (e.g. K_SPLIT_OFF) alongside
-    # workgroup IDs.  These starts are global offsets that must be removed
-    # *before* any dimension scaling (K → K/32 for MXFP4 scales) so that
-    # the subtraction later doesn't mix scaled and unscaled units.
+    # Zero out tiling constraint starts alongside workgroup IDs.  A non-zero
+    # start is a global base offset, just like a workgroup-ID term, and must be
+    # removed to produce a shared-memory-local index.
     for tc in tiling_constraints:
         if tc.start != sympy.Integer(0) and isinstance(tc.start, sympy.Symbol):
             subs[tc.start] = 0

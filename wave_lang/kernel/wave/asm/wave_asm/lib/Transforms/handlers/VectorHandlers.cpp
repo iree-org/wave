@@ -215,6 +215,26 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
     size = cast<IntegerAttr>(sizes[0]).getInt();
   }
 
+  // Check for sub-dword element extraction.  When elements are smaller than
+  // 32 bits (e.g. vector<2xi8>), multiple elements are packed in a single
+  // VGPR.  A register-level offset would read the wrong VGPR; instead we
+  // emit a right-shift to bring the desired byte(s) to bit-position 0.
+  auto srcVecType = extractOp.getSourceVectorType();
+  int64_t elemBits = srcVecType.getElementType().getIntOrFloatBitWidth();
+  if (elemBits < 32 && offset != 0) {
+    int64_t bitShift = offset * elemBits;
+    auto shiftImm =
+        ConstantOp::create(builder, loc, ctx.createImmType(bitShift), bitShift);
+    auto shifted = V_LSHRREV_B32::create(builder, loc, ctx.createVRegType(),
+                                         shiftImm, *src);
+    ctx.getMapper().mapValue(extractOp.getResult(), shifted);
+    return success();
+  }
+  if (elemBits < 32 && offset == 0) {
+    ctx.getMapper().mapValue(extractOp.getResult(), *src);
+    return success();
+  }
+
   // Get the source register type to find the base physical register
   Type srcType = src->getType();
 
