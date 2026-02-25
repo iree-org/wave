@@ -1,4 +1,4 @@
-// Copyright 2025 The Wave Authors
+// Copyright 2026 The Wave Authors
 //
 // Licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -138,13 +138,16 @@ struct LshlAddPattern : public OpRewritePattern<V_ADD_U32> {
       // buffer_load_lds voffset chain, skip fusion — let the
       // BufferLoadLDSSoffsetPattern extract the shift into soffset instead.
       if (isSGPRType(lshlOp.getSrc1().getType())) {
-        auto feedsBufferLoadLDS = [](Value v) {
+        auto isBufferLoadLDS = [](Operation *op) {
+          return isa<BUFFER_LOAD_DWORDX4_LDS, BUFFER_LOAD_DWORD_LDS>(op);
+        };
+        auto feedsBufferLoadLDS = [&](Value v) {
           for (Operation *user : v.getUsers()) {
-            if (isa<BUFFER_LOAD_DWORDX4_LDS, BUFFER_LOAD_DWORD_LDS>(user))
+            if (isBufferLoadLDS(user))
               return true;
             if (auto add = dyn_cast<V_ADD_U32>(user)) {
               for (Operation *u2 : add.getResult().getUsers())
-                if (isa<BUFFER_LOAD_DWORDX4_LDS, BUFFER_LOAD_DWORD_LDS>(u2))
+                if (isBufferLoadLDS(u2))
                   return true;
             }
           }
@@ -252,6 +255,12 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
 
     Location loc = loadOp.getLoc();
 
+    // Return the i-th operand pair of outerAdd (commutative).
+    auto outerOperands = [&](int idx) -> std::pair<Value, Value> {
+      Value lhs = outerAdd.getSrc0(), rhs = outerAdd.getSrc1();
+      return idx == 0 ? std::make_pair(lhs, rhs) : std::make_pair(rhs, lhs);
+    };
+
     // Case 1: voffset = V_ADD_U32(row, V_LSHLREV_B32(const, sgpr)).
     if (auto found = findShiftInAdd(outerAdd)) {
       auto [base, shiftAmt, other] = *found;
@@ -266,8 +275,7 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
 
     // Case 2: voffset = V_ADD_U32(row, V_ADD_U32(thread, V_LSHLREV(...))).
     for (int i = 0; i < 2; ++i) {
-      Value candidate = i == 0 ? outerAdd.getSrc0() : outerAdd.getSrc1();
-      Value row = i == 0 ? outerAdd.getSrc1() : outerAdd.getSrc0();
+      auto [candidate, row] = outerOperands(i);
       auto innerAdd = candidate.template getDefiningOp<V_ADD_U32>();
       if (!innerAdd)
         continue;
@@ -293,8 +301,7 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
     // LshlAddPattern fused a VGPR shift+add, burying the SGPR shift as the
     // addend of v_lshl_add_u32.
     for (int i = 0; i < 2; ++i) {
-      Value candidate = i == 0 ? outerAdd.getSrc0() : outerAdd.getSrc1();
-      Value row = i == 0 ? outerAdd.getSrc1() : outerAdd.getSrc0();
+      auto [candidate, row] = outerOperands(i);
       auto lshlAdd = candidate.template getDefiningOp<V_LSHL_ADD_U32>();
       if (!lshlAdd)
         continue;

@@ -1,4 +1,4 @@
-// Copyright 2025 The Wave Authors
+// Copyright 2026 The Wave Authors
 //
 // Licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -16,7 +16,7 @@
 #include "waveasm/Transforms/Passes.h"
 
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace waveasm {
 #define GEN_PASS_DEF_WAVEASMM0REDUNDANCYELIM
@@ -36,9 +36,8 @@ struct M0RedundancyEliminationPass
   void runOnOperation() override {
     getOperation()->walk([](Block *block) {
       Value lastM0Source;
-      SmallVector<Operation *> toErase;
 
-      for (Operation &op : *block) {
+      for (Operation &op : llvm::make_early_inc_range(*block)) {
         auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
         if (!m0Op) {
           // Conservatively reset tracking across region-bearing ops
@@ -51,15 +50,11 @@ struct M0RedundancyEliminationPass
         Value src = m0Op.getSrc();
 
         // If M0 already holds this value, the write is redundant.
-        if (src == lastM0Source) {
-          toErase.push_back(&op);
-        } else {
+        if (src == lastM0Source)
+          op.erase();
+        else
           lastM0Source = src;
-        }
       }
-
-      for (Operation *op : toErase)
-        op->erase();
     });
   }
 };
