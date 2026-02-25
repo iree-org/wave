@@ -186,7 +186,6 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
 
       switch (binExpr.getKind()) {
       case AffineExprKind::Add: {
-        // Check if bit ranges overlap - if not, use OR instead of ADD
         if (!lhsRange.overlaps(rhsRange)) {
           // Check if either operand is a shift (Mul by power of 2)
           // If so, emit v_lshl_or_b32 directly instead of lshlrev + or
@@ -360,14 +359,16 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
           int64_t divisor = constRhs.getValue();
 
-          // SIMPLIFICATION: If the LHS is a thread ID with upper_bound <=
-          // divisor, then floor(tid / divisor) = 0 for all valid thread IDs.
-          // Example: tid_x in [0, 63], floor(tid_x / 64) = 0
-          if (threadIdUpperBound > 0 && divisor >= threadIdUpperBound) {
-            // LHS is in range [0, upper_bound-1], so floor(LHS / divisor) = 0
-            auto immZero = ctx.createImmType(0);
-            return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
-                              BitRange(0, 0));
+          // If the LHS max value (from BitRange) is less than the divisor,
+          // floor(lhs / divisor) == 0 for all inputs. Generalizes the old
+          // thread-ID upper-bound check to work with any tracked bit-range.
+          if (lhsRange.highBit < 31) {
+            int64_t maxVal = (1LL << (lhsRange.highBit + 1)) - 1;
+            if (maxVal < divisor) {
+              auto immZero = ctx.createImmType(0);
+              return ExprResult(ConstantOp::create(builder, loc, immZero, 0),
+                                BitRange(0, 0));
+            }
           }
 
           // Check if divisor is power of 2 -> use right shift

@@ -604,7 +604,13 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 auto [dstPhys, dstIsSGPR] = getPhysRegInfo(body.getArgument(i));
 
                 if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
-                  pendingCopies.push_back({dstPhys, srcPhys, isSGPR});
+                  // Multi-register iter_args (e.g. dwordx4) need one copy per
+                  // sub-register, otherwise only the first register is copied
+                  // and the remaining lanes silently corrupt after iteration 0.
+                  int64_t width = getRegSize(body.getArgument(i).getType());
+                  for (int64_t r = 0; r < width; ++r) {
+                    pendingCopies.push_back({dstPhys + r, srcPhys + r, isSGPR});
+                  }
                 }
               }
 
