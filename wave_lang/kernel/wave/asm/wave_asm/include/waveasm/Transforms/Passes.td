@@ -250,4 +250,51 @@ def WAVEASMEmitAssembly : Pass<"waveasm-emit-assembly"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// Peephole Optimization Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMPeephole : Pass<"waveasm-peephole"> {
+  let summary = "Local pattern-based peephole optimizations for WAVEASM IR";
+  let description = [{
+    Instruction fusion, strength reduction, constant folding, and redundant
+    move elimination.  All transformations are local rewrite patterns applied
+    via the greedy pattern rewrite driver.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// LICM Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMLICM : Pass<"waveasm-licm"> {
+  let summary = "Loop-invariant code motion for WAVEASM IR";
+  let description = [{
+    Hoists VALU address-computation instructions whose operands all dominate
+    the loop out of LoopOp bodies.  Uses an iterative fixpoint with post-order
+    walk so inner loops are processed first and chains of hoistable ops are
+    handled across multiple iterations.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// M0 Redundancy Elimination Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMM0RedundancyElim : Pass<"waveasm-m0-redundancy-elim"> {
+  let summary = "Eliminate redundant M0 register writes";
+  let description = [{
+    Tracks the last s_mov_b32_m0 source value within each basic block and
+    erases writes that set M0 to the value it already holds.  Conservatively
+    resets tracking across region-bearing ops (loops, ifs) whose bodies may
+    clobber M0.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 #endif // WaveASM_TRANSFORMS_PASSES
