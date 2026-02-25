@@ -9,7 +9,6 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSymbol, IndexSequence, IndexExpr
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
-    Conditional,
     CustomOp,
     GatherToLDS,
     GetResult,
@@ -820,16 +819,18 @@ def guard_g2s_with_bounds_check(
     constraints: list[Constraint],
 ):
     """
-    Post-scheduling pass: wrap GatherToLDS nodes inside pipelined loops that
-    have eliminate_epilogue=True with an scf.if bounds guard.
+    Post-scheduling pass: annotate GatherToLDS nodes inside pipelined loops
+    that have eliminate_epilogue=True with branchless SRD guard metadata.
 
     When eliminate_epilogue=True, the loop runs for the full trip count. Stage 0
     (the prefetch stage) uses iv + (num_stages-1)*step, which goes OOB in the
-    last (num_stages-1) iterations. Since gather_to_lds faults on OOB rather
-    than returning zero, we guard these ops with:
+    last (num_stages-1) iterations. Instead of wrapping gather_to_lds in an
+    scf.if branch, we annotate each gather_to_lds with a guard condition so
+    that codegen can emit a dynamic validBytes that becomes 0 when OOB:
 
-        if iv + (num_stages-1)*step < max_induction_variable:
-            gather_to_lds(...)
+        validBytes = select(iv + prefetch_offset < max_iv, real_validBytes, 0)
+
+    This makes the hardware DMA a no-op (reads nothing) without any branch.
     """
     for node in trace.walk(lambda n: isinstance(get_custom(n), Iterate)):
         if not node.meta.get("eliminate_epilogue", False):
@@ -855,32 +856,8 @@ def guard_g2s_with_bounds_check(
             induction_variable + prefetch_offset, max_iv
         )
 
-        guard_subgraph = fx.Graph()
-        guard_subgraph_name = f"g2s_guard_{subgraph_name}"
-
-        first_g2s = g2s_nodes[0]
-        location = get_custom(first_g2s).location
-
-        with pipelined_graph.inserting_before(first_g2s):
-            cond_node = Conditional(
-                guard_condition,
-                subgraph_name=guard_subgraph_name,
-                implicit_captures=[],
-            ).add_to_graph(pipelined_graph, loc=location)
-
         for g2s in g2s_nodes:
-            custom = get_custom(g2s)
-            custom.copy(new_graph=guard_subgraph)
-            custom.erase()
-
-        guard_subgraph.output(None)
-
-        trace.add_subgraph(guard_subgraph_name, guard_subgraph)
-
-        guard_subgraph.parent_op = cond_node
-
-        root_graph = get_custom(cond_node).get_root_graph()
-        root_graph.subgraphs[guard_subgraph_name] = guard_subgraph
+            g2s.meta["g2s_branchless_guard"] = guard_condition
 
 
 def construct_pipelined_loop(
