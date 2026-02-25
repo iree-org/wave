@@ -2,6 +2,7 @@
 # RUN: python %s | FileCheck %s
 
 
+import atexit
 import sys
 import sympy
 from typing import Any
@@ -17,9 +18,10 @@ from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import Constraint, MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
-    emit_wave_dialect,
     format_diagnostics,
+    PersistentEmitter,
 )
+from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.templates.vanilla_attention import (
     get_vanilla_attention_kernel,
@@ -38,6 +40,15 @@ from wave_lang.support.ir_imports import (
     UnitAttr,
 )
 from iree.compiler.dialects.transform.extras import insert_transform_script, OpHandle
+
+# Keep a single water_emitter subprocess alive for the entire test file
+# instead of spawning a fresh one per call (~2s import overhead each).
+# Lit runs each test file as its own `python %s` process (see the RUN line),
+# so the emitter lives only for this file. atexit closes the subprocess
+# cleanly when the interpreter exits at the end of the run.
+emitter = PersistentEmitter()
+emitter.__enter__()
+atexit.register(emitter.close)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -90,7 +101,7 @@ def failure_to_parse_override_mlir():
 
     # Override the MLIR module after `wave_compile` so it doesn't attempt to parse it.
     options.override_mlir = "module {"
-    _, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    _, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     assert len(diagnostics) == 1
     # CHECK: expected operation name in quotes
@@ -101,7 +112,7 @@ def failure_to_parse_override_mlir():
 @run_test
 def failure_to_parse_pipeline():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics, _ = emit_wave_dialect(
+    _, diagnostics, _ = emitter.emit_wave_dialect(
         trace, constraints, options, pipeline="module {"
     )
 
@@ -114,7 +125,7 @@ def failure_to_parse_pipeline():
 @run_test
 def pipeline_is_empty():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics, _ = emit_wave_dialect(
+    _, diagnostics, _ = emitter.emit_wave_dialect(
         trace, constraints, options, pipeline="module {}"
     )
 
@@ -127,7 +138,7 @@ def pipeline_is_empty():
 @run_test
 def pipeline_is_not_a_named_sequence():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics, _ = emit_wave_dialect(
+    _, diagnostics, _ = emitter.emit_wave_dialect(
         trace, constraints, options, pipeline="module { module {}}"
     )
 
@@ -153,7 +164,7 @@ module attributes {transform.with_named_sequence} {
 def failure_in_pipeline():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
     options.override_mlir = "module {}"
-    _, diagnostics, _ = emit_wave_dialect(
+    _, diagnostics, _ = emitter.emit_wave_dialect(
         trace, constraints, options, pipeline=GUARANTEED_FAIL_TRANSFORM_SCRIPT
     )
     assert len(diagnostics) == 1
@@ -192,7 +203,7 @@ def vector_shapes_symbol_not_in_subs():
     compiled = wave_compile(options, kernel)
     trace = compiled.get_compiled_graph()
 
-    _, diagnostics, _ = emit_wave_dialect(trace, kernel.constraints, options)
+    _, diagnostics, _ = emitter.emit_wave_dialect(trace, kernel.constraints, options)
 
     assert len(diagnostics) == 1
     # CHECK: Vector shape VEC_M in hardware constraints could not be resolved to an integer.
@@ -207,7 +218,7 @@ def override_mlir():
 module {
   func.func private @overridden_mlir()
 }"""
-    emitted, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    emitted, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
     assert len(diagnostics) == 0, "Did not expect errors in overridden IR."
 
     # CHECK: func.func private @overridden_mlir()
@@ -269,7 +280,7 @@ def mlir_converter_matrix_add():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
@@ -389,7 +400,7 @@ def mlir_converter_broadcast():
     trace = compiled_kernel.get_compiled_graph()
     constraints = broadcast.constraints
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
@@ -424,7 +435,7 @@ def mlir_converter_self_index():
     trace = compiled_kernel.get_compiled_graph()
     constraints = self_index.constraints
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
@@ -470,7 +481,7 @@ def mlir_converter_select():
     trace = compiled_kernel.get_compiled_graph()
     constraints = select.constraints
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
@@ -540,7 +551,7 @@ def multi_result_handling():
     constraints = multi_result_iteration.constraints
 
     with Context(), Location.unknown():
-        asm, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+        asm, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     assert len(diagnostics) == 0, "No diagnostics should be produced."
     print(asm)
@@ -605,7 +616,7 @@ def mlir_converter_reshape():
     trace = compiled_kernel.compiled_graph
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -671,7 +682,7 @@ def mlir_converter_sum():
     constraints = sum.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
@@ -749,7 +760,9 @@ def mlir_converter_apply_expr():
     trace = compiled_kernel.get_compiled_graph()
     kernel_constraints = apply_expr_kernel.constraints
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, kernel_constraints, options
+    )
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -828,7 +841,9 @@ def mlir_converter_apply_expr_combinators():
     trace = compiled_kernel.get_compiled_graph()
     kernel_constraints = apply_expr_kernel.constraints
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, kernel_constraints, options
+    )
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -932,7 +947,7 @@ def mlir_converter_emit_wave_dialect_loop_implicit_capture():
     compiled = wave_compile(options_loop, kernel_loop_implicit_capture)
     trace = compiled.compiled_graph
 
-    mlir_output, diagnostics, _ = emit_wave_dialect(
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
         trace, kernel_loop_implicit_capture.constraints, options_loop
     )
 
@@ -1043,7 +1058,7 @@ def mlir_converter_matmul():
 
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
-    mlir_output, diagnostics, _ = emit_wave_dialect(
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
         trace, constraints, options, pipeline=pipeline_asm
     )
 
@@ -1213,13 +1228,10 @@ def mlir_converter_attention():
 
     constraints = attention.constraints
 
-    # TODO: investigate why the recursion limit is hit in the emitter.
-    limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(10000)
-
     with Context(), Location.unknown():
-        mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
-    sys.setrecursionlimit(limit)
+        mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options
+        )
 
     assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
 
@@ -1346,7 +1358,9 @@ def mlir_converter_mixed_memory_spaces():
     constraints = mixed_memory_kernel.constraints
 
     with Context(), Location.unknown():
-        mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+        mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options
+        )
 
     assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
 
@@ -1397,16 +1411,18 @@ def mlir_converter_invalid_non_int_hyperparameter():
     trace = compiled_kernel.compiled_graph
     constraints = invalid_hyperparameter_kernel.constraints
 
-    # This should raise a RuntimeError due to invalid non-int hyperparameter
-    try:
-        with Context(), Location.unknown():
-            mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
-        assert False, "Expected RuntimeError for invalid non-int hyperparameter"
-    except RuntimeError as e:
-        # Verify the error message is what we expect
-        assert "Unexpected non-int mapping in hyperparameters" in str(e)
-        assert "INVALID_SYMBOL -> invalid_string_value" in str(e)
-        assert "Expected all non-int values to be address spaces" in str(e)
+    with Context(), Location.unknown():
+        mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options
+        )
+
+    # The invalid hyperparameter should produce an error diagnostic.
+    errors = error_diagnostics(diagnostics)
+    assert errors, f"Expected an error diagnostic, got: {diagnostics}"
+    error_msg = errors[0].message
+    assert "Unexpected non-int mapping in hyperparameters" in error_msg
+    assert "INVALID_SYMBOL -> invalid_string_value" in error_msg
+    assert "Expected all non-int values to be address spaces" in error_msg
 
 
 @run_test
@@ -1461,7 +1477,9 @@ def mlir_converter_permute():
     kernel_constraints = permute_kernel.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, kernel_constraints, options
+    )
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -1557,7 +1575,9 @@ def mlir_converter_read_with_mapping():
     kernel_constraints = read_with_mapping_kernel.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, kernel_constraints, options
+    )
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -1651,7 +1671,9 @@ def mlir_converter_write_with_mapping():
     kernel_constraints = write_with_mapping_kernel.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, kernel_constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, kernel_constraints, options
+    )
 
     if diagnostics:
         for diagnostic in diagnostics:

@@ -15,9 +15,13 @@ from the host process.
 
 `mlir_to_fx` sends MLIR text to `fx_emitter.py` and returns a
 reconstructed CapturedTrace with constraints and compile options.
+
+For repeated conversions (e.g. roundtrip tests), use `PersistentEmitter`
+to keep the subprocesses alive and amortize the ~2s import overhead.
 """
 
 import linecache
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -211,6 +215,138 @@ class FxEmitterResponse:
     diagnostics: list[MLIRDiagnostic] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers -- used by both standalone functions and PersistentEmitter
+# ---------------------------------------------------------------------------
+
+_DILL_RECURSION_LIMIT = 10000
+
+_WATER_ANALYSIS_PIPELINE = """
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
+    %0 = transform.apply_registered_pass "water-wave-detect-normal-forms" to %arg0 : (!transform.any_op) -> !transform.any_op
+    %1 = transform.structured.match ops{["normalform.module"]} in %0 : (!transform.any_op) -> !transform.any_op
+    %2 = transform.apply_registered_pass "water-wave-propagate-defaults-from-constraints" to %1 : (!transform.any_op) -> !transform.any_op
+    transform.apply_registered_pass "water-wave-infer-index-exprs" to %2 : (!transform.any_op) -> !transform.any_op
+    transform.yield
+  }
+}"""
+
+
+def _start_emitter(
+    script_name: str,
+    *,
+    server: bool = False,
+    extra_args: list[str] | None = None,
+) -> subprocess.Popen:
+    """Locate and spawn an emitter subprocess."""
+    child = Path(__file__).with_name(script_name)
+    if not child.exists():
+        raise RuntimeError(f"Emitter helper not found: {child}")
+    args = [sys.executable, str(child)]
+    if server:
+        args.append("--server")
+    if extra_args:
+        args.extend(extra_args)
+    return subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _prepare_water_request(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    test_diagnostic_emission: bool = False,
+    pipeline: str = "",
+) -> bytes:
+    """Build and serialize a water_emitter request.
+
+    Snapshots the trace's node state, expands the water-analysis pipeline if
+    requested, and returns the dill-serialized request bytes.  The recursion
+    limit is temporarily raised for dill.dumps to handle large object graphs.
+    """
+    # Ensure additional node fields (like .type) are not lost during pickling.
+    trace.snapshot_node_state()
+
+    assert not (
+        options.check_water_analysis and pipeline
+    ), "Cannot check water analysis and use a pipeline"
+    if options.check_water_analysis:
+        pipeline = _WATER_ANALYSIS_PIPELINE
+
+    # dill.dumps walks the object graph recursively and can exceed the
+    # default 1000-frame limit for large kernels (e.g. attention).
+    saved_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
+    try:
+        return dill.dumps(
+            {
+                "trace": trace,
+                "constraints": constraints,
+                "options": options,
+                "pipeline": pipeline,
+                "test_diagnostic_emission": test_diagnostic_emission,
+            }
+        )
+    finally:
+        sys.setrecursionlimit(saved_limit)
+
+
+def _unpack_water_response(
+    raw: bytes,
+) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
+    """Deserialize and unpack a water_emitter response."""
+    unpickled = dill.loads(raw)
+    if not isinstance(unpickled, dict):
+        raise RuntimeError(
+            f"water_emitter response has unexpected type: {type(unpickled)}"
+        )
+    module = unpickled.get("module")
+    diagnostics = unpickled.get("diagnostics")
+    inferred_attributes = unpickled.get("inferred_attributes")
+    return (
+        module.decode("utf-8") if module else "",
+        diagnostics or [],
+        inferred_attributes or {},
+    )
+
+
+def _unpack_fx_response(
+    raw: bytes,
+) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]]:
+    """Deserialize and validate an fx_emitter response."""
+    # The response contains a CapturedTrace whose recursive object graph can
+    # exceed the default 1000-frame limit during dill.loads.
+    saved_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
+    try:
+        response = dill.loads(raw)
+    finally:
+        sys.setrecursionlimit(saved_limit)
+    if not isinstance(response, FxEmitterResponse):
+        raise RuntimeError(f"fx_emitter output has unexpected type: {type(response)}")
+    if response.trace is None:
+        raise RuntimeError(
+            f"fx_emitter returned no trace. Diagnostics: "
+            f"{format_diagnostics(response.diagnostics, use_color=False)}"
+        )
+    if not isinstance(response.trace, CapturedTrace):
+        raise RuntimeError(
+            f"fx_emitter trace has unexpected type: {type(response.trace)}"
+        )
+    response.trace.restore_node_state()
+    return response.trace, response.constraints, response.options, response.diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Standalone (one-shot) entry points
+# ---------------------------------------------------------------------------
+
+
 def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -232,51 +368,16 @@ def emit_wave_dialect(
         - A list of MLIRDiagnostic or WaterError instances.
         - A dict of inferred attributes per water ID.
     """
-
-    child = Path(__file__).with_name("water_emitter.py")
-    if not child.exists():
-        raise RuntimeError(f"water emitter helper not found: {child}")
-
-    # Ensure additional node fields (like .type) are not lost during pickling
-    trace.snapshot_node_state()
-
-    args = [sys.executable, str(child)]
-
-    if test_diagnostic_emission:
-        args.append(f"--test-diagnostic-emission={test_diagnostic_emission.value}")
-
-    proc = subprocess.Popen(
-        args,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    extra_args = (
+        [f"--test-diagnostic-emission={test_diagnostic_emission.value}"]
+        if test_diagnostic_emission
+        else []
     )
-
-    assert (
-        not options.check_water_analysis or not pipeline
-    ), "Cannot check water analysis and use a pipeline"
-    if options.check_water_analysis:
-        pipeline = """
-module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
-    %0 = transform.apply_registered_pass "water-wave-detect-normal-forms" to %arg0 : (!transform.any_op) -> !transform.any_op
-    %1 = transform.structured.match ops{["normalform.module"]} in %0 : (!transform.any_op) -> !transform.any_op
-    %2 = transform.apply_registered_pass "water-wave-propagate-defaults-from-constraints" to %1 : (!transform.any_op) -> !transform.any_op
-    transform.apply_registered_pass "water-wave-infer-index-exprs" to %2 : (!transform.any_op) -> !transform.any_op
-    transform.yield
-  }
-}"""
-
-    output, err = proc.communicate(
-        dill.dumps(
-            {
-                "trace": trace,
-                "constraints": constraints,
-                "options": options,
-                "pipeline": pipeline,
-            }
-        )
+    proc = _start_emitter("water_emitter.py", extra_args=extra_args)
+    request = _prepare_water_request(
+        trace, constraints, options, test_diagnostic_emission, pipeline
     )
+    output, err = proc.communicate(request)
 
     if proc.returncode != 0:
         raise RuntimeError(
@@ -286,28 +387,18 @@ module attributes {transform.with_named_sequence} {
         )
 
     try:
-        unpickled = dill.loads(output)
+        result = _unpack_water_response(output)
     except Exception as e:
         raise RuntimeError(
-            f"Failed to unpickle output from water_emitter (code {proc.returncode}):\n"
-            f"Output: {output!r}\n"
-            f"Exception: {e}"
+            f"Failed to process water_emitter output (code {proc.returncode}):\n"
+            f"Output: {output!r}"
         ) from e
-    diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
-    module = unpickled.get("module") if isinstance(unpickled, dict) else None
-    inferred_attributes = (
-        unpickled.get("inferred_attributes") if isinstance(unpickled, dict) else None
-    )
 
     # Preserve stderr messages.
     if err:
         print(err.decode("utf-8", errors="replace"), file=sys.stderr)
 
-    return (
-        module.decode("utf-8"),
-        diagnostics,
-        inferred_attributes,
-    )
+    return result
 
 
 def mlir_to_fx(
@@ -338,15 +429,7 @@ def mlir_to_fx(
     """
     if not isinstance(mlir_text, str):
         raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
-    child = Path(__file__).with_name("fx_emitter.py")
-    if not child.exists():
-        raise RuntimeError(f"fx_emitter helper not found: {child}")
-    proc = subprocess.Popen(
-        [sys.executable, str(child)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    proc = _start_emitter("fx_emitter.py")
     output, err = proc.communicate(dill.dumps({"mlir": mlir_text}))
     if proc.returncode != 0:
         diagnostics: list[MLIRDiagnostic] = []
@@ -366,18 +449,117 @@ def mlir_to_fx(
             f"{err.decode('utf-8', errors='replace')}{diag_text}"
         )
     try:
-        response = dill.loads(output)
+        return _unpack_fx_response(output)
     except Exception as e:
         raise RuntimeError(
-            f"Failed to unpickle output from fx_emitter (code {proc.returncode}):\n"
-            f"Output: {output!r}\n"
-            f"Exception: {e}"
+            f"Failed to process fx_emitter output (code {proc.returncode}):\n"
+            f"Output: {output!r}"
         ) from e
-    if not isinstance(response, FxEmitterResponse):
-        raise RuntimeError(f"fx_emitter output has unexpected type: {type(response)}")
-    if not isinstance(response.trace, CapturedTrace):
-        raise RuntimeError(
-            f"fx_emitter trace has unexpected type: {type(response.trace)}"
+
+
+# ---------------------------------------------------------------------------
+# Length-prefixed protocol for persistent subprocess mode
+# ---------------------------------------------------------------------------
+#
+# Wire format (same in both directions):
+#
+#     [4-byte native uint32 length][length bytes of dill payload]
+#
+# We use native byte order ("=") because both ends run on the same machine.
+# uint32 ("I") supports payloads up to ~4 GB which is more than enough
+
+_HEADER_FMT = "=I"
+_HEADER_SIZE = struct.calcsize(_HEADER_FMT)
+
+
+def send_message(pipe, data: bytes) -> None:
+    """Write a length-prefixed message to `pipe`."""
+    pipe.write(struct.pack(_HEADER_FMT, len(data)))
+    pipe.write(data)
+    pipe.flush()
+
+
+def recv_message(pipe) -> bytes:
+    """Read a length-prefixed message from `pipe`."""
+    header = pipe.read(_HEADER_SIZE)
+    if len(header) < _HEADER_SIZE:
+        raise EOFError("Subprocess closed the connection")
+    (length,) = struct.unpack(_HEADER_FMT, header)
+    data = pipe.read(length)
+    if len(data) < length:
+        raise EOFError("Incomplete message from subprocess")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# PersistentEmitter -- keeps emitter subprocesses alive across calls
+# ---------------------------------------------------------------------------
+
+
+class PersistentEmitter:
+    """Keeps water_emitter and fx_emitter subprocesses alive for repeated use.
+
+    Using this as a context manager avoids re-spawning a fresh Python process
+    for every conversion call.  This is critical for the roundtrip test, where
+    we had 47 passes x 2 subprocesses = 94 spawns, each spending ~2 s on imports
+    alone.
+
+    Usage::
+
+        with PersistentEmitter() as emitter:
+            mlir, diags, attrs = emitter.emit_wave_dialect(trace, constraints, options)
+            trace2, cons2, opts2, diags2 = emitter.mlir_to_fx(mlir)
+    """
+
+    def __init__(self) -> None:
+        self._water_proc: subprocess.Popen | None = None
+        self._fx_proc: subprocess.Popen | None = None
+
+    # -- lifecycle ------------------------------------------------------------
+
+    def __enter__(self) -> "PersistentEmitter":
+        self._water_proc = _start_emitter("water_emitter.py", server=True)
+        self._fx_proc = _start_emitter("fx_emitter.py", server=True)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        for proc in (self._water_proc, self._fx_proc):
+            if proc is not None and proc.poll() is None:
+                proc.stdin.close()
+                proc.wait(timeout=10)
+        self._water_proc = None
+        self._fx_proc = None
+
+    # -- public API -----------------------------------------------------------
+
+    def emit_wave_dialect(
+        self,
+        trace: CapturedTrace,
+        constraints: list[Constraint],
+        options: WaveCompileOptions,
+        test_diagnostic_emission: bool = False,
+        pipeline: str = "",
+    ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
+        """Same signature as the module-level `emit_wave_dialect`."""
+        assert self._water_proc is not None and self._water_proc.poll() is None
+        request = _prepare_water_request(
+            trace, constraints, options, test_diagnostic_emission, pipeline
         )
-    response.trace.restore_node_state()
-    return response.trace, response.constraints, response.options, response.diagnostics
+        send_message(self._water_proc.stdin, request)
+        return _unpack_water_response(recv_message(self._water_proc.stdout))
+
+    def mlir_to_fx(
+        self,
+        mlir_text: str,
+    ) -> tuple[
+        CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]
+    ]:
+        """Same signature as the module-level `mlir_to_fx`."""
+        if not isinstance(mlir_text, str):
+            raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
+        assert self._fx_proc is not None and self._fx_proc.poll() is None
+        send_message(self._fx_proc.stdin, dill.dumps({"mlir": mlir_text}))
+        return _unpack_fx_response(recv_message(self._fx_proc.stdout))

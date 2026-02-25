@@ -9,6 +9,7 @@ mlir operations of wave and other dialects.
 from __future__ import annotations
 import argparse
 import dill
+import struct
 import sys
 import torch.fx as fx
 from pathlib import Path
@@ -1100,23 +1101,6 @@ def diagnostic_from_mlir_error(e: ir.MLIRError) -> list[MLIRDiagnostic]:
     return diagnostics
 
 
-def _flush_output(
-    module_str: str,
-    diagnostics: list[MLIRDiagnostic | WaterError],
-    inferred_attributes: dict[str, dict[str, Any]] | None = None,
-) -> None:
-    output = dill.dumps(
-        {
-            "diagnostics": diagnostics,
-            "module": module_str.encode("utf-8"),
-            "inferred_attributes": (
-                inferred_attributes if inferred_attributes is not None else {}
-            ),
-        }
-    )
-    sys.stdout.buffer.write(output)
-    sys.stdout.flush()
-
 
 def _create_kernel_module(
     ctx: ir.Context,
@@ -1307,7 +1291,25 @@ def _emit_from_captured_trace(
     *,
     test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
 ) -> int:
+    response_data = _build_response(
+        trace, constraints, options, pipeline, test_diagnostics
+    )
+    sys.stdout.buffer.write(response_data)
+    sys.stdout.flush()
+    return 0
 
+
+def _build_response(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    pipeline: str = "",
+    test_diagnostics: bool = False,
+) -> bytes:
+    """Core conversion logic that returns the dill-serialized response bytes.
+
+    Shared between single-shot mode and server mode.
+    """
     diagnostics: list[MLIRDiagnostic | WaterError] = []
 
     def diagnostics_handler(d):
@@ -1342,8 +1344,7 @@ def _emit_from_captured_trace(
         if creation_diagnostics:
             diagnostics.extend(creation_diagnostics)
         if module is None:
-            _flush_output("", diagnostics, None)
-            return 0
+            return _serialize_response("", diagnostics, None)
 
         # Verify the module before transforming or printing. Note that the call
         # to explicit `verify` registers its own diagnostic handler and raises
@@ -1355,14 +1356,13 @@ def _emit_from_captured_trace(
             diagnostics.extend(diagnostic_from_mlir_error(e))
             # Print in generic form if verification fails, this form should be
             # robust to that.
-            _flush_output(
+            return _serialize_response(
                 module.operation.get_asm(
                     enable_debug_info=enable_debug_info, print_generic_op_form=True
                 ),
                 diagnostics,
                 None,
             )
-            return 0
 
         if options.print_mlir_before_water:
             print(module.operation.get_asm(), file=sys.stderr)
@@ -1379,7 +1379,8 @@ def _emit_from_captured_trace(
                 # Require the first op to be a named sequence.
                 if entry_op.operation.name != "transform.named_sequence":
                     raise RuntimeError(
-                        f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
+                        f'Expected first op to be "transform.named_sequence", '
+                        f'got "{entry_op.operation.name}"'
                     )
                 interpreter.apply_named_sequence(
                     module,
@@ -1455,7 +1456,106 @@ def _emit_from_captured_trace(
                     raise RuntimeError(f"Index not inferred for water id {water_id}.")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-        _flush_output(module_str, diagnostics, inferred_attributes)
+        return _serialize_response(module_str, diagnostics, inferred_attributes)
+
+
+def _serialize_response(
+    module_str: str,
+    diagnostics: list[MLIRDiagnostic | WaterError],
+    inferred_attributes: dict[str, dict[str, Any]] | None = None,
+) -> bytes:
+    return dill.dumps(
+        {
+            "diagnostics": diagnostics,
+            "module": module_str.encode("utf-8"),
+            "inferred_attributes": (
+                inferred_attributes if inferred_attributes is not None else {}
+            ),
+        }
+    )
+
+
+_DILL_RECURSION_LIMIT = 10000
+
+
+def _server_mode() -> int:
+    """Run as a persistent server, reading length-prefixed requests from stdin.
+
+    Instead of spawning a fresh process per request (which costs ~2 s in
+    module imports each time), the parent keeps this process alive and
+    sends multiple requests over the same stdin/stdout pipes.
+
+    Wire protocol (both directions):
+        [4-byte native uint32 length][length bytes of dill payload]
+
+    We use native byte order because both ends run on the same machine.
+    `=I` is Python `struct` notation for native-byte-order (`=`)
+    unsigned 32-bit integer (`I`), supporting payloads up to ~4 GB.
+
+    Each request payload is a dill-serialized dict with the same keys as
+    in single-shot mode (trace, constraints, options, pipeline, ...).
+    Each response payload is a dill-serialized dict with keys
+    `diagnostics`, `module`, and `inferred_attributes`.
+
+    The loop exits when stdin is closed (EOF on the length header), i.e.
+    when the parent closes its end of the pipe.
+    """
+
+    # "=I" = native-byte-order unsigned 32-bit integer (4 bytes).
+    header_fmt = "=I"
+    header_size = struct.calcsize(header_fmt)
+
+    saved_recursion_limit = sys.getrecursionlimit()
+
+    while True:
+        # Read the 4-byte length header for the next request.
+        header = sys.stdin.buffer.read(header_size)
+        if len(header) < header_size:
+            break  # Parent closed stdin -- shut down.
+
+        (length,) = struct.unpack(header_fmt, header)
+        raw_request = sys.stdin.buffer.read(length)
+        if len(raw_request) < length:
+            break  # Truncated payload -- parent died mid-write.
+
+        # dill.loads walks the object graph recursively and can exceed the
+        # default 1000-frame limit for large kernels (e.g. attention).
+        sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
+        try:
+            request = dill.loads(raw_request)
+        except Exception as e:
+            print(f"FATAL: failed to unpickle: {e}", file=sys.stderr)
+            break
+        finally:
+            sys.setrecursionlimit(saved_recursion_limit)
+
+        trace = request.get("trace")
+        constraints = request.get("constraints", [])
+        options = request.get("options", WaveCompileOptions())
+        pipeline = request.get("pipeline", "")
+        test_diags = request.get("test_diagnostic_emission", False)
+
+        if not isinstance(trace, CapturedTrace):
+            print(
+                f"FATAL: expected CapturedTrace, got {type(trace)}",
+                file=sys.stderr,
+            )
+            break
+
+        trace.restore_node_state()
+
+        try:
+            response_data = _build_response(
+                trace, constraints, options, pipeline, test_diags
+            )
+        except Exception as e:
+            response_data = _serialize_response("", [WaterError(message=str(e))], None)
+
+        # Write the length-prefixed response.
+        sys.stdout.buffer.write(struct.pack(header_fmt, len(response_data)))
+        sys.stdout.buffer.write(response_data)
+        sys.stdout.buffer.flush()
+
     return 0
 
 
@@ -1468,8 +1568,16 @@ if __name__ == "__main__":
         default=WaterDiagTestingMode.NO.value,
         help="Test diagnostic serialization and deserialization through stdin and stdout",
     )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run in persistent server mode (length-prefixed protocol on stdin/stdout)",
+    )
 
     args = parser.parse_args()
+
+    if args.server:
+        sys.exit(_server_mode())
 
     trace, constraints, options, pass_pipeline = _parse_input()
     sys.exit(

@@ -515,7 +515,7 @@ class _OpParseContext:
         return self.value_map[value]
 
     def add_mapping(self, mlir_value: ir.Value, fx_node: fx.Node | int | float) -> None:
-        """Add MLIR value → FX node mapping."""
+        """Add MLIR value -> FX node mapping."""
         assert (
             mlir_value not in self.value_map
         ), f"Duplicate mapping for MLIR value: {mlir_value}"
@@ -809,8 +809,8 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     iter_count = len(init_args)
 
     # Create a local scope for the iterate body.
-    # - IterArg block arguments → new IterArg placeholder nodes in subgraph
-    # - Capture block arguments → mapped directly to outer values (no placeholders)
+    # - IterArg block arguments -> new IterArg placeholder nodes in subgraph
+    # - Capture block arguments -> mapped directly to outer values (no placeholders)
     local_map: dict[ir.Value, fx.Node | int | float] = {}
 
     # Map iter args to new placeholder nodes in the subgraph
@@ -1041,7 +1041,108 @@ def convert_mlir_to_trace(
         return trace, constraints, options, diagnostics
 
 
+def _process_single_request(mlir_text: str) -> bytes:
+    """Process one MLIR-to-FX request and return dill-serialized response bytes."""
+    response = FxEmitterResponse()
+    try:
+        trace, constraints, options, diagnostics = convert_mlir_to_trace(mlir_text)
+        if trace is None:
+            raise ValueError("MLIR conversion/verification failed; see diagnostics")
+        trace.snapshot_node_state()
+        response = FxEmitterResponse(
+            trace=trace,
+            constraints=constraints,
+            options=options,
+            diagnostics=diagnostics,
+        )
+    except Exception as e:
+        response.diagnostics.append(MLIRDiagnostic(message=str(e), severity="ERROR"))
+    # The response contains a CapturedTrace whose recursive object graph can
+    # exceed the default 1000-frame limit during dill.dumps.
+    saved_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
+    try:
+        return dill.dumps(response)
+    finally:
+        sys.setrecursionlimit(saved_limit)
+
+
+_DILL_RECURSION_LIMIT = 10000
+
+
+def _server_mode() -> int:
+    """Run as a persistent server, reading length-prefixed requests from stdin.
+
+    Instead of spawning a fresh process per request, the parent keeps this
+    process alive and sends multiple requests over the same stdin/stdout pipes.
+
+    Wire protocol (both directions):
+        [4-byte native uint32 length][length bytes of dill payload]
+
+    We use native byte order because both ends run on the same machine.
+    `=I` is Python `struct` notation for native-byte-order (`=`)
+    unsigned 32-bit integer (`I`), supporting payloads up to ~4 GB.
+
+    Each request payload is a dill-serialized dict with an `"mlir"` key.
+    Each response payload is a dill-serialized `FxEmitterResponse`.
+
+    The loop exits when stdin is closed (EOF on the length header), i.e.
+    when the parent closes its end of the pipe.
+    """
+    import struct
+
+    # "=I" = native-byte-order unsigned 32-bit integer (4 bytes).
+    header_fmt = "=I"
+    header_size = struct.calcsize(header_fmt)
+
+    while True:
+        # Read the 4-byte length header for the next request.
+        header = sys.stdin.buffer.read(header_size)
+        if len(header) < header_size:
+            break  # Parent closed stdin -- shut down.
+
+        (length,) = struct.unpack(header_fmt, header)
+        raw_request = sys.stdin.buffer.read(length)
+        if len(raw_request) < length:
+            break  # Truncated payload -- parent died mid-write.
+
+        try:
+            request = dill.loads(raw_request)
+        except Exception as e:
+            sys.stderr.write(f"FATAL: failed to unpickle: {e}\n")
+            break
+
+        mlir_text = request.get("mlir") if isinstance(request, dict) else None
+        if not isinstance(mlir_text, str):
+            sys.stderr.write(
+                f"FATAL: expected 'mlir' string in request, got: {type(mlir_text)}\n"
+            )
+            break
+
+        response_data = _process_single_request(mlir_text)
+
+        # Write the length-prefixed response.
+        sys.stdout.buffer.write(struct.pack(header_fmt, len(response_data)))
+        sys.stdout.buffer.write(response_data)
+        sys.stdout.buffer.flush()
+
+    return 0
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="FX emitter (MLIR -> FX)")
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run in persistent server mode (length-prefixed protocol on stdin/stdout)",
+    )
+    args = parser.parse_args()
+
+    if args.server:
+        sys.exit(_server_mode())
+
     try:
         request = dill.loads(sys.stdin.buffer.read())
     except Exception as e:
@@ -1055,26 +1156,18 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    response = FxEmitterResponse()
+    response_data = _process_single_request(mlir_text)
+    has_error = False
     try:
-        trace, constraints, options, diagnostics = convert_mlir_to_trace(mlir_text)
-        if trace is None:
-            raise ValueError("MLIR conversion/verification failed; see diagnostics")
-        trace.snapshot_node_state()
-        response = FxEmitterResponse(
-            trace=trace,
-            constraints=constraints,
-            options=options,
-            diagnostics=diagnostics,
+        response = dill.loads(response_data)
+        has_error = any(
+            d.severity == "ERROR"
+            for d in response.diagnostics
+            if hasattr(d, "severity")
         )
-        sys.stdout.buffer.write(dill.dumps(response))
-        sys.stdout.flush()
-        sys.exit(0)
-    except Exception as e:
-        response.diagnostics.append(MLIRDiagnostic(message=str(e), severity="ERROR"))
-        try:
-            sys.stdout.buffer.write(dill.dumps(response))
-            sys.stdout.flush()
-        finally:
-            sys.stderr.write(f"FATAL: fx_emitter failed: {e}\n")
-            sys.exit(1)
+    except Exception:
+        has_error = True
+
+    sys.stdout.buffer.write(response_data)
+    sys.stdout.flush()
+    sys.exit(1 if has_error else 0)

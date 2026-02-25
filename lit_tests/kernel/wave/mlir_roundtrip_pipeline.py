@@ -30,9 +30,8 @@ from wave_lang.kernel.wave.constraints import (
 )
 from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
-    emit_wave_dialect,
     format_diagnostics,
-    mlir_to_fx,
+    PersistentEmitter,
 )
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
@@ -48,17 +47,20 @@ def _try_roundtrip(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
+    emitter: PersistentEmitter,
 ) -> Result[None]:
     """Attempt an MLIR roundtrip on the current trace state."""
     try:
         # Emit FX -> Water MLIR.
-        mlir_text, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+        mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options
+        )
         errors = error_diagnostics(diagnostics)
         if errors:
             return Failure(f"emit:\n{format_diagnostics(errors, use_color=False)}")
 
         # Import Water MLIR -> FX.
-        fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
+        fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
         errors = error_diagnostics(fx_diags)
         if errors:
             return Failure(f"import:\n{format_diagnostics(errors, use_color=False)}")
@@ -92,7 +94,7 @@ def _run_progressive_roundtrip(
     passes (stale xfail entries).
     """
     # Replicate the setup that wave_compile performs before running passes.
-    with IndexingContext() as idxc:
+    with IndexingContext() as idxc, PersistentEmitter() as emitter:
         idxc.set_subs(options.subs)
         launchable.initialize_wave_constraints()
         launchable.initialize_symbolic_constraints()
@@ -129,7 +131,9 @@ def _run_progressive_roundtrip(
             # serializes to MLIR text and compares it against a fresh import.
             p()
 
-            result = _try_roundtrip(trace, launchable.constraints, options)
+            result = _try_roundtrip(
+                trace, launchable.constraints, options, emitter=emitter
+            )
 
             if result and not expected_fail:
                 ok_count += 1
