@@ -17,7 +17,7 @@ Required tags: k_loop, read_a, read_a_scale, read_b, read_b_scale,
 bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale, scaled_mma.
 """
 
-from sympy import Piecewise, ceiling, floor
+from sympy import Piecewise, ceiling, floor, Max
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -57,7 +57,6 @@ def get_tagged_mxfp4_gemm(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
-    GROUP_SIZE_N = tkl.sym.GROUP_SIZE_N
     A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
     B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
@@ -73,7 +72,7 @@ def get_tagged_mxfp4_gemm(
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
-            WORKGROUP_0, WORKGROUP_1, M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
+            M, N, BLOCK_M, BLOCK_N, group_size_n
         )
         constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
         constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
@@ -114,7 +113,6 @@ def get_tagged_mxfp4_gemm(
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
-        GROUP_SIZE_N: group_size_n,
         M: shape[0],
         N: shape[1],
         K: shape[2],
@@ -183,7 +181,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
-            WORKGROUP_0, WORKGROUP_1, M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
+            M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
         )
         constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
         constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
@@ -313,14 +311,18 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     return gemm, options
 
 
-def _reorder_mxfp4_workgroups(wg0, wg1, m, n, block_m, block_n, group_size_n):
+def _reorder_mxfp4_workgroups(m, n, block_m, block_n, group_size_n):
     """Remap workgroup indices to a new order based on group_size_n along N dimension.
 
+    Example (3x5 grid, group_size_n=2): column-major dispatch order becomes
+    full groups of 2 along N, then tail:
+      0  3  6  9 12       |0 1| | 6  7| 12
+      1  4  7 10 13  -->  |2 3| | 8  9| 13
+      2  5  8 11 14       |4 5| |10 11| 14
+
     Args:
-        wg0: Initial workgroup index along M dimension.
-        wg1: Initial workgroup index along N dimension.
-        m: Number of workgroups along M dimension.
-        n: Number of workgroups along N dimension.
+        m: Problem dimension M.
+        n: Problem dimension N.
         block_m: Tile size along M dimension.
         block_n: Tile size along N dimension.
         group_size_n: Number of N-tiles per group.
@@ -347,8 +349,8 @@ def _reorder_mxfp4_workgroups(wg0, wg1, m, n, block_m, block_n, group_size_n):
     tail_tiles_n = num_wg_1 - full_tiles_n
     total_full = full_tiles_n * num_wg_0
     tail_linear = flat_wg_index - total_full
-    tail_new_wg0 = tail_linear // tail_tiles_n
-    tail_new_wg1 = full_tiles_n + tail_linear % tail_tiles_n
+    tail_new_wg0 = tail_linear // Max(1, tail_tiles_n)
+    tail_new_wg1 = full_tiles_n + tail_linear % Max(1, tail_tiles_n)
 
     # Select tail path if we can no longer form full groups
     new_wg0 = Piecewise(
