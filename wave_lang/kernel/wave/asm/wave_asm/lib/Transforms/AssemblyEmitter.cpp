@@ -630,18 +630,19 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                       handled[j] = true;
                       break;
                     }
-                    if (!pendingCopies[i].isSGPR && !pendingCopies[j].isSGPR) {
-                      int64_t regA = pendingCopies[i].dst;
-                      int64_t regB = pendingCopies[j].dst;
-                      int64_t tmp = peakVGPRs;
-                      peakVGPRs = std::max(peakVGPRs, tmp + 1);
-                      os << "  v_mov_b32 v" << tmp << ", v" << regA << "\n";
-                      os << "  v_mov_b32 v" << regA << ", v" << regB << "\n";
-                      os << "  v_mov_b32 v" << regB << ", v" << tmp << "\n";
-                      handled[i] = true;
-                      handled[j] = true;
-                      break;
-                    }
+                    assert(!pendingCopies[i].isSGPR &&
+                           !pendingCopies[j].isSGPR &&
+                           "mixed SGPR/VGPR swap not supported.");
+                    int64_t regA = pendingCopies[i].dst;
+                    int64_t regB = pendingCopies[j].dst;
+                    int64_t tmp = peakVGPRs;
+                    peakVGPRs = std::max(peakVGPRs, tmp + 1);
+                    os << "  v_mov_b32 v" << tmp << ", v" << regA << "\n";
+                    os << "  v_mov_b32 v" << regA << ", v" << regB << "\n";
+                    os << "  v_mov_b32 v" << regB << ", v" << tmp << "\n";
+                    handled[i] = true;
+                    handled[j] = true;
+                    break;
                   }
                 }
               }
