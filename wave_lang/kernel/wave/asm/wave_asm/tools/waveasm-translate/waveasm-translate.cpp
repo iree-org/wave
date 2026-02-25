@@ -74,6 +74,11 @@ static llvm::cl::opt<bool>
                         llvm::cl::desc("Run waitcnt insertion pass"),
                         llvm::cl::init(false));
 
+static llvm::cl::opt<bool> ticketedWaitcnt(
+    "ticketed-waitcnt",
+    llvm::cl::desc("Enable ticket-based waitcnt/barrier insertion"),
+    llvm::cl::init(true)); // true = ticketing ON by default
+
 static llvm::cl::opt<bool>
     runLinearScan("waveasm-linear-scan",
                   llvm::cl::desc("Run linear scan register allocation"),
@@ -328,7 +333,8 @@ int main(int argc, char **argv) {
   // Waitcnt insertion should run before hazard mitigation
   // (matching Python pipeline order for better wait coalescing)
   if (runWaitcntInsertion) {
-    pm.addPass(waveasm::createWAVEASMInsertWaitcntPass());
+    pm.addPass(waveasm::createWAVEASMInsertWaitcntPass(
+        /*insertAfterLoads=*/false, /*ticketedWaitcnt=*/ticketedWaitcnt));
   }
 
   // Hazard mitigation runs after waitcnt (NOPs don't affect wait coalescing)

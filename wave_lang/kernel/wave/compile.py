@@ -1262,7 +1262,9 @@ def _generate_asm_code_waveasm(mlir_asm, options):
     wg = tuple(options.kernel_launch_info.blocks)
     compiler = WaveASMCompiler(target=options.target, codeobj=options.codeobj)
     success, asm_text, stderr = compiler.compile_mlir_to_asm(
-        kernel_mlir, workgroup_size=wg
+        kernel_mlir,
+        workgroup_size=wg,
+        ticketed_waitcnt=False,
     )
     if not success:
         raise RuntimeError(f"waveasm-translate failed:\n{asm_text}")

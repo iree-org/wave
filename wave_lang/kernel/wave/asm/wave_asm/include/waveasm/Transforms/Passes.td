@@ -210,7 +210,9 @@ def WAVEASMInsertWaitcnt : Pass<"waveasm-insert-waitcnt"> {
 
   let options = [
     Option<"insertAfterLoads", "insert-after-loads", "bool", "false",
-           "Insert waitcnt immediately after loads (conservative)">
+           "Insert waitcnt immediately after loads (conservative)">,
+    Option<"ticketedWaitcnt", "ticketed-waitcnt", "bool", "true",
+           "Ticket-based waitcnt/barrier insertion (set to false to disable)">
   ];
 
   let statistics = [
