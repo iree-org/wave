@@ -45,13 +45,15 @@ struct M0RedundancyEliminationPass
 
         for (Operation &op : *block) {
           auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
-          if (!m0Op)
+          if (!m0Op) {
+            // Conservatively reset tracking across region-bearing ops
+            // (loops, ifs) — their bodies may clobber M0.
+            if (op.getNumRegions() > 0)
+              lastM0Source = Value{};
             continue;
+          }
 
-          if (m0Op->getNumOperands() < 1)
-            continue;
-
-          Value src = m0Op->getOperand(0);
+          Value src = m0Op.getSrc();
 
           // If M0 already holds this value, the write is redundant.
           if (src == lastM0Source) {
