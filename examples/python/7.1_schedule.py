@@ -233,7 +233,10 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
 
 
 def test_dbuf_4wave_mxfp_preshuffle_b_no_epilogue_gemm(
-    is_debug=False, shape=(1024, 2048, 8192), block=(128, 256, 256)
+    is_debug=False,
+    shape=(1024, 1024, 8192),
+    block=(128, 256, 256),
+    eliminate_epilogue=True,
 ):
     """Asymmetric MXFP4 GEMM with preshuffled B, epilogue eliminated via OOB=0."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
