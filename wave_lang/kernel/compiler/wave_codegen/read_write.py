@@ -127,6 +127,48 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     return thread_independent_index, thread_dependent_index
 
 
+def _split_index_three_way(
+    src: IndexExpr | int, uniform_syms: set
+) -> tuple[IndexExpr, IndexExpr, IndexExpr]:
+    """
+    Split index expr into workgroup, uniform (e.g. loop induction), and
+    thread-dependent parts.  Keeping the uniform part separate from the
+    thread part allows the backend to place the uniform contribution in
+    the buffer-load soffset field instead of a VALU add.
+    """
+    if isinstance(src, int):
+        return sympy.sympify(0), sympy.sympify(0), sympy.sympify(src)
+
+    subs_wg = {WORKGROUP_0: 0, WORKGROUP_1: 0, WORKGROUP_2: 0}
+    subs_all_uniform = {**subs_wg, **{s: 0 for s in uniform_syms}}
+
+    # Thread-only: zero out all uniform symbols (WG + induction vars).
+    thread_index = safe_subs(src, subs_all_uniform)
+
+    # No-WG: zero out only WG symbols (keeps induction vars + thread).
+    no_wg = safe_subs(src, subs_wg)
+
+    # Uniform part = no_wg - thread_only (induction-var-dependent terms).
+    uniform_index = _simplify(no_wg - thread_index)
+
+    # WG part = src - no_wg.
+    wg_index = _simplify(src - no_wg)
+
+    # Validate WG part contains only WG symbols.
+    if wg_index.free_symbols - set(subs_wg.keys()):
+        wg_index = sympy.sympify(0)
+        no_wg = src
+        uniform_index = _simplify(no_wg - thread_index)
+
+    # Validate uniform part has no thread-dependent symbols.
+    thread_syms = {THREAD_0, THREAD_1, THREAD_2}
+    if uniform_index.free_symbols & thread_syms:
+        thread_index = no_wg
+        uniform_index = sympy.sympify(0)
+
+    return wg_index, uniform_index, thread_index
+
+
 def _extract0(src):
     static_pos = [0] * src.type.rank
     return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
@@ -151,14 +193,25 @@ def _build_start_indices(
     emitter: WaveEmitter,
     src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
     dynamic_values: dict[IndexExpr, Any] = {},
-) -> tuple[list[OpResult], list[OpResult], list[OpResult]]:
+    uniform_syms: set | None = None,
+) -> (
+    tuple[list[OpResult], list[OpResult], list[OpResult]]
+    | tuple[list[OpResult], list[OpResult], list[OpResult], list[OpResult]]
+):
     start_indices = _get_start_indices(src_indices)
-    split_indices = [_split_index(i) for i in start_indices]
     subs = add_emitter_subs(emitter, dynamic_values)
     indices = [gen_sympy_index(subs, i) for i in start_indices]
+
+    if uniform_syms:
+        split_indices = [_split_index_three_way(i, uniform_syms) for i in start_indices]
+        indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
+        indices_unif = [gen_sympy_index(subs, i[1]) for i in split_indices]
+        indices_th = [gen_sympy_index(subs, i[2]) for i in split_indices]
+        return indices, indices_wg, indices_unif, indices_th
+
+    split_indices = [_split_index(i) for i in start_indices]
     indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
     indices_th = [gen_sympy_index(subs, i[1]) for i in split_indices]
-
     return indices, indices_wg, indices_th
 
 
@@ -1070,13 +1123,25 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, new_src_idx, src_dynamic_vals_map_start
-    )
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+    # Three-way split: separate induction-variable (uniform) offsets from
+    # per-lane thread offsets so the backend can place the uniform part in
+    # the buffer-load soffset field instead of emitting a VALU add.
+    src_index_iv = None
+    if induction_vars:
+        src_index, src_index_wg, src_index_iv, src_index_th = _build_start_indices(
+            emitter,
+            new_src_idx,
+            src_dynamic_vals_map_start,
+            uniform_syms=induction_vars,
+        )
+    else:
+        src_index, src_index_wg, src_index_th = _build_start_indices(
+            emitter, new_src_idx, src_dynamic_vals_map_start
+        )
 
     ip = InsertionPoint.current
-
-    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
     # Hoist to the function level, if not using induction variables.
     if not any(
@@ -1104,6 +1169,25 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
+
+    # Add uniform (induction-variable) contribution as a separate SGPR offset.
+    # Keeping it as a distinct arith.addi (VGPR + SGPR) lets the AMDGPU
+    # backend's SIFoldOperands fold the SGPR into the buffer_load soffset.
+    if src_index_iv is not None:
+        overflow_flags = arith_d.IntegerOverflowFlags.nsw
+        offset_iv = None
+        for iv_idx, stride in zip(src_index_iv, strides):
+            if isinstance(iv_idx, int):
+                iv_idx = arith_d.constant(IndexType.get(), iv_idx)
+            off = arith_d.muli(iv_idx, stride, overflow_flags=overflow_flags)
+            if offset_iv is None:
+                offset_iv = off
+            else:
+                offset_iv = arith_d.addi(offset_iv, off, overflow_flags=overflow_flags)
+        if offset_iv is not None and _get_constant_value(offset_iv) != 0:
+            offset_th = arith_d.addi(
+                offset_th, offset_iv, overflow_flags=overflow_flags
+            )
 
     # We previously checked mask is same for all elements, so we can use
     # elements_per_thread=1 to build the mask.
