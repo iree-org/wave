@@ -18,24 +18,20 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMM0REDUNDANCYELIM
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 using namespace mlir;
 using namespace waveasm;
 
 namespace {
 
 struct M0RedundancyEliminationPass
-    : public PassWrapper<M0RedundancyEliminationPass, OperationPass<>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(M0RedundancyEliminationPass)
-
-  M0RedundancyEliminationPass() = default;
-
-  StringRef getArgument() const override {
-    return "waveasm-m0-redundancy-elim";
-  }
-
-  StringRef getDescription() const override {
-    return "Eliminate redundant M0 register writes in WAVEASM IR";
-  }
+    : public waveasm::impl::WAVEASMM0RedundancyElimBase<
+          M0RedundancyEliminationPass> {
+  using WAVEASMM0RedundancyElimBase::WAVEASMM0RedundancyElimBase;
 
   void runOnOperation() override {
     getOperation()->walk([](ProgramOp program) {
@@ -71,11 +67,3 @@ struct M0RedundancyEliminationPass
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMM0RedundancyElimPass() {
-  return std::make_unique<M0RedundancyEliminationPass>();
-}
-
-} // namespace waveasm

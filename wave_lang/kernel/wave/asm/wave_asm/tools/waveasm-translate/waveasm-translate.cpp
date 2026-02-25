@@ -255,7 +255,7 @@ int main(int argc, char **argv) {
 
   // Peephole optimizations run after CSE but before waitcnt/hazard.
   if (runPeephole) {
-    pm.addPass(waveasm::createWAVEASMPeepholePass());
+    pm.addPass(waveasm::createWAVEASMPeephole());
   }
 
   // Eliminate BFE/LSHL_OR round-trips for B-scale iter_args.

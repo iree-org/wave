@@ -27,6 +27,11 @@
 
 #include <limits>
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMPEEPHOLE
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 using namespace mlir;
 using namespace waveasm;
 
@@ -1037,16 +1042,8 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
 // Peephole Optimization Pass
 //===----------------------------------------------------------------------===//
 
-struct PeepholePass : public PassWrapper<PeepholePass, OperationPass<>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PeepholePass)
-
-  PeepholePass() = default;
-
-  StringRef getArgument() const override { return "waveasm-peephole"; }
-
-  StringRef getDescription() const override {
-    return "Peephole optimizations for WAVEASM IR";
-  }
+struct PeepholePass : public waveasm::impl::WAVEASMPeepholeBase<PeepholePass> {
+  using WAVEASMPeepholeBase::WAVEASMPeepholeBase;
 
   void runOnOperation() override {
     Operation *op = getOperation();
@@ -1088,11 +1085,3 @@ struct PeepholePass : public PassWrapper<PeepholePass, OperationPass<>> {
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMPeepholePass() {
-  return std::make_unique<PeepholePass>();
-}
-
-} // namespace waveasm

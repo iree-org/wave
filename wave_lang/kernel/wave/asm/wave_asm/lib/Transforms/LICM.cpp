@@ -18,21 +18,18 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMLICM
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 using namespace mlir;
 using namespace waveasm;
 
 namespace {
 
-struct LICMPass : public PassWrapper<LICMPass, OperationPass<>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LICMPass)
-
-  LICMPass() = default;
-
-  StringRef getArgument() const override { return "waveasm-licm"; }
-
-  StringRef getDescription() const override {
-    return "Loop-invariant code motion for WAVEASM IR";
-  }
+struct LICMPass : public waveasm::impl::WAVEASMLICMBase<LICMPass> {
+  using WAVEASMLICMBase::WAVEASMLICMBase;
 
   void runOnOperation() override {
     // Post-order: process inner loops first so ops hoisted from inner to
@@ -82,11 +79,3 @@ struct LICMPass : public PassWrapper<LICMPass, OperationPass<>> {
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMLICMPass() {
-  return std::make_unique<LICMPass>();
-}
-
-} // namespace waveasm
