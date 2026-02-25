@@ -17,6 +17,9 @@
 
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "waveasm-m0-redundancy-elim"
 
 namespace waveasm {
 #define GEN_PASS_DEF_WAVEASMM0REDUNDANCYELIM
@@ -34,7 +37,8 @@ struct M0RedundancyEliminationPass
   using WAVEASMM0RedundancyElimBase::WAVEASMM0RedundancyElimBase;
 
   void runOnOperation() override {
-    getOperation()->walk([](Block *block) {
+    unsigned numEliminated = 0;
+    getOperation()->walk([&](Block *block) {
       Value lastM0Source;
 
       for (Operation &op : llvm::make_early_inc_range(*block)) {
@@ -50,12 +54,15 @@ struct M0RedundancyEliminationPass
         Value src = m0Op.getSrc();
 
         // If M0 already holds this value, the write is redundant.
-        if (src == lastM0Source)
+        if (src == lastM0Source) {
           op.erase();
-        else
+          ++numEliminated;
+        } else {
           lastM0Source = src;
+        }
       }
     });
+    LDBG() << "removed " << numEliminated << " redundant M0 writes.";
   }
 };
 
