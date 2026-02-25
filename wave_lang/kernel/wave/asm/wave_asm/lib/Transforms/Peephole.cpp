@@ -139,11 +139,11 @@ struct LshlAddPattern : public OpRewritePattern<V_ADD_U32> {
       // BufferLoadLDSSoffsetPattern extract the shift into soffset instead.
       if (isSGPRType(lshlOp.getSrc1().getType())) {
         auto feedsBufferLoadLDS = [](Value v) {
-          for (auto *user : v.getUsers()) {
+          for (Operation *user : v.getUsers()) {
             if (isa<BUFFER_LOAD_DWORDX4_LDS, BUFFER_LOAD_DWORD_LDS>(user))
               return true;
             if (auto add = dyn_cast<V_ADD_U32>(user)) {
-              for (auto *u2 : add.getResult().getUsers())
+              for (Operation *u2 : add.getResult().getUsers())
                 if (isa<BUFFER_LOAD_DWORDX4_LDS, BUFFER_LOAD_DWORD_LDS>(u2))
                   return true;
             }
@@ -250,7 +250,7 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
       return std::nullopt;
     };
 
-    auto loc = loadOp.getLoc();
+    Location loc = loadOp.getLoc();
 
     // Case 1: voffset = V_ADD_U32(row, V_LSHLREV_B32(const, sgpr)).
     if (auto found = findShiftInAdd(outerAdd)) {
@@ -271,7 +271,8 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
       auto innerAdd = candidate.template getDefiningOp<V_ADD_U32>();
       if (!innerAdd)
         continue;
-      auto found = findShiftInAdd(innerAdd);
+      std::optional<std::tuple<Value, Value, Value>> found =
+          findShiftInAdd(innerAdd);
       if (!found)
         continue;
 
@@ -298,7 +299,8 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
       if (!lshlAdd)
         continue;
       // Check if src2 (the addend) is a scalar shift.
-      auto shift = extractScalarShift(lshlAdd.getSrc2());
+      std::optional<std::pair<Value, Value>> shift =
+          extractScalarShift(lshlAdd.getSrc2());
       if (!shift)
         continue;
 
@@ -964,7 +966,7 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
   LogicalResult matchAndRewrite(V_LSHL_OR_B32 outerOp,
                                 PatternRewriter &rewriter) const override {
     // Outer: v_lshl_or_b32(byte3, 24, middle_result).
-    auto shiftOuter = getConstantValue(outerOp.getSrc1());
+    std::optional<int64_t> shiftOuter = getConstantValue(outerOp.getSrc1());
     if (!shiftOuter || *shiftOuter != 24)
       return failure();
 
@@ -977,7 +979,7 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
     if (!middleOp)
       return failure();
 
-    auto shiftMiddle = getConstantValue(middleOp.getSrc1());
+    std::optional<int64_t> shiftMiddle = getConstantValue(middleOp.getSrc1());
     if (!shiftMiddle || *shiftMiddle != 16)
       return failure();
 
@@ -990,7 +992,7 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
     if (!innerOp)
       return failure();
 
-    auto shiftInner = getConstantValue(innerOp.getSrc1());
+    std::optional<int64_t> shiftInner = getConstantValue(innerOp.getSrc1());
     if (!shiftInner || *shiftInner != 8)
       return failure();
 
@@ -1005,19 +1007,19 @@ struct BFEPackIdentityPattern : public OpRewritePattern<V_LSHL_OR_B32> {
     // All 4 BFEs must extract from the same source with width 8.
     auto checkBFE = [](V_BFE_U32 bfe,
                        int64_t expectedOffset) -> std::optional<Value> {
-      auto width = getConstantValue(bfe.getSrc2());
+      std::optional<int64_t> width = getConstantValue(bfe.getSrc2());
       if (!width || *width != 8)
         return std::nullopt;
-      auto offset = getConstantValue(bfe.getSrc1());
+      std::optional<int64_t> offset = getConstantValue(bfe.getSrc1());
       if (!offset || *offset != expectedOffset)
         return std::nullopt;
       return bfe.getSrc0();
     };
 
-    auto src0 = checkBFE(bfe0, 0);
-    auto src1 = checkBFE(bfe1, 8);
-    auto src2 = checkBFE(bfe2, 16);
-    auto src3 = checkBFE(bfe3, 24);
+    std::optional<Value> src0 = checkBFE(bfe0, 0);
+    std::optional<Value> src1 = checkBFE(bfe1, 8);
+    std::optional<Value> src2 = checkBFE(bfe2, 16);
+    std::optional<Value> src3 = checkBFE(bfe3, 24);
 
     if (!src0 || !src1 || !src2 || !src3)
       return failure();
