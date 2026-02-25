@@ -171,7 +171,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options.linearize_shared_access = True
     options.use_buffer_ops = True
     options.dump_intermediates = "build/intermediates"
-    schedule = get_mxfp4_asymmetric_schedule()
+    schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
@@ -210,7 +210,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     options.wave_runtime = True
     options.use_wave_asm_backend = True
     options.dump_intermediates = "build/intermediates"
-    schedule = get_mxfp4_asymmetric_schedule()
+    schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
