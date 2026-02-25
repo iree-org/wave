@@ -91,7 +91,7 @@ static llvm::cl::opt<bool>
 
 static llvm::cl::opt<bool>
     runLICM("waveasm-licm",
-            llvm::cl::desc("Hoist loop-invariant VALU address ops"),
+            llvm::cl::desc("Hoist loop-invariant code out of loops"),
             llvm::cl::init(false));
 
 static llvm::cl::opt<bool> runM0RedundancyElim(

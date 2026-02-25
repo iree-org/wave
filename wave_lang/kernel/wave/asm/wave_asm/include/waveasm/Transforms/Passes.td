@@ -266,22 +266,6 @@ def WAVEASMPeephole : Pass<"waveasm-peephole"> {
 }
 
 //===----------------------------------------------------------------------===//
-// LICM Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMLICM : Pass<"waveasm-licm"> {
-  let summary = "Loop-invariant code motion for WAVEASM IR";
-  let description = [{
-    Hoists VALU address-computation instructions whose operands all dominate
-    the loop out of LoopOp bodies.  Uses an iterative fixpoint with post-order
-    walk so inner loops are processed first and chains of hoistable ops are
-    handled across multiple iterations.
-  }];
-
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
-}
-
-//===----------------------------------------------------------------------===//
 // M0 Redundancy Elimination Pass
 //===----------------------------------------------------------------------===//
 
