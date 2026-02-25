@@ -132,4 +132,7 @@ class WaveCompileOptions:
     use_wave_asm_backend: bool = (
         False  # Use WaveASM (waveasm-translate) instead of Python backend
     )
+    use_wave_asm_backend: bool = (
+        False  # Use WaveASM (waveasm-translate) instead of Python backend
+    )
     mma_type: Optional["MMAType"] = None  # MMA type for ASM backend dispatch
