@@ -18,12 +18,14 @@ from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import (
     get_tagged_mxfp4_gemm,
     get_tagged_mxfp4_gemm_preshuffle_b,
+    get_tagged_mxfp4_gemm_preshuffle_scale_b,
 )
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
     get_mxfp4_dbuf_pingpong_schedule,
     get_mxfp4_dbuf_mixed_pingpong_schedule,
     get_mxfp4_asymmetric_schedule,
+    get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule,
 )
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
@@ -50,15 +52,27 @@ def _run_mxfp_gemm(gemm, shape):
     )
 
 
-def _run_mxfp_gemm_preshuffle_b(gemm, shape):
-    """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference."""
+def _run_mxfp_gemm_preshuffle(gemm, shape, all=False, only_scale=False, only_b=False):
+    """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference.
+
+    Shuffling is applied based on the flags:
+      all        - shuffle a_scale (x_scales), b_scale (w_scales), and b (w_t)
+      only_scale - shuffle a_scale (x_scales) and b_scale (w_scales) only
+      only_b     - shuffle b_scale (w_scales) only
+    """
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     w_t = w.T.contiguous()
-    w_t_ps = b_preshuffle(w_t)
-    x_scales_ps = e8m0_shuffle(x_scales)
-    w_scales_ps = e8m0_shuffle(w_scales)
+
+    # Apply b (w_t) preshuffle only when all=True
+    w_t_ps = b_preshuffle(w_t) if all else w_t
+
+    # Apply a_scale shuffle when all=True or only_scale=True
+    x_scales_ps = e8m0_shuffle(x_scales) if (all or only_scale) else x_scales
+
+    # Apply b_scale shuffle when all=True, only_scale=True, or only_b=True
+    w_scales_ps = e8m0_shuffle(w_scales) if (all or only_scale or only_b) else w_scales
 
     x, w_t_ps = x.cuda(), w_t_ps.cuda()
     x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
@@ -138,6 +152,46 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
     print("MXFP GEMM double-buffer 8-wave mixed ping pong test passed!")
 
 
+def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
+    is_debug=False, shape=(16384, 16384, 16384), block=(256, 256, 256)
+):
+    """Double-buffered MXFP4 GEMM, 8 waves, with stagger.
+
+    A variant of the ping-pong schedule that hides the latency of the extra
+    WorkgroupBarrier required for large shapes. With staggering, the two
+    clusters of waves write to LDS at different times, so a second barrier is
+    needed to ensure all writes are visible before any wave reads. This
+    schedule overlaps that barrier with useful work by splitting LDS loads:
+
+    - "Safe" loads: rows this wave wrote itself — readable immediately after
+        memory_counter_wait, before the global WorkgroupBarrier.
+    - "Dependent" loads: rows written by other waves — deferred until after
+        the global WorkgroupBarrier.
+
+    This lets the MFMAs on the safe operands start firing as soon as the
+    barrier releases, effectively hiding the second barrier's latency behind
+    the early loads and compute.
+    """
+
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scale_b(
+        shape, block, wave_shape=(4, 2)
+    )
+
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    # options.linearize_shared_access = True
+    schedule = get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger=True)
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
+
+    _run_mxfp_gemm_preshuffle(gemm, shape, only_b=True)
+    print("MXFP GEMM double-buffer 8-wave mixed ping pong with shuffling test passed!")
+
+
 def test_dbuf_4wave_mxfp_asymmetric_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
@@ -177,7 +231,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle_b(gemm, shape)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     print("MXFP GEMM preshuffle-B 4-wave test passed!")
 
 
