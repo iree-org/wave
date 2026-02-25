@@ -12,6 +12,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!asm/wave_asm/
 lib64/
 parts/
 sdist/

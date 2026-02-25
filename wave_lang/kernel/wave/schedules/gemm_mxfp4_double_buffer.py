@@ -1014,6 +1014,7 @@ def get_mxfp4_asymmetric_schedule():
                     prologue_g2v_b,
                     prologue_g2v_b_scale,
                     tkw.MemoryCounterWaitBarrier(load=prologue_vmcnt),
+                    tkw.MemoryCounterWait(load=0),
                     prologue_s2v_a_0,
                     prologue_s2v_a_scale_0,
                 ],
@@ -1282,5 +1283,8 @@ def get_mxfp4_asymmetric_schedule():
         clusters += epilogue_clusters_itr0
         clusters += prologue_clusters
         tkw.reorder_graph(pipeline_loop.EPILOGUE, clusters)
+        # Unroll factor requires per-GEMM tuning:
+        unroll_factor = 2
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
     return mxfp4_dbuf_schedule

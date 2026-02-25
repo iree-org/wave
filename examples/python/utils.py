@@ -56,17 +56,15 @@ def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block
         return False
 
     test_func = module_globals[test_name]
+    kwargs = {"is_debug": debug}
+    if shape is not None:
+        kwargs["shape"] = shape
+    if block is not None:
+        kwargs["block"] = block
+
     for i in range(repeat):
         try:
-            # if shape and block are provided, pass them to the test function
-            if shape and block:
-                test_func(debug, shape, block)
-            elif shape:
-                test_func(debug, shape)
-            elif block:
-                test_func(debug, block)
-            else:
-                test_func(debug)
+            test_func(**kwargs)
             if repeat > 1:
                 print(f"Test {i+1}/{repeat} passed")
         except Exception as e:
