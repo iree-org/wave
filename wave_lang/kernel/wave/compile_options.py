@@ -89,6 +89,7 @@ class WaveCompileOptions:
     wave_runtime: bool = False
     iree_launch_async: bool = True
     use_buffer_ops: bool = False
+    use_real_buffer_bounds: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
     linearize_shared_access: bool = False

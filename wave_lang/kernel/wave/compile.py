@@ -72,6 +72,7 @@ from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
 from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
+from .scheduling.loop_reconstruction import guard_g2s_with_bounds_check
 from .scheduling.schedule import schedule_graph
 from .scheduling.schedule_enums import SchedulingType
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
@@ -544,6 +545,10 @@ def build_graph_passes(
                 options.multi_buffer_count,
             )
         )
+
+    graph_passes.append(
+        partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
+    )
 
     if options.optimization_level:
         graph_passes += [

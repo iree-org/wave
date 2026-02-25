@@ -164,10 +164,11 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm(
 
 
 def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256)
 ):
     """Asymmetric MXFP4 GEMM with preshuffled B data and B scales."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    print(block)
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.use_buffer_ops = True
@@ -178,8 +179,38 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
+    with open("build/intermediates/gemm_mxfp4_dbuf_4wave_asymmetric.mlir", "w") as f:
+        f.write(gemm.asm)
+
     _run_mxfp_gemm_preshuffle_b(gemm, shape)
     print("MXFP GEMM preshuffle-B 4-wave test passed!")
+
+
+def test_dbuf_4wave_mxfp_preshuffle_b_no_epilogue_gemm(
+    is_debug=False, shape=(1024, 2048, 8192), block=(128, 256, 256)
+):
+    """Asymmetric MXFP4 GEMM with preshuffled B, epilogue eliminated via OOB=0."""
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.use_real_buffer_bounds = True
+    options.dump_intermediates = "build/intermediates"
+    schedule = get_mxfp4_asymmetric_schedule(eliminate_epilogue=True)
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    print(block)
+    gemm = wave_compile(options, gemm, schedule)
+
+    with open(
+        f"build/intermediates/gemm_mxfp4_dbuf_4wave_asymmetric_no_epilogue_{shape[0]}_{shape[1]}_{shape[2]}.mlir",
+        "w",
+    ) as f:
+        f.write(gemm.asm)
+
+    _run_mxfp_gemm_preshuffle_b(gemm, shape)
+    print("MXFP GEMM preshuffle-B no-epilogue 4-wave test passed!")
 
 
 if __name__ == "__main__":
