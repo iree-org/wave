@@ -1142,9 +1142,13 @@ def _create_kernel_module(
         if issubclass(t, Memory) and t.address_space in options.subs:
             # Create a new type with resolved address space
             resolved_address_space = options.subs[t.address_space]
-            if resolved_address_space != GLOBAL_ADDRESS_SPACE:
+            if resolved_address_space not in (
+                GLOBAL_ADDRESS_SPACE,
+                SHARED_ADDRESS_SPACE,
+            ):
                 raise RuntimeError(
-                    f"Unexpected address space in hyperparameters: {t.address_space} -> {resolved_address_space}"
+                    f"Unexpected address space in hyperparameters: "
+                    f"{t.address_space} -> {resolved_address_space}"
                 )
             t = Memory[t.symbolic_shape, resolved_address_space, t.dtype]
         arg_types.append(_type_to_wave_mlir(ctx, t))
