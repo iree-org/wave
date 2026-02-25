@@ -38,7 +38,8 @@
 //
 // After optimization:
 //   Loop carries the dword directly. The LSHL_OR chain and BFE extractions
-//   are eliminated, saving 6 VALU + 8 BFE instructions per iteration.
+//   are eliminated, saving 3 LSHL_OR + 4 BFE = 7 VALU instructions per
+//   chain per iteration.
 //   This matches AITER's pattern where buffer_load_dword feeds MFMA opsel
 //   directly.
 //===----------------------------------------------------------------------===//
@@ -50,7 +51,6 @@
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
@@ -189,14 +189,15 @@ static std::optional<Value> verifyBFEGroup(llvm::ArrayRef<unsigned> argIndices,
   return commonSource;
 }
 
-/// Check that the byte block arguments have no uses other than the pack
-/// chain ops. This ensures removing them is safe.
-static bool byteArgsOnlyUsedByPackChain(PackChain &chain, Block &body) {
+/// Check that the byte block arguments and intermediate chain results have
+/// no uses outside the pack chain. This ensures removing them is safe.
+static bool chainOnlyUsedInternally(PackChain &chain, Block &body) {
   llvm::SmallDenseSet<Operation *, 4> packOps;
   packOps.insert(chain.innerOp.getOperation());
   packOps.insert(chain.middleOp.getOperation());
   packOps.insert(chain.outerOp.getOperation());
 
+  // Byte block args must only feed into the pack chain.
   for (unsigned i : llvm::seq(4u)) {
     Value arg = body.getArgument(chain.byteArgIdx[i]);
     for (OpOperand &use : arg.getUses()) {
@@ -204,6 +205,12 @@ static bool byteArgsOnlyUsedByPackChain(PackChain &chain, Block &body) {
         return false;
     }
   }
+
+  // Intermediate results (inner, middle) must only feed the next op in chain.
+  if (!chain.innerOp.getResult().hasOneUse() ||
+      !chain.middleOp.getResult().hasOneUse())
+    return false;
+
   return true;
 }
 
@@ -243,8 +250,8 @@ static void eliminateScalePackChains(LoopOp loopOp) {
       continue;
     chain->yieldDword = *yieldDword;
 
-    // Step 4: Verify byte args have no other uses.
-    if (!byteArgsOnlyUsedByPackChain(*chain, body))
+    // Step 4: Verify byte args and intermediate results have no other uses.
+    if (!chainOnlyUsedInternally(*chain, body))
       continue;
 
     chains.push_back(*chain);
@@ -253,7 +260,9 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   if (chains.empty())
     return;
 
-  LDBG() << "found " << chains.size() << " pack chains to eliminate";
+  LDBG() << "found " << chains.size() << " pack chains to eliminate ("
+         << chains.size() * 4 << " iter_args -> " << chains.size()
+         << " dword iter_args)";
 
   // Step 5: Collect indices of byte args to remove.
   llvm::SmallDenseSet<unsigned, 8> removedArgIndices;
@@ -341,42 +350,44 @@ static void eliminateScalePackChains(LoopOp loopOp) {
   ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
 
   // Step 11: Replace old loop results with new loop results.
+  // For removed byte args with post-loop uses, emit BFE extractions.
+  OpBuilder postBuilder(builder.getContext());
+  postBuilder.setInsertionPointAfter(newLoop);
+
+  auto emitPostLoopBFE = [&](unsigned argIdx) -> Value {
+    for (auto [ci, chain] : llvm::enumerate(chains)) {
+      for (unsigned bi : llvm::seq(4u)) {
+        if (chain.byteArgIdx[bi] != argIdx)
+          continue;
+        int64_t offset = bi * 8;
+        auto vregType = postBuilder.getType<VRegType>(1, 1);
+        auto offsetImm = postBuilder.getType<ImmType>(offset);
+        auto offsetConst =
+            ConstantOp::create(postBuilder, loc, offsetImm, offset);
+        auto widthImm = postBuilder.getType<ImmType>(8);
+        auto widthConst = ConstantOp::create(postBuilder, loc, widthImm, 8);
+        Value dwordResult = newLoop.getResult(chainNewArgIdx[ci]);
+        return V_BFE_U32::create(postBuilder, loc, vregType, dwordResult,
+                                 offsetConst, widthConst);
+      }
+    }
+    llvm_unreachable("removed arg not found in any chain");
+  };
+
   for (unsigned i : llvm::seq(numArgs)) {
     if (oldToNewArgIdx[i] >= 0) {
       loopOp.getResult(i).replaceAllUsesWith(
           newLoop.getResult(oldToNewArgIdx[i]));
     } else if (!loopOp.getResult(i).use_empty()) {
-      // This result corresponded to a removed byte arg. Extract the byte
-      // from the chain's dword result for any post-loop uses.
-      for (auto [ci, chain] : llvm::enumerate(chains)) {
-        for (unsigned bi : llvm::seq(4u)) {
-          if (chain.byteArgIdx[bi] != i)
-            continue;
-          OpBuilder postBuilder(builder.getContext());
-          postBuilder.setInsertionPointAfter(newLoop);
-          int64_t offset = bi * 8;
-          auto vregType = postBuilder.getType<VRegType>(1, 1);
-          auto offsetImm = postBuilder.getType<ImmType>(offset);
-          auto offsetConst =
-              ConstantOp::create(postBuilder, loc, offsetImm, offset);
-          auto widthImm = postBuilder.getType<ImmType>(8);
-          auto widthConst = ConstantOp::create(postBuilder, loc, widthImm, 8);
-          Value dwordResult = newLoop.getResult(chainNewArgIdx[ci]);
-          auto bfe = V_BFE_U32::create(postBuilder, loc, vregType, dwordResult,
-                                       offsetConst, widthConst);
-          loopOp.getResult(i).replaceAllUsesWith(bfe);
-          goto nextResult; // Break out of both inner loops.
-        }
-      }
+      loopOp.getResult(i).replaceAllUsesWith(emitPostLoopBFE(i));
     }
-  nextResult:;
   }
 
   loopOp.erase();
 }
 
 struct ScalePackEliminationPass
-    : public PassWrapper<ScalePackEliminationPass, OperationPass<ModuleOp>> {
+    : public PassWrapper<ScalePackEliminationPass, OperationPass<>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScalePackEliminationPass)
 
   StringRef getArgument() const override {
@@ -388,10 +399,11 @@ struct ScalePackEliminationPass
   }
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    // Collect loops first (transformation invalidates walk iterator).
+    // Post-order so inner loops are processed before outer ones.
+    // Collect first since transformation invalidates walk iterator.
     SmallVector<LoopOp> loops;
-    module.walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
+    getOperation()->walk<WalkOrder::PostOrder>(
+        [&](LoopOp loopOp) { loops.push_back(loopOp); });
     for (auto loopOp : loops)
       eliminateScalePackChains(loopOp);
   }

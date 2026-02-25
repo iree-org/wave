@@ -4,7 +4,7 @@
 //
 // The pass finds BFE(dword,{0,8,16,24},8) -> iter_arg -> LSHL_OR repack
 // chains and replaces them with a single dword iter_arg, eliminating
-// 3 LSHL_OR + 4 BFE per iteration.
+// 3 LSHL_OR + 4 BFE = 7 VALU per chain per iteration.
 
 //===----------------------------------------------------------------------===//
 // Basic: one pack chain, loop carries 4 bytes -> 1 dword.
@@ -316,12 +316,12 @@ waveasm.program @two_chains
 }
 
 //===----------------------------------------------------------------------===//
-// Post-loop uses of removed byte results.
-// The pass should insert v_bfe_u32 extractions after the loop.
+// Post-loop: multiple byte uses from the same chain (bytes 0, 1, 3).
+// Each should get its own v_bfe_u32 extraction after the loop.
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: @post_loop_byte_use
-waveasm.program @post_loop_byte_use
+// CHECK-LABEL: @post_loop_multi_byte_use
+waveasm.program @post_loop_multi_byte_use
   target = #waveasm.target<#waveasm.gfx942, 5>
   abi = #waveasm.abi<tid = 0, kernarg = 0>
   attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
@@ -345,7 +345,7 @@ waveasm.program @post_loop_byte_use
   %b2 = waveasm.v_bfe_u32 %init_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
   %b3 = waveasm.v_bfe_u32 %init_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-  // Loop still gets transformed (bytes only used by pack chain inside).
+  // Loop still gets transformed.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg) {
   %riv, %rb0, %rb1, %rb2, %rb3 = waveasm.loop(
@@ -376,11 +376,16 @@ waveasm.program @post_loop_byte_use
         : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
   }
 
-  // Post-loop use of byte 1 (%rb1). The pass should insert a
-  // v_bfe_u32(dword_result, 8, 8) after the loop to extract byte 1.
-  // CHECK: waveasm.v_bfe_u32
-  // CHECK: waveasm.v_add_u32
-  %post = waveasm.v_add_u32 %rb1, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+  // Post-loop uses of bytes 0, 1, and 3. Each gets a v_bfe_u32 extraction.
+  // Byte 0: v_bfe_u32(dword, 0, 8).
+  // CHECK: waveasm.v_bfe_u32 %{{.*}}, %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.imm<0>, !waveasm.imm<8>
+  // Byte 1: v_bfe_u32(dword, 8, 8).
+  // CHECK: waveasm.v_bfe_u32 %{{.*}}, %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.imm<8>, !waveasm.imm<8>
+  // Byte 3: v_bfe_u32(dword, 24, 8).
+  // CHECK: waveasm.v_bfe_u32 %{{.*}}, %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8>
+  %post0 = waveasm.v_add_u32 %rb0, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+  %post1 = waveasm.v_add_u32 %rb1, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+  %post3 = waveasm.v_add_u32 %rb3, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
