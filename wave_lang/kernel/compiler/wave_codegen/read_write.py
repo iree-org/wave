@@ -420,8 +420,10 @@ def _cast_buffer_and_encode_stride(
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
         stride_int = _get_constant_value(stride_candidate)
-        # Only swizzle if stride is static and fits in signed i14.
-        if stride_int and stride_int < 8192:
+        # Only swizzle if stride is static and fits in signed i14
+        # (max representable positive value is 8191, but 8192 wraps to
+        # -8192 which the hardware accepts).
+        if stride_int and stride_int <= 8192:
             swizzle_stride = arith_d.index_cast(uint14, stride_candidate)
 
     if swizzle_stride:
