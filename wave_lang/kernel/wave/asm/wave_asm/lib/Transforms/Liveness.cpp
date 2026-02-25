@@ -433,6 +433,34 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // tiedClassId field on each range identifies its class membership.
   auto &tc = info.tiedClasses;
 
+  // Check whether tying an async memory load's iter_arg to its block arg
+  // is unsafe. An async load (MemoryOp trait with results) writes its
+  // destination register asynchronously. If the corresponding block arg
+  // is still read after the load issues, sharing a register would let the
+  // load clobber a value MFMAs are still consuming.
+  auto isUnsafeAsyncTie = [&](Value iterArg, BlockArgument blockArg) -> bool {
+    Operation *defOp = iterArg.getDefiningOp();
+    if (!defOp)
+      return false;
+    if (!defOp->hasTrait<OpTrait::MemoryOp>() || defOp->getNumResults() == 0)
+      return false;
+
+    auto defIt = opToIdx.find(defOp);
+    if (defIt == opToIdx.end())
+      return false;
+    int64_t defIdx = defIt->second;
+
+    // Find the last use of blockArg in the program-linear order.
+    int64_t lastUseIdx = -1;
+    for (OpOperand &use : blockArg.getUses()) {
+      auto userIt = opToIdx.find(use.getOwner());
+      if (userIt != opToIdx.end())
+        lastUseIdx = std::max(lastUseIdx, userIt->second);
+    }
+
+    return lastUseIdx > defIdx;
+  };
+
   program.walk([&](LoopOp loopOp) {
     Block &bodyBlock = loopOp.getBodyBlock();
     auto condOp = dyn_cast<ConditionOp>(bodyBlock.getTerminator());
@@ -476,10 +504,11 @@ LivenessInfo computeLiveness(ProgramOp program) {
           members.push_back(loopResult);
       }
 
-      // Condition iter_arg -> block arg
+      // Condition iter_arg -> block arg (skip unsafe async memory loads).
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        if (info.ranges.contains(iterArg))
+        if (info.ranges.contains(iterArg) &&
+            !isUnsafeAsyncTie(iterArg, blockArg))
           members.push_back(iterArg);
       }
 
@@ -529,7 +558,8 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        if (info.ranges.contains(iterArg) && !tc.tiedPairs.contains(iterArg))
+        if (info.ranges.contains(iterArg) && !tc.tiedPairs.contains(iterArg) &&
+            !isUnsafeAsyncTie(iterArg, blockArg))
           tc.tiedPairs[iterArg] = blockArg;
       }
       if (i < loopOp->getNumResults()) {

@@ -599,12 +599,16 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               };
 
               for (unsigned i = 0; i < numIter; ++i) {
-                auto [srcPhys, isSGPR] =
-                    getPhysRegInfo(condOp.getIterArgs()[i]);
-                auto [dstPhys, dstIsSGPR] = getPhysRegInfo(body.getArgument(i));
+                Value iterArg = condOp.getIterArgs()[i];
+                Value blockArg = body.getArgument(i);
+                auto [srcPhys, isSGPR] = getPhysRegInfo(iterArg);
+                auto [dstPhys, dstIsSGPR] = getPhysRegInfo(blockArg);
 
                 if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
-                  pendingCopies.push_back({dstPhys, srcPhys, isSGPR});
+                  // Decompose multi-register values into individual copies.
+                  int64_t size = getRegSize(iterArg.getType());
+                  for (int64_t j = 0; j < size; ++j)
+                    pendingCopies.push_back({dstPhys + j, srcPhys + j, isSGPR});
                 }
               }
 
