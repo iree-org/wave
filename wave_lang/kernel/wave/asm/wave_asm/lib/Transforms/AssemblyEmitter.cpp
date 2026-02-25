@@ -630,10 +630,18 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                       handled[j] = true;
                       break;
                     }
-                    assert(!((!pendingCopies[i].isSGPR) &&
-                             (!pendingCopies[j].isSGPR)) &&
-                           "VGPR swap cycles in iter_args are not supported; "
-                           "extend swap emission to handle VGPRs");
+                    if (!pendingCopies[i].isSGPR && !pendingCopies[j].isSGPR) {
+                      int64_t regA = pendingCopies[i].dst;
+                      int64_t regB = pendingCopies[j].dst;
+                      int64_t tmp = peakVGPRs;
+                      peakVGPRs = std::max(peakVGPRs, tmp + 1);
+                      os << "  v_mov_b32 v" << tmp << ", v" << regA << "\n";
+                      os << "  v_mov_b32 v" << regA << ", v" << regB << "\n";
+                      os << "  v_mov_b32 v" << regB << ", v" << tmp << "\n";
+                      handled[i] = true;
+                      handled[j] = true;
+                      break;
+                    }
                   }
                 }
               }
