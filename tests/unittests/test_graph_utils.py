@@ -9,6 +9,7 @@ import torch.fx as fx
 from wave_lang.kernel.wave.utils.graph_utils import (
     is_barrier_between,
     is_barrier_between_same_graph,
+    _check_nodes_equivalent,
 )
 from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
@@ -305,6 +306,80 @@ class TestIsBarrierBetweenNestedGraphs:
         result = is_barrier_between(node_sibling1, node_sibling2)
         assert result is not None
         assert result == barrier_main
+
+
+class TestOutputComparison:
+    """Tests for Output node equivalence checking."""
+
+    def test_different_return_value_count(self):
+        """Outputs returning different numbers of values are not equivalent."""
+        graph_a = fx.Graph()
+        val_a1 = add_test_node(graph_a, "x")
+        val_a2 = add_test_node(graph_a, "y")
+        out_a = Output(return_vals=([val_a1, val_a2],))
+        out_a.add_to_graph(graph_a)
+
+        graph_b = fx.Graph()
+        val_b = add_test_node(graph_b, "x")
+        out_b = Output(return_vals=([val_b],))
+        out_b.add_to_graph(graph_b)
+
+        node_map = {val_a1: val_b}
+        result = _check_nodes_equivalent(
+            get_custom(out_a.fx_node),
+            get_custom(out_b.fx_node),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert not result
+
+    def test_different_return_value(self):
+        """Outputs returning different nodes are not equivalent."""
+        graph_a = fx.Graph()
+        val_a1 = add_test_node(graph_a, "x")
+        val_a2 = add_test_node(graph_a, "y")
+        out_a = Output(return_vals=([val_a1],))
+        out_a.add_to_graph(graph_a)
+
+        graph_b = fx.Graph()
+        val_b1 = add_test_node(graph_b, "x")
+        val_b2 = add_test_node(graph_b, "y")
+        out_b = Output(return_vals=([val_b2],))
+        out_b.add_to_graph(graph_b)
+
+        node_map = {val_a1: val_b1, val_a2: val_b2}
+        result = _check_nodes_equivalent(
+            get_custom(out_a.fx_node),
+            get_custom(out_b.fx_node),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert not result
+
+    def test_single_vs_list_wrapped_return(self):
+        """Single-return and list-wrapped single-return are equivalent."""
+        graph_a = fx.Graph()
+        val_a = add_test_node(graph_a, "x")
+        out_node_a = graph_a.create_node("output", target="output", args=([val_a],))
+
+        graph_b = fx.Graph()
+        val_b = add_test_node(graph_b, "x")
+        out_node_b = graph_b.create_node("output", target="output", args=(val_b,))
+
+        node_map = {val_a: val_b}
+        result = _check_nodes_equivalent(
+            get_custom(out_node_a),
+            get_custom(out_node_b),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert result
 
 
 if __name__ == "__main__":
