@@ -34,34 +34,32 @@ struct M0RedundancyEliminationPass
   using WAVEASMM0RedundancyElimBase::WAVEASMM0RedundancyElimBase;
 
   void runOnOperation() override {
-    getOperation()->walk([](ProgramOp program) {
-      program.walk([](Block *block) {
-        Value lastM0Source;
-        SmallVector<Operation *, 8> toErase;
+    getOperation()->walk([](Block *block) {
+      Value lastM0Source;
+      SmallVector<Operation *> toErase;
 
-        for (Operation &op : *block) {
-          auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
-          if (!m0Op) {
-            // Conservatively reset tracking across region-bearing ops
-            // (loops, ifs) — their bodies may clobber M0.
-            if (op.getNumRegions() > 0)
-              lastM0Source = Value{};
-            continue;
-          }
-
-          Value src = m0Op.getSrc();
-
-          // If M0 already holds this value, the write is redundant.
-          if (src == lastM0Source) {
-            toErase.push_back(m0Op);
-          } else {
-            lastM0Source = src;
-          }
+      for (Operation &op : *block) {
+        auto m0Op = dyn_cast<S_MOV_B32_M0>(&op);
+        if (!m0Op) {
+          // Conservatively reset tracking across region-bearing ops
+          // (loops, ifs) — their bodies may clobber M0.
+          if (op.getNumRegions() > 0)
+            lastM0Source = Value{};
+          continue;
         }
 
-        for (auto *op : toErase)
-          op->erase();
-      });
+        Value src = m0Op.getSrc();
+
+        // If M0 already holds this value, the write is redundant.
+        if (src == lastM0Source) {
+          toErase.push_back(&op);
+        } else {
+          lastM0Source = src;
+        }
+      }
+
+      for (Operation *op : toErase)
+        op->erase();
     });
   }
 };
