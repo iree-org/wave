@@ -661,10 +661,7 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     rhs_node = parse_ctx.resolve_operand(op.rhs)
     acc_node = parse_ctx.resolve_operand(op.accumulator)
     converted_attrs = _convert_supported_attrs(op)
-    mma_type = (
-        converted_attrs.pop(AttrNames.KIND.mlir_name, None)
-        or parse_ctx.default_mma_type
-    )
+    mma_type = converted_attrs.pop(AttrNames.KIND.mlir_name, None)
 
     mma_op = MMA.create(
         parse_ctx.graph,

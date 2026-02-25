@@ -198,11 +198,6 @@ def gemm_progressive_roundtrip():
             "initialize_reductions",
             "finalize_indices",
             "substitute_vector_shapes",
-            "add_get_results",
-            "infer_types",
-            "construct_index_mapping",
-            "debug_log_write_replace",
-            "promote_placeholders",
         }
     )
 
