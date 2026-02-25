@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 from enum import Enum
 
+import sympy
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
@@ -8,7 +9,9 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSymbol, IndexSequence, IndexExpr
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
+    Conditional,
     CustomOp,
+    GatherToLDS,
     GetResult,
     IterArg,
     Iterate,
@@ -812,6 +815,74 @@ def erase_allocs(allocs: list[fx.Node]):
             get_custom(alloc).erase()
 
 
+def guard_g2s_with_bounds_check(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+):
+    """
+    Post-scheduling pass: wrap GatherToLDS nodes inside pipelined loops that
+    have eliminate_epilogue=True with an scf.if bounds guard.
+
+    When eliminate_epilogue=True, the loop runs for the full trip count. Stage 0
+    (the prefetch stage) uses iv + (num_stages-1)*step, which goes OOB in the
+    last (num_stages-1) iterations. Since gather_to_lds faults on OOB rather
+    than returning zero, we guard these ops with:
+
+        if iv + (num_stages-1)*step < max_induction_variable:
+            gather_to_lds(...)
+    """
+    for node in trace.walk(lambda n: isinstance(get_custom(n), Iterate)):
+        if not node.meta.get("eliminate_epilogue", False):
+            continue
+
+        iterate = get_custom(node)
+        subgraph_name = iterate.subgraph_name
+        pipelined_graph = trace.get_subgraph(subgraph_name)
+
+        g2s_nodes = [
+            n for n in pipelined_graph.nodes if isinstance(get_custom(n), GatherToLDS)
+        ]
+        if not g2s_nodes:
+            continue
+
+        num_stages = node.meta["num_pipeline_stages"]
+        step = iterate.step
+        max_iv = iterate.count
+        induction_variable = get_induction_variable(iterate, constraints)
+
+        prefetch_offset = (num_stages - 1) * step
+        guard_condition = sympy.StrictLessThan(
+            induction_variable + prefetch_offset, max_iv
+        )
+
+        guard_subgraph = fx.Graph()
+        guard_subgraph_name = f"g2s_guard_{subgraph_name}"
+
+        first_g2s = g2s_nodes[0]
+        location = get_custom(first_g2s).location
+
+        with pipelined_graph.inserting_before(first_g2s):
+            cond_node = Conditional(
+                guard_condition,
+                subgraph_name=guard_subgraph_name,
+                implicit_captures=[],
+            ).add_to_graph(pipelined_graph, loc=location)
+
+        for g2s in g2s_nodes:
+            custom = get_custom(g2s)
+            custom.copy(new_graph=guard_subgraph)
+            custom.erase()
+
+        guard_subgraph.output(None)
+
+        trace.add_subgraph(guard_subgraph_name, guard_subgraph)
+
+        guard_subgraph.parent_op = cond_node
+
+        root_graph = get_custom(cond_node).get_root_graph()
+        root_graph.subgraphs[guard_subgraph_name] = guard_subgraph
+
+
 def construct_pipelined_loop(
     trace: CapturedTrace,
     reduction: Iterate,
@@ -823,10 +894,15 @@ def construct_pipelined_loop(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    eliminate_epilogue: bool = False,
 ) -> tuple[fx.Node, dict[fx.Node, list[fx.Node]], list[fx.Node]]:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
     with a prologue, kernel and epilogue.
+
+    When eliminate_epilogue=True, the epilogue is not generated. The loop runs
+    for the full trip count and relies on out-of-bounds loads returning zero
+    to make the extra iterations contribute nothing to the accumulators.
 
     Returns:
         pipelined_reduction: The pipelined loop node
@@ -893,28 +969,61 @@ def construct_pipelined_loop(
     trace.add_subgraph(
         get_custom(pipelined_reduction).subgraph_name, pipelined_reduction_graph
     )
-    # Construct epilogue.
-    # The epilogue induction variables must account for the step size.
-    # With step > 1, each "iteration" covers step original iterations.
-    final_results = construct_epilogue(
-        graph,
-        reduction,
-        get_custom(pipelined_reduction),
-        partitioned_graph,
-        num_stages,
-        initiation_interval,
-        rotating_registers,
-        induction_variable,
-        [
-            max_induction_variable - num_stages * step + i * step
-            for i in range(num_stages)
-        ],
-        create_drain_stage_schedule(num_stages),
-        num_rotating_registers,
-        visualize,
-        outer_vars=outer_vars,
-        node_mapping=node_mapping,
-    )
+
+    if eliminate_epilogue:
+        pipelined_reduction.meta["eliminate_epilogue"] = True
+        pipelined_reduction.meta["num_pipeline_stages"] = num_stages
+
+        # No epilogue: the loop runs for the full trip count.
+        # The final results are simply the GetResult nodes from the pipelined loop.
+        pipelined_custom = get_custom(pipelined_reduction)
+        existing_get_results: list[GetResult] = sorted(
+            [x for x in pipelined_custom.users if isinstance(x, GetResult)],
+            key=lambda x: x.res_idx,
+        )
+        iter_args = reduction.iter_args(graph)
+        # Ensure we have GetResult for every iter arg
+        last_get_result = (
+            existing_get_results[-1].fx_node
+            if existing_get_results
+            else pipelined_reduction
+        )
+        existing_indices = {x.res_idx for x in existing_get_results}
+        for i in range(len(iter_args)):
+            if i not in existing_indices:
+                with pipelined_custom.graph.inserting_after(last_get_result):
+                    result = GetResult(pipelined_reduction, i).add_to_graph(
+                        pipelined_custom.graph,
+                        type=iter_args[i].type,
+                        loc=pipelined_custom.location,
+                    )
+                    existing_get_results.append(get_custom(result))
+                    last_get_result = result
+        existing_get_results = sorted(existing_get_results, key=lambda x: x.res_idx)
+        final_results = [gr.fx_node for gr in existing_get_results]
+    else:
+        # Construct epilogue.
+        # The epilogue induction variables must account for the step size.
+        # With step > 1, each "iteration" covers step original iterations.
+        final_results = construct_epilogue(
+            graph,
+            reduction,
+            get_custom(pipelined_reduction),
+            partitioned_graph,
+            num_stages,
+            initiation_interval,
+            rotating_registers,
+            induction_variable,
+            [
+                max_induction_variable - num_stages * step + i * step
+                for i in range(num_stages)
+            ],
+            create_drain_stage_schedule(num_stages),
+            num_rotating_registers,
+            visualize,
+            outer_vars=outer_vars,
+            node_mapping=node_mapping,
+        )
 
     # Remove the unpipelined reduction and the corresponding subgraph
     reduction.erase()

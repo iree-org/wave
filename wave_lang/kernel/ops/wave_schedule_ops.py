@@ -183,7 +183,7 @@ def reorder_graph(loop: Any, clusters: Any): ...
 
 
 @define_schedule_op
-def pipeline(iterate: Sequence[fx.Node], multi_buffer_count: Optional[int] = None): ...
+def pipeline(iterate: Sequence[fx.Node], eliminate_epilogue: bool = False, multi_buffer_count: Optional[int] = None): ...
 
 
 @define_schedule_op
@@ -804,11 +804,13 @@ class PipelinedLoop:
         iterate: Sequence[fx.Node],
         kernel_trace: "CapturedTrace",
         constraints: list[Constraint],
+        eliminate_epilogue: bool = False,
         multi_buffer_count: Optional[int] = None,
     ):
         self.iterate = iterate
         self.kernel_trace = kernel_trace
         self.constraints = constraints
+        self.eliminate_epilogue = eliminate_epilogue
         self.multi_buffer_count = multi_buffer_count
         self.unroll_factor = 1
 
@@ -877,6 +879,7 @@ class PipelinedLoop:
             visualize=False,
             multi_buffer_count=self.multi_buffer_count,
             unroll_factor=self.unroll_factor,
+            eliminate_epilogue=self.eliminate_epilogue,
         )
 
         # Store the pipelined iterate node and node mapping, then create proxies for the stages
@@ -939,7 +942,11 @@ class PipelinedLoop:
 
     @property
     def EPILOGUE(self):
-        """Get a reference to the EPILOGUE stage (nodes after pipelined iterate)."""
+        """Get a reference to the EPILOGUE stage (nodes after pipelined iterate).
+        Returns None when eliminate_epilogue=True (epilogue was not generated).
+        """
+        if self.eliminate_epilogue:
+            return None
         return self._EPILOGUE
 
     def _update_kernel_node_mapping(self):
@@ -1112,8 +1119,11 @@ class Pipeline(CustomScheduleOp):
         kernel_trace,
         constraints: list[Constraint],
         iterate: Sequence[fx.Node],
+        eliminate_epilogue: bool = False,
     ):
-        real_pipelined_loop = PipelinedLoop(iterate, kernel_trace, constraints)
+        real_pipelined_loop = PipelinedLoop(
+            iterate, kernel_trace, constraints, eliminate_epilogue=eliminate_epilogue
+        )
 
         # Return the real object directly (no proxy needed)
         return real_pipelined_loop
