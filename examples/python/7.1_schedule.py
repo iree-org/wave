@@ -78,7 +78,9 @@ def _run_mxfp_gemm_preshuffle(gemm, shape, all=False, only_scale=False, only_b=F
     x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
     out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32).cuda()
 
-    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+    for _ in range(50):
+        gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
@@ -188,7 +190,7 @@ def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
     gemm = wave_compile(options, gemm, schedule)
     print(gemm.asm)
 
-    _run_mxfp_gemm_preshuffle(gemm, shape, only_b=True)
+    _run_mxfp_gemm_preshuffle(gemm, shape, only_scale=True)
     print("MXFP GEMM double-buffer 8-wave mixed ping pong with shuffling test passed!")
 
 
@@ -230,6 +232,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     print("MXFP GEMM preshuffle-B 4-wave test passed!")

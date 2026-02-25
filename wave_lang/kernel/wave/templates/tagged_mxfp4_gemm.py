@@ -183,6 +183,30 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
+    # --- A scale preshuffle mapping (e8m0_shuffle) ---
+    # Maps logical (K/32, M) scale coordinates to the shuffled physical layout.
+    # Same e8m0_shuffle permutation as B scale but over the M dimension.
+    i_a = tkw.IndexMapping.iterator(0)
+    j_a = tkw.IndexMapping.iterator(1)
+
+    a_scale_flat = (
+        (j_a // 32) * ((K_SCALE_SHUFFLED // 8) * 256)
+        + (i_a // 8) * 256
+        + ((i_a % 8) % 4) * 64
+        + ((j_a % 32) % 16) * 4
+        + (((i_a % 8) // 4) * 2)
+        + ((j_a % 32) // 16)
+    )
+
+    a_scale_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={
+            M: a_scale_flat // K_SCALE_SHUFFLED,
+            K: a_scale_flat % K_SCALE_SHUFFLED,
+        },
+        outputs={K: i_a, M: j_a},
+    )
+
     # --- B scale preshuffle mapping (e8m0_shuffle) ---
     # Maps logical (N, K/32) scale coordinates to the shuffled physical layout.
     # The e8m0_shuffle does:
@@ -212,7 +236,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
     @tkw.wave(constraints)
     def gemm(
         a: tkl.Memory[M, K / 2, A_ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, A_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
@@ -225,7 +249,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
         ) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
-            a_scale_reg = tkw.read(a_scale, tag="read_a_scale")
+            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale")
             b_reg = tkw.read(b, tag="read_b")
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
@@ -249,10 +273,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
         K: shape[2],
         K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,
     }
-    # GROUP_SIZE_N is only needed as a substitution target when using the N strategy.
-    # For strategy "M", group_size_m is baked directly into the sympy expression.
-    if reorder_workgroups and strategy == "N":
-        hyperparams[GROUP_SIZE_N] = group_size_n
+
     hyperparams.update(get_default_scheduling_params())
 
     options = WaveCompileOptions(
