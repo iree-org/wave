@@ -210,9 +210,6 @@ template <typename BufferLoadOp>
 struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
   using OpRewritePattern<BufferLoadOp>::OpRewritePattern;
 
-  BufferLoadLDSSoffsetPattern(MLIRContext *ctx)
-      : OpRewritePattern<BufferLoadOp>(ctx, /*benefit=*/20) {}
-
   LogicalResult matchAndRewrite(BufferLoadOp loadOp,
                                 PatternRewriter &rewriter) const override {
     // Only apply when soffset is currently 0.
