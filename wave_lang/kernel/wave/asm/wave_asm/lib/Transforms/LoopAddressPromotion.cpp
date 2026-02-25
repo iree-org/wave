@@ -306,8 +306,13 @@ struct LoopAddressPromotionPass
   }
 
   void runOnOperation() override {
-    getOperation()->walk(
-        [](LoopOp loopOp) { applyLoopAddressPromotion(loopOp); });
+    // Post-order so inner loops are processed before outer ones.
+    // Collect first since transformation invalidates walk iterator.
+    SmallVector<LoopOp> loops;
+    getOperation()->walk<WalkOrder::PostOrder>(
+        [&](LoopOp loopOp) { loops.push_back(loopOp); });
+    for (auto loopOp : loops)
+      applyLoopAddressPromotion(loopOp);
   }
 };
 
