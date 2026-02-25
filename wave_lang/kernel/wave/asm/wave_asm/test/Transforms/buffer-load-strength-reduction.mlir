@@ -579,3 +579,99 @@ waveasm.program @lds_load_no_transform
 
   waveasm.s_endpgm
 }
+
+// ---- Right-shift in address chain: lshl then lshr ----
+// Pattern from MXFP4 preshuffle GEMM: address chain does lshl 7 then lshr 8.
+// With IV step=2: delta through lshl = 2*128 = 256, lshr 8 = 256/256 = 1.
+// The stride is constant because the delta is exactly divisible by the shift.
+// Previously the pass bailed on lshrrev as "nonlinear if IV-dependent".
+
+// CHECK-LABEL: @lshrrev_in_address_chain
+waveasm.program @lshrrev_in_address_chain
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %two = waveasm.constant 2 : !waveasm.imm<2>
+  %seven = waveasm.constant 7 : !waveasm.imm<7>
+  %eight = waveasm.constant 8 : !waveasm.imm<8>
+  %twelve = waveasm.constant 12 : !waveasm.imm<12>
+  %limit = waveasm.constant 32 : !waveasm.imm<32>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // Should be transformed despite the lshrrev in the chain.
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.sreg) {
+  // CHECK: waveasm.buffer_load_dwordx4 {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: [[NEXT_SOFF:%[0-9]+]] = waveasm.s_add_u32 [[SOFF]], {{.*}} : !waveasm.sreg, !waveasm.sreg ->
+  // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, [[NEXT_SOFF]]) :
+  %final_iv = waveasm.loop(%iv = %init_iv) : (!waveasm.sreg) -> (!waveasm.sreg) {
+
+    // Mimic the GEMM pattern: addr = ((IV << 7) + tid) >> 8, then shift up.
+    %shifted_iv = waveasm.v_lshlrev_b32 %seven, %iv : !waveasm.imm<7>, !waveasm.sreg -> !waveasm.vreg
+    %addr = waveasm.v_add_u32 %shifted_iv, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+    %page = waveasm.v_lshrrev_b32 %eight, %addr : !waveasm.imm<8>, !waveasm.vreg -> !waveasm.vreg
+    %voff = waveasm.v_lshlrev_b32 %twelve, %page : !waveasm.imm<12>, !waveasm.vreg -> !waveasm.vreg
+
+    %v0, %v1, %v2, %v3 = waveasm.buffer_load_dwordx4 %srd, %voff, %soff0
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0>
+        -> !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %two : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<32> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.sreg
+  }
+
+  waveasm.s_endpgm
+}
+
+// ---- Right-shift with non-divisible delta: no transformation ----
+// IV step=1, lshl 3 gives delta=8, lshr 4 = 8/16 = 0.5 — not an integer.
+// The pass should reject this candidate.
+
+// CHECK-LABEL: @lshrrev_non_divisible
+waveasm.program @lshrrev_non_divisible
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %three = waveasm.constant 3 : !waveasm.imm<3>
+  %four = waveasm.constant 4 : !waveasm.imm<4>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+  %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
+
+  // Loop unchanged: delta(lshl 3)=8, lshr 4 gives 8%16!=0, rejected.
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg) {
+  %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
+      : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+
+    // delta(shifted_iv) = 1*8 = 8, lshr 4 -> 8 % 16 != 0 -> bail.
+    %shifted_iv = waveasm.v_lshlrev_b32 %three, %iv : !waveasm.imm<3>, !waveasm.sreg -> !waveasm.vreg
+    %addr = waveasm.v_add_u32 %shifted_iv, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+    %voff = waveasm.v_lshrrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    %val = waveasm.buffer_load_dword %srd, %voff, %soff0
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
+
+    %new_acc = waveasm.v_add_u32 %acc, %val : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
+
+    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %new_acc) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}

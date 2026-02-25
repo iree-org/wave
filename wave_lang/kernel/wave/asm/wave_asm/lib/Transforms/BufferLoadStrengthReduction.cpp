@@ -293,7 +293,27 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
-    // Bitwise ops (AND, OR, XOR, BFE, LSHR): nonlinear if IV-dependent.
+    if (isa<V_LSHRREV_B32>(op)) {
+      // lshrrev(amt, src) = src >> amt.
+      // Safe when delta(src) is exactly divisible by 2^amt — no bits lost.
+      // Example: address chain does lshl 7 then lshr 8 with IV step 2:
+      //   delta(src) = 2*128 = 256, shift = 8, 256 % 256 == 0 → delta = 1.
+      int64_t dAmt = getDelta(op->getOperand(0));
+      int64_t dSrc = getDelta(op->getOperand(1));
+      if (dAmt != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(op->getOperand(0)));
+      if (!shiftAmt)
+        return std::nullopt;
+      int64_t divisor = int64_t(1) << *shiftAmt;
+      if (dSrc % divisor != 0)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dSrc / divisor;
+      continue;
+    }
+
+    // Bitwise ops (AND, OR, XOR, BFE): nonlinear if IV-dependent.
     bool hasIVDep = false;
     for (Value operand : op->getOperands())
       if (getDelta(operand) != 0)
