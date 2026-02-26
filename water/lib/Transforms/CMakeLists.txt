@@ -3,10 +3,13 @@ add_mlir_dialect_library(MLIRWaterTransforms
   AllocToAlloca.cpp
   AssembleISA.cpp
   CheckStaticAssertions.cpp
+  ComposeAffineArith.cpp
   DropTransformOps.cpp
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   MemrefDecomposition.cpp
+  ReorderAffine.cpp
+  ReorderAffineExprs.cpp
   SLPVectorizer.cpp
 
   ADDITIONAL_HEADER_DIRS
