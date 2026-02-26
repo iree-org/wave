@@ -85,17 +85,18 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 
 /// Build a per-thread mask:
 ///
-///   mask = AND_d ( id_start_d(elements_per_thread) <
-///                  bound_d(elements_per_thread))
+///   mask = AND ( start-index_d[0..elements_per_thread-1] <
+///                splat(bound_d, elements_per_thread))
 ///          foreach d in dimensions.
 ///
 /// whenever a bounds mapping is provided. When it is not provided, return a
-/// null mask. If the vectorized dimension cannot be identified, return failure.
+/// null mask. elements_per_thread is considered to be 1 for any dimension
+/// other than `vectorizedDim` and the given value for `vectorizedDim`.
 static FailureOr<Value>
 buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
           ArrayRef<wave::WaveSymbolAttr> orderedSyms, PatternRewriter &rewriter,
           wave::WaveHyperparameterAttr hyper, ArrayRef<Value> startIdx,
-          int64_t elementsPerThread) {
+          int64_t elementsPerThread, uint64_t vectorizedDim) {
   if (!boundsMapping)
     return Value();
 
@@ -123,7 +124,7 @@ buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
     Value bound = boundVals[0];
 
     Value clause;
-    if (d == rank - 1) {
+    if (d == vectorizedDim) {
       // iota [0..L-1] : vector<index>
       Value iota = vector::StepOp::create(rewriter, loc, vecIdxType);
 
