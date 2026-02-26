@@ -1190,6 +1190,46 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 
 // -----
 
+// Test masking non-innermost vectorized dimension.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: @lower_read_write_bounds_non_trailing_vectorized_dim
+  func.func @lower_read_write_bounds_non_trailing_vectorized_dim(
+      %mem: memref<100x64xf16, #gpu.address_space<workgroup>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 100, N = 64}>} {
+    // The bound for M is M itself, which is substitued with its constant value from hyperparams.
+    // CHECK: %[[BOUND:.*]] = affine.apply affine_map<() -> (100)>()
+    // CHECK: %[[IOTA:.*]] = vector.step : vector<4xindex>
+    // CHECK: %[[START_VEC:.*]] = vector.broadcast {{.*}} : index to vector<4xindex>
+    // CHECK: %[[OFFSET:.*]] = arith.addi %[[START_VEC]], %[[IOTA]] : vector<4xindex>
+    // CHECK: %[[BOUND_VEC:.*]] = vector.broadcast %[[BOUND]] : index to vector<4xindex>
+    // CHECK: %[[MASK:.*]] = arith.cmpi slt, %[[OFFSET]], %[[BOUND_VEC]] : vector<4xindex>
+    // CHECK: vector.transfer_read {{.*}}, %[[MASK]] {in_bounds = [true]
+    %0 = wave.read %mem index [{
+        M : <[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
+        N : <[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
+      }] {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">],
+          bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
+      : (memref<100x64xf16, #gpu.address_space<workgroup>>) -> vector<4xf16>
+
+    // CHECK: %[[BOUND_W:.*]] = affine.apply affine_map<() -> (100)>()
+    // CHECK: %[[IOTA_W:.*]] = vector.step : vector<4xindex>
+    // CHECK: %[[START_VEC_W:.*]] = vector.broadcast {{.*}} : index to vector<4xindex>
+    // CHECK: %[[OFFSET_W:.*]] = arith.addi %[[START_VEC_W]], %[[IOTA_W]] : vector<4xindex>
+    // CHECK: %[[BOUND_VEC_W:.*]] = vector.broadcast %[[BOUND_W]] : index to vector<4xindex>
+    // CHECK: %[[MASK_W:.*]] = arith.cmpi slt, %[[OFFSET_W]], %[[BOUND_VEC_W]] : vector<4xindex>
+    // CHECK: vector.transfer_write {{.*}}, %[[MASK_W]] {in_bounds = [true]
+    wave.write %0, %mem index [{
+        M : <[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
+        N : <[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
+      }] {ordered_syms = [#wave.symbol<"M">, #wave.symbol<"N">],
+          bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
+      : vector<4xf16>, memref<100x64xf16, #gpu.address_space<workgroup>>
+    return
+  }
+}
+
+// -----
+
 // Test that ordered_syms correctly determines dimension ordering (not alphabetical).
 // The dimensions are named M, K, N intentionally - alphabetically sorted would be K, M, N.
 // But ordered_syms = [M, K, N] means the correct order is: dim0=M, dim1=K, dim2=N.
