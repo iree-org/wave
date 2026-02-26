@@ -23,6 +23,7 @@
 #include "water/Dialect/Wave/Transforms/Utils.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -785,7 +786,71 @@ public:
     if (failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
       return failure();
 
-    return success();
+    WalkResult walkResult = top->walk([&](Operation *op) {
+      auto indexArray = op->getAttrOfType<ArrayAttr>(
+          wave::WaveDialect::kIndexWaveExprListAttrName);
+      if (!indexArray)
+        return WalkResult::advance();
+
+      auto indexIface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
+      if (!indexIface)
+        return WalkResult::advance();
+
+      SmallVector<Value> valuesForIndexExpr;
+      std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
+          indexIface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+
+      assert(valuesForIndexExpr.size() == indexArray.size());
+      for (auto [i, value, index] :
+           llvm::enumerate(valuesForIndexExpr, indexArray)) {
+        ElementsPerThreadLattice *lattice = getLatticeElement(value);
+        auto indexDict = cast<DictionaryAttr>(index);
+        int64_t elementsPerThread = 1;
+        llvm::StringSet<> visitedSymbols;
+        for (const NamedAttribute &namedAttr : indexDict) {
+          visitedSymbols.insert(namedAttr.getName().strref());
+          auto mapping = cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
+          ArrayRef<Attribute> symbols = mapping.getSymbols();
+          AffineMap step = mapping.getStep();
+          std::optional<SmallVector<int64_t>> stepValues =
+              wave::evaluateMapWithHyperparams(step, symbols, init.hyperparams);
+          if (!stepValues)
+            continue;
+          assert((*stepValues)[0] > 0 && "expected positive step");
+          if ((*stepValues)[0] != 1) {
+            assert(elementsPerThread == 1 &&
+                   "more than one non-unit index stepping found, missing "
+                   "verifier?");
+            elementsPerThread = (*stepValues)[0];
+          }
+        }
+        [[maybe_unused]] auto resultType =
+            cast<wave::WaveTensorType>(value.getType());
+        assert(llvm::all_of(resultType.getShape(),
+                            [&](wave::WaveSymbolAttr dim) {
+                              return visitedSymbols.contains(dim.getName());
+                            }) &&
+               "expected index to contain entries for all result dimensions");
+
+        std::string errorMessage;
+        llvm::raw_string_ostream errs(errorMessage);
+        llvm::SmallString<32> description;
+        llvm::raw_svector_ostream descriptionOs(description);
+        descriptionGenerator(descriptionOs, i);
+        FailureOr<ChangeResult> result =
+            wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+                wave::ElementsPerThreadLatticeValue(elementsPerThread), {},
+                lattice->getValue(), "index expression", "",
+                descriptionOs.str(), errs);
+        if (failed(result))
+          return WalkResult::interrupt();
+        if (*result == ChangeResult::Change)
+          propagateIfChanged(lattice, *result);
+      }
+      return WalkResult::advance();
+    });
+
+    return success(!walkResult.wasInterrupted());
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -1123,6 +1188,7 @@ public:
 
       wave::ElementsPerThreadInit init;
       init.threadXDimension = nullptr;
+      init.hyperparams = wave::getHyperparameters(parent);
       for (Attribute constraint : cast<ArrayAttr>(attr)) {
         auto workgroupConstraint =
             dyn_cast<wave::WorkgroupConstraintAttr>(constraint);

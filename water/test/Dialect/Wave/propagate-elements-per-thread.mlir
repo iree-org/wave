@@ -39,6 +39,38 @@ func.func @propagate_register_write(%mem: !wave.tensor<[@M] of f16, <global>>) a
 
 // -----
 
+// Register per thread is the non-unit second element of the index map,
+// propagate that in absence of explicit elements_per_thread.
+//
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @propagate_register_write_index_expr
+func.func @propagate_register_write_index_expr(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
+  wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+func.func @propagate_register_write_index_expr_conflict(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4}}
+  wave.write %reg, %mem { elements_per_thread = 8 }
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
 // CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
 // CHECK-LABEL: @propagate_backward_from_write
