@@ -608,6 +608,28 @@ public:
   }
 };
 
+class BroadcastOpLoweringPattern
+    : public OpConversionPattern<wave::BroadcastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::BroadcastOp op, wave::BroadcastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Broadcast operates on registers, those should have been converted to
+    // vectors now.
+    auto sourceType = cast<VectorType>(adaptor.getSource().getType());
+    auto targetType = cast<VectorType>(op.getResult().getType());
+    if (sourceType == targetType) {
+      rewriter.replaceOp(op, op.getSource());
+      return success();
+    }
+    auto vectorBroadcast = vector::BroadcastOp::create(
+        rewriter, op.getLoc(), targetType, op.getSource());
+    rewriter.replaceOp(op, vectorBroadcast);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // CastOp
 //===----------------------------------------------------------------------===//
@@ -1202,6 +1224,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
   patterns.add<
       // clang-format off
       ApplyExprOpLoweringPattern,
+      BroadcastOpLoweringPattern,
       CastOpLoweringPattern,
       ExtractOpLoweringPattern,
       ExtractSliceOpLoweringPattern,

@@ -873,10 +873,10 @@ func.func @broadcast_source_dim_not_in_result(%arg0: !wave.tensor<[@M, @N] of f3
 
 // -----
 
-func.func @broadcast_explicit_dims_with_fully_specified_types(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
-  // When both source and result types are fully specified, explicit dims are not expected.
-  // expected-error @below {{does not expect explicit dims when source and result types are fully specified}}
-  wave.broadcast %arg0 dims [@K] : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f32, <register>>
+func.func @broadcast_result_not_fully_specified(%arg0: !wave.tensor<[@M] of f32, <register>>) {
+  // Tensor result type must be fully specified.
+  // expected-error @below {{result type must be fully specified when it is a tensor}}
+  wave.broadcast %arg0 : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<any of f32, <register>>
   return
 }
 

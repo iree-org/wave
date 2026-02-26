@@ -159,23 +159,6 @@ func.func @propagate_reduction_result_to_init() {
   return
 }
 
-// CHECK-LABEL: @broadcast_forward
-func.func @broadcast_forward(%src: !wave.tensor<[@M] of f32, <register>>) {
-  // CHECK: wave.broadcast
-  // CHECK-SAME: (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N, @K] of f32, <register>>
-  wave.broadcast %src dims [@N, @K] : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<any of f32, <register>>
-  return
-}
-
-// CHECK-LABEL: @broadcast_backward
-func.func @broadcast_backward() {
-  // CHECK: wave.broadcast
-  // CHECK-SAME: (!wave.tensor<[@A, @B] of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
-  %src = water_test.wave_tensor : !wave.tensor<any of bf16, <register>>
-  wave.broadcast %src dims [@C] : (!wave.tensor<any of bf16, <register>>) -> !wave.tensor<[@A, @B, @C] of bf16, <register>>
-  return
-}
-
 } // normalform.module
 
 // -----
