@@ -16,6 +16,13 @@
 //    V_LSHLREV_B32(N, V_ADD_U32(base, K)) -> V_LSHLREV_B32(N, base) +
 //    offset:K<<N
 // 4. Multi-level combinations of the above
+// 5. Constant splitting for oversized offsets:
+//    V_ADD_U32(base, K) where K > maxOffset
+//    -> V_ADD_U32(base, K_hi) offset:K_lo
+//    where K = K_hi + K_lo, K_lo = K % (maxOffset + 1).
+//    The downstream ScopedCSE pass then merges v_add ops that now share
+//    the same K_hi, turning e.g. v_add(base,68608) and v_add(base,67584)
+//    into a single v_add(base,67584) with offsets 1024 and 0.
 //
 // After folding, dead instructions are removed by a DCE sweep.
 //===----------------------------------------------------------------------===//
@@ -31,6 +38,7 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 
 #define DEBUG_TYPE "waveasm-memory-offset-opt"
 
@@ -177,9 +185,8 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
           return {addr, 0};
         }
         if (check == OrOverlapCheck::Unknown) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
-                     << "non-overlapping bits for constant " << *c << "\n");
+          LDBG() << "skipping V_OR_B32 - cannot prove "
+                 << "non-overlapping bits for constant " << *c;
           return {addr, 0};
         }
       }
@@ -203,9 +210,8 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
           return {addr, 0};
         }
         if (check == OrOverlapCheck::Unknown) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "MemoryOffsetOpt: skipping V_OR_B32 - cannot prove "
-                     << "non-overlapping bits for constant " << *c << "\n");
+          LDBG() << "skipping V_OR_B32 - cannot prove "
+                 << "non-overlapping bits for constant " << *c;
           return {addr, 0};
         }
       }
@@ -231,25 +237,25 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
         if (inner.constOffset == 0)
           return std::nullopt;
 
-        // Check shift overflow before creating any new ops
+        // Check shift overflow before creating any new ops.
         auto shiftedConst = safeShiftLeft(inner.constOffset, *shiftAmt);
         if (!shiftedConst)
           return std::nullopt;
 
-        // Create new shift of the stripped base
+        // Create new shift of the stripped base.
         auto newShift =
             V_LSHLREV_B32::create(builder, loc, shiftOp.getResult().getType(),
                                   shiftOp.getSrc0(), inner.base);
 
-        // Recurse on the other operand too
+        // Recurse on the other operand too.
         auto otherAnalysis = extractConstant(otherVal, builder, loc);
 
-        // Check addition overflow
+        // Check addition overflow.
         auto totalConst = safeAdd(*shiftedConst, otherAnalysis.constOffset);
         if (!totalConst)
           return std::nullopt;
 
-        // Create new add with the stripped shift and other operand
+        // Create new add with the stripped shift and other operand.
         Value newBase =
             V_ADD_U32::create(builder, loc, addLike->resultType,
                               newShift.getResult(), otherAnalysis.base);
@@ -282,7 +288,7 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
       auto srcAnalysis = extractConstant(src, builder, loc);
       if (srcAnalysis.constOffset == 0)
         return std::nullopt;
-      // Also recurse on the other operand
+      // Also recurse on the other operand.
       auto otherAnalysis = extractConstant(other, builder, loc);
       auto totalConst =
           safeAdd(srcAnalysis.constOffset, otherAnalysis.constOffset);
@@ -307,10 +313,10 @@ static AddrAnalysis extractConstant(Value addr, OpBuilder &builder,
     if (shiftAmt && *shiftAmt >= 0 && *shiftAmt < 32) {
       auto inner = extractConstant(shiftOp.getSrc1(), builder, loc);
       if (inner.constOffset != 0) {
-        // Check shift overflow before creating any new ops
+        // Check shift overflow before creating any new ops.
         auto shiftedConst = safeShiftLeft(inner.constOffset, *shiftAmt);
         if (shiftedConst) {
-          // Create new shift of the stripped base
+          // Create new shift of the stripped base.
           auto newShift =
               V_LSHLREV_B32::create(builder, loc, shiftOp.getResult().getType(),
                                     shiftOp.getSrc0(), inner.base);
@@ -426,7 +432,7 @@ struct MemoryOffsetOptPass
     module.walk([&](ProgramOp program) {
       OpBuilder builder(program.getBody().front().getParentOp());
 
-      // Collect memory ops to process (avoid modifying while iterating)
+      // Collect memory ops to process (avoid modifying while iterating).
       SmallVector<Operation *, 32> memOps;
       program.walk([&](Operation *op) {
         if (getMemOpKind(op) != MemOpKind::Unknown)
@@ -444,11 +450,11 @@ struct MemoryOffsetOptPass
         int64_t maxOffset = getMaxOffset(kind);
 
         // Set insertion point right before the memory op for any new
-        // instructions
+        // instructions.
         builder.setInsertionPoint(op);
         Location loc = op->getLoc();
 
-        // Extract constants from the address tree
+        // Extract constants from the address tree.
         AddrAnalysis analysis = extractConstant(addr, builder, loc);
 
         if (analysis.constOffset == 0)
@@ -460,48 +466,54 @@ struct MemoryOffsetOptPass
           continue;
 
         if (newOffset <= maxOffset) {
-          // Constant fits in hardware offset field: fold into offset:N
+          // Constant fits entirely in the hardware offset field.
           op->setOperand(addrIdx, analysis.base);
           setOffset(op, newOffset, kind);
           totalFolded++;
         } else {
-          // Constant exceeds hardware offset limit. Still apply the shift
-          // distribution to simplify the address tree, but leave the constant
-          // as an explicit v_add_u32 with a literal. This enables CSE to
-          // deduplicate the shared base (analysis.base) across multiple
-          // memory ops that differ only by their constant offset.
+          // Constant exceeds the hardware offset limit. Split it:
+          //   v_add_u32(base, K) where K > maxOffset
+          //   → v_add_u32(base, K_hi)  offset:(K_lo + existingOffset)
+          // where K = K_hi + K_lo, K_lo = K % (maxOffset + 1).
           //
-          // Check if constant fits in 32-bit integer (V_ADD_U32 limitation)
-          if (analysis.constOffset > std::numeric_limits<int32_t>::max() ||
-              analysis.constOffset < std::numeric_limits<int32_t>::min()) {
-            continue;
-          }
+          // The downstream ScopedCSE pass then merges v_add_u32 ops that
+          // now share the same K_hi and base (e.g., loads that originally
+          // had constants 67584 and 68608 both become v_add_u32(base, 67584)
+          // with offsets 0 and 1024 respectively).
+          int64_t K = analysis.constOffset;
+          int64_t K_lo = K % (maxOffset + 1);
+          int64_t K_hi = K - K_lo;
+          int64_t splitOffset = existingOffset + K_lo;
 
-          // Before: (base + K) << N + col  [3 ops, K<<N > maxOffset]
-          // After:  (base << N + col) + K<<N  [1 op + shared base via CSE]
-          auto constImm = builder.getType<ImmType>(analysis.constOffset);
-          auto constOp =
-              ConstantOp::create(builder, loc, constImm, analysis.constOffset);
+          // Sanity: K_lo is in [0, maxOffset], so splitOffset is bounded.
+          assert(K_lo >= 0 && K_lo <= maxOffset && "bad constant split");
+
+          if (splitOffset < 0 || splitOffset > maxOffset)
+            continue;
+          // Check if K_hi fits in 32-bit integer (V_ADD_U32 limitation).
+          if (K_hi > std::numeric_limits<int32_t>::max() ||
+              K_hi < std::numeric_limits<int32_t>::min())
+            continue;
+
+          auto constImm = builder.getType<ImmType>(K_hi);
+          auto constOp = ConstantOp::create(builder, loc, constImm, K_hi);
           auto vregType = builder.getType<VRegType>(1, 1);
-          // NOTE: constant must be src0 (first operand) for VOP2 encoding.
-          // src1 must be a VGPR on AMDGCN.
+          // NOTE: constant must be src0 for VOP2 encoding.
           auto newAddr =
               V_ADD_U32::create(builder, loc, vregType, constOp, analysis.base);
           op->setOperand(addrIdx, newAddr.getResult());
+          setOffset(op, splitOffset, kind);
           totalFolded++;
         }
       }
 
-      // Remove dead instructions created by the folding
-      // totalDead += removeDeadOps(program);
       // NOTE: Dead code elimination is delegated to the standard Canonicalizer
       // or CSE passes that should run after this pass.
     });
 
-    LLVM_DEBUG(if (totalFolded > 0) {
-      llvm::dbgs() << "MemoryOffsetOpt: folded " << totalFolded
-                   << " constant address components into offset fields\n";
-    });
+    if (totalFolded > 0)
+      LDBG() << "folded " << totalFolded
+             << " constant address components into offset fields";
   }
 };
 
