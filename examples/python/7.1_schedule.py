@@ -281,16 +281,19 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm(
 
 
 def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256)
+    is_debug=False,
+    shape=(1024, 1024, 8192),
+    block=(128, 256, 256),
+    eliminate_epilogue=False,
 ):
     """Asymmetric MXFP4 GEMM with preshuffled B data and B scales."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
-    print(block)
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.use_buffer_ops = True
+    options.eliminate_epilogue = eliminate_epilogue
     options.dump_intermediates = "build/intermediates"
-    schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+    schedule = get_mxfp4_asymmetric_schedule(eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True)
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
@@ -301,27 +304,12 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
 
 
 def test_dbuf_4wave_mxfp_preshuffle_b_no_epilogue_gemm(
-    is_debug=False,
-    shape=(1024, 1024, 8192),
-    block=(128, 256, 256),
-    eliminate_epilogue=True,
+    is_debug=False, shape=(1024, 2048, 8192), block=(128, 256, 256)
 ):
     """Asymmetric MXFP4 GEMM with preshuffled B, epilogue eliminated via OOB=0."""
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
-    options.minimize_shared_allocs = True
-    options.linearize_shared_access = True
-    options.use_buffer_ops = True
-    options.eliminate_epilogue = True
-    options.dump_intermediates = "build/intermediates"
-    schedule = get_mxfp4_asymmetric_schedule(eliminate_epilogue=True, is_bscale_shuffled=True)
-
-    options.print_ir_after = "all" if is_debug else []
-    options = set_default_run_config(options)
-    print(block)
-    gemm = wave_compile(options, gemm, schedule)
-
-    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
-    print("MXFP GEMM preshuffle-B no-epilogue 4-wave test passed!")
+    test_dbuf_4wave_mxfp_preshuffle_b_gemm(
+        is_debug=is_debug, shape=shape, block=block, eliminate_epilogue=True,
+    )
 
 
 def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
