@@ -5,10 +5,34 @@
 	"build": {
         "dockerfile": "Dockerfile"
     },
-
-	"runArgs": [ "--device=/dev/kfd", "--device=/dev/dri", "--group-add=video", "--network=host", "--ipc=host" ],
+	// sometimes the render group id on the host does not match the container.
+	// To fix that get the group id with: `cat /etc/group | grep render` and replace render with the gid.
+	// Alternatively you can also access the GPU using the root user / sudo.
+	"runArgs": [ "--device=/dev/kfd", "--device=/dev/dri", "--group-add=video", "--group-add=render", "--network=host", "--ipc=host" ],
 	"capAdd": ["SYS_PTRACE"],
 	"securityOpt": ["seccomp=unconfined"],
+	"containerUser": "vscode",
+	"mounts": [
+		"source=${localWorkspaceFolderBasename}-venv,target=${containerWorkspaceFolder}/.venv,type=volume"
+	],
 
-	"postCreateCommand": "pre-commit install && pre-commit install --hook-type commit-msg"
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-python.black-formatter",
+				"ms-python.mypy-type-checker",
+				"ms-python.debugpy",
+				"ms-python.vscode-python-envs",
+				"llvm-vs-code-extensions.vscode-mlir"
+			],
+			"settings": {
+				"python.terminal.activateEnvInCurrentTerminal": true,
+				"python.defaultInterpreterPath": ".venv/bin/python"
+			}
+		}
+	},
+
+	"postCreateCommand": "sudo chown vscode .venv && pre-commit install && pre-commit install --hook-type commit-msg && python -m venv .venv --prompt wave && . ${containerWorkspaceFolder}/.venv/bin/activate && pip install --upgrade pip && pip install -r requirements-iree-pinned.txt && pip install -r pytorch-rocm-requirements.txt && pip install -r requirements.txt -e ."
 }
