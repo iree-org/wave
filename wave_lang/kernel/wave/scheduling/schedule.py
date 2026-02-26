@@ -264,7 +264,7 @@ def build_guarded_pipeline_with_remainder(
     else:
         pipelined_iterations = (max_induction_variable // num_stages) * num_stages
 
-    conditional_body_graph, _ = graph_copy(reduction_graph)
+    conditional_body_graph, body_old_to_new = graph_copy(reduction_graph)
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
     placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
 
@@ -313,6 +313,14 @@ def build_guarded_pipeline_with_remainder(
         use_scheduling_barriers,
         multi_buffer_count,
     )
+
+    # node_mapping keys are from the copied body graph. Translate them back
+    # to the original reduction_graph nodes so that
+    # _update_kernel_node_mapping can match tracked lists by identity.
+    new_to_old = {v: k for k, v in body_old_to_new.items()}
+    node_mapping = {
+        new_to_old.get(k, k): v for k, v in node_mapping.items()
+    }
 
     # Set the count for the pipelined loop
     # With step > 1 (e.g., from unrolling), we need to reduce the count by more

@@ -648,14 +648,17 @@ class ReorderGraph(CustomScheduleOp):
         original_subgraph_name = custom_iterate.subgraph_name
         reordered_subgraph_name = f"reordered_{original_subgraph_name}"
 
+        # The iterate's owning graph holds the subgraph registration.
+        # For static shapes this is the root graph; for dynamic shapes
+        # it may be a conditional subgraph.
+        parent_graph = custom_iterate.graph
+
         kernel_trace.add_subgraph(reordered_subgraph_name, reordered_subgraph)
-        kernel_trace.get_root_graph().subgraphs[
-            reordered_subgraph_name
-        ] = reordered_subgraph
+        parent_graph.subgraphs[reordered_subgraph_name] = reordered_subgraph
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
 
         del kernel_trace.region_graph.subgraphs[original_subgraph_name]
-        del kernel_trace.get_root_graph().subgraphs[original_subgraph_name]
+        del parent_graph.subgraphs[original_subgraph_name]
 
         logger.info(
             f"Successfully reordered graph: {original_subgraph_name} -> {reordered_subgraph_name}"

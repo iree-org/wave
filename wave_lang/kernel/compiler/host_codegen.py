@@ -25,7 +25,10 @@ from wave_lang.support.ir_imports import (
     tensor_d,
 )
 
+import sympy
+
 from .._support.indexing import IndexSymbol
+from ..wave.utils.general_utils import infer_dim
 from ...support.location_config import LocationCaptureConfig
 from .builder import (
     ModuleBuilder,
@@ -150,14 +153,30 @@ def isolated_test_call(
         argument_dims = get_dynamic_dims(host_sig.buffer_bindings, dynamic_symbols)
 
         # Map dynamic symbols to buffer argument indices and dimensions.
+        # For derived shapes like K/2, also store the inverse expression
+        # so we can recover K from the buffer dimension at runtime.
         arg_dim_mapping: dict[IndexSymbol, tuple[int, int]] = {}
+        # Maps symbol -> sympy expression to recover it from the dim value.
+        # For direct matches (M in shape[M, ...]) this is just a dummy d.
+        # For derived (K/2 in shape[M, K/2]) this is e.g. 2*d.
+        _dim_val = sympy.Symbol("_dim_val")
+        arg_dim_inverse: dict[IndexSymbol, sympy.Expr] = {}
         for arg_idx, b in enumerate(host_sig.buffer_bindings):
             shape = b.kernel_buffer_type.symbolic_shape
-            for dim_idx, dim_symbol in enumerate(shape):
-                if dim_symbol in arg_dim_mapping:
+            for dim_idx, dim_expr in enumerate(shape):
+                base_sym = infer_dim(dim_expr)
+                if base_sym in arg_dim_mapping:
                     continue
-
-                arg_dim_mapping[dim_symbol] = (arg_idx, dim_idx)
+                arg_dim_mapping[base_sym] = (arg_idx, dim_idx)
+                if dim_expr == base_sym:
+                    arg_dim_inverse[base_sym] = _dim_val
+                else:
+                    # Solve shape_expr = d for the base symbol.
+                    solutions = sympy.solve(dim_expr - _dim_val, base_sym)
+                    assert len(solutions) == 1, (
+                        f"Cannot solve {dim_expr} = _dim_val for {base_sym}"
+                    )
+                    arg_dim_inverse[base_sym] = solutions[0]
 
         if async_dispatch:
             fence_type = IrType.parse("!hal.fence")
@@ -217,6 +236,8 @@ def isolated_test_call(
             ]
 
             # Get the dynamic symbols values from the buffer dimensions.
+            # For derived shapes (K/2), apply the inverse expression to
+            # recover the original symbol value.
             dynamic_argument_map: dict[IndexSymbol, Value] = {}
             for symbol in dynamic_symbols:
                 if symbol in arg_dim_mapping:
@@ -338,6 +359,14 @@ def isolated_test_call(
             else:
                 # If no device constraints, just dispatch the kernel directly
                 # with the provided host signature arguments.
+                from .wave_codegen.emitter import gen_sympy_index as _gen
+
+                def _resolve_dim(expr):
+                    """Resolve a shape expression to an IR value."""
+                    if expr in dynamic_argument_map:
+                        return dynamic_argument_map[expr]
+                    return _gen(dynamic_argument_map, expr)
+
                 out = flow_d.DispatchOp(
                     memref_to_tensor(output_types),
                     [dynamic_argument_map[dim] for dim in dynamic_symbols]
