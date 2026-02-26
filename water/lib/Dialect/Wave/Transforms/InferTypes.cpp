@@ -17,6 +17,7 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
@@ -1041,6 +1042,11 @@ public:
       WaterWavePropagateElementsPerThreadPassBase;
 
   void runOnOperation() override {
+    if (failed(wave::verifyNormalFormPassPrecondition(
+            wave::WaveNormalForm::AllTypesSpecified, getOperation(),
+            getArgument())))
+      return signalPassFailure();
+
     llvm::DenseMap<Operation *, Attribute> constraints;
     if (failed(wave::collectWaveConstraints(getOperation(), constraints)))
       return signalPassFailure();
