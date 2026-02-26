@@ -64,6 +64,11 @@ llvm::LogicalResult computeWavesPerBlockFromConstraints(
     wave::WaveHyperparameterAttr hyperparams,
     llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
 
+/// Permute the shape according to the mapping.
+void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
+                  mlir::AffineMap map, bool inverse,
+                  llvm::SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape);
+
 } // namespace wave
 
 namespace llvm {
