@@ -87,17 +87,19 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 
 /// Build a per-thread mask:
 ///
-///   mask = AND_d ( id_start_d(elements_per_thread) <
-///                  bound_d(elements_per_thread))
+///   mask = AND ( start-index_d[0..elements_per_thread-1] <
+///                splat(bound_d, elements_per_thread))
 ///          foreach d in dimensions.
 ///
 /// whenever a bounds mapping is provided. When it is not provided, return a
-/// null mask. If the vectorized dimension cannot be identified, return failure.
+/// null mask. elements_per_thread is considered to be 1 for any dimension
+/// other than `vectorizedDim` and the given value for `vectorizedDim`.
 static FailureOr<Value>
 buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
           ArrayRef<wave::WaveSymbolAttr> orderedSyms, PatternRewriter &rewriter,
           DictionaryAttr indexDict, wave::WaveHyperparameterAttr hyper,
-          ArrayRef<Value> startIdx, int64_t elementsPerThread) {
+          ArrayRef<Value> startIdx, int64_t elementsPerThread,
+          uint64_t vectorizedDim) {
   if (!boundsMapping)
     return Value();
 
@@ -125,7 +127,7 @@ buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
     Value bound = boundVals[0];
 
     Value clause;
-    if (d == rank - 1) {
+    if (d == vectorizedDim) {
       // iota [0..L-1] : vector<index>
       Value iota = vector::StepOp::create(rewriter, loc, vecIdxType);
 
@@ -291,6 +293,37 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   }
 }
 
+static DictionaryAttr
+transformIndex(DictionaryAttr indexDict,
+               ArrayRef<wave::WaveSymbolAttr> orderedSyms,
+               wave::WaveExprListAttr mapping,
+               SmallVectorImpl<wave::WaveSymbolAttr> &updatedOrderedSyms) {
+  assert(updatedOrderedSyms.empty() &&
+         "updatedOrderedSyms must be empty and will be populated");
+  if (!mapping || mapping.getMap().isIdentity()) {
+    updatedOrderedSyms.assign(orderedSyms);
+    return indexDict;
+  }
+
+  // When we hit this while increasing mapping expressiveness, it would mean
+  // that we need ot add the symbol part of the mapping to the new value. We
+  // will need to figure out which dimension.
+  assert(mapping.getMap().isPermutation() &&
+         "NYI: only permutation mappings are currently supported");
+
+  wave::permuteShape(orderedSyms, mapping.getMap(), /*inverse=*/true,
+                     updatedOrderedSyms);
+
+  // XXX: step/stride are not permuted on the pywave side for some
+  // reason... maybe they are not used at all.
+  SmallVector<NamedAttribute> newIndexDictEntries;
+  for (size_t i = 0, e = updatedOrderedSyms.size(); i < e; ++i) {
+    newIndexDictEntries.emplace_back(updatedOrderedSyms[i].getName(),
+                                     indexDict.get(orderedSyms[i].getName()));
+  }
+  return DictionaryAttr::get(indexDict.getContext(), newIndexDictEntries);
+}
+
 /// Describes access info used when lowering Wave ops to vector read/write ops.
 /// - startIndices: base element indices into the memref (size == memref rank).
 /// - mask: vector<i1> guarding per-lane accesses (length == elementsPerThread).
@@ -357,16 +390,29 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
     return rewriter.notifyMatchFailure(
         op, "failed to identify vectorized dimension");
   }
-  FailureOr<SmallVector<Value>> maybeStartIndices =
-      buildStartIndices(op->getLoc(), indexDict, orderedSyms, rewriter, hyper);
+
+  wave::WaveExprListAttr mapping = op.getMappingAttr();
+  SmallVector<wave::WaveSymbolAttr> memoryShape;
+  DictionaryAttr transformedIndexDict =
+      transformIndex(indexDict, orderedSyms, mapping, memoryShape);
+
+  FailureOr<SmallVector<Value>> maybeStartIndices = buildStartIndices(
+      op->getLoc(), transformedIndexDict, memoryShape, rewriter, hyper);
   if (failed(maybeStartIndices))
     return rewriter.notifyMatchFailure(
         op, "failed to convert start indices to affine");
   SmallVector<Value> startIndices = std::move(*maybeStartIndices);
 
+  // When this assertion hits while increasing mapping expressiveness, the
+  // `buildMask` call below may need to be updated to account for the mapping,
+  // in particular for any additive component of the mapping.
+  // TODO: NOW: are we sure we can just construct a mask using the unmodified
+  // dict?
+  assert((!mapping || mapping.getMap().isPermutation()) &&
+         "NYI: only permutation mappings are currently supported");
   FailureOr<Value> mask =
       buildMask(op->getLoc(), boundsMapping, orderedSyms, rewriter, indexDict,
-                hyper, startIndices, elementsPerThread);
+                hyper, startIndices, elementsPerThread, *vectorizedDim);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");
 
@@ -380,9 +426,6 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getMapping())
-      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
-
     // wave.read produces a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The
     // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that
@@ -410,9 +453,6 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getMapping())
-      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
-
     // wave.write consumes a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The
     // MemoryOnlyTypes normal form (required by LowerWaveToMLIR) verifies that

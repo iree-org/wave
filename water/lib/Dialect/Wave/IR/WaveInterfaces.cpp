@@ -470,8 +470,18 @@ llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
   assert(!from.empty());
   assert(!to.empty());
+  auto source = ElementsPerThreadLatticeValue::bottom();
+  for (ElementsPerThreadLatticeValue fromValue : from) {
+    if (fromValue.isBottom())
+      continue;
+    source = fromValue;
+    break;
+  }
+  if (source.isBottom())
+    return ChangeResult::NoChange;
+
   return checkAndPropagateElementsPerThreadFromConstant(
-      from[0], from, to, (fromName + " #0").str(), fromName, toName, errs);
+      source, from, to, (fromName + " #0").str(), fromName, toName, errs);
 }
 
 wave::ElementsPerThreadLatticeValue wave::ElementsPerThreadLatticeValue::join(

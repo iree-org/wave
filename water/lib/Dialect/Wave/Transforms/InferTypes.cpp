@@ -17,11 +17,13 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -620,6 +622,39 @@ updateValueTypes(Operation *root,
 }
 
 namespace {
+// Wrapper to print operations without regions. Use as `llvm::outs() <<
+// PrintNoRegions(op)`.
+class PrintNoRegions {
+public:
+  PrintNoRegions(Operation *op) : operation(op) {}
+
+  void print(llvm::raw_ostream &os) const {
+    if (!operation) {
+      os << "<null>";
+      return;
+    }
+    operation->print(os, OpPrintingFlags().skipRegions());
+  }
+
+private:
+  Operation *operation;
+};
+} // namespace
+
+// Support operator<< for OperationPrinterWithoutRegions.
+inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                                     const PrintNoRegions &printer) {
+  printer.print(os);
+  return os;
+}
+
+inline llvm::raw_ostream &
+operator<<(llvm::raw_ostream &os, const ElementsPerThreadLatticeValue &value) {
+  value.print(os);
+  return os;
+}
+
+namespace {
 // Type inference pass implementation.
 class InferTypes : public wave::impl::WaterWaveInferTypesPassBase<InferTypes> {
 public:
@@ -718,6 +753,21 @@ handleNonInterfaceOpElementsPerThread(Operation *op) {
             "operation not implementing the corresponding interface";
 }
 
+static Value getEPTValueForIndexPosition(Operation *op, unsigned index) {
+  if (isa<wave::MmaOp>(op)) {
+    if (index < 3)
+      return op->getOperand(index);
+    else
+      return op->getResult(index - 3);
+  }
+  if (isa<wave::WriteOp>(op)) {
+    return op->getOperand(index);
+  }
+  if (index >= op->getNumResults())
+    return nullptr;
+  return op->getResult(index);
+}
+
 // Dataflow analysis propagating elements-per-thread information from operands
 // to results. This is an optimistic sparse context-insensitive forward dataflow
 // analysis intended for intra-procedural use and composition with the
@@ -751,7 +801,75 @@ public:
     if (failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
       return failure();
 
-    return success();
+    WalkResult walkResult = top->walk([&](Operation *op) {
+      auto indexArray = op->getAttrOfType<ArrayAttr>(
+          wave::WaveDialect::kIndexWaveExprListAttrName);
+      if (!indexArray)
+        return WalkResult::advance();
+
+      // assert(indexArray.size() == op->getNumResults() &&
+      //        "expected number of index expressions to match number of
+      //        result");
+      // TODO: NOW: for write, unclear what the index expression corresponds to,
+      // need to check how we set it in inference... and potentially generalize
+      // this connection.
+      // IDEM for mmas, they have more than one thing here.
+      // TODO: double-check that we have all types fully specified by normal
+      // form requirement.
+      for (auto [i, index] : llvm::enumerate(indexArray)) {
+        Value value = getEPTValueForIndexPosition(op, i);
+        if (!value)
+          continue;
+        ElementsPerThreadLattice *lattice = getLatticeElement(value);
+        auto indexDict = cast<DictionaryAttr>(index);
+        int64_t elementsPerThread = 1;
+        llvm::StringSet<> visitedSymbols;
+        for (const NamedAttribute &namedAttr : indexDict) {
+          visitedSymbols.insert(namedAttr.getName().strref());
+          auto mapping = cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
+          ArrayRef<Attribute> symbols = mapping.getSymbols();
+          AffineMap step = mapping.getStep();
+          std::optional<SmallVector<int64_t>> stepValues =
+              wave::evaluateMapWithHyperparams(step, symbols, init.hyperparams);
+          if (!stepValues)
+            continue;
+          assert((*stepValues)[0] > 0 && "expected positive step");
+          if ((*stepValues)[0] != 1) {
+            assert(elementsPerThread == 1 &&
+                   "more than one non-unit index stepping found, missing "
+                   "verifier?");
+            elementsPerThread = (*stepValues)[0];
+          }
+        }
+        [[maybe_unused]] auto resultType =
+            cast<wave::WaveTensorType>(value.getType());
+        assert(llvm::all_of(resultType.getShape(),
+                            [&](wave::WaveSymbolAttr dim) {
+                              return visitedSymbols.contains(dim.getName());
+                            }) &&
+               "expected index to contain entries for all result dimensions");
+
+        std::string errorMessage;
+        llvm::raw_string_ostream errs(errorMessage);
+        // TODO: need to trigger propagation...
+        FailureOr<ChangeResult> result =
+            wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+                wave::ElementsPerThreadLatticeValue(elementsPerThread), {},
+                lattice->getValue(), "index expression", "", "result", errs);
+        if (failed(result)) {
+          op->emitError()
+              << "failed to initialize elements per thread for result #" << i
+              << ": " << errs.str();
+          return WalkResult::interrupt();
+        }
+        if (*result == ChangeResult::Change) {
+          propagateIfChanged(lattice, *result);
+        }
+      }
+      return WalkResult::advance();
+    });
+
+    return success(!walkResult.wasInterrupted());
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -783,6 +901,17 @@ public:
     llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
         llvm::map_to_vector(results, extractValue);
 
+    LLVM_DEBUG({
+      LDBG() << "visiting operation forward " << PrintNoRegions(op);
+      LDBG() << "  operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+      LDBG() << "  result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
     llvm::FailureOr<ChangeResult> result =
@@ -794,6 +923,12 @@ public:
              << "failed to propagate elements per thread forward: "
              << errs.str();
     }
+    LLVM_DEBUG({
+      LDBG() << "  updated result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     if (*result == ChangeResult::NoChange)
       return success();
 
@@ -997,6 +1132,17 @@ public:
     llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
         llvm::map_to_vector(results, extractValue);
 
+    LLVM_DEBUG({
+      LDBG() << "visiting operation backward " << PrintNoRegions(op);
+      LDBG() << "  operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+      LDBG() << "  result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
     llvm::FailureOr<ChangeResult> result =
@@ -1008,6 +1154,12 @@ public:
              << "failed to propagate elements per thread backward: "
              << errs.str();
     }
+    LLVM_DEBUG({
+      LDBG() << "  updated operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+    });
     if (*result == ChangeResult::NoChange)
       return llvm::success();
 
@@ -1050,6 +1202,7 @@ public:
 
       wave::ElementsPerThreadInit init;
       init.threadXDimension = nullptr;
+      init.hyperparams = wave::getHyperparameters(parent);
       for (Attribute constraint : cast<ArrayAttr>(attr)) {
         auto workgroupConstraint =
             dyn_cast<wave::WorkgroupConstraintAttr>(constraint);
@@ -1122,34 +1275,6 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(IndexExprsLattice);
   using Lattice::Lattice;
 };
-
-namespace {
-// Wrapper to print operations without regions. Use as `llvm::outs() <<
-// PrintNoRegions(op)`.
-class PrintNoRegions {
-public:
-  PrintNoRegions(Operation *op) : operation(op) {}
-
-  void print(llvm::raw_ostream &os) const {
-    if (!operation) {
-      os << "<null>";
-      return;
-    }
-    operation->print(os, OpPrintingFlags().skipRegions());
-  }
-
-private:
-  Operation *operation;
-};
-
-} // namespace
-
-// Support operator<< for OperationPrinterWithoutRegions.
-inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
-                                     const PrintNoRegions &printer) {
-  printer.print(os);
-  return os;
-}
 
 class IndexExprsForwardAnalysis
     : public dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {

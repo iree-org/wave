@@ -400,14 +400,34 @@ def transform_index_on_mapping(
     else:
         index_mapping = mapping.map_output_indices(symbolic_shape)
 
+    # index_mapping contains positionally-indexed iterator(x) objects for "main"
+    # symbols indexing each dimension in the symbolic shape, or more generally
+    # the expressions mapped to those by the non-identity part of the
+    # IndexMapping.
+
     idxc = IndexingContext.current()
     index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+
+    # index_mapping is the same with constants substituted in. Not sure if this
+    # may also substitute in things like thread/wg identifiers...
+
     iters = mapping.iters
     subs = [
         (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
     ] + list(idxc.subs.items())
+
+    # subs is prepared to substitute positionally-indexed iterator(x) with
+    # start expressions at the same position x in the index (regardless of the dimension it is considered to index)
+
     transformed_index = {
         key: m.subs(subs) for key, m in zip(symbolic_shape, index_mapping)
     }
+
+    # transformed index is co-indexed with the symbolic shape.
+    # It is then a substitution of the index_mapping[x] using subs.
+    # index_mapping[x] is the expression for the x-th dimension of the symbolic shape mapped to it by the non-identity part of the IndexMapping.
+    # The iterator is then substituted with the start expression at the same position x in the `index`
+
+    # dimension x of the symbolic shape -> start expression at position x in the `index` + remainder of the IndexMapping expression for the given expression
 
     return transformed_index
