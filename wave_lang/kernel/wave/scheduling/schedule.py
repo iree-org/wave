@@ -438,7 +438,7 @@ def construct_pipelined_loop_adaptive(
 
     When eliminate_epilogue=True, the epilogue is not generated and the loop
     runs for the full trip count. Out-of-bounds loads in the extra iterations
-    must return zero (guaranteed by buffer_load on GFX9+). This trades wasted
+    must return zero (guaranteed by buffer_load on GFX950). This trades wasted
     prefetch work in the last (num_stages-1) iterations for eliminating all
     epilogue code (MFMAs, loads, bitcasts).
     """
