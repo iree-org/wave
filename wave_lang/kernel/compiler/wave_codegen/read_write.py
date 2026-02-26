@@ -62,7 +62,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
-from ...wave.utils.symbol_utils import safe_subs
+from ...wave.utils.symbol_utils import decompose_affine_by_uniformity, safe_subs
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -71,8 +71,10 @@ from .emitter import (
     cast_py_value,
     cast_vector,
     gen_sympy_index,
+    gen_sympy_index_decomposed,
     get_constant_attr,
     get_type_or_element_type,
+    get_uniformity_classes,
     handle_op,
 )
 
@@ -105,26 +107,17 @@ def _simplify(expr):
     return sympy.simplify(expr)
 
 
+_WG_SYMS = {WORKGROUP_0, WORKGROUP_1, WORKGROUP_2}
+
+
 def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
-    """
-    Split index expr into thread-dependent and thread-independent parts
-    """
-    subs_wg = {WORKGROUP_0: 0, WORKGROUP_1: 0, WORKGROUP_2: 0}
-    # Replace all wg symbols with 0s to get thread-dependent index.
-    # All dynamic values will also be part of thread-index.
-    thread_dependent_index = safe_subs(src, subs_wg)
+    """Split index expr into workgroup and thread-dependent parts.
 
-    # Compute thread-independent index as `orig_index - thread_dependent_index`
-    # All thread symbols and dynamic should cancel-out in the result.
-    thread_independent_index = _simplify(src - thread_dependent_index)
-    if thread_independent_index.free_symbols - set(subs_wg.keys()):
-        # If we have any symbols besides wg symbols, means some thread or
-        # dynamic symbols were not canceled out, use the entire index as
-        # thread dependent index.
-        thread_independent_index = sympy.sympify(0)
-        thread_dependent_index = src
-
-    return thread_independent_index, thread_dependent_index
+    Thin wrapper around :func:`decompose_affine_by_uniformity` with a
+    single symbol class (workgroup symbols).
+    """
+    parts = decompose_affine_by_uniformity(src, [_WG_SYMS])
+    return parts[0], parts[1]
 
 
 def _extract0(src):
@@ -151,15 +144,82 @@ def _build_start_indices(
     emitter: WaveEmitter,
     src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
     dynamic_values: dict[IndexExpr, Any] = {},
-) -> tuple[list[OpResult], list[OpResult], list[OpResult]]:
+    uniform_sym_classes: list[set] | None = None,
+) -> tuple:
+    """Build MLIR index values with N-way uniformity decomposition.
+
+    When *uniform_sym_classes* is ``None`` (default), performs the legacy
+    two-way split (workgroup / thread) and returns a 3-tuple::
+
+        (full_indices, wg_indices, thread_indices)
+
+    When *uniform_sym_classes* is a list of symbol sets (ordered
+    most-uniform first, e.g. ``[induction_var_syms]``), prepends the
+    workgroup class automatically and returns an ``(n + 2)``-tuple::
+
+        (full_indices, wg_indices, class_0_indices, ..., thread_indices)
+    """
     start_indices = _get_start_indices(src_indices)
-    split_indices = [_split_index(i) for i in start_indices]
     subs = add_emitter_subs(emitter, dynamic_values)
     indices = [gen_sympy_index(subs, i) for i in start_indices]
-    indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
-    indices_th = [gen_sympy_index(subs, i[1]) for i in split_indices]
 
-    return indices, indices_wg, indices_th
+    classes = [_WG_SYMS] + (uniform_sym_classes or [])
+    decomposed = [
+        decompose_affine_by_uniformity(i, classes) for i in start_indices
+    ]
+
+    n_parts = len(classes) + 1  # one per class + remainder
+    parts: list[list[OpResult]] = []
+    for k in range(n_parts):
+        parts.append([gen_sympy_index(subs, d[k]) for d in decomposed])
+
+    if not uniform_sym_classes:
+        return indices, parts[0], parts[1]
+
+    return (indices,) + tuple(parts)
+
+
+def _compute_linear_offset(
+    indices: list[Value | int],
+    strides: list[Value],
+) -> Value | None:
+    """Linearize per-dimension index values with strides into a scalar offset.
+
+    Returns *None* when ``indices`` is empty.
+    """
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+    offset = None
+    for idx, stride in zip(indices, strides):
+        if isinstance(idx, int):
+            idx = arith_d.constant(IndexType.get(), idx)
+        off = arith_d.muli(idx, stride, overflow_flags=overflow_flags)
+        if offset is None:
+            offset = off
+        else:
+            offset = arith_d.addi(offset, off, overflow_flags=overflow_flags)
+    return offset
+
+
+def _apply_uniform_offsets(
+    offset_th: Value,
+    uniform_parts: list[list[Value]],
+    strides: list[Value],
+) -> Value:
+    """Add uniform (SGPR-eligible) contributions to the thread offset.
+
+    Each entry in *uniform_parts* is a list of per-dimension index values
+    for one uniformity class.  They are linearized with *strides* and
+    added to *offset_th* as separate ``arith.addi`` ops so the backend
+    can keep them in SGPRs (e.g. fold into ``buffer_load`` soffset).
+    """
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+    for unif_indices in uniform_parts:
+        unif_offset = _compute_linear_offset(unif_indices, strides)
+        if unif_offset is not None and _get_constant_value(unif_offset) != 0:
+            offset_th = arith_d.addi(
+                offset_th, unif_offset, overflow_flags=overflow_flags
+            )
+    return offset_th
 
 
 def _get_symbolic_shape(node: fx.Node) -> tuple[IndexExpr]:
@@ -469,6 +529,7 @@ def _create_vec_read_write(
     memory: CustomOp,
     mask: Optional[Value],
     node_index: Optional[IndexSequence] = None,
+    uniform_parts: list[list[Value]] | None = None,
 ) -> Optional[Value]:
     is_read = value is None
     uint32 = IntegerType.get_signless(32)
@@ -512,6 +573,8 @@ def _create_vec_read_write(
                 mem, start_indices_wg, start_indices_th, strides
             )
             mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+            if uniform_parts:
+                offset_th = _apply_uniform_offsets(offset_th, uniform_parts, strides)
         if linearize_shared_mem:
             mem = _linearize_shared_mem(mem)
             linearized_index = {
@@ -548,6 +611,8 @@ def _create_vec_read_write(
             mem, start_indices_wg, start_indices_th, strides
         )
         mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+        if uniform_parts:
+            offset_th = _apply_uniform_offsets(offset_th, uniform_parts, strides)
 
     indices = [offset_th] if buffer_ops_enabled else start_indices
 
@@ -711,9 +776,21 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     else:
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
 
-    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-        emitter, index, dynamic_vals_map_start
-    )
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+    uniform_parts: list[list[Value]] = []
+    if induction_vars:
+        start_indices, start_indices_wg, *uniform_parts, start_indices_th = (
+            _build_start_indices(
+                emitter,
+                index,
+                dynamic_vals_map_start,
+                uniform_sym_classes=[induction_vars],
+            )
+        )
+    else:
+        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+            emitter, index, dynamic_vals_map_start
+        )
 
     use_llvm_load = flags != MemoryAccessFlags.NONE
     if use_llvm_load:
@@ -738,6 +815,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             get_custom(memory),
             mask,
             node_index=index,
+            uniform_parts=uniform_parts or None,
         )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
@@ -802,9 +880,21 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     else:
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
 
-    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-        emitter, index, dynamic_vals_map_start
-    )
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+    uniform_parts: list[list[Value]] = []
+    if induction_vars:
+        start_indices, start_indices_wg, *uniform_parts, start_indices_th = (
+            _build_start_indices(
+                emitter,
+                index,
+                dynamic_vals_map_start,
+                uniform_sym_classes=[induction_vars],
+            )
+        )
+    else:
+        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+            emitter, index, dynamic_vals_map_start
+        )
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
     if use_llvm_store:
@@ -825,6 +915,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             get_custom(memory),
             mask,
             node_index=index,
+            uniform_parts=uniform_parts or None,
         )
 
 
@@ -1070,13 +1161,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, new_src_idx, src_dynamic_vals_map_start
-    )
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+    uniform_parts: list[list[Value]] = []
+    if induction_vars:
+        src_index, src_index_wg, *uniform_parts, src_index_th = (
+            _build_start_indices(
+                emitter,
+                new_src_idx,
+                src_dynamic_vals_map_start,
+                uniform_sym_classes=[induction_vars],
+            )
+        )
+    else:
+        src_index, src_index_wg, src_index_th = _build_start_indices(
+            emitter, new_src_idx, src_dynamic_vals_map_start
+        )
 
     ip = InsertionPoint.current
-
-    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
     # Hoist to the function level, if not using induction variables.
     if not any(
@@ -1104,6 +1206,9 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
+
+    if uniform_parts:
+        offset_th = _apply_uniform_offsets(offset_th, uniform_parts, strides)
 
     # We previously checked mask is same for all elements, so we can use
     # elements_per_thread=1 to build the mask.
