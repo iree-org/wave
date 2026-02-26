@@ -806,6 +806,7 @@ class PipelinedLoop:
         self.iterate = iterate
         self.kernel_trace = kernel_trace
         self.constraints = constraints
+        self.multi_buffer_count = multi_buffer_count
 
         # Access options from the current ScheduleContext
         from .._support.tracing import ScheduleContext
