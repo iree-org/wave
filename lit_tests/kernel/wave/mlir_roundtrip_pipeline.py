@@ -27,6 +27,7 @@ from wave_lang.kernel.wave.constraints import (
     Constraint,
     HardwareConstraint,
     MMAType,
+    TilingConstraint,
 )
 from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
@@ -40,6 +41,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
     assert_constraints_equivalent,
     compare_hardware_constraints_for_mlir_roundtrip,
+    compare_tiling_constraints_for_mlir_roundtrip,
 )
 
 
@@ -74,6 +76,7 @@ def _try_roundtrip(
             fx_constraints,
             custom_comparators={
                 HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip,
+                TilingConstraint: compare_tiling_constraints_for_mlir_roundtrip,
             },
         )
 
@@ -188,18 +191,8 @@ def gemm_progressive_roundtrip():
     )
 
     # Passes whose MLIR roundtrip is known to fail for this kernel.
-    # As the emitters improve, passes should be REMOVED from this set so
-    # the test locks in the progress.
-    expected_failures = frozenset(
-        {
-            "debug_log_hoist",
-            "initialize_iter_args",
-            "create_induction_vars",
-            "initialize_reductions",
-            "finalize_indices",
-            "substitute_vector_shapes",
-        }
-    )
+    # Currently, we expect all passes to pass the roundtrip for this kernel.
+    expected_failures = frozenset()
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
     _run_progressive_roundtrip(gemm, options, expected_failures)

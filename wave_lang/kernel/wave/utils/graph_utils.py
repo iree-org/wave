@@ -24,7 +24,7 @@ from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
 from ...lang.wave_types import Memory, Register
-from ..constraints import HardwareConstraint
+from ..constraints import HardwareConstraint, TilingConstraint
 from ...ops.wave_ops import (
     MMA,
     Allocate,
@@ -208,6 +208,31 @@ def _check_index_mapping_equivalent(
     return Success()
 
 
+def _resolve_node(node: fx.Node, node_map: dict[fx.Node, fx.Node]) -> fx.Node | None:
+    """Look up the mapped counterpart of `node`.
+
+    Tries a direct lookup first.  If that fails and `node` is a
+    GetResult, falls back to looking up the underlying value.
+    """
+    mapped = node_map.get(node)
+    if mapped is None and isinstance(get_custom(node), GetResult):
+        mapped = node_map.get(get_custom(node).value)
+    return mapped
+
+
+def _nodes_match(expected: fx.Node, actual: fx.Node) -> bool:
+    """Check whether `actual` is the expected node.
+
+    Returns True when `actual` is `expected` directly, or when `actual`
+    is a GetResult wrapping `expected`.
+    """
+    if actual is expected:
+        return True
+    if isinstance(get_custom(actual), GetResult):
+        return get_custom(actual).value is expected
+    return False
+
+
 def _check_payloads_equivalent(
     lhs: Payload,
     rhs: Payload,
@@ -219,14 +244,12 @@ def _check_payloads_equivalent(
     if isinstance(lhs, fx.Node) or isinstance(rhs, fx.Node):
         if not (isinstance(lhs, fx.Node) and isinstance(rhs, fx.Node)):
             return Failure(f"node vs non-node: {type(lhs)} vs {type(rhs)}")
-        expected = node_map.get(lhs)
+        expected = _resolve_node(lhs, node_map)
         if expected is None:
             return Failure("node mapping not provided")
-        return (
-            Success()
-            if expected is rhs
-            else Failure(f"node mapping mismatch: {lhs} vs {rhs}")
-        )
+        if not _nodes_match(expected, rhs):
+            return Failure(f"node mapping mismatch: {lhs} vs {rhs}")
+        return Success()
 
     # Dict comparison
     if isinstance(lhs, dict) and isinstance(rhs, dict):
@@ -648,6 +671,12 @@ def _check_graphs_equivalent(
 
     After placeholders are resolved, non-placeholder nodes are compared
     positionally via `_compare_node_lists`.
+
+    `GetResult` nodes are filtered automatically when the source (lhs)
+    graph contains `Iterate` nodes but no `GetResult` nodes. This
+    handles pre-canonical FX graphs where `add_get_results` has not yet
+    run: the MLIR importer always produces `GetResult` wrappers, but the
+    source FX graph may reference iterate results directly.
     """
     lhs = (
         lhs_trace.get_root_graph()
@@ -662,6 +691,14 @@ def _check_graphs_equivalent(
 
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
+
+    # Auto-detect pre-canonical FX: if lhs has Iterate but no GetResult nodes,
+    # the source graph predates the add_get_results pass. Filter
+    # GetResult from both sides so they can be compared structurally.
+    lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
+    lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
+    if lhs_has_iterate and not lhs_has_getresult:
+        rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), GetResult)]
 
     if lhs_graph_name is not None:
         # Subgraph: reconcile lifted placeholders, then compare non-lifted.
@@ -794,6 +831,33 @@ def compare_hardware_constraints_for_mlir_roundtrip(
     # workgroups_per_cluster and n_service_waves are intentionally NOT compared
     # as they are not part of the MLIR representation
 
+    return True
+
+
+def compare_tiling_constraints_for_mlir_roundtrip(
+    source: TilingConstraint, roundtripped: TilingConstraint
+) -> bool:
+    """Directional comparison for TilingConstraint during MLIR roundtrip.
+
+    Before `create_induction_vars`, the fields `induction_var` and `iters`
+    are `None` in the source trace. The MLIR importer always reconstructs
+    them from the iterate operation, so the roundtripped constraint may
+    have values that the source doesn't yet. This comparator accepts
+    `None` on the source side for these fields even when they are set on
+    the roundtripped side.
+    """
+    if source.dim != roundtripped.dim:
+        return False
+    if source.tile_size != roundtripped.tile_size:
+        return False
+    # These fields are populated by `create_induction_vars`, a
+    # accept None on the source side
+    if source.induction_var is not None and (
+        source.induction_var != roundtripped.induction_var
+    ):
+        return False
+    if source.iters is not None and source.iters != roundtripped.iters:
+        return False
     return True
 
 
