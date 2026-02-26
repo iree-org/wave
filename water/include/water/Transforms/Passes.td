@@ -171,4 +171,18 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterMMAReorderPass : Pass<"water-mma-reorder"> {
+  let summary = "Reorder matrix multiply intrinsics to maximize operand reuse";
+  let description = [{
+    This pass reorders ROCDL matrix multiply intrinsics (WMMA, MFMA, scaled
+    MFMA, SMFMAC) within basic blocks to maximize operand reuse. When
+    consecutive operations share the same A or B matrix operand, the hardware
+    can benefit from register locality. For WMMA ops that support explicit
+    reuseA/reuseB flags, these are set accordingly.
+  }];
+  let dependentDialects = [
+    "::mlir::ROCDL::ROCDLDialect",
+  ];
+}
+
 #endif // WATER_PASSES
