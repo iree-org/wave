@@ -1055,7 +1055,6 @@ def diagnostic_from_mlir_error(e: ir.MLIRError) -> list[MLIRDiagnostic]:
     return diagnostics
 
 
-
 def _create_kernel_module(
     ctx: ir.Context,
     trace: CapturedTrace,

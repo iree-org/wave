@@ -30,7 +30,6 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     FileLocation,
     MLIRDiagnostic,
     NameLocation,
-    WaterDiagTestingMode,
     WaterError,
 )
 from wave_lang.kernel.wave.mlir_converter import dill_util
