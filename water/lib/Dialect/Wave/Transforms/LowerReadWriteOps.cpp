@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "mlir/IR/Attributes.h"
+#include "water/Dialect/Wave/IR/IndexExpr.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
@@ -34,17 +35,14 @@ struct TransferOpCommonAttrs {
 /// Build the common attrs for vector.transfer_{read,write} when vectorizing a
 /// memref dimension.
 static TransferOpCommonAttrs
-make1DTransferCommonAttrs(MemRefType memrefType, int64_t vectorizedDim,
-                          VectorType vecType, PatternRewriter &rewriter) {
+make1DTransferCommonAttrs(int64_t memoryRank, int64_t vectorizedDim,
+                          PatternRewriter &rewriter) {
 
-  uint64_t memrefRank = memrefType.getRank();
   MLIRContext *ctx = rewriter.getContext();
-
-  assert(vecType.getRank() == 1 && "only 1-D vectors supported here");
 
   // Permutation map: (d0,..,d{rank-1}) -> (d_{vectorizedDim})
   AffineExpr e = getAffineDimExpr(vectorizedDim, ctx);
-  AffineMap map = AffineMap::get(memrefRank, /*numSymbols=*/0, e, ctx);
+  AffineMap map = AffineMap::get(memoryRank, /*numSymbols=*/0, e, ctx);
   AffineMapAttr permAttr = AffineMapAttr::get(map);
 
   ArrayAttr inTrue = rewriter.getBoolArrayAttr({true});
@@ -96,8 +94,8 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
 static FailureOr<Value>
 buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
           ArrayRef<wave::WaveSymbolAttr> orderedSyms, PatternRewriter &rewriter,
-          DictionaryAttr indexDict, wave::WaveHyperparameterAttr hyper,
-          ArrayRef<Value> startIdx, int64_t elementsPerThread) {
+          wave::WaveHyperparameterAttr hyper, ArrayRef<Value> startIdx,
+          int64_t elementsPerThread) {
   if (!boundsMapping)
     return Value();
 
@@ -156,32 +154,6 @@ buildMask(Location loc, wave::WaveSymbolMappingAttr boundsMapping,
   return finalMask;
 }
 
-/// Checks whether the vectorized dimension is the innermost dimension and if
-/// its stride is 1. This is required to use vector.load/store or
-/// masked_load/store.
-static FailureOr<bool> isMinorContiguous(MemRefType memrefType,
-                                         int64_t vectorizedDim) {
-  int64_t memrefRank = memrefType.getRank();
-
-  // Must be vectorizing the innermost dimension.
-  if (vectorizedDim != static_cast<int64_t>(memrefRank - 1))
-    return false;
-
-  int64_t offset = 0;
-  SmallVector<int64_t> strides;
-  if (failed(memrefType.getStridesAndOffset(strides, offset))) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "Non-strided memref layout; using transfer ops\n \n");
-    return failure(); // layout not representable as simple strided
-  }
-
-  // Minor (last) stride must be known and equal to 1 to be contiguous.
-  if (strides.empty() || ShapedType::isDynamic(strides.back()))
-    return false;
-
-  return strides.back() == 1;
-}
-
 /// Build a read or a masked read operation based on presence of a mask.
 /// - If vectorizing the innermost dimension with unit stride (contiguous), emit
 /// `vector.load` or `vector.maskedload`
@@ -195,7 +167,7 @@ static FailureOr<bool> isMinorContiguous(MemRefType memrefType,
 /// shape.
 static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
                              ArrayRef<Value> indices, VectorType vecType,
-                             Value mask, uint64_t vectorizedDim) {
+                             Value mask, int64_t vectorizedDim) {
 
   Type eltType = vecType.getElementType();
   TypedAttr zeroElement;
@@ -206,9 +178,8 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
   else
     assert(false && "unsupported element type");
 
-  auto memrefType = cast<MemRefType>(mem.getType());
-  FailureOr<bool> isMinorContig = isMinorContiguous(memrefType, vectorizedDim);
-  bool usePlainVectorRead = isMinorContig.value_or(false);
+  int64_t memoryRank = cast<MemRefType>(mem.getType()).getRank();
+  bool usePlainVectorRead = vectorizedDim == memoryRank - 1;
 
   // vector.load or vector.masked_load
   if (usePlainVectorRead) {
@@ -225,7 +196,7 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
 
   // vector.transfer_read (masked or unmasked)
   TransferOpCommonAttrs common =
-      make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
+      make1DTransferCommonAttrs(memoryRank, vectorizedDim, rewriter);
   // Padding value used by vector.transfer_read to fill lanes that are
   // out-of-bounds or masked-off.
   Value padding =
@@ -256,11 +227,10 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
 /// shape.
 static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
                              ArrayRef<Value> indices, Value vecValue,
-                             Value mask, uint64_t vectorizedDim) {
+                             Value mask, int64_t vectorizedDim) {
 
-  auto memrefType = cast<MemRefType>(mem.getType());
-  FailureOr<bool> isMinorContig = isMinorContiguous(memrefType, vectorizedDim);
-  bool usePlainVectorStore = succeeded(isMinorContig) && *isMinorContig;
+  int64_t memoryRank = cast<MemRefType>(mem.getType()).getRank();
+  bool usePlainVectorStore = vectorizedDim == memoryRank - 1;
 
   // vector.store or vector.masked_store
   if (usePlainVectorStore) {
@@ -274,9 +244,8 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   }
 
   // vector.transfer_write (masked or unmasked)
-  auto vecType = cast<VectorType>(vecValue.getType());
   TransferOpCommonAttrs common =
-      make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
+      make1DTransferCommonAttrs(memoryRank, vectorizedDim, rewriter);
 
   if (mask) {
     vector::TransferWriteOp::create(rewriter, loc, vecValue, mem, indices,
@@ -289,6 +258,61 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
                                     /*permutation_map=*/common.perm,
                                     /*in_bounds=*/common.inFalse);
   }
+}
+
+static DictionaryAttr
+transformIndex(DictionaryAttr indexDict,
+               ArrayRef<wave::WaveSymbolAttr> orderedSyms,
+               wave::WaveExprListAttr mapping,
+               SmallVectorImpl<wave::WaveSymbolAttr> &updatedOrderedSyms) {
+  assert(updatedOrderedSyms.empty() &&
+         "updatedOrderedSyms must be empty and will be populated");
+  if (!mapping || mapping.getMap().isIdentity()) {
+    updatedOrderedSyms.assign(orderedSyms);
+    return indexDict;
+  }
+
+  // When we hit this while increasing mapping expressiveness, it would mean
+  // that we need ot add the symbol part of the mapping to the new value. We
+  // will need to figure out which dimension.
+  assert(mapping.getMap().isPermutation() &&
+         "NYI: only permutation mappings are currently supported");
+
+  wave::permuteShape(orderedSyms, mapping.getMap(), /*inverse=*/true,
+                     updatedOrderedSyms);
+
+  // XXX: step/stride are not permuted similarly to pywave. For step, this
+  // appears necessary to avoid losing track of the dimension that is
+  // vectorized. For stride, not sure, it may be unused at all at this stage.
+  SmallVector<NamedAttribute> newIndexDictEntries;
+  for (size_t i = 0, e = updatedOrderedSyms.size(); i < e; ++i) {
+    auto updatedIndexMapping = cast<wave::WaveIndexMappingAttr>(
+        indexDict.get(orderedSyms[i].getName()));
+    auto originalIndexMapping = cast<wave::WaveIndexMappingAttr>(
+        indexDict.get(updatedOrderedSyms[i].getName()));
+
+    SmallVector<Attribute> allSymbols;
+    wave::aggregateAllSymbols(
+        ArrayRef<ArrayRef<Attribute>>{updatedIndexMapping.getSymbols(),
+                                      originalIndexMapping.getSymbols()},
+        allSymbols);
+
+    AffineMap start =
+        wave::alignMapSymbols(updatedIndexMapping.getStart(),
+                              updatedIndexMapping.getSymbols(), allSymbols);
+    AffineMap step =
+        wave::alignMapSymbols(originalIndexMapping.getStep(),
+                              originalIndexMapping.getSymbols(), allSymbols);
+    AffineMap stride =
+        wave::alignMapSymbols(originalIndexMapping.getStride(),
+                              originalIndexMapping.getSymbols(), allSymbols);
+
+    newIndexDictEntries.emplace_back(
+        updatedOrderedSyms[i].getName(),
+        wave::WaveIndexMappingAttr::get(updatedIndexMapping.getContext(),
+                                        allSymbols, start, step, stride));
+  }
+  return DictionaryAttr::get(indexDict.getContext(), newIndexDictEntries);
 }
 
 /// Describes access info used when lowering Wave ops to vector read/write ops.
@@ -350,23 +374,40 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
     return rewriter.notifyMatchFailure(
         op, "MemRefType memory operand requires ordered_syms attribute");
   }
-  std::optional<int64_t> vectorizedDim =
-      wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
+
+  wave::WaveExprListAttr mapping = op.getMappingAttr();
+  SmallVector<wave::WaveSymbolAttr> memoryShape;
+  DictionaryAttr transformedIndexDict =
+      transformIndex(indexDict, orderedSyms, mapping, memoryShape);
+
+  std::optional<int64_t> vectorizedDim = wave::getPositionOfVectorizedDim(
+      memoryShape, transformedIndexDict, hyper);
 
   if (!vectorizedDim.has_value()) {
     return rewriter.notifyMatchFailure(
         op, "failed to identify vectorized dimension");
   }
-  FailureOr<SmallVector<Value>> maybeStartIndices =
-      buildStartIndices(op->getLoc(), indexDict, orderedSyms, rewriter, hyper);
+
+  FailureOr<SmallVector<Value>> maybeStartIndices = buildStartIndices(
+      op->getLoc(), transformedIndexDict, memoryShape, rewriter, hyper);
   if (failed(maybeStartIndices))
     return rewriter.notifyMatchFailure(
         op, "failed to convert start indices to affine");
   SmallVector<Value> startIndices = std::move(*maybeStartIndices);
 
+  // When this assertion hits while increasing mapping expressiveness, the
+  // `buildMask` call below may need to be updated to account for the mapping,
+  // in particular for any additive component of the mapping.
+  // XXX: pywave somehow uses the unmodified index dict to build the mask in
+  // some case regardless of the mapping, which looks suspicious. This approach
+  // doesn't need the index dict entries but relies on the order in which start
+  // indices occur (matches the memory shape, rather than the unmodified index
+  // dictionary order that matches the value shape).
+  assert((!mapping || mapping.getMap().isPermutation()) &&
+         "NYI: only permutation mappings are currently supported");
   FailureOr<Value> mask =
-      buildMask(op->getLoc(), boundsMapping, orderedSyms, rewriter, indexDict,
-                hyper, startIndices, elementsPerThread);
+      buildMask(op->getLoc(), boundsMapping, memoryShape, rewriter, hyper,
+                startIndices, elementsPerThread);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");
 
@@ -380,8 +421,10 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getMapping())
-      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
+    auto memoryType = cast<MemRefType>(adaptor.getMemory().getType());
+    if (!memoryType.getLayout().isIdentity()) {
+      return rewriter.notifyMatchFailure(op, "non-identity memory layout");
+    }
 
     // wave.read produces a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The
@@ -410,8 +453,10 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getMapping())
-      return rewriter.notifyMatchFailure(op, "mapping is not supported yet");
+    auto memoryType = cast<MemRefType>(adaptor.getMemory().getType());
+    if (!memoryType.getLayout().isIdentity()) {
+      return rewriter.notifyMatchFailure(op, "non-identity memory layout");
+    }
 
     // wave.write consumes a register-resident value. PropagateElementsPerThread
     // converts these from WaveTensorType<register> to VectorType. The

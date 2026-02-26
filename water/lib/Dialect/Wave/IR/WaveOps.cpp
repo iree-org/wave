@@ -1513,6 +1513,20 @@ wave::MmaOp::propagateElementsPerThreadBackward(
 // ReadOp
 //-----------------------------------------------------------------------------
 
+void wave::permuteShape(ArrayRef<wave::WaveSymbolAttr> shape, AffineMap map,
+                        bool inverse,
+                        SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape) {
+  assert(map.isPermutation() && "expected mapping to be a permutation");
+  assert(shape.size() == map.getNumResults());
+  permutedShape.resize(shape.size());
+  if (inverse)
+    map = inversePermutation(map);
+  for (auto [i, expr] : llvm::enumerate(map.getResults())) {
+    auto dim = cast<AffineDimExpr>(expr);
+    permutedShape[i] = shape[dim.getPosition()];
+  }
+}
+
 // Compute the shape implied by (inverse if requested) mapping from sourceType.
 // For example, if the source type is [A, B, C, D] and the mapping is
 // (d0,d1,d2,d3)->(d3,d1,d0,d2), the direct expected shape is [D, B, A, C] and
@@ -1523,14 +1537,8 @@ static void getExpectedMemoryTypeFromMapping(
     bool inverse, SmallVectorImpl<wave::WaveSymbolAttr> &expectedShape) {
   if (mapping) {
     assert(mapping.getMap() && "expected mapping to have a non-null map");
-    expectedShape.resize(sourceType.getRank());
-    AffineMap map = mapping.getMap();
-    if (inverse)
-      map = inversePermutation(map);
-    for (auto [i, expr] : llvm::enumerate(map.getResults())) {
-      auto dim = cast<AffineDimExpr>(expr);
-      expectedShape[i] = sourceType.getShape()[dim.getPosition()];
-    }
+    wave::permuteShape(sourceType.getShape(), mapping.getMap(), inverse,
+                       expectedShape);
   } else {
     expectedShape = llvm::to_vector(sourceType.getShape());
   }
@@ -1766,28 +1774,26 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
     }
   }
 
-  if (!memoryTensorType)
-    return success();
-
-  if (orderedSyms) {
-    ArrayRef<WaveSymbolAttr> shape = memoryTensorType.getShape();
+  if (orderedSyms && valueTensorType) {
+    ArrayRef<WaveSymbolAttr> shape = valueTensorType.getShape();
     if (orderedSyms.size() != shape.size()) {
       return op->emitOpError()
              << "'ordered_syms' size (" << orderedSyms.size()
-             << ") does not match memory tensor rank (" << shape.size() << ")";
+             << ") does not match value tensor rank (" << shape.size() << ")";
     }
-    for (auto [i, pair] : llvm::enumerate(llvm::zip(orderedSyms, shape))) {
-      auto orderedSym = cast<WaveSymbolAttr>(std::get<0>(pair));
-      WaveSymbolAttr shapeSym = std::get<1>(pair);
-      if (orderedSym.getName() != shapeSym.getName()) {
+    for (auto [i, orderedSym, shapeSym] : llvm::enumerate(orderedSyms, shape)) {
+      if (orderedSym != shapeSym) {
         return op->emitOpError()
                << "'ordered_syms' symbol at index " << i << " ('"
-               << orderedSym.getName()
-               << "') does not match memory tensor shape symbol ('"
+               << cast<WaveSymbolAttr>(orderedSym).getName()
+               << "') does not match value tensor shape symbol ('"
                << shapeSym.getName() << "')";
       }
     }
   }
+
+  if (!memoryTensorType)
+    return success();
 
   if (failed(verifyIndexElementsPerThread(op, indexAttr, elementsPerThread,
                                           memoryTensorType, valueType)))
