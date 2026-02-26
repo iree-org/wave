@@ -71,6 +71,8 @@ mlir::LogicalResult handleArithMulI(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleArithDivUI(mlir::Operation *op,
                                      TranslationContext &ctx);
+mlir::LogicalResult handleArithDivSI(mlir::Operation *op,
+                                     TranslationContext &ctx);
 mlir::LogicalResult handleArithRemUI(mlir::Operation *op,
                                      TranslationContext &ctx);
 mlir::LogicalResult handleArithIndexCast(mlir::Operation *op,

@@ -503,6 +503,7 @@ LogicalResult handleArithAddI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithSubI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithMulI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithDivSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithIndexCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithAndI(Operation *op, TranslationContext &ctx);
@@ -1569,6 +1570,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::SubIOp, handleArithSubI);
   REGISTER_HANDLER(arith::MulIOp, handleArithMulI);
   REGISTER_HANDLER(arith::DivUIOp, handleArithDivUI);
+  REGISTER_HANDLER(arith::DivSIOp, handleArithDivSI);
   REGISTER_HANDLER(arith::RemUIOp, handleArithRemUI);
   REGISTER_HANDLER(arith::IndexCastOp, handleArithIndexCast);
 
