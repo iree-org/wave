@@ -2170,6 +2170,7 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
 @pytest.mark.parametrize(
     "shape,num_splits",
     [
+        ((256, 256, 256), 1),
         ((256, 256, 256), 2),
     ],
 )

@@ -407,20 +407,27 @@ static void applyStrengthReduction(LoopOp loopOp) {
   if (candidates.empty())
     return;
 
-  // Group by (SRD, stride). Loads sharing the same SRD and same constant
-  // stride share one soffset iter_arg; different strides get separate ones.
+  // Group by (SRD, stride, original soffset). Loads sharing the same SRD,
+  // same constant stride, AND same original soffset share one soffset
+  // iter_arg; different strides or soffsets get separate groups.
+  // The original soffset is preserved as the initial value of the new
+  // soffset iter_arg, which is critical for split-K kernels where the
+  // scale buffer_load has a non-zero soffset (e.g., block_z * 4).
   struct SRDGroup {
     Value srd;
     int64_t stride;
     Value strideSGPR;
+    Value originalSoffset;
   };
   SmallVector<SRDGroup> groups;
   SmallVector<unsigned> candidateGroupIdx;
 
   for (auto [i, info] : llvm::enumerate(candidates)) {
+    Value origSoff = info.loadOp->getOperand(2);
     std::optional<unsigned> matchIdx;
     for (auto [g, group] : llvm::enumerate(groups)) {
-      if (group.srd == info.srd && group.stride == candidateStrides[i]) {
+      if (group.srd == info.srd && group.stride == candidateStrides[i] &&
+          group.originalSoffset == origSoff) {
         matchIdx = g;
         break;
       }
@@ -433,7 +440,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
           ConstantOp::create(builder, loc, strideImm, candidateStrides[i]);
       Value strideSGPR = S_MOV_B32::create(builder, loc, sregType, strideConst);
       candidateGroupIdx.push_back(groups.size());
-      groups.push_back({info.srd, candidateStrides[i], strideSGPR});
+      groups.push_back(
+          {info.srd, candidateStrides[i], strideSGPR, origSoff});
     }
   }
 
@@ -445,13 +453,18 @@ static void applyStrengthReduction(LoopOp loopOp) {
     initialVoffsets.push_back(voff);
   }
 
-  // Build expanded init args: old args + soffset per SRD group (starts at 0).
+  // Build expanded init args: old args + soffset per SRD group.
+  // Each group's initial soffset is the original soffset from its buffer_load.
+  // This preserves non-zero soffsets (e.g., block_z * scale_stride in split-K).
   SmallVector<Value> expandedInit(initArgs.begin(), initArgs.end());
   unsigned soffsetArgBase = expandedInit.size();
-  auto zeroImm = builder.getType<ImmType>(0);
-  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-  auto zeroSoff = S_MOV_B32::create(builder, loc, sregType, zeroConst);
-  expandedInit.append(groups.size(), zeroSoff);
+  for (auto &group : groups) {
+    Value initSoff = group.originalSoffset;
+    if (isa<ImmType>(initSoff.getType())) {
+      initSoff = S_MOV_B32::create(builder, loc, sregType, initSoff);
+    }
+    expandedInit.push_back(initSoff);
+  }
 
   // Build new loop.
   auto newLoop = LoopOp::create(builder, loc, expandedInit);

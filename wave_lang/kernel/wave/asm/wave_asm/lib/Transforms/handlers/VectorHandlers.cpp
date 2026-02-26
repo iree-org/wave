@@ -28,6 +28,7 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "llvm/Support/Debug.h"
 
@@ -36,6 +37,26 @@
 using namespace mlir;
 
 namespace waveasm {
+
+/// Return the effective element bit width in the register file.
+///
+/// The arith.truncf handler defers vector conversions (e.g. f32->bf16),
+/// leaving registers in the source layout while the MLIR type already
+/// reflects the narrow destination type.  When a subsequent extract
+/// indexes into such a vector, the element width that governs register
+/// indexing is the *source* width, not the nominal destination width.
+static int64_t getEffectiveElemBits(Value source) {
+  if (auto truncOp = source.getDefiningOp<arith::TruncFOp>()) {
+    auto srcType = truncOp.getIn().getType();
+    if (auto vecType = dyn_cast<VectorType>(srcType)) {
+      if (vecType.getNumElements() > 1)
+        return vecType.getElementType().getIntOrFloatBitWidth();
+    }
+  }
+  if (auto vecType = dyn_cast<VectorType>(source.getType()))
+    return vecType.getElementType().getIntOrFloatBitWidth();
+  return 32;
+}
 
 LogicalResult handleVectorBroadcast(Operation *op, TranslationContext &ctx) {
   auto broadcastOp = cast<vector::BroadcastOp>(op);
@@ -64,6 +85,46 @@ LogicalResult handleVectorExtract(Operation *op, TranslationContext &ctx) {
   int64_t index = 0;
   if (!staticPos.empty()) {
     index = staticPos[0];
+  }
+
+  int64_t elemBits = getEffectiveElemBits(extractOp.getSource());
+
+  // Sub-dword elements: multiple elements are packed per 32-bit VGPR.
+  // Compute which VGPR holds the element and the bit position within it.
+  if (elemBits < 32) {
+    int64_t elemsPerDword = 32 / elemBits;
+    int64_t dwordOffset = index / elemsPerDword;
+    int64_t bitOffset = (index % elemsPerDword) * elemBits;
+
+    // Select the correct VGPR via register-level extraction.
+    Value dwordReg;
+    Type srcType = src->getType();
+    if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
+      int64_t baseIdx = pvreg.getIndex() + dwordOffset;
+      auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
+      dwordReg = PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
+    } else if (dwordOffset == 0) {
+      dwordReg = *src;
+    } else {
+      auto elemType = ctx.createVRegType(1, 1);
+      auto extractWaveOp = ExtractOp::create(
+          builder, loc, elemType, *src,
+          builder.getI64IntegerAttr(dwordOffset));
+      dwordReg = extractWaveOp.getResult();
+    }
+
+    if (bitOffset != 0) {
+      auto shiftImm = ConstantOp::create(builder, loc,
+                                         ctx.createImmType(bitOffset),
+                                         bitOffset);
+      auto shifted = V_LSHRREV_B32::create(builder, loc,
+                                           ctx.createVRegType(), shiftImm,
+                                           dwordReg);
+      ctx.getMapper().mapValue(extractOp.getResult(), shifted);
+    } else {
+      ctx.getMapper().mapValue(extractOp.getResult(), dwordReg);
+    }
+    return success();
   }
 
   // Get the source register type to find the base physical register
@@ -215,23 +276,46 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
     size = cast<IntegerAttr>(sizes[0]).getInt();
   }
 
-  // Check for sub-dword element extraction.  When elements are smaller than
-  // 32 bits (e.g. vector<2xi8>), multiple elements are packed in a single
-  // VGPR.  A register-level offset would read the wrong VGPR; instead we
-  // emit a right-shift to bring the desired byte(s) to bit-position 0.
-  auto srcVecType = extractOp.getSourceVectorType();
-  int64_t elemBits = srcVecType.getElementType().getIntOrFloatBitWidth();
-  if (elemBits < 32 && offset != 0) {
-    int64_t bitShift = offset * elemBits;
-    auto shiftImm =
-        ConstantOp::create(builder, loc, ctx.createImmType(bitShift), bitShift);
-    auto shifted = V_LSHRREV_B32::create(builder, loc, ctx.createVRegType(),
-                                         shiftImm, *src);
-    ctx.getMapper().mapValue(extractOp.getResult(), shifted);
-    return success();
-  }
-  if (elemBits < 32 && offset == 0) {
-    ctx.getMapper().mapValue(extractOp.getResult(), *src);
+  // Sub-dword element extraction.  When elements are smaller than 32 bits
+  // (e.g. bf16, i8), multiple elements are packed per VGPR.  We first select
+  // the correct dword (VGPR), then shift within it if needed.
+  // Use getEffectiveElemBits to handle deferred arith.truncf where the
+  // registers are still in the wider source layout.
+  int64_t elemBits = getEffectiveElemBits(extractOp.getSource());
+  if (elemBits < 32) {
+    int64_t elemsPerDword = 32 / elemBits;
+    int64_t dwordOffset = offset / elemsPerDword;
+    int64_t bitOffset = (offset % elemsPerDword) * elemBits;
+
+    // Select the correct VGPR via register-level extraction.
+    Value dwordReg;
+    Type srcType = src->getType();
+    if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
+      int64_t baseIdx = pvreg.getIndex() + dwordOffset;
+      auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
+      dwordReg =
+          PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
+    } else if (dwordOffset == 0) {
+      dwordReg = *src;
+    } else {
+      auto elemType = ctx.createVRegType(1, 1);
+      auto extractWaveOp = ExtractOp::create(
+          builder, loc, elemType, *src,
+          builder.getI64IntegerAttr(dwordOffset));
+      dwordReg = extractWaveOp.getResult();
+    }
+
+    if (bitOffset != 0) {
+      auto shiftImm = ConstantOp::create(builder, loc,
+                                         ctx.createImmType(bitOffset),
+                                         bitOffset);
+      auto shifted = V_LSHRREV_B32::create(builder, loc,
+                                           ctx.createVRegType(), shiftImm,
+                                           dwordReg);
+      ctx.getMapper().mapValue(extractOp.getResult(), shifted);
+    } else {
+      ctx.getMapper().mapValue(extractOp.getResult(), dwordReg);
+    }
     return success();
   }
 

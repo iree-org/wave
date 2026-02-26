@@ -79,38 +79,36 @@ private:
   int64_t maxSGPRs = 104;
   int64_t maxAGPRs = 256;
 
-  /// Create a fresh zero-initialized copy of a duplicate init arg to ensure
-  /// unique physical registers. This is used when CSE merges identical
-  /// zero-initialized accumulators, causing multiple loop block args to be
-  /// tied to the same init value. Each block arg needs its own physical
-  /// register, so we create a new v_mov_b32/s_mov_b32 from zero.
+  /// Create a fresh copy of a duplicate init arg to ensure unique physical
+  /// registers. This is used when CSE or other passes cause multiple loop
+  /// block args to be tied to the same init value. Each block arg needs its
+  /// own physical register, so we create a new mov that copies the value.
   ///
-  /// PRECONDITION: This should only be called for zero-initialized init args
-  /// (e.g., v_mov_b32 %vreg, 0). Calling it for non-zero init args will
-  /// produce incorrect zero values silently.
-  Value createZeroInitCopy(LoopOp loopOp, Value initArg) {
+  /// For VGPR/AGPR: always zero-initialize. Duplicate VGPR/AGPR init args
+  /// are only produced by CSE merging zero-initialized MFMA accumulators;
+  /// v_mov_b32 can't copy a multi-register source in a single instruction.
+  ///
+  /// For SGPR: copy the actual value. Duplicate SGPR init args can carry
+  /// non-zero values (e.g., soffsets from BufferLoadStrengthReduction).
+  Value createInitArgCopy(LoopOp loopOp, Value initArg) {
     OpBuilder copyBuilder(loopOp);
     auto loc = loopOp.getLoc();
 
-    // Create a zero immediate. We always use 0 because this function is
-    // only called for duplicate init args produced by CSE merging identical
-    // zero-initialized values (e.g., v_mov_b32 vN, 0).
-    auto immType = ImmType::get(loopOp->getContext(), 0);
-    Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
-
     if (isAGPRType(initArg.getType())) {
-      // AGPR zero-init: V_MOV_B32 with ARegType destination.
-      // The assembly emitter will produce v_accvgpr_write_b32 aN, 0.
       auto aregType = cast<ARegType>(initArg.getType());
+      auto immType = ImmType::get(loopOp->getContext(), 0);
+      Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
       return V_MOV_B32::create(copyBuilder, loc, aregType, zeroImm);
     }
     if (isVGPRType(initArg.getType())) {
       auto vregType = cast<VRegType>(initArg.getType());
+      auto immType = ImmType::get(loopOp->getContext(), 0);
+      Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
       return V_MOV_B32::create(copyBuilder, loc, vregType, zeroImm);
     }
     if (isSGPRType(initArg.getType())) {
       auto sregType = cast<SRegType>(initArg.getType());
-      return S_MOV_B32::create(copyBuilder, loc, sregType, zeroImm);
+      return S_MOV_B32::create(copyBuilder, loc, sregType, initArg);
     }
     return nullptr;
   }
@@ -194,9 +192,10 @@ private:
     if (collectFailed)
       return failure();
 
-    // Handle duplicate init args: if CSE merged identical zero-initialized
-    // accumulators, multiple block args may be tied to the same init value.
-    // Each block arg needs its own physical register, so insert copies.
+    // Handle duplicate init args: if CSE or other passes cause multiple block
+    // args to be tied to the same init value, each block arg still needs its
+    // own physical register. Insert a copy so the allocator sees distinct SSA
+    // values and doesn't try to coalesce both block args to the same phys reg.
     // This must run before liveness analysis since it modifies the IR.
     program.walk([&](LoopOp loopOp) {
       Block &bodyBlock = loopOp.getBodyBlock();
@@ -206,7 +205,7 @@ private:
         if (i < loopOp.getInitArgs().size()) {
           Value initArg = loopOp.getInitArgs()[i];
           if (usedInitArgs.contains(initArg)) {
-            Value copy = createZeroInitCopy(loopOp, initArg);
+            Value copy = createInitArgCopy(loopOp, initArg);
             if (copy) {
               loopOp.getInitArgsMutable()[i].set(copy);
             }
