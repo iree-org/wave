@@ -433,6 +433,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         "lower-affine",
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
+        *add_opt(("water-insert-broadcasts", {}, "gpu.module")),
         ("water-alloc-to-alloca", {}, "gpu.module"),
         # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
         add_transform(alloca_to_global, "__transform_alloca_to_global"),

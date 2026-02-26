@@ -380,6 +380,9 @@ class WaveEmitter:
         threads_per_block = self.hardware_constraint.threads_per_block
 
         kernel_func_wrapper.known_block_size = DenseI32ArrayAttr.get(threads_per_block)
+        kernel_func_wrapper.attributes["subgroup_size"] = IntegerAttr.get(
+            i32, self.hardware_constraint.threads_per_wave
+        )
 
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
             func_args = entry_block.arguments[1:]
