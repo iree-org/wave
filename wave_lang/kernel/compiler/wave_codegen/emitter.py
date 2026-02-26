@@ -1102,8 +1102,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             case _:
                 raise CodegenError(f"Can not handle {type(term)} : {term}")
 
-    if len(stack) != 1 or isinstance(stack[0], _Rational):
+    if len(stack) != 1:
         raise CodegenError(f"Expected single result, got {stack} for {expr}")
+
+    if isinstance(stack[0], _Rational):
+        stack[0] = _floor(stack[0])
 
     return _get_ir_value(stack[0])
 

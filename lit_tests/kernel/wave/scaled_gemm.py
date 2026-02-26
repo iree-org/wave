@@ -902,3 +902,89 @@ def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
     # CHECK:            %[[LHS_SCALE_BITCAST:.+]] = vector.bitcast %[[LHS_SCALE]] : vector<1xi8> to vector<1xf8E8M0FNU>
     # CHECK:            %[[LHS_SCALE_EXTRACT:.+]] = vector.extract %[[LHS_SCALE_BITCAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
     # CHECK-COUNT-2:    amdgpu.scaled_mfma 16x16x128 (%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+
+
+@run_test
+def test_dynamic_scaled_gemm_mxfp4():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    @tkw.wave(constraints)
+    def scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 128,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.NONE,
+        device="hip",
+        target="gfx950",
+        compile_to_mlir=True,
+        dynamic_symbols=[M, N, K],
+    )
+
+    scaled_gemm = wave_compile(options, scaled_gemm)
+    print(scaled_gemm.asm)
+
+    # CHECK-LABEL: test_dynamic_scaled_gemm_mxfp4
+
+    # Verify floordiv expressions for K/2 and K/32 buffer dimensions.
+    # CHECK-DAG:    affine_map<()[s0] -> (s0 floordiv 2)>
+    # CHECK-DAG:    affine_map<()[s0] -> (s0 floordiv 32)>
+
+    # Dynamic index arguments for M, N, K.
+    # CHECK:        func.func @scaled_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index, %arg7: index)
+
+    # Buffer shapes are dynamic (?) due to M, N, K being runtime values.
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg5, %{{.*}}], strides: [%{{.*}}, 1] : memref<i8> to memref<?x?xi8, strided<[?, 1]>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg6, %{{.*}}], strides: [%{{.*}}, 1] : memref<i8> to memref<?x?xi8, strided<[?, 1]>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg5, %arg6], strides: [%arg6, 1] : memref<f32> to memref<?x?xf32, strided<[?, 1]>>
+
+    # Core loop and scaled MFMA still present.
+    # CHECK:          scf.for
+    # CHECK:            amdgpu.scaled_mfma
+    # CHECK-COUNT-4:  vector.maskedstore {{.*}} memref<?x?xf32

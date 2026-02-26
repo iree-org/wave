@@ -253,8 +253,13 @@ class WaveKernel:
         def get_dynamic_dimension_actual(sym):
             if sym in debug_extra_dimensions:
                 return debug_extra_dimensions[sym]
-            arg_idx, dim = self.symbols_args_map[sym]
-            return args[arg_idx].shape[dim]
+            if sym in self.symbols_args_map:
+                arg_idx, dim = self.symbols_args_map[sym]
+                return args[arg_idx].shape[dim]
+            _, a_idx, d_idx, inv = host_codegen._find_symbol_in_compound_dim(
+                sym, self.symbols_args_map
+            )
+            return int(args[a_idx].shape[d_idx] * inv)
 
         # If there are debug_log uses with extra iteration dimensions, we need
         # to collect their sizes so that we can allocate the appropriate Torch

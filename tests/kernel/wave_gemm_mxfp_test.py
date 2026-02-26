@@ -95,6 +95,7 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
     ],
 )
 @param_bool("use_global_to_shared")
+@param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
@@ -109,6 +110,7 @@ def testScaledGemmMXFP4(
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
     use_global_to_shared: bool,
+    dynamic_dims: bool,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -166,11 +168,19 @@ def testScaledGemmMXFP4(
     }
     hyperparams.update(get_default_scheduling_params())
 
+    dynamic_symbols = []
+    if dynamic_dims:
+        dynamic_symbols = [M, N, K]
+        del hyperparams[M]
+        del hyperparams[N]
+        del hyperparams[K]
+
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
         schedule=enable_scheduling,
         use_global_to_shared=use_global_to_shared,
+        dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
