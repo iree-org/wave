@@ -183,7 +183,7 @@ def reorder_graph(loop: Any, clusters: Any): ...
 
 
 @define_schedule_op
-def pipeline(iterate: Sequence[fx.Node]): ...
+def pipeline(iterate: Sequence[fx.Node], multi_buffer_count: Optional[int] = None): ...
 
 
 @define_schedule_op
@@ -801,6 +801,7 @@ class PipelinedLoop:
         iterate: Sequence[fx.Node],
         kernel_trace: "CapturedTrace",
         constraints: list[Constraint],
+        multi_buffer_count: Optional[int] = None,
     ):
         self.iterate = iterate
         self.kernel_trace = kernel_trace
@@ -869,7 +870,7 @@ class PipelinedLoop:
             initiation_interval=self.initiation_interval,
             scheduling_type=SchedulingType.MANUAL,
             visualize=False,
-            multi_buffer_count=None,
+            multi_buffer_count=self.multi_buffer_count,
         )
 
         # Store the pipelined iterate node and node mapping, then create proxies for the stages
