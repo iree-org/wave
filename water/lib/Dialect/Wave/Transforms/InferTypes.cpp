@@ -621,6 +621,39 @@ updateValueTypes(Operation *root,
 }
 
 namespace {
+// Wrapper to print operations without regions. Use as `llvm::outs() <<
+// PrintNoRegions(op)`.
+class PrintNoRegions {
+public:
+  PrintNoRegions(Operation *op) : operation(op) {}
+
+  void print(llvm::raw_ostream &os) const {
+    if (!operation) {
+      os << "<null>";
+      return;
+    }
+    operation->print(os, OpPrintingFlags().skipRegions());
+  }
+
+private:
+  Operation *operation;
+};
+} // namespace
+
+// Support operator<< for PrintNoRegions.
+inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                                     const PrintNoRegions &printer) {
+  printer.print(os);
+  return os;
+}
+
+inline llvm::raw_ostream &
+operator<<(llvm::raw_ostream &os, const ElementsPerThreadLatticeValue &value) {
+  value.print(os);
+  return os;
+}
+
+namespace {
 // Type inference pass implementation.
 class InferTypes : public wave::impl::WaterWaveInferTypesPassBase<InferTypes> {
 public:
@@ -784,6 +817,17 @@ public:
     llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
         llvm::map_to_vector(results, extractValue);
 
+    LLVM_DEBUG({
+      LDBG() << "visiting operation forward " << PrintNoRegions(op);
+      LDBG() << "  operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+      LDBG() << "  result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
     llvm::FailureOr<ChangeResult> result =
@@ -795,6 +839,12 @@ public:
              << "failed to propagate elements per thread forward: "
              << errs.str();
     }
+    LLVM_DEBUG({
+      LDBG() << "  updated result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     if (*result == ChangeResult::NoChange)
       return success();
 
@@ -998,6 +1048,17 @@ public:
     llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
         llvm::map_to_vector(results, extractValue);
 
+    LLVM_DEBUG({
+      LDBG() << "visiting operation backward " << PrintNoRegions(op);
+      LDBG() << "  operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+      LDBG() << "  result elements:";
+      for (auto [i, result] : llvm::enumerate(resultElements)) {
+        LDBG() << "    result #" << i << ": " << result;
+      }
+    });
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
     llvm::FailureOr<ChangeResult> result =
@@ -1009,6 +1070,12 @@ public:
              << "failed to propagate elements per thread backward: "
              << errs.str();
     }
+    LLVM_DEBUG({
+      LDBG() << "  updated operand elements:";
+      for (auto [i, operand] : llvm::enumerate(operandElements)) {
+        LDBG() << "    operand #" << i << ": " << operand;
+      }
+    });
     if (*result == ChangeResult::NoChange)
       return llvm::success();
 
@@ -1128,34 +1195,6 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(IndexExprsLattice);
   using Lattice::Lattice;
 };
-
-namespace {
-// Wrapper to print operations without regions. Use as `llvm::outs() <<
-// PrintNoRegions(op)`.
-class PrintNoRegions {
-public:
-  PrintNoRegions(Operation *op) : operation(op) {}
-
-  void print(llvm::raw_ostream &os) const {
-    if (!operation) {
-      os << "<null>";
-      return;
-    }
-    operation->print(os, OpPrintingFlags().skipRegions());
-  }
-
-private:
-  Operation *operation;
-};
-
-} // namespace
-
-// Support operator<< for OperationPrinterWithoutRegions.
-inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
-                                     const PrintNoRegions &printer) {
-  printer.print(os);
-  return os;
-}
 
 class IndexExprsForwardAnalysis
     : public dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {
