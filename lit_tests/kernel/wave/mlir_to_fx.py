@@ -35,7 +35,6 @@ from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
 # so the emitter lives only for this file. atexit closes the subprocesses
 # cleanly when the interpreter exits at the end of the run.
 emitter = PersistentEmitter()
-emitter.__enter__()
 atexit.register(emitter.close)
 
 M = tkl.sym.M

@@ -31,7 +31,6 @@ from wave_lang.support.location_config import (
 )
 
 emitter = PersistentEmitter()
-emitter.__enter__()
 atexit.register(emitter.close)
 
 M = tkl.sym.M
@@ -188,7 +187,7 @@ def test_location_capture_file_line_col():
     # CHECK-LABEL: test_location_capture_file_line_col
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 67
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 66
     # CHECK:     a_reg = wave.read(a)
     # CHECK: location frame count: 1
     # CHECK: first frame type: file
@@ -222,7 +221,7 @@ def test_location_capture_stack_trace():
     # CHECK:     diagnostics = compile_and_emit_diagnostics
     # CHECK:   File "{{.*}}mlir_converter_diagnostics.py"
     # CHECK:     compiled_kernel = wave_compile(options, matrix_add)
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 67
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 66
     # CHECK:     a_reg = wave.read
 
 
@@ -250,7 +249,7 @@ def test_location_capture_stack_trace_with_system():
     # CHECK-LABEL: test_location_capture_stack_trace_with_system
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 67
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 66
     # CHECK:   File "{{.*}}wave_lang/kernel/ops/wave_ops.py"
     # CHECK:     capture_location
 

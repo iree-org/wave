@@ -23,7 +23,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import dill
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.constraints import Constraint
@@ -34,6 +33,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     WaterDiagTestingMode,
     WaterError,
 )
+from wave_lang.kernel.wave.mlir_converter import dill_util
 
 
 # ANSI color codes for terminal output
@@ -208,14 +208,12 @@ class FxEmitterResponse:
     trace: CapturedTrace | None = None
     constraints: list[Constraint] = field(default_factory=list)
     options: WaveCompileOptions = field(default_factory=WaveCompileOptions)
-    diagnostics: list[MLIRDiagnostic] = field(default_factory=list)
+    diagnostics: list[MLIRDiagnostic | WaterError] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers -- used by both standalone functions and PersistentEmitter
 # ---------------------------------------------------------------------------
-
-_DILL_RECURSION_LIMIT = 10000
 
 _WATER_ANALYSIS_PIPELINE = """
 module attributes {transform.with_named_sequence} {
@@ -252,8 +250,7 @@ def _prepare_water_request(
     """Build and serialize a water_emitter request.
 
     Snapshots the trace's node state, expands the water-analysis pipeline if
-    requested, and returns the dill-serialized request bytes.  The recursion
-    limit is temporarily raised for dill.dumps to handle large object graphs.
+    requested, and returns the dill-serialized request bytes.
     """
     # Ensure additional node fields (like .type) are not lost during pickling.
     trace.snapshot_node_state()
@@ -264,29 +261,22 @@ def _prepare_water_request(
     if options.check_water_analysis:
         pipeline = _WATER_ANALYSIS_PIPELINE
 
-    # dill.dumps walks the object graph recursively and can exceed the
-    # default 1000-frame limit for large kernels (e.g. attention).
-    saved_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
-    try:
-        return dill.dumps(
-            {
-                "trace": trace,
-                "constraints": constraints,
-                "options": options,
-                "pipeline": pipeline,
-                "test_diagnostic_emission": test_diagnostic_emission,
-            }
-        )
-    finally:
-        sys.setrecursionlimit(saved_limit)
+    return dill_util.dumps(
+        {
+            "trace": trace,
+            "constraints": constraints,
+            "options": options,
+            "pipeline": pipeline,
+            "test_diagnostic_emission": test_diagnostic_emission,
+        }
+    )
 
 
 def _unpack_water_response(
     raw: bytes,
 ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
     """Deserialize and unpack a water_emitter response."""
-    unpickled = dill.loads(raw)
+    unpickled = dill_util.loads(raw)
     if not isinstance(unpickled, dict):
         raise RuntimeError(
             f"water_emitter response has unexpected type: {type(unpickled)}"
@@ -303,16 +293,14 @@ def _unpack_water_response(
 
 def _unpack_fx_response(
     raw: bytes,
-) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]]:
+) -> tuple[
+    CapturedTrace,
+    list[Constraint],
+    WaveCompileOptions,
+    list[MLIRDiagnostic | WaterError],
+]:
     """Deserialize and validate an fx_emitter response."""
-    # The response contains a CapturedTrace whose recursive object graph can
-    # exceed the default 1000-frame limit during dill.loads.
-    saved_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
-    try:
-        response = dill.loads(raw)
-    finally:
-        sys.setrecursionlimit(saved_limit)
+    response = dill_util.loads(raw)
     if not isinstance(response, FxEmitterResponse):
         raise RuntimeError(f"fx_emitter output has unexpected type: {type(response)}")
     if response.trace is None:
@@ -339,16 +327,20 @@ from wave_lang.kernel.wave.mlir_converter.protocol import recv_message, send_mes
 class PersistentEmitter:
     """Keeps water_emitter and fx_emitter subprocesses alive for repeated use.
 
-    Using this as a context manager avoids re-spawning a fresh Python process
-    for every conversion call.  This is critical for the roundtrip test, where
-    we had 47 passes x 2 subprocesses = 94 spawns, each spending ~2 s on imports
-    alone.
+    Subprocesses are started lazily on first use, so callers that only need
+    one direction (e.g. FX -> MLIR) don't pay for the other subprocess.
 
-    Usage::
+    Can be used as a context manager for automatic cleanup, or standalone
+    with an explicit `close()` call (e.g. via `atexit`):
 
+        # Context manager - subprocesses closed on block exit.
         with PersistentEmitter() as emitter:
             mlir, diags, attrs = emitter.emit_wave_dialect(trace, constraints, options)
-            trace2, cons2, opts2, diags2 = emitter.mlir_to_fx(mlir)
+
+        # Standalone - caller is responsible for closing.
+        emitter = PersistentEmitter()
+        atexit.register(emitter.close)
+        mlir, diags, attrs = emitter.emit_wave_dialect(trace, constraints, options)
     """
 
     def __init__(self) -> None:
@@ -358,8 +350,6 @@ class PersistentEmitter:
     # -- lifecycle ------------------------------------------------------------
 
     def __enter__(self) -> "PersistentEmitter":
-        self._water_proc = _start_emitter("water_emitter.py")
-        self._fx_proc = _start_emitter("fx_emitter.py")
         return self
 
     def __exit__(self, *exc) -> None:
@@ -373,6 +363,16 @@ class PersistentEmitter:
         self._water_proc = None
         self._fx_proc = None
 
+    def _get_water_proc(self) -> subprocess.Popen:
+        if self._water_proc is None or self._water_proc.poll() is not None:
+            self._water_proc = _start_emitter("water_emitter.py")
+        return self._water_proc
+
+    def _get_fx_proc(self) -> subprocess.Popen:
+        if self._fx_proc is None or self._fx_proc.poll() is not None:
+            self._fx_proc = _start_emitter("fx_emitter.py")
+        return self._fx_proc
+
     # -- public API -----------------------------------------------------------
 
     def emit_wave_dialect(
@@ -383,23 +383,26 @@ class PersistentEmitter:
         test_diagnostic_emission: bool = False,
         pipeline: str = "",
     ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
-        """Same signature as the module-level `emit_wave_dialect`."""
-        assert self._water_proc is not None and self._water_proc.poll() is None
+        """Emit Wave MLIR from a traced FX graph."""
+        proc = self._get_water_proc()
         request = _prepare_water_request(
             trace, constraints, options, test_diagnostic_emission, pipeline
         )
-        send_message(self._water_proc.stdin, request)
-        return _unpack_water_response(recv_message(self._water_proc.stdout))
+        send_message(proc.stdin, request)
+        return _unpack_water_response(recv_message(proc.stdout))
 
     def mlir_to_fx(
         self,
         mlir_text: str,
     ) -> tuple[
-        CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]
+        CapturedTrace,
+        list[Constraint],
+        WaveCompileOptions,
+        list[MLIRDiagnostic | WaterError],
     ]:
-        """Same signature as the module-level `mlir_to_fx`."""
+        """Convert Wave MLIR text back into a Wave FX trace."""
         if not isinstance(mlir_text, str):
             raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
-        assert self._fx_proc is not None and self._fx_proc.poll() is None
-        send_message(self._fx_proc.stdin, dill.dumps({"mlir": mlir_text}))
-        return _unpack_fx_response(recv_message(self._fx_proc.stdout))
+        proc = self._get_fx_proc()
+        send_message(proc.stdin, dill_util.dumps({"mlir": mlir_text}))
+        return _unpack_fx_response(recv_message(proc.stdout))

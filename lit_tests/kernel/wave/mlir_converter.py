@@ -47,7 +47,6 @@ from iree.compiler.dialects.transform.extras import insert_transform_script, OpH
 # so the emitter lives only for this file. atexit closes the subprocess
 # cleanly when the interpreter exits at the end of the run.
 emitter = PersistentEmitter()
-emitter.__enter__()
 atexit.register(emitter.close)
 
 M = tkl.sym.M

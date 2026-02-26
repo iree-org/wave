@@ -7,7 +7,6 @@ mlir operations of wave and other dialects.
 """
 
 from __future__ import annotations
-import dill
 import sys
 import torch.fx as fx
 from pathlib import Path
@@ -48,6 +47,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     WaterDiagTestingMode,
     WaterError,
 )
+from wave_lang.kernel.wave.mlir_converter import dill_util
 from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.lang.wave_types import Memory, Register, IndexMapping
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
@@ -154,6 +154,7 @@ try:
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
+
 
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
@@ -1401,7 +1402,7 @@ def _serialize_response(
     diagnostics: list[MLIRDiagnostic | WaterError],
     inferred_attributes: dict[str, dict[str, Any]] | None = None,
 ) -> bytes:
-    return dill.dumps(
+    return dill_util.dumps(
         {
             "diagnostics": diagnostics,
             "module": module_str.encode("utf-8"),
@@ -1410,9 +1411,6 @@ def _serialize_response(
             ),
         }
     )
-
-
-_DILL_RECURSION_LIMIT = 10000
 
 
 def _server_mode() -> int:
@@ -1435,8 +1433,6 @@ def _server_mode() -> int:
         send_message,
     )
 
-    saved_recursion_limit = sys.getrecursionlimit()
-
     while True:
         try:
             raw_request = recv_message(sys.stdin.buffer)
@@ -1449,16 +1445,11 @@ def _server_mode() -> int:
             print(f"WARNING: {e}", file=sys.stderr)
             break
 
-        # dill.loads walks the object graph recursively and can exceed the
-        # default 1000-frame limit for large kernels (e.g. attention).
-        sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
         try:
-            request = dill.loads(raw_request)
+            request = dill_util.loads(raw_request)
         except Exception as e:
             print(f"FATAL: failed to unpickle: {e}", file=sys.stderr)
             break
-        finally:
-            sys.setrecursionlimit(saved_recursion_limit)
 
         trace = request.get("trace")
         constraints = request.get("constraints", [])

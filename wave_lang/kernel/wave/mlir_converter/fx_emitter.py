@@ -12,8 +12,7 @@ from typing import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import dill
-
+from wave_lang.kernel.wave.mlir_converter import dill_util
 from wave_lang.kernel.wave.mlir_converter.protocol import (
     recv_message,
     send_message,
@@ -71,7 +70,7 @@ from wave_lang.kernel.wave.constraints import (
     DeviceConstraint,
     HardwareConstraint,
 )
-from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic
+from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic, WaterError
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import FxEmitterResponse
 from wave_lang.kernel.wave.mlir_converter.water_emitter import serialize_location
 from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
@@ -1061,18 +1060,8 @@ def _process_single_request(mlir_text: str) -> bytes:
             diagnostics=diagnostics,
         )
     except Exception as e:
-        response.diagnostics.append(MLIRDiagnostic(message=str(e), severity="ERROR"))
-    # The response contains a CapturedTrace whose recursive object graph can
-    # exceed the default 1000-frame limit during dill.dumps.
-    saved_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(_DILL_RECURSION_LIMIT)
-    try:
-        return dill.dumps(response)
-    finally:
-        sys.setrecursionlimit(saved_limit)
-
-
-_DILL_RECURSION_LIMIT = 10000
+        response.diagnostics.append(WaterError(message=str(e)))
+    return dill_util.dumps(response)
 
 
 def _server_mode() -> int:
@@ -1101,7 +1090,7 @@ def _server_mode() -> int:
             break
 
         try:
-            request = dill.loads(raw_request)
+            request = dill_util.loads(raw_request)
         except Exception as e:
             sys.stderr.write(f"FATAL: failed to unpickle: {e}\n")
             break
