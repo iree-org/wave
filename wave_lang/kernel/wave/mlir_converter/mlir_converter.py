@@ -30,6 +30,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     FileLocation,
     MLIRDiagnostic,
     NameLocation,
+    WaterDiagTestingMode,
     WaterError,
 )
 from wave_lang.kernel.wave.mlir_converter import dill_util
@@ -242,7 +243,7 @@ def _prepare_water_request(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    test_diagnostic_emission: bool = False,
+    test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
     pipeline: str = "",
 ) -> bytes:
     """Build and serialize a water_emitter request.
@@ -382,7 +383,7 @@ class PersistentEmitter:
         trace: CapturedTrace,
         constraints: list[Constraint],
         options: WaveCompileOptions,
-        test_diagnostic_emission: bool = False,
+        test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
         pipeline: str = "",
     ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
         """Emit Wave MLIR from a traced FX graph."""

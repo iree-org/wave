@@ -1241,7 +1241,7 @@ def _build_response(
     constraints: list[Constraint],
     options: WaveCompileOptions,
     pipeline: str = "",
-    test_diagnostics: bool = False,
+    test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
 ) -> bytes:
     """Core conversion logic that returns the dill-serialized response bytes.
 
@@ -1412,7 +1412,7 @@ def _serialize_response(
     )
 
 
-def _server_mode() -> int:
+def _server_mode() -> None:
     """Run as a persistent server, reading length-prefixed requests from stdin.
 
     Instead of spawning a fresh process per request (which costs ~2 s in
@@ -1447,21 +1447,26 @@ def _server_mode() -> int:
         try:
             request = dill_util.loads(raw_request)
         except Exception as e:
-            print(f"FATAL: failed to unpickle: {e}", file=sys.stderr)
-            break
+            response_data = _serialize_response(
+                "", [WaterError(message=f"Failed to unpickle request: {e}")], None
+            )
+            send_message(sys.stdout.buffer, response_data)
+            continue
 
         trace = request.get("trace")
         constraints = request.get("constraints", [])
         options = request.get("options", WaveCompileOptions())
         pipeline = request.get("pipeline", "")
-        test_diags = request.get("test_diagnostic_emission", False)
+        test_diags = request.get("test_diagnostic_emission", WaterDiagTestingMode.NO)
 
         if not isinstance(trace, CapturedTrace):
-            print(
-                f"FATAL: expected CapturedTrace, got {type(trace)}",
-                file=sys.stderr,
+            response_data = _serialize_response(
+                "",
+                [WaterError(message=f"Expected CapturedTrace, got {type(trace)}")],
+                None,
             )
-            break
+            send_message(sys.stdout.buffer, response_data)
+            continue
 
         trace.restore_node_state()
 
@@ -1474,8 +1479,6 @@ def _server_mode() -> int:
 
         send_message(sys.stdout.buffer, response_data)
 
-    return 0
-
 
 if __name__ == "__main__":
-    sys.exit(_server_mode())
+    _server_mode()

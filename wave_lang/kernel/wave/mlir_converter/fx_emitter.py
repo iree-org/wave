@@ -1064,7 +1064,7 @@ def _process_single_request(mlir_text: str) -> bytes:
     return dill_util.dumps(response)
 
 
-def _server_mode() -> int:
+def _server_mode() -> None:
     """Run as a persistent server, reading length-prefixed requests from stdin.
 
     Instead of spawning a fresh process per request, the parent keeps this
@@ -1092,22 +1092,28 @@ def _server_mode() -> int:
         try:
             request = dill_util.loads(raw_request)
         except Exception as e:
-            sys.stderr.write(f"FATAL: failed to unpickle: {e}\n")
-            break
+            response = FxEmitterResponse()
+            response.diagnostics.append(
+                WaterError(message=f"Failed to unpickle request: {e}")
+            )
+            send_message(sys.stdout.buffer, dill_util.dumps(response))
+            continue
 
         mlir_text = request.get("mlir") if isinstance(request, dict) else None
         if not isinstance(mlir_text, str):
-            sys.stderr.write(
-                f"FATAL: expected 'mlir' string in request, got: {type(mlir_text)}\n"
+            response = FxEmitterResponse()
+            response.diagnostics.append(
+                WaterError(
+                    message=f"Expected 'mlir' string in request, got: {type(mlir_text)}"
+                )
             )
-            break
+            send_message(sys.stdout.buffer, dill_util.dumps(response))
+            continue
 
         response_data = _process_single_request(mlir_text)
 
         send_message(sys.stdout.buffer, response_data)
 
-    return 0
-
 
 if __name__ == "__main__":
-    sys.exit(_server_mode())
+    _server_mode()
