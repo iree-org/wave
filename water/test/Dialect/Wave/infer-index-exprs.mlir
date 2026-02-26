@@ -853,6 +853,39 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// Backward propagation from the MMA should give the register only M's index
+// expr, not N (the broadcast dimension).
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @broadcast_mma_back_to_register
+  func.func @broadcast_mma_back_to_register(
+      %a: !wave.tensor<[@M, @K] of f16>,
+      %b: !wave.tensor<[@N, @K] of f16>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // Register has shape [M] only. Broadcast to [M, N] to use as MMA accumulator.
+    %cst = arith.constant 0.0 : f32
+    // CHECK: wave.register
+    // Backward propagation from MMA: register gets M index expr only (not N).
+    // CHECK:     M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-NOT: N :
+    %reg = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
+
+    // CHECK: wave.broadcast
+    %acc = wave.broadcast %reg
+      : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // Broadcast result is the accumulator operand; index exprs propagate back
+    // through it to the register.
+    %mma = wave.mma %a, %b, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
 // Test permute forward propagation: index expressions flow from MMA result
 // through permute to write. The permute swaps M and N dimensions, which should
 // swap their strides.

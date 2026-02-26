@@ -1613,3 +1613,36 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
     return %0 : vector<4xf32>
   }
 }
+
+// -----
+
+// Test wave.broadcast lowering: vector<1> to vector<8> produces vector.broadcast.
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_broadcast_vector1_to_vector8
+  func.func @lower_broadcast_vector1_to_vector8() -> vector<8xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 0.0 : f32
+    %vec = wave.register %c0 : vector<1xf32>
+    // CHECK-NOT: wave.broadcast
+    // CHECK: %[[REG:.*]] = arith.constant dense<0.000000e+00> : vector<1xf32>
+    // CHECK: vector.broadcast %[[REG]] : vector<1xf32> to vector<8xf32>
+    %0 = wave.broadcast %vec : (vector<1xf32>) -> vector<8xf32>
+    return %0 : vector<8xf32>
+  }
+}
+
+// -----
+
+// Test wave.broadcast lowering: same source and result type is replaced by source (no vector.broadcast).
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_broadcast_identity
+  func.func @lower_broadcast_identity() -> vector<4xf32> attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %c0 = arith.constant 1.0 : f32
+    %vec = wave.register %c0 : vector<4xf32>
+    // CHECK-NOT: wave.broadcast
+    // CHECK-NOT: vector.broadcast
+    // CHECK: arith.constant dense<1.000000e+00> : vector<4xf32>
+    // CHECK: return
+    %0 = wave.broadcast %vec : (vector<4xf32>) -> vector<4xf32>
+    return %0 : vector<4xf32>
+  }
+}
