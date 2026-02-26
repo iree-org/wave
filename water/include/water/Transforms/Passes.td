@@ -171,4 +171,21 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterFuseScaleLoadsPass : Pass<"water-fuse-scale-loads"> {
+  let summary = "Fuse scale loads for scaled WMMA operations";
+  let description = [{
+    This pass fuses scale loads for `amdgpu.scaled_wmma` operations when the
+    number of scales is less than the wave size. This allows multiple scale
+    values to be loaded together, reducing memory traffic.
+  }];
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::gpu::GPUDialect",
+  ];
+  let options = [
+    Option<"waveSize", "wave-size", "unsigned", /*default=*/"32",
+      "Wave size of the target GPU (32 or 64)">,
+  ];
+}
+
 #endif // WATER_PASSES
