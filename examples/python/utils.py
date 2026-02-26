@@ -3,6 +3,7 @@ Utilities for running wave examples.
 """
 
 import argparse
+import traceback
 
 
 def parse_args():
@@ -68,7 +69,7 @@ def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block
             if repeat > 1:
                 print(f"Test {i+1}/{repeat} passed")
         except Exception as e:
-            print(f"Error: {e}")
+            traceback.print_exc()
             if repeat > 1:
                 print(f"Test {i+1}/{repeat} failed")
             else:
