@@ -23,6 +23,7 @@
 #include "water/Dialect/Wave/Transforms/Utils.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -785,7 +786,105 @@ public:
     if (failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
       return failure();
 
-    return success();
+    WalkResult walkResult = top->walk([&](Operation *op) {
+      auto indexArray = op->getAttrOfType<ArrayAttr>(
+          wave::WaveDialect::kIndexWaveExprListAttrName);
+      if (!indexArray)
+        return WalkResult::advance();
+
+      auto indexIface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
+      if (!indexIface)
+        return WalkResult::advance();
+
+      SmallVector<Value> valuesForIndexExpr;
+      std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
+          indexIface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+
+      assert(valuesForIndexExpr.size() == indexArray.size());
+      for (auto [i, value, index] :
+           llvm::enumerate(valuesForIndexExpr, indexArray)) {
+        ElementsPerThreadLattice *lattice = getLatticeElement(value);
+        auto indexDict = cast<DictionaryAttr>(index);
+        std::optional<int64_t> elementsPerThread = std::nullopt;
+        llvm::StringSet<> visitedSymbols;
+        for (const NamedAttribute &namedAttr : indexDict) {
+          visitedSymbols.insert(namedAttr.getName().strref());
+          auto mapping = cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
+          ArrayRef<Attribute> symbols = mapping.getSymbols();
+          AffineMap step = mapping.getStep();
+          if (!step)
+            continue;
+          std::optional<SmallVector<int64_t>> stepValues =
+              wave::evaluateMapWithHyperparams(step, symbols, init.hyperparams);
+          if (!stepValues)
+            continue;
+          // TODO(#1012): turn this into an assertion when the verifier is
+          // implemented.
+          int64_t stepValue = (*stepValues)[0];
+          if (stepValue <= 0) {
+            op->emitError() << "expected positive step in index expressions "
+                               "(missing verifier)";
+            return WalkResult::interrupt();
+          }
+
+          // Elements per thread may be 1 if _all_ dimensions have a unit step,
+          // otherwise it should be the one non-unit step.
+          // TODO(#1013): this logic can be reused in the verifier.
+          if (!elementsPerThread.has_value()) {
+            elementsPerThread = (*stepValues)[0];
+          } else if (*elementsPerThread == 1) {
+            elementsPerThread = (*stepValues)[0];
+          } else if (stepValue != 1) {
+            // TODO(#1013): turn this into an assertion when the verifier is
+            // implemented.
+            op->emitError() << "expected only one non-unit index step, found "
+                            << (*stepValues)[0] << " and " << *elementsPerThread
+                            << " (missing verifier)";
+            return WalkResult::interrupt();
+          }
+        }
+
+        llvm::SmallString<32> description;
+        llvm::raw_svector_ostream descriptionOs(description);
+        descriptionGenerator(descriptionOs, i);
+        auto resultType = cast<wave::WaveTensorType>(value.getType());
+        if (!llvm::all_of(resultType.getShape(), [&](wave::WaveSymbolAttr dim) {
+              return visitedSymbols.contains(dim.getName());
+            })) {
+          // TODO(#878): turn this into an assertion when the verifier is
+          // implemented. We may also consider a relaxation where we take the
+          // non-unit EPT if it was extracted even from an incomplete index
+          // expression.
+          op->emitError() << "expected index to contain entries for all "
+                          << description << " dimensions (missing verifier)";
+          return WalkResult::interrupt();
+        }
+
+        // If couldn't get a fixed value for EPT, bail.
+        if (!elementsPerThread.has_value()) {
+          return WalkResult::advance();
+        }
+
+        std::string errorMessage;
+        llvm::raw_string_ostream errs(errorMessage);
+        FailureOr<ChangeResult> result =
+            wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+                wave::ElementsPerThreadLatticeValue(*elementsPerThread), {},
+                lattice->getValue(), "index expression", "",
+                descriptionOs.str(), errs);
+        if (failed(result)) {
+          op->emitError() << "failed to propagate elements per thread forward "
+                             "during initialization: "
+                          << errs.str();
+          return WalkResult::interrupt();
+        }
+        if (*result == ChangeResult::Change)
+          propagateIfChanged(lattice, *result);
+      }
+      return WalkResult::advance();
+    });
+
+    return success(!walkResult.wasInterrupted());
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -1123,6 +1222,7 @@ public:
 
       wave::ElementsPerThreadInit init;
       init.threadXDimension = nullptr;
+      init.hyperparams = wave::getHyperparameters(parent);
       for (Attribute constraint : cast<ArrayAttr>(attr)) {
         auto workgroupConstraint =
             dyn_cast<wave::WorkgroupConstraintAttr>(constraint);

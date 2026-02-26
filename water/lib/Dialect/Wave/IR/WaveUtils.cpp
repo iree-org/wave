@@ -103,7 +103,9 @@ wave::evaluateMapWithHyperparams(AffineMap map, ArrayRef<Attribute> symbols,
     if (!symbol)
       return std::nullopt;
 
-    std::optional<int64_t> value = hyperparams.getSymbolValue(symbol.getName());
+    std::optional<int64_t> value =
+        hyperparams ? hyperparams.getSymbolValue(symbol.getName())
+                    : std::nullopt;
     if (!value)
       return std::nullopt;
     symReplacements.push_back(getAffineConstantExpr(*value, map.getContext()));

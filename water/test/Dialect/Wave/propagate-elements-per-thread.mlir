@@ -39,6 +39,143 @@ func.func @propagate_register_write(%mem: !wave.tensor<[@M] of f16, <global>>) a
 
 // -----
 
+// Register per thread is the non-unit second element of the index map,
+// propagate that in absence of explicit elements_per_thread.
+//
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @propagate_register_write_index_expr
+func.func @propagate_register_write_index_expr(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
+  wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+func.func @propagate_register_write_index_expr_conflict(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4)}}
+  wave.write %reg, %mem { elements_per_thread = 8 }
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
+// Check the error message during initialization from index expressions. In MMAs, unlike many other ops,
+// we have index expressions associated with operands and not only results. This means that the
+// initialization process may have assigned an EPT value to an operand when initializing dataflow for
+// its defining operation, making it the only scenario in which the conflict error may be seen
+// during initialization and not at some later point.
+normalform.module [#wave.normal_form<full_types>] {
+func.func @mma_operands_from_reads(
+    %mem_a: !wave.tensor<[@M, @K] of f16, <global>>,
+    %mem_b: !wave.tensor<[@N, @K] of f16, <global>>,
+    %mem_c: !wave.tensor<[@M, @N] of f32, <global>>,
+    %out: !wave.tensor<[@M, @N] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, K = 32}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+
+  %a = wave.read %mem_a { elements_per_thread = 8 } : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
+  %b = wave.read %mem_b { elements_per_thread = 8 } : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
+  %c = wave.read %mem_c { elements_per_thread = 8 } : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  // expected-error @below {{failed to propagate elements per thread forward during initialization: mismatch between index expression (1) and rhs #0 (8)}}
+  %result = wave.mma %a, %b, %c index [
+    {M : <[] -> (<NULL>, 8, <NULL>)>, K : <[] -> (<NULL>, 1, <NULL>)>},
+    {K : <[] -> (<NULL>, 1, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
+    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
+    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>}
+  ] {kind =  #wave.mma_kind<f32_16x16x16_f16> } : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  wave.write %result, %out { elements_per_thread = 8 } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+  return
+}
+}
+
+// -----
+
+// Null hyperparameters: step uses a symbol so it cannot be evaluated; pass must
+// not crash and should report that EPT could not be identified.
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @null_hyperparams_symbol_step(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{couldn't identify elements per thread for result #0}}
+    %reg = wave.register %cst index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+    wave.write %reg, %mem index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}]
+      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Null hyperparameters but constant step: step has no symbols so it is
+// evaluated without hyperparams and EPT is inferred.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @null_hyperparams_constant_step
+  func.func @null_hyperparams_constant_step(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<4xf16>
+    %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+    // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
+    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Step is zero; pass must report "expected positive step".
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_step_zero(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{expected positive step in index expressions}}
+    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 0, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 0, <NULL>)>}]
+      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Two dimensions with non-unit steps; pass must report "expected only one non-unit".
+// Use only register (write has its own verifier for multi-step index).
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_multi_non_unit_step(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{expected only one non-unit index step}}
+    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>, N : <[] -> (<NULL>, 8, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>
+    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>}]
+      : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Index missing dimension N for result type [M, N]; pass must report missing dimensions.
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_missing_dimension(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{expected index to contain entries for all result #0 dimensions}}
+    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>
+    wave.write %reg, %mem { elements_per_thread = 4 } : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
 // CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
 // CHECK-LABEL: @propagate_backward_from_write

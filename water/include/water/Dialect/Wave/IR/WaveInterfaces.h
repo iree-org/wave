@@ -411,6 +411,7 @@ private:
 // Shared for elements per thread analyses, visible to every call but immutable.
 struct ElementsPerThreadInit {
   wave::WaveSymbolAttr threadXDimension;
+  wave::WaveHyperparameterAttr hyperparams;
 };
 
 namespace detail {
