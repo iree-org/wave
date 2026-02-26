@@ -18,7 +18,7 @@ from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import (
     get_tagged_mxfp4_gemm,
     get_tagged_mxfp4_gemm_preshuffle_b,
-    get_tagged_mxfp4_gemm_preshuffle_scale_b,
+    get_tagged_mxfp4_gemm_preshuffle_scales,
 )
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
@@ -157,25 +157,14 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
 def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
     is_debug=False, shape=(16384, 16384, 16384), block=(256, 256, 256)
 ):
-    """Double-buffered MXFP4 GEMM, 8 waves, with stagger.
+    """Like :func:`test_dbuf_8wave_mixed_pingpong_mxfp_gemm` but with A_scale & B_scale
+    preshuffled and prefetched to VGPRs.
 
-    A variant of the ping-pong schedule that hides the latency of the extra
-    WorkgroupBarrier required for large shapes. With staggering, the two
-    clusters of waves write to LDS at different times, so a second barrier is
-    needed to ensure all writes are visible before any wave reads. This
-    schedule overlaps that barrier with useful work by splitting LDS loads:
-
-    - "Safe" loads: rows this wave wrote itself — readable immediately after
-        memory_counter_wait, before the global WorkgroupBarrier.
-    - "Dependent" loads: rows written by other waves — deferred until after
-        the global WorkgroupBarrier.
-
-    This lets the MFMAs on the safe operands start firing as soon as the
-    barrier releases, effectively hiding the second barrier's latency behind
-    the early loads and compute.
+    Note: preshuffling B and loading it directly to VGPRs combined with prefetching
+    consumes too many VGPRs and causes spilling.
     """
 
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scale_b(
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
         shape, block, wave_shape=(4, 2)
     )
 

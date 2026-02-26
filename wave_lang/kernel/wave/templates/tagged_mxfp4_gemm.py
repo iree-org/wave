@@ -130,21 +130,18 @@ def get_tagged_mxfp4_gemm(
     return gemm, options
 
 
-def get_tagged_mxfp4_gemm_preshuffle_scale_b(
+def get_tagged_mxfp4_gemm_preshuffle_scales(
     shape: tuple[int, int, int] = (1024, 1024, 8192),
     block_shape: tuple[int, int, int] = (256, 256, 256),
     wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
-    reorder_workgroups: bool = False,
-    group_size_n: int | None = None,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
-    B data is read directly from global memory using a preshuffle mapping
-    (aiter shuffle_weight permutation).  B scales are also read from global
-    memory using an e8m0 scale preshuffle mapping.  A and A_scale go through
-    shared memory (LDS) as usual.
+    A and B are loaded from global to shared.
+    A and B scales are read from global memory using an e8m0 scale preshuffle mapping and directly stored to VGPRs.
+
 
     All ops are tagged for use with MXFP4 schedule functions.
 
@@ -153,11 +150,6 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
         mfma_variant: Scaled MMA instruction type.
-        a_address_space: Address space for A and A_scale (typically SHARED).
-        reorder_workgroups: Enable workgroup reordering for L2 reuse.
-        group_size_n: N-tiles per reorder group.  Pass None (default) to
-            auto-select using compute_best_group_size_n.  Reordering is also
-            auto-disabled when no candidate improves on the default data reuse.
 
     Returns:
         (kernel_function, WaveCompileOptions)
@@ -169,7 +161,6 @@ def get_tagged_mxfp4_gemm_preshuffle_scale_b(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
-    GROUP_SIZE_N = tkl.sym.GROUP_SIZE_N
     A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
     K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED

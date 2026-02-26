@@ -956,35 +956,6 @@ def get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger: bool = True):
             )
 
         # =====================================================================
-<<<<<<< HEAD
-=======
-        # PROLOGUE: issue g2s[0] + b_scale[0]; wait for b_scale[0] to land in
-        # VGPRs before entering the loop (g2s[0] may still be in flight).
-        # Mirrors get_mxfp4_asymmetric_schedule's prologue_g2v_b_scale handling.
-        # =====================================================================
-        prologue_g2s = tkw.filter_nodes(
-            global_to_shared_a, subgraph=pipeline_loop.PROLOGUE
-        ) + tkw.filter_nodes(global_to_shared_b, subgraph=pipeline_loop.PROLOGUE)
-        prologue_b_scale = tkw.filter_nodes(
-            all_read_b_scale, subgraph=pipeline_loop.PROLOGUE
-        )
-        n_prologue_g2s = len(prologue_g2s)
-        # Total ops issued in prologue = n_g2s + n_b_scale.
-        # MemoryCounterWait(n_g2s) means "at most n_g2s still pending",
-        # i.e. all b_scale loads are complete → safe to use as initial iter_args.
-        prologue_vmcnt = n_prologue_g2s
-        prologue_clusters = [
-            tkw.cluster(
-                [
-                    prologue_g2s,
-                    prologue_b_scale,
-                    # tkw.MemoryCounterWait(load=prologue_vmcnt),
-                ]
-            )
-        ]
-
-        # =====================================================================
->>>>>>> fea8f806 (add a scale preshuffle)
         # KERNEL: Main loop body with custom cluster ordering
         # =====================================================================
 
@@ -1212,7 +1183,7 @@ def get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger: bool = True):
     return mxfp4_dbuf_schedule
 
 
-def get_mxfp4_asymmetric_schedule():
+def get_mxfp4_asymmetric_schedule(is_bscale_shuffled: bool = False):
     """Return an asymmetric-prefetch MXFP4 schedule for wave_compile().
 
     Asymmetric data paths:
