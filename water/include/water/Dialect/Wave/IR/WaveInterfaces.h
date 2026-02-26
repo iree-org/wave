@@ -30,7 +30,10 @@ class WaveTensorType;
 // HasWaveIndexMapping trait
 //-----------------------------------------------------------------------------
 
-// Common verifier for the optional 'index' attribute used by Wave ops.
+// Common verifier for the optional 'index' attribute used by Wave ops. When
+// the operation implements WaveInferIndexExprsOpInterface and the attribute is
+// present, also checks that the attribute length matches the number of values
+// from getIndexExprValuesAndDescriptions.
 mlir::LogicalResult verifyWaveIndexMappings(mlir::Operation *op);
 
 // Trait that checks the 'index' attribute using verifyWaveIndexMappings.
@@ -691,13 +694,6 @@ public:
     return wave::detail::identityIndexExprsPropagate(
         resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
         "result", "operand", emitError);
-  }
-
-  llvm::LogicalResult
-  setIndexFromLattices(llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-                       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-    return detail::identitySetIndexFromLattices(this->getOperation(),
-                                                operandExprs, resultExprs);
   }
 };
 

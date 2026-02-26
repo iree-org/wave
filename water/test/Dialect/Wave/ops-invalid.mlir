@@ -503,6 +503,16 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_length_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>) {
+    // expected-error @below {{index attribute length (0) does not match the number of index expression values (1)}}
+    %0 = wave.read %mem index [] : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
   func.func @elements_per_thread_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}

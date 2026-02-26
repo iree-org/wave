@@ -271,18 +271,27 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       }]
     >,
     InterfaceMethod<[{
-      Set the index attribute of the current operation based on (converged)
-      operand and result index expressions. Even though the index expression is
-      conceptually a property of a value, it is typically attached to the
-      operation producing these values. Some operations may require special
-      handling, e.g., operations with regions that may also want to capture
-      index expressions of their block arguments or certain operations like MMA
-      that also expect operand index expressions for legacy reasons.
+      Populate the argument with the ordered list of values for which the index
+      expressions should be present in the corresponding operation attribute.
+      Return a function producing a user-understandable name of that value. Note
+      that the implementation of the function should be careful not to capture
+      `this` as it is a thin wrapper around `Operation *` that is usually passed
+      by value and is therefore easily out-of-scope. It is preferable to capture
+      specific quantities, such as operand positions, by value directly.
+
+      Even though the index expression is conceptually a property of a value, it
+      is attached to operations for roundtripping and legacy reasons.
       }],
-      "::llvm::LogicalResult",
-      "setIndexFromLattices",
-      (ins "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
-           "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs)
+      "std::function<void(::llvm::raw_ostream &, unsigned)>",
+      "getIndexExprValuesAndDescriptions",
+      (ins "::llvm::SmallVectorImpl<::mlir::Value> &":$values),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        ::llvm::append_range(values, this->getOperation()->getResults());
+        return [](::llvm::raw_ostream &os, unsigned i) {
+          os << "result #" << i;
+        };
+      }]
     >
   ];
 }

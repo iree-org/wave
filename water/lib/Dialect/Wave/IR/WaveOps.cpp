@@ -307,12 +307,6 @@ llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsBackward(
   llvm_unreachable("IterateOp should be handled by control flow interfaces");
 }
 
-llvm::LogicalResult wave::IterateOp::setIndexFromLattices(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operands,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  return detail::identitySetIndexFromLattices(*this, operands, resultExprs);
-}
-
 LogicalResult wave::IterateOp::verify() {
   if (getNumOperands() != getLoopBody()->getNumArguments()) {
     return emitOpError() << "expects the same number of operands ("
@@ -1275,25 +1269,26 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 // for the operands.
 // TODO: this shouldn't be strictly necessary in a purely MLIR flow,
 // but is kept for Python compatibility.
-LogicalResult MmaOp::setIndexFromLattices(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<Attribute> indexExprs;
-  indexExprs.reserve(operandExprs.size() + resultExprs.size());
-  for (OpOperand &operand : getOperation()->getOpOperands()) {
-    if (llvm::failed(detail::checkAndAppendIndexExpr(
-            getLoc(), operandExprs[operand.getOperandNumber()],
-            "operand #" + llvm::Twine(operand.getOperandNumber()), indexExprs)))
-      return failure();
-  }
-  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
-    if (llvm::failed(detail::checkAndAppendIndexExpr(
-            getLoc(), resultExprs[i], "result #" + llvm::Twine(i), indexExprs)))
-      return failure();
-  }
-  getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                          ArrayAttr::get(getContext(), indexExprs));
-  return llvm::success();
+std::function<void(raw_ostream &, unsigned)>
+MmaOp::getIndexExprValuesAndDescriptions(llvm::SmallVectorImpl<Value> &values) {
+  values.reserve(4);
+  llvm::append_range(values, getOperands());
+  values.push_back(getResult());
+  unsigned lhsPosition = getLhsMutable().getOperandNumber();
+  unsigned rhsPosition = getRhsMutable().getOperandNumber();
+  unsigned accumulatorPosition = getAccumulatorMutable().getOperandNumber();
+  return [lhsPosition, rhsPosition, accumulatorPosition](raw_ostream &os,
+                                                         unsigned i) {
+    assert(i < 4 && "unexpected position");
+    if (i == lhsPosition)
+      os << "lhs";
+    else if (i == rhsPosition)
+      os << "rhs";
+    else if (i == accumulatorPosition)
+      os << "accumulator";
+    else
+      os << "result";
+  };
 }
 
 LogicalResult MmaOp::verify() {
@@ -2244,23 +2239,14 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
 // TODO: this shouldn't be necessary in a purely MLIR form since
 // mappings are a property of the SSA value (conversely, changing the
 // mapping should create a new value), but keeping for compatibility.
-llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<Attribute> indexExprs;
-  indexExprs.reserve(resultExprs.size() + 1);
-  if (llvm::failed(detail::checkAndAppendIndexExpr(
-          getLoc(), operandExprs[getValueToStoreMutable().getOperandNumber()],
-          "value to store", indexExprs)))
-    return llvm::failure();
-  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
-    if (llvm::failed(detail::checkAndAppendIndexExpr(
-            getLoc(), resultExprs[i], "result #" + llvm::Twine(i), indexExprs)))
-      return llvm::failure();
-  }
-  getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                          ArrayAttr::get(getContext(), indexExprs));
-  return llvm::success();
+std::function<void(raw_ostream &, unsigned)>
+wave::WriteOp::getIndexExprValuesAndDescriptions(
+    llvm::SmallVectorImpl<Value> &values) {
+  values.push_back(getValueToStore());
+  return [](raw_ostream &os, unsigned i) {
+    assert(i == 0 && "unexpected position");
+    os << "value to store";
+  };
 }
 
 //-----------------------------------------------------------------------------
@@ -2857,12 +2843,6 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
   }
 
   return updateIfChanged(operandExprs[0], newOperandLattice);
-}
-
-llvm::LogicalResult wave::PermuteOp::setIndexFromLattices(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  return detail::identitySetIndexFromLattices(*this, operandExprs, resultExprs);
 }
 
 llvm::LogicalResult wave::PermuteOp::finalizeTypeInference() {

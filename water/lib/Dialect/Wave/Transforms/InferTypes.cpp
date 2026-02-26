@@ -1799,13 +1799,23 @@ wave::setWaveIndexExprAnalysisResults(Operation *top,
           return latticeObject ? latticeObject->getValue()
                                : IndexExprsLatticeStorage::bottom();
         };
-        llvm::SmallVector<wave::IndexExprsLatticeStorage> operandExprs =
-            llvm::map_to_vector(iface->getOperands(), getLatticeValue);
-        llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
-            llvm::map_to_vector(iface->getResults(), getLatticeValue);
 
-        if (llvm::failed(iface.setIndexFromLattices(operandExprs, resultExprs)))
-          return WalkResult::interrupt();
+        SmallVector<Value> valuesForIndexExpr;
+        std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
+            iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+        SmallVector<Attribute> indexExprs;
+        indexExprs.reserve(valuesForIndexExpr.size());
+        for (auto &&[i, value] : llvm::enumerate(valuesForIndexExpr)) {
+          llvm::SmallString<32> description;
+          llvm::raw_svector_ostream os(description);
+          descriptionGenerator(os, i);
+          if (failed(detail::checkAndAppendIndexExpr(iface->getLoc(),
+                                                     getLatticeValue(value),
+                                                     os.str(), indexExprs)))
+            return WalkResult::interrupt();
+        }
+        iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                       ArrayAttr::get(iface->getContext(), indexExprs));
 
         return WalkResult::advance();
       });

@@ -34,6 +34,13 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   if (!attribute)
     return success();
 
+  // This is an assertion rather than a diagnostic because it means the op is
+  // defined incorrectly or that the delayed registration did not happen.
+  // Attempts to make it a static_assert in trait definition were unsuccessful.
+  auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
+  assert(iface && "expected the operation with the HasWaveIndexMapping "
+                  "trait to also implement WaveInferIndexExprsOpInterface");
+
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
@@ -83,6 +90,18 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
         }
       }
     }
+  }
+
+  // When the operation implements WaveInferIndexExprsOpInterface, the index
+  // attribute length must match the number of values from
+  // getIndexExprValuesAndDescriptions.
+  llvm::SmallVector<Value> values;
+  iface.getIndexExprValuesAndDescriptions(values);
+  if (values.size() != arr.size()) {
+    return op->emitError() << WaveDialect::kIndexWaveExprListAttrName
+                           << " attribute length (" << arr.size()
+                           << ") does not match the number of index expression "
+                           << "values (" << values.size() << ")";
   }
   return success();
 }
