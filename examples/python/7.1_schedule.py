@@ -106,8 +106,13 @@ def test_dbuf_4wave_mxfp_gemm(
 def test_dbuf_8wave_pingpong_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
-    """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
+    """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
+    A&B scales are preshuffled and read from global memory directly to VGPRs.
+    A and B are read from global memory directly to LDS.
+    """
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
+        shape, block, wave_shape=(4, 2)
+    )
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
@@ -116,8 +121,9 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
-    _run_mxfp_gemm(gemm, shape)
-    print("MXFP GEMM double-buffer 8-wave ping pong test passed!")
+
+    _run_mxfp_gemm_preshuffle(gemm, shape, only_scale=True)
+    print("MXFP GEMM double-buffer 8-wave ping pong with scale shuffling test passed!")
 
 
 def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
@@ -127,10 +133,12 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
 
     A variant of the ping-pong schedule that hides the latency of the extra
     WorkgroupBarrier required for large shapes. With staggering, the two
-    clusters of waves write to LDS at different times, so a second barrier is
-    needed to ensure all writes are visible before any wave reads. This
-    schedule overlaps that barrier with useful work by splitting LDS loads:
+    clusters of waves write to LDS at different times.
+    When the bus becomes congested, memory operations loaded by the later cluster may not arrive
+    in LDS before the other cluster attempts to read from it. In this case,
+    we add a second workgroup barrier to fix the timing and prevent incorrect output results.
 
+    This schedule overlaps that barrier with useful work by splitting LDS loads:
       - "Safe" loads: rows this wave wrote itself — readable immediately after
         memory_counter_wait, before the global WorkgroupBarrier.
       - "Dependent" loads: rows written by other waves — deferred until after
