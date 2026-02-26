@@ -235,7 +235,6 @@ def _start_emitter(script_name: str) -> subprocess.Popen:
         [sys.executable, str(child)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
     )
 
 
@@ -358,7 +357,11 @@ class PersistentEmitter:
         for proc in (self._water_proc, self._fx_proc):
             if proc is not None and proc.poll() is None:
                 proc.stdin.close()
-                proc.wait(timeout=10)
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
         self._water_proc = None
         self._fx_proc = None
 
