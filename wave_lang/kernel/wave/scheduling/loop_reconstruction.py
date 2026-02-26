@@ -857,7 +857,7 @@ def guard_g2s_with_bounds_check(
         )
 
         for g2s in g2s_nodes:
-            g2s.meta["g2s_branchless_guard"] = guard_condition
+            g2s.meta["g2s_guard"] = guard_condition
 
 
 def construct_pipelined_loop(

@@ -897,8 +897,7 @@ def get_mxfp4_asymmetric_schedule(eliminate_epilogue: bool = False):
     When eliminate_epilogue=True the loop runs for the full K trip count
     and relies on OOB buffer loads returning zero (GFX9+ hardware guarantee)
     so that extra iterations contribute nothing to the accumulators.  This
-    removes all epilogue code, reducing icache pressure and total code size.
-    Requires options.use_buffer_ops=True and options.use_real_buffer_bounds=True.
+    removes all epilogue code, reducing total code size.
     """
     M = tkl.sym.M
 

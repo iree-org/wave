@@ -387,7 +387,7 @@ def _compute_branchless_valid_bytes(
     uint64 = IntegerType.get_signless(64)
     elem_bytes = elem_type.width // 8
 
-    if emitter.options.use_real_buffer_bounds and symbolic_shape is not None:
+    if emitter.options.eliminate_epilogue and symbolic_shape is not None:
         total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
         if isinstance(total_elements, (int, float)) or (
             hasattr(total_elements, "is_number") and total_elements.is_number
@@ -428,7 +428,7 @@ def _cast_buffer_and_encode_stride(
     if valid_bytes_override is not None:
         valid_bytes_val = valid_bytes_override
     else:
-        if emitter.options.use_real_buffer_bounds and symbolic_shape is not None:
+        if emitter.options.eliminate_epilogue and symbolic_shape is not None:
             total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
             if isinstance(total_elements, (int, float)) or (
                 hasattr(total_elements, "is_number") and total_elements.is_number
@@ -1200,7 +1200,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
 
     valid_bytes_override = None
-    guard_condition = node.meta.get("g2s_branchless_guard", None)
+    guard_condition = node.meta.get("g2s_guard", None)
     if guard_condition is not None:
         valid_bytes_override = _compute_branchless_valid_bytes(
             emitter, src_symbolic_shape, element_type, guard_condition
