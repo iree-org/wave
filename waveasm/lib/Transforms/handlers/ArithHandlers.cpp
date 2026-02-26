@@ -170,7 +170,7 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
     return failure();
   }
 
-  // Check if RHS is a power of 2 constant - use shift instead
+  // Check if RHS is a power of 2 constant - use shift instead.
   if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
     int64_t divisor = constOp.getValue();
     if (isPowerOf2(divisor)) {
@@ -184,10 +184,38 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // General case: non-power-of-2 division requires complex reciprocal sequence
-  // Emit an error rather than silently producing incorrect code
+  // General case: non-power-of-2 division requires complex reciprocal sequence.
+  // Emit an error rather than silently producing incorrect code.
   return op->emitError("unsigned integer division by non-power-of-2 is not "
                        "yet implemented; divisor must be a power of 2");
+}
+
+LogicalResult handleArithDivSI(Operation *op, TranslationContext &ctx) {
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+  auto vregType = ctx.createVRegType();
+
+  auto divOp = cast<arith::DivSIOp>(op);
+  std::optional<Value> lhs, rhs;
+  if (failed(validateBinaryOperands(divOp, ctx, lhs, rhs)))
+    return failure();
+
+  // Power-of-2 constant divisor → arithmetic right shift.
+  if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
+    int64_t divisor = constOp.getValue();
+    if (divisor > 0 && isPowerOf2(divisor)) {
+      int64_t shiftAmt = log2(divisor);
+      auto immShift = ctx.createImmType(shiftAmt);
+      auto shiftConst = ConstantOp::create(builder, loc, immShift, shiftAmt);
+      auto result =
+          V_ASHRREV_I32::create(builder, loc, vregType, shiftConst, *lhs);
+      ctx.getMapper().mapValue(divOp.getResult(), result);
+      return success();
+    }
+  }
+
+  return op->emitError("signed integer division by non-power-of-2 is not "
+                       "yet implemented; divisor must be a positive power of 2");
 }
 
 LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
