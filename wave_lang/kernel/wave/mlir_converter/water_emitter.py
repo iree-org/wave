@@ -7,9 +7,7 @@ mlir operations of wave and other dialects.
 """
 
 from __future__ import annotations
-import argparse
 import dill
-import struct
 import sys
 import torch.fx as fx
 from pathlib import Path
@@ -293,51 +291,6 @@ def _type_to_wave_mlir(
             ctx, type_.symbolic_shape, type_.dtype, address_space_attr
         )
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
-
-
-def _parse_input() -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, str]:
-    """Parses and returns the pickled trace, options, and pipeline from stdin.
-
-    The input is expected to be a dill-serialized dict with keys:
-    - "trace": CapturedTrace object
-    - "constraints": list[Constraint]
-    - "options": WaveCompileOptions
-    - "pipeline": A string containing the transform dialect pass pipeline
-
-    Restores supplemental fx.Node fields (e.g., .type) from node.meta.
-    """
-    try:
-        unpickled = dill.loads(sys.stdin.buffer.read())
-    except Exception as e:
-        raise SystemExit(f"FATAL: failed to unpickle: {e}")
-    trace = unpickled.get("trace") if isinstance(unpickled, dict) else None
-    constraints = unpickled.get("constraints") if isinstance(unpickled, dict) else None
-    options = unpickled.get("options") if isinstance(unpickled, dict) else None
-    pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
-
-    if not isinstance(trace, CapturedTrace):
-        raise SystemExit(
-            f"FATAL: unpickled object is not CapturedTrace (got {type(trace)})"
-        )
-
-    if not isinstance(constraints, list) or not all(
-        isinstance(c, Constraint) for c in constraints
-    ):
-        raise SystemExit(
-            f"FATAL: unpickled object is not list of Constraints (got {type(constraints)})"
-        )
-
-    if not isinstance(options, WaveCompileOptions):
-        raise SystemExit(
-            f"FATAL: unpickled object is not WaveCompileOptions (got {type(options)})"
-        )
-
-    if not isinstance(pipeline, str):
-        raise SystemExit(f"FATAL: unpickled object is not str (got {type(pipeline)})")
-
-    # Restore supplemental node fields captured in the meta field
-    trace.restore_node_state()
-    return trace, constraints, options, pipeline
 
 
 def _convert_sympy_expr_to_affine_map(
@@ -1283,22 +1236,6 @@ _INTERNAL_WATER_ID_ATTR_NAME = "_water_internal.id"
 _INTERNAL_RESULT_WATER_IRS_ATTR_NAME = "_water_internal.result_ids"
 
 
-def _emit_from_captured_trace(
-    trace: CapturedTrace,
-    constraints: list[Constraint],
-    options: WaveCompileOptions,
-    pipeline: str = "",
-    *,
-    test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
-) -> int:
-    response_data = _build_response(
-        trace, constraints, options, pipeline, test_diagnostics
-    )
-    sys.stdout.buffer.write(response_data)
-    sys.stdout.flush()
-    return 0
-
-
 def _build_response(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -1485,13 +1422,6 @@ def _server_mode() -> int:
     module imports each time), the parent keeps this process alive and
     sends multiple requests over the same stdin/stdout pipes.
 
-    Wire protocol (both directions):
-        [4-byte native uint32 length][length bytes of dill payload]
-
-    We use native byte order because both ends run on the same machine.
-    `=I` is Python `struct` notation for native-byte-order (`=`)
-    unsigned 32-bit integer (`I`), supporting payloads up to ~4 GB.
-
     Each request payload is a dill-serialized dict with the same keys as
     in single-shot mode (trace, constraints, options, pipeline, ...).
     Each response payload is a dill-serialized dict with keys
@@ -1500,23 +1430,24 @@ def _server_mode() -> int:
     The loop exits when stdin is closed (EOF on the length header), i.e.
     when the parent closes its end of the pipe.
     """
-
-    # "=I" = native-byte-order unsigned 32-bit integer (4 bytes).
-    header_fmt = "=I"
-    header_size = struct.calcsize(header_fmt)
+    from wave_lang.kernel.wave.mlir_converter.protocol import (
+        recv_message,
+        send_message,
+    )
 
     saved_recursion_limit = sys.getrecursionlimit()
 
     while True:
-        # Read the 4-byte length header for the next request.
-        header = sys.stdin.buffer.read(header_size)
-        if len(header) < header_size:
-            break  # Parent closed stdin -- shut down.
-
-        (length,) = struct.unpack(header_fmt, header)
-        raw_request = sys.stdin.buffer.read(length)
-        if len(raw_request) < length:
-            break  # Truncated payload -- parent died mid-write.
+        try:
+            raw_request = recv_message(sys.stdin.buffer)
+        except EOFError:
+            break  # Parent closed stdin, clean shutdown.
+        except ConnectionError as e:
+            # The parent likely crashed mid-write. The response pipe is
+            # broken so we can't send a diagnostic back, stderr is
+            # best-effort.
+            print(f"WARNING: {e}", file=sys.stderr)
+            break
 
         # dill.loads walks the object graph recursively and can exceed the
         # default 1000-frame limit for large kernels (e.g. attention).
@@ -1551,41 +1482,10 @@ def _server_mode() -> int:
         except Exception as e:
             response_data = _serialize_response("", [WaterError(message=str(e))], None)
 
-        # Write the length-prefixed response.
-        sys.stdout.buffer.write(struct.pack(header_fmt, len(response_data)))
-        sys.stdout.buffer.write(response_data)
-        sys.stdout.buffer.flush()
+        send_message(sys.stdout.buffer, response_data)
 
     return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Water dialect emitter")
-
-    parser.add_argument(
-        "--test-diagnostic-emission",
-        choices=[m.value for m in WaterDiagTestingMode],
-        default=WaterDiagTestingMode.NO.value,
-        help="Test diagnostic serialization and deserialization through stdin and stdout",
-    )
-    parser.add_argument(
-        "--server",
-        action="store_true",
-        help="Run in persistent server mode (length-prefixed protocol on stdin/stdout)",
-    )
-
-    args = parser.parse_args()
-
-    if args.server:
-        sys.exit(_server_mode())
-
-    trace, constraints, options, pass_pipeline = _parse_input()
-    sys.exit(
-        _emit_from_captured_trace(
-            trace,
-            constraints,
-            options,
-            pass_pipeline,
-            test_diagnostics=WaterDiagTestingMode(args.test_diagnostic_emission),
-        )
-    )
+    sys.exit(_server_mode())

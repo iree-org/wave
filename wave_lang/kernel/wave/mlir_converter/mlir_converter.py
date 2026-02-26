@@ -8,20 +8,16 @@
 Bidirectional converter between Wave FX traces and Wave MLIR.
 
 Both directions run in a subprocess to isolate the Water MLIR Python bindings
-from the host process.
+from the host process.  Use `PersistentEmitter` as a context manager to keep
+the subprocesses alive and amortize the ~2 s import overhead across calls.
 
-`emit_wave_dialect` serializes a CapturedTrace via dill, spawns
-`water_emitter.py`, and returns the MLIR module text.
-
-`mlir_to_fx` sends MLIR text to `fx_emitter.py` and returns a
-reconstructed CapturedTrace with constraints and compile options.
-
-For repeated conversions (e.g. roundtrip tests), use `PersistentEmitter`
-to keep the subprocesses alive and amortize the ~2s import overhead.
+Usage:
+    with PersistentEmitter() as emitter:
+        mlir, diags, attrs = emitter.emit_wave_dialect(trace, constraints, options)
+        trace2, cons2, opts2, diags2 = emitter.mlir_to_fx(mlir)
 """
 
 import linecache
-import struct
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -233,23 +229,13 @@ module attributes {transform.with_named_sequence} {
 }"""
 
 
-def _start_emitter(
-    script_name: str,
-    *,
-    server: bool = False,
-    extra_args: list[str] | None = None,
-) -> subprocess.Popen:
+def _start_emitter(script_name: str) -> subprocess.Popen:
     """Locate and spawn an emitter subprocess."""
     child = Path(__file__).with_name(script_name)
     if not child.exists():
         raise RuntimeError(f"Emitter helper not found: {child}")
-    args = [sys.executable, str(child)]
-    if server:
-        args.append("--server")
-    if extra_args:
-        args.extend(extra_args)
     return subprocess.Popen(
-        args,
+        [sys.executable, str(child)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -342,153 +328,7 @@ def _unpack_fx_response(
     return response.trace, response.constraints, response.options, response.diagnostics
 
 
-# ---------------------------------------------------------------------------
-# Standalone (one-shot) entry points
-# ---------------------------------------------------------------------------
-
-
-def emit_wave_dialect(
-    trace: CapturedTrace,
-    constraints: list[Constraint],
-    options: WaveCompileOptions,
-    pipeline: str = "",
-    *,
-    test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
-) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
-    """Emit Wave MLIR by sending the pickled trace and options to the emitter.
-
-    The `subs` field of options is the only option used during emission. If
-    `pipeline` is provided, it must be a parsable MLIR transform module
-    containing a transform.named_sequence to be applied to the emitted module
-    via the Transform dialect interpreter.
-
-    Returns:
-        A tuple of:
-        - The string representation of the MLIR module if all stages succeeded.
-        - A list of MLIRDiagnostic or WaterError instances.
-        - A dict of inferred attributes per water ID.
-    """
-    extra_args = (
-        [f"--test-diagnostic-emission={test_diagnostic_emission.value}"]
-        if test_diagnostic_emission
-        else []
-    )
-    proc = _start_emitter("water_emitter.py", extra_args=extra_args)
-    request = _prepare_water_request(
-        trace, constraints, options, test_diagnostic_emission, pipeline
-    )
-    output, err = proc.communicate(request)
-
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n"
-            f"{err.decode('utf-8', errors='replace')}\n"
-            f"{output.decode('utf-8', errors='replace')}"
-        )
-
-    try:
-        result = _unpack_water_response(output)
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to process water_emitter output (code {proc.returncode}):\n"
-            f"Output: {output!r}"
-        ) from e
-
-    # Preserve stderr messages.
-    if err:
-        print(err.decode("utf-8", errors="replace"), file=sys.stderr)
-
-    return result
-
-
-def mlir_to_fx(
-    mlir_text: str,
-) -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, list[MLIRDiagnostic]]:
-    """Convert Wave MLIR text back into a Wave FX trace via subprocess.
-
-    Spawns `fx_emitter.py`, sends the MLIR text over stdin, and returns
-    the reconstructed FX graph together with its associated metadata.
-
-    Args:
-        mlir_text: Textual representation of a Wave MLIR module containing a
-            single function with Wave dialect operations.
-
-    Returns:
-        A 4-tuple of:
-        - trace: The reconstructed `CapturedTrace` (FX graph with subgraphs).
-        - constraints: Wave constraints extracted from the function attributes
-          (workgroup, wave, tiling, device, and hardware constraints).
-        - options: `WaveCompileOptions` with hyperparameters recovered from
-          the `wave.hyperparameters` function attribute.
-        - diagnostics: List of `MLIRDiagnostic` instances (errors, warnings,
-          remarks) collected during parsing, verification, and conversion.
-
-    Raises:
-        RuntimeError: If the subprocess exits with a non-zero code or the
-            response cannot be unpickled / validated.
-    """
-    if not isinstance(mlir_text, str):
-        raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
-    proc = _start_emitter("fx_emitter.py")
-    output, err = proc.communicate(dill.dumps({"mlir": mlir_text}))
-    if proc.returncode != 0:
-        diagnostics: list[MLIRDiagnostic] = []
-        try:
-            response = dill.loads(output)
-            if isinstance(response, FxEmitterResponse):
-                diagnostics = response.diagnostics
-        except Exception:
-            pass
-        diag_text = (
-            f"\n{format_diagnostics(diagnostics, use_color=False)}"
-            if diagnostics
-            else ""
-        )
-        raise RuntimeError(
-            f"fx_emitter failed (code {proc.returncode}):\n"
-            f"{err.decode('utf-8', errors='replace')}{diag_text}"
-        )
-    try:
-        return _unpack_fx_response(output)
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to process fx_emitter output (code {proc.returncode}):\n"
-            f"Output: {output!r}"
-        ) from e
-
-
-# ---------------------------------------------------------------------------
-# Length-prefixed protocol for persistent subprocess mode
-# ---------------------------------------------------------------------------
-#
-# Wire format (same in both directions):
-#
-#     [4-byte native uint32 length][length bytes of dill payload]
-#
-# We use native byte order ("=") because both ends run on the same machine.
-# uint32 ("I") supports payloads up to ~4 GB which is more than enough
-
-_HEADER_FMT = "=I"
-_HEADER_SIZE = struct.calcsize(_HEADER_FMT)
-
-
-def send_message(pipe, data: bytes) -> None:
-    """Write a length-prefixed message to `pipe`."""
-    pipe.write(struct.pack(_HEADER_FMT, len(data)))
-    pipe.write(data)
-    pipe.flush()
-
-
-def recv_message(pipe) -> bytes:
-    """Read a length-prefixed message from `pipe`."""
-    header = pipe.read(_HEADER_SIZE)
-    if len(header) < _HEADER_SIZE:
-        raise EOFError("Subprocess closed the connection")
-    (length,) = struct.unpack(_HEADER_FMT, header)
-    data = pipe.read(length)
-    if len(data) < length:
-        raise EOFError("Incomplete message from subprocess")
-    return data
+from wave_lang.kernel.wave.mlir_converter.protocol import recv_message, send_message
 
 
 # ---------------------------------------------------------------------------
@@ -518,8 +358,8 @@ class PersistentEmitter:
     # -- lifecycle ------------------------------------------------------------
 
     def __enter__(self) -> "PersistentEmitter":
-        self._water_proc = _start_emitter("water_emitter.py", server=True)
-        self._fx_proc = _start_emitter("fx_emitter.py", server=True)
+        self._water_proc = _start_emitter("water_emitter.py")
+        self._fx_proc = _start_emitter("fx_emitter.py")
         return self
 
     def __exit__(self, *exc) -> None:

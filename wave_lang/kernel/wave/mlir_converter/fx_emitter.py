@@ -14,6 +14,11 @@ from pathlib import Path
 
 import dill
 
+from wave_lang.kernel.wave.mlir_converter.protocol import (
+    recv_message,
+    send_message,
+)
+
 if __name__ == "__main__":
     # Add parent directory to sys.path to enable relative imports when running standalone.
     # This allows importing water_mlir from ../water_mlir/ as if it were a relative import.
@@ -1076,35 +1081,24 @@ def _server_mode() -> int:
     Instead of spawning a fresh process per request, the parent keeps this
     process alive and sends multiple requests over the same stdin/stdout pipes.
 
-    Wire protocol (both directions):
-        [4-byte native uint32 length][length bytes of dill payload]
-
-    We use native byte order because both ends run on the same machine.
-    `=I` is Python `struct` notation for native-byte-order (`=`)
-    unsigned 32-bit integer (`I`), supporting payloads up to ~4 GB.
-
     Each request payload is a dill-serialized dict with an `"mlir"` key.
     Each response payload is a dill-serialized `FxEmitterResponse`.
 
     The loop exits when stdin is closed (EOF on the length header), i.e.
     when the parent closes its end of the pipe.
     """
-    import struct
-
-    # "=I" = native-byte-order unsigned 32-bit integer (4 bytes).
-    header_fmt = "=I"
-    header_size = struct.calcsize(header_fmt)
 
     while True:
-        # Read the 4-byte length header for the next request.
-        header = sys.stdin.buffer.read(header_size)
-        if len(header) < header_size:
-            break  # Parent closed stdin -- shut down.
-
-        (length,) = struct.unpack(header_fmt, header)
-        raw_request = sys.stdin.buffer.read(length)
-        if len(raw_request) < length:
-            break  # Truncated payload -- parent died mid-write.
+        try:
+            raw_request = recv_message(sys.stdin.buffer)
+        except EOFError:
+            break  # Parent closed stdin, clean shutdown.
+        except ConnectionError as e:
+            # The parent likely crashed mid-write. The response pipe is
+            # broken so we can't send a diagnostic back, stderr is
+            # best-effort.
+            print(f"WARNING: {e}", file=sys.stderr)
+            break
 
         try:
             request = dill.loads(raw_request)
@@ -1121,53 +1115,10 @@ def _server_mode() -> int:
 
         response_data = _process_single_request(mlir_text)
 
-        # Write the length-prefixed response.
-        sys.stdout.buffer.write(struct.pack(header_fmt, len(response_data)))
-        sys.stdout.buffer.write(response_data)
-        sys.stdout.buffer.flush()
+        send_message(sys.stdout.buffer, response_data)
 
     return 0
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="FX emitter (MLIR -> FX)")
-    parser.add_argument(
-        "--server",
-        action="store_true",
-        help="Run in persistent server mode (length-prefixed protocol on stdin/stdout)",
-    )
-    args = parser.parse_args()
-
-    if args.server:
-        sys.exit(_server_mode())
-
-    try:
-        request = dill.loads(sys.stdin.buffer.read())
-    except Exception as e:
-        sys.stderr.write(f"FATAL: failed to unpickle input: {e}\n")
-        sys.exit(1)
-
-    mlir_text = request.get("mlir") if isinstance(request, dict) else None
-    if not isinstance(mlir_text, str):
-        sys.stderr.write(
-            f"FATAL: expected 'mlir' string in request, got: {type(mlir_text)}\n"
-        )
-        sys.exit(1)
-
-    response_data = _process_single_request(mlir_text)
-    has_error = False
-    try:
-        response = dill.loads(response_data)
-        has_error = any(
-            d.severity == "ERROR"
-            for d in response.diagnostics
-            if hasattr(d, "severity")
-        )
-    except Exception:
-        has_error = True
-
-    sys.stdout.buffer.write(response_data)
-    sys.stdout.flush()
-    sys.exit(1 if has_error else 0)
+    sys.exit(_server_mode())

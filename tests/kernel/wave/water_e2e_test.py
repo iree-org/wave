@@ -5,7 +5,7 @@ from torch.testing import assert_close
 
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import PersistentEmitter
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -46,9 +46,10 @@ def _run_matmul_water_e2e(minimize_shared_allocs: bool):
     trace = compiled_kernel.compiled_graph
     constraints = gemm.constraints
 
-    wave_dialect_mlir, diagnostics, _ = emit_wave_dialect(
-        trace, constraints, options_mlir
-    )
+    with PersistentEmitter() as emitter:
+        wave_dialect_mlir, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options_mlir
+        )
 
     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
 
