@@ -48,6 +48,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     LocationFrame,
     MLIRDiagnostic,
     NameLocation,
+    WaterDiagTestingMode,
     WaterError,
 )
 from wave_lang.support.location_config import LocationCaptureLevel
@@ -1120,15 +1121,6 @@ def _flush_output(
     sys.stdout.flush()
 
 
-from enum import Enum
-
-
-class WaterDiagTestingMode(Enum):
-    NO = "no"
-    DIRECT = "direct"
-    VERIFIER = "verifier"
-
-
 def _create_kernel_module(
     ctx: ir.Context,
     trace: CapturedTrace,
@@ -1171,6 +1163,8 @@ def _create_kernel_module(
     module = ir.Module.create()
 
     if test_diagnostics == WaterDiagTestingMode.DIRECT:
+        # A suitable location is the first non-placeholder op (placeholders use
+        # "name" locations that are near-useless).
         candidates = trace.walk(
             lambda n: not isinstance(get_custom(n), Placeholder)
             and get_custom(n).location

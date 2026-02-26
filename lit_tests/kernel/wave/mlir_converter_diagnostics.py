@@ -20,6 +20,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     FileLocation,
     NameLocation,
     MLIRDiagnostic,
+    WaterDiagTestingMode,
     WaterError,
 )
 from wave_lang.kernel.wave.utils.general_utils import run_test
@@ -81,15 +82,14 @@ SUBS: dict[str | IndexSymbol, Any] = {
 
 
 def compile_and_emit_diagnostics(
-    location_level: LocationCaptureLevel, test_diagnostic_emission: str
+    location_level: LocationCaptureLevel, test_diagnostic_emission: WaterDiagTestingMode
 ) -> list[MLIRDiagnostic | WaterError]:
     """Helper to compile kernel and emit diagnostics with given location level.
 
     Args:
         location_level: The LocationCaptureLevel to use for capturing locations.
         test_diagnostic_emission: Kind of diagnostics to emit to test the
-            mechanics of diagnostic emission. Must be one of the values of
-            WaterDiagTestingMode.
+            mechanics of diagnostic emission.
 
     Returns:
         List of MLIRDiagnostic or WaterError objects.
@@ -127,7 +127,7 @@ def test_location_capture_none():
     unknown location.
     """
     diagnostics = compile_and_emit_diagnostics(
-        LocationCaptureLevel.NONE, test_diagnostic_emission="direct"
+        LocationCaptureLevel.NONE, test_diagnostic_emission=WaterDiagTestingMode.DIRECT
     )
 
     assert len(diagnostics) > 0, "Expected at least one diagnostic"
@@ -156,7 +156,8 @@ def test_location_capture_none():
 def test_location_capture_file_line_col():
     """Test diagnostics with LocationCaptureLevel.FILE_LINE_COL - single location."""
     diagnostics = compile_and_emit_diagnostics(
-        LocationCaptureLevel.FILE_LINE_COL, test_diagnostic_emission="direct"
+        LocationCaptureLevel.FILE_LINE_COL,
+        test_diagnostic_emission=WaterDiagTestingMode.DIRECT,
     )
 
     assert len(diagnostics) > 0, "Expected at least one diagnostic"
@@ -182,7 +183,7 @@ def test_location_capture_file_line_col():
     # CHECK-LABEL: test_location_capture_file_line_col
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 61
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 62
     # CHECK:     a_reg = wave.read(a)
     # CHECK: location frame count: 1
     # CHECK: first frame type: file
@@ -194,7 +195,8 @@ def test_location_capture_file_line_col():
 def test_location_capture_stack_trace():
     """Test diagnostics with LocationCaptureLevel.STACK_TRACE - multiple frames."""
     diagnostics = compile_and_emit_diagnostics(
-        LocationCaptureLevel.STACK_TRACE, test_diagnostic_emission="direct"
+        LocationCaptureLevel.STACK_TRACE,
+        test_diagnostic_emission=WaterDiagTestingMode.DIRECT,
     )
 
     assert len(diagnostics) > 0, "Expected at least one diagnostic"
@@ -204,7 +206,7 @@ def test_location_capture_stack_trace():
     # Verify we have location frames
     diag = diagnostics[0]
     location = diag.location
-    print(f"location frame count: {len(location)}")
+    assert len(location) > 1, "Expected a stack trace."
 
     # CHECK-LABEL: test_location_capture_stack_trace
     # CHECK: ERROR: test error
@@ -215,17 +217,16 @@ def test_location_capture_stack_trace():
     # CHECK:     diagnostics = compile_and_emit_diagnostics
     # CHECK:   File "{{.*}}mlir_converter_diagnostics.py"
     # CHECK:     compiled_kernel = wave_compile(options, matrix_add)
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 61
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 62
     # CHECK:     a_reg = wave.read
-    # CHECK: location frame count:
-    # CHECK-NOT: 1
 
 
 @run_test
 def test_location_capture_stack_trace_with_system():
     """Test diagnostics with LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM."""
     diagnostics = compile_and_emit_diagnostics(
-        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM, test_diagnostic_emission="direct"
+        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM,
+        test_diagnostic_emission=WaterDiagTestingMode.DIRECT,
     )
 
     assert len(diagnostics) > 0, "Expected at least one diagnostic"
@@ -235,7 +236,7 @@ def test_location_capture_stack_trace_with_system():
     # Verify we have location frames
     diag = diagnostics[0]
     location = diag.location
-    print(f"location frame count: {len(location)}")
+    assert len(location) > 0, "Expected a stack trace."
 
     # When system frames are preserved, we should see them in the stack trace,
     # in particular check for the `capture_location` function that should
@@ -244,17 +245,16 @@ def test_location_capture_stack_trace_with_system():
     # CHECK-LABEL: test_location_capture_stack_trace_with_system
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
-    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 61
+    # CHECK:   File "{{.*}}mlir_converter_diagnostics.py", line 62
     # CHECK:   File "{{.*}}wave_lang/kernel/ops/wave_ops.py"
     # CHECK:     capture_location
-    # CHECK: location frame count:
-    # CHECK-NOT: {{1$}}
 
 
 @run_test
 def test_verification_failure():
     diagnostics = compile_and_emit_diagnostics(
-        LocationCaptureLevel.NONE, test_diagnostic_emission="verifier"
+        LocationCaptureLevel.NONE,
+        test_diagnostic_emission=WaterDiagTestingMode.VERIFIER,
     )
     assert len(diagnostics) > 0, "Expected at least one diagnostic"
     # CHECK-LABEL: test_verification_failure

@@ -31,6 +31,7 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     FileLocation,
     MLIRDiagnostic,
     NameLocation,
+    WaterDiagTestingMode,
     WaterError,
 )
 
@@ -216,7 +217,7 @@ def emit_wave_dialect(
     options: WaveCompileOptions,
     pipeline: str = "",
     *,
-    test_diagnostic_emission: str = "no",
+    test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
 ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
@@ -242,7 +243,7 @@ def emit_wave_dialect(
     args = [sys.executable, str(child)]
 
     if test_diagnostic_emission:
-        args.append(f"--test-diagnostic-emission={test_diagnostic_emission}")
+        args.append(f"--test-diagnostic-emission={test_diagnostic_emission.value}")
 
     proc = subprocess.Popen(
         args,
