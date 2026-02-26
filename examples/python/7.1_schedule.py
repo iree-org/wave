@@ -31,6 +31,7 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
     b_preshuffle,
     e8m0_shuffle,
 )
+import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from utils import parse_args, list_tests, run_test
 
@@ -204,8 +205,13 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
 def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256)
 ):
-    """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
+    """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend with dynamic M/N/K."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    # Make M, N, K dynamic so the compiler does not specialize on problem size.
+    dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+    for sym in dynamic_symbols:
+        del options.subs[sym]
+    options.dynamic_symbols = dynamic_symbols
     options.backend = "asm"
     options.wave_runtime = True
     options.use_wave_asm_backend = True

@@ -813,8 +813,29 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             return muli_expr(lhs, rhs)
 
     def _rem(lhs, rhs):
-        assert not isinstance(lhs, _Rational) and not isinstance(rhs, _Rational)
-
+        # Lift rationals to a common denominator so Mod operates on integers.
+        # Mod(a/b, c) = Mod(a, b*c) / b
+        # Mod(x, c/d) = Mod(x*d, c) / d
+        # Mod(a/b, c/d) = Mod(a*d, b*c) / (b*d)
+        is_rat_l = isinstance(lhs, _Rational)
+        is_rat_r = isinstance(rhs, _Rational)
+        if is_rat_l and is_rat_r:
+            num = rem_expr(
+                muli_expr(lhs.numerator, rhs.denominator),
+                muli_expr(lhs.denominator, rhs.numerator),
+            )
+            den = muli_expr(lhs.denominator, rhs.denominator)
+            return _Rational(num, den)
+        if is_rat_l:
+            return _Rational(
+                rem_expr(lhs.numerator, muli_expr(lhs.denominator, rhs)),
+                lhs.denominator,
+            )
+        if is_rat_r:
+            return _Rational(
+                rem_expr(muli_expr(lhs, rhs.denominator), rhs.numerator),
+                rhs.denominator,
+            )
         return rem_expr(lhs, rhs)
 
     def _floordiv(lhs, rhs):
@@ -919,8 +940,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             case sympy.Mod():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
                 stack.append(_rem(lhs, rhs))
             case sympy.floor():
                 stack.append(_floor(stack.pop()))
@@ -1102,8 +1121,13 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             case _:
                 raise CodegenError(f"Can not handle {type(term)} : {term}")
 
-    if len(stack) != 1 or isinstance(stack[0], _Rational):
+    if len(stack) != 1:
         raise CodegenError(f"Expected single result, got {stack} for {expr}")
+
+    # Resolve a leftover rational (e.g. K/2 with dynamic K) into a divsi.
+    if isinstance(stack[0], _Rational):
+        r = stack[0]
+        return arith_d.divsi(_get_ir_value(r.numerator), _get_ir_value(r.denominator))
 
     return _get_ir_value(stack[0])
 

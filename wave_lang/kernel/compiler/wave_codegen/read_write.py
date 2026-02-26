@@ -593,6 +593,7 @@ def _create_vec_read_write(
     zero = get_constant_attr(0, element_type)
     zero = arith_d.constant(element_type, zero)
 
+    offset_th = None
     if mask is None:
         mask_vec_type = VectorType.get(
             [elements_per_thread], IntegerType.get_signless(1)
