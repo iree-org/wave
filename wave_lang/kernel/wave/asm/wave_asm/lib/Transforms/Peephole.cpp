@@ -699,24 +699,14 @@ struct AddNegToSubPattern : public OpRewritePattern<V_ADD_U32> {
 // 2. Uses hardware's native inline constant support
 //===----------------------------------------------------------------------===//
 
-struct MFMAZeroAccumPattern : public RewritePattern {
-  MFMAZeroAccumPattern(MLIRContext *ctx)
-      : RewritePattern(MatchAnyOpTypeTag{}, /*benefit=*/1, ctx) {}
+struct MFMAZeroAccumPattern
+    : public OpInterfaceRewritePattern<MFMAOpInterface> {
+  using OpInterfaceRewritePattern<MFMAOpInterface>::OpInterfaceRewritePattern;
 
-  LogicalResult matchAndRewrite(Operation *op,
+  LogicalResult matchAndRewrite(MFMAOpInterface mfmaOp,
                                 PatternRewriter &rewriter) const override {
-    // Check if this is an MFMA operation (has TiedOperandIndex attribute)
-    // MFMA ops have 3 operands: a, b, acc
-    if (op->getNumOperands() != 3 || op->getNumResults() != 1)
-      return failure();
-
-    // Check for MFMA ops by name pattern
-    StringRef opName = op->getName().getStringRef();
-    if (!opName.contains("mfma"))
-      return failure();
-
-    // Get the accumulator operand (operand index 2)
-    Value accum = op->getOperand(2);
+    // Get the accumulator operand using the named accessor
+    Value accum = mfmaOp.getAcc();
 
     // Check if accumulator comes from a v_mov_b32 of zero
     auto movOp = accum.getDefiningOp<V_MOV_B32>();
@@ -738,12 +728,14 @@ struct MFMAZeroAccumPattern : public RewritePattern {
       return failure();
 
     // Replace the accumulator with an inline zero constant
+    Operation *op = mfmaOp.getOperation();
     auto loc = op->getLoc();
     auto immType = rewriter.getType<ImmType>(0);
     auto zeroConst = ConstantOp::create(rewriter, loc, immType, 0);
 
-    // Update the MFMA's accumulator operand
-    op->setOperand(2, zeroConst);
+    // Update the MFMA's accumulator operand (operand index from interface)
+    rewriter.modifyOpInPlace(
+        op, [&]() { op->setOperand(mfmaOp.getTiedOperandIndex(), zeroConst); });
 
     return success();
   }

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
+#include "waveasm/Dialect/WaveASMInterfaces.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 #include "waveasm/Transforms/Liveness.h"
@@ -115,13 +116,13 @@ private:
     return nullptr;
   }
 
-  /// Get the accumulator operand from an MFMA op (always operand index 2).
-  /// Returns nullptr if the operation doesn't have enough operands.
+  /// Get the accumulator operand from an MFMA op using the interface.
+  /// Returns nullptr if the operation is not an MFMA.
   Value getMFMAAccumulator(Operation *op) {
-    if (op->getNumOperands() < 3) {
-      return nullptr;
+    if (auto mfmaOp = dyn_cast<MFMAOpInterface>(op)) {
+      return mfmaOp.getAcc();
     }
-    return op->getOperand(2); // acc is the third operand
+    return nullptr;
   }
 
   LogicalResult processProgram(ProgramOp program) {
@@ -171,9 +172,9 @@ private:
         for (int64_t i = 0; i < size; ++i) {
           reservedAGPRs.insert(physIdx + i);
         }
-      } else if (op->hasTrait<OpTrait::MFMAOp>() && op->getNumResults() > 0) {
+      } else if (auto mfmaOp = dyn_cast<MFMAOpInterface>(op)) {
         // For MFMA with VGPR accumulator, tie result to accumulator
-        Value acc = getMFMAAccumulator(op);
+        Value acc = mfmaOp.getAcc();
         if (!acc) {
           op->emitError() << "MFMA operation must have at least 3 operands "
                           << "(A, B, accumulator), but found "

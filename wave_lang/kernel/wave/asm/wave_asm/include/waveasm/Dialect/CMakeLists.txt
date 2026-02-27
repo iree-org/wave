@@ -43,6 +43,8 @@ add_public_tablegen_target(MLIRWaveASMAttrsIncGen)
 set(LLVM_TARGET_DEFINITIONS WaveASMInterfaces.td)
 mlir_tablegen(WaveASMAttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(WaveASMAttrInterfaces.cpp.inc -gen-attr-interface-defs)
+mlir_tablegen(WaveASMOpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(WaveASMOpInterfaces.cpp.inc -gen-op-interface-defs)
 add_public_tablegen_target(MLIRWaveASMInterfacesIncGen)
 
 #-------------------------------------------------------------------------------
