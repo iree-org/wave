@@ -274,7 +274,7 @@ def _transform_scale_memory(
     global_symbolic_shape = global_type.symbolic_shape
     global_m_dim = infer_dim(global_symbolic_shape[0])
     global_k_dim = infer_dim(global_symbolic_shape[1])
-    global_k32_full = int(subs_idxc(global_symbolic_shape[1]))
+    global_k32_full = subs_idxc(global_symbolic_shape[1])
     element_type = sample_read.type.dtype
 
     global_index = remove_thread_indexing(sample_read.index)
