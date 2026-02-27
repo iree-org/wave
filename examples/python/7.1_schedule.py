@@ -178,7 +178,6 @@ def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
-    # options.linearize_shared_access = True
     schedule = get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger=True)
 
     options.print_ir_after = "all" if is_debug else []
