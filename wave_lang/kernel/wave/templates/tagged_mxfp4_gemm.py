@@ -35,6 +35,7 @@ def get_tagged_mxfp4_gemm(
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    dynamic_dims: bool = False,
     reorder_workgroups=True,
     group_size_n=32,
 ):
@@ -117,6 +118,16 @@ def get_tagged_mxfp4_gemm(
         N: shape[1],
         K: shape[2],
     }
+
+    dynamic_symbols = []
+    if dynamic_dims:
+        dynamic_symbols.append(M)
+        dynamic_symbols.append(N)
+        dynamic_symbols.append(K)
+        del hyperparams[M]
+        del hyperparams[N]
+        del hyperparams[K]
+
     hyperparams.update(get_default_scheduling_params())
 
     options = WaveCompileOptions(
@@ -125,6 +136,7 @@ def get_tagged_mxfp4_gemm(
         schedule=SchedulingType.MANUAL,
         use_global_to_shared=True,
         minimize_shared_allocs=False,
+        dynamic_symbols=dynamic_symbols,
     )
 
     return gemm, options
@@ -136,6 +148,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    dynamic_dims: bool = False,
     reorder_workgroups=True,
     group_size_n=32,
 ):
@@ -185,6 +198,9 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         )
         constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
         constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
+
+    if dynamic_dims:
+        constraints += [tkw.Assumption(K > BLOCK_K * 4)]
 
     # --- B data preshuffle mapping (aiter shuffle_weight) ---
     # Each 16-row x 32-byte tile is reordered from [n, k_sub, k_elem] to
@@ -272,7 +288,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         ) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
-            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
+            a_scale_reg = tkw.read(a_scale, tag="read_a_scale")
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale")
             b_reg = tkw.read(b, mapping=b_preshuffle_mapping, tag="read_b")
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
@@ -300,12 +316,24 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     }
     hyperparams.update(get_default_scheduling_params())
 
+    dynamic_symbols = []
+    if dynamic_dims:
+        dynamic_symbols.append(M)
+        dynamic_symbols.append(N)
+        dynamic_symbols.append(K)
+        del hyperparams[M]
+        del hyperparams[N]
+        del hyperparams[K]
+        hyperparams[K_PACKED] = K // 2
+        hyperparams[K_SCALE_SHUFFLED] = (((K // 32) + 7) // 8) * 8
+
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         use_global_to_shared=True,
         minimize_shared_allocs=False,
+        dynamic_symbols=dynamic_symbols,
     )
 
     return gemm, options
