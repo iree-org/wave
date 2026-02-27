@@ -113,7 +113,7 @@ jobs:
       fail-fast: false
       matrix:
         version: [3.11]
-        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org, [rdna4, self-hosted, Linux, X64, shark49]] # nodai-amdgpu-mi250-x86-64
+        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org] # nodai-amdgpu-mi250-x86-64, [rdna4, self-hosted, Linux, X64, shark49]
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
     needs: build_llvm_linux
