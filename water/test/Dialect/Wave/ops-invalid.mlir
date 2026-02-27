@@ -503,6 +503,16 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_length_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>) {
+    // expected-error @below {{index attribute length (0) does not match the number of index expression values (1)}}
+    %0 = wave.read %mem index [] : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
   func.func @elements_per_thread_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}
@@ -1107,5 +1117,14 @@ func.func @reshape_target_vector_shape_spurious_dimension2(%arg0: !wave.tensor<[
 func.func @reshape_logical_slice_too_large(%arg0: vector<8xf32>) {
   // expected-error @below {{expected logical slice to be less than the number of slices}}
   wave.reshape %arg0 {target_vector_shape = {}, logical_slice = 2, num_slices = 2} : vector<8xf32> to vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of f32>) {
+  // expected-warning @below {{index attribute present but operation does not implement WaveInferIndexExprsOpInterface}}
+  // expected-error @below {{index attribute length (2) does not match the number of op results (1)}}
+  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] {index = [{}, {}]} : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return
 }

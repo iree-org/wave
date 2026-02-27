@@ -37,6 +37,20 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
+
+  auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
+  if (!iface) {
+    op->emitWarning() << "index attribute present but operation does not "
+                         "implement WaveInferIndexExprsOpInterface";
+    SmallVector<Value> values;
+    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
+    if (values.size() != arr.size()) {
+      return op->emitError() << "index attribute length (" << arr.size()
+                             << ") does not match the number of op results ("
+                             << values.size() << ")";
+    }
+  }
+
   SmallVector<DictionaryAttr> dicts;
   dicts.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
@@ -83,6 +97,18 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
         }
       }
     }
+  }
+
+  // When the operation implements WaveInferIndexExprsOpInterface, the index
+  // attribute length must match the number of values from
+  // getIndexExprValuesAndDescriptions.
+  llvm::SmallVector<Value> values;
+  iface.getIndexExprValuesAndDescriptions(values);
+  if (values.size() != arr.size()) {
+    return op->emitError() << WaveDialect::kIndexWaveExprListAttrName
+                           << " attribute length (" << arr.size()
+                           << ") does not match the number of index expression "
+                           << "values (" << values.size() << ")";
   }
   return success();
 }
@@ -1334,25 +1360,6 @@ llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
     return llvm::failure();
   }
   indexExprs.push_back(expr.getConcreteValue());
-  return llvm::success();
-}
-
-llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
-    Operation *op,
-    [[maybe_unused]] llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<Attribute> indexExprs;
-  indexExprs.reserve(resultExprs.size());
-  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
-    if (!llvm::isa<wave::WaveTensorType>(op->getResult(i).getType()))
-      continue;
-    if (failed(checkAndAppendIndexExpr(op->getLoc(), resultExprs[i],
-                                       "result #" + llvm::Twine(i),
-                                       indexExprs)))
-      return llvm::failure();
-  }
-  op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-              ArrayAttr::get(op->getContext(), indexExprs));
   return llvm::success();
 }
 
