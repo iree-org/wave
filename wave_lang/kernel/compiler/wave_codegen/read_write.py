@@ -225,6 +225,7 @@ def _build_mask(
     elements_per_thread: int,
     bounds: Optional[dict[IndexSymbol, IndexExpr]],
     dynamic_values: dict[IndexExpr, Any] = {},
+    scalarize: bool = False,
 ) -> Optional[OpResult]:
     if not bounds:
         return None
@@ -233,6 +234,25 @@ def _build_mask(
     fastest_dim = get_fastest_index(index)
     last_dim = list(index)[fastest_dim]
     new_index = {k: _get_start_index(v) for k, v in index.items()}
+
+    if scalarize:
+        # Build mask from per-element scalar comparisons to avoid vector ops.
+        subs = add_emitter_subs(emitter, dynamic_values)
+        base = new_index[last_dim]
+        i1 = IntegerType.get_signless(1)
+        bits = []
+        for i in range(elements_per_thread):
+            new_index[last_dim] = base + i
+            elem_expr = functools.reduce(
+                lambda a, b: sympy.And(a, b),
+                (new_index[dim] < bound for dim, bound in bounds.items()),
+            )
+            bits.append(gen_sympy_index(subs, elem_expr))
+        new_index[last_dim] = base
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        return vector_d.from_elements(mask_vec_type, bits)
 
     new_index[last_dim] = new_index[last_dim] + idxc.iota(elements_per_thread)
 
@@ -600,14 +620,6 @@ def _create_vec_read_write(
         )
         mask = _constant_mask(mask_vec_type)
 
-    # make offsets 0, 1, 2 ...
-    offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
-    vals = [IntegerAttr.get(IndexType.get(), v) for v in range(elements_per_thread)]
-
-    offsets_vec = arith_d.constant(
-        offsets_vec_type, DenseElementsAttr.get(vals, offsets_vec_type)
-    )
-
     if buffer_ops_enabled:
         mem, offset_th = _linearize_memref(
             mem, start_indices_wg, start_indices_th, strides
@@ -623,49 +635,28 @@ def _create_vec_read_write(
     )
 
     if no_masked_load_store_ops:
-        # find the index at which memory out of bounds of buffer
+        # Out-of-bounds index causes hardware to return zero.
         oob_index_value = _get_out_of_bounds_index(element_type)
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
 
-        oob_index = vector_d.broadcast(
-            VectorType.get(vector_type.shape, IndexType.get()), oob_index
-        )
-
-        offset_th = vector_d.broadcast(
-            VectorType.get(vector_type.shape, IndexType.get()), offset_th
-        )
-
-        uint32_vec_type = VectorType.get([elements_per_thread], uint32)
-        indexvec_type = VectorType.get([elements_per_thread], IndexType.get())
-
-        offsets_vec = arith_d.index_cast(uint32_vec_type, offsets_vec)
-        offset_th = arith_d.index_cast(uint32_vec_type, offset_th)
-
-        # add the thread offset and the vec offsets
-        offsets_vec = arith_d.addi(offsets_vec, offset_th)
-        offsets_vec = arith_d.index_cast(indexvec_type, offsets_vec)
-
-        # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
-        selected_index = arith_d.select(mask, offsets_vec, oob_index)
-        elems = list()
-
         if splatted_mask:
-            # mask is same for all of them, can just pick the first index
-            selected_index = extract(selected_index, 0)
-
+            # Mask is uniform — select once and do a single vector load/store.
+            selected_index = arith_d.select(mask_splat, offset_th, oob_index)
             if is_read:
                 return vector_d.load(vector_type, mem, indices=[selected_index])
-
             else:
                 vector_d.store(value, mem, indices=[selected_index])
                 return
 
+        # Per-element scalar index computation avoids vector broadcasts.
+        elems = list()
+        singlenumvec_type = VectorType.get([1], vector_type.element_type)
         for i in range(elements_per_thread):
-            # mask is not same for all elements, need to unroll
-            this_index = extract(selected_index, i)  # this element
+            i_const = arith_d.constant(IndexType.get(), i)
+            elem_offset = arith_d.addi(offset_th, i_const)
+            mask_bit = extract(mask, i)
+            this_index = arith_d.select(mask_bit, elem_offset, oob_index)
 
-            # Unmasked load, using selected_index
-            singlenumvec_type = VectorType.get([1], vector_type.element_type)
             if is_read:
                 elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
                 elem = extract(elem, 0)
@@ -676,10 +667,8 @@ def _create_vec_read_write(
                 vector_d.store(single_num_vector, mem, indices=[this_index])
 
         if is_read:
-            # now make a vector from all the elements loaded
             return vector_d.from_elements(vector_type, elems)
-
-        else:  # it was a store, return
+        else:
             return
 
     else:
@@ -702,6 +691,7 @@ def _build_mask_with_mapping(
     elements_per_thread: int,
     bounds: Optional[tuple[IndexSymbol, ...]],
     dynamic_vals_map: dict[IndexExpr, Value],
+    scalarize: bool = False,
 ) -> Optional[Value]:
     """
     Build a mask for read/write operations, when a mapping is used
@@ -733,9 +723,12 @@ def _build_mask_with_mapping(
             elements_per_thread,
             bounds,
             dynamic_vals_map,
+            scalarize=scalarize,
         )
     else:
-        return _build_mask(emitter, index, elements_per_thread, bounds)
+        return _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize
+        )
 
 
 @handle_op(read)
@@ -764,6 +757,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
+    is_global_mem = kb_ir_type.memory_space is None
+    scalarize_mask = emitter.options.use_buffer_ops and is_global_mem
+
     if mapping:
         transformed_index = transform_index_on_mapping(
             mapping, input_shape, index, is_read=True
@@ -777,10 +773,13 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             bounds,
             dynamic_vals_map_start,
+            scalarize=scalarize_mask,
         )
         index = transformed_index
     else:
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        mask = _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize_mask
+        )
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
@@ -855,6 +854,9 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
     element_type = kb_ir_type.element_type
 
+    is_global_mem = kb_ir_type.memory_space is None
+    scalarize_mask = emitter.options.use_buffer_ops and is_global_mem
+
     if mapping:
         transformed_index = transform_index_on_mapping(
             mapping, output_shape, index, is_read=False
@@ -868,10 +870,13 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             bounds,
             dynamic_vals_map_start,
+            scalarize=scalarize_mask,
         )
         index = transformed_index
     else:
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        mask = _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize_mask
+        )
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
