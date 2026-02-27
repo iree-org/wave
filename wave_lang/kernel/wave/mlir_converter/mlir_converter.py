@@ -20,6 +20,7 @@ Usage:
 import linecache
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -227,16 +228,26 @@ module attributes {transform.with_named_sequence} {
 }"""
 
 
-def _start_emitter(script_name: str) -> subprocess.Popen:
+def _start_emitter(script_name: str) -> subprocess.Popen[bytes]:
     """Locate and spawn an emitter subprocess."""
     child = Path(__file__).with_name(script_name)
     if not child.exists():
         raise RuntimeError(f"Emitter helper not found: {child}")
+    # Stderr is inherited from the parent so it is captured automatically.
     return subprocess.Popen(
         [sys.executable, str(child)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
     )
+
+
+def _subprocess_crash_diagnostic(
+    label: str, proc: subprocess.Popen[bytes]
+) -> WaterError:
+    """Build a WaterError diagnostic for a crashed emitter subprocess."""
+    rc = proc.poll()
+    status = f"exit code {rc}" if rc is not None else "still running"
+    return WaterError(message=f"{label} subprocess died ({status}).")
 
 
 def _prepare_water_request(
@@ -329,6 +340,13 @@ class PersistentEmitter:
     Subprocesses are started lazily on first use, so callers that only need
     one direction (e.g. FX -> MLIR) don't pay for the other subprocess.
 
+    Thread-safe: a lock serialises the entire send-request/receive-response
+    cycle so a single instance can be shared across threads.  This prevents
+    both protocol corruption (interleaved writes) and response mix-ups
+    (thread A receiving thread B's response).  However, concurrent callers
+    are serialised -- for true parallelism, use one PersistentEmitter per
+    thread.
+
     Can be used as a context manager for automatic cleanup, or standalone
     with an explicit `close()` call (e.g. via `atexit`):
 
@@ -343,8 +361,9 @@ class PersistentEmitter:
     """
 
     def __init__(self) -> None:
-        self._water_proc: subprocess.Popen | None = None
-        self._fx_proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+        self._water_proc: subprocess.Popen[bytes] | None = None
+        self._fx_proc: subprocess.Popen[bytes] | None = None
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -366,12 +385,12 @@ class PersistentEmitter:
         self._water_proc = None
         self._fx_proc = None
 
-    def _get_water_proc(self) -> subprocess.Popen:
+    def _get_water_proc(self) -> subprocess.Popen[bytes]:
         if self._water_proc is None or self._water_proc.poll() is not None:
             self._water_proc = _start_emitter("water_emitter.py")
         return self._water_proc
 
-    def _get_fx_proc(self) -> subprocess.Popen:
+    def _get_fx_proc(self) -> subprocess.Popen[bytes]:
         if self._fx_proc is None or self._fx_proc.poll() is not None:
             self._fx_proc = _start_emitter("fx_emitter.py")
         return self._fx_proc
@@ -387,12 +406,17 @@ class PersistentEmitter:
         pipeline: str = "",
     ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
         """Emit Wave MLIR from a traced FX graph."""
-        proc = self._get_water_proc()
         request = _prepare_water_request(
             trace, constraints, options, test_diagnostic_emission, pipeline
         )
-        send_message(proc.stdin, request)
-        return _unpack_water_response(recv_message(proc.stdout))
+        with self._lock:
+            proc = self._get_water_proc()
+            try:
+                send_message(proc.stdin, request)
+                return _unpack_water_response(recv_message(proc.stdout))
+            except (EOFError, OSError):
+                diag = _subprocess_crash_diagnostic("water_emitter", proc)
+                return ("", [diag], {})
 
     def mlir_to_fx(
         self,
@@ -406,6 +430,11 @@ class PersistentEmitter:
         """Convert Wave MLIR text back into a Wave FX trace."""
         if not isinstance(mlir_text, str):
             raise ValueError(f"Expected MLIR text as str, got: {type(mlir_text)}")
-        proc = self._get_fx_proc()
-        send_message(proc.stdin, dill_util.dumps({"mlir": mlir_text}))
-        return _unpack_fx_response(recv_message(proc.stdout))
+        with self._lock:
+            proc = self._get_fx_proc()
+            try:
+                send_message(proc.stdin, dill_util.dumps({"mlir": mlir_text}))
+                return _unpack_fx_response(recv_message(proc.stdout))
+            except (EOFError, OSError):
+                diag = _subprocess_crash_diagnostic("fx_emitter", proc)
+                raise RuntimeError(format_error(diag, use_color=False))
