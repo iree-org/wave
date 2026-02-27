@@ -257,7 +257,9 @@ def _transform_scale_memory(
     elements_per_thread = 4
     num_waves = total_threads // threads_per_wave
     num_m_blocks = m_count // 32
-    num_dma_ops = max(1, num_m_blocks // num_waves)
+
+    # ensures we schedule enough DMA ops to cover all m-blocks even when num_m_blocks doesn't divide evenly by num_waves
+    num_dma_ops = max(1, (num_m_blocks + num_waves - 1) // num_waves)
 
     logger.info(
         f"DMA config: {num_waves} waves x {threads_per_wave} lanes, "
@@ -293,6 +295,11 @@ def _transform_scale_memory(
     common_id = None
     for op_i in range(num_dma_ops):
         b_index = op_i * num_waves + wave_id
+
+        # ensure we don't overflow the m-blocks
+        # Eg: num_m_blocks = 2 and 4 waves, b_index without clamping would be: 0, 1, 2, 3
+        # which would cause us to access m-blocks 2 and 3, which don't exist.
+        b_index = sympy.Min(b_index, num_m_blocks - 1)
 
         src_flat = (
             (sympy.floor(m_wg / 32) + b_index) * block_stride
