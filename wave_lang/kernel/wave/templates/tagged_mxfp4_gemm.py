@@ -136,6 +136,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    a_scale_preshuffle: bool = True,
     reorder_workgroups=True,
     group_size_n=32,
 ):
@@ -221,14 +222,17 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         + ((j_a % 32) // 16)
     )
 
-    a_scale_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={
-            M: a_scale_flat // K_SCALE_SHUFFLED,
-            K: a_scale_flat % K_SCALE_SHUFFLED,
-        },
-        outputs={K: i_a, M: j_a},
-    )
+    if a_scale_preshuffle:
+        a_scale_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                M: a_scale_flat // K_SCALE_SHUFFLED,
+                K: a_scale_flat % K_SCALE_SHUFFLED,
+            },
+            outputs={K: i_a, M: j_a},
+        )
+    else:
+        a_scale_mapping = None
 
     # --- B scale preshuffle mapping (e8m0_shuffle) ---
     # Maps logical (N, K/32) scale coordinates to the shuffled physical layout.

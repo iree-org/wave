@@ -770,6 +770,74 @@ def testScaledGemmMXFP4PreshuffleB(
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 
 
+MACROTILES_PRESHUFFLE = [
+    (256, 256, 128),
+    (256, 192, 128),
+    (256, 128, 128),
+    (128, 256, 128),
+    (128, 192, 128),
+    (128, 128, 256),
+    (128, 128, 128),
+    (64, 256, 128),
+    (64, 192, 256),
+    (64, 192, 128),
+    (64, 128, 256),
+    (64, 128, 128),
+    (64, 64, 128),
+    (32, 192, 256),
+    (32, 128, 256),
+    (32, 64, 256),
+]
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 1024, 8192)],
+)
+@pytest.mark.parametrize("block_shape", MACROTILES_PRESHUFFLE)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+@pytest.mark.parametrize("a_scale_preshuffle", [False])
+def testScaledGemmMXFP4PreshuffleMacrotiles(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    mfma_variant: ScaledMMAType,
+    a_scale_preshuffle: bool,
+):
+    """Preshuffle MXFP4 GEMM over macrotiles with a_scale_preshuffle on/off."""
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block_shape,
+        wave_shape=(1, 4),
+        mfma_variant=mfma_variant,
+        a_scale_preshuffle=a_scale_preshuffle,
+    )
+    schedule = get_mxfp4_asymmetric_schedule()
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    a_scale_arg = x_scales_ps if a_scale_preshuffle else x_scales
+    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
+    gemm(x, a_scale_arg, w_t_ps, w_scales_ps, out)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
 def get_gfx1250_scaled_gemm_mxfp4_template(
     shape: tuple[int], mfma_variant: ScaledMMAType, enable_scheduling: SchedulingType
 ) -> tuple[WaveCompileOptions, "LaunchableWave"]:
