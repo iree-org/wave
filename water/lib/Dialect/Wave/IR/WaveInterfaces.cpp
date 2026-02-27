@@ -40,8 +40,11 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 
   auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
   if (!iface) {
-    op->emitWarning() << "index attribute present but operation does not "
-                         "implement WaveInferIndexExprsOpInterface";
+    // XXX: cannot use op->emitWarning as that triggers the op verifier
+    // leading to infinite recursion.
+    emitWarning(op->getLoc())
+        << "index attribute present but operation does not "
+           "implement WaveInferIndexExprsOpInterface";
     SmallVector<Value> values;
     wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
     if (values.size() != arr.size()) {
@@ -102,13 +105,15 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // When the operation implements WaveInferIndexExprsOpInterface, the index
   // attribute length must match the number of values from
   // getIndexExprValuesAndDescriptions.
-  llvm::SmallVector<Value> values;
-  iface.getIndexExprValuesAndDescriptions(values);
-  if (values.size() != arr.size()) {
-    return op->emitError() << WaveDialect::kIndexWaveExprListAttrName
-                           << " attribute length (" << arr.size()
-                           << ") does not match the number of index expression "
-                           << "values (" << values.size() << ")";
+  if (iface) {
+    llvm::SmallVector<Value> values;
+    iface.getIndexExprValuesAndDescriptions(values);
+    if (values.size() != arr.size()) {
+      return op->emitError()
+             << WaveDialect::kIndexWaveExprListAttrName << " attribute length ("
+             << arr.size() << ") does not match the number of index expression "
+             << "values (" << values.size() << ")";
+    }
   }
   return success();
 }
