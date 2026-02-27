@@ -288,7 +288,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         ) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
-            a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
+            a_scale_reg = tkw.read(a_scale, tag="read_a_scale")
             a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale")
             b_reg = tkw.read(b, mapping=b_preshuffle_mapping, tag="read_b")
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
