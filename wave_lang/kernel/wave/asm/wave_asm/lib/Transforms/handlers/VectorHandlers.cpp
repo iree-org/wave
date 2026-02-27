@@ -270,4 +270,54 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
   return success();
 }
 
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
+  auto fromElemOp = cast<vector::FromElementsOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto resultType = fromElemOp.getType();
+  int64_t numElems = resultType.getNumElements();
+  int64_t elemBitWidth = resultType.getElementType().getIntOrFloatBitWidth();
+
+  // Number of sub-elements that pack into a single 32-bit VGPR.
+  int64_t elemsPerDword = 32 / elemBitWidth;
+  int64_t numDwords = (numElems + elemsPerDword - 1) / elemsPerDword;
+
+  SmallVector<Value> dwords;
+  for (int64_t d = 0; d < numDwords; ++d) {
+    Value packed;
+    for (int64_t e = 0; e < elemsPerDword; ++e) {
+      int64_t idx = d * elemsPerDword + e;
+      if (idx >= numElems)
+        break;
+
+      auto elem = ctx.getMapper().getMapped(fromElemOp.getElements()[idx]);
+      if (!elem)
+        return op->emitError("element not mapped at index ") << idx;
+
+      if (e == 0) {
+        packed = *elem;
+      } else {
+        // Pack into the next byte/halfword lane via shift-or.
+        int64_t shiftAmt = e * elemBitWidth;
+        auto shiftImm = ConstantOp::create(builder, loc,
+                                           ctx.createImmType(shiftAmt),
+                                           shiftAmt);
+        packed = V_LSHL_OR_B32::create(builder, loc, ctx.createVRegType(),
+                                       *elem, shiftImm, packed);
+      }
+    }
+    dwords.push_back(packed);
+  }
+
+  if (numDwords == 1) {
+    ctx.getMapper().mapValue(fromElemOp.getResult(), dwords[0]);
+  } else {
+    auto resultVRegType = ctx.createVRegType(numDwords, numDwords);
+    auto pack = PackOp::create(builder, loc, resultVRegType, dwords);
+    ctx.getMapper().mapValue(fromElemOp.getResult(), pack);
+  }
+  return success();
+}
+
 } // namespace waveasm

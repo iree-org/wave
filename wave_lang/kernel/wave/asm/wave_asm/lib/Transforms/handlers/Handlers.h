@@ -157,6 +157,8 @@ mlir::LogicalResult handleVectorFma(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleVectorReduction(mlir::Operation *op,
                                           TranslationContext &ctx);
+mlir::LogicalResult handleVectorFromElements(mlir::Operation *op,
+                                             TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Dialect Handlers
