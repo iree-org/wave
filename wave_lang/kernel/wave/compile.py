@@ -492,6 +492,9 @@ def build_graph_passes(
             partial(specialize_kernel, trace, launchable.constraints, options),
             partial(gather_to_shared, trace, launchable.constraints, options),
             partial(gather_to_shared_swizzling, trace, launchable.constraints, options),
+        ]
+    if options.optimization_level and options.enable_mark_hardware_transpose_candidates:
+        graph_passes += [
             partial(
                 mark_hardware_transpose_candidates,
                 trace,

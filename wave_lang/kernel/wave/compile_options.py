@@ -95,6 +95,7 @@ class WaveCompileOptions:
     scalarize_packed_math: bool = False
     coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
     enable_swizzle: bool = True
+    enable_mark_hardware_transpose_candidates: bool = True
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

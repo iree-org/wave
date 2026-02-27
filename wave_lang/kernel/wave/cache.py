@@ -202,6 +202,7 @@ class WaveCacheManager(object):
             options.iree_preprocessing_pass_pipeline,
             options.override_mlir,
             options.optimization_level,
+            options.enable_mark_hardware_transpose_candidates,
             options.denorm_fp_math_f32,
             options.waves_per_eu,
             options.iree_launch_async,
