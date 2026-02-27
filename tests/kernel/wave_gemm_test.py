@@ -41,12 +41,22 @@ from .common.utils import (
     require_rdna4,
     use_water_backend_bool,
 )
-from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
+from wave_lang.kernel.wave.constraints import (
+    MMAType,
+    MMAOperand,
+    GenericDot,
+    ScaledMMAType,
+)
+from wave_lang.kernel.wave.utils.mxfp_utils import (
+    generate_gemm_afp4wfp4_inputs,
+    torchScaledGemmMXFP4,
+)
 from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
     get_splitk_gemm_kernel,
+    get_splitk_mxfp4_gemm_kernel,
     get_streamk_gemm_kernel,
     get_hybrid_streamk_gemm_kernel,
     get_persistent_reordering_kernel,
@@ -3614,3 +3624,53 @@ def testSplitKGemm(
 
     torch_ref = a.cpu().to(torch.float32) @ b.cpu().T.to(torch.float32)
     assert_close(c.cpu(), torch_ref, rtol=1e-3, atol=1e-2)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape, num_splits",
+    [
+        ((256, 256, 256), 2),
+        ((256, 256, 512), 4),
+        ((256, 256, 1024), 4),
+        ((512, 512, 1024), 2),
+    ],
+)
+def testSplitKMxfp4Gemm(
+    shape: tuple[int, int, int],
+    num_splits: int,
+):
+    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+        shape,
+        num_splits=num_splits,
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+    splitk_gemm = wave_compile(options, splitk_gemm)
+
+    m, n, k = shape
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_gpu = x_scales.cuda()
+    w_scales_gpu = w_scales.cuda()
+    c_gpu = device_zeros(m, n, dtype=torch.bfloat16)
+
+    splitk_gemm(x_gpu, x_scales_gpu, w_t_gpu, w_scales_gpu, c_gpu)
+    # Each split accumulates a partial f32 sum, casts it to bf16, then atomically
+    # adds it into the bf16 output.  At partial-sum magnitudes of ~250-430 the bf16
+    # ULP is 2-4, so with 2-4 splits the worst-case absolute rounding error is
+    # num_splits * max_partial_magnitude * bf16_eps ≈ 4 * 430 * 2^-7 ≈ 13.
+    # Observed worst-case across all parametrized shapes is ~3, so atol=4.0 is
+    # generous but justified by the bf16 accumulation arithmetic.
+    assert_close(c_gpu.cpu().to(torch.float32), torch_ref, rtol=1e-1, atol=4.0)

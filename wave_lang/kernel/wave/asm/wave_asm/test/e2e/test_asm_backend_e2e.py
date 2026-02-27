@@ -1798,6 +1798,722 @@ def test_compare_backends_copy_kernel(shape, compiler):
 
 
 # =============================================================================
+# Test: Split-K MXFP4 GEMM with bf16 atomic add (buffer_atomic_pk_add_bf16)
+# =============================================================================
+
+
+@pytest.mark.run_e2e
+@pytest.mark.parametrize(
+    "shape,num_splits",
+    [
+        ((256, 256, 256), 2),
+    ],
+)
+def test_splitk_mxfp4_bf16_atomic_cpp_backend(
+    shape, num_splits, compiler, backend, dump_asm
+):
+    """End-to-end test for split-K MXFP4 GEMM with bf16 atomic accumulation.
+
+    Validates that the C++ WaveASM backend correctly emits the
+    buffer_atomic_pk_add_bf16 instruction for bf16 atomic add operations.
+
+    Requires CDNA4 (gfx950+) for both scaled MFMA and bf16 atomics.
+    """
+    if not is_cdna4():
+        pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    from wave_lang.kernel.lang.global_symbols import (
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.utils.mxfp_utils import (
+        generate_gemm_afp4wfp4_inputs,
+        torchScaledGemmMXFP4,
+    )
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+        shape,
+        num_splits=num_splits,
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+    )
+
+    # Override to use shared memory address space with global-to-shared loads,
+    # since the C++ backend doesn't yet support vector.maskedload (used by
+    # the global address space path).
+    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=True,
+    )
+    options = set_default_run_config(options)
+
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+
+    test_id = f"splitk_mxfp4_bf16_{shape[0]}x{shape[1]}x{shape[2]}_s{num_splits}"
+
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+
+    if dump_asm:
+        with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+            f.write(kernel_info.mlir_text)
+        if cpp_result.success:
+            with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+                f.write(cpp_result.asm_text)
+
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    # Verify the assembly contains buffer_atomic_pk_add_bf16
+    assert (
+        "buffer_atomic_pk_add_bf16" in cpp_result.asm_text
+    ), "Expected buffer_atomic_pk_add_bf16 in generated assembly"
+
+    m, n, k = shape
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_gpu = x_scales.cuda()
+    w_scales_gpu = w_scales.cuda()
+    c_gpu = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
+
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    run_with_wave_runtime(
+        binary_path=binary_path,
+        inputs=[x_gpu, x_scales_gpu, w_t_gpu, w_scales_gpu],
+        outputs=[c_gpu],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # BF16 atomic accumulation loses precision vs f32 reference:
+    # each split truncates f32→bf16 (up to 0.5 ULP) before the atomic add.
+    # atol=1.0 covers the worst-case bf16 ULP (0.5) at output magnitudes ~64.
+    assert_close(c_gpu.cpu().to(torch.float32), torch_ref, rtol=5e-2, atol=1.0)
+
+
+# =============================================================================
+# Test: Split-K MXFP4 Assembly Emission (Lit-style inspection test)
+# =============================================================================
+
+
+@pytest.mark.run_e2e
+@pytest.mark.parametrize(
+    "shape,num_splits",
+    [
+        ((256, 256, 256), 2),
+    ],
+)
+def test_splitk_mxfp4_bf16_asm_emission(shape, num_splits, compiler):
+    """Assembly emission test for split-K MXFP4 GEMM with bf16 atomics.
+
+    Captures MLIR from the splitk mxfp4 bf16 kernel, compiles it to
+    assembly via waveasm-translate, and validates the emitted instructions.
+    Both the MLIR and assembly are always saved to /tmp/ for inspection.
+
+    This serves as a lit-style test to see exactly what the C++ backend
+    emits for the full splitk mxfp4 bf16 atomic pipeline.
+
+    Requires CDNA4 (gfx950+) for both scaled MFMA and bf16 atomics.
+    """
+    if not is_cdna4():
+        pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import wave_lang.kernel.lang as tkl
+    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+        shape,
+        num_splits=num_splits,
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+    )
+
+    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=True,
+    )
+    options = set_default_run_config(options)
+
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+
+    test_id = (
+        f"splitk_mxfp4_bf16_asm_emission_{shape[0]}x{shape[1]}x{shape[2]}_s{num_splits}"
+    )
+
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+
+    # Always save MLIR and assembly for inspection
+    with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+        f.write(kernel_info.mlir_text)
+    if cpp_result.success:
+        with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+            f.write(cpp_result.asm_text)
+
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    asm = cpp_result.asm_text
+
+    # Validate expected instructions are present
+    assert (
+        "buffer_atomic_pk_add_bf16" in asm
+    ), "Expected buffer_atomic_pk_add_bf16 in assembly"
+    assert (
+        "v_mfma_scale_f32_16x16x128_f8f6f4" in asm
+    ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 in assembly"
+    assert "v_cvt_pk_bf16_f32" in asm, "Expected v_cvt_pk_bf16_f32 in assembly"
+
+    # Count key instructions for diagnostic output
+    lines = asm.split("\n")
+    atomic_count = sum(1 for l in lines if "buffer_atomic_pk_add_bf16" in l)
+    cvt_count = sum(1 for l in lines if "v_cvt_pk_bf16_f32" in l)
+    mfma_count = sum(1 for l in lines if "v_mfma_scale_f32_16x16x128_f8f6f4" in l)
+    total_lines = len(lines)
+
+    print(f"\n=== Assembly Emission Report ===")
+    print(f"  MLIR: /tmp/{test_id}_mlir.txt")
+    print(f"  Assembly: /tmp/{test_id}_cpp.s")
+    print(f"  Total assembly lines: {total_lines}")
+    print(f"  buffer_atomic_pk_add_bf16: {atomic_count}")
+    print(f"  v_cvt_pk_bf16_f32: {cvt_count}")
+    print(f"  v_mfma_scale_f32_16x16x128_f8f6f4: {mfma_count}")
+    print(f"================================\n")
+
+
+# =============================================================================
+# Test: Split-K MXFP4 GEMM with preshuffled scales
+# =============================================================================
+
+
+@pytest.mark.run_e2e
+@pytest.mark.parametrize(
+    "shape,num_splits",
+    [
+        ((512, 512, 2048), 2),
+        ((512, 512, 2048), 4),
+    ],
+)
+def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
+    shape, num_splits, compiler, backend, dump_asm
+):
+    """End-to-end test for split-K MXFP4 GEMM with preshuffled E8M0 scales.
+
+    Validates that the C++ WaveASM backend correctly handles
+    vector<4xi8> dword loads (buffer_load_dword) generated by the
+    e8m0_shuffle IndexMapping after merge_contiguous_reads combines scalar
+    scale reads into 4x vector loads, reading scales from global memory with
+    a non-trivial address computation (bypassing LDS).
+
+    BLOCK_K=256 is required so that each thread reads 8 scale elements
+    (256/32), which merge into 2 groups of 4 -> vector<4xi8>.  The
+    e8m0_shuffle layout also requires K/32 >= 64 (K >= 2048) for the
+    groups to land contiguously in the row-major scale tensor.
+
+    Requires CDNA4 (gfx950+) for scaled MFMA and bf16 atomics.
+    """
+    if not is_cdna4():
+        pytest.skip("MXFP4 with preshuffled scales requires gfx950+ (CDNA4)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    from wave_lang.kernel.lang.global_symbols import (
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.utils.mxfp_utils import (
+        e8m0_shuffle,
+        generate_gemm_afp4wfp4_inputs,
+        torchScaledGemmMXFP4,
+    )
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+        shape,
+        num_splits=num_splits,
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        preshuffle_scales=True,
+        block_shape=(128, 128, 256),
+    )
+
+    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=True,
+    )
+    options = set_default_run_config(options)
+
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+
+    m, n, k = shape
+    test_id = f"splitk_mxfp4_preshuffle_scales_{m}x{n}x{k}_s{num_splits}"
+
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+
+    if dump_asm:
+        with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+            f.write(kernel_info.mlir_text)
+        if cpp_result.success:
+            with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+                f.write(cpp_result.asm_text)
+
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    assert (
+        "buffer_atomic_pk_add_bf16" in cpp_result.asm_text
+    ), "Expected buffer_atomic_pk_add_bf16 in generated assembly"
+    assert (
+        "buffer_load_dword" in cpp_result.asm_text
+    ), "Expected buffer_load_dword (vector<4xi8>) for preshuffled scale reads"
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_scales_sh = e8m0_shuffle(x_scales)
+    w_scales_sh = e8m0_shuffle(w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_sh_gpu = x_scales_sh.cuda()
+    w_scales_sh_gpu = w_scales_sh.cuda()
+    c_gpu = torch.zeros(m, n, dtype=torch.bfloat16, device="cuda")
+
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    run_with_wave_runtime(
+        binary_path=binary_path,
+        inputs=[x_gpu, x_scales_sh_gpu, w_t_gpu, w_scales_sh_gpu],
+        outputs=[c_gpu],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Each split truncates f32→bf16 before the atomic add, so error
+    # grows roughly linearly with num_splits.
+    atol = max(2.0, num_splits * 1.0)
+    assert_close(c_gpu.cpu().to(torch.float32), torch_ref, rtol=5e-2, atol=atol)
+
+
+# =============================================================================
+# Test: Split-K MXFP4 GEMM with f32 output (buffer_atomic_add_f32)
+# =============================================================================
+
+
+@pytest.mark.run_e2e
+@pytest.mark.parametrize(
+    "shape,num_splits",
+    [
+        ((256, 256, 256), 1),
+        ((256, 256, 256), 2),
+    ],
+)
+def test_splitk_mxfp4_f32_atomic_cpp_backend(
+    shape, num_splits, compiler, backend, dump_asm
+):
+    """End-to-end test for split-K MXFP4 GEMM with f32 atomic accumulation.
+
+    Like test_splitk_mxfp4_bf16_atomic_cpp_backend but uses f32 output
+    (buffer_atomic_add_f32) instead of bf16 (buffer_atomic_pk_add_bf16).
+    This helps isolate whether issues are in the bf16 conversion/packing
+    path or in the split-K atomic accumulation logic itself.
+
+    Requires CDNA4 (gfx950+) for scaled MFMA.
+    """
+    if not is_cdna4():
+        pytest.skip("Split-K MXFP4 requires gfx950+ (CDNA4)")
+
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import math
+
+    import sympy
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+        WORKGROUP_2,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
+    from wave_lang.kernel.wave.utils.mxfp_utils import (
+        generate_gemm_afp4wfp4_inputs,
+        torchScaledGemmMXFP4,
+    )
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+
+    m, n, k = shape
+    block_shape = (128, 128, 128)
+    waves_per_block = (2, 2)
+    k_per_split = math.ceil(k / num_splits)
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    S = tkl.sym.S
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    BLOCK_S = tkl.sym.BLOCK_S
+    K_SPLIT_OFF = tkl.sym.K_SPLIT_OFF
+    K_SPLIT_LEN = tkl.sym.K_SPLIT_LEN
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WorkgroupConstraint(S, BLOCK_S, 2),
+        tkw.TilingConstraint(
+            K,
+            BLOCK_K,
+            iters=sympy.ceiling(K_SPLIT_LEN / BLOCK_K),
+            start=K_SPLIT_OFF,
+        ),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / waves_per_block[0])),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / waves_per_block[1])),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=ScaledMMAType.F32_16x16x128_F8F6F4,
+            vector_shapes={S: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def splitk_mxfp4_gemm_f32(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.atomic_add(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        BLOCK_S: 1,
+        M: m,
+        N: n,
+        K: k,
+        S: num_splits,
+        K_SPLIT_OFF: WORKGROUP_2 * k_per_split,
+        K_SPLIT_LEN: sympy.Min(K, (WORKGROUP_2 + 1) * k_per_split) - K_SPLIT_OFF,
+    }
+    for key, value in hyperparams.items():
+        if isinstance(value, sympy.Expr):
+            hyperparams[key] = value.subs(hyperparams)
+    hyperparams.update(get_default_scheduling_params())
+
+    hyperparams[ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=True,
+    )
+    options = set_default_run_config(options)
+
+    kernel_info = capture_wave_kernel_info(options, splitk_mxfp4_gemm_f32)
+
+    test_id = f"splitk_mxfp4_f32_{shape[0]}x{shape[1]}x{shape[2]}_s{num_splits}"
+
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+
+    if dump_asm:
+        with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+            f.write(kernel_info.mlir_text)
+        if cpp_result.success:
+            with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+                f.write(cpp_result.asm_text)
+
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    # Verify the assembly contains buffer_atomic_add_f32 (not bf16)
+    assert (
+        "buffer_atomic_add_f32" in cpp_result.asm_text
+    ), "Expected buffer_atomic_add_f32 in generated assembly"
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_gpu = x_scales.cuda()
+    w_scales_gpu = w_scales.cuda()
+    c_gpu = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    run_with_wave_runtime(
+        binary_path=binary_path,
+        inputs=[x_gpu, x_scales_gpu, w_t_gpu, w_scales_gpu],
+        outputs=[c_gpu],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    assert_close(c_gpu.cpu(), torch_ref, rtol=5e-2, atol=5e-2)
+
+
+# =============================================================================
+# Test: bf16 output GEMM without split-K
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "shape,block_k,config",
+    [
+        ((64, 64, 64), 16, (16, 16, 16, 16)),
+        ((256, 256, 128), 64, (32, 32, 16, 16)),
+    ],
+)
+@pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
+def test_bf16_gemm_cpp_backend(
+    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+):
+    """End-to-end test for GEMM with bf16 output (no split-K) using C++ ASM backend.
+
+    Computes in f32 via MFMA, casts to bf16, then writes to global memory.
+    Tests the arith.truncf (f32->bf16) + buffer_store path without atomics.
+
+    This helps isolate whether bf16 conversion and stores work correctly
+    outside of the atomic accumulation context.
+    """
+    skip_if_no_gpu()
+    skip_if_no_wave_lang()
+
+    import torch
+    from torch.testing import assert_close
+
+    import wave_lang.kernel.lang as tkl
+    import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
+    from wave_lang.kernel.wave.compile import WaveCompileOptions
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M_SYM = tkl.sym.BLOCK_M
+    BLOCK_N_SYM = tkl.sym.BLOCK_N
+    BLOCK_K_SYM = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    block_m, block_n, WAVE_M, WAVE_N = config
+    wave_size = 64
+
+    assert block_m % WAVE_M == 0
+    assert block_n % WAVE_N == 0
+
+    mma_type = tkw.MMAType.F32_16x16x16_F16
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N_SYM, 1),
+        tkw.TilingConstraint(K, BLOCK_K_SYM),
+        tkw.WaveConstraint(M, WAVE_M),
+        tkw.WaveConstraint(N, WAVE_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            mma_type=mma_type,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def bf16_gemm_kernel(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.bf16],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        repeat_bf16 = tkw.cast(repeat, tkl.bf16)
+        tkw.write(repeat_bf16, c)
+
+    m, n, k = shape
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.bfloat16)
+
+    options = WaveCompileOptions(
+        subs={
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M_SYM: block_m,
+            BLOCK_N_SYM: block_n,
+            BLOCK_K_SYM: block_k,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        use_global_to_shared=use_global_to_shared,
+    )
+    options = set_default_run_config(options)
+
+    kernel_info = capture_wave_kernel_info(options, bf16_gemm_kernel)
+
+    g2s_str = "g2s" if use_global_to_shared else "no_g2s"
+    test_id = f"bf16_gemm_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}"
+
+    cpp_result = None
+    if backend in ("cpp", "both"):
+        cpp_result = compiler.compile_full(
+            kernel_info.mlir_text, kernel_info.workgroup_size
+        )
+        if not cpp_result.success:
+            pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+
+    if dump_asm:
+        with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
+            f.write(kernel_info.mlir_text)
+        if cpp_result and cpp_result.asm_text:
+            with open(f"/tmp/{test_id}_cpp.s", "w") as f:
+                f.write(cpp_result.asm_text)
+
+    if cpp_result is None:
+        pytest.fail("No backend compiled successfully")
+
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    block = kernel_info.workgroup_size
+    lds_size = kernel_info.lds_size
+    grid = kernel_info.grid_size
+
+    run_with_wave_runtime(
+        binary_path=binary_path,
+        inputs=[a, b],
+        outputs=[c],
+        grid=grid,
+        block=block,
+        shared_memory_bytes=lds_size,
+        func_name=kernel_name,
+    )
+
+    # Validate: C = bf16(A @ B^T)
+    expected = torch.matmul(a.float(), b.float().T).to(torch.bfloat16)
+    assert_close(c, expected, atol=1e-2, rtol=1e-2)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 

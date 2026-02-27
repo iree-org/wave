@@ -412,8 +412,13 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
                      std::to_string(srcSrdBase + 1) + ", 0xffff";
   RawOp::create(builder, loc, and1);
 
+  // SRD word 1 upper bits: cache_swizzle_enable (bit 30) | stride (bits 29:16)
+  uint32_t srdWord1Upper =
+      (1u << 30) | (static_cast<uint32_t>(swizzleStride & 0x3FFF) << 16);
+  char hexBuf[16];
+  snprintf(hexBuf, sizeof(hexBuf), "0x%X", srdWord1Upper);
   std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                    std::to_string(newSrdBase + 1) + ", 0x40400000";
+                    std::to_string(newSrdBase + 1) + ", " + hexBuf;
   RawOp::create(builder, loc, or1);
 
   std::string mov2 =
@@ -1088,7 +1093,13 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
     BUFFER_ATOMIC_PK_ADD_BF16::create(builder, loc, packed, srd, alignedVoffset,
                                       alignedInstOffset);
   } else if (elementType.isF32()) {
-    BUFFER_ATOMIC_ADD_F32::create(builder, loc, *valueMapped, srd, voffset,
+    Value f32Value = *valueMapped;
+    if (isAGPRType(f32Value.getType())) {
+      auto vregType = ctx.createVRegType();
+      f32Value =
+          V_ACCVGPR_READ_B32::create(builder, loc, vregType, f32Value);
+    }
+    BUFFER_ATOMIC_ADD_F32::create(builder, loc, f32Value, srd, voffset,
                                   instOffset);
   } else {
     return op->emitError("unsupported element type for atomic_rmw: ")

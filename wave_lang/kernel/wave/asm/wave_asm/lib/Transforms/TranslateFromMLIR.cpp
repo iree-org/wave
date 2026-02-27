@@ -404,12 +404,31 @@ VOffsetResult computeVOffsetFromIndices(MemRefType memrefType,
 
 Value lookupSRD(Value memref, TranslationContext &ctx, Location loc) {
   auto &builder = ctx.getBuilder();
-  if (auto srdIdx = ctx.getSRDIndex(memref)) {
-    auto sregType = ctx.createSRegType(4, 4);
-    return PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
+
+  // Walk up through memref cast/reinterpret operations to find the
+  // underlying binding that has an SRD registered.  This handles the
+  // pattern:  binding.subspan -> reinterpret_cast -> vector.load
+  // where the SRD is registered on the binding result but the load
+  // uses the reinterpret_cast result.
+  Value current = memref;
+  while (current) {
+    if (auto srdIdx = ctx.getSRDIndex(current)) {
+      auto sregType = ctx.createSRegType(4, 4);
+      return PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
+    }
+    if (auto mapped = ctx.getMapper().getMapped(current))
+      return *mapped;
+
+    if (auto castOp = current.getDefiningOp<memref::ReinterpretCastOp>())
+      current = castOp.getSource();
+    else if (auto castOp = current.getDefiningOp<memref::CastOp>())
+      current = castOp.getSource();
+    else if (auto subviewOp = current.getDefiningOp<memref::SubViewOp>())
+      current = subviewOp.getSource();
+    else
+      break;
   }
-  if (auto mapped = ctx.getMapper().getMapped(memref))
-    return *mapped;
+
   auto sregType = ctx.createSRegType(4, 4);
   return PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
 }
