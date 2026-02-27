@@ -88,7 +88,7 @@ def test_dbuf_4wave_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm(
-    is_debug=False, shape=(16384, 16384, 16384), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger."""
     gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
