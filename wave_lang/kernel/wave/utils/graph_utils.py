@@ -692,9 +692,11 @@ def _check_graphs_equivalent(
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
 
-    # Auto-detect pre-canonical FX: if lhs has Iterate but no GetResult nodes,
-    # the source graph predates the add_get_results pass. Filter
-    # GetResult from both sides so they can be compared structurally.
+    # Auto-detect pre-canonical FX: if lhs has Iterate but no GetResult,
+    # add_get_results has not run yet. Filter GetResult from rhs so the
+    # two sides can be compared structurally.
+    # When both are present (proper canonical form), no filtering happens and
+    # GetResult nodes are compared normally on both sides.
     lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
     lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
     if lhs_has_iterate and not lhs_has_getresult:
