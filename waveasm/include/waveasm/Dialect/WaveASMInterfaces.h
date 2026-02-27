@@ -9,6 +9,9 @@
 
 #include "mlir/IR/OpDefinition.h"
 
+// Include generated op interfaces (MFMAOpInterface, etc.)
+#include "waveasm/Dialect/WaveASMOpInterfaces.h.inc"
+
 namespace mlir {
 namespace OpTrait {
 
@@ -25,9 +28,9 @@ namespace OpTrait {
 template <typename ConcreteType>
 class ArithmeticOp : public TraitBase<ConcreteType, ArithmeticOp> {};
 
-/// Trait for MFMA operations. This is orthogonal to CSE.
-template <typename ConcreteType>
-class MFMAOp : public TraitBase<ConcreteType, MFMAOp> {};
+// Note: MFMAOp is now an OpInterface (MFMAOpInterface) defined in
+// WaveASMInterfaces.td. The interface provides getA(), getB(), getAcc(),
+// getDst(), and getTiedOperandIndex() methods for MFMA operations.
 
 /// Trait for memory operations (loads/stores).
 /// These are NOT eligible for CSE.

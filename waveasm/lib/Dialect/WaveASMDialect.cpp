@@ -6,6 +6,7 @@
 
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMAttrs.h"
+#include "waveasm/Dialect/WaveASMInterfaces.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 
@@ -17,6 +18,9 @@ using namespace mlir;
 using namespace waveasm;
 
 #include "waveasm/Dialect/WaveASMDialect.cpp.inc"
+
+// Include OpInterface definitions
+#include "waveasm/Dialect/WaveASMOpInterfaces.cpp.inc"
 
 // Include full type and attribute definitions to make storage types complete
 #define GET_TYPEDEF_CLASSES

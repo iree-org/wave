@@ -114,10 +114,11 @@ KernelGenerator::materializeLiteralOperand(Value operand, int scratchIdx) {
 std::string KernelGenerator::emitBufferLoadLDS(Operation *op,
                                                llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
-  if (op->getNumOperands() >= 3) {
-    std::string voffset = resolveValue(op->getOperand(0));
-    std::string srd = resolveValue(op->getOperand(1));
-    std::string soffset = resolveValue(op->getOperand(2));
+  // Use VMEMToLDSLoadOpInterface to access operands by name
+  if (auto loadOp = dyn_cast<VMEMToLDSLoadOpInterface>(op)) {
+    std::string voffset = resolveValue(loadOp.getVoffset());
+    std::string srd = resolveValue(loadOp.getSrd());
+    std::string soffset = resolveValue(loadOp.getSoffset());
     result += " " + voffset + ", " + srd + ", " + soffset + " offen";
     if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
       int64_t offset = instOffsetAttr.getInt();
@@ -137,10 +138,11 @@ std::string KernelGenerator::emitBufferLoad(Operation *op,
   for (Value res : op->getResults()) {
     vdata = resolveValue(res);
   }
-  if (op->getNumOperands() >= 3) {
-    std::string voffset = resolveValue(op->getOperand(1));
-    std::string srd = resolveValue(op->getOperand(0));
-    std::string soffset = resolveValue(op->getOperand(2));
+  // Use VMEMLoadOpInterface to access operands by name
+  if (auto loadOp = dyn_cast<VMEMLoadOpInterface>(op)) {
+    std::string voffset = resolveValue(loadOp.getVoffset());
+    std::string srd = resolveValue(loadOp.getSaddr());
+    std::string soffset = resolveValue(loadOp.getSoffset());
     result +=
         " " + vdata + ", " + voffset + ", " + srd + ", " + soffset + " offen";
     if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
@@ -156,10 +158,11 @@ std::string KernelGenerator::emitBufferLoad(Operation *op,
 std::string KernelGenerator::emitBufferStore(Operation *op,
                                              llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
-  if (op->getNumOperands() >= 3) {
-    std::string vdata = resolveValue(op->getOperand(0));
-    std::string voffset = resolveValue(op->getOperand(2));
-    std::string srd = resolveValue(op->getOperand(1));
+  // Use VMEMStoreOpInterface to access operands by name
+  if (auto storeOp = dyn_cast<VMEMStoreOpInterface>(op)) {
+    std::string vdata = resolveValue(storeOp.getData());
+    std::string voffset = resolveValue(storeOp.getVoffset());
+    std::string srd = resolveValue(storeOp.getSaddr());
     result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
     if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
       int64_t offset = instOffsetAttr.getInt();
@@ -178,13 +181,11 @@ std::string KernelGenerator::emitGlobalLoad(Operation *op,
   for (Value res : op->getResults()) {
     vdata = resolveValue(res);
   }
-  if (op->getNumOperands() >= 2) {
-    std::string vaddr = resolveValue(op->getOperand(1));
-    std::string saddr = resolveValue(op->getOperand(0));
+  // Use VMEMLoadOpInterface to access operands by name
+  if (auto loadOp = dyn_cast<VMEMLoadOpInterface>(op)) {
+    std::string vaddr = resolveValue(loadOp.getVoffset());
+    std::string saddr = resolveValue(loadOp.getSaddr());
     result += " " + vdata + ", " + vaddr + ", " + saddr;
-  } else if (op->getNumOperands() >= 1) {
-    std::string vaddr = resolveValue(op->getOperand(0));
-    result += " " + vdata + ", " + vaddr + ", off";
   }
   return result;
 }
@@ -192,10 +193,11 @@ std::string KernelGenerator::emitGlobalLoad(Operation *op,
 std::string KernelGenerator::emitGlobalStore(Operation *op,
                                              llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
-  if (op->getNumOperands() >= 3) {
-    std::string vdata = resolveValue(op->getOperand(0));
-    std::string vaddr = resolveValue(op->getOperand(2));
-    std::string saddr = resolveValue(op->getOperand(1));
+  // Use VMEMStoreOpInterface to access operands by name
+  if (auto storeOp = dyn_cast<VMEMStoreOpInterface>(op)) {
+    std::string vdata = resolveValue(storeOp.getData());
+    std::string vaddr = resolveValue(storeOp.getVoffset());
+    std::string saddr = resolveValue(storeOp.getSaddr());
     result += " " + vaddr + ", " + vdata + ", " + saddr;
   }
   return result;
@@ -208,8 +210,9 @@ std::string KernelGenerator::emitLDSRead(Operation *op,
   for (Value res : op->getResults()) {
     vdst = resolveValue(res);
   }
-  if (op->getNumOperands() >= 1) {
-    std::string vaddr = resolveValue(op->getOperand(0));
+  // Use LDSLoadOpInterface to access operands by name
+  if (auto loadOp = dyn_cast<LDSLoadOpInterface>(op)) {
+    std::string vaddr = resolveValue(loadOp.getVaddr());
     result += " " + vdst + ", " + vaddr;
   }
   if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
@@ -224,9 +227,10 @@ std::string KernelGenerator::emitLDSRead(Operation *op,
 std::string KernelGenerator::emitLDSWrite(Operation *op,
                                           llvm::StringRef mnemonic) {
   std::string result = "  " + mnemonic.str();
-  if (op->getNumOperands() >= 2) {
-    std::string vaddr = resolveValue(op->getOperand(1));
-    std::string vdata = resolveValue(op->getOperand(0));
+  // Use LDSStoreOpInterface to access operands by name
+  if (auto storeOp = dyn_cast<LDSStoreOpInterface>(op)) {
+    std::string vaddr = resolveValue(storeOp.getVaddr());
+    std::string vdata = resolveValue(storeOp.getData());
     result += " " + vaddr + ", " + vdata;
   }
   if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
@@ -463,9 +467,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
       .Case<S_MOV_B32_M0>([&](S_MOV_B32_M0 movOp) {
         std::string result = "  s_mov_b32 m0";
-        if (movOp->getNumOperands() >= 1) {
-          result += ", " + resolveValue(movOp->getOperand(0));
-        }
+        result += ", " + resolveValue(movOp.getSrc());
         return result;
       })
 
