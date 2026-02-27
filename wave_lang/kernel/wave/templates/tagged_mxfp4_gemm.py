@@ -56,7 +56,7 @@ def get_tagged_mxfp4_gemm(
     Returns:
         (kernel_function, WaveCompileOptions)
     """
-    # Auto-select group_size_n (and whether reordering helps) if not specified.
+    # Auto-select group_size_n and determine whether reordering helps
     if reorder_workgroups:
         group_size_n, reorder_workgroups = compute_best_group_size_n(
             shape[0], shape[1], shape[2], block_shape[0], block_shape[1]
@@ -176,7 +176,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     Returns:
         (kernel_function, WaveCompileOptions)
     """
-    # Auto-select group_size_n (and whether reordering helps) if not specified.
+    # Auto-select group_size_n and determine whether reordering helps
     if reorder_workgroups:
         group_size_n, reorder_workgroups = compute_best_group_size_n(
             shape[0], shape[1], shape[2], block_shape[0], block_shape[1]
