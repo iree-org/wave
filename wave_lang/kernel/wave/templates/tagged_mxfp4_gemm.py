@@ -404,6 +404,10 @@ def compute_best_group_size_n(
     num_wg_0 = ceil(M / block_m)  # M-tiles
     num_wg_1 = ceil(N / block_n)  # N-tiles
 
+    total_wg = num_wg_0 * num_wg_1
+    if total_wg < num_xcds:  # fewer wgs than XCDs, model meaningless and reordering too
+        return 32, False
+
     candidates = [g for g in (16, 32, 64) if g % num_xcds == 0 and g <= num_wg_1]
     if not candidates:
         return num_xcds, False
