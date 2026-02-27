@@ -813,7 +813,29 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             return muli_expr(lhs, rhs)
 
     def _rem(lhs, rhs):
-        assert not isinstance(lhs, _Rational) and not isinstance(rhs, _Rational)
+        # Lift rationals to a common denominator so Mod operates on integers.
+        # Mod(a/b, c) = Mod(a, b*c) / b
+        # Mod(x, c/d) = Mod(x*d, c) / d
+        # Mod(a/b, c/d) = Mod(a*d, b*c) / (b*d)
+        is_rat_l = isinstance(lhs, _Rational)
+        is_rat_r = isinstance(rhs, _Rational)
+        if is_rat_l and is_rat_r:
+            num = rem_expr(
+                muli_expr(lhs.numerator, rhs.denominator),
+                muli_expr(lhs.denominator, rhs.numerator),
+            )
+            den = muli_expr(lhs.denominator, rhs.denominator)
+            return _Rational(num, den)
+        if is_rat_l:
+            return _Rational(
+                rem_expr(lhs.numerator, muli_expr(lhs.denominator, rhs)),
+                lhs.denominator,
+            )
+        if is_rat_r:
+            return _Rational(
+                rem_expr(muli_expr(lhs, rhs.denominator), rhs.numerator),
+                rhs.denominator,
+            )
 
         return rem_expr(lhs, rhs)
 
@@ -919,8 +941,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             case sympy.Mod():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
                 stack.append(_rem(lhs, rhs))
             case sympy.floor():
                 stack.append(_floor(stack.pop()))
