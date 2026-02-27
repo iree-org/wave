@@ -262,6 +262,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     for sym in dynamic_symbols:
         del options.subs[sym]
     options.dynamic_symbols = dynamic_symbols
+    options.use_buffer_ops = True
     options.backend = "asm"
     options.wave_runtime = True
     options.use_wave_asm_backend = True
