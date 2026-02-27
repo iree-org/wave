@@ -134,8 +134,219 @@ def WaveASM_TargetAttrInterface : AttrInterface<"TargetAttrInterface"> {
 // Trait for arithmetic/ALU operations that are pure and CSE-eligible
 def WaveASM_ArithmeticOp : NativeOpTrait<"ArithmeticOp">;
 
-// Trait for MFMA operations
-def WaveASM_MFMAOp : NativeOpTrait<"MFMAOp">;
+// Interface for MFMA operations - provides typed accessors for operands
+def WaveASM_MFMAOp : OpInterface<"MFMAOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for matrix fused multiply-add (MFMA) operations.
+    All MFMA ops have the same operand structure: a, b, acc -> dst.
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the first matrix operand (A).",
+      "::mlir::Value", "getA", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the second matrix operand (B).",
+      "::mlir::Value", "getB", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(1);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the accumulator operand.",
+      "::mlir::Value", "getAcc", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(2);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the destination/result value.",
+      "::mlir::Value", "getDst", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getResult(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the tied operand index (accumulator index for tying).",
+      "int", "getTiedOperandIndex", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return 2; // acc is always operand index 2
+      }]
+    >
+  ];
+}
+
+// Interface for VMEM load operations (buffer_load_*, global_load_*)
+// Provides typed accessors for saddr, voffset, soffset
+def WaveASM_VMEMLoadOp : OpInterface<"VMEMLoadOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for VMEM load operations (buffer and global loads).
+    Operands: saddr (SRD/pointer), voffset (per-lane offset), soffset (scalar offset).
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the buffer descriptor / address operand.",
+      "::mlir::Value", "getSaddr", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the vector offset operand.",
+      "::mlir::Value", "getVoffset", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(1);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the scalar offset operand.",
+      "::mlir::Value", "getSoffset", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(2);
+      }]
+    >
+  ];
+}
+
+// Interface for VMEM store operations (buffer_store_*, global_store_*)
+// Provides typed accessors for data, saddr, voffset
+def WaveASM_VMEMStoreOp : OpInterface<"VMEMStoreOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for VMEM store operations (buffer and global stores).
+    Operands: data (value to store), saddr (SRD/pointer), voffset (per-lane offset).
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the data operand (value to store).",
+      "::mlir::Value", "getData", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the buffer descriptor / address operand.",
+      "::mlir::Value", "getSaddr", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(1);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the vector offset operand.",
+      "::mlir::Value", "getVoffset", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(2);
+      }]
+    >
+  ];
+}
+
+// Interface for LDS load operations (ds_read_*)
+// Provides typed accessor for vaddr
+def WaveASM_LDSLoadOp : OpInterface<"LDSLoadOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for LDS load operations.
+    Operands: vaddr (LDS address).
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the LDS address operand.",
+      "::mlir::Value", "getVaddr", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >
+  ];
+}
+
+// Interface for LDS store operations (ds_write_*)
+// Provides typed accessors for data, vaddr
+def WaveASM_LDSStoreOp : OpInterface<"LDSStoreOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for LDS store operations.
+    Operands: data (value to store), vaddr (LDS address).
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the data operand (value to store).",
+      "::mlir::Value", "getData", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the LDS address operand.",
+      "::mlir::Value", "getVaddr", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(1);
+      }]
+    >
+  ];
+}
+
+// Interface for VMEM-to-LDS load operations (buffer_load_*_lds)
+// Provides typed accessors for voffset, srd, soffset
+// Note: Different operand order from VMEMLoadOp - voffset comes first
+def WaveASM_VMEMToLDSLoadOp : OpInterface<"VMEMToLDSLoadOpInterface"> {
+  let cppNamespace = "::waveasm";
+  let description = [{
+    Interface for VMEM-to-LDS (gather-to-LDS) load operations.
+    Operands: voffset (per-lane offset), srd (buffer descriptor), soffset (scalar offset).
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      "Get the vector offset operand.",
+      "::mlir::Value", "getVoffset", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(0);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the buffer descriptor operand.",
+      "::mlir::Value", "getSrd", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(1);
+      }]
+    >,
+    InterfaceMethod<
+      "Get the scalar offset operand.",
+      "::mlir::Value", "getSoffset", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return $_op->getOperand(2);
+      }]
+    >
+  ];
+}
 
 // Trait for memory operations (loads/stores)
 def WaveASM_MemoryOp : NativeOpTrait<"MemoryOp">;

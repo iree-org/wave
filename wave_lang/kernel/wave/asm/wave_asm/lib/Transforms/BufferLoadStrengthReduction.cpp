@@ -40,6 +40,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
+#include "waveasm/Dialect/WaveASMInterfaces.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 #include "waveasm/Transforms/Passes.h"
@@ -78,12 +79,28 @@ static bool isBufferLoadLDS(Operation *op) {
   return isa<BUFFER_LOAD_DWORD_LDS, BUFFER_LOAD_DWORDX4_LDS>(op);
 }
 
-// VMEMLoadOp:       (saddr=0, voffset=1, soffset=2).
-// VMEMToLDSLoadOp:  (voffset=0, srd=1, soffset=2).
+// Get voffset from load operation using interface.
+static Value getVoffset(Operation *op) {
+  if (auto vmemLoad = dyn_cast<VMEMLoadOpInterface>(op))
+    return vmemLoad.getVoffset();
+  if (auto ldsLoad = dyn_cast<VMEMToLDSLoadOpInterface>(op))
+    return ldsLoad.getVoffset();
+  return nullptr;
+}
+
+// Get SRD/saddr from load operation using interface.
+static Value getSrd(Operation *op) {
+  if (auto vmemLoad = dyn_cast<VMEMLoadOpInterface>(op))
+    return vmemLoad.getSaddr();
+  if (auto ldsLoad = dyn_cast<VMEMToLDSLoadOpInterface>(op))
+    return ldsLoad.getSrd();
+  return nullptr;
+}
+
+// Get voffset operand index for setOperand.
 static unsigned getVoffsetIdx(Operation *op) {
   return isBufferLoadLDS(op) ? 0 : 1;
 }
-static unsigned getSrdIdx(Operation *op) { return isBufferLoadLDS(op) ? 1 : 0; }
 
 static bool isDefinedInLoop(Value val, Region *loopRegion) {
   if (auto *defOp = val.getDefiningOp())
@@ -196,9 +213,9 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
-    if (isa<V_MOV_B32>(op)) {
+    if (auto movOp = dyn_cast<V_MOV_B32>(op)) {
       for (Value r : op->getResults())
-        delta[r] = getDelta(op->getOperand(0));
+        delta[r] = getDelta(movOp.getSrc());
       continue;
     }
 
@@ -209,44 +226,45 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       return amt;
     };
 
-    if (isa<V_ADD_U32, V_LSHL_ADD_U32>(op)) {
-      // v_add_u32(a, b) = a + b.
+    if (auto lshlAddOp = dyn_cast<V_LSHL_ADD_U32>(op)) {
       // v_lshl_add_u32(a, b, c) = (a << b) + c.
       // For lshl_add: treat as add(lshl(a, b), c) — but b must be constant
       // and IV-independent for the shift to be linear.
-      if (isa<V_LSHL_ADD_U32>(op)) {
-        int64_t dSrc = getDelta(op->getOperand(0));
-        int64_t dShift = getDelta(op->getOperand(1));
-        int64_t dAdd = getDelta(op->getOperand(2));
-        if (dShift != 0)
-          return std::nullopt;
-        auto shiftAmt = validShift(getConstantValue(op->getOperand(1)));
-        if (!shiftAmt)
-          return std::nullopt;
-        for (Value r : op->getResults())
-          delta[r] = (dSrc << *shiftAmt) + dAdd;
-      } else {
-        int64_t d = getDelta(op->getOperand(0)) + getDelta(op->getOperand(1));
-        for (Value r : op->getResults())
-          delta[r] = d;
-      }
+      int64_t dSrc = getDelta(lshlAddOp.getSrc0());
+      int64_t dShift = getDelta(lshlAddOp.getSrc1());
+      int64_t dAdd = getDelta(lshlAddOp.getSrc2());
+      if (dShift != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(lshlAddOp.getSrc1()));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = (dSrc << *shiftAmt) + dAdd;
       continue;
     }
 
-    if (isa<V_SUB_U32>(op)) {
-      int64_t d = getDelta(op->getOperand(0)) - getDelta(op->getOperand(1));
+    if (auto addOp = dyn_cast<V_ADD_U32>(op)) {
+      // v_add_u32(a, b) = a + b.
+      int64_t d = getDelta(addOp.getSrc0()) + getDelta(addOp.getSrc1());
       for (Value r : op->getResults())
         delta[r] = d;
       continue;
     }
 
-    if (isa<V_LSHLREV_B32>(op)) {
+    if (auto subOp = dyn_cast<V_SUB_U32>(op)) {
+      int64_t d = getDelta(subOp.getSrc0()) - getDelta(subOp.getSrc1());
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+
+    if (auto lshlrevOp = dyn_cast<V_LSHLREV_B32>(op)) {
       // lshlrev(amt, src) = src << amt.
-      int64_t dAmt = getDelta(op->getOperand(0));
-      int64_t dSrc = getDelta(op->getOperand(1));
+      int64_t dAmt = getDelta(lshlrevOp.getSrc0());
+      int64_t dSrc = getDelta(lshlrevOp.getSrc1());
       if (dAmt != 0)
         return std::nullopt;
-      auto shiftAmt = validShift(getConstantValue(op->getOperand(0)));
+      auto shiftAmt = validShift(getConstantValue(lshlrevOp.getSrc0()));
       if (!shiftAmt)
         return std::nullopt;
       for (Value r : op->getResults())
@@ -254,16 +272,16 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
-    if (isa<V_LSHL_OR_B32>(op)) {
+    if (auto lshlOrOp = dyn_cast<V_LSHL_OR_B32>(op)) {
       // lshl_or(src, amt, or_val) = (src << amt) | or_val.
       // In address computation, OR always has disjoint bits (packed fields),
       // so delta = (dSrc << amt) + dOr — same as lshl_add.
-      int64_t dSrc = getDelta(op->getOperand(0));
-      int64_t dShift = getDelta(op->getOperand(1));
-      int64_t dOr = getDelta(op->getOperand(2));
+      int64_t dSrc = getDelta(lshlOrOp.getSrc0());
+      int64_t dShift = getDelta(lshlOrOp.getSrc1());
+      int64_t dOr = getDelta(lshlOrOp.getSrc2());
       if (dShift != 0)
         return std::nullopt;
-      auto shiftAmt = validShift(getConstantValue(op->getOperand(1)));
+      auto shiftAmt = validShift(getConstantValue(lshlOrOp.getSrc1()));
       if (!shiftAmt)
         return std::nullopt;
       for (Value r : op->getResults())
@@ -271,10 +289,10 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
-    if (isa<V_MUL_LO_U32>(op)) {
+    if (auto mulOp = dyn_cast<V_MUL_LO_U32>(op)) {
       // Linear only if exactly one operand depends on IV.
-      int64_t d0 = getDelta(op->getOperand(0));
-      int64_t d1 = getDelta(op->getOperand(1));
+      int64_t d0 = getDelta(mulOp.getSrc0());
+      int64_t d1 = getDelta(mulOp.getSrc1());
       if (d0 != 0 && d1 != 0)
         return std::nullopt;
       if (d0 == 0 && d1 == 0) {
@@ -283,7 +301,7 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
         continue;
       }
       // One is IV-dependent, the other must be a known constant.
-      Value constOperand = d0 == 0 ? op->getOperand(0) : op->getOperand(1);
+      Value constOperand = d0 == 0 ? mulOp.getSrc0() : mulOp.getSrc1();
       int64_t dVar = d0 != 0 ? d0 : d1;
       auto constVal = getConstantValue(constOperand);
       if (!constVal)
@@ -293,16 +311,16 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
-    if (isa<V_LSHRREV_B32>(op)) {
+    if (auto lshrrevOp = dyn_cast<V_LSHRREV_B32>(op)) {
       // lshrrev(amt, src) = src >> amt.
       // Safe when delta(src) is exactly divisible by 2^amt — no bits lost.
       // Example: address chain does lshl 7 then lshr 8 with IV step 2:
       //   delta(src) = 2*128 = 256, shift = 8, 256 % 256 == 0 → delta = 1.
-      int64_t dAmt = getDelta(op->getOperand(0));
-      int64_t dSrc = getDelta(op->getOperand(1));
+      int64_t dAmt = getDelta(lshrrevOp.getSrc0());
+      int64_t dSrc = getDelta(lshrrevOp.getSrc1());
       if (dAmt != 0)
         return std::nullopt;
-      auto shiftAmt = validShift(getConstantValue(op->getOperand(0)));
+      auto shiftAmt = validShift(getConstantValue(lshrrevOp.getSrc0()));
       if (!shiftAmt)
         return std::nullopt;
       int64_t divisor = int64_t(1) << *shiftAmt;
@@ -363,8 +381,10 @@ static void applyStrengthReduction(LoopOp loopOp) {
     if (op.getNumOperands() < 3)
       continue;
 
-    Value voffset = op.getOperand(getVoffsetIdx(&op));
-    Value srd = op.getOperand(getSrdIdx(&op));
+    Value voffset = getVoffset(&op);
+    Value srd = getSrd(&op);
+    if (!voffset || !srd)
+      continue;
 
     if (!isDefinedInLoop(voffset, loopRegion))
       continue;

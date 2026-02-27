@@ -137,7 +137,7 @@ class MFMAOp<string mnemonic, int accSize, list<Trait> traits = []>
 // VMEM Load: results = load(saddr, voffset, soffset) with optional instruction offset.
 // effective_address = SRD_base + voffset + soffset.
 class VMEMLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp, WaveASM_VMEMLoadOp], traits)> {
   // voffset can be VGPR or immediate (for constant offsets).
   // soffset is an SGPR or immediate scalar offset (default 0).
   // instOffset is an optional immediate offset added to voffset (emitted as "offset:N").
@@ -155,7 +155,7 @@ class VMEMLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
 
 // VMEM Store: store(data, saddr, voffset) with optional instruction offset
 class VMEMStoreOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp, WaveASM_VMEMStoreOp], traits)> {
   // voffset can be VGPR or immediate (for constant offsets)
   // instOffset is an optional immediate offset added to voffset (emitted as "offset:N")
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
@@ -180,7 +180,7 @@ class SMEMLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
 // vaddr can be VGPR or immediate offset
 // offset is an optional immediate byte offset (for ds_read offset:N syntax)
 class LDSLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp, WaveASM_LDSLoadOp], traits)> {
   let arguments = (ins WaveASM_VRegOrImm:$vaddr,
                        OptionalAttr<I64Attr>:$offset);
   let results = (outs Variadic<WaveASM_AnyVGPR>:$results);
@@ -192,7 +192,7 @@ class LDSLoadOp<string mnemonic, int numResults, list<Trait> traits = []>
 // LDS Store: store(data, vaddr)
 // vaddr can be VGPR or immediate offset
 class LDSStoreOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp, WaveASM_LDSStoreOp], traits)> {
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_VRegOrImm:$vaddr);
   let assemblyFormat = "$data `,` $vaddr attr-dict `:` type($data) `,` type($vaddr)";
 }
@@ -861,7 +861,7 @@ def WaveASM_FLAT_LOAD_DWORDX4 : VMEMLoadOp<"flat_load_dwordx4", 4>;
 // VMEM-to-LDS Load: load from global to LDS (M0 contains LDS offset)
 // No VGPR result - data goes directly to LDS
 class VMEMToLDSLoadOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, traits> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_VMEMToLDSLoadOp], traits)> {
   let summary = "Load from global memory directly to LDS";
   let arguments = (ins
     WaveASM_VRegOrImm:$voffset,   // Global memory offset per lane
@@ -900,7 +900,7 @@ def WaveASM_S_MOV_B32_M0 : WAVEASMOp<"s_mov_b32_m0", [WaveASM_SpecialRegOp]> {
 // The instruction atomically adds both bf16 values to the corresponding
 // bf16 halves at the 32-bit aligned memory address.
 class VMEMAtomicOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_MemoryOp, WaveASM_VMEMStoreOp], traits)> {
   let arguments = (ins WaveASM_AnyVGPR:$data, WaveASM_AnySGPR:$saddr, WaveASM_VRegOrImm:$voffset,
                        DefaultValuedAttr<I64Attr, "0">:$instOffset);
   let assemblyFormat = "$data `,` $saddr `,` $voffset (`offset` `:` $instOffset^)? attr-dict `:` type($data) `,` type($saddr) `,` type($voffset)";
