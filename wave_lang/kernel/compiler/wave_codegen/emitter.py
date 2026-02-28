@@ -226,18 +226,14 @@ class WaveEmitter:
                     )
                     stride_arg_offset += rank
                     dyn_stride_sentinel = MemRefType.get_dynamic_stride_or_offset()
-                    if rank == 1:
-                        stride_vals = [arith_d.constant(IndexType.get(), 1)]
-                        static_strides = [1]
-                        layout = StridedLayoutAttr.get(offset=dyn_val, strides=[1])
-                    else:
-                        stride_vals = list(stride_args[:-1]) + [
-                            arith_d.constant(IndexType.get(), 1)
-                        ]
-                        static_strides = [dyn_stride_sentinel] * (rank - 1) + [1]
-                        layout = StridedLayoutAttr.get(
-                            offset=dyn_val, strides=static_strides
-                        )
+                    # Leading dims use dynamic stride args; innermost is always 1 (vector.load requirement).
+                    stride_vals = list(stride_args[:-1]) + [
+                        arith_d.constant(IndexType.get(), 1)
+                    ]
+                    static_strides = [dyn_stride_sentinel] * (rank - 1) + [1]
+                    layout = StridedLayoutAttr.get(
+                        offset=dyn_val, strides=static_strides
+                    )
                     memref_type = MemRefType.get(
                         static_sizes, element_type, layout=layout
                     )
