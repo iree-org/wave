@@ -728,7 +728,7 @@ def testScaledGemmMXFP4AsymmetricSchedule(
 )
 @pytest.mark.parametrize(
     "block_shape",
-    [(256, 256, 256)],
+    [(256, 256, 256), (64, 192, 256)],
 )
 @pytest.mark.parametrize(
     "mfma_variant",
