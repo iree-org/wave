@@ -94,12 +94,15 @@ def invoke_with_wave_runtime(
     kernel_args = wave_runtime.Int64Vector(kern_args)
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims[len(bound_scalar_symbols) :])
 
-    # Pass in strides from torch tensor metadata.
-    stride_values = []
-    for arg_tensor in chain(kernel_inputs, kernel_outputs):
-        for d in range(arg_tensor.dim()):
-            stride_values.append(arg_tensor.stride(d))
-    strides = wave_runtime.Int64Vector(stride_values)
+    # Pass strides only when kernel was compiled with dynamic strides (LLVM backend).
+    if options.wave_runtime and options.backend != "asm":
+        stride_values = []
+        for arg_tensor in chain(kernel_inputs, kernel_outputs):
+            for d in range(arg_tensor.dim()):
+                stride_values.append(arg_tensor.stride(d))
+        strides = wave_runtime.Int64Vector(stride_values)
+    else:
+        strides = wave_runtime.Int64Vector([])
 
     # Launch the kernel.
     wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, scalar_args, strides)
