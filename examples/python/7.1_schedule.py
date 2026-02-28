@@ -265,7 +265,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle_b(gemm, shape)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     print("MXFP GEMM preshuffle-B 4-wave (WaveASM backend) test passed!")
 
 
