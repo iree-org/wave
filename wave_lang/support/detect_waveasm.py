@@ -42,3 +42,16 @@ def get_waveasm_translate() -> str:
         raise RuntimeError("waveasm-translate binary not found")
 
     return path
+
+
+@lru_cache
+def get_clang() -> str:
+    """Returns the path to clang++ for assembling AMDGCN."""
+    path = find_binary("clang++")
+    if path is None:
+        raise RuntimeError(
+            "clang++ binary not found in waveasm package. "
+            "Build with WAVE_BUILD_WAVEASM=1 or ensure clang is in the LLVM build."
+        )
+
+    return path

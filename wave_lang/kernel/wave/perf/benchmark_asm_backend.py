@@ -31,7 +31,7 @@ by BLOCK_M/WAVE_M along M and BLOCK_N/WAVE_N along N.
 
 C++ Backend Requirements:
   - waveasm-translate executable (set WAVEASM_TRANSLATE env var or build wave-asm)
-  - amdclang++ from ROCm installation
+  - clang++ (built from LLVM or in PATH)
   - wave_runtime Python module
 """
 

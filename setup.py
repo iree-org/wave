@@ -251,7 +251,7 @@ class CMakeBuild(build_ext):
             "Ninja",
             f"-DCMAKE_MAKE_PROGRAM:FILEPATH={NINJA_PATH}",
             "-DLLVM_TARGETS_TO_BUILD=host;AMDGPU",
-            "-DLLVM_ENABLE_PROJECTS=llvm;mlir;lld",
+            "-DLLVM_ENABLE_PROJECTS=llvm;mlir;lld;clang",
             "-DMLIR_ENABLE_BINDINGS_PYTHON=ON",
             f"-DBUILD_SHARED_LIBS={BUILD_SHARED_LIBS}",
             "-DLLVM_ENABLE_ASSERTIONS=ON",
