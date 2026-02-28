@@ -48,6 +48,7 @@ import warnings
 
 import pytest
 
+from tests.kernel.common.utils import require_cdna4
 from wave_lang.kernel.wave.asm.waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_kernel_info,
@@ -56,8 +57,9 @@ from wave_lang.kernel.wave.asm.waveasm_e2e import (
     run_with_wave_runtime,
 )
 
-# All tests in this module require the waveasm-translate binary and a GPU.
-pytestmark = [pytest.mark.require_waveasm, pytest.mark.require_e2e]
+# All tests require waveasm-translate, a GPU, and CDNA4 (gfx950/MI350X).
+# The C++ ASM backend does not support CDNA3 or earlier.
+pytestmark = [pytest.mark.require_waveasm, pytest.mark.require_e2e, require_cdna4]
 
 # =============================================================================
 # Test Configuration
