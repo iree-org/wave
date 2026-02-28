@@ -152,8 +152,9 @@ class WaveEmitter:
 
         arg_types = [abi_type(b) for b in bindings]
 
+        # Dynamic strides only with Wave runtime and LLVM backend (not ASM).
         stride_arg_count = 0
-        if self.options.wave_runtime:
+        if self.options.wave_runtime and self.options.backend != "asm":
             stride_arg_count = sum(
                 len(b.kernel_buffer_type.symbolic_shape)
                 for b in self.root_sig.sig.kernel_buffer_bindings
@@ -176,7 +177,11 @@ class WaveEmitter:
 
         with InsertionPoint(entry_block), Location.name("wave-generated function"):
             self.emit_program_invariants()
-            stride_arg_offset = len(bindings) if self.options.wave_runtime else 0
+            stride_arg_offset = (
+                len(bindings)
+                if (self.options.wave_runtime and self.options.backend != "asm")
+                else 0
+            )
             for bind, arg in zip(bindings, entry_block.arguments):
                 node = bind.reference[1]
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
@@ -206,7 +211,11 @@ class WaveEmitter:
                 static_sizes = [get_static_dim(s) for s in physical_shape]
                 rank = len(symbolic_shape)
 
-                use_dynamic_strides = self.options.wave_runtime and stride_arg_count > 0
+                use_dynamic_strides = (
+                    self.options.wave_runtime
+                    and self.options.backend != "asm"
+                    and stride_arg_count > 0
+                )
                 if use_dynamic_strides:
                     # vector.load requires the most minor (innermost) dim to have unit stride.
                     # Use dynamic strides only for leading dims; keep innermost stride static 1.

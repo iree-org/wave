@@ -54,7 +54,7 @@ def _mma_type_params():
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.parametrize("shape", [(16, 16)])
 def test_copy_kernel_asm_backend(shape, run_bench):
     """End-to-end test for the copy kernel using ASM backend."""
@@ -115,7 +115,7 @@ def test_copy_kernel_asm_backend(shape, run_bench):
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.parametrize("mma_type,k_size,load_elems", _mma_type_params())
 def test_mma_kernel_asm_backend(mma_type, k_size, load_elems, run_bench):
     """End-to-end test for the MMA kernel using ASM backend.
@@ -198,7 +198,7 @@ def test_mma_kernel_asm_backend(mma_type, k_size, load_elems, run_bench):
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -294,7 +294,7 @@ def test_mma_multi_workgroup_single_wave_asm_backend(shape, run_bench):
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.parametrize(
     "shape,config",
     [
@@ -441,7 +441,7 @@ def _gemm_mma_type_params():
 
 @require_e2e
 @require_cdna_3_or_4
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.parametrize(
     "shape,block_k,config",
     [
@@ -581,7 +581,7 @@ def test_gemm_asm_backend(
 
 
 @require_e2e
-@pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
+# @pytest.mark.xfail(reason="Dynamic strides are not supported in the ASM backend yet")
 @pytest.mark.skipif(
     "gfx95" not in get_default_arch(),
     reason="MXFP4 scaled MFMA only supported on gfx950+ (CDNA4/MI350X)",
