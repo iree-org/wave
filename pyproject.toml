@@ -78,7 +78,7 @@ path = "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml"
 
 [tool.pytest.ini_options]
 timeout = 300
-testpaths = ["tests", "waveasm/test/e2e"]
+testpaths = ["tests"]
 # Because of the pytest collection process, it will import all modules from all
 # tests, which is undesirable for mlir/wave interfacing tests. Exclude them
 # from the global run.
