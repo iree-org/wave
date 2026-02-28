@@ -216,6 +216,18 @@ def _get_max_buffer_size(elem_type: IrType) -> int:
     return ((1 << 31) - 1) // (elem_type.width // 8)
 
 
+def _get_strides_from_memref(mem: Value) -> list[Value]:
+    """
+    Return stride SSA values from a memref (e.g. when it has dynamic strides).
+    Uses extract_strided_metadata: results are [base, offset, sizes..., strides...].
+    """
+    memref_type = mem.type
+    rank = len(memref_type.shape)
+    metadata = memref_d.extract_strided_metadata(mem)
+    # Strides start at index 2 + rank (after base, offset, sizes).
+    return list(metadata[2 + rank : 2 + 2 * rank])
+
+
 def _linearize_memref(
     mem: Value,
     offsets_wg: tuple[Value | int],
@@ -490,8 +502,13 @@ def _create_vec_read_write(
     stride_values = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
-    has_int_strides = all(isinstance(s, int) for s in stride_values)
-    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
+    use_dynamic_strides = (
+        emitter.options.wave_runtime and emitter.options.backend != "asm"
+    )
+    if is_global_mem and not is_read and use_dynamic_strides:
+        strides = _get_strides_from_memref(mem)
+    else:
+        strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
     no_masked_load_store_ops = buffer_ops_enabled
 
@@ -506,8 +523,6 @@ def _create_vec_read_write(
     if mask is None:
         offset_th = None
         if buffer_ops_enabled:
-            # TODO: If strides cannot be converted into integers, means they are dynamic
-            # and linearize breaks, need to investigate later.
             mem, offset_th = _linearize_memref(
                 mem, start_indices_wg, start_indices_th, strides
             )
