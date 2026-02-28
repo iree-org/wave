@@ -30,18 +30,12 @@ Usage:
 
 import os
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Tuple
 
 import torch
-
-# Add wave_lang to path if needed.
-wave_root = Path(__file__).parent.parent.parent
-if str(wave_root) not in sys.path:
-    sys.path.insert(0, str(wave_root))
 
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success

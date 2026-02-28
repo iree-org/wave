@@ -48,7 +48,7 @@ import warnings
 
 import pytest
 
-from waveasm.test.e2e.waveasm_e2e import (
+from wave_lang.kernel.wave.asm.waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_kernel_info,
     capture_wave_mlir,

@@ -1587,8 +1587,7 @@ def _write_trace_script_cpp(
 import sys, os
 os.environ["WAVE_CACHE_ON"] = "0"
 for p in ["/dockerx/wave", "/dockerx/aiter",
-          "/dockerx/wave/wave_lang/kernel/wave/asm/scripts",
-          "/dockerx/wave/waveasm/test/e2e"]:
+          "/dockerx/wave/wave_lang/kernel/wave/asm/scripts"]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -1716,7 +1715,6 @@ def capture_att_trace(
     extra_paths = [
         working_dir,
         os.path.join(working_dir, "wave_lang/kernel/wave/asm/scripts"),
-        os.path.join(working_dir, "waveasm/test/e2e"),
     ]
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = ":".join(extra_paths + ([existing] if existing else []))
@@ -2114,9 +2112,11 @@ def main():
         sys.path.insert(0, "wave_lang/kernel/wave/asm/scripts")
         from compare_backends import get_default_arch
 
-        sys.path.insert(0, "waveasm/test/e2e")
-        from test_asm_backend_e2e import capture_wave_kernel_info
-        from waveasm_e2e import WaveASMCompiler, run_with_wave_runtime
+        from wave_lang.kernel.wave.asm.waveasm_e2e import (
+            WaveASMCompiler,
+            capture_wave_kernel_info,
+            run_with_wave_runtime,
+        )
 
         _ws2 = (1, 4) if pcfg.num_waves <= 4 else (4, 2)
         if pcfg.num_waves <= 4:
