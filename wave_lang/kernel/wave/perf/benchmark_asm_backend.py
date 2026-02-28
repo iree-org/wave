@@ -498,7 +498,7 @@ def compile_and_run_cpp_backend(
     Returns:
         CppBackendKernel: A callable that can be invoked for repeated execution.
     """
-    from wave_lang.kernel.wave.asm.wave_asm.test.e2e.waveasm_e2e import (
+    from wave_lang.kernel.wave.asm.waveasm_e2e import (
         WaveASMCompiler,
         capture_wave_kernel_info,
     )

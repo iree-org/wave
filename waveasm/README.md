@@ -47,7 +47,7 @@ ninja check-waveasm
 ## Directory Structure
 
 ```
-wave-asm/
+waveasm/
 ├── include/waveasm/
 │   ├── Dialect/           # TableGen definitions and headers
 │   ├── Transforms/        # Pass definitions
@@ -70,36 +70,31 @@ wave-asm/
 
 ### LLVM/MLIR Dependency
 
-wave-asm requires LLVM/MLIR at a specific commit for reproducible builds:
+WaveASM shares the LLVM version pinned in `water/llvm-sha.txt`. See the
+top-level README for instructions on building the shared LLVM/MLIR install.
 
-```
-LLVM SHA: 53ddc87454669c0d595c0e3d3174e35cdc4b0a61
-```
+### Standalone Build
 
-#### Option 1: Build LLVM from scratch (recommended)
-
-```bash
-./scripts/build-llvm.sh ~/llvm-waveasm
-```
-
-This will clone LLVM at the pinned SHA, build it, and provide the MLIR_DIR path.
-
-#### Option 2: Use existing LLVM build
-
-If you have an LLVM build at the correct SHA, point to it directly.
-
-### Build Instructions
+Point CMake at the shared LLVM install:
 
 ```bash
 mkdir build && cd build
-cmake -G Ninja .. -DMLIR_DIR=/path/to/llvm/build/lib/cmake/mlir
+cmake -G Ninja ../waveasm \
+  -DLLVM_DIR=/path/to/llvm-install/lib/cmake/llvm \
+  -DMLIR_DIR=/path/to/llvm-install/lib/cmake/mlir
 ninja
+```
+
+### pip Build
+
+```bash
+WAVE_BUILD_WAVEASM=1 WAVE_LLVM_DIR=/path/to/llvm-install pip install -e .
 ```
 
 ### Verify Build
 
 ```bash
-./tools/waveasm-translate/waveasm-translate --help
+./build/bin/waveasm-translate --help
 ```
 
 ## Dialect Design

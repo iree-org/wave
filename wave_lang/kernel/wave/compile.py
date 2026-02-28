@@ -1237,9 +1237,11 @@ def _generate_asm_code(mb, options):
 def _generate_asm_code_waveasm(mlir_asm, options):
     """Generate AMDGCN assembly via the WaveASM (waveasm-translate) backend."""
     import os
+    import subprocess
+    import tempfile
     from wave_lang.support.ir_imports import Context, Module, func_d
+    from wave_lang.support.detect_waveasm import get_waveasm_translate
     from .asm.mlir_analysis import walk_ops_recursively, should_skip_function
-    from .asm.wave_asm.test.e2e.waveasm_e2e import WaveASMCompiler
 
     # WaveASM expects a bare func.func (no stream wrapper), so extract
     # the kernel function and wrap it in a plain module.
@@ -1268,14 +1270,46 @@ def _generate_asm_code_waveasm(mlir_asm, options):
             print(kernel_mlir_pretty)
 
     wg = tuple(options.kernel_launch_info.blocks)
-    compiler = WaveASMCompiler(target=options.target, codeobj=options.codeobj)
-    success, asm_text, stderr = compiler.compile_mlir_to_asm(
-        kernel_mlir,
-        workgroup_size=wg,
-        ticketed_waitcnt=False,
-    )
-    if not success:
-        raise RuntimeError(f"waveasm-translate failed:\n{asm_text}")
+    waveasm_translate = get_waveasm_translate()
+
+    # Write MLIR to temp file and invoke waveasm-translate.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".mlir", delete=False
+    ) as mlir_file:
+        mlir_file.write(kernel_mlir)
+        mlir_path = mlir_file.name
+
+    try:
+        cmd = [
+            waveasm_translate,
+            f"--target={options.target}",
+            "--mlir-cse",
+            "--waveasm-scoped-cse",
+            "--waveasm-peephole",
+            "--waveasm-scale-pack-elimination",
+            "--waveasm-licm",
+            "--waveasm-m0-redundancy-elim",
+            "--waveasm-buffer-load-strength-reduction",
+            "--waveasm-memory-offset-opt",
+            "--waveasm-loop-address-promotion",
+            "--waveasm-linear-scan",
+            "--max-vgprs=512",
+            "--max-agprs=512",
+            "--waveasm-insert-waitcnt",
+            "--waveasm-hazard-mitigation",
+            "--emit-assembly",
+            "--ticketed-waitcnt=false",
+            f"--workgroup-size-x={wg[0]}",
+            f"--workgroup-size-y={wg[1]}",
+            f"--workgroup-size-z={wg[2]}",
+            mlir_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
+        asm_text = result.stdout
+    finally:
+        os.unlink(mlir_path)
 
     if options.dump_intermediates:
         asm_path = os.path.join(options.dump_intermediates, f"{kernel_name}.rocmasm")

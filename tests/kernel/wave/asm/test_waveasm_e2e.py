@@ -22,22 +22,19 @@ Tests included:
 
 Run with:
     # Run all e2e tests with C++ backend (default, requires GPU)
-    pytest test/e2e/test_asm_backend_e2e.py -v --run-e2e
+    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e
 
     # Run with Python backend
-    pytest test/e2e/test_asm_backend_e2e.py -v --run-e2e --backend=python
+    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --backend=python
 
     # Run with both backends and compare
-    pytest test/e2e/test_asm_backend_e2e.py -v --run-e2e --backend=both
+    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --backend=both
 
     # Dump assembly files to /tmp for debugging
-    pytest test/e2e/test_asm_backend_e2e.py -v --run-e2e --dump-asm
+    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --dump-asm
 
     # Run specific test
-    pytest test/e2e/test_asm_backend_e2e.py::test_gemm_cpp_backend -v --run-e2e
-
-    # Compare C++ vs Python backends (comparison tests)
-    pytest test/e2e/test_asm_backend_e2e.py -v -k "compare"
+    pytest tests/kernel/wave/asm/test_waveasm_e2e.py::test_gemm_cpp_backend -v --run-e2e
 
 Environment variables:
     WAVEASM_TRANSLATE: Path to waveasm-translate (default: auto-detect in build/)
@@ -47,27 +44,22 @@ Environment variables:
 """
 
 import os
-import sys
 import warnings
-from pathlib import Path
 
 import pytest
 
-# Add wave_lang to path
-wave_root = Path(__file__).parent.parent.parent.parent
-if str(wave_root) not in sys.path:
-    sys.path.insert(0, str(wave_root))
-
-# Add e2e directory to path for local imports
-sys.path.insert(0, str(Path(__file__).parent))
-
-from waveasm_e2e import (
+from tests.kernel.common.utils import require_cdna4
+from wave_lang.kernel.wave.asm.waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_kernel_info,
     capture_wave_mlir,
     compare_with_python_backend,
     run_with_wave_runtime,
 )
+
+# All tests require waveasm-translate, a GPU, and CDNA4 (gfx950/MI350X).
+# The C++ ASM backend does not support CDNA3 or earlier.
+pytestmark = [pytest.mark.require_waveasm, pytest.mark.require_e2e, require_cdna4]
 
 # =============================================================================
 # Test Configuration
@@ -907,7 +899,6 @@ module attributes {transform.with_named_sequence} {
 """
 
 
-@pytest.mark.run_e2e
 @pytest.mark.parametrize(
     "shape,block_k,config",
     [

@@ -31,3 +31,7 @@ target_link_libraries(waveasm-translate
   LLVMSupport
   LLVMCore
 )
+
+install(TARGETS waveasm-translate
+  RUNTIME DESTINATION bin
+)

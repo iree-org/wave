@@ -143,6 +143,11 @@ Before installing Wave, ensure you have the following prerequisites:
      export WAVE_BUILD_WATER=1
      ```
 
+   - `WAVE_BUILD_WAVEASM`: Build the WaveASM C++ MLIR backend (default: `0`)
+     ```bash
+     export WAVE_BUILD_WAVEASM=1
+     ```
+
    - `WAVE_LLVM_DIR`: Path to pre-built LLVM installation (optional)
      ```bash
      export WAVE_LLVM_DIR=/path/to/llvm-install
@@ -159,11 +164,17 @@ Before installing Wave, ensure you have the following prerequisites:
      export WAVE_LLVM_BUILD_SHARED_LIBS=ON
      ```
 
-   - `WAVE_WATER__DIR`: Path to an existing Water CMake build directory for symlink-based installation (optional)
+   - `WAVE_WATER_DIR`: Path to an existing Water CMake build directory for symlink-based installation (optional)
      ```bash
      export WAVE_WATER_DIR=/path/to/wave/water/build
      ```
      When set, the installation will create symlinks to the build directory instead of building Water from source. This enables a fast C++ development workflow where changes to Water are immediately available after running `ninja` without re-running `pip install`. Requires the build directory to have been configured with `-DWATER_ENABLE_PYTHON=ON -DMLIR_ENABLE_BINDINGS_PYTHON=ON`.
+
+   - `WAVE_WAVEASM_DIR`: Path to an existing WaveASM CMake build directory for symlink-based installation (optional)
+     ```bash
+     export WAVE_WAVEASM_DIR=/path/to/waveasm/build
+     ```
+     When set, the installation will create symlinks to the build directory instead of building WaveASM from source. This enables a fast C++ development workflow where changes to WaveASM are immediately available after running `ninja` without re-running `pip install`.
 
 5. Important Environment Flags
 
