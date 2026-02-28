@@ -226,7 +226,6 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
-    print(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     print("MXFP GEMM preshuffle-B 4-wave test passed!")
