@@ -98,7 +98,7 @@ def invoke_with_wave_runtime(
     if options.wave_runtime and options.backend != "asm":
         stride_values = []
         for arg_tensor in chain(kernel_inputs, kernel_outputs):
-            for d in range(arg_tensor.stride()):
+            for d in range(arg_tensor.dim()):
                 stride_values.append(arg_tensor.stride(d))
         strides = wave_runtime.Int64Vector(stride_values)
     else:
