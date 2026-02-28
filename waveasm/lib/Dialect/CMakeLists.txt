@@ -22,4 +22,5 @@ add_mlir_dialect_library(MLIRWaveASMDialect
   MLIRSupport
   MLIRControlFlowInterfaces
   MLIRFunctionInterfaces
+  MLIRLoopLikeInterface
 )
