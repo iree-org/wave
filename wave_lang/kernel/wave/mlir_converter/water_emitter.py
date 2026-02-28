@@ -358,7 +358,7 @@ def _attach_attributes(
 
         if isinstance(node, MMA):
             # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
-            # match MmaOp::setIndexFromLattices which serialises
+            # match MmaOp::getIndexExprValuesAndDescriptions which serializes
             # operandExprs + resultExprs.  The Python-side index sequence
             # analysis only tracks 3 (lhs, rhs, acc), so we emit acc_index
             # twice: once for the accumulator operand and once for the

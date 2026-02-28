@@ -30,7 +30,10 @@ class WaveTensorType;
 // HasWaveIndexMapping trait
 //-----------------------------------------------------------------------------
 
-// Common verifier for the optional 'index' attribute used by Wave ops.
+// Common verifier for the optional 'index' attribute used by Wave ops. When
+// the operation implements WaveInferIndexExprsOpInterface and the attribute is
+// present, also checks that the attribute length matches the number of values
+// from getIndexExprValuesAndDescriptions.
 mlir::LogicalResult verifyWaveIndexMappings(mlir::Operation *op);
 
 // Trait that checks the 'index' attribute using verifyWaveIndexMappings.
@@ -651,12 +654,6 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
 
-// Set the index attribute as an array of index expressions, one for each of the
-// results.
-llvm::LogicalResult identitySetIndexFromLattices(
-    mlir::Operation *op, llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs);
-
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an
 // error and return failure.
@@ -665,6 +662,13 @@ checkAndAppendIndexExpr(mlir::Location loc,
                         const IndexExprsLatticeStorage &expr,
                         const llvm::Twine &description,
                         llvm::SmallVectorImpl<mlir::Attribute> &indexExprs);
+
+static inline std::function<void(llvm::raw_ostream &, unsigned)>
+defaultGetIndexExprValuesAndDescriptions(
+    mlir::Operation *op, llvm::SmallVectorImpl<mlir::Value> &values) {
+  llvm::append_range(values, op->getResults());
+  return [](llvm::raw_ostream &os, unsigned i) { os << "result #" << i; };
+}
 } // namespace detail
 
 // Trait implementing the methods of the WaveInferIndexExprsOpInterface with
@@ -691,13 +695,6 @@ public:
     return wave::detail::identityIndexExprsPropagate(
         resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
         "result", "operand", emitError);
-  }
-
-  llvm::LogicalResult
-  setIndexFromLattices(llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-                       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-    return detail::identitySetIndexFromLattices(this->getOperation(),
-                                                operandExprs, resultExprs);
   }
 };
 

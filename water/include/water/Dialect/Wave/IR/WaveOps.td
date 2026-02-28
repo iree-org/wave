@@ -213,7 +213,8 @@ def MmaOp : WaveOp<"mma",
     [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
      DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
      DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
-      ["initializeIndexExprsForward", "initializeIndexExprsBackward"]>]>,
+      ["initializeIndexExprsForward", "initializeIndexExprsBackward",
+       "getIndexExprValuesAndDescriptions"]>]>,
             WaveArithmeticOpDoc {
   let summary = "Matrix multiply and accumulate";
 
@@ -572,7 +573,8 @@ def RegisterOp : WaveOp<"register", [
 def WriteOp : WaveOp<"write", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
-    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+        ["getIndexExprValuesAndDescriptions"]>,
     RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
