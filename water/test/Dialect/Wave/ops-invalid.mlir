@@ -1123,7 +1123,6 @@ func.func @reshape_logical_slice_too_large(%arg0: vector<8xf32>) {
 // -----
 
 func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of f32>) {
-  // expected-warning @below {{index attribute present but operation does not implement WaveInferIndexExprsOpInterface}}
   // expected-error @below {{index attribute length (2) does not match the number of op results (1)}}
   %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] {index = [{}, {}]} : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return

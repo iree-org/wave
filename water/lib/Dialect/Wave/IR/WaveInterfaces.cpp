@@ -38,22 +38,6 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
 
-  auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op);
-  if (!iface) {
-    // XXX: cannot use op->emitWarning as that triggers the op verifier
-    // leading to infinite recursion.
-    emitWarning(op->getLoc())
-        << "index attribute present but operation does not "
-           "implement WaveInferIndexExprsOpInterface";
-    SmallVector<Value> values;
-    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
-    if (values.size() != arr.size()) {
-      return op->emitError() << "index attribute length (" << arr.size()
-                             << ") does not match the number of op results ("
-                             << values.size() << ")";
-    }
-  }
-
   SmallVector<DictionaryAttr> dicts;
   dicts.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
@@ -104,8 +88,10 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 
   // When the operation implements WaveInferIndexExprsOpInterface, the index
   // attribute length must match the number of values from
-  // getIndexExprValuesAndDescriptions.
-  if (iface) {
+  // getIndexExprValuesAndDescriptions. Otherwise, default to the number of op
+  // results.
+
+  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
     llvm::SmallVector<Value> values;
     iface.getIndexExprValuesAndDescriptions(values);
     if (values.size() != arr.size()) {
@@ -113,6 +99,14 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
              << WaveDialect::kIndexWaveExprListAttrName << " attribute length ("
              << arr.size() << ") does not match the number of index expression "
              << "values (" << values.size() << ")";
+    }
+  } else {
+    SmallVector<Value> values;
+    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
+    if (values.size() != arr.size()) {
+      return op->emitError() << "index attribute length (" << arr.size()
+                             << ") does not match the number of op results ("
+                             << values.size() << ")";
     }
   }
   return success();
