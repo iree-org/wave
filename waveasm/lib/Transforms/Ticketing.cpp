@@ -44,6 +44,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMINSERTWAITCNT
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -228,28 +233,15 @@ struct WaitcntState {
 };
 
 struct InsertWaitcntPass
-    : public PassWrapper<InsertWaitcntPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InsertWaitcntPass)
-
-  InsertWaitcntPass() = default;
-  InsertWaitcntPass(bool insertAfterLoads, bool ticketedWaitcnt)
-      : insertAfterLoads(insertAfterLoads), ticketedWaitcnt(ticketedWaitcnt) {}
-
-  StringRef getArgument() const override { return "waveasm-insert-waitcnt"; }
-
-  StringRef getDescription() const override {
-    return "Insert s_waitcnt instructions for memory synchronization";
-  }
+    : public waveasm::impl::WAVEASMInsertWaitcntBase<InsertWaitcntPass> {
+  using WAVEASMInsertWaitcntBase::WAVEASMInsertWaitcntBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    module.walk([&](ProgramOp program) { processProgram(program); });
+    Operation *module = getOperation();
+    module->walk([&](ProgramOp program) { processProgram(program); });
   }
 
 private:
-  bool insertAfterLoads = false;
-  bool ticketedWaitcnt = true;
-
   /// Minimum number of IR operations between an LGKM load and its use for
   /// latency covering. ds_read (LDS) latency is ~20-40 cycles on CDNA.
   ///
@@ -602,16 +594,3 @@ private:
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass() {
-  return std::make_unique<InsertWaitcntPass>();
-}
-
-std::unique_ptr<mlir::Pass>
-createWAVEASMInsertWaitcntPass(bool insertAfterLoads, bool ticketedWaitcnt) {
-  return std::make_unique<InsertWaitcntPass>(insertAfterLoads, ticketedWaitcnt);
-}
-
-} // namespace waveasm

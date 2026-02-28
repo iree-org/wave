@@ -37,6 +37,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMMEMORYOFFSETOPT
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -407,23 +412,14 @@ static void setOffset(Operation *op, int64_t offset, MemOpKind kind) {
 //===----------------------------------------------------------------------===//
 
 struct MemoryOffsetOptPass
-    : public PassWrapper<MemoryOffsetOptPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MemoryOffsetOptPass)
-
-  MemoryOffsetOptPass() = default;
-
-  StringRef getArgument() const override { return "waveasm-memory-offset-opt"; }
-
-  StringRef getDescription() const override {
-    return "Fold constant address components into memory instruction offset "
-           "fields";
-  }
+    : public waveasm::impl::WAVEASMMemoryOffsetOptBase<MemoryOffsetOptPass> {
+  using WAVEASMMemoryOffsetOptBase::WAVEASMMemoryOffsetOptBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    Operation *module = getOperation();
     unsigned totalFolded = 0;
 
-    module.walk([&](ProgramOp program) {
+    module->walk([&](ProgramOp program) {
       OpBuilder builder(program.getBody().front().getParentOp());
 
       // Collect memory ops to process (avoid modifying while iterating)
@@ -506,11 +502,3 @@ struct MemoryOffsetOptPass
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMMemoryOffsetOptPass() {
-  return std::make_unique<MemoryOffsetOptPass>();
-}
-
-} // namespace waveasm

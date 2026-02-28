@@ -27,6 +27,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMLINEARSCAN
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 /// Convert a virtual register type to a physical register type.
 /// Returns the original type unchanged if it's not a virtual register type
 /// or if physReg < 0.
@@ -50,24 +55,14 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 struct LinearScanPass
-    : public PassWrapper<LinearScanPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinearScanPass)
-
-  LinearScanPass() = default;
-  LinearScanPass(int64_t maxVGPRs, int64_t maxSGPRs, int64_t maxAGPRs)
-      : maxVGPRs(maxVGPRs), maxSGPRs(maxSGPRs), maxAGPRs(maxAGPRs) {}
-
-  StringRef getArgument() const override { return "waveasm-linear-scan"; }
-
-  StringRef getDescription() const override {
-    return "Linear scan register allocation";
-  }
+    : public waveasm::impl::WAVEASMLinearScanBase<LinearScanPass> {
+  using WAVEASMLinearScanBase::WAVEASMLinearScanBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    Operation *module = getOperation();
 
-    // Process each program
-    module.walk([&](ProgramOp program) {
+    // Process each program.
+    module->walk([&](ProgramOp program) {
       if (failed(processProgram(program))) {
         signalPassFailure();
       }
@@ -75,10 +70,6 @@ struct LinearScanPass
   }
 
 private:
-  int64_t maxVGPRs = 256;
-  int64_t maxSGPRs = 104;
-  int64_t maxAGPRs = 256;
-
   /// Create a fresh zero-initialized copy of a duplicate init arg to ensure
   /// unique physical registers. This is used when CSE merges identical
   /// zero-initialized accumulators, causing multiple loop block args to be
@@ -360,17 +351,3 @@ private:
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass() {
-  return std::make_unique<LinearScanPass>();
-}
-
-std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
-                                                        int64_t maxSGPRs,
-                                                        int64_t maxAGPRs) {
-  return std::make_unique<LinearScanPass>(maxVGPRs, maxSGPRs, maxAGPRs);
-}
-
-} // namespace waveasm

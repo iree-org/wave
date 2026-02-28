@@ -26,6 +26,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMHAZARDMITIGATION
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -122,42 +127,27 @@ static bool needsVALUReadFirstLaneHazard(TargetAttrInterface target) {
 //===----------------------------------------------------------------------===//
 
 struct HazardMitigationPass
-    : public PassWrapper<HazardMitigationPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HazardMitigationPass)
-
-  HazardMitigationPass() = default;
-  HazardMitigationPass(StringRef target) : targetArch(target.str()) {
-    std::optional<TargetKind> parsed = symbolizeTargetKind(target);
-    if (parsed) {
-      this->targetKindEnum = *parsed;
-      this->validTarget = true;
-    }
-  }
-
-  StringRef getArgument() const override { return "waveasm-hazard-mitigation"; }
-
-  StringRef getDescription() const override {
-    return "Insert s_nop instructions to mitigate hardware hazards";
-  }
+    : public waveasm::impl::WAVEASMHazardMitigationBase<HazardMitigationPass> {
+  using WAVEASMHazardMitigationBase::WAVEASMHazardMitigationBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    Operation *module = getOperation();
 
-    // Check for invalid target architecture
-    if (!validTarget) {
-      module.emitError() << "Invalid target architecture: '" << targetArch
-                         << "'. Supported targets: gfx942, gfx950, gfx1250";
+    // Parse target arch from option.
+    std::optional<TargetKind> parsed = symbolizeTargetKind(targetArch);
+    if (!parsed) {
+      module->emitError() << "Invalid target architecture: '" << targetArch
+                          << "'. Supported targets: gfx942, gfx950, gfx1250";
       return signalPassFailure();
     }
+    targetKindEnum = *parsed;
 
-    // Process each program
-    module.walk([&](ProgramOp program) { processProgram(program); });
+    // Process each program.
+    module->walk([&](ProgramOp program) { processProgram(program); });
   }
 
 private:
   TargetKind targetKindEnum = TargetKind::GFX942;
-  std::string targetArch;
-  bool validTarget = true; // Default constructor uses default target
   unsigned numNopsInserted = 0;
 
   void processProgram(ProgramOp program) {
@@ -210,16 +200,3 @@ private:
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass() {
-  return std::make_unique<HazardMitigationPass>();
-}
-
-std::unique_ptr<mlir::Pass>
-createWAVEASMHazardMitigationPass(llvm::StringRef targetArch) {
-  return std::make_unique<HazardMitigationPass>(targetArch);
-}
-
-} // namespace waveasm

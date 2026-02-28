@@ -12,65 +12,6 @@
 
 namespace waveasm {
 
-//===----------------------------------------------------------------------===//
-// Pass Creation Functions
-//===----------------------------------------------------------------------===//
-
-/// Create the SSA validation pass
-std::unique_ptr<mlir::Pass> createWAVEASMValidateSSAPass();
-
-/// Create the liveness analysis pass
-std::unique_ptr<mlir::Pass> createWAVEASMLivenessPass();
-
-/// Create the linear scan register allocation pass
-std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass();
-std::unique_ptr<mlir::Pass> createWAVEASMLinearScanPass(int64_t maxVGPRs,
-                                                        int64_t maxSGPRs,
-                                                        int64_t maxAGPRs);
-
-/// Create the hazard mitigation pass
-std::unique_ptr<mlir::Pass> createWAVEASMHazardMitigationPass();
-std::unique_ptr<mlir::Pass>
-createWAVEASMHazardMitigationPass(llvm::StringRef targetArch);
-
-/// Create the waitcnt insertion pass
-std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass();
-std::unique_ptr<mlir::Pass>
-createWAVEASMInsertWaitcntPass(bool insertAfterLoads,
-                               bool ticketedWaitcnt = true);
-
-/// Create the assembly emission pass
-std::unique_ptr<mlir::Pass> createWAVEASMEmitAssemblyPass();
-std::unique_ptr<mlir::Pass>
-createWAVEASMEmitAssemblyPass(llvm::StringRef outputPath);
-
-/// Create the MLIR translation pass
-std::unique_ptr<mlir::Pass> createWAVEASMTranslateFromMLIRPass();
-std::unique_ptr<mlir::Pass>
-createWAVEASMTranslateFromMLIRPass(llvm::StringRef targetId);
-
-/// Create the scoped CSE pass
-std::unique_ptr<mlir::Pass> createWAVEASMScopedCSEPass();
-
-/// Create the buffer load strength reduction pass.
-std::unique_ptr<mlir::Pass> createWAVEASMBufferLoadStrengthReductionPass();
-
-/// Create the loop address promotion pass.
-std::unique_ptr<mlir::Pass> createWAVEASMLoopAddressPromotionPass();
-
-/// Create the scale pack elimination pass.
-std::unique_ptr<mlir::Pass> createWAVEASMScalePackEliminationPass();
-
-/// Create the memory offset optimization pass
-std::unique_ptr<mlir::Pass> createWAVEASMMemoryOffsetOptPass();
-
-//===----------------------------------------------------------------------===//
-// Pass Registration
-//===----------------------------------------------------------------------===//
-
-/// Register all WAVEASM passes
-void registerWAVEASMPasses();
-
 #define GEN_PASS_DECL
 #include "waveasm/Transforms/Passes.h.inc"
 

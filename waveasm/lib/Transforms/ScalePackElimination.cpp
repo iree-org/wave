@@ -65,6 +65,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMSCALEPACKELIMINATION
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 struct PackChain {
@@ -387,16 +392,9 @@ static void eliminateScalePackChains(LoopOp loopOp) {
 }
 
 struct ScalePackEliminationPass
-    : public PassWrapper<ScalePackEliminationPass, OperationPass<>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScalePackEliminationPass)
-
-  StringRef getArgument() const override {
-    return "waveasm-scale-pack-elimination";
-  }
-
-  StringRef getDescription() const override {
-    return "Eliminate BFE/LSHL_OR round-trips for B-scale iter_args";
-  }
+    : public waveasm::impl::WAVEASMScalePackEliminationBase<
+          ScalePackEliminationPass> {
+  using WAVEASMScalePackEliminationBase::WAVEASMScalePackEliminationBase;
 
   void runOnOperation() override {
     // Post-order so inner loops are processed before outer ones.
@@ -410,11 +408,3 @@ struct ScalePackEliminationPass
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMScalePackEliminationPass() {
-  return std::make_unique<ScalePackEliminationPass>();
-}
-
-} // namespace waveasm
