@@ -36,7 +36,8 @@ createWAVEASMHazardMitigationPass(llvm::StringRef targetArch);
 /// Create the waitcnt insertion pass
 std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass();
 std::unique_ptr<mlir::Pass>
-createWAVEASMInsertWaitcntPass(bool insertAfterLoads);
+createWAVEASMInsertWaitcntPass(bool insertAfterLoads,
+                               bool ticketedWaitcnt = true);
 
 /// Create the assembly emission pass
 std::unique_ptr<mlir::Pass> createWAVEASMEmitAssemblyPass();

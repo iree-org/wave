@@ -65,8 +65,6 @@ def test_topk():
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 
     # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 64], strides: [64, 1] : memref<f16> to memref<32x64xf16, strided<[64, 1]>>
-    # CHECK-DAG: %[[VALUES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 2], strides: [2, 1] : memref<f16> to memref<32x2xf16, strided<[2, 1]>>
-    # CHECK-DAG: %[[INDICES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 2], strides: [2, 1] : memref<i32> to memref<32x2xi32, strided<[2, 1]>>
 
     # Check for read operation
     # CHECK: %[[LOADED:.*]] = vector.load %[[INPUT]]
@@ -103,6 +101,8 @@ def test_topk():
     # CHECK: vector.from_elements{{.*}} : vector<2xf16>
     # CHECK: vector.from_elements{{.*}} : vector<2xi32>
 
-    # Write operations for both values and indices
-    # CHECK: vector.store{{.*}}, %[[VALUES_OUT]]{{.*}} : memref<32x2xf16{{.*}}>, vector<2xf16>
-    # CHECK: vector.store{{.*}}, %[[INDICES_OUT]]{{.*}} : memref<32x2xi32{{.*}}>, vector<2xi32>
+    # Write operations for both values and indices (linearized 1D stores)
+    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [1073741822], strides: [1] : memref<f16>
+    # CHECK: vector.store {{.*}} : memref<1073741822xf16{{.*}}>, vector<2xf16>
+    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [536870910], strides: [1] : memref<i32>
+    # CHECK: vector.store {{.*}} : memref<536870910xi32{{.*}}>, vector<2xi32>

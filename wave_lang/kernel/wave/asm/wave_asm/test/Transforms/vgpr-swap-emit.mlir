@@ -32,10 +32,10 @@ waveasm.program @vgpr_swap_iter_args
     // Use both so they're not dead.
     %sum = waveasm.v_add_u32 %a, %b : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
 
-    %next_iv = waveasm.s_add_u32 %iv, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     // Swap: pass %b as new %a, %a as new %b.
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %b, %a) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %b, %a) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
   }
 
   waveasm.s_endpgm

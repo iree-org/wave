@@ -117,9 +117,9 @@ waveasm.program @loop_dsread_acc_competition
     %n3 = waveasm.v_mfma_f32_16x16x16_f16 %lds_data0, %lds_data1, %acc3
         : !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
 
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %n0, %n1, %n2, %n3)
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %n0, %n1, %n2, %n3)
         : !waveasm.sreg,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>
@@ -161,9 +161,9 @@ waveasm.program @value_live_across_loop
     %tmp2 = waveasm.v_add_u32 %tmp, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %tmp3 = waveasm.v_add_u32 %tmp2, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
 
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %tmp3) : !waveasm.sreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %tmp3) : !waveasm.sreg, !waveasm.vreg
   }
 
   // CHECK: waveasm.v_add_u32 {{.*}}!waveasm.pvreg<[[OUTSIDE]]>
@@ -203,16 +203,16 @@ waveasm.program @nested_loops
         : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
       %inner_tmp = waveasm.v_add_u32 %inner_acc, %v0
           : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
-      %next_j = waveasm.s_add_u32 %ij, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-      %inner_cond = waveasm.s_cmp_lt_u32 %next_j, %c4 : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-      waveasm.condition %inner_cond : !waveasm.sreg iter_args(%next_j, %inner_tmp) : !waveasm.sreg, !waveasm.vreg
+      %next_j:2 = waveasm.s_add_u32 %ij, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      %inner_cond = waveasm.s_cmp_lt_u32 %next_j#0, %c4 : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+      waveasm.condition %inner_cond : !waveasm.sreg iter_args(%next_j#0, %inner_tmp) : !waveasm.sreg, !waveasm.vreg
     }
 
     %outer_new_sum = waveasm.v_add_u32 %inner_result, %c1
         : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
-    %next_i = waveasm.s_add_u32 %oi, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %outer_cond = waveasm.s_cmp_lt_u32 %next_i, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %outer_cond : !waveasm.sreg iter_args(%next_i, %outer_new_sum) : !waveasm.sreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %oi, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %outer_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %outer_cond : !waveasm.sreg iter_args(%next_i#0, %outer_new_sum) : !waveasm.sreg, !waveasm.vreg
   }
 
   // CHECK: waveasm.s_endpgm
@@ -268,9 +268,9 @@ waveasm.program @multi_mfma_chain_loop
     %n6 = waveasm.v_mfma_f32_16x16x16_f16 %lds_a, %lds_b, %acc6 : !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
     %n7 = waveasm.v_mfma_f32_16x16x16_f16 %lds_a, %lds_b, %acc7 : !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
 
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c16 : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7)
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c16 : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7)
         : !waveasm.sreg,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>
@@ -351,9 +351,9 @@ waveasm.program @blockarg_only_mfma_use
     %new_acc = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %acc
         : !waveasm.pvreg<0, 4>, !waveasm.pvreg<4, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
 
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
   %v8 = waveasm.precolored.vreg 8 : !waveasm.pvreg<8>
@@ -389,9 +389,9 @@ waveasm.program @sequential_loops
       : (!waveasm.sreg, !waveasm.vreg<4, 4>) -> (!waveasm.sreg, !waveasm.vreg<4, 4>) {
     %n1 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %loop1_acc
         : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
-    %next_i1 = waveasm.s_add_u32 %i1, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond1 = waveasm.s_cmp_lt_u32 %next_i1, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond1 : !waveasm.sreg iter_args(%next_i1, %n1) : !waveasm.sreg, !waveasm.vreg<4, 4>
+    %next_i1:2 = waveasm.s_add_u32 %i1, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond1 = waveasm.s_cmp_lt_u32 %next_i1#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond1 : !waveasm.sreg iter_args(%next_i1#0, %n1) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
   %use1 = waveasm.v_add_u32 %acc1_out, %v0 : !waveasm.vreg<4, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
@@ -404,9 +404,9 @@ waveasm.program @sequential_loops
       : (!waveasm.sreg, !waveasm.vreg<4, 4>) -> (!waveasm.sreg, !waveasm.vreg<4, 4>) {
     %n2 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %loop2_acc
         : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
-    %next_i2 = waveasm.s_add_u32 %i2, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond2 = waveasm.s_cmp_lt_u32 %next_i2, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond2 : !waveasm.sreg iter_args(%next_i2, %n2) : !waveasm.sreg, !waveasm.vreg<4, 4>
+    %next_i2:2 = waveasm.s_add_u32 %i2, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond2 = waveasm.s_cmp_lt_u32 %next_i2#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond2 : !waveasm.sreg iter_args(%next_i2#0, %n2) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
   %use2 = waveasm.v_add_u32 %acc2_out, %v0 : !waveasm.vreg<4, 4>, !waveasm.pvreg<0> -> !waveasm.vreg
@@ -440,9 +440,9 @@ waveasm.program @blockarg_cond_only
 
     %new_val = waveasm.v_add_u32 %val, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %new_val, %sum) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %new_val, %sum) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
   }
 
   // CHECK: waveasm.v_add_u32 {{.*}}!waveasm.pvreg<[[FWD]]>
@@ -477,9 +477,9 @@ waveasm.program @long_epilogue
     %lb = waveasm.precolored.vreg 8, 4 : !waveasm.pvreg<8, 4>
     %new_acc = waveasm.v_mfma_f32_16x16x16_f16 %la, %lb, %acc
         : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
-    %next_i = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
   // Long epilogue chain

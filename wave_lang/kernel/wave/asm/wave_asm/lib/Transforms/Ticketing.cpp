@@ -232,8 +232,8 @@ struct InsertWaitcntPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InsertWaitcntPass)
 
   InsertWaitcntPass() = default;
-  InsertWaitcntPass(bool insertAfterLoads)
-      : insertAfterLoads(insertAfterLoads) {}
+  InsertWaitcntPass(bool insertAfterLoads, bool ticketedWaitcnt)
+      : insertAfterLoads(insertAfterLoads), ticketedWaitcnt(ticketedWaitcnt) {}
 
   StringRef getArgument() const override { return "waveasm-insert-waitcnt"; }
 
@@ -248,6 +248,7 @@ struct InsertWaitcntPass
 
 private:
   bool insertAfterLoads = false;
+  bool ticketedWaitcnt = true;
 
   /// Minimum number of IR operations between an LGKM load and its use for
   /// latency covering. ds_read (LDS) latency is ~20-40 cycles on CDNA.
@@ -490,22 +491,24 @@ private:
     llvm::SmallVector<Operation *> allOps;
     collectOpsRecursive(program.getBodyBlock(), allOps);
 
-    for (Operation *op : allOps) {
-      ++st.opIndex;
+    if (ticketedWaitcnt) {
+      for (Operation *op : allOps) {
+        ++st.opIndex;
 
-      if (observeExistingWaitcnt(op, st))
-        continue;
-      if (handleBarrier(op, st))
-        continue;
+        if (observeExistingWaitcnt(op, st))
+          continue;
+        if (handleBarrier(op, st))
+          continue;
 
-      MemOpKind kind = classifyMemOp(op);
-      if (kind != MemOpKind::None) {
-        handleMemoryOp(op, kind, st);
-        continue;
+        MemOpKind kind = classifyMemOp(op);
+        if (kind != MemOpKind::None) {
+          handleMemoryOp(op, kind, st);
+          continue;
+        }
+
+        handleNonMemoryOp(op, st);
+        handleLoopBoundary(op, st);
       }
-
-      handleNonMemoryOp(op, st);
-      handleLoopBoundary(op, st);
     }
 
     combineAdjacentWaitcnts(program);
@@ -607,8 +610,8 @@ std::unique_ptr<mlir::Pass> createWAVEASMInsertWaitcntPass() {
 }
 
 std::unique_ptr<mlir::Pass>
-createWAVEASMInsertWaitcntPass(bool insertAfterLoads) {
-  return std::make_unique<InsertWaitcntPass>(insertAfterLoads);
+createWAVEASMInsertWaitcntPass(bool insertAfterLoads, bool ticketedWaitcnt) {
+  return std::make_unique<InsertWaitcntPass>(insertAfterLoads, ticketedWaitcnt);
 }
 
 } // namespace waveasm

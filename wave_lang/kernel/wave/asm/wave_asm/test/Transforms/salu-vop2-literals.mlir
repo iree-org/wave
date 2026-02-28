@@ -18,13 +18,12 @@ waveasm.program @salu_literal_test target = #waveasm.target<#waveasm.gfx942, 5> 
   // CHECK-NOT: v_mov_b32
   // CHECK: s_add_u32 s{{[0-9]+}}, s0, 4096
   %c4096 = waveasm.constant 4096 : !waveasm.imm<4096>
-  %r1 = waveasm.s_add_u32 %s0, %c4096 : !waveasm.psreg<0>, !waveasm.imm<4096> -> !waveasm.sreg
-
+  %r1:2 = waveasm.s_add_u32 %s0, %c4096 : !waveasm.psreg<0>, !waveasm.imm<4096> -> !waveasm.sreg, !waveasm.sreg
   // Another SALU with literal -- should also be direct
   // CHECK-NOT: v_mov_b32
   // CHECK: s_lshl_b32 s{{[0-9]+}}, s{{[0-9]+}}, 7
   %c7 = waveasm.constant 7 : !waveasm.imm<7>
-  %r2 = waveasm.s_lshl_b32 %r1, %c7 : !waveasm.sreg, !waveasm.imm<7> -> !waveasm.sreg
+  %r2 = waveasm.s_lshl_b32 %r1#0, %c7 : !waveasm.sreg, !waveasm.imm<7> -> !waveasm.sreg
 
   waveasm.s_endpgm
 }
@@ -45,7 +44,7 @@ waveasm.program @vop2_literal_test target = #waveasm.target<#waveasm.gfx942, 5> 
   // CHECK-NOT: v_mov_b32 v15
   // CHECK: v_add_u32 v{{[0-9]+}}, 512, v{{[0-9]+}}
   %c512 = waveasm.constant 512 : !waveasm.imm<512>
-  %r2 = waveasm.v_add_u32 %c512, %r1 : !waveasm.imm<512>, !waveasm.vreg -> !waveasm.vreg
+  %r2 = waveasm.v_add_u32 %c512, %r1#0 : !waveasm.imm<512>, !waveasm.vreg -> !waveasm.vreg
 
   waveasm.s_endpgm
 }

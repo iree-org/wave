@@ -33,8 +33,7 @@ waveasm.program @smem_waitcnt target = #waveasm.target<#waveasm.gfx942, 5> abi =
   // CHECK: waveasm.s_load_dword
   // CHECK: waveasm.s_waitcnt
   %s1 = waveasm.precolored.sreg 4 : !waveasm.psreg<4>
-  %result = waveasm.s_add_u32 %loaded, %s1 : !waveasm.sreg, !waveasm.psreg<4> -> !waveasm.sreg
-
+  %result:2 = waveasm.s_add_u32 %loaded, %s1 : !waveasm.sreg, !waveasm.psreg<4> -> !waveasm.sreg, !waveasm.sreg
   waveasm.s_endpgm
 }
 

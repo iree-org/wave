@@ -171,7 +171,7 @@ def test_attention_32x32x8():
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [12], sizes = [4], strides = [1]}
     # CHECK-COUNT-4:            {{.*}} = amdgpu.mfma
     # CHECK:                    scf.yield
-    # CHECK-COUNT-4:            vector.store {{.*}}: memref<8x128x128xf32{{.*}}>, vector<4xf32>
+    # CHECK-COUNT-4:            vector.store {{.*}}: memref<{{.*}}xf32{{.*}}>, vector<4xf32>
 
 
 @run_test
@@ -297,8 +297,8 @@ def test_dynamic_attention_32x32x8():
     # CHECK:                %[[BOUNDS:.+]] = vector.broadcast %{{.*}} : index to vector<4xindex>
     # CHECK:                %[[SLT:.+]] = arith.cmpi slt, %[[INDICES]], %[[BOUNDS]] : vector<4xindex>
     # CHECK:                %[[MASK:.+]] = arith.andi %{{.*}}, %[[SLT]] : vector<4xi1>
-    # CHECK:                vector.maskedstore %{{.*}}[{{.*}}], %[[MASK]], %{{.*}} : memref<?x?x?xf32, strided<[?, ?, 1]>>, vector<4xi1>, vector<4xf32>
-    # CHECK-COUNT-3:        vector.maskedstore {{.*}} : memref<?x?x?xf32, strided<[?, ?, 1]>>, vector<4xi1>, vector<4xf32>
+    # CHECK:                vector.maskedstore %{{.*}}[{{.*}}], %[[MASK]], %{{.*}} : memref<{{.*}}xf32{{.*}}>, vector<4xi1>, vector<4xf32>
+    # CHECK-COUNT-3:        vector.maskedstore {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<4xi1>, vector<4xf32>
 
 
 @run_test

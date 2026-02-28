@@ -1120,7 +1120,7 @@ def wave_compile(
             use_local_scope=options.use_local_scope,
         )
 
-        if options.print_mlir:
+        if options.print_mlir and not options.use_wave_asm_backend:
             if options.print_mlir_file:
                 write_file(options.print_mlir_file, "w", asm)
             else:
@@ -1217,7 +1217,6 @@ def wave_compile(
 
 def _generate_asm_code(mb, options):
     """Generate AMDGCN assembly from MLIR module."""
-    # Convert module_op to MLIR string
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
         != LocationCaptureLevel.NONE
@@ -1225,12 +1224,66 @@ def _generate_asm_code(mb, options):
         use_local_scope=options.use_local_scope,
     )
 
-    # Canonical MLIR->ASM entry point (single-path kernel IR backend).
+    if options.use_wave_asm_backend:
+        return _generate_asm_code_waveasm(mlir_asm, options)
+
     from .asm.kernel_module_compiler import KernelModuleCompiler
 
     return KernelModuleCompiler(
         targetid=options.target, codeobj=options.codeobj, mma_type=options.mma_type
     ).compile_mlir_string(mlir_asm)
+
+
+def _generate_asm_code_waveasm(mlir_asm, options):
+    """Generate AMDGCN assembly via the WaveASM (waveasm-translate) backend."""
+    import os
+    from wave_lang.support.ir_imports import Context, Module, func_d
+    from .asm.mlir_analysis import walk_ops_recursively, should_skip_function
+    from .asm.wave_asm.test.e2e.waveasm_e2e import WaveASMCompiler
+
+    # WaveASM expects a bare func.func (no stream wrapper), so extract
+    # the kernel function and wrap it in a plain module.
+    kernel_name = None
+    with Context() as ctx:
+        ctx.allow_unregistered_dialects = True
+        module = Module.parse(mlir_asm)
+        for fn in walk_ops_recursively(module.operation):
+            if not isinstance(fn, func_d.FuncOp):
+                continue
+            if should_skip_function(fn):
+                continue
+            kernel_name = fn.sym_name.value
+            kernel_mlir = (
+                "module {\n" + fn.get_asm(print_generic_op_form=True) + "\n}\n"
+            )
+            kernel_mlir_pretty = "module {\n" + fn.get_asm() + "\n}\n"
+            break
+        else:
+            raise ValueError("No kernel function found in MLIR for WaveASM backend")
+
+    if options.print_mlir:
+        if options.print_mlir_file:
+            write_file(options.print_mlir_file, "w", kernel_mlir_pretty)
+        else:
+            print(kernel_mlir_pretty)
+
+    wg = tuple(options.kernel_launch_info.blocks)
+    compiler = WaveASMCompiler(target=options.target, codeobj=options.codeobj)
+    success, asm_text, stderr = compiler.compile_mlir_to_asm(
+        kernel_mlir,
+        workgroup_size=wg,
+        ticketed_waitcnt=False,
+    )
+    if not success:
+        raise RuntimeError(f"waveasm-translate failed:\n{asm_text}")
+
+    if options.dump_intermediates:
+        asm_path = os.path.join(options.dump_intermediates, f"{kernel_name}.rocmasm")
+        os.makedirs(options.dump_intermediates, exist_ok=True)
+        with open(asm_path, "w") as f:
+            f.write(asm_text)
+
+    return asm_text
 
 
 def _compile_asm_to_binary(asm_code, options):
@@ -1269,7 +1322,6 @@ def _compile_asm_to_binary(asm_code, options):
         result = subprocess.run(compile_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Assembly compilation failed: {result.stderr}")
-
         # Step 2: Link object file to hsaco file
         link_cmd = [
             "amdclang++",

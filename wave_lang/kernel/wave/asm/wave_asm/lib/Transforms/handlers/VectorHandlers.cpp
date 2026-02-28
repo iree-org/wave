@@ -201,48 +201,68 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
     return op->emitError("source value not mapped");
   }
 
-  // Get the offset from the offsets attribute (for 1D, it's a single value)
   auto offsets = extractOp.getOffsets();
   int64_t offset = 0;
   if (!offsets.empty()) {
     offset = cast<IntegerAttr>(offsets[0]).getInt();
   }
 
-  // Get the size from the sizes attribute (for 1D, it's a single value)
   auto sizes = extractOp.getSizes();
   int64_t size = 1;
   if (!sizes.empty()) {
     size = cast<IntegerAttr>(sizes[0]).getInt();
   }
 
-  // Get the source register type to find the base physical register
+  // Check for sub-register packed extraction: when all elements fit in a
+  // single 32-bit VGPR (e.g. vector<4xi8>), extracting at offset>0 requires
+  // a bitfield operation rather than a register-index offset.
+  // Only handle the single-register case; multi-register packed vectors
+  // (e.g. vector<8xi8> = 2 VGPRs) would need per-register selection first.
+  auto sourceVecType = dyn_cast<VectorType>(extractOp.getSource().getType());
+  if (sourceVecType) {
+    int64_t elemBitWidth =
+        sourceVecType.getElementType().getIntOrFloatBitWidth();
+    int64_t numElems = sourceVecType.getNumElements();
+    int64_t totalBits = numElems * elemBitWidth;
+    int64_t srcRegWidth = (totalBits + 31) / 32;
+
+    if (srcRegWidth == 1 && srcRegWidth < numElems) {
+      int64_t bitOffset = offset * elemBitWidth;
+      int64_t extractWidth = size * elemBitWidth;
+      auto vregType = ctx.createVRegType(1, 1);
+      auto bitOffsetImm = builder.getType<ImmType>(bitOffset);
+      auto bitOffsetConst =
+          ConstantOp::create(builder, loc, bitOffsetImm, bitOffset);
+      auto widthImm = builder.getType<ImmType>(extractWidth);
+      auto widthConst =
+          ConstantOp::create(builder, loc, widthImm, extractWidth);
+      auto bfe = V_BFE_U32::create(builder, loc, vregType, *src, bitOffsetConst,
+                                   widthConst);
+      ctx.getMapper().mapValue(extractOp.getResult(), bfe);
+      return success();
+    }
+  }
+
   Type srcType = src->getType();
 
   if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
-    // Physical VGPR - extract element(s) at offset
     int64_t baseIdx = pvreg.getIndex() + offset;
     auto elemType = PVRegType::get(builder.getContext(), baseIdx, size);
     auto elemReg =
         PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, size);
     ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
   } else if (auto pareg = dyn_cast<PARegType>(srcType)) {
-    // Physical AGPR - extract element(s) at offset
     int64_t baseIdx = pareg.getIndex() + offset;
     auto elemType = PARegType::get(builder.getContext(), baseIdx, size);
     auto elemReg =
         PrecoloredARegOp::create(builder, loc, elemType, baseIdx, size);
     ctx.getMapper().mapValue(extractOp.getResult(), elemReg);
   } else if (isAGPRType(srcType)) {
-    // Virtual AGPR - use waveasm.extract op with AGPR result type.
-    // Preserving the AGPR type is critical: downstream vector.store handlers
-    // check isAGPRType to insert v_accvgpr_read_b32 before MUBUF stores.
     auto elemType = ctx.createARegType(size, 1);
     auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
                                            builder.getI64IntegerAttr(offset));
     ctx.getMapper().mapValue(extractOp.getResult(), extractWaveOp.getResult());
   } else {
-    // Virtual VGPR or other type - use waveasm.extract op
-    // This will be lowered to proper register offset during register allocation
     auto elemType = ctx.createVRegType(size, 1);
     auto extractWaveOp = ExtractOp::create(builder, loc, elemType, *src,
                                            builder.getI64IntegerAttr(offset));

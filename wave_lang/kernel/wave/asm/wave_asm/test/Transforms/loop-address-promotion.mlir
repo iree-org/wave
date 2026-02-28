@@ -48,10 +48,10 @@ waveasm.program @basic_double_buffer
     %val = waveasm.ds_read_b128 %addr : !waveasm.vreg -> !waveasm.vreg<4, 4>
 
     // IV bump + condition.
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     // Rotation: s0->s1, s1->s0.
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -88,9 +88,9 @@ waveasm.program @no_transform_not_lds
     %addr = waveasm.v_add_u32 %tid, %s0 : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
     %dummy = waveasm.v_add_u32 %addr, %tid : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -126,10 +126,10 @@ waveasm.program @no_transform_no_rotation
     %addr = waveasm.v_add_u32 %tid, %s0 : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
     %val = waveasm.ds_read_b128 %addr : !waveasm.vreg -> !waveasm.vreg<4, 4>
 
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     // Identity: s0->s0, no rotation.
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s0) : !waveasm.sreg, !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s0) : !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -169,10 +169,10 @@ waveasm.program @triple_buffer
     // CHECK: waveasm.ds_read_b128
     %val = waveasm.ds_read_b128 %addr : !waveasm.vreg -> !waveasm.vreg<4, 4>
 
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
     // Rotation: s0->s1->s2->s0.
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s1, %s2, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s1, %s2, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -217,9 +217,9 @@ waveasm.program @two_reads_same_group
     // CHECK: waveasm.ds_read_b32
     %val1 = waveasm.ds_read_b32 %addr1 : !waveasm.vreg -> !waveasm.vreg
 
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -257,9 +257,9 @@ waveasm.program @operand_order_reversed
     // CHECK: waveasm.ds_read_b64
     %val = waveasm.ds_read_b64 %addr : !waveasm.vreg -> !waveasm.vreg<2>
 
-    %next_iv = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0, %s1, %s0) : !waveasm.sreg, !waveasm.sreg, !waveasm.sreg
   }
 
   waveasm.s_endpgm

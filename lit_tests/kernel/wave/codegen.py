@@ -257,10 +257,10 @@ def test_read_write():
     # CHECK-DAG:        %[[D1:.*]] = stream.binding.subspan %[[ARG1]][%[[C0]]] : !stream.binding -> memref<f16>
     # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
     # CHECK:            %[[S0:.*]] = memref.reinterpret_cast %[[D0]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
-    # CHECK:            %[[S1:.*]] = memref.reinterpret_cast %[[D1]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[I0:.*]] = affine.apply #[[MAP0]]()[%[[thread_id_x]]]
     # CHECK:            %[[V:.*]] = vector.load %[[S0]][%[[I0]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
-    # CHECK:            vector.store %[[V]], %[[S1]][%[[I0]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
+    # CHECK:            memref.reinterpret_cast %[[D1]] to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>
+    # CHECK:            vector.store %[[V]], {{.*}}[{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<16xf16>
     # CHECK:            return
 
 
@@ -303,13 +303,12 @@ def test_read_write_diagonal():
     # CHECK-DAG:        %[[CST_1:.*]] = arith.constant dense<0.000000e+00> : vector<16xf16>
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK-DAG:        %[[S:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<f16>
-    # CHECK:            %[[D7:.*]] = memref.reinterpret_cast %[[S]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[D0:.*]] = affine.apply #[[map]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D1:.*]] = arith.index_cast %[[D0]] : index to i64
     # CHECK:            %[[D4:.*]] = vector.broadcast %[[D1]] : i64 to vector<16xi64>
     # CHECK:            %[[D5:.*]] = arith.cmpi sge, %[[D4]], %[[CST]] : vector<16xi64>
     # CHECK:            %[[D6:.*]] = arith.select %[[D5]], %[[CST_1]], %[[CST_0]] : vector<16xi1>, vector<16xf16>
-    # CHECK:            vector.store %[[D6]], %[[D7]][%[[D0]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
+    # CHECK:            vector.store %[[D6]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<16xf16>
 
 
 @run_test
@@ -354,13 +353,12 @@ def test_read_write_masked():
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK-DAG:        %[[D0:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1, 3], strides: [3, 1] : memref<f16> to memref<1x3xf16, strided<[3, 1]>>
-    # CHECK-DAG:        %[[D6:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1, 3], strides: [3, 1] : memref<f16> to memref<1x3xf16, strided<[3, 1]>>
     # CHECK:            %[[D1:.*]] = affine.apply #[[map]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D2:.*]] = arith.cmpi slt, %[[D1]], %[[C1]] : index
     # CHECK:            %[[D3:.*]] = vector.broadcast %[[D2]] : i1 to vector<4xi1>
     # CHECK:            %[[D4:.*]] = arith.andi %[[D3]], %[[CST_0]] : vector<4xi1>
     # CHECK:            %[[D5:.*]] = vector.maskedload %[[D0]][%[[D1]], %[[C0]]], %[[D4]], %[[CST]] : memref<1x3xf16, strided<[3, 1]>>, vector<4xi1>, vector<4xf16> into vector<4xf16>
-    # CHECK:            vector.maskedstore %[[D6]][%[[D1]], %[[C0]]], %[[D4]], %[[D5]] : memref<1x3xf16, strided<[3, 1]>>, vector<4xi1>, vector<4xf16>
+    # CHECK:            vector.maskedstore {{.*}}[{{.*}}], %[[D4]], %[[D5]] : memref<{{.*}}xf16{{.*}}>, vector<4xi1>, vector<4xf16>
 
 
 @run_test
@@ -401,7 +399,7 @@ def test_read_write_masked_shared():
     # CHECK:            %{{.*}} = vector.maskedload {{.*}} : memref<1x3xf16, strided<[3, 1]>>, vector<4xi1>, vector<4xf16> into vector<4xf16>
     # CHECK:            vector.store {{.*}} : memref<4x8xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            %{{.*}} = vector.load {{.*}} : memref<4x8xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            vector.maskedstore {{.*}} : memref<1x3xf16, strided<[3, 1]>>, vector<4xi1>, vector<4xf16>
+    # CHECK:            vector.maskedstore {{.*}} : memref<{{.*}}xf16{{.*}}>, vector<4xi1>, vector<4xf16>
 
 
 @run_test
@@ -490,13 +488,12 @@ def test_read_write_dynamic_mapping():
     # CHECK-DAG:        %[[S2:.*]] = stream.binding.subspan %[[ARG2]][%[[C0]]] : !stream.binding -> memref<f16>
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK-DAG:        %[[D0:.*]] = memref.reinterpret_cast %[[S1]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
-    # CHECK-DAG:        %[[D58:.*]] = memref.reinterpret_cast %[[S2]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[D1:.*]] = affine.apply #[[map0]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D2:.*]] = vector.load %[[D0]][%[[D1]], %[[C0]]] : memref<16x16xi32, strided<[16, 1]>>, vector<16xi32>
     # CHECK-COUNT-16:   memref.load
     # CHECK-NOT:        vector.extract
     # CHECK:            %[[RES:.*]] = vector.from_elements
-    # CHECK:            vector.store %[[RES]], %[[D58]][%[[D1]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
+    # CHECK:            vector.store %[[RES]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<16xf16>
 
 
 @run_test
@@ -547,7 +544,7 @@ def test_read_write_dynamic_mapping_broadcast():
     # CHECK:            %[[OFF:.*]] = memref.load %{{.*}}[%[[M:.*]], %{{.*}}] : memref<16x1xi32, strided<[1, 1]>>
     # CHECK:            %[[IDX:.*]] = arith.index_cast %[[OFF]] : i32 to index
     # CHECK:            %[[RES:.*]] = vector.load %{{.*}}[%[[M]], %[[IDX]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
-    # CHECK:            vector.store %[[RES]], %{{.*}}[%[[M]], %{{.*}}] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
+    # CHECK:            vector.store %[[RES]], %{{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<16xf16>
 
 
 @run_test
@@ -621,7 +618,6 @@ def test_read_write_dynamic_mapping_chain():
     # CHECK-DAG:      %[[D0:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK-DAG:      %[[D4:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 2], strides: [2, 1] : memref<i32> to memref<16x2xi32, strided<[2, 1]>>
     # CHECK-DAG:      %[[D8:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 4], strides: [4, 1] : memref<i32> to memref<16x4xi32, strided<[4, 1]>>
-    # CHECK-DAG:      %[[D12:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:          %[[D1:.*]] = affine.apply #[[map0]]()[%[[THREAD_ID_X]]]
     # CHECK:          %[[D2:.*]] = affine.apply #[[map1]]()[%[[WORKGROUP_ID_1]]]
     # CHECK:          %[[D3:.*]] = memref.load %[[D4]][%[[D1]], %[[D2]]] : memref<16x2xi32, strided<[2, 1]>>
@@ -630,7 +626,7 @@ def test_read_write_dynamic_mapping_chain():
     # CHECK:          %[[D9:.*]] = arith.index_cast %[[D6]] : i32 to index
     # CHECK:          %[[D11:.*]] = vector.load %[[D0]][%[[D1]], %[[D9]]] : memref<16x16xf16, strided<[16, 1]>>, vector<4xf16>
     # CHECK:          %[[D13:.*]] = affine.apply #[[map2]]()[%[[WORKGROUP_ID_1]]]
-    # CHECK:          vector.store %[[D11]], %[[D12]][%[[D1]], %[[D13]]] : memref<16x16xf16, strided<[16, 1]>>, vector<4xf16>
+    # CHECK:          vector.store %[[D11]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<4xf16>
 
 
 @run_test
@@ -684,11 +680,10 @@ def test_read_write_dynamic_symbol():
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #   CHECK-DAG:      %[[A1:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg3, 16], strides: [16, 1] : memref<f16> to memref<?x16xf16, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A2:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
-    #   CHECK-DAG:      %[[A3:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M:.*]], %[[N:.*]]] : memref<16x16xi32, strided<[16, 1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[RES:.*]] = vector.load %[[A1]][%[[O2]], %[[N]]] : memref<?x16xf16, strided<[16, 1]>>, vector<1xf16>
-    #       CHECK:      vector.store %[[RES]], %[[A3]][%[[M]], %[[N]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
+    #       CHECK:      vector.store %[[RES]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<1xf16>
 
 
 @run_test
@@ -744,12 +739,11 @@ def test_read_write_dynamic_symbol_expr():
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #   CHECK-DAG:      %[[A1:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg3, 16], strides: [16, 1] : memref<f16> to memref<?x16xf16, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A2:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
-    #   CHECK-DAG:      %[[A3:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M:.*]], %[[N:.*]]] : memref<16x16xi32, strided<[16, 1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.subi %[[CST]], %[[O2]] : index
     #       CHECK:      %[[RES:.*]] = vector.load %[[A1]][%[[O3]], %[[N]]] : memref<?x16xf16, strided<[16, 1]>>, vector<1xf16>
-    #       CHECK:      vector.store %[[RES]], %[[A3]][%[[M]], %[[N]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
+    #       CHECK:      vector.store %[[RES]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<1xf16>
 
 
 @run_test
@@ -794,14 +788,13 @@ def test_read_write_conditional():
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #   CHECK-DAG:      %[[A1:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #   CHECK-DAG:      %[[A2:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<i32> to memref<16x16xi32, strided<[16, 1]>>
-    #   CHECK-DAG:      %[[A3:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     #       CHECK:      %[[VEC:.*]] = vector.load %[[A1]][%[[M:.*]], %{{.*}}] : memref<16x16xf16, strided<[16, 1]>>, vector<8xf16>
     #       CHECK:      %[[RES:.*]] = vector.extract_strided_slice %[[VEC]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf16> to vector<1xf16>
     #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[C0]]] : memref<16x16xi32, strided<[16, 1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.cmpi sgt, %[[O2]], %[[C0]] : index
     #       CHECK:      scf.if %[[O3]] {
-    #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<1xf16>
+    #       CHECK:        vector.store %[[RES]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<1xf16>
     #       CHECK:      }
 
 
@@ -848,7 +841,7 @@ def test_dynamic_copy():
     # CHECK:            %[[D8:.*]] = vector.broadcast %[[D7]] : i1 to vector<16xi1>
     # CHECK:            %[[D9:.*]] = arith.andi %[[D5]], %[[D8]] : vector<16xi1>
     # CHECK:            %[[D10:.*]] = vector.maskedload %[[D0]][%[[D6]], %[[D1]]], %[[D9]], %[[CST]] : memref<?x?xf16, strided<[?, 1]>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
-    # CHECK:            vector.maskedstore %[[D0]][%[[D6]], %[[D1]]], %[[D9]], %[[D10]] : memref<?x?xf16, strided<[?, 1]>>, vector<16xi1>, vector<16xf16>
+    # CHECK:            vector.maskedstore {{.*}}[{{.*}}], %[[D9]], %[[D10]] : memref<{{.*}}xf16{{.*}}>, vector<16xi1>, vector<16xf16>
     # CHECK:          func.func @isolated_benchmark$async(%[[ARG:.*]]: !hal.buffer_view, %[[FENCE:.*]]: !hal.fence, %{{.*}}: !hal.fence)
     # CHECK:            %[[D0:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[0] : index
     # CHECK:            %[[D1:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[1] : index
@@ -2666,7 +2659,7 @@ def test_scanop_cumsum():
     # CHECK: arith.addf {{.*}} : vector<1xf16>
 
     # Final store
-    # CHECK: vector.store {{.*}} : memref<1x64xf16
+    # CHECK: vector.store {{.*}} : memref<{{.*}}xf16
 
     # Dispatch
     # CHECK: flow.dispatch @scanop_cumsum
@@ -2929,7 +2922,6 @@ def test_atomic_add():
     # CHECK-DAG:        %[[ZERO_VEC:.+]] = arith.constant dense<0> : vector<{{.*}}xi32>
     # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
     # CHECK:            %[[INDICES:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [64], strides: [1] : memref<i32> to memref<64xi32, strided<[1]>>
-    # CHECK:            %[[EXPERTS:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [4], strides: [1] : memref<i32> to memref<4xi32, strided<[1]>>
     # CHECK:            %[[IDX:.+]] = memref.load %[[INDICES]][%[[thread_id_x]]] : memref<{{.*}}xi32, strided<[1]>>
     # CHECK:            %[[alloc:.*]] = memref.alloc() : memref<{{.*}}xi32, #gpu.address_space<workgroup>>
     # CHECK:            vector.store %[[ZERO_VEC]], %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
@@ -2937,7 +2929,7 @@ def test_atomic_add():
     # CHECK:            %[[ATOMIC_ADD:.+]] = memref.atomic_rmw addi %[[C1_I32]], %[[alloc]][%[[IDX_CAST]]] : (i32, memref<{{.*}}xi32, #gpu.address_space<workgroup>>) -> i32
     # CHECK:            amdgpu.lds_barrier
     # CHECK:            %[[RESULT:.+]] = vector.load %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
-    # CHECK:            vector.store %[[RESULT]], %[[EXPERTS]][%[[C0]]] : memref<{{.*}}xi32, strided<[1]>>, vector<{{.*}}xi32>
+    # CHECK:            vector.store %[[RESULT]], {{.*}}[{{.*}}] : memref<{{.*}}xi32{{.*}}>, vector<{{.*}}xi32>
 
 
 @run_test

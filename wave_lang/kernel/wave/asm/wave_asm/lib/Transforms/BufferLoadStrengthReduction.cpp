@@ -414,7 +414,13 @@ static void applyStrengthReduction(LoopOp loopOp) {
     SmallVector<BufferLoadInfo> filtered;
     for (auto &info : candidates) {
       auto stride = computeStaticStride(info.deps, info.voffset, iv, *ivStep);
-      if (stride) {
+      // Reject stride == 0: the voffset chain depends on the IV (checked
+      // earlier by dependsOnIV), but the symbolic derivative collapsed to
+      // zero — typically because two IV-dependent sub-expressions cancel
+      // in the delta while the actual values still vary per iteration
+      // (e.g. via right-shift truncation / staircase patterns). Hoisting
+      // the voffset and bumping soffset by 0 would freeze the address.
+      if (stride && *stride != 0) {
         candidateStrides.push_back(*stride);
         filtered.push_back(std::move(info));
       } else {
@@ -432,7 +438,6 @@ static void applyStrengthReduction(LoopOp loopOp) {
   struct SRDGroup {
     Value srd;
     int64_t stride;
-    Value strideSGPR;
   };
   SmallVector<SRDGroup> groups;
   SmallVector<unsigned> candidateGroupIdx;
@@ -448,12 +453,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
     if (matchIdx) {
       candidateGroupIdx.push_back(*matchIdx);
     } else {
-      auto strideImm = builder.getType<ImmType>(candidateStrides[i]);
-      auto strideConst =
-          ConstantOp::create(builder, loc, strideImm, candidateStrides[i]);
-      Value strideSGPR = S_MOV_B32::create(builder, loc, sregType, strideConst);
       candidateGroupIdx.push_back(groups.size());
-      groups.push_back({info.srd, candidateStrides[i], strideSGPR});
+      groups.push_back({info.srd, candidateStrides[i]});
     }
   }
 
@@ -522,8 +523,12 @@ static void applyStrengthReduction(LoopOp loopOp) {
     SmallVector<Value> nextSoffs;
     for (auto [g, group] : llvm::enumerate(groups)) {
       Value currentSoff = newBody.getArgument(soffsetArgBase + g);
+      auto strideImm = preCondBuilder.getType<ImmType>(group.stride);
+      Value strideConst =
+          ConstantOp::create(preCondBuilder, loc, strideImm, group.stride);
       Value nextSoff = S_ADD_U32::create(preCondBuilder, loc, sregType,
-                                         currentSoff, group.strideSGPR);
+                                         sregType, currentSoff, strideConst)
+                           .getDst();
       nextSoffs.push_back(nextSoff);
     }
 
@@ -541,8 +546,12 @@ static void applyStrengthReduction(LoopOp loopOp) {
       newCondIterArgs.push_back(mapping.lookup(v));
     for (auto [g, group] : llvm::enumerate(groups)) {
       Value currentSoff = newBody.getArgument(soffsetArgBase + g);
-      Value nextSoff = S_ADD_U32::create(bodyBuilder, loc, sregType,
-                                         currentSoff, group.strideSGPR);
+      auto strideImm = bodyBuilder.getType<ImmType>(group.stride);
+      Value strideConst =
+          ConstantOp::create(bodyBuilder, loc, strideImm, group.stride);
+      Value nextSoff = S_ADD_U32::create(bodyBuilder, loc, sregType, sregType,
+                                         currentSoff, strideConst)
+                           .getDst();
       newCondIterArgs.push_back(nextSoff);
     }
     ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);

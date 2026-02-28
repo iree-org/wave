@@ -75,6 +75,11 @@ struct LshlOrFusePattern : public OpRewritePattern<V_OR_B32> {
       Value shiftSrc = lshlOp.getSrc1(); // value being shifted
       Value shiftAmt = lshlOp.getSrc0(); // shift amount
 
+      // VOP3 constant bus restriction: at most one distinct SGPR source.
+      if (isSGPRType(shiftSrc.getType()) && isSGPRType(orend.getType()) &&
+          shiftSrc != orend)
+        return failure();
+
       auto loc = orOp.getLoc();
       auto resultType = orOp.getResult().getType();
 
@@ -156,6 +161,13 @@ struct LshlAddPattern : public OpRewritePattern<V_ADD_U32> {
         if (feedsBufferLoadLDS(addOp.getResult()))
           return failure();
       }
+
+      // VOP3 constant bus restriction: at most one distinct SGPR source.
+      // If both base and addend are SGPRs (and not the same value), the
+      // fused instruction would need two constant bus slots → illegal.
+      if (isSGPRType(lshlOp.getSrc1().getType()) &&
+          isSGPRType(other.getType()) && lshlOp.getSrc1() != other)
+        return failure();
 
       auto loc = addOp.getLoc();
 

@@ -121,16 +121,17 @@ def test_mxfp4_scaled_mma_16x16x128():
     # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
     # CHECK:        %[[EXTRACT_STRIDED_SLICE_0:.+]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [0], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:        %[[AFFINE_APPLY_4:.+]] = affine.apply #[[MAP4]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_0]], %{{.*}}[%[[AFFINE_APPLY_4]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:        %[[REINTERPRET_CAST_6:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [536870910], strides: [1] : memref<f32> to memref<536870910xf32, strided<[1]>>
+    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_0]], %[[REINTERPRET_CAST_6]][%{{.*}}] : memref<536870910xf32, strided<[1]>>, vector<1xf32>
     # CHECK:        %[[EXTRACT_STRIDED_SLICE_1:.+]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [1], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:        %[[AFFINE_APPLY_5:.+]] = affine.apply #[[MAP5]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_1]], %{{.*}}[%[[AFFINE_APPLY_5]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_1]], %[[REINTERPRET_CAST_6]][%{{.*}}] : memref<536870910xf32, strided<[1]>>, vector<1xf32>
     # CHECK:        %[[EXTRACT_STRIDED_SLICE_2:.+]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [2], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:        %[[AFFINE_APPLY_6:.+]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_2]], %{{.*}}[%[[AFFINE_APPLY_6]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_2]], %[[REINTERPRET_CAST_6]][%{{.*}}] : memref<536870910xf32, strided<[1]>>, vector<1xf32>
     # CHECK:        %[[EXTRACT_STRIDED_SLICE_3:.+]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [3], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:        %[[AFFINE_APPLY_7:.+]] = affine.apply #[[MAP7]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_3]], %{{.*}}[%[[AFFINE_APPLY_7]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_3]], %[[REINTERPRET_CAST_6]][%{{.*}}] : memref<536870910xf32, strided<[1]>>, vector<1xf32>
     # CHECK:        return
 
 
@@ -250,16 +251,16 @@ def test_mxfp8_scaled_mma_16x16x128():
     # CHECK:       %[[SCALED_MFMA:.*]] = amdgpu.scaled_mfma 16x16x128 (%[[LOAD7]][0] * %[[INSERT_STRIDED_SLICE_5]]) * (%[[LOAD4]][0] * %[[INSERT_STRIDED_SLICE_3]]) + %[[CST]] : f8E8M0FNU, vector<32xf8E5M2>, f8E8M0FNU, vector<32xf8E5M2>, vector<4xf32>
     # CHECK:       %[[EXTRACT_STRIDED_SLICE:.*]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [0], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:       %[[AFFINE_APPLY5:.*]] = affine.apply #[[MAP5]]()[%[[THREAD_ID_X]]]
-    # CHECK:       vector.store %[[EXTRACT_STRIDED_SLICE]], %{{.*}}[%[[AFFINE_APPLY5]], %[[AFFINE_APPLY4]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:       vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:       %[[EXTRACT_STRIDED_SLICE_7:.*]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [1], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:       %[[AFFINE_APPLY6:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]]]
-    # CHECK:       vector.store %[[EXTRACT_STRIDED_SLICE_7]], %{{.*}}[%[[AFFINE_APPLY6]], %[[AFFINE_APPLY4]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:       vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:       %[[EXTRACT_STRIDED_SLICE_8:.*]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [2], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:       %[[AFFINE_APPLY7:.*]] = affine.apply #[[MAP7]]()[%[[THREAD_ID_X]]]
-    # CHECK:       vector.store %[[EXTRACT_STRIDED_SLICE_8]], %{{.*}}[%[[AFFINE_APPLY7]], %[[AFFINE_APPLY4]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:       vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:       %[[EXTRACT_STRIDED_SLICE_9:.*]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [3], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:       %[[AFFINE_APPLY8:.*]] = affine.apply #[[MAP8]]()[%[[THREAD_ID_X]]]
-    # CHECK:       vector.store %[[EXTRACT_STRIDED_SLICE_9]], %{{.*}}[%[[AFFINE_APPLY8]], %[[AFFINE_APPLY4]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
+    # CHECK:       vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:       return
 
 

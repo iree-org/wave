@@ -116,7 +116,7 @@ def test_wmma_specialize():
     #### store graph ####
     # CHECK-DAG:                scf.if %[[COMP_COND]] {
     # CHECK-COUNT-32:               vector.extract_strided_slice
-    # CHECK-NEXT:                   vector.store
+    # CHECK:                        vector.store
 
     # CHECK:                    }
     # CHECK:                    return

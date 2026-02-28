@@ -63,10 +63,11 @@ def test_mma():
     print(mma.asm)
 
     # CHECK-LABEL: test_mma
-    # CHECK-DAG:        #[[MAP0:.*]] = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #[[MAP1:.*]] = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:        #[[MAP2:.*]] = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:        #[[MAP3:.*]] = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @mma
     # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
     # CHECK-DAG:        %[[workgroup_id_0:.*]] = gpu.block_id x
@@ -83,20 +84,16 @@ def test_mma():
     # CHECK:            %[[D22:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
 
-    # CHECK:            %[[OFF0:.*]] = affine.apply #[[MAP0]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D22]], {{.*}}[%[[OFF0]], {{.*}}]  : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
+    # CHECK:            vector.store %[[D22]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[D26:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [1], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
-    # CHECK:            %[[OFF1:.*]] = affine.apply #[[MAP1]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D26]], {{.*}}[%[[OFF1]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
+    # CHECK:            vector.store %[[D26]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[D28:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [2], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
-    # CHECK:            %[[OFF2:.*]] = affine.apply #[[MAP2]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D28]], {{.*}}[%[[OFF2]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
+    # CHECK:            vector.store %[[D28]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[D30:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [3], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
-    # CHECK:            %[[OFF3:.*]] = affine.apply #[[MAP3]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D30]], {{.*}}[%[[OFF3]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
+    # CHECK:            vector.store %[[D30]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
 
 @run_test
@@ -144,22 +141,23 @@ def test_mma_32x32x8():
     print(mma_32x32x8.asm)
 
     # CHECK-LABEL:    test_mma_32x32x8
-    # CHECK-DAG:        #[[MAP0:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4)>
-    # CHECK-DAG:        #[[MAP1:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 1)>
-    # CHECK-DAG:        #[[MAP2:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 2)>
-    # CHECK-DAG:        #[[MAP3:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 3)>
-    # CHECK-DAG:        #[[MAP4:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 8)>
-    # CHECK-DAG:        #[[MAP5:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 9)>
-    # CHECK-DAG:        #[[MAP6:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 10)>
-    # CHECK-DAG:        #[[MAP7:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 11)>
-    # CHECK-DAG:        #[[MAP8:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 16)>
-    # CHECK-DAG:        #[[MAP9:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 17)>
-    # CHECK-DAG:        #[[MAP10:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 18)>
-    # CHECK-DAG:        #[[MAP11:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 19)>
-    # CHECK-DAG:        #[[MAP12:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 24)>
-    # CHECK-DAG:        #[[MAP13:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 25)>
-    # CHECK-DAG:        #[[MAP14:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 26)>
-    # CHECK-DAG:        #[[MAP15:.*]] = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 27)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 64)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 8)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 9)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 10)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 11)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 16)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 17)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 18)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 19)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 24)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 25)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 26)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 27)>
     # CHECK:          func.func @mma_32x32x8
     # CHECK-DAG:        %[[workgroup_id_0:.*]] = gpu.block_id x
     # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
@@ -168,62 +166,43 @@ def test_mma_32x32x8():
     # CHECK-DAG:        %[[BASE_ALLOC:.+]] = memref.alloc() : memref<3072xi8, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C1536:.+]] = arith.constant 1536 : index
-    # CHECK-DAG:        %[[SUBSPAN:.*]] = stream.binding.subspan %arg2[%[[C0]]] : !stream.binding -> memref<f32>
-    # CHECK-DAG:        %[[DST:.*]] = memref.reinterpret_cast %[[SUBSPAN]] to offset: [0], sizes: [128, 128], strides: [128, 1] : memref<f32> to memref<128x128xf32, strided<[128, 1]>>
     # CHECK-DAG:        %[[ALLOC:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1536]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
     # CHECK:            %[[D12:.+]] = vector.load %[[ALLOC]]{{.*}} : memref<64x12xf16,
     # CHECK:            %[[D20:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<64x12xf16,
     # CHECK:            %[[D21:.+]] = amdgpu.mfma 32x32x8 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
     # CHECK:            %[[VAL0:.*]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
-
-    # CHECK:            %[[OFF0:.*]] = affine.apply #[[MAP0]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL0]], %[[DST]][%[[OFF0]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL0]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL1:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [1], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF1:.*]] = affine.apply #[[MAP1]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL1]], %[[DST]][%[[OFF1]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL1]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL2:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [2], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF2:.*]] = affine.apply #[[MAP2]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL2]], %[[DST]][%[[OFF2]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL2]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL3:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [3], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF3:.*]] = affine.apply #[[MAP3]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL3]], %[[DST]][%[[OFF3]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL3]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL4:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [4], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF4:.*]] = affine.apply #[[MAP4]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL4]], %[[DST]][%[[OFF4]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL4]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL5:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [5], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF5:.*]] = affine.apply #[[MAP5]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL5]], %[[DST]][%[[OFF5]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL5]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL6:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [6], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF6:.*]] = affine.apply #[[MAP6]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL6]], %[[DST]][%[[OFF6]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL6]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL7:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [7], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF7:.*]] = affine.apply #[[MAP7]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL7]], %[[DST]][%[[OFF7]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL7]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL8:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [8], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF8:.*]] = affine.apply #[[MAP8]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL8]], %[[DST]][%[[OFF8]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL8]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL9:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [9], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF9:.*]] = affine.apply #[[MAP9]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL9]], %[[DST]][%[[OFF9]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL9]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL10:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [10], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF10:.*]] = affine.apply #[[MAP10]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL10]], %[[DST]][%[[OFF10]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL10]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL11:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [11], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF11:.*]] = affine.apply #[[MAP11]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL11]], %[[DST]][%[[OFF11]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL11]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL12:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [12], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF12:.*]] = affine.apply #[[MAP12]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL12]], %[[DST]][%[[OFF12]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL12]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL13:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [13], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF13:.*]] = affine.apply #[[MAP13]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL13]], %[[DST]][%[[OFF13]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL13]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL14:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [14], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF14:.*]] = affine.apply #[[MAP14]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL14]], %[[DST]][%[[OFF14]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL14]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
     # CHECK:            %[[VAL15:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [15], sizes = [1], strides = [1]}
-    # CHECK:            %[[OFF15:.*]] = affine.apply #[[MAP15]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL15]], %[[DST]][%[[OFF15]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL15]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
 
 @run_test
@@ -271,22 +250,23 @@ def test_mma_32x32x16():
     print(mma_32x32x16.asm)
 
     # CHECK-LABEL:    test_mma_32x32x16
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 1)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 2)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 3)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 8)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 9)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 10)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 11)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 17)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 18)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 19)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 24)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 25)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 26)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + ((s1 mod 64) floordiv 32) * 4 + 27)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 64)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 8)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 9)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 10)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 11)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 16)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 17)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 18)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 19)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 24)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 25)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 26)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 32 + ((s0 mod 64) floordiv 32) * 4 + 27)>
     # CHECK:          func.func @mma_32x32x16
 
     # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
@@ -349,10 +329,11 @@ def test_mma_16x16x32():
     print(mma_16x16x32.asm)
 
     # CHECK-LABEL:    test_mma_16x16x32
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @mma_16x16x32
     # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
 
@@ -512,36 +493,28 @@ def test_wmma_f32_16x16x16_f16_w32():
 
     # CHECK-DAG:        %[[E1:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
 
-    # CHECK-DAG:        %[[V14:.*]] = affine.apply #map5()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E1]], %{{.*}}[%[[V14]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E1]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E2:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [1], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V16:.*]] = affine.apply #map6()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E2]], {{.*}}[%[[V16]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E2]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E3:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [2], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V18:.*]] = affine.apply #map7()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E3]], %{{.*}}[%[[V18]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E3]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E4:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [3], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V20:.*]] = affine.apply #map8()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E4]], %{{.*}}[%[[V20]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E4]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E5:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [4], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V22:.*]] = affine.apply #map9()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E5]], %{{.*}}[%[[V22]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E5]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E6:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [5], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V24:.*]] = affine.apply #map10()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E6]], %{{.*}}[%[[V24]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E6]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E7:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [6], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V26:.*]] = affine.apply #map11()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E7]], %{{.*}}[%[[V26]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E7]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK-DAG:        %[[E8:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [7], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
-    # CHECK-DAG:        %[[V28:.*]] = affine.apply #map12()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E8]], %{{.*}}[%[[V28]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E8]], {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
     # CHECK:            return
 
@@ -652,7 +625,6 @@ def test_wmma_with_tensor_load():
 
     # CHECK:        %[[CAST_0:.*]] = memref.reinterpret_cast %[[SUBSPAN0]]
     # CHECK:        %[[CAST_1:.*]] = memref.reinterpret_cast %[[SUBSPAN1]]
-    # CHECK:        %[[CAST_2:.*]] = memref.reinterpret_cast %[[SUBSPAN2]]
 
     ### shared memory alloc
     #   Make sure the shared memory allocation is padded
