@@ -70,38 +70,32 @@ def get_waveasm_translate_path() -> Path:
     if "WAVEASM_TRANSLATE" in os.environ:
         return Path(os.environ["WAVEASM_TRANSLATE"])
 
-    # Default: look in wave-asm build directory
+    # Try detect_waveasm (pip-installed binary).
+    try:
+        from wave_lang.support.detect_waveasm import get_waveasm_translate
+
+        return Path(get_waveasm_translate())
+    except (ImportError, RuntimeError):
+        pass
+
+    # Fallback: look in top-level waveasm build directory.
     script_dir = Path(__file__).parent
+    # script_dir is wave_lang/kernel/wave/asm/scripts, repo root is 5 levels up.
+    repo_root = script_dir.parent.parent.parent.parent.parent
     default_path = (
-        script_dir.parent.parent.parent
-        / "wave_asm"
+        repo_root
+        / "waveasm"
         / "build"
         / "tools"
         / "waveasm-translate"
         / "waveasm-translate"
     )
-
     if default_path.exists():
         return default_path
 
-    # Try alternative path
-    alt_path = (
-        script_dir.parent.parent.parent.parent.parent
-        / "kernel"
-        / "wave"
-        / "asm"
-        / "wave_asm"
-        / "build"
-        / "tools"
-        / "waveasm-translate"
-        / "waveasm-translate"
-    )
-    if alt_path.exists():
-        return alt_path
-
     raise FileNotFoundError(
         "waveasm-translate not found. Set WAVEASM_TRANSLATE environment variable "
-        "or build wave-asm project."
+        "or build waveasm project."
     )
 
 

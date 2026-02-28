@@ -143,6 +143,7 @@ jobs:
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_BUILD_WATER=1" >> $GITHUB_ENV
+          echo "WAVE_BUILD_WAVEASM=1" >> $GITHUB_ENV
           echo "WAVE_LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install" >> $GITHUB_ENV
 
       - name: Cache LLVM-MLIR
@@ -322,3 +323,71 @@ jobs:
         run: |
           cd cmake_build
           cmake --build . --target check-water
+
+
+  test_linux_waveasm:
+    name: "${{ matrix.name }} :: SHARED_LIBS ${{ matrix.shared_libs }} :: Run waveasm tests"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [3.11]
+        name: [linux-mi325-1gpu-ossci-iree-org]
+        shared_libs: ["ON", "OFF"]
+    runs-on: ${{ matrix.name }}
+    timeout-minutes: 60
+    needs: build_llvm_linux
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{matrix.version}}
+
+      - name: Setup Cache Vars
+        run: |
+          echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
+
+      - name: Cache LLVM-MLIR
+        id: cache-llvm-mlir
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: |
+            llvm-mlir/_mlir_install/**
+          key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
+
+      - name: Build waveasm
+        run: |
+          export EXTERNAL_LIT=${GITHUB_WORKSPACE}/water/scripts/runlit.py
+          export LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
+          mkdir -p cmake_build_waveasm
+          cd cmake_build_waveasm
+          export CC=clang
+          export CXX=clang++
+          cmake ${GITHUB_WORKSPACE}/waveasm                                    \
+            -GNinja                                                            \
+            -DCMAKE_BUILD_TYPE=Release                                         \
+            -DLLVM_DIR=${LLVM_DIR}/lib/cmake/llvm                              \
+            -DMLIR_DIR=${LLVM_DIR}/lib/cmake/mlir                              \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }}                      \
+            -DLLVM_EXTERNAL_LIT=${EXTERNAL_LIT}
+          cmake --build .
+
+      - name: Test waveasm
+        # As we are mixing static LLVM build with shared WaveASM we will get a
+        # usual double option registration LLVM issue. Only compile WaveASM in
+        # this case to look for missing libraries.
+        if: ${{ matrix.shared_libs == 'OFF' }}
+        run: |
+          cd cmake_build_waveasm
+          cmake --build . --target check-waveasm

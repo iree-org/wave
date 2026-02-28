@@ -38,8 +38,8 @@ from typing import Optional, List, Tuple
 
 import torch
 
-# Add wave_lang to path if needed
-wave_root = Path(__file__).parent.parent.parent.parent.parent.parent
+# Add wave_lang to path if needed.
+wave_root = Path(__file__).parent.parent.parent
 if str(wave_root) not in sys.path:
     sys.path.insert(0, str(wave_root))
 
@@ -90,11 +90,19 @@ class CompilationResult:
 
 def get_waveasm_translate_path() -> Path:
     """Get path to waveasm-translate executable."""
-    # Check environment variable first
+    # Check environment variable first.
     if "WAVEASM_TRANSLATE" in os.environ:
         return Path(os.environ["WAVEASM_TRANSLATE"])
 
-    # Default: look in wave-asm build directory
+    # Try detect_waveasm (pip-installed binary).
+    try:
+        from wave_lang.support.detect_waveasm import get_waveasm_translate
+
+        return Path(get_waveasm_translate())
+    except (ImportError, RuntimeError):
+        pass
+
+    # Fallback: look in waveasm build directory.
     script_dir = Path(__file__).parent
     default_path = (
         script_dir.parent.parent
@@ -103,11 +111,10 @@ def get_waveasm_translate_path() -> Path:
         / "waveasm-translate"
         / "waveasm-translate"
     )
-
     if default_path.exists():
         return default_path
 
-    # Try to find it in PATH
+    # Try to find it in PATH.
     try:
         result = subprocess.run(
             ["which", "waveasm-translate"], capture_output=True, text=True
@@ -119,7 +126,7 @@ def get_waveasm_translate_path() -> Path:
 
     raise FileNotFoundError(
         "waveasm-translate not found. Set WAVEASM_TRANSLATE environment variable "
-        "or build wave-asm project."
+        "or build waveasm project."
     )
 
 

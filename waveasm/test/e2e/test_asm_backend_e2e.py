@@ -53,8 +53,8 @@ from pathlib import Path
 
 import pytest
 
-# Add wave_lang to path
-wave_root = Path(__file__).parent.parent.parent.parent
+# Add wave_lang to path.
+wave_root = Path(__file__).parent.parent.parent
 if str(wave_root) not in sys.path:
     sys.path.insert(0, str(wave_root))
 

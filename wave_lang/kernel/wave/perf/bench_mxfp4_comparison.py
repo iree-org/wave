@@ -1588,7 +1588,7 @@ import sys, os
 os.environ["WAVE_CACHE_ON"] = "0"
 for p in ["/dockerx/wave", "/dockerx/aiter",
           "/dockerx/wave/wave_lang/kernel/wave/asm/scripts",
-          "/dockerx/wave/wave_lang/kernel/wave/asm/wave_asm/test/e2e"]:
+          "/dockerx/wave/waveasm/test/e2e"]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -1716,7 +1716,7 @@ def capture_att_trace(
     extra_paths = [
         working_dir,
         os.path.join(working_dir, "wave_lang/kernel/wave/asm/scripts"),
-        os.path.join(working_dir, "wave_lang/kernel/wave/asm/wave_asm/test/e2e"),
+        os.path.join(working_dir, "waveasm/test/e2e"),
     ]
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = ":".join(extra_paths + ([existing] if existing else []))
@@ -2114,7 +2114,7 @@ def main():
         sys.path.insert(0, "wave_lang/kernel/wave/asm/scripts")
         from compare_backends import get_default_arch
 
-        sys.path.insert(0, "wave_lang/kernel/wave/asm/wave_asm/test/e2e")
+        sys.path.insert(0, "waveasm/test/e2e")
         from test_asm_backend_e2e import capture_wave_kernel_info
         from waveasm_e2e import WaveASMCompiler, run_with_wave_runtime
 

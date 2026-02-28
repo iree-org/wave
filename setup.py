@@ -21,6 +21,8 @@ REPO_ROOT = THIS_DIR
 BUILD_TYPE = os.environ.get("WAVE_BUILD_TYPE", "Release")
 BUILD_WATER = int(os.environ.get("WAVE_BUILD_WATER", "0"))
 WATER_DIR = os.getenv("WAVE_WATER_DIR")
+BUILD_WAVEASM = int(os.environ.get("WAVE_BUILD_WAVEASM", "0"))
+WAVEASM_DIR = os.getenv("WAVE_WAVEASM_DIR")
 LLVM_DIR = os.getenv("WAVE_LLVM_DIR")
 LLVM_REPO = os.getenv("WAVE_LLVM_REPO", "https://github.com/llvm/llvm-project.git")
 BUILD_SHARED_LIBS = os.getenv("WAVE_LLVM_BUILD_SHARED_LIBS", "OFF")
@@ -70,6 +72,16 @@ def check_water_install(build_dir: Path):
         )
 
 
+def check_waveasm_install(build_dir: Path):
+    # Validate build directory contains expected artifacts.
+    waveasm_path = build_dir / "bin" / "waveasm-translate"
+    if not waveasm_path.exists():
+        raise RuntimeError(
+            f"WAVE_WAVEASM_DIR does not contain waveasm-translate at {waveasm_path}. "
+            "Make sure you have built waveasm with 'ninja' or 'cmake --build .'."
+        )
+
+
 class CMakeBuild(build_ext):
     def run(self) -> None:
         for ext in self.extensions:
@@ -88,15 +100,18 @@ class CMakeBuild(build_ext):
         # Ensure install directory exists
         os.makedirs(extdir, exist_ok=True)
 
-        if ext.name == "water" and ext.external_build_dir:
+        if ext.external_build_dir and ext.name in ("water", "waveasm"):
             print(
-                f"Installing water from external build directory: {ext.external_build_dir}"
+                f"Installing {ext.name} from external build directory: {ext.external_build_dir}"
             )
             print(f"  Install location: {extdir}")
             print(
                 "  Using CMAKE_INSTALL_MODE=ABS_SYMLINK for symlink-based installation"
             )
-            check_water_install(ext.external_build_dir)
+            if ext.name == "water":
+                check_water_install(ext.external_build_dir)
+            elif ext.name == "waveasm":
+                check_waveasm_install(ext.external_build_dir)
             env = os.environ.copy()
             env["CMAKE_INSTALL_MODE"] = "ABS_SYMLINK"
             invoke_cmake(
@@ -274,6 +289,8 @@ ext_modules = [
 
 if BUILD_WATER and WATER_DIR:
     raise RuntimeError("WAVE_WATER_DIR and WAVE_BUILD_WATER are mutually exclusive")
+if BUILD_WAVEASM and WAVEASM_DIR:
+    raise RuntimeError("WAVE_WAVEASM_DIR and WAVE_BUILD_WAVEASM are mutually exclusive")
 
 if BUILD_WATER or WATER_DIR:
     ext_modules += [
@@ -297,6 +314,18 @@ if BUILD_WATER or WATER_DIR:
             external_build_dir=Path(WATER_DIR).resolve() if WATER_DIR else None,
         ),
     ]
+
+if BUILD_WAVEASM or WAVEASM_DIR:
+    ext_modules.append(
+        CMakeExtension(
+            "waveasm",
+            "waveasm",
+            install_dir="wave_lang/kernel/wave/waveasm",
+            need_llvm=True,
+            cmake_args=[f"-DBUILD_SHARED_LIBS={BUILD_SHARED_LIBS}"],
+            external_build_dir=Path(WAVEASM_DIR).resolve() if WAVEASM_DIR else None,
+        ),
+    )
 
 # Only build-related configuration here.
 # All metadata and dependencies are in pyproject.toml.
