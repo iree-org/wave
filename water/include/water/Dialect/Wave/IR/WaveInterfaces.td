@@ -181,6 +181,11 @@ def CompatibleOperandsAndResultsShapeOpTrait
   let cppNamespace = "::wave";
 }
 
+def EqualElementTypesOpTrait
+    : NativeOpTrait<"EqualElementTypesOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 //-----------------------------------------------------------------------------
 // WaveInferIndexExprsOpInterface and implementation traits
 //-----------------------------------------------------------------------------

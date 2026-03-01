@@ -1887,12 +1887,6 @@ LogicalResult ExtractOp::verify() {
                          << position.getRank();
   }
 
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
-                                             getSource().getType(), "result",
-                                             getResult().getType()))) {
-    return failure();
-  }
-
   if (auto resultVectorType = dyn_cast<VectorType>(getResult().getType())) {
     if (resultVectorType.getShape()[0] != 1) {
       return emitOpError() << "result must be a 1-element vector, got "
@@ -2502,11 +2496,6 @@ llvm::SmallVector<WaveSymbolAttr> wave::BroadcastOp::inferBroadcastDims() {
 }
 
 LogicalResult wave::BroadcastOp::verify() {
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "source",
-                                             getSource().getType(), "result",
-                                             getResult().getType())))
-    return failure();
-
   auto sourceType = llvm::dyn_cast<WaveTensorType>(getSource().getType());
   auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
 
@@ -2640,10 +2629,6 @@ static LogicalResult validatePermutationInput(WaveTensorType inputType,
 LogicalResult wave::PermuteOp::verify() {
   Value input = getValue();
   Value result = getResult();
-
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "input", input.getType(),
-                                             "result", result.getType())))
-    return failure();
 
   auto inputType = dyn_cast<WaveTensorType>(input.getType());
   auto resultType = dyn_cast<WaveTensorType>(result.getType());
