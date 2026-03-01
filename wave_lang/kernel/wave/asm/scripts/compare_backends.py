@@ -99,24 +99,11 @@ def get_waveasm_translate_path() -> Path:
     )
 
 
-def get_amdclang_path() -> str:
-    """Get path to amdclang++ for assembly compilation."""
-    rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
-    amdclang = os.path.join(rocm_path, "bin", "amdclang++")
+def get_clang_path() -> str:
+    """Get path to clang++ for assembly compilation."""
+    from wave_lang.kernel.wave.asm.waveasm_e2e import get_clang_path as _get
 
-    if os.path.exists(amdclang):
-        return amdclang
-
-    try:
-        result = subprocess.run(["which", "amdclang++"], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-
-    raise FileNotFoundError(
-        "amdclang++ not found. Ensure ROCm is installed and in PATH."
-    )
+    return _get()
 
 
 # =============================================================================
@@ -572,7 +559,7 @@ def compile_cpp_backend(
     """Compile MLIR using C++ waveasm-translate backend."""
     try:
         waveasm_translate = get_waveasm_translate_path()
-        amdclang = get_amdclang_path()
+        clang = get_clang_path()
     except FileNotFoundError as e:
         return BackendResult(
             backend="cpp",
@@ -646,7 +633,7 @@ def compile_cpp_backend(
 
         # Assemble to HSACO
         compile_cmd = [
-            amdclang,
+            clang,
             "-x",
             "assembler",
             "-target",
@@ -679,7 +666,7 @@ def compile_cpp_backend(
 
             # Link to HSACO
             link_cmd = [
-                amdclang,
+                clang,
                 "-target",
                 "amdgcn-amd-amdhsa",
                 "-Xlinker",

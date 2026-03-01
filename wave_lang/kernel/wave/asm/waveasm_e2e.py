@@ -10,7 +10,7 @@ End-to-end testing utilities for C++ WaveASM backend.
 This module provides utilities to:
 1. Capture MLIR IR from Wave kernels
 2. Compile MLIR using the C++ waveasm-translate tool
-3. Assemble to GPU binary using amdclang++
+3. Assemble to GPU binary using clang++
 4. Execute and validate against PyTorch
 
 Usage:
@@ -124,25 +124,25 @@ def get_waveasm_translate_path() -> Path:
     )
 
 
-def get_amdclang_path() -> str:
-    """Get path to amdclang++ for assembly compilation."""
-    # Check ROCM_PATH first
-    rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
-    amdclang = os.path.join(rocm_path, "bin", "amdclang++")
-
-    if os.path.exists(amdclang):
-        return amdclang
-
-    # Try to find it in PATH
+def get_clang_path() -> str:
+    """Get path to clang++ for assembly compilation."""
     try:
-        result = subprocess.run(["which", "amdclang++"], capture_output=True, text=True)
+        from wave_lang.support.detect_waveasm import get_clang
+
+        return get_clang()
+    except (ImportError, RuntimeError):
+        pass
+
+    # Fallback: look in PATH.
+    try:
+        result = subprocess.run(["which", "clang++"], capture_output=True, text=True)
         if result.returncode == 0:
             return result.stdout.strip()
     except Exception:
         pass
 
     raise FileNotFoundError(
-        "amdclang++ not found. Ensure ROCm is installed and in PATH."
+        "clang++ not found. Build with WAVE_BUILD_WAVEASM=1 or ensure clang++ is in PATH."
     )
 
 
@@ -159,7 +159,7 @@ class WaveASMCompiler:
         self.codeobj = codeobj
         self.keep_temp_files = keep_temp_files
         self.waveasm_translate = get_waveasm_translate_path()
-        self.amdclang = get_amdclang_path()
+        self.clang = get_clang_path()
         self._temp_dir = None
 
     def _get_temp_dir(self) -> Path:
@@ -252,7 +252,7 @@ class WaveASMCompiler:
             return False, str(e), ""
 
     def assemble_to_binary(self, asm_text: str) -> Result[Path]:
-        """Assemble AMDGCN assembly to GPU binary using amdclang++."""
+        """Assemble AMDGCN assembly to GPU binary using clang++."""
         temp_dir = self._get_temp_dir()
         asm_file = temp_dir / "kernel.s"
         obj_file = temp_dir / "kernel.o"
@@ -263,7 +263,7 @@ class WaveASMCompiler:
 
         # Step 1: Assemble to object file
         compile_cmd = [
-            self.amdclang,
+            self.clang,
             "-x",
             "assembler",
             "-target",
@@ -290,7 +290,7 @@ class WaveASMCompiler:
 
             # Step 2: Link to HSACO
             link_cmd = [
-                self.amdclang,
+                self.clang,
                 "-target",
                 "amdgcn-amd-amdhsa",
                 "-Xlinker",

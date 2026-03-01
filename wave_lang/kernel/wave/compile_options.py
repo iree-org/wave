@@ -127,7 +127,7 @@ class WaveCompileOptions:
 
     # === ASM backend options ===
     compile_to_asm: bool = (
-        False  # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+        False  # Compile to AMDGCN assembly (for lit tests, no clang++)
     )
     use_wave_asm_backend: bool = (
         False  # Use WaveASM (waveasm-translate) instead of Python backend

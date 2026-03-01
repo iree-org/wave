@@ -1321,25 +1321,28 @@ def _generate_asm_code_waveasm(mlir_asm, options):
 
 
 def _compile_asm_to_binary(asm_code, options):
-    """Compile AMDGCN assembly to binary using amdclang++."""
+    """Compile AMDGCN assembly to binary using clang++."""
     import tempfile
     import os
     import subprocess
+    from wave_lang.support.detect_waveasm import get_clang
 
-    # Create temporary file for assembly output
+    clang = get_clang()
+
+    # Create temporary file for assembly output.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".s", delete=False) as asm_file:
         asm_file.write(asm_code)
         asm_output = asm_file.name
 
     try:
-        # Generate code object using amdclang++
+        # Generate code object using clang++.
         kernel_name = options.func_name
         obj_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.o")
         hsaco_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.hsaco")
 
-        # Step 1: Compile assembly to object file
+        # Step 1: Compile assembly to object file.
         compile_cmd = [
-            "amdclang++",
+            clang,
             "-x",
             "assembler",
             "-target",
@@ -1356,9 +1359,10 @@ def _compile_asm_to_binary(asm_code, options):
         result = subprocess.run(compile_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Assembly compilation failed: {result.stderr}")
-        # Step 2: Link object file to hsaco file
+
+        # Step 2: Link object file to hsaco file.
         link_cmd = [
-            "amdclang++",
+            clang,
             "-target",
             "amdgcn-amd-amdhsa",
             "-Xlinker",
