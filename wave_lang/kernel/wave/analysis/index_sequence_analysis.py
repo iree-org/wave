@@ -449,7 +449,7 @@ def compute_stride(
         stride = int(stride)
     except Exception as e:
         logger.error(e)
-    return stride
+    return 1
 
 
 def is_contiguous_dim(
