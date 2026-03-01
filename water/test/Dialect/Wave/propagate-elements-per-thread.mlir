@@ -87,6 +87,28 @@ func.func @propagate_forward_from_read(%mem: !wave.tensor<[@M] of f16, <global>>
 
 // -----
 
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @propagate_via_identity_rhs
+func.func @propagate_via_identity_rhs(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f16, <global>>) -> vector<4xf16>
+  %reg = wave.read %mem { elements_per_thread = 4 } : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+  %cst2 = arith.constant 42.0 : f16
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg2 = wave.register %cst2 : !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.add {{.*}} : (vector<4xf16>, vector<4xf16>) -> vector<4xf16>
+  %sum = wave.add %reg2, %reg : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.mul {{.*}} : (vector<4xf16>, vector<4xf16>) -> vector<4xf16>
+  %mul = wave.mul %reg2, %sum : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.exp2 {{.*}} : (vector<4xf16>) -> vector<4xf16>
+  %exp = wave.exp2 %mul : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  return
+}
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_types>] {
 func.func @missing_elements_per_thread(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
   // expected-error @below {{couldn't identify elements per thread for result #0}}
