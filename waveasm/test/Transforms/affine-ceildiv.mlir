@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s | FileCheck %s
 //
 // Test: ceildiv pattern: (x + N-1) >> log2(N)
 

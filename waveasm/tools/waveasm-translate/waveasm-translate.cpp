@@ -34,6 +34,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -64,66 +65,10 @@ static llvm::cl::opt<std::string>
              llvm::cl::value_desc("gfx942|gfx950|gfx1250"),
              llvm::cl::init("gfx942"));
 
-static llvm::cl::opt<bool> runHazardMitigation(
-    "waveasm-hazard-mitigation",
-    llvm::cl::desc("Run hazard mitigation pass (insert s_nop for hazards)"),
+static llvm::cl::opt<bool> disablePassVerifier(
+    "disable-pass-verifier",
+    llvm::cl::desc("Disable interleaved pass verifier (needed for regalloc)"),
     llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
-    runWaitcntInsertion("waveasm-insert-waitcnt",
-                        llvm::cl::desc("Run waitcnt insertion pass"),
-                        llvm::cl::init(false));
-
-static llvm::cl::opt<bool> ticketedWaitcnt(
-    "ticketed-waitcnt",
-    llvm::cl::desc("Enable ticket-based waitcnt/barrier insertion"),
-    llvm::cl::init(true)); // true = ticketing ON by default
-
-static llvm::cl::opt<bool>
-    runLinearScan("waveasm-linear-scan",
-                  llvm::cl::desc("Run linear scan register allocation"),
-                  llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
-    runScopedCSE("waveasm-scoped-cse",
-                 llvm::cl::desc("Run scoped common subexpression elimination"),
-                 llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
-    runPeephole("waveasm-peephole",
-                llvm::cl::desc("Run peephole optimizations"),
-                llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
-    runLICM("waveasm-licm",
-            llvm::cl::desc("Hoist loop-invariant code out of loops"),
-            llvm::cl::init(false));
-
-static llvm::cl::opt<bool> runM0RedundancyElim(
-    "waveasm-m0-redundancy-elim",
-    llvm::cl::desc("Eliminate redundant M0 register writes"),
-    llvm::cl::init(false));
-
-static llvm::cl::opt<bool> runMemoryOffsetOpt(
-    "waveasm-memory-offset-opt",
-    llvm::cl::desc("Fold constant address components into memory instruction "
-                   "offset fields"),
-    llvm::cl::init(false));
-
-static llvm::cl::opt<bool> runBufferLoadStrengthReduction(
-    "waveasm-buffer-load-strength-reduction",
-    llvm::cl::desc("Run buffer load strength reduction pass"),
-    llvm::cl::init(false));
-
-static llvm::cl::opt<bool> runScalePackElimination(
-    "waveasm-scale-pack-elimination",
-    llvm::cl::desc("Eliminate BFE/LSHL_OR round-trips for B-scale iter_args"),
-    llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
-    runLoopAddressPromotion("waveasm-loop-address-promotion",
-                            llvm::cl::desc("Run loop address promotion pass"),
-                            llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
     emitAssembly("emit-assembly",
@@ -155,27 +100,20 @@ static llvm::cl::opt<int64_t>
     subgroupSize("subgroup-size", llvm::cl::desc("Subgroup (wavefront) size"),
                  llvm::cl::init(64));
 
-static llvm::cl::opt<int64_t>
-    maxVGPRs("max-vgprs",
-             llvm::cl::desc("Maximum VGPRs for register allocation"),
-             llvm::cl::init(256));
-
-static llvm::cl::opt<int64_t>
-    maxSGPRs("max-sgprs",
-             llvm::cl::desc("Maximum SGPRs for register allocation"),
-             llvm::cl::init(104));
-
-static llvm::cl::opt<int64_t>
-    maxAGPRs("max-agprs",
-             llvm::cl::desc("Maximum AGPRs for register allocation"),
-             llvm::cl::init(256));
-
 //===----------------------------------------------------------------------===//
 // Main Function
 //===----------------------------------------------------------------------===//
 
 int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
+
+  // Register passes so PassPipelineCLParser can expose them as CLI flags.
+  waveasm::registerWaveASMPasses();
+  mlir::registerTransformsPasses();
+
+  // Construct AFTER pass registration — PassNameParser::initialize() snapshots
+  // the registry, so passes must already be registered at this point.
+  static mlir::PassPipelineCLParser passPipeline("", "Compiler passes to run");
 
   llvm::cl::ParseCommandLineOptions(argc, argv,
                                     "WAVEASM IR translation tool\n");
@@ -250,104 +188,28 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Run passes if requested
+  // Build pass pipeline from CLI flags.
   PassManager pm(&context);
-
-  // CSE should run early (before register allocation)
-  if (runScopedCSE) {
-    pm.addPass(waveasm::createWAVEASMScopedCSE());
+  if (passPipeline.hasAnyOccurrences()) {
+    auto errorHandler = [](const Twine &msg) {
+      llvm::errs() << msg << "\n";
+      return failure();
+    };
+    if (failed(passPipeline.addToPipeline(pm, errorHandler)))
+      return 1;
   }
 
-  // Peephole optimizations run after CSE but before waitcnt/hazard.
-  if (runPeephole) {
-    pm.addPass(waveasm::createWAVEASMPeephole());
-  }
-
-  // Eliminate BFE/LSHL_OR round-trips for B-scale iter_args.
-  // Runs after peephole (which creates lshl_or_b32 ops) and before
-  // loop address promotion (which modifies loop structure).
-  if (runScalePackElimination) {
-    pm.addPass(waveasm::createWAVEASMScalePackElimination());
-  }
-
-  // LICM after peephole so fused ops (e.g. v_lshl_add_u32) get hoisted.
-  if (runLICM) {
-    pm.addPass(mlir::createLoopInvariantCodeMotionPass());
-  }
-
-  // M0 redundancy elimination after LICM so hoisted M0 writes get cleaned up.
-  if (runM0RedundancyElim) {
-    pm.addPass(waveasm::createWAVEASMM0RedundancyElim());
-  }
-
-  // Strength-reduce buffer_load address computation in loops: precompute
-  // voffsets and increment by constant stride each iteration.
-  if (runBufferLoadStrengthReduction) {
-    pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReduction());
-  }
-
-  // Memory offset optimization: fold constant address components into
-  // memory instruction offset fields (saves VALU instructions)
-  if (runMemoryOffsetOpt) {
-    pm.addPass(waveasm::createWAVEASMMemoryOffsetOpt());
-
-    // Clean up any dead instructions left by the optimization
-    pm.addPass(mlir::createCanonicalizerPass());
-
-    // Re-run ScopedCSE after memory offset optimization, because folding
-    // constants into offsets may expose identical base address computations
-    // that can now be deduplicated.
-    if (runScopedCSE) {
-      pm.addPass(waveasm::createWAVEASMScopedCSE());
-    }
-  }
-
-  // Loop address promotion: replace per-iteration v_add_u32 LDS address
-  // computation with precomputed rotating VGPR iter_args.
-  if (runLoopAddressPromotion) {
-    pm.addPass(waveasm::createWAVEASMLoopAddressPromotion());
-  }
-
-  // Register allocation must run before waitcnt/hazard so that those passes
-  // see the final register assignments.  Matches compare_backends.py order:
-  // LinearScan -> Waitcnt -> Hazard.
-  if (runLinearScan) {
-    waveasm::WAVEASMLinearScanOptions lsOpts;
-    lsOpts.maxVGPRs = maxVGPRs;
-    lsOpts.maxSGPRs = maxSGPRs;
-    lsOpts.maxAGPRs = maxAGPRs;
-    pm.addPass(waveasm::createWAVEASMLinearScan(lsOpts));
-    // After register allocation, physical register types (pvreg/psreg) replace
-    // virtual types (vreg/sreg). The MLIR RegionBranchOpInterface verifier
-    // checks exact type equality between entry operands and block arguments,
-    // but after regalloc these may have structurally compatible (same register
-    // class and size) but not identical types (different physical indices).
-    // Our op-level verifiers use typesCompatible() to handle this, but the
-    // built-in interface verifier does not.
-    //
-    // We disable the pass-pipeline interleaved verifier ONLY for the regalloc
-    // pass. Module-level verification still runs below to catch other errors.
-    // TODO: Implement a custom post-regalloc verification pass that uses
-    // typesCompatible() instead of exact type equality, then re-enable the
-    // interleaved verifier.
+  // After register allocation, physical register types (pvreg/psreg) replace
+  // virtual types (vreg/sreg).  The MLIR RegionBranchOpInterface verifier
+  // checks exact type equality between entry operands and block arguments,
+  // but after regalloc these may be structurally compatible (same register
+  // class and size) but not identical (different physical indices).
+  // Our op-level verifiers use typesCompatible() to handle this, but the
+  // built-in interface verifier does not.
+  // TODO: Implement a custom post-regalloc verification pass that uses
+  // typesCompatible() instead of exact type equality.
+  if (disablePassVerifier)
     pm.enableVerifier(false);
-  }
-
-  // Waitcnt insertion should run before hazard mitigation
-  // (matching Python pipeline order for better wait coalescing)
-  if (runWaitcntInsertion) {
-    waveasm::WAVEASMInsertWaitcntOptions wtOpts;
-    wtOpts.insertAfterLoads = false;
-    wtOpts.ticketedWaitcnt = ticketedWaitcnt;
-    pm.addPass(waveasm::createWAVEASMInsertWaitcnt(wtOpts));
-  }
-
-  // Hazard mitigation runs after waitcnt (NOPs don't affect wait coalescing)
-  if (runHazardMitigation) {
-    waveasm::WAVEASMHazardMitigationOptions hmOpts;
-    hmOpts.targetArch = targetId.getValue();
-    pm.addPass(waveasm::createWAVEASMHazardMitigation(hmOpts));
-  }
 
   if (pm.size() > 0) {
     if (failed(pm.run(*module))) {
@@ -357,14 +219,9 @@ int main(int argc, char **argv) {
   }
 
   // Verify module after translation/passes.
-  // After regalloc, the RegionBranchOpInterface verifier may reject
-  // structurally compatible types (same register class/size but different
-  // physical indices). We still run verification but treat failures as
-  // warnings when regalloc has run, since our op verifiers handle this.
   if (failed(mlir::verify(*module))) {
-    if (runLinearScan) {
+    if (disablePassVerifier) {
       // Expected: RegionBranchOpInterface type mismatch after regalloc.
-      // Op-level verifiers using typesCompatible() passed during the pass run.
       LLVM_DEBUG(llvm::dbgs()
                  << "Note: Module verification warning after regalloc "
                  << "(expected for physical register type mismatches)\n");

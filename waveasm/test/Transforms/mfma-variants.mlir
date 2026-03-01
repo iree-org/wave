@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
 //
 // Test MFMA instruction variants - F16, BF16, I8, F32, F64
 

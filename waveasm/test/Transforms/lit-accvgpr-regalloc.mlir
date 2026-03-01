@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
 
 // CHECK-LABEL: waveasm.program @mfma_agpr_tied
 waveasm.program @mfma_agpr_tied target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {

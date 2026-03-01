@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s 2>&1 | FileCheck %s
 //
 // Test: Full assembly output for scaled MFMA with double-buffered LDS allocs.
 //

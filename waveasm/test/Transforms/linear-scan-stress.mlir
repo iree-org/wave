@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
 //
 // Stress tests for the linear scan register allocator.
 // These tests all PASS -- they verify correct behavior under various

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-scoped-cse --waveasm-linear-scan --waveasm-hazard-mitigation --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --waveasm-scoped-cse --disable-pass-verifier --waveasm-linear-scan --waveasm-hazard-mitigation --emit-assembly %s | FileCheck %s
 //
 // Test: End-to-end pipeline: CSE -> RegAlloc -> Hazard Mitigation -> Assembly
 

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s | FileCheck %s
 //
 // Test readlane operations: v_readlane_b32 and v_readfirstlane_b32
 // These are used for subgroup broadcasts from a specific lane to all lanes.

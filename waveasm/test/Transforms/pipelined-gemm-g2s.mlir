@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s 2>&1 | FileCheck %s
 //
 // End-to-end integration test: pipelined GEMM with g2s double-buffering.
 //

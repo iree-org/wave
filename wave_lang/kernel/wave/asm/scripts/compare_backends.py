@@ -588,24 +588,25 @@ def compile_cpp_backend(
 
         mlir_file.write_text(simplified_mlir)
 
-        # Run waveasm-translate
+        # Run waveasm-translate.
         cmd = [
             str(waveasm_translate),
             f"--target={target}",
-            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
+            "--mlir-cse",
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
             "--waveasm-scale-pack-elimination",
-            "--waveasm-licm",
+            "--loop-invariant-code-motion",
             "--waveasm-m0-redundancy-elim",
             "--waveasm-buffer-load-strength-reduction",
-            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
+            "--waveasm-memory-offset-opt",
+            "--canonicalize",
+            "--waveasm-scoped-cse",
             "--waveasm-loop-address-promotion",
-            "--waveasm-linear-scan",
-            "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
-            "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
+            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
             "--waveasm-insert-waitcnt",
-            "--waveasm-hazard-mitigation",
+            f"--waveasm-hazard-mitigation=target={target}",
+            "--disable-pass-verifier",
             "--emit-assembly",
             str(mlir_file),
         ]

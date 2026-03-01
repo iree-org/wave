@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
 //
 // Test that loop results do NOT inflate register pressure inside the loop body.
 // Loop results are only available after the loop exits, so their live ranges

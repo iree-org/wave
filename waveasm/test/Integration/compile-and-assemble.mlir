@@ -1,4 +1,4 @@
-// RUN: waveasm-translate %s --waveasm-linear-scan --emit-assembly -o %t.s
+// RUN: waveasm-translate %s --disable-pass-verifier --waveasm-linear-scan --emit-assembly -o %t.s
 // RUN: FileCheck %s < %t.s
 // RUN: %rocm_clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx942 -c %t.s -o %t.o
 // RUN: %rocm_lld -shared -o %t.hsaco %t.o
