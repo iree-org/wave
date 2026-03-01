@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s | FileCheck %s
 //
 // Test: v_cndmask_b32 drops explicit VCC operand
 

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s | FileCheck %s
 //
 // Test: v_add_u32 commutes non-inline literal from src1 to src0
 

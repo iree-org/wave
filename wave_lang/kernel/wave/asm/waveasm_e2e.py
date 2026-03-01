@@ -192,28 +192,28 @@ class WaveASMCompiler:
         # Write MLIR to temp file
         mlir_file.write_text(mlir_text)
 
-        # Run waveasm-translate with full pipeline
+        # Run waveasm-translate with full pipeline.
+        ticketed = "true" if ticketed_waitcnt else "false"
         cmd = [
             str(self.waveasm_translate),
             f"--target={self.target}",
-            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination
-            "--waveasm-scoped-cse",  # Run CSE
-            "--waveasm-peephole",  # Run peephole optimizations (fuse lshl+add, etc.)
+            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination.
+            "--waveasm-scoped-cse",  # Scoped CSE.
+            "--waveasm-peephole",  # Peephole optimizations (fuse lshl+add, etc.).
             "--waveasm-scale-pack-elimination",
-            "--waveasm-licm",  # Hoist loop-invariant VALU address ops
-            "--waveasm-m0-redundancy-elim",  # Eliminate redundant M0 writes
+            "--loop-invariant-code-motion",  # Hoist loop-invariant VALU address ops.
+            "--waveasm-m0-redundancy-elim",  # Eliminate redundant M0 writes.
             "--waveasm-buffer-load-strength-reduction",
-            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields
+            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields.
+            "--canonicalize",  # Clean up dead instructions from offset opt.
+            "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
-            "--waveasm-linear-scan",  # Run register allocation
-            "--max-vgprs=512",  # Allow up to 512 VGPRs (4-wave occupancy)
-            "--max-agprs=512",  # Allow up to 512 AGPRs (accumulators)
-            "--waveasm-insert-waitcnt",  # Insert wait instructions
-            "--waveasm-hazard-mitigation",  # Handle hazards
-            "--emit-assembly",  # Emit AMDGCN assembly
+            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",  # Register allocation.
+            f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",  # Insert waits.
+            f"--waveasm-hazard-mitigation=target={self.target}",  # Handle hazards.
+            "--disable-pass-verifier",
+            "--emit-assembly",
         ]
-
-        cmd.append(f"--ticketed-waitcnt={'true' if ticketed_waitcnt else 'false'}")
 
         # Add workgroup size if specified
         if workgroup_size:

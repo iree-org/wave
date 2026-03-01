@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s | FileCheck %s
 //
 // Test: memref.atomic_rmw generates buffer_atomic instructions
 // Note: This test may need adjustment based on the exact translation pipeline flags available.

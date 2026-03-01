@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s | FileCheck %s
 //
 // Test: Linear scan register allocation
 

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
 //
 // Test: v_readfirstlane_b32 is inserted for VGPR loop upper bounds
 

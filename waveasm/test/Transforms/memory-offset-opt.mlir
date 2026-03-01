@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-memory-offset-opt %s | FileCheck %s
+// RUN: waveasm-translate --waveasm-memory-offset-opt --canonicalize %s | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // Test: DS read with constant add in address -> fold into offset:N

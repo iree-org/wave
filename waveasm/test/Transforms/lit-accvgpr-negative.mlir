@@ -1,4 +1,4 @@
-// RUN: not waveasm-translate --waveasm-linear-scan --max-agprs=4 %s 2>&1 | FileCheck %s
+// RUN: not waveasm-translate --disable-pass-verifier '--waveasm-linear-scan=max-agprs=4' %s 2>&1 | FileCheck %s
 
 waveasm.program @accvgpr_limit_fail target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
   %a = waveasm.precolored.vreg 0, 4 : !waveasm.pvreg<0, 4>

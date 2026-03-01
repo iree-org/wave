@@ -1,5 +1,5 @@
-// RUN: waveasm-translate --waveasm-peephole --waveasm-licm %s | FileCheck %s
-// RUN: waveasm-translate --waveasm-licm %s | FileCheck %s --check-prefix=PURE
+// RUN: waveasm-translate --waveasm-peephole --loop-invariant-code-motion %s | FileCheck %s
+// RUN: waveasm-translate --loop-invariant-code-motion %s | FileCheck %s --check-prefix=PURE
 
 //===----------------------------------------------------------------------===//
 // Test: LICM — hoist chain of VALU address ops out of loop.

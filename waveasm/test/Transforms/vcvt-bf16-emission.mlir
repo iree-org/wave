@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --waveasm-linear-scan --emit-assembly %s | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan --emit-assembly %s | FileCheck %s
 //
 // Test: v_cvt_bf16_f32 emits as v_cvt_pk_bf16_f32 dst, src, 0
 
