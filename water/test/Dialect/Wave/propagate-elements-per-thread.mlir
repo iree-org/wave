@@ -147,15 +147,23 @@ func.func @unsupported_op() attributes {wave.hyperparameters = #wave.hyperparame
 }
 }
 
-
 // -----
 
-// CHECK: normalform.module [#wave.normal_form<memory_only_types>]
-normalform.module [] {
-  func.func @test_no_existing_normal_form_attr(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+// CHECK: normalform.module [#wave.normal_form<full_types,memory_only_types>]
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @test_normal_form_conditions(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
     %0 = arith.constant 0.0 : f32
     %reg = wave.register %0 : !wave.tensor<[@M] of f32, <register>>
     wave.write %reg, %mem { elements_per_thread = 8 } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+    return
+  }
+}
+
+// -----
+
+// expected-error @below {{pass expects the root operation or its ancestor to guarantee the full_types normal form}}
+normalform.module [] {
+  func.func @normal_form_missing() {
     return
   }
 }
