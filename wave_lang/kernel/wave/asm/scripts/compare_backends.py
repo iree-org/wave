@@ -592,16 +592,16 @@ def compile_cpp_backend(
         cmd = [
             str(waveasm_translate),
             f"--target={target}",
-            "--mlir-cse",
+            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination.
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
             "--waveasm-scale-pack-elimination",
             "--loop-invariant-code-motion",
             "--waveasm-m0-redundancy-elim",
             "--waveasm-buffer-load-strength-reduction",
-            "--waveasm-memory-offset-opt",
-            "--canonicalize",
-            "--waveasm-scoped-cse",
+            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields.
+            "--canonicalize",  # Clean up dead instructions from offset opt.
+            "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
             "--waveasm-insert-waitcnt",

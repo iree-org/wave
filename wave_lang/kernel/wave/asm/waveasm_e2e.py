@@ -197,20 +197,20 @@ class WaveASMCompiler:
         cmd = [
             str(self.waveasm_translate),
             f"--target={self.target}",
-            "--mlir-cse",
-            "--waveasm-scoped-cse",
-            "--waveasm-peephole",
+            "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination.
+            "--waveasm-scoped-cse",  # Scoped CSE.
+            "--waveasm-peephole",  # Peephole optimizations (fuse lshl+add, etc.).
             "--waveasm-scale-pack-elimination",
-            "--loop-invariant-code-motion",
-            "--waveasm-m0-redundancy-elim",
+            "--loop-invariant-code-motion",  # Hoist loop-invariant VALU address ops.
+            "--waveasm-m0-redundancy-elim",  # Eliminate redundant M0 writes.
             "--waveasm-buffer-load-strength-reduction",
-            "--waveasm-memory-offset-opt",
-            "--canonicalize",
-            "--waveasm-scoped-cse",
+            "--waveasm-memory-offset-opt",  # Fold constant addresses into offset fields.
+            "--canonicalize",  # Clean up dead instructions from offset opt.
+            "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
-            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",
-            f"--waveasm-hazard-mitigation=target={self.target}",
+            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",  # Register allocation.
+            f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",  # Insert waits.
+            f"--waveasm-hazard-mitigation=target={self.target}",  # Handle hazards.
             "--disable-pass-verifier",
             "--emit-assembly",
         ]
