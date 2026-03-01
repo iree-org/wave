@@ -121,7 +121,8 @@ using Int64Vector = std::vector<uint64_t>;
 using Int32Vector = std::vector<uint32_t>;
 
 static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
-                   const Int64Vector &dynamicDims, nb::list scalarArgs) {
+                   const Int64Vector &dynamicDims, nb::list scalarArgs,
+                   const Int64Vector &strides = {}) {
   hipStream_t stream = reinterpret_cast<hipStream_t>(info.stream);
   hipFunction_t function = reinterpret_cast<hipFunction_t>(info.function);
 
@@ -129,10 +130,11 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
 
   // Since we always pass our dynamic dims as index type, iree converts them to
   // i64 and then splits them to two i32s, i64 = hi | lo where lo = trunc(i64)
-  // and hi = trunc(i64 >> 32).
+  // and hi = trunc(i64 >> 32). Strides are passed the same way (i64 as 2x i32).
   size_t kernArgSize = tensors.size() * sizeof(uint64_t) +
                        2 * dynamicDims.size() * sizeof(uint32_t) +
-                       scalarArgs.size() * scalarSize;
+                       scalarArgs.size() * scalarSize +
+                       2 * strides.size() * sizeof(uint32_t);
 
   // TODO(paulzzy): We should set a maximum size to avoid stack corruption
   uint8_t kernelArguments[kernArgSize];
@@ -155,6 +157,11 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
   for (auto dim : dynamicDims) {
     *ptr3++ = static_cast<uint32_t>(dim);
     *ptr3++ = static_cast<uint32_t>(dim >> 32);
+  }
+
+  for (auto stride : strides) {
+    *ptr3++ = static_cast<uint32_t>(stride);
+    *ptr3++ = static_cast<uint32_t>(stride >> 32);
   }
 
   void *hipLaunchParams[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, kernelArguments,
