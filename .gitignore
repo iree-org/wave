@@ -46,6 +46,9 @@ out
 # clangd
 water/.cache
 
+# WaveASM build artifacts
+wave_lang/kernel/wave/waveasm/
+
 # Water artifacts
 wave_lang/kernel/wave/water_mlir/*
 # __init__.py is not installed by cmake
