@@ -61,6 +61,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMBUFFERLOADSTRENGTHREDUCTION
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 static bool isAddressVALU(Operation *op) {
@@ -592,34 +597,18 @@ static void applyStrengthReduction(LoopOp loopOp) {
 }
 
 struct BufferLoadStrengthReductionPass
-    : public PassWrapper<BufferLoadStrengthReductionPass,
-                         OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BufferLoadStrengthReductionPass)
-
-  StringRef getArgument() const override {
-    return "waveasm-buffer-load-strength-reduction";
-  }
-
-  StringRef getDescription() const override {
-    return "Replace per-iteration buffer_load address computation with "
-           "soffset-based incremental addressing";
-  }
+    : public waveasm::impl::WAVEASMBufferLoadStrengthReductionBase<
+          BufferLoadStrengthReductionPass> {
+  using WAVEASMBufferLoadStrengthReductionBase::
+      WAVEASMBufferLoadStrengthReductionBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    Operation *module = getOperation();
     SmallVector<LoopOp> loops;
-    module.walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
+    module->walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
     for (auto loopOp : loops)
       applyStrengthReduction(loopOp);
   }
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMBufferLoadStrengthReductionPass() {
-  return std::make_unique<BufferLoadStrengthReductionPass>();
-}
-
-} // namespace waveasm

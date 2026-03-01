@@ -33,6 +33,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMSCOPEDCSE
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -266,23 +271,15 @@ private:
 //===----------------------------------------------------------------------===//
 
 struct ScopedCSEPass
-    : public PassWrapper<ScopedCSEPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScopedCSEPass)
-
-  ScopedCSEPass() = default;
-
-  StringRef getArgument() const override { return "waveasm-scoped-cse"; }
-
-  StringRef getDescription() const override {
-    return "Scoped Common Subexpression Elimination for WAVEASM IR";
-  }
+    : public waveasm::impl::WAVEASMScopedCSEBase<ScopedCSEPass> {
+  using WAVEASMScopedCSEBase::WAVEASMScopedCSEBase;
 
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    Operation *module = getOperation();
     unsigned totalRemoved = 0;
 
-    // Process each program
-    module.walk([&](ProgramOp program) {
+    // Process each program.
+    module->walk([&](ProgramOp program) {
       ScopedCSEDriver driver;
       driver.processProgram(program);
       totalRemoved += driver.getOpsRemoved();
@@ -296,11 +293,3 @@ struct ScopedCSEPass
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMScopedCSEPass() {
-  return std::make_unique<ScopedCSEPass>();
-}
-
-} // namespace waveasm

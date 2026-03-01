@@ -10,101 +10,6 @@
 include "mlir/Pass/PassBase.td"
 
 //===----------------------------------------------------------------------===//
-// MLIR to WAVEASM Translation Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMTranslateFromMLIR : Pass<"waveasm-translate-from-mlir", "mlir::ModuleOp"> {
-  let summary = "Translate standard MLIR dialects to WAVEASM dialect";
-  let description = [{
-    Translates MLIR modules containing standard dialects (arith, vector,
-    memref, gpu, amdgpu, stream, scf, affine) to the WAVEASM kernel dialect.
-
-    Input dialects supported:
-    - stream.executable, stream.binding (IREE)
-    - func.func (builtin)
-    - gpu.thread_id, gpu.block_id
-    - vector.load, vector.store, vector.extract_strided_slice
-    - memref.alloc, memref.view, memref.reinterpret_cast
-    - amdgpu.mfma, amdgpu.lds_barrier
-    - arith.constant, arith.addi, arith.muli, arith.index_cast
-    - affine.apply
-    - scf.for
-
-    The pass:
-    1. Extracts kernel functions from stream.executable
-    2. Analyzes memory access patterns and buffer bindings
-    3. Emits WAVEASM instructions with virtual registers
-    4. Creates an waveasm.program with appropriate ABI configuration
-  }];
-
-  let options = [
-    Option<"target", "target", "std::string", "\"gfx942\"",
-           "Target GPU architecture">,
-    Option<"codeObjectVersion", "code-object-version", "int64_t", "5",
-           "Code object version">
-  ];
-
-  let dependentDialects = [
-    "::waveasm::WaveASMDialect",
-    "::mlir::arith::ArithDialect",
-    "::mlir::vector::VectorDialect",
-    "::mlir::memref::MemRefDialect",
-    "::mlir::gpu::GPUDialect",
-    "::mlir::scf::SCFDialect",
-    "::mlir::affine::AffineDialect"
-  ];
-}
-
-//===----------------------------------------------------------------------===//
-// SSA Validation Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMValidateSSA : Pass<"waveasm-validate-ssa"> {
-  let summary = "Validate that the program is in SSA form";
-  let description = [{
-    Checks that each virtual register is defined exactly once.
-
-    Exceptions:
-    - Loop control registers (SGPRs used for loop counters)
-    - Accumulator registers (VGPRs used for MFMA read-modify-write)
-
-    These exceptions must be registered on the ProgramOp before validation.
-  }];
-
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
-}
-
-//===----------------------------------------------------------------------===//
-// Liveness Analysis Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMLiveness : Pass<"waveasm-liveness"> {
-  let summary = "Compute liveness information for virtual registers";
-  let description = [{
-    Computes live ranges for all virtual registers using the region
-    structure (LoopOp, IfOp) to determine loop-carried liveness.
-
-    The analysis:
-    1. Collects def/use points from the flattened instruction stream
-    2. Builds initial live ranges from definition to last use
-    3. Extends ranges for values used inside loop bodies (LoopOp)
-    4. Computes register pressure using sweep algorithm
-
-    The results are stored as an analysis and can be queried by
-    subsequent passes (e.g., register allocation).
-  }];
-
-  let statistics = [
-    Statistic<"numVRegs", "Number of virtual VGPRs", "count">,
-    Statistic<"numSRegs", "Number of virtual SGPRs", "count">,
-    Statistic<"maxVRegPressure", "Peak VGPR pressure", "registers">,
-    Statistic<"maxSRegPressure", "Peak SGPR pressure", "registers">
-  ];
-
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
-}
-
-//===----------------------------------------------------------------------===//
 // Linear Scan Register Allocation Pass
 //===----------------------------------------------------------------------===//
 
@@ -225,34 +130,6 @@ def WAVEASMInsertWaitcnt : Pass<"waveasm-insert-waitcnt"> {
 }
 
 //===----------------------------------------------------------------------===//
-// Assembly Emission Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMEmitAssembly : Pass<"waveasm-emit-assembly"> {
-  let summary = "Emit AMDGCN assembly text";
-  let description = [{
-    Converts the allocated WAVEASM program to AMDGCN assembly text.
-    Outputs a complete .s file including:
-
-    - Prologue: .amdgcn_target, .amdhsa_kernel, kernel descriptor
-    - Body: Instructions with physical registers
-    - Epilogue: .amdgpu_metadata YAML section
-
-    The pass requires all instructions to be in physical form
-    (after register allocation).
-  }];
-
-  let options = [
-    Option<"outputPath", "output", "std::string", "",
-           "Output file path (empty for stdout)">,
-    Option<"emitMetadata", "emit-metadata", "bool", "true",
-           "Emit .amdgpu_metadata section">
-  ];
-
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
-}
-
-//===----------------------------------------------------------------------===//
 // Peephole Optimization Pass
 //===----------------------------------------------------------------------===//
 
@@ -278,6 +155,85 @@ def WAVEASMM0RedundancyElim : Pass<"waveasm-m0-redundancy-elim"> {
     erases writes that set M0 to the value it already holds.  Conservatively
     resets tracking across region-bearing ops (loops, ifs) whose bodies may
     clobber M0.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Scoped CSE Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMScopedCSE : Pass<"waveasm-scoped-cse"> {
+  let summary = "Scoped Common Subexpression Elimination for WAVEASM IR";
+  let description = [{
+    Implements scoped CSE respecting structured control flow by maintaining
+    a scope stack.  Only operations within the same or dominating scope can
+    be deduplicated.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Buffer Load Strength Reduction Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMBufferLoadStrengthReduction
+    : Pass<"waveasm-buffer-load-strength-reduction"> {
+  let summary = "Replace per-iteration buffer_load address computation with "
+                "soffset-based incremental addressing";
+  let description = [{
+    Replaces per-iteration buffer_load voffset recomputation with precomputed
+    voffsets and SGPR soffset bumping.  Symbolically differentiates the address
+    chain w.r.t. the induction variable to compute a constant stride, then
+    groups candidates by (SRD, stride) to share soffsets.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Loop Address Promotion Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMLoopAddressPromotion : Pass<"waveasm-loop-address-promotion"> {
+  let summary = "Promote loop-carried LDS read address computation";
+  let description = [{
+    Promotes loop-carried LDS read address computation from per-iteration
+    V_ADD_U32 operations to precomputed rotating VGPR iter_args.  Eliminates
+    VALU address computation from the loop body.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Scale Pack Elimination Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMScalePackElimination : Pass<"waveasm-scale-pack-elimination"> {
+  let summary = "Eliminate BFE/LSHL_OR round-trips for B-scale iter_args";
+  let description = [{
+    Eliminates redundant BFE->iter_arg->LSHL_OR round-trips for B-scale values
+    in scaled MFMA loops.  Carries the dword directly as a loop iter_arg instead
+    of four separate byte extractions.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Memory Offset Optimization Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
+  let summary = "Fold constant address components into memory instruction "
+                "offset fields";
+  let description = [{
+    Folds constant address components into memory instruction offset fields,
+    reducing VALU instruction count.  Handles constant adds, constant through
+    V_MOV_B32, and algebraic distribution through shifts.
   }];
 
   let dependentDialects = ["::waveasm::WaveASMDialect"];

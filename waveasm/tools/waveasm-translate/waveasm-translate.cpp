@@ -255,7 +255,7 @@ int main(int argc, char **argv) {
 
   // CSE should run early (before register allocation)
   if (runScopedCSE) {
-    pm.addPass(waveasm::createWAVEASMScopedCSEPass());
+    pm.addPass(waveasm::createWAVEASMScopedCSE());
   }
 
   // Peephole optimizations run after CSE but before waitcnt/hazard.
@@ -267,7 +267,7 @@ int main(int argc, char **argv) {
   // Runs after peephole (which creates lshl_or_b32 ops) and before
   // loop address promotion (which modifies loop structure).
   if (runScalePackElimination) {
-    pm.addPass(waveasm::createWAVEASMScalePackEliminationPass());
+    pm.addPass(waveasm::createWAVEASMScalePackElimination());
   }
 
   // LICM after peephole so fused ops (e.g. v_lshl_add_u32) get hoisted.
@@ -283,13 +283,13 @@ int main(int argc, char **argv) {
   // Strength-reduce buffer_load address computation in loops: precompute
   // voffsets and increment by constant stride each iteration.
   if (runBufferLoadStrengthReduction) {
-    pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReductionPass());
+    pm.addPass(waveasm::createWAVEASMBufferLoadStrengthReduction());
   }
 
   // Memory offset optimization: fold constant address components into
   // memory instruction offset fields (saves VALU instructions)
   if (runMemoryOffsetOpt) {
-    pm.addPass(waveasm::createWAVEASMMemoryOffsetOptPass());
+    pm.addPass(waveasm::createWAVEASMMemoryOffsetOpt());
 
     // Clean up any dead instructions left by the optimization
     pm.addPass(mlir::createCanonicalizerPass());
@@ -298,22 +298,25 @@ int main(int argc, char **argv) {
     // constants into offsets may expose identical base address computations
     // that can now be deduplicated.
     if (runScopedCSE) {
-      pm.addPass(waveasm::createWAVEASMScopedCSEPass());
+      pm.addPass(waveasm::createWAVEASMScopedCSE());
     }
   }
 
   // Loop address promotion: replace per-iteration v_add_u32 LDS address
   // computation with precomputed rotating VGPR iter_args.
   if (runLoopAddressPromotion) {
-    pm.addPass(waveasm::createWAVEASMLoopAddressPromotionPass());
+    pm.addPass(waveasm::createWAVEASMLoopAddressPromotion());
   }
 
   // Register allocation must run before waitcnt/hazard so that those passes
   // see the final register assignments.  Matches compare_backends.py order:
   // LinearScan -> Waitcnt -> Hazard.
   if (runLinearScan) {
-    pm.addPass(
-        waveasm::createWAVEASMLinearScanPass(maxVGPRs, maxSGPRs, maxAGPRs));
+    waveasm::WAVEASMLinearScanOptions lsOpts;
+    lsOpts.maxVGPRs = maxVGPRs;
+    lsOpts.maxSGPRs = maxSGPRs;
+    lsOpts.maxAGPRs = maxAGPRs;
+    pm.addPass(waveasm::createWAVEASMLinearScan(lsOpts));
     // After register allocation, physical register types (pvreg/psreg) replace
     // virtual types (vreg/sreg). The MLIR RegionBranchOpInterface verifier
     // checks exact type equality between entry operands and block arguments,
@@ -333,13 +336,17 @@ int main(int argc, char **argv) {
   // Waitcnt insertion should run before hazard mitigation
   // (matching Python pipeline order for better wait coalescing)
   if (runWaitcntInsertion) {
-    pm.addPass(waveasm::createWAVEASMInsertWaitcntPass(
-        /*insertAfterLoads=*/false, /*ticketedWaitcnt=*/ticketedWaitcnt));
+    waveasm::WAVEASMInsertWaitcntOptions wtOpts;
+    wtOpts.insertAfterLoads = false;
+    wtOpts.ticketedWaitcnt = ticketedWaitcnt;
+    pm.addPass(waveasm::createWAVEASMInsertWaitcnt(wtOpts));
   }
 
   // Hazard mitigation runs after waitcnt (NOPs don't affect wait coalescing)
   if (runHazardMitigation) {
-    pm.addPass(waveasm::createWAVEASMHazardMitigationPass(targetId));
+    waveasm::WAVEASMHazardMitigationOptions hmOpts;
+    hmOpts.targetArch = targetId.getValue();
+    pm.addPass(waveasm::createWAVEASMHazardMitigation(hmOpts));
   }
 
   if (pm.size() > 0) {

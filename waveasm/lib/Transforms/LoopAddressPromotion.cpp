@@ -57,6 +57,11 @@
 using namespace mlir;
 using namespace waveasm;
 
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMLOOPADDRESSPROMOTION
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
 namespace {
 
 struct PromotableAddressAdd {
@@ -294,16 +299,9 @@ static void applyLoopAddressPromotion(LoopOp loopOp) {
 }
 
 struct LoopAddressPromotionPass
-    : public PassWrapper<LoopAddressPromotionPass, OperationPass<>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LoopAddressPromotionPass)
-
-  StringRef getArgument() const override {
-    return "waveasm-loop-address-promotion";
-  }
-
-  StringRef getDescription() const override {
-    return "Promote loop-carried LDS read address computation";
-  }
+    : public waveasm::impl::WAVEASMLoopAddressPromotionBase<
+          LoopAddressPromotionPass> {
+  using WAVEASMLoopAddressPromotionBase::WAVEASMLoopAddressPromotionBase;
 
   void runOnOperation() override {
     // Post-order so inner loops are processed before outer ones.
@@ -317,11 +315,3 @@ struct LoopAddressPromotionPass
 };
 
 } // namespace
-
-namespace waveasm {
-
-std::unique_ptr<mlir::Pass> createWAVEASMLoopAddressPromotionPass() {
-  return std::make_unique<LoopAddressPromotionPass>();
-}
-
-} // namespace waveasm
