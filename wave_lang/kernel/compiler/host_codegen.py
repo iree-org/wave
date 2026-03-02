@@ -271,15 +271,13 @@ def isolated_test_call(
                     sym_val = arith_d.divsi(sym_val, div_c)
                 dynamic_argument_map[dim] = sym_val
 
-            # Create workload base: scalars, then dynamic dims, then strides.
-            workload_base = scalars_args + [
-                dynamic_argument_map[dim] for dim in dynamic_symbols
-            ]
+            # Create workload base: dynamic dims, then scalars, then strides.
+            dynamic_args = [dynamic_argument_map[dim] for dim in dynamic_symbols]
             if stride_arg_count > 0:
                 stride_args = [to_index(v) for v in arguments[-stride_arg_count:]]
-                workload_base = workload_base + stride_args
             else:
                 stride_args = []
+            workload_base = dynamic_args + scalars_args + stride_args
 
             assert isinstance(entry_block, Block)
             # Create a flow.dispatch op to the kernel
