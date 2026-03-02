@@ -41,6 +41,13 @@ THREAD_0 = index_symbol(THREAD_SYMBOL_NAMES[0])
 THREAD_1 = index_symbol(THREAD_SYMBOL_NAMES[1])
 THREAD_2 = index_symbol(THREAD_SYMBOL_NAMES[2])
 
+# Wave-uniform symbols: same value for all lanes in a wave, SGPR-eligible.
+# WAVE_ID_N = floor(linearized_thread_id / threads_per_wave) projected onto
+# workgroup dimension N. Expanded to actual MLIR values at codegen time.
+WAVE_ID_0 = index_symbol("$WAVE0")
+WAVE_ID_1 = index_symbol("$WAVE1")
+WAVE_ID_2 = index_symbol("$WAVE2")
+
 # Input selector symbol for selecting input from different tensors.
 INPUT_SELECTOR = index_symbol("$INPUT_SELECTOR")
 

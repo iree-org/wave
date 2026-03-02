@@ -881,16 +881,22 @@ class WaveConstraint(DistributionConstraint):
         The wave_id is the same as the thread_id, with the exception of
           wave_id[0] = thread_id[0] / threads_per_wave
         This is a convention that we adopt.
+
+        Uses first-class WAVE_ID_N symbols so that index expressions stay
+        simple (no floor(THREAD/64)) and can be recognised as wave-uniform
+        by the read/write lowering.
         """
         old_wave_id = self.wave_id
         assert self.dim == workgroup_constraint.dim, "Dimension mismatch"
-        self.wave_id = hardware_constraint.get_thread_id_from_workgroup_dim(
-            workgroup_constraint.workgroup_dim
-        )
-        # Only handling the wg_dim_0 case because Wave assumes
-        # all threads in a wave are handled in wg_dim_0.
-        if workgroup_constraint.workgroup_dim == 0:
-            self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
+        match workgroup_constraint.workgroup_dim:
+            case 0:
+                self.wave_id = WAVE_ID_0
+            case 1:
+                self.wave_id = WAVE_ID_1
+            case 2:
+                self.wave_id = WAVE_ID_2
+            case _:
+                raise ValueError("Invalid workgroup dimension. Expected 0, 1 or 2.")
         assert (
             old_wave_id is None or self.wave_id == old_wave_id
         ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
