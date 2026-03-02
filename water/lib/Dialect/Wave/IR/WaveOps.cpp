@@ -2486,8 +2486,7 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
     wave::EmitErrorFn emitError) {
   auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
   if (!sourceTensorType) {
-    emitError() << "expected source tensor type, got "
-                << getOperand().getType();
+    emitError() << "expected source tensor type, got " << getSource().getType();
     return failure();
   }
 
