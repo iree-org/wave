@@ -17,7 +17,6 @@ from wave_lang.support.ir_imports import (
     DenseElementsAttr,
     IndexType,
     InsertionPoint,
-    IntegerAttr,
     IntegerType,
     IrType,
     MemRefType,

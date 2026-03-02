@@ -318,9 +318,7 @@ def build_guarded_pipeline_with_remainder(
     # to the original reduction_graph nodes so that
     # _update_kernel_node_mapping can match tracked lists by identity.
     new_to_old = {v: k for k, v in body_old_to_new.items()}
-    node_mapping = {
-        new_to_old.get(k, k): v for k, v in node_mapping.items()
-    }
+    node_mapping = {new_to_old.get(k, k): v for k, v in node_mapping.items()}
 
     # Set the count for the pipelined loop
     # With step > 1 (e.g., from unrolling), we need to reduce the count by more

@@ -173,9 +173,9 @@ def isolated_test_call(
                 else:
                     # Solve shape_expr = d for the base symbol.
                     solutions = sympy.solve(dim_expr - _dim_val, base_sym)
-                    assert len(solutions) == 1, (
-                        f"Cannot solve {dim_expr} = _dim_val for {base_sym}"
-                    )
+                    assert (
+                        len(solutions) == 1
+                    ), f"Cannot solve {dim_expr} = _dim_val for {base_sym}"
                     arg_dim_inverse[base_sym] = solutions[0]
 
         if async_dispatch:
