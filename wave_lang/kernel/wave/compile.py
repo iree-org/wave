@@ -37,7 +37,6 @@ from .analysis.index_sequence_analysis import (
     set_node_indices_water_checked,
     set_post_expansion_indices,
 )
-from .analysis.compute_iv_strides import compute_iv_strides
 from .analysis.partition_strided_operators import (
     merge_contiguous_reads,
     partition_gather_like_ops,
@@ -570,9 +569,6 @@ def build_graph_passes(
                 options.minimize_shared_allocs,
             ),
         ]
-    # Run IV-stride analysis after scheduling so loop-carried IV symbols are
-    # present in read indices; earlier placement cannot see them reliably.
-    graph_passes += [partial(compute_iv_strides, trace, launchable.constraints)]
     graph_passes += [
         partial(
             add_shared_memory_barriers,

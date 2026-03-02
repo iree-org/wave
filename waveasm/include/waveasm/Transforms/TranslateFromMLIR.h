@@ -516,36 +516,20 @@ public:
     mlir::Value elementOffset;
     int64_t srcSrdBase;
     int64_t elementBytes;
-    mlir::Value computedSoffset;
   };
 
   void setPendingSRDBaseAdjust(mlir::Value memref, mlir::Value elemOffset,
                                int64_t srcSrdBase, int64_t elementBytes) {
-    pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes,
-                                       nullptr};
+    pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes};
   }
 
-  /// Get a pending SRD base adjustment (mutable for caching)
-  PendingSRDBaseAdjust *getPendingSRDBaseAdjust(mlir::Value memref) {
+  /// Get a pending SRD base adjustment (returns nullptr if none)
+  const PendingSRDBaseAdjust *
+  getPendingSRDBaseAdjust(mlir::Value memref) const {
     auto it = pendingSRDBaseAdjustMap.find(memref);
     if (it != pendingSRDBaseAdjustMap.end())
       return &it->second;
     return nullptr;
-  }
-
-  /// Reuse an already-computed adjusted SRD with equivalent adjustment params.
-  std::optional<int64_t>
-  findComputedAdjustedSRDIndex(mlir::Value elementOffset, int64_t srcSrdBase,
-                               int64_t elementBytes) const {
-    for (const auto &entry : pendingSRDBaseAdjustMap) {
-      const auto &adj = entry.second;
-      if (adj.elementOffset != elementOffset || adj.srcSrdBase != srcSrdBase ||
-          adj.elementBytes != elementBytes || !adj.computedSoffset)
-        continue;
-      if (auto psreg = llvm::dyn_cast<PSRegType>(adj.computedSoffset.getType()))
-        return psreg.getIndex();
-    }
-    return std::nullopt;
   }
 
   /// Clear a pending SRD base adjustment after it has been applied
