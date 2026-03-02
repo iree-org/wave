@@ -691,19 +691,6 @@ def _get_or_create_flat_memref(
     return flat
 
 
-_IV_SPLIT_ALL_ZERO = {
-    THREAD_0: 0,
-    THREAD_1: 0,
-    THREAD_2: 0,
-    WORKGROUP_0: 0,
-    WORKGROUP_1: 0,
-    WORKGROUP_2: 0,
-    WAVE_ID_0: 0,
-    WAVE_ID_1: 0,
-    WAVE_ID_2: 0,
-}
-
-
 def _try_iv_split_offset(
     emitter: WaveEmitter,
     index: dict[IndexExpr, IndexSequence | IndexExpr],
@@ -723,8 +710,8 @@ def _try_iv_split_offset(
     Parameters
     ----------
     strides : per-dimension integer strides for linearisation.
-    use_subs_idxc : if True, apply ``subs_idxc`` before ``int()`` in the
-        3-point check (needed when expressions contain residual shape symbols).
+    use_subs_idxc : if True, apply ``subs_idxc`` before simplification
+        (needed when expressions contain residual shape symbols).
     """
     iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
     if not iv_syms:
@@ -744,21 +731,30 @@ def _try_iv_split_offset(
         return None
 
     iv_sym = iv_syms[0]
-    try:
-        d1 = d2 = 0
-        for expr, ps in zip(start_exprs, strides):
-            e0 = safe_subs(expr, {**_IV_SPLIT_ALL_ZERO, iv_sym: 0})
-            e1 = safe_subs(expr, {**_IV_SPLIT_ALL_ZERO, iv_sym: step_int})
-            e2 = safe_subs(expr, {**_IV_SPLIT_ALL_ZERO, iv_sym: 2 * step_int})
-            if use_subs_idxc:
-                e0, e1, e2 = subs_idxc(e0), subs_idxc(e1), subs_idxc(e2)
-            d1 += (int(e1) - int(e0)) * ps
-            d2 += (int(e2) - int(e1)) * ps
-    except (TypeError, ValueError, sympy.SympifyError):
-        return None
 
-    if d1 != d2 or d1 == 0:
+    # Symbolic linearity proof: substitute IV = step * j (j is a fresh
+    # integer symbol) keeping all other symbols (T0, WG, WAVE, ...) live.
+    # Because step is a concrete power-of-2 that aligns with tile sizes,
+    # floor/Mod sub-expressions collapse and sympy.simplify reduces the
+    # linearized offset to  c*j + f(T0, WG, ...).  The per-step delta
+    # lin(j+1) - lin(j) then simplifies to a pure integer constant,
+    # proving the stride is independent of thread/wave/workgroup indices.
+    _j = sympy.Symbol("_j", integer=True, nonnegative=True)
+    iv_as_j = step_int * _j
+    lin_sym = sympy.Integer(0)
+    for expr, ps in zip(start_exprs, strides):
+        e = safe_subs(expr, {iv_sym: iv_as_j})
+        if use_subs_idxc:
+            e = subs_idxc(e)
+        e = sympy.simplify(e)
+        lin_sym += e * ps
+    lin_sym = sympy.simplify(lin_sym)
+    lin_sym_next = sympy.simplify(lin_sym.subs(_j, _j + 1))
+    delta = sympy.simplify(lin_sym_next - lin_sym)
+
+    if not delta.is_Integer or delta == 0:
         return None
+    d1 = int(delta)
     k_stride_per_iv, rem = divmod(d1, step_int)
     if rem != 0:
         return None
