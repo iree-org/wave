@@ -200,14 +200,11 @@ int main(int argc, char **argv) {
   }
 
   // After register allocation, physical register types (pvreg/psreg) replace
-  // virtual types (vreg/sreg).  The MLIR RegionBranchOpInterface verifier
-  // checks exact type equality between entry operands and block arguments,
-  // but after regalloc these may be structurally compatible (same register
-  // class and size) but not identical (different physical indices).
-  // Our op-level verifiers use typesCompatible() to handle this, but the
-  // built-in interface verifier does not.
-  // TODO: Implement a custom post-regalloc verification pass that uses
-  // typesCompatible() instead of exact type equality.
+  // virtual types (vreg/sreg).  LoopOp/IfOp override areTypesCompatible() on
+  // RegionBranchOpInterface to accept structurally compatible types, but
+  // LoopLikeOpInterface::verify() hardcodes exact type equality with no
+  // override mechanism.  Disable the interleaved verifier when regalloc runs.
+  // TODO: Upstream areTypesCompatible to LoopLikeOpInterface.
   if (disablePassVerifier)
     pm.enableVerifier(false);
 

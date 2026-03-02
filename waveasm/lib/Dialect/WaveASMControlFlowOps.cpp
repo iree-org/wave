@@ -61,6 +61,10 @@ OperandRange LoopOp::getEntrySuccessorOperands(RegionSuccessor successor) {
   return getInitArgs();
 }
 
+bool LoopOp::areTypesCompatible(Type lhs, Type rhs) {
+  return typesCompatible(lhs, rhs);
+}
+
 // Old API compatibility wrapper (required by this MLIR version)
 
 Block &LoopOp::getBodyBlock() { return getBody().front(); }
@@ -244,6 +248,10 @@ void IfOp::getSuccessorRegions(RegionBranchPoint point,
 
 ValueRange IfOp::getSuccessorInputs(RegionSuccessor successor) {
   return successor.isParent() ? ValueRange(getResults()) : ValueRange();
+}
+
+bool IfOp::areTypesCompatible(Type lhs, Type rhs) {
+  return typesCompatible(lhs, rhs);
 }
 
 // Old API compatibility wrapper (required by this MLIR version)

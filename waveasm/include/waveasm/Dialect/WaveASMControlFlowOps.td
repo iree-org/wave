@@ -19,7 +19,7 @@ include "waveasm/Dialect/WaveASMTypes.td"
 //===----------------------------------------------------------------------===//
 
 def WaveASM_LoopOp : WAVEASMOp<"loop", [
-    DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs", "getEntrySuccessorOperands"]>,
+    DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs", "getEntrySuccessorOperands", "areTypesCompatible"]>,
     DeclareOpInterfaceMethods<LoopLikeOpInterface, ["getInitsMutable", "getRegionIterArgs", "getYieldedValuesMutable"]>,
     RecursiveMemoryEffects,
     SingleBlockImplicitTerminator<"ConditionOp">
@@ -62,7 +62,7 @@ def WaveASM_LoopOp : WAVEASMOp<"loop", [
 }
 
 def WaveASM_IfOp : WAVEASMOp<"if", [
-    DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>,
+    DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs", "areTypesCompatible"]>,
     RecursiveMemoryEffects,
     SingleBlockImplicitTerminator<"YieldOp">
   ]> {
