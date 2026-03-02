@@ -273,6 +273,10 @@ verifyTypesMatchingDimensions(std::optional<mlir::Location> loc,
 // corresponding flag is set, compatible address spaces.
 llvm::LogicalResult verifyCompatibleOperandsAndResultsOpTrait(
     mlir::Operation *op, bool includeAddressSpace, bool includeElementalType);
+
+// Verification logic for the equal-element-types trait. Succeeds if all
+// operands and results have the same element type.
+llvm::LogicalResult verifyEqualElementTypesOpTrait(mlir::Operation *op);
 }; // namespace detail
 
 template <typename OpTy>
@@ -305,6 +309,15 @@ public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(
         op, /*includeAddressSpace=*/true, /*includeElementalType=*/false);
+  }
+};
+
+template <typename OpTy>
+class EqualElementTypesOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, EqualElementTypesOpTrait> {
+public:
+  static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
+    return detail::verifyEqualElementTypesOpTrait(op);
   }
 };
 
