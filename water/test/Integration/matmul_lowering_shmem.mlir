@@ -1,7 +1,10 @@
-// RUN: water-opt %s --pass-pipeline="builtin.module(water-wave-detect-normal-forms,normalform.module(water-wave-propagate-elements-per-thread,water-wave-resolve-distributed-allocations,water-wave-detect-normal-forms,lower-wave-to-mlir),lower-normalform-module,canonicalize,cse)"
+// RUN: water-opt %s --pass-pipeline="builtin.module(water-wave-detect-normal-forms,normalform.module(water-wave-propagate-elements-per-thread,water-wave-resolve-distributed-allocations,water-wave-detect-normal-forms,lower-wave-to-mlir),lower-normalform-module,canonicalize,cse)" | FileCheck %s
 
-// This test is a LIT counterpart to $WAVE_DIR/tests/kernel/wave/water_e2e_test.py.
-// It only checks that wave-related dialect have been succssfully lowered: the
+// This test is a LIT counterpart to $WAVE_DIR/tests/kernel/wave/water_e2e_test.py
+// with the `minimize_shared_allocs` option on and was obtained by printing
+// the MLIR produced by `emit_wave_dialect` before it is passed into
+// `override_mlir`.
+// It only checks that wave-related dialect have been successfully lowered: the
 // dialects are missing and there are no errors meaning the exit code 0. Unit
 // tests cover individual transformations and verifiers.
 
