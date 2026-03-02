@@ -777,7 +777,7 @@ def _simplify_mapping(mapping: IndexMapping) -> IndexMapping | None:
     new_outputs, out_changed = _simplify_symbols_map(mapping.output_mapping)
     new_dyn_mappings = []
     dyn_changed = False
-    for dvm in mapping.dynamic_val_mappings:
+    for dvm in mapping.dynamic_val_mappings or ():
         new_dvm, c = _simplify_symbols_map(dvm)
         new_dyn_mappings.append(new_dvm)
         dyn_changed |= c
