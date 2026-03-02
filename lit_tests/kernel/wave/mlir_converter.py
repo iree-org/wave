@@ -443,7 +443,7 @@ def mlir_converter_self_index():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_self_index
-    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (T0 mod 64) * (BLOCK_M ceildiv 128) + (BLOCK_M floordiv 2) * (T0 floordiv 64), BLOCK_M ceildiv 128, 1)>}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] : !wave.tensor<[@M] of i32, <register>>
     # CHECK: wave.write %[[SELF_INDEX]]
 
 
