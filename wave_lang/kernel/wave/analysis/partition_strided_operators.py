@@ -787,6 +787,10 @@ def _get_divisibility_subs(
         sym, divisor = lhs.args
         if not sym.is_Symbol or not divisor.is_Integer:
             continue
+        # Bail if the symbol may be negative: floor/Mod semantics differ
+        # between Euclidean and truncated division for negative operands.
+        if not sym.is_nonnegative:
+            continue
         div_sym = sympy.Symbol(
             f"_{sym.name}_div_{divisor}",
             integer=True,
