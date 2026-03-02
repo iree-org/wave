@@ -775,94 +775,6 @@ def _create_vec_read_write(
             return
 
 
-_WAVEASM_UNIFORM = {
-    WORKGROUP_0: 0,
-    WORKGROUP_1: 0,
-    WORKGROUP_2: 0,
-    THREAD_1: 0,
-    THREAD_2: 0,
-    WAVE_ID_0: 0,
-    WAVE_ID_1: 0,
-    WAVE_ID_2: 0,
-}
-_WAVEASM_UNIFORM_KEYS = set(_WAVEASM_UNIFORM.keys())
-
-
-_linearize_cache: dict = {}
-
-
-def _linearize_read_waveasm(
-    emitter: WaveEmitter,
-    mem: Value,
-    node_index: Optional[dict],
-    dynamic_values: dict[IndexExpr, Any],
-    symbolic_shape: tuple[IndexExpr, ...],
-) -> tuple[Value, Value]:
-    """
-    Linearize a global read for the WaveASM backend, treating THREAD_1/2
-    as wave-uniform (SRD base) so the per-lane voffset depends only on
-    THREAD_0.  Returns (linearized_mem, th_offset).
-    """
-    kb_type = MemRefType(mem.type)
-    phys_strides, _ = kb_type.get_strides_and_offset()
-    overflow_flags = arith_d.IntegerOverflowFlags.nsw
-    start_exprs = _get_start_indices(node_index)
-    subs = add_emitter_subs(emitter, dynamic_values)
-
-    wg_offset = None
-    th_offset = None
-    for expr, ps in zip(start_exprs, phys_strides):
-        th_expr = safe_subs(expr, _WAVEASM_UNIFORM)
-        wg_expr = sympy.expand(expr - th_expr)
-        if wg_expr.free_symbols - _WAVEASM_UNIFORM_KEYS:
-            wg_expr = sympy.sympify(0)
-            th_expr = expr
-
-        wg_val = gen_sympy_index(subs, wg_expr)
-        th_val = gen_sympy_index(subs, th_expr)
-        stride_val = arith_d.constant(IndexType.get(), ps)
-
-        wg_term = arith_d.muli(wg_val, stride_val, overflow_flags=overflow_flags)
-        th_term = arith_d.muli(th_val, stride_val, overflow_flags=overflow_flags)
-        wg_offset = (
-            wg_term
-            if wg_offset is None
-            else arith_d.addi(wg_offset, wg_term, overflow_flags=overflow_flags)
-        )
-        th_offset = (
-            th_term
-            if th_offset is None
-            else arith_d.addi(th_offset, th_term, overflow_flags=overflow_flags)
-        )
-
-    if not hasattr(emitter, "_linearize_cache"):
-        emitter._linearize_cache = {}
-    cache_key = mem
-    if cache_key in emitter._linearize_cache:
-        return emitter._linearize_cache[cache_key], th_offset
-
-    max_buf = _get_max_buffer_size(kb_type.element_type) - 1
-    dyn_val = ShapedType.get_dynamic_size()
-    result_type = MemRefType.get(
-        [max_buf],
-        kb_type.element_type,
-        layout=Attribute.parse("strided<[1], offset: ?>"),
-        memory_space=kb_type.memory_space,
-    )
-    linearized_mem = memref_d.reinterpret_cast(
-        result_type,
-        mem,
-        offsets=[wg_offset],
-        sizes=[],
-        strides=[],
-        static_offsets=[dyn_val],
-        static_sizes=[max_buf],
-        static_strides=[1],
-    )
-    emitter._linearize_cache[cache_key] = linearized_mem
-    return linearized_mem, th_offset
-
-
 def _get_or_create_flat_memref(
     emitter: WaveEmitter,
     mem: Value,
@@ -934,51 +846,48 @@ def _emit_iv_split_read(
     if isinstance(owner, func_d.FuncOp):
         return None
 
-    # --- Determine k_stride_per_iv ---
-    if getattr(node, "iv_linear", False):
-        k_stride_per_iv = node.iv_k_stride
-    else:
-        phys_strides, _ = kb_type.get_strides_and_offset()
-        dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
-        if any(s == dyn_sentinel for s in phys_strides):
-            return None
+    # --- Determine k_stride_per_iv via 3-point linearity check ---
+    phys_strides, _ = kb_type.get_strides_and_offset()
+    dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
+    if any(s == dyn_sentinel for s in phys_strides):
+        return None
 
-        step_int = _get_constant_value(owner.operands[2])
-        if step_int is None or step_int <= 0:
-            return None
+    step_int = _get_constant_value(owner.operands[2])
+    if step_int is None or step_int <= 0:
+        return None
 
-        start_exprs = _get_start_indices(index)
-        if len(start_exprs) != len(phys_strides):
-            return None
+    start_exprs = _get_start_indices(index)
+    if len(start_exprs) != len(phys_strides):
+        return None
 
-        all_zero = {
-            THREAD_0: 0,
-            THREAD_1: 0,
-            THREAD_2: 0,
-            WORKGROUP_0: 0,
-            WORKGROUP_1: 0,
-            WORKGROUP_2: 0,
-            WAVE_ID_0: 0,
-            WAVE_ID_1: 0,
-            WAVE_ID_2: 0,
-        }
-        iv_sym = iv_syms[0]
-        try:
-            d1 = d2 = 0
-            for expr, ps in zip(start_exprs, phys_strides):
-                v0 = int(safe_subs(expr, {**all_zero, iv_sym: 0}))
-                v1 = int(safe_subs(expr, {**all_zero, iv_sym: step_int}))
-                v2 = int(safe_subs(expr, {**all_zero, iv_sym: 2 * step_int}))
-                d1 += (v1 - v0) * ps
-                d2 += (v2 - v1) * ps
-        except (TypeError, ValueError, sympy.SympifyError):
-            return None
+    all_zero = {
+        THREAD_0: 0,
+        THREAD_1: 0,
+        THREAD_2: 0,
+        WORKGROUP_0: 0,
+        WORKGROUP_1: 0,
+        WORKGROUP_2: 0,
+        WAVE_ID_0: 0,
+        WAVE_ID_1: 0,
+        WAVE_ID_2: 0,
+    }
+    iv_sym = iv_syms[0]
+    try:
+        d1 = d2 = 0
+        for expr, ps in zip(start_exprs, phys_strides):
+            v0 = int(safe_subs(expr, {**all_zero, iv_sym: 0}))
+            v1 = int(safe_subs(expr, {**all_zero, iv_sym: step_int}))
+            v2 = int(safe_subs(expr, {**all_zero, iv_sym: 2 * step_int}))
+            d1 += (v1 - v0) * ps
+            d2 += (v2 - v1) * ps
+    except (TypeError, ValueError, sympy.SympifyError):
+        return None
 
-        if d1 != d2 or d1 == 0:
-            return None
-        k_stride_per_iv, rem = divmod(d1, step_int)
-        if rem != 0:
-            return None
+    if d1 != d2 or d1 == 0:
+        return None
+    k_stride_per_iv, rem = divmod(d1, step_int)
+    if rem != 0:
+        return None
 
     # --- Zero IV in index expressions ---
     iv_zero_subs = {sym: 0 for sym in iv_syms}
