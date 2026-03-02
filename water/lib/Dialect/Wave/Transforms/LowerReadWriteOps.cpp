@@ -273,7 +273,7 @@ transformIndex(DictionaryAttr indexDict,
   }
 
   // When we hit this while increasing mapping expressiveness, it would mean
-  // that we need ot add the symbol part of the mapping to the new value. We
+  // that we need to add the symbol part of the mapping to the new value. We
   // will need to figure out which dimension.
   assert(mapping.getMap().isPermutation() &&
          "NYI: only permutation mappings are currently supported");
@@ -286,31 +286,34 @@ transformIndex(DictionaryAttr indexDict,
   // vectorized. For stride, not sure, it may be unused at all at this stage.
   SmallVector<NamedAttribute> newIndexDictEntries;
   for (size_t i = 0, e = updatedOrderedSyms.size(); i < e; ++i) {
-    auto updatedIndexMapping = cast<wave::WaveIndexMappingAttr>(
-        indexDict.get(orderedSyms[i].getName()));
-    auto originalIndexMapping = cast<wave::WaveIndexMappingAttr>(
+    auto indexMappingForDimOriginallyAtCurrentPos =
+        cast<wave::WaveIndexMappingAttr>(
+            indexDict.get(orderedSyms[i].getName()));
+    auto indexMappingForCurrentNamedDim = cast<wave::WaveIndexMappingAttr>(
         indexDict.get(updatedOrderedSyms[i].getName()));
 
     SmallVector<Attribute> allSymbols;
     wave::aggregateAllSymbols(
-        ArrayRef<ArrayRef<Attribute>>{updatedIndexMapping.getSymbols(),
-                                      originalIndexMapping.getSymbols()},
+        ArrayRef<ArrayRef<Attribute>>{
+            indexMappingForDimOriginallyAtCurrentPos.getSymbols(),
+            indexMappingForCurrentNamedDim.getSymbols()},
         allSymbols);
 
-    AffineMap start =
-        wave::alignMapSymbols(updatedIndexMapping.getStart(),
-                              updatedIndexMapping.getSymbols(), allSymbols);
-    AffineMap step =
-        wave::alignMapSymbols(originalIndexMapping.getStep(),
-                              originalIndexMapping.getSymbols(), allSymbols);
-    AffineMap stride =
-        wave::alignMapSymbols(originalIndexMapping.getStride(),
-                              originalIndexMapping.getSymbols(), allSymbols);
+    AffineMap start = wave::alignMapSymbols(
+        indexMappingForDimOriginallyAtCurrentPos.getStart(),
+        indexMappingForDimOriginallyAtCurrentPos.getSymbols(), allSymbols);
+    AffineMap step = wave::alignMapSymbols(
+        indexMappingForCurrentNamedDim.getStep(),
+        indexMappingForCurrentNamedDim.getSymbols(), allSymbols);
+    AffineMap stride = wave::alignMapSymbols(
+        indexMappingForCurrentNamedDim.getStride(),
+        indexMappingForCurrentNamedDim.getSymbols(), allSymbols);
 
     newIndexDictEntries.emplace_back(
         updatedOrderedSyms[i].getName(),
-        wave::WaveIndexMappingAttr::get(updatedIndexMapping.getContext(),
-                                        allSymbols, start, step, stride));
+        wave::WaveIndexMappingAttr::get(
+            indexMappingForDimOriginallyAtCurrentPos.getContext(), allSymbols,
+            start, step, stride));
   }
   return DictionaryAttr::get(indexDict.getContext(), newIndexDictEntries);
 }

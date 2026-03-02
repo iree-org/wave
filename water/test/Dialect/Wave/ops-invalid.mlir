@@ -384,6 +384,16 @@ func.func @write_ordered_syms_symbol_mismatch(%val: !wave.tensor<[@M, @K, @N] of
 
 // -----
 
+func.func @read_ordered_syms_mismatch_with_mapping(%mem: !wave.tensor<[@N, @M] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 0 ('N') does not match value tensor shape symbol ('M')}}
+  %0 = wave.read %mem {
+    ordered_syms = [#wave.symbol<"N">, #wave.symbol<"M">],
+    mapping = #wave.expr_list<[] (d0, d1) -> (d1, d0)>
+  } : (!wave.tensor<[@N, @M] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// -----
 
 func.func @empty_distributed_shape() {
   // expected-error @below {{distributed shape must have at least one result}}
