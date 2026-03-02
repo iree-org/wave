@@ -17,6 +17,7 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSequence, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
+from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
     ExtractSlice,
@@ -753,11 +754,49 @@ def partition_gather_like_ops(
             custom.erase()
 
 
+def _simplify_symbols_map(mapping: dict) -> tuple[dict, bool]:
+    """Simplify values in a symbol map (``{dim: expr}``).
+
+    Returns ``(new_map, changed)``."""
+    new_map = {}
+    changed = False
+    for key, val in mapping.items():
+        new_val = sym_simplify(subs_idxc(val))
+        new_map[key] = new_val
+        if new_val != val:
+            changed = True
+    return new_map, changed
+
+
+def _simplify_mapping(mapping: IndexMapping) -> IndexMapping | None:
+    """Simplify expressions inside an IndexMapping.
+
+    Returns a new mapping if any expression changed, ``None`` otherwise.
+    """
+    new_inputs, inp_changed = _simplify_symbols_map(mapping.input_mapping)
+    new_outputs, out_changed = _simplify_symbols_map(mapping.output_mapping)
+    new_dyn_mappings = []
+    dyn_changed = False
+    for dvm in mapping.dynamic_val_mappings:
+        new_dvm, c = _simplify_symbols_map(dvm)
+        new_dyn_mappings.append(new_dvm)
+        dyn_changed |= c
+    if not (inp_changed or out_changed or dyn_changed):
+        return None
+    return IndexMapping(
+        mapping.num_iterators,
+        new_inputs,
+        new_outputs,
+        dynamic_val_mappings=tuple(new_dyn_mappings),
+    )
+
+
 def simplify_indices(trace: CapturedTrace):
     """Pre-simplify index expressions on all ops.
 
     Runs ``simplify(subs_idxc(component))`` on every ``start``, ``size``,
-    and ``stride`` of every ``IndexSequence`` in every op's index dict.
+    and ``stride`` of every ``IndexSequence`` in every op's index dict,
+    and on every expression in Read/Write index mappings.
     This normalises indices once so downstream passes (contiguity checks,
     merge, partition) don't each pay the simplification cost independently.
     """
@@ -766,29 +805,36 @@ def simplify_indices(trace: CapturedTrace):
             custom = get_custom(node)
             if not isinstance(custom, CustomOp):
                 continue
+            # Simplify index sequences.
             try:
                 index = custom.index
             except (ValueError, AttributeError):
-                continue
-            if not isinstance(index, dict):
-                continue
-            new_index = {}
-            changed = False
-            for dim, seq in index.items():
-                if not isinstance(seq, IndexSequence):
-                    new_index[dim] = seq
-                    continue
-                new_start = sym_simplify(subs_idxc(seq.start))
-                new_size = sym_simplify(subs_idxc(seq.size))
-                new_stride = sym_simplify(subs_idxc(seq.stride))
-                if (
-                    new_start != seq.start
-                    or new_size != seq.size
-                    or new_stride != seq.stride
-                ):
-                    new_index[dim] = IndexSequence(new_start, new_size, new_stride)
-                    changed = True
-                else:
-                    new_index[dim] = seq
-            if changed:
-                custom.index = new_index
+                index = None
+            if isinstance(index, dict):
+                new_index = {}
+                changed = False
+                for dim, seq in index.items():
+                    if not isinstance(seq, IndexSequence):
+                        new_index[dim] = seq
+                        continue
+                    new_start = sym_simplify(subs_idxc(seq.start))
+                    new_size = sym_simplify(subs_idxc(seq.size))
+                    new_stride = sym_simplify(subs_idxc(seq.stride))
+                    if (
+                        new_start != seq.start
+                        or new_size != seq.size
+                        or new_stride != seq.stride
+                    ):
+                        new_index[dim] = IndexSequence(
+                            new_start, new_size, new_stride
+                        )
+                        changed = True
+                    else:
+                        new_index[dim] = seq
+                if changed:
+                    custom.index = new_index
+            # Simplify index mappings on Read/Write ops.
+            if isinstance(custom, (Read, Write)) and custom.mapping is not None:
+                new_mapping = _simplify_mapping(custom.mapping)
+                if new_mapping is not None:
+                    custom.mapping = new_mapping
