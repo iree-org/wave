@@ -6,8 +6,7 @@
 // YieldOp operand types (LinearScanPass.cpp lines 352-361), but does NOT
 // update the else-branch's YieldOp operand types. When the then-branch
 // and else-branch yield values allocated to DIFFERENT physical registers,
-// MLIR verification fails because the IfOp's result type doesn't match
-// the else-branch's yield type.
+// the types diverge.
 //
 // Root cause: LinearScanPass.cpp only walks then-branch:
 //   program.walk([&](IfOp ifOp) {
@@ -19,6 +18,12 @@
 //     }
 //   });
 //
+// IfOp/LoopOp override areTypesCompatible() on RegionBranchOpInterface
+// to accept structurally compatible types, so the IfOp verifier itself
+// no longer rejects this.  However, LoopLikeOpInterface::verify()
+// hardcodes exact type equality and still catches the mismatch when
+// the IfOp is inside a loop (tests 2 and 3).
+//
 // The fix should ensure both branches' yield types are consistent, either by:
 // (a) Also updating the else-branch yield types, or
 // (b) The allocator ensuring both branches yield the same physical register
@@ -26,12 +31,9 @@
 // (c) Using the allocation mapping to determine the IfOp result type
 //     independently of which branch's yield types we look at.
 
-// Each of these tests triggers the verification error.
-// We check that the error message appears.
-
-// CHECK: error: 'waveasm.if' op along control flow edge from Operation waveasm.yield to parent
-// CHECK: error: 'waveasm.if' op along control flow edge from Operation waveasm.yield to parent
-// CHECK: error: 'waveasm.if' op along control flow edge from Operation waveasm.yield to parent
+// Test 1 (standalone IfOp) passes thanks to areTypesCompatible().
+// Tests 2-3 (IfOp inside loop) still fail via LoopLikeOpInterface.
+// CHECK: error: 'waveasm.loop' op
 
 //===----------------------------------------------------------------------===//
 // Test 1: Minimal reproduction -- standalone IfOp
