@@ -578,7 +578,7 @@ def build_graph_passes(
         ),
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
-        partial(simplify_indices, trace),
+        partial(simplify_indices, trace, launchable.constraints),
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
