@@ -102,14 +102,7 @@ def _split_index(
     """
     Split index expr into thread-dependent and thread-independent parts
     """
-    subs_wg = {
-        WORKGROUP_0: 0,
-        WORKGROUP_1: 0,
-        WORKGROUP_2: 0,
-        WAVE_ID_0: 0,
-        WAVE_ID_1: 0,
-        WAVE_ID_2: 0,
-    }
+    subs_wg = {WORKGROUP_0: 0, WORKGROUP_1: 0, WORKGROUP_2: 0}
     # Replace all wg symbols with 0s to get thread-dependent index.
     # All dynamic values will also be part of thread-index.
     thread_dependent_index = safe_subs(src, subs_wg)
