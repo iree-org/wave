@@ -857,9 +857,9 @@ def _try_iv_split_offset(
     # integer symbol) keeping all other symbols (T0, WG, WAVE, ...) live.
     # Because step is a concrete power-of-2 that aligns with tile sizes,
     # floor/Mod sub-expressions collapse and sympy.simplify reduces the
-    # linearized offset to  c*j + f(T0, WG, ...).  The per-step delta
-    # lin(j+1) - lin(j) then simplifies to a pure integer constant,
-    # proving the stride is independent of thread/wave/workgroup indices.
+    # linearized offset to  c*j + f(T0, WG, ...).  Extracting the
+    # coefficient of j and verifying j doesn't appear in the remainder
+    # proves the stride is constant for all thread/wave/workgroup values.
     _j = sympy.Symbol("_j", integer=True, nonnegative=True)
     iv_as_j = step_int * _j
     lin_sym = sympy.Integer(0)
@@ -870,13 +870,12 @@ def _try_iv_split_offset(
         e = sympy.simplify(e)
         lin_sym += e * ps
     lin_sym = sympy.simplify(lin_sym)
-    lin_sym_next = sympy.simplify(lin_sym.subs(_j, _j + 1))
-    delta = sympy.simplify(lin_sym_next - lin_sym)
 
-    if not delta.is_Integer or delta == 0:
+    coeff = lin_sym.coeff(_j)
+    remainder = sympy.simplify(lin_sym - coeff * _j)
+    if not coeff.is_Integer or coeff == 0 or _j in remainder.free_symbols:
         return None
-    d1 = int(delta)
-    k_stride_per_iv, rem = divmod(d1, step_int)
+    k_stride_per_iv, rem = divmod(int(coeff), step_int)
     if rem != 0:
         return None
 
