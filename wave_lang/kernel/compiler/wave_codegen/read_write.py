@@ -102,7 +102,14 @@ def _split_index(
     """
     Split index expr into thread-dependent and thread-independent parts
     """
-    subs_wg = {WORKGROUP_0: 0, WORKGROUP_1: 0, WORKGROUP_2: 0}
+    subs_wg = {
+        WORKGROUP_0: 0,
+        WORKGROUP_1: 0,
+        WORKGROUP_2: 0,
+        WAVE_ID_0: 0,
+        WAVE_ID_1: 0,
+        WAVE_ID_2: 0,
+    }
     # Replace all wg symbols with 0s to get thread-dependent index.
     # All dynamic values will also be part of thread-index.
     thread_dependent_index = safe_subs(src, subs_wg)
@@ -647,6 +654,257 @@ def _create_vec_read_write(
             return
 
 
+_WAVEASM_UNIFORM = {
+    WORKGROUP_0: 0,
+    WORKGROUP_1: 0,
+    WORKGROUP_2: 0,
+    THREAD_1: 0,
+    THREAD_2: 0,
+    WAVE_ID_0: 0,
+    WAVE_ID_1: 0,
+    WAVE_ID_2: 0,
+}
+_WAVEASM_UNIFORM_KEYS = set(_WAVEASM_UNIFORM.keys())
+
+
+_linearize_cache: dict = {}
+
+
+def _linearize_read_waveasm(
+    emitter: WaveEmitter,
+    mem: Value,
+    node_index: Optional[dict],
+    dynamic_values: dict[IndexExpr, Any],
+    symbolic_shape: tuple[IndexExpr, ...],
+) -> tuple[Value, Value]:
+    """
+    Linearize a global read for the WaveASM backend, treating THREAD_1/2
+    as wave-uniform (SRD base) so the per-lane voffset depends only on
+    THREAD_0.  Returns (linearized_mem, th_offset).
+    """
+    kb_type = MemRefType(mem.type)
+    phys_strides, _ = kb_type.get_strides_and_offset()
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+    start_exprs = _get_start_indices(node_index)
+    subs = add_emitter_subs(emitter, dynamic_values)
+
+    wg_offset = None
+    th_offset = None
+    for expr, ps in zip(start_exprs, phys_strides):
+        th_expr = safe_subs(expr, _WAVEASM_UNIFORM)
+        wg_expr = sympy.expand(expr - th_expr)
+        if wg_expr.free_symbols - _WAVEASM_UNIFORM_KEYS:
+            wg_expr = sympy.sympify(0)
+            th_expr = expr
+
+        wg_val = gen_sympy_index(subs, wg_expr)
+        th_val = gen_sympy_index(subs, th_expr)
+        stride_val = arith_d.constant(IndexType.get(), ps)
+
+        wg_term = arith_d.muli(wg_val, stride_val, overflow_flags=overflow_flags)
+        th_term = arith_d.muli(th_val, stride_val, overflow_flags=overflow_flags)
+        wg_offset = (
+            wg_term
+            if wg_offset is None
+            else arith_d.addi(wg_offset, wg_term, overflow_flags=overflow_flags)
+        )
+        th_offset = (
+            th_term
+            if th_offset is None
+            else arith_d.addi(th_offset, th_term, overflow_flags=overflow_flags)
+        )
+
+    if not hasattr(emitter, "_linearize_cache"):
+        emitter._linearize_cache = {}
+    cache_key = mem
+    if cache_key in emitter._linearize_cache:
+        return emitter._linearize_cache[cache_key], th_offset
+
+    max_buf = _get_max_buffer_size(kb_type.element_type) - 1
+    dyn_val = ShapedType.get_dynamic_size()
+    result_type = MemRefType.get(
+        [max_buf],
+        kb_type.element_type,
+        layout=Attribute.parse("strided<[1], offset: ?>"),
+        memory_space=kb_type.memory_space,
+    )
+    linearized_mem = memref_d.reinterpret_cast(
+        result_type,
+        mem,
+        offsets=[wg_offset],
+        sizes=[],
+        strides=[],
+        static_offsets=[dyn_val],
+        static_sizes=[max_buf],
+        static_strides=[1],
+    )
+    emitter._linearize_cache[cache_key] = linearized_mem
+    return linearized_mem, th_offset
+
+
+def _get_or_create_flat_memref(
+    emitter: WaveEmitter,
+    mem: Value,
+) -> Value:
+    """Return a rank-1 view of *mem* with offset 0 (pure shape change).
+
+    All reads from the same source buffer share one reinterpret_cast,
+    so the backend maps them all to a single SRD — no per-read SRD copies.
+    """
+    if not hasattr(emitter, "_flat_memref_cache"):
+        emitter._flat_memref_cache = {}
+    key = id(mem)
+    if key in emitter._flat_memref_cache:
+        return emitter._flat_memref_cache[key]
+
+    kb_type = MemRefType(mem.type)
+    max_buf = _get_max_buffer_size(kb_type.element_type) - 1
+    result_type = MemRefType.get(
+        [max_buf],
+        kb_type.element_type,
+        layout=Attribute.parse("strided<[1], offset: 0>"),
+        memory_space=kb_type.memory_space,
+    )
+    flat = memref_d.reinterpret_cast(
+        result_type,
+        mem,
+        offsets=[],
+        sizes=[],
+        strides=[],
+        static_offsets=[0],
+        static_sizes=[max_buf],
+        static_strides=[1],
+    )
+    emitter._flat_memref_cache[key] = flat
+    return flat
+
+
+def _emit_iv_split_read(
+    emitter: WaveEmitter,
+    node: fx.Node,
+    index: dict[IndexExpr, IndexSequence | IndexExpr],
+    kb_src: Value,
+    input_shape: tuple[IndexExpr, ...],
+    vector_type: VectorType,
+    dynamic_vals_map_start: dict[IndexExpr, Any],
+) -> Optional[Value]:
+    """
+    Emit a VALU-free global read inside a tiled loop.
+
+    Follows the AITER methodology:
+      1. ONE shared rank-1 memref per source buffer (no per-read SRD copies).
+      2. Full linearized offset at IV=0 → voffset, hoisted before the loop.
+      3. IV * k_stride added inside loop → BufferLoadStrengthReduction
+         promotes it to soffset, yielding zero in-loop VALU.
+
+    Uses a 3-point linearity check on the post-mapping codegen-time indices
+    so it works even when the pre-codegen pass couldn't tag the node.
+    """
+    iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
+    if not iv_syms:
+        return None
+
+    kb_type = MemRefType(kb_src.type)
+    if kb_type.rank == 0:
+        return None
+
+    ip = InsertionPoint.current
+    owner = ip.block.owner
+    if isinstance(owner, func_d.FuncOp):
+        return None
+
+    # --- Determine k_stride_per_iv ---
+    if getattr(node, "iv_linear", False):
+        k_stride_per_iv = node.iv_k_stride
+    else:
+        phys_strides, _ = kb_type.get_strides_and_offset()
+        dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
+        if any(s == dyn_sentinel for s in phys_strides):
+            return None
+
+        step_int = _get_constant_value(owner.operands[2])
+        if step_int is None or step_int <= 0:
+            return None
+
+        start_exprs = _get_start_indices(index)
+        if len(start_exprs) != len(phys_strides):
+            return None
+
+        all_zero = {
+            THREAD_0: 0,
+            THREAD_1: 0,
+            THREAD_2: 0,
+            WORKGROUP_0: 0,
+            WORKGROUP_1: 0,
+            WORKGROUP_2: 0,
+            WAVE_ID_0: 0,
+            WAVE_ID_1: 0,
+            WAVE_ID_2: 0,
+        }
+        iv_sym = iv_syms[0]
+        try:
+            d1 = d2 = 0
+            for expr, ps in zip(start_exprs, phys_strides):
+                v0 = int(safe_subs(expr, {**all_zero, iv_sym: 0}))
+                v1 = int(safe_subs(expr, {**all_zero, iv_sym: step_int}))
+                v2 = int(safe_subs(expr, {**all_zero, iv_sym: 2 * step_int}))
+                d1 += (v1 - v0) * ps
+                d2 += (v2 - v1) * ps
+        except (TypeError, ValueError, sympy.SympifyError):
+            return None
+
+        if d1 != d2 or d1 == 0:
+            return None
+        k_stride_per_iv, rem = divmod(d1, step_int)
+        if rem != 0:
+            return None
+
+    # --- Zero IV in index expressions ---
+    iv_zero_subs = {sym: 0 for sym in iv_syms}
+    index_no_iv = {}
+    for dim, seq in index.items():
+        start = _get_start_index(seq)
+        new_start = safe_subs(start, iv_zero_subs)
+        if isinstance(seq, IndexSequence):
+            index_no_iv[dim] = IndexSequence(new_start, seq.size)
+        else:
+            index_no_iv[dim] = new_start
+
+    # --- Hoist: compute full linearized voffset at IV=0, create shared flat memref ---
+    kb_type = MemRefType(kb_src.type)
+    phys_strides, _ = kb_type.get_strides_and_offset()
+    hoist_ip = InsertionPoint(owner)
+    subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+
+    with hoist_ip:
+        flat_mem = _get_or_create_flat_memref(emitter, kb_src)
+
+        iv0_exprs = _get_start_indices(index_no_iv)
+        lin_offset = None
+        for expr, ps in zip(iv0_exprs, phys_strides):
+            val = gen_sympy_index(subs_map, expr)
+            stride_c = arith_d.constant(IndexType.get(), ps)
+            term = arith_d.muli(val, stride_c, overflow_flags=overflow_flags)
+            lin_offset = (
+                term
+                if lin_offset is None
+                else arith_d.addi(lin_offset, term, overflow_flags=overflow_flags)
+            )
+
+    # --- In-loop: total = hoisted_voffset + IV * k_stride ---
+    iv_sym = iv_syms[0]
+    iv_mlir = subs_map.get(iv_sym)
+    if iv_mlir is None:
+        return None
+
+    k_stride_val = gen_sympy_index(subs_map, sympy.sympify(k_stride_per_iv))
+    iv_offset = arith_d.muli(iv_mlir, k_stride_val, overflow_flags=overflow_flags)
+    total_offset = arith_d.addi(lin_offset, iv_offset, overflow_flags=overflow_flags)
+
+    return vector_d.load(vector_type, flat_mem, [total_offset])
+
+
 def _build_mask_with_mapping(
     emitter: WaveEmitter,
     mapping: IndexMapping,
@@ -736,11 +994,35 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     else:
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
 
+    is_global = get_custom(memory).type.address_space != SHARED_ADDRESS_SPACE
+    use_llvm_load = flags != MemoryAccessFlags.NONE
+
+    if (
+        is_global
+        and mask is None
+        and not use_llvm_load
+        and emitter.options.use_wave_asm_backend
+        and not read_meets_hw_transpose_requirements(
+            get_custom(node), emitter.constraints, emitter.options.target
+        )
+    ):
+        result = _emit_iv_split_read(
+            emitter,
+            node,
+            index,
+            kb_src,
+            input_shape,
+            vector_type,
+            dynamic_vals_map_start,
+        )
+        if result is not None:
+            emitter.bind_node_proxy(node, IRProxyValue(result))
+            return
+
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
 
-    use_llvm_load = flags != MemoryAccessFlags.NONE
     if use_llvm_load:
         result = _create_llvm_read_write(
             kb_src, kb_ir_type, start_indices, vector_type, flags

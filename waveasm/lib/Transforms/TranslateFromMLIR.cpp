@@ -437,6 +437,83 @@ Value lookupSRD(Value memref, TranslationContext &ctx, Location loc) {
   return PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
 }
 
+/// Apply a pending SRD base adjustment from a linearized memref
+/// reinterpret_cast. Allocates a fresh SRD slot, copies source base,
+/// adds byte offset, and sets num_records + stride.
+/// Caches the computed SRD in adj->computedSoffset for reuse.
+static std::pair<Value, int64_t>
+applyPendingSRDBaseAdjust(TranslationContext::PendingSRDBaseAdjust *adj,
+                          MemRefType memrefType, TranslationContext &ctx,
+                          Location loc) {
+  (void)memrefType;
+  if (adj->computedSoffset) {
+    if (auto psreg = dyn_cast<PSRegType>(adj->computedSoffset.getType())) {
+      int64_t idx = psreg.getIndex();
+      auto srdType = ctx.createSRegType(4, 4);
+      auto srd =
+          PrecoloredSRegOp::create(ctx.getBuilder(), loc, srdType, idx, 4);
+      return {srd, idx};
+    }
+  }
+
+  if (auto reusedIdx = ctx.findComputedAdjustedSRDIndex(
+          adj->elementOffset, adj->srcSrdBase, adj->elementBytes)) {
+    auto &builder = ctx.getBuilder();
+    auto srdType = ctx.createSRegType(4, 4);
+    Value srd = PrecoloredSRegOp::create(builder, loc, srdType, *reusedIdx, 4);
+    adj->computedSoffset = srd;
+    return {srd, *reusedIdx};
+  }
+
+  auto &builder = ctx.getBuilder();
+  int64_t N = ctx.getNextSwizzleSRDIndex();
+  auto *mlirCtx = builder.getContext();
+
+  std::string copyBase = "s_mov_b64 s[" + std::to_string(N) + ":" +
+                         std::to_string(N + 1) + "], s[" +
+                         std::to_string(adj->srcSrdBase) + ":" +
+                         std::to_string(adj->srcSrdBase + 1) + "]";
+  RawOp::create(builder, loc, copyBase);
+
+  Value offsetVal = adj->elementOffset;
+  auto tmpType = PSRegType::get(mlirCtx, N + 3, 1);
+  if (isVGPRType(offsetVal.getType())) {
+    offsetVal = V_READFIRSTLANE_B32::create(builder, loc, tmpType, offsetVal);
+  } else {
+    offsetVal = S_MOV_B32::create(builder, loc, tmpType, offsetVal);
+  }
+
+  auto elemSizeImm = ConstantOp::create(
+      builder, loc, ctx.createImmType(adj->elementBytes), adj->elementBytes);
+  auto hiType = PSRegType::get(mlirCtx, N + 2, 1);
+  auto loType = PSRegType::get(mlirCtx, N + 3, 1);
+  auto byteOffHi =
+      S_MUL_HI_U32::create(builder, loc, hiType, offsetVal, elemSizeImm);
+  auto byteOffLo =
+      S_MUL_I32::create(builder, loc, loType, offsetVal, elemSizeImm);
+
+  auto sccType = ctx.createSRegType();
+  auto base0Type = PSRegType::get(mlirCtx, N, 1);
+  auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
+  auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
+  auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
+  S_ADD_U32::create(builder, loc, base0Type, sccType, base0, byteOffLo);
+  S_ADDC_U32::create(builder, loc, base1Type, sccType, base1, byteOffHi);
+
+  int64_t srcBase = adj->srcSrdBase;
+  std::string copySize = "s_mov_b32 s" + std::to_string(N + 2) + ", s" +
+                         std::to_string(srcBase + 2);
+  RawOp::create(builder, loc, copySize);
+  std::string copyStride = "s_mov_b32 s" + std::to_string(N + 3) + ", s" +
+                           std::to_string(srcBase + 3);
+  RawOp::create(builder, loc, copyStride);
+
+  auto srdType = ctx.createSRegType(4, 4);
+  Value srd = PrecoloredSRegOp::create(builder, loc, srdType, N, 4);
+  adj->computedSoffset = srd;
+  return {srd, N};
+}
+
 SmallVector<Value, 4> emitBufferLoads(Value srd, Value voffset,
                                       int64_t instOffset, int64_t numBytes,
                                       TranslationContext &ctx, Location loc) {
@@ -948,7 +1025,13 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     // Global load - buffer_load_dwordx* with splitting for large vectors
     auto [voffset, instOffset] =
         computeVOffsetFromIndices(memrefType, loadOp.getIndices(), ctx, loc);
-    Value srd = lookupSRD(loadOp.getBase(), ctx, loc);
+    Value srd;
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(loadOp.getBase())) {
+      auto [adjSrd, _] = applyPendingSRDBaseAdjust(adj, memrefType, ctx, loc);
+      srd = adjSrd;
+    } else {
+      srd = lookupSRD(loadOp.getBase(), ctx, loc);
+    }
     auto loadResults =
         emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
 
@@ -988,7 +1071,13 @@ LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
 
   auto [voffset, instOffset] = computeVOffsetFromIndices(
       memrefType, maskedLoadOp.getIndices(), ctx, loc);
-  Value srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
+  Value srd;
+  if (auto *adj = ctx.getPendingSRDBaseAdjust(maskedLoadOp.getBase())) {
+    auto [adjSrd, _] = applyPendingSRDBaseAdjust(adj, memrefType, ctx, loc);
+    srd = adjSrd;
+  } else {
+    srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
+  }
   auto loadResults =
       emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
 

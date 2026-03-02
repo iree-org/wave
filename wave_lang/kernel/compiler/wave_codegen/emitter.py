@@ -137,6 +137,14 @@ class WaveEmitter:
             ),
         ]
 
+        threads_per_wave = self.hardware_constraint.threads_per_wave
+        tpw = arith_d.constant(IndexType.get(), threads_per_wave)
+        self.wave_ids = [
+            arith_d.divui(self.thread_ids[0], tpw),
+            self.thread_ids[1],
+            self.thread_ids[2],
+        ]
+
     def emit_func(self) -> Operation:
         bindings = self.root_sig.sig.linear_bindings
 
@@ -607,7 +615,11 @@ def add_emitter_subs(
         arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_2
     ]
     all_symbols = (
-        emitter.thread_ids + emitter.workgroup_ids + device_zeros + induction_vars
+        emitter.thread_ids
+        + emitter.workgroup_ids
+        + device_zeros
+        + emitter.wave_ids
+        + induction_vars
     )
     dynamics = dict(
         zip(
@@ -621,6 +633,9 @@ def add_emitter_subs(
                 DEVICE_DIM_0,
                 DEVICE_DIM_1,
                 DEVICE_DIM_2,
+                WAVE_ID_0,
+                WAVE_ID_1,
+                WAVE_ID_2,
             ]
             + induction_var_syms,
             all_symbols,
