@@ -1613,14 +1613,13 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
 
   // The 'index' attribute is optional. For non-MMA ops (read/write), we only
   // use a single index expression, which is stored as the first (and only)
-  // dictionary inside the array attribute.
+  // dictionary inside the array attribute. Length is validated earlier (index
+  // attribute length must match the number of index expression values).
   ArrayAttr arr = dyn_cast_or_null<ArrayAttr>(indexAttr);
   if (!arr)
     return success();
-  if (!llvm::hasSingleElement(arr.getValue()))
-    return op->emitError() << "'index' attribute must contain exactly one "
-                              "dictionary for this op, got "
-                           << arr.size();
+  assert(llvm::hasSingleElement(arr.getValue()) &&
+         "index length already validated for non-MMA read/write");
   DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(arr[0]);
   if (!indexDict)
     return success();
