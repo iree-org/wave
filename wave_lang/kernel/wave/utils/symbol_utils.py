@@ -109,22 +109,32 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
-@lru_cache(maxsize=1024)
+_simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
+
+
 def simplify(expr: sympy.Expr) -> sympy.Expr:
     """Simplify a sympy expression using interval arithmetic and sympy.simplify.
 
     Extends sympy.simplify with bounds-based reasoning that can resolve
     floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
     sympy cannot handle.  Iterates to a fixed point.
+
+    The cache maps both ``src -> dst`` and ``dst -> dst`` so that calling
+    simplify on an already-simplified expression is a cache hit.
     """
     if not isinstance(expr, sympy.Basic):
         return expr
+    if expr in _simplify_cache:
+        return _simplify_cache[expr]
+    orig = expr
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
         new_expr = sympy.simplify(new_expr)
         if new_expr == expr:
             break
         expr = new_expr
+    _simplify_cache[orig] = expr
+    _simplify_cache[expr] = expr
     return expr
 
 
