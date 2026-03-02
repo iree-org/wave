@@ -1196,7 +1196,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
   func.func @lower_read_write_bounds_non_trailing_vectorized_dim(
       %mem: memref<100x64xf16, #gpu.address_space<workgroup>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{M = 100, N = 64}>} {
-    // The bound for M is M itself, which is substitued with its constant value from hyperparams.
+    // The bound for M is M itself, which is substituted with its constant value from hyperparams.
     // CHECK: %[[BOUND:.*]] = affine.apply affine_map<() -> (100)>()
     // CHECK: %[[IOTA:.*]] = vector.step : vector<4xindex>
     // CHECK: %[[START_VEC:.*]] = vector.broadcast {{.*}} : index to vector<4xindex>

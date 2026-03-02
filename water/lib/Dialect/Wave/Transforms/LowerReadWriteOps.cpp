@@ -394,7 +394,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
          "NYI: only permutation mappings are currently supported");
   FailureOr<Value> mask =
       buildMask(op->getLoc(), boundsMapping, memoryShape, rewriter, hyper,
-                startIndices, elementsPerThread);
+                startIndices, elementsPerThread, *vectorizedDim);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");
 
