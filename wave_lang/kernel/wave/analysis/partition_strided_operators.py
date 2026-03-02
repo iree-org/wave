@@ -751,3 +751,38 @@ def partition_gather_like_ops(
                 raise NotImplementedError(f"Unsupported op type: {custom}")
 
             custom.erase()
+
+
+def simplify_indices(trace: CapturedTrace):
+    """Pre-simplify index expressions on all ops.
+
+    Runs ``simplify(subs_idxc(component))`` on every ``start``, ``size``,
+    and ``stride`` of every ``IndexSequence`` in every op's index dict.
+    This normalises indices once so downstream passes (contiguity checks,
+    merge, partition) don't each pay the simplification cost independently.
+    """
+    for subgraph in trace.region_graph.subgraphs.values():
+        for node in subgraph.nodes:
+            custom = get_custom(node)
+            if not isinstance(custom, CustomOp):
+                continue
+            index = custom.index
+            if index is None:
+                continue
+            # Iterate/Conditional ops return a list of index dicts.
+            if isinstance(index, list):
+                continue
+            changed = False
+            for dim, seq in index.items():
+                if not isinstance(seq, IndexSequence):
+                    continue
+                new_start = sym_simplify(subs_idxc(seq.start))
+                new_size = sym_simplify(subs_idxc(seq.size))
+                new_stride = sym_simplify(subs_idxc(seq.stride))
+                if new_start != seq.start or new_size != seq.size or new_stride != seq.stride:
+                    seq.start = new_start
+                    seq.size = new_size
+                    seq.stride = new_stride
+                    changed = True
+            if changed:
+                custom.index = index

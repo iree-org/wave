@@ -42,6 +42,7 @@ from .analysis.partition_strided_operators import (
     partition_gather_like_ops,
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
+    simplify_indices,
 )
 from .barriers import add_shared_memory_barriers
 from .cluster_barriers import add_cluster_barriers
@@ -577,6 +578,7 @@ def build_graph_passes(
         ),
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
+        partial(simplify_indices, trace),
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
