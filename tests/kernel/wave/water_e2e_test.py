@@ -1,4 +1,9 @@
-"""End-to-end tests for Water middle-end pipeline."""
+"""End-to-end tests for Water middle-end pipeline.
+
+This test has LIT counterparts in $WAVE_ROOT/water/test/Integration/matmul*.mlir.
+If it fails, check the LIT counterpart for error messages. If those pass, the
+error is likely in the Python/C++ interfacing.
+"""
 
 import torch
 from torch.testing import assert_close
