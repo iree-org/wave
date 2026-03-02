@@ -213,13 +213,11 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
 
     Value result;
     if (elemBits <= 8)
-      result =
-          DS_READ_U8::create(builder, loc, TypeRange{vregType}, vaddr)
-              .getResult(0);
+      result = DS_READ_U8::create(builder, loc, TypeRange{vregType}, vaddr)
+                   .getResult(0);
     else
-      result =
-          DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr)
-              .getResult(0);
+      result = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr)
+                   .getResult(0);
     ctx.getMapper().mapValue(loadOp.getResult(), result);
   } else {
     // Global load.
@@ -241,12 +239,12 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
 
     Value result;
     if (elemBits <= 8)
-      result = BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{vregType},
-                                         srd, voffset, zeroConst)
+      result = BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{vregType}, srd,
+                                         voffset, zeroConst)
                    .getResult(0);
     else
-      result = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType},
-                                         srd, voffset, zeroConst)
+      result = BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType}, srd,
+                                         voffset, zeroConst)
                    .getResult(0);
     ctx.getMapper().mapValue(loadOp.getResult(), result);
   }

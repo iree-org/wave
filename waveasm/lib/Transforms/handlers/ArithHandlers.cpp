@@ -214,8 +214,9 @@ LogicalResult handleArithDivSI(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  return op->emitError("signed integer division by non-power-of-2 is not "
-                       "yet implemented; divisor must be a positive power of 2");
+  return op->emitError(
+      "signed integer division by non-power-of-2 is not "
+      "yet implemented; divisor must be a positive power of 2");
 }
 
 LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {

@@ -301,9 +301,8 @@ LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
       } else {
         // Pack into the next byte/halfword lane via shift-or.
         int64_t shiftAmt = e * elemBitWidth;
-        auto shiftImm = ConstantOp::create(builder, loc,
-                                           ctx.createImmType(shiftAmt),
-                                           shiftAmt);
+        auto shiftImm = ConstantOp::create(
+            builder, loc, ctx.createImmType(shiftAmt), shiftAmt);
         packed = V_LSHL_OR_B32::create(builder, loc, ctx.createVRegType(),
                                        *elem, shiftImm, packed);
       }
