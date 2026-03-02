@@ -17,7 +17,7 @@ Required tags: k_loop, read_a, read_a_scale, read_b, read_b_scale,
 bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale, scaled_mma.
 """
 
-from sympy import Piecewise, ceiling, floor, Max
+from sympy import Eq, Piecewise, ceiling, floor, Max
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -327,6 +327,11 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    # Divisibility assumptions for M, N, K (no effect for static shapes).
+    constraints += [tkw.Assumption(Eq(M % 32, 0))]
+    constraints += [tkw.Assumption(Eq(N % 32, 0))]
+    constraints += [tkw.Assumption(Eq(K % 256, 0))]
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
