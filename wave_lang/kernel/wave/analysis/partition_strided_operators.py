@@ -757,11 +757,12 @@ def partition_gather_like_ops(
             custom.erase()
 
 
+SubstList = list[tuple[sympy.Symbol, sympy.Expr]]
+
+
 def _get_divisibility_subs(
     constraints: Sequence[Constraint],
-) -> tuple[
-    list[tuple[sympy.Symbol, sympy.Expr]], list[tuple[sympy.Symbol, sympy.Expr]]
-]:
+) -> tuple[SubstList, SubstList]:
     """Extract divisibility assumptions into forward/backward substitution lists.
 
     For each ``Assumption(Eq(Mod(S, d), 0))`` we introduce a fresh integer
@@ -839,10 +840,11 @@ def _simplify_mapping(
     mapping: IndexMapping,
     fwd: list,
     bwd: list,
-) -> IndexMapping | None:
+) -> tuple[IndexMapping, bool]:
     """Simplify expressions inside an IndexMapping.
 
-    Returns a new mapping if any expression changed, ``None`` otherwise.
+    Returns ``(new_mapping, True)`` if any expression changed,
+    ``(original_mapping, False)`` otherwise.
     """
     new_inputs, inp_changed = _simplify_symbols_map(mapping.input_mapping, fwd, bwd)
     new_outputs, out_changed = _simplify_symbols_map(mapping.output_mapping, fwd, bwd)
@@ -853,13 +855,13 @@ def _simplify_mapping(
         new_dyn_mappings.append(new_dvm)
         dyn_changed |= c
     if not (inp_changed or out_changed or dyn_changed):
-        return None
+        return mapping, False
     return IndexMapping(
         mapping.num_iterators,
         new_inputs,
         new_outputs,
         dynamic_val_mappings=tuple(new_dyn_mappings),
-    )
+    ), True
 
 
 def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = ()):
@@ -881,11 +883,18 @@ def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = (
             custom = get_custom(node)
             if not isinstance(custom, CustomOp):
                 continue
+            # Simplify index mappings on Read/Write ops.
+            if isinstance(custom, (Read, Write)) and custom.mapping is not None:
+                new_mapping, mapping_changed = _simplify_mapping(
+                    custom.mapping, fwd, bwd
+                )
+                if mapping_changed:
+                    custom.mapping = new_mapping
             # Simplify index sequences.
             try:
                 index = custom.index
             except (ValueError, AttributeError):
-                index = None
+                continue
             if isinstance(index, dict):
                 new_index = {}
                 changed = False
@@ -907,8 +916,3 @@ def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = (
                         new_index[dim] = seq
                 if changed:
                     custom.index = new_index
-            # Simplify index mappings on Read/Write ops.
-            if isinstance(custom, (Read, Write)) and custom.mapping is not None:
-                new_mapping = _simplify_mapping(custom.mapping, fwd, bwd)
-                if new_mapping is not None:
-                    custom.mapping = new_mapping
