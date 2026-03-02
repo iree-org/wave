@@ -447,8 +447,8 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         M: shape[0],
         N: shape[1],
         K: shape[2],
-        K_PACKED: shape[2] // 2,
-        K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,
+        K_PACKED: K // 2,
+        K_SCALE_SHUFFLED: (((K // 32) + 7) // 8) * 8,
     }
     hyperparams.update(get_default_scheduling_params())
 
