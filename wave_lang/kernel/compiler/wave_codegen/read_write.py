@@ -1421,29 +1421,183 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, new_src_idx, src_dynamic_vals_map_start
-    )
-
     ip = InsertionPoint.current
 
     induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
-    # Hoist to the function level, if not using induction variables.
+    # Hoist dst indices to function level if they don't use induction variables.
+    dst_ip = ip
     if not any(
         induction_vars.intersection(set(index.start.free_symbols))
         for index in dst_idx.values()
     ):
-        while not isinstance(ip.block.owner, func_d.FuncOp):
-            ip = InsertionPoint(ip.block.owner)
+        while not isinstance(dst_ip.block.owner, func_d.FuncOp):
+            dst_ip = InsertionPoint(dst_ip.block.owner)
 
-    with ip:
+    with dst_ip:
         dst_index, _, _ = _build_start_indices(
             emitter, dst_idx, dst_dynamic_vals_map_start
         )
-        # We are indexing shared mem so i32 is enough.
         i32 = IntegerType.get_signless(32)
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
+
+    # Try iv-split for the source (global) address — same AITER-style
+    # approach as _emit_iv_split_read: flat memref, hoisted voffset,
+    # scalar IV stride.
+    iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
+    owner = ip.block.owner
+    use_iv_split = (
+        iv_syms
+        and not isinstance(owner, func_d.FuncOp)
+        and emitter.options.use_wave_asm_backend
+        and MemRefType(src.type).rank > 0
+    )
+
+    if use_iv_split:
+        # Use symbolic strides (from tensor shape) for the linearized offset,
+        # not the MLIR memref strides (which may be rank-1 after cast).
+        sym_stride_vals = strides_from_symbolic_shape(
+            IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+        )
+        sym_strides_int = []
+        try:
+            sym_strides_int = [int(subs_idxc(s)) for s in sym_stride_vals]
+        except (TypeError, ValueError):
+            sym_strides_int = []
+
+        step_int = (
+            _get_constant_value(owner.operands[2])
+            if not isinstance(owner, func_d.FuncOp)
+            else None
+        )
+
+        if sym_strides_int and step_int is not None and step_int > 0:
+            start_exprs = _get_start_indices(new_src_idx)
+            if len(start_exprs) == len(sym_strides_int):
+                all_zero = {
+                    THREAD_0: 0,
+                    THREAD_1: 0,
+                    THREAD_2: 0,
+                    WORKGROUP_0: 0,
+                    WORKGROUP_1: 0,
+                    WORKGROUP_2: 0,
+                    WAVE_ID_0: 0,
+                    WAVE_ID_1: 0,
+                    WAVE_ID_2: 0,
+                }
+                iv_sym = iv_syms[0]
+                try:
+                    d1 = d2 = 0
+                    for expr, ps in zip(start_exprs, sym_strides_int):
+                        e0 = subs_idxc(safe_subs(expr, {**all_zero, iv_sym: 0}))
+                        e1 = subs_idxc(safe_subs(expr, {**all_zero, iv_sym: step_int}))
+                        e2 = subs_idxc(
+                            safe_subs(expr, {**all_zero, iv_sym: 2 * step_int})
+                        )
+                        v0 = int(e0)
+                        v1 = int(e1)
+                        v2 = int(e2)
+                        d1 += (v1 - v0) * ps
+                        d2 += (v2 - v1) * ps
+                    lin_ok = d1 == d2 and d1 != 0 and d1 % step_int == 0
+                except (TypeError, ValueError, sympy.SympifyError):
+                    lin_ok = False
+
+                if lin_ok:
+                    k_stride_per_iv = d1 // step_int
+                    iv_zero_subs = {sym: 0 for sym in iv_syms}
+                    idx_no_iv = {}
+                    for dim, seq in new_src_idx.items():
+                        start = _get_start_index(seq)
+                        new_start = safe_subs(start, iv_zero_subs)
+                        if isinstance(seq, IndexSequence):
+                            idx_no_iv[dim] = IndexSequence(new_start, seq.size)
+                        else:
+                            idx_no_iv[dim] = new_start
+
+                    subs_map = add_emitter_subs(emitter, src_dynamic_vals_map_start)
+                    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+                    hoist_ip = InsertionPoint(owner)
+
+                    with hoist_ip:
+                        iv0_exprs = _get_start_indices(idx_no_iv)
+                        lin_offset = None
+                        for expr, ps in zip(iv0_exprs, sym_strides_int):
+                            val = gen_sympy_index(subs_map, expr)
+                            stride_c = arith_d.constant(IndexType.get(), ps)
+                            term = arith_d.muli(
+                                val, stride_c, overflow_flags=overflow_flags
+                            )
+                            lin_offset = (
+                                term
+                                if lin_offset is None
+                                else arith_d.addi(
+                                    lin_offset, term, overflow_flags=overflow_flags
+                                )
+                            )
+
+                    iv_mlir = subs_map.get(iv_sym)
+                    if iv_mlir is not None:
+                        k_stride_val = arith_d.constant(
+                            IndexType.get(), k_stride_per_iv
+                        )
+                        iv_offset = arith_d.muli(
+                            iv_mlir, k_stride_val, overflow_flags=overflow_flags
+                        )
+                        total_offset = arith_d.addi(
+                            lin_offset, iv_offset, overflow_flags=overflow_flags
+                        )
+
+                        mask = _build_mask(
+                            emitter,
+                            src_idx,
+                            elements_per_thread=1,
+                            bounds=src_bounds,
+                            dynamic_values=src_dynamic_vals_map_start,
+                        )
+                        if mask:
+                            mask = vector_d.extract(
+                                mask, static_position=[0], dynamic_position=[]
+                            )
+                            oob_index_value = _get_out_of_bounds_index(element_type)
+                            oob_index = arith_d.constant(
+                                IndexType.get(), oob_index_value
+                            )
+                            total_offset = arith_d.select(mask, total_offset, oob_index)
+
+                        # Linearize src to 1D for single-index addressing.
+                        # Use _linearize_memref with zero wg/th offsets since
+                        # the full offset is in total_offset already.
+                        lin_strides = [
+                            gen_sympy_index(
+                                add_emitter_subs(emitter, src_dynamic_vals_map_start), s
+                            )
+                            for s in sym_stride_vals
+                        ]
+                        zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(
+                            lin_strides
+                        )
+                        lin_src, _ = _linearize_memref(
+                            src, zero_indices, zero_indices, lin_strides
+                        )
+                        lin_src = _cast_buffer_and_encode_stride(
+                            lin_src, lin_strides, element_type, emitter
+                        )
+
+                        amdgpu_d.gather_to_lds(
+                            src=lin_src,
+                            src_indices=[total_offset],
+                            dst=dst,
+                            dst_indices=dst_index,
+                            transfer_type=store_type,
+                        )
+                        return
+        use_iv_split = False
+
+    # Fallback: original linearization path
+    src_index, src_index_wg, src_index_th = _build_start_indices(
+        emitter, new_src_idx, src_dynamic_vals_map_start
+    )
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
@@ -1473,8 +1627,6 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         ),
     )
 
-    # We previously checked mask is same for all elements, so we can use
-    # elements_per_thread=1 to build the mask.
     mask = _build_mask(
         emitter,
         src_idx,
@@ -1488,11 +1640,9 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
         offset_th = arith_d.select(mask, offset_th, oob_index)
 
-    src_index = [offset_th]
-
     amdgpu_d.gather_to_lds(
         src=src,
-        src_indices=src_index,
+        src_indices=[offset_th],
         dst=dst,
         dst_indices=dst_index,
         transfer_type=store_type,
