@@ -772,17 +772,23 @@ def simplify_indices(trace: CapturedTrace):
             # Iterate/Conditional ops return a list of index dicts.
             if isinstance(index, list):
                 continue
+            new_index = {}
             changed = False
             for dim, seq in index.items():
                 if not isinstance(seq, IndexSequence):
+                    new_index[dim] = seq
                     continue
                 new_start = sym_simplify(subs_idxc(seq.start))
                 new_size = sym_simplify(subs_idxc(seq.size))
                 new_stride = sym_simplify(subs_idxc(seq.stride))
-                if new_start != seq.start or new_size != seq.size or new_stride != seq.stride:
-                    seq.start = new_start
-                    seq.size = new_size
-                    seq.stride = new_stride
+                if (
+                    new_start != seq.start
+                    or new_size != seq.size
+                    or new_stride != seq.stride
+                ):
+                    new_index[dim] = IndexSequence(new_start, new_size, new_stride)
                     changed = True
+                else:
+                    new_index[dim] = seq
             if changed:
-                custom.index = index
+                custom.index = new_index
