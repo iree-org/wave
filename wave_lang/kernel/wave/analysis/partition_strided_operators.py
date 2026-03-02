@@ -856,12 +856,15 @@ def _simplify_mapping(
         dyn_changed |= c
     if not (inp_changed or out_changed or dyn_changed):
         return mapping, False
-    return IndexMapping(
-        mapping.num_iterators,
-        new_inputs,
-        new_outputs,
-        dynamic_val_mappings=tuple(new_dyn_mappings),
-    ), True
+    return (
+        IndexMapping(
+            mapping.num_iterators,
+            new_inputs,
+            new_outputs,
+            dynamic_val_mappings=tuple(new_dyn_mappings),
+        ),
+        True,
+    )
 
 
 def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = ()):
