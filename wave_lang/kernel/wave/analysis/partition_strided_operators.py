@@ -43,6 +43,7 @@ from ..utils.mma_utils import (
 )
 from ..utils.symbol_utils import (
     _numeric_eval_constant,
+    safe_subs,
     simplify as sym_simplify,
     subs_idxc,
 )
@@ -805,10 +806,10 @@ def _simplify_expr(
     """Run subs_idxc + simplify with divisibility rewriting."""
     expr = subs_idxc(expr)
     if fwd:
-        expr = expr.subs(fwd)
+        expr = safe_subs(expr, fwd)
     expr = sym_simplify(expr)
     if bwd:
-        expr = expr.subs(bwd)
+        expr = safe_subs(expr, bwd)
     return expr
 
 
