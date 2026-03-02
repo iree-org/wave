@@ -275,6 +275,7 @@ def attention_progressive_roundtrip():
             "generate_bounds_exprs",
             "merge_contiguous_reads",
             "location_check_pass",
+            "simplify_indices",
         }
     )
 
