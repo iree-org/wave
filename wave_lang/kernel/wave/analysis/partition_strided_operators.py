@@ -766,11 +766,11 @@ def simplify_indices(trace: CapturedTrace):
             custom = get_custom(node)
             if not isinstance(custom, CustomOp):
                 continue
-            index = custom.index
-            if index is None:
+            try:
+                index = custom.index
+            except (ValueError, AttributeError):
                 continue
-            # Iterate/Conditional ops return a list of index dicts.
-            if isinstance(index, list):
+            if not isinstance(index, dict):
                 continue
             new_index = {}
             changed = False
