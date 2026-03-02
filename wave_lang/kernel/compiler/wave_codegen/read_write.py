@@ -17,7 +17,6 @@ from wave_lang.support.ir_imports import (
     DenseElementsAttr,
     IndexType,
     InsertionPoint,
-    IntegerAttr,
     IntegerType,
     IrType,
     MemRefType,
@@ -62,7 +61,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
-from ...wave.utils.symbol_utils import safe_subs
+from ...wave.utils.symbol_utils import safe_subs, simplify
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -95,16 +94,6 @@ def _get_start_indices(
     return start_indices
 
 
-@functools.lru_cache
-def _simplify(expr):
-    """
-    Simple wrapper around simplify in order to utilize LRU Cache.
-    This is important to minimize compile time caused by re-simplifying
-    expressions.
-    """
-    return sympy.simplify(expr)
-
-
 def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     """
     Split index expr into thread-dependent and thread-independent parts
@@ -116,7 +105,7 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
 
     # Compute thread-independent index as `orig_index - thread_dependent_index`
     # All thread symbols and dynamic should cancel-out in the result.
-    thread_independent_index = _simplify(src - thread_dependent_index)
+    thread_independent_index = simplify(src - thread_dependent_index)
     if thread_independent_index.free_symbols - set(subs_wg.keys()):
         # If we have any symbols besides wg symbols, means some thread or
         # dynamic symbols were not canceled out, use the entire index as
@@ -125,6 +114,48 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
         thread_dependent_index = src
 
     return thread_independent_index, thread_dependent_index
+
+
+def _split_index_three_way(
+    src: IndexExpr | int, uniform_syms: set
+) -> tuple[IndexExpr, IndexExpr, IndexExpr]:
+    """
+    Split index expr into workgroup, uniform (e.g. loop induction), and
+    thread-dependent parts.  Keeping the uniform part separate from the
+    thread part allows the backend to place the uniform contribution in
+    the buffer-load soffset field instead of a VALU add.
+    """
+    if isinstance(src, int):
+        return sympy.sympify(0), sympy.sympify(0), sympy.sympify(src)
+
+    subs_wg = {WORKGROUP_0: 0, WORKGROUP_1: 0, WORKGROUP_2: 0}
+    subs_all_uniform = {**subs_wg, **{s: 0 for s in uniform_syms}}
+
+    # Thread-only: zero out all uniform symbols (WG + induction vars).
+    thread_index = safe_subs(src, subs_all_uniform)
+
+    # No-WG: zero out only WG symbols (keeps induction vars + thread).
+    no_wg = safe_subs(src, subs_wg)
+
+    # Uniform part = no_wg - thread_only (induction-var-dependent terms).
+    uniform_index = simplify(no_wg - thread_index)
+
+    # WG part = src - no_wg.
+    wg_index = simplify(src - no_wg)
+
+    # Validate WG part contains only WG symbols.
+    if wg_index.free_symbols - set(subs_wg.keys()):
+        wg_index = sympy.sympify(0)
+        no_wg = src
+        uniform_index = simplify(no_wg - thread_index)
+
+    # Validate uniform part has no thread-dependent symbols.
+    thread_syms = {THREAD_0, THREAD_1, THREAD_2}
+    if uniform_index.free_symbols & thread_syms:
+        thread_index = no_wg
+        uniform_index = sympy.sympify(0)
+
+    return wg_index, uniform_index, thread_index
 
 
 def _extract0(src):
@@ -151,14 +182,25 @@ def _build_start_indices(
     emitter: WaveEmitter,
     src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
     dynamic_values: dict[IndexExpr, Any] = {},
-) -> tuple[list[OpResult], list[OpResult], list[OpResult]]:
+    uniform_syms: set | None = None,
+) -> (
+    tuple[list[OpResult], list[OpResult], list[OpResult]]
+    | tuple[list[OpResult], list[OpResult], list[OpResult], list[OpResult]]
+):
     start_indices = _get_start_indices(src_indices)
-    split_indices = [_split_index(i) for i in start_indices]
     subs = add_emitter_subs(emitter, dynamic_values)
     indices = [gen_sympy_index(subs, i) for i in start_indices]
+
+    if uniform_syms:
+        split_indices = [_split_index_three_way(i, uniform_syms) for i in start_indices]
+        indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
+        indices_unif = [gen_sympy_index(subs, i[1]) for i in split_indices]
+        indices_th = [gen_sympy_index(subs, i[2]) for i in split_indices]
+        return indices, indices_wg, indices_unif, indices_th
+
+    split_indices = [_split_index(i) for i in start_indices]
     indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
     indices_th = [gen_sympy_index(subs, i[1]) for i in split_indices]
-
     return indices, indices_wg, indices_th
 
 
@@ -172,6 +214,7 @@ def _build_mask(
     elements_per_thread: int,
     bounds: Optional[dict[IndexSymbol, IndexExpr]],
     dynamic_values: dict[IndexExpr, Any] = {},
+    scalarize: bool = False,
 ) -> Optional[OpResult]:
     if not bounds:
         return None
@@ -180,6 +223,25 @@ def _build_mask(
     fastest_dim = get_fastest_index(index)
     last_dim = list(index)[fastest_dim]
     new_index = {k: _get_start_index(v) for k, v in index.items()}
+
+    if scalarize:
+        # Build mask from per-element scalar comparisons to avoid vector ops.
+        subs = add_emitter_subs(emitter, dynamic_values)
+        base = new_index[last_dim]
+        i1 = IntegerType.get_signless(1)
+        bits = []
+        for i in range(elements_per_thread):
+            new_index[last_dim] = base + i
+            elem_expr = functools.reduce(
+                lambda a, b: sympy.And(a, b),
+                (new_index[dim] < bound for dim, bound in bounds.items()),
+            )
+            bits.append(gen_sympy_index(subs, elem_expr))
+        new_index[last_dim] = base
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        return vector_d.from_elements(mask_vec_type, bits)
 
     new_index[last_dim] = new_index[last_dim] + idxc.iota(elements_per_thread)
 
@@ -537,73 +599,50 @@ def _create_vec_read_write(
     zero = get_constant_attr(0, element_type)
     zero = arith_d.constant(element_type, zero)
 
+    offset_th = None
     if mask is None:
         mask_vec_type = VectorType.get(
             [elements_per_thread], IntegerType.get_signless(1)
         )
         mask = _constant_mask(mask_vec_type)
 
-    # make offsets 0, 1, 2 ...
-    offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
-    vals = [IntegerAttr.get(IndexType.get(), v) for v in range(elements_per_thread)]
-
-    offsets_vec = arith_d.constant(
-        offsets_vec_type, DenseElementsAttr.get(vals, offsets_vec_type)
-    )
-
-    offset_th = None
     if buffer_ops_enabled:
         mem, offset_th = _linearize_memref(
             mem, start_indices_wg, start_indices_th, strides
         )
         mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+    elif is_global_mem and not is_read:
+        mem, offset_th = _linearize_memref(
+            mem, start_indices_wg, start_indices_th, strides
+        )
 
-    indices = [offset_th] if buffer_ops_enabled else start_indices
+    indices = (
+        [offset_th] if (buffer_ops_enabled or offset_th is not None) else start_indices
+    )
 
     if no_masked_load_store_ops:
-        # find the index at which memory out of bounds of buffer
+        # Out-of-bounds index causes hardware to return zero.
         oob_index_value = _get_out_of_bounds_index(element_type)
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
 
-        oob_index = vector_d.broadcast(
-            VectorType.get(vector_type.shape, IndexType.get()), oob_index
-        )
-
-        offset_th = vector_d.broadcast(
-            VectorType.get(vector_type.shape, IndexType.get()), offset_th
-        )
-
-        uint32_vec_type = VectorType.get([elements_per_thread], uint32)
-        indexvec_type = VectorType.get([elements_per_thread], IndexType.get())
-
-        offsets_vec = arith_d.index_cast(uint32_vec_type, offsets_vec)
-        offset_th = arith_d.index_cast(uint32_vec_type, offset_th)
-
-        # add the thread offset and the vec offsets
-        offsets_vec = arith_d.addi(offsets_vec, offset_th)
-        offsets_vec = arith_d.index_cast(indexvec_type, offsets_vec)
-
-        # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
-        selected_index = arith_d.select(mask, offsets_vec, oob_index)
-        elems = list()
-
         if splatted_mask:
-            # mask is same for all of them, can just pick the first index
-            selected_index = extract(selected_index, 0)
-
+            # Mask is uniform — select once and do a single vector load/store.
+            selected_index = arith_d.select(mask_splat, offset_th, oob_index)
             if is_read:
                 return vector_d.load(vector_type, mem, indices=[selected_index])
-
             else:
                 vector_d.store(value, mem, indices=[selected_index])
                 return
 
+        # Per-element scalar index computation avoids vector broadcasts.
+        elems = list()
+        singlenumvec_type = VectorType.get([1], vector_type.element_type)
         for i in range(elements_per_thread):
-            # mask is not same for all elements, need to unroll
-            this_index = extract(selected_index, i)  # this element
+            i_const = arith_d.constant(IndexType.get(), i)
+            elem_offset = arith_d.addi(offset_th, i_const)
+            mask_bit = extract(mask, i)
+            this_index = arith_d.select(mask_bit, elem_offset, oob_index)
 
-            # Unmasked load, using selected_index
-            singlenumvec_type = VectorType.get([1], vector_type.element_type)
             if is_read:
                 elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
                 elem = extract(elem, 0)
@@ -614,10 +653,8 @@ def _create_vec_read_write(
                 vector_d.store(single_num_vector, mem, indices=[this_index])
 
         if is_read:
-            # now make a vector from all the elements loaded
             return vector_d.from_elements(vector_type, elems)
-
-        else:  # it was a store, return
+        else:
             return
 
     else:
@@ -640,6 +677,7 @@ def _build_mask_with_mapping(
     elements_per_thread: int,
     bounds: Optional[tuple[IndexSymbol, ...]],
     dynamic_vals_map: dict[IndexExpr, Value],
+    scalarize: bool = False,
 ) -> Optional[Value]:
     """
     Build a mask for read/write operations, when a mapping is used
@@ -671,9 +709,12 @@ def _build_mask_with_mapping(
             elements_per_thread,
             bounds,
             dynamic_vals_map,
+            scalarize=scalarize,
         )
     else:
-        return _build_mask(emitter, index, elements_per_thread, bounds)
+        return _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize
+        )
 
 
 @handle_op(read)
@@ -702,6 +743,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
+    is_global_mem = kb_ir_type.memory_space is None
+    scalarize_mask = emitter.options.use_buffer_ops and is_global_mem
+
     if mapping:
         transformed_index = transform_index_on_mapping(
             mapping, input_shape, index, is_read=True
@@ -715,10 +759,13 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             bounds,
             dynamic_vals_map_start,
+            scalarize=scalarize_mask,
         )
         index = transformed_index
     else:
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        mask = _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize_mask
+        )
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
@@ -793,6 +840,9 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
     element_type = kb_ir_type.element_type
 
+    is_global_mem = kb_ir_type.memory_space is None
+    scalarize_mask = emitter.options.use_buffer_ops and is_global_mem
+
     if mapping:
         transformed_index = transform_index_on_mapping(
             mapping, output_shape, index, is_read=False
@@ -806,10 +856,13 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             bounds,
             dynamic_vals_map_start,
+            scalarize=scalarize_mask,
         )
         index = transformed_index
     else:
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        mask = _build_mask(
+            emitter, index, elements_per_thread, bounds, scalarize=scalarize_mask
+        )
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
@@ -1079,13 +1132,25 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, new_src_idx, src_dynamic_vals_map_start
-    )
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+    # Three-way split: separate induction-variable (uniform) offsets from
+    # per-lane thread offsets so the backend can place the uniform part in
+    # the buffer-load soffset field instead of emitting a VALU add.
+    src_index_iv = None
+    if induction_vars:
+        src_index, src_index_wg, src_index_iv, src_index_th = _build_start_indices(
+            emitter,
+            new_src_idx,
+            src_dynamic_vals_map_start,
+            uniform_syms=induction_vars,
+        )
+    else:
+        src_index, src_index_wg, src_index_th = _build_start_indices(
+            emitter, new_src_idx, src_dynamic_vals_map_start
+        )
 
     ip = InsertionPoint.current
-
-    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
     # Hoist to the function level, if not using induction variables.
     if not any(
@@ -1113,6 +1178,25 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
+
+    # Add uniform (induction-variable) contribution as a separate SGPR offset.
+    # Keeping it as a distinct arith.addi (VGPR + SGPR) lets the AMDGPU
+    # backend's SIFoldOperands fold the SGPR into the buffer_load soffset.
+    if src_index_iv is not None:
+        overflow_flags = arith_d.IntegerOverflowFlags.nsw
+        offset_iv = None
+        for iv_idx, stride in zip(src_index_iv, strides):
+            if isinstance(iv_idx, int):
+                iv_idx = arith_d.constant(IndexType.get(), iv_idx)
+            off = arith_d.muli(iv_idx, stride, overflow_flags=overflow_flags)
+            if offset_iv is None:
+                offset_iv = off
+            else:
+                offset_iv = arith_d.addi(offset_iv, off, overflow_flags=overflow_flags)
+        if offset_iv is not None and _get_constant_value(offset_iv) != 0:
+            offset_th = arith_d.addi(
+                offset_th, offset_iv, overflow_flags=overflow_flags
+            )
 
     # We previously checked mask is same for all elements, so we can use
     # elements_per_thread=1 to build the mask.

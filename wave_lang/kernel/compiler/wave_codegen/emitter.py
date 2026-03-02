@@ -836,7 +836,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                 rem_expr(muli_expr(lhs, rhs.denominator), rhs.numerator),
                 rhs.denominator,
             )
-
         return rem_expr(lhs, rhs)
 
     def _floordiv(lhs, rhs):

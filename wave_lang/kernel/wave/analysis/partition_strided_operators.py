@@ -400,6 +400,24 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
+def _symbol_ranges_from_constraints(
+    constraints: list[Constraint],
+) -> dict[sympy.Symbol, tuple[int, int]]:
+    """Build symbol→(lo, hi) ranges for thread IDs from constraints."""
+    hw = get_hardware_constraint(constraints)
+    tpw = hw.threads_per_wave
+    wpb = hw.waves_per_block
+    ranges: dict[sympy.Symbol, tuple[int, int]] = {}
+    if wpb is not None:
+        ranges[THREAD_0] = (sympy.Integer(0), sympy.Integer(tpw * wpb[0] - 1))
+        ranges[THREAD_1] = (sympy.Integer(0), sympy.Integer(wpb[1] - 1))
+        ranges[THREAD_2] = (sympy.Integer(0), sympy.Integer(wpb[2] - 1))
+    else:
+        # Still know THREAD_0 ∈ [0, tpw - 1] at minimum.
+        ranges[THREAD_0] = (sympy.Integer(0), sympy.Integer(tpw - 1))
+    return ranges
+
+
 def merge_contiguous_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
@@ -414,7 +432,8 @@ def merge_contiguous_reads(
     physical flat offset starts differ by exactly ept are merged.
     """
     hw_constraint = get_hardware_constraint(constraints)
-    while _merge_contiguous_reads_once(trace, hw_constraint):
+    ranges = _symbol_ranges_from_constraints(constraints)
+    while _merge_contiguous_reads_once(trace, hw_constraint, ranges):
         pass
 
 
@@ -443,7 +462,7 @@ def _get_physical_start(
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
-def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
+def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint, ranges) -> bool:
     """Single merge pass: merge adjacent pairs of same-ept reads.
 
     Groups reads by (memory operand, ept) and merges pairs whose physical
@@ -512,6 +531,7 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
             for j in range(i + 1, len(read_infos)):
                 if j in merged:
                     continue
+
                 off1, phys1, custom1, node1 = read_infos[i]
                 off2, phys2, custom2, node2 = read_infos[j]
 
@@ -533,7 +553,7 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     if diff is None:
                         continue
                 else:
-                    diff = sym_simplify(raw_diff)
+                    diff = sym_simplify(raw_diff, ranges)
                     if diff != ept and diff != -ept:
                         nv = _numeric_eval_constant(raw_diff)
                         if nv is not None:
@@ -562,7 +582,7 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                             merge_dim = None
                             break
                     else:
-                        d = sym_simplify(raw_d)
+                        d = sym_simplify(raw_d, ranges)
                         if d != ept and d != 0:
                             nv = _numeric_eval_constant(raw_d)
                             if nv is not None:

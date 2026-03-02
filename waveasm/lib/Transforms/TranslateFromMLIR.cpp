@@ -522,6 +522,7 @@ LogicalResult handleArithAddI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithSubI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithMulI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithDivSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithIndexCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithAndI(Operation *op, TranslationContext &ctx);
@@ -561,6 +562,7 @@ LogicalResult handleVectorShapeCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorBitCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorFma(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorReduction(Operation *op, TranslationContext &ctx);
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorExtractStridedSlice(Operation *op,
                                               TranslationContext &ctx);
 
@@ -1593,6 +1595,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::SubIOp, handleArithSubI);
   REGISTER_HANDLER(arith::MulIOp, handleArithMulI);
   REGISTER_HANDLER(arith::DivUIOp, handleArithDivUI);
+  REGISTER_HANDLER(arith::DivSIOp, handleArithDivSI);
   REGISTER_HANDLER(arith::RemUIOp, handleArithRemUI);
   REGISTER_HANDLER(arith::IndexCastOp, handleArithIndexCast);
 
@@ -1650,6 +1653,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(vector::TransferWriteOp, handleVectorTransferWrite);
   REGISTER_HANDLER(vector::FMAOp, handleVectorFma);
   REGISTER_HANDLER(vector::ReductionOp, handleVectorReduction);
+  REGISTER_HANDLER(vector::FromElementsOp, handleVectorFromElements);
 
   // AMDGPU dialect
   REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
