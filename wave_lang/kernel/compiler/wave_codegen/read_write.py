@@ -95,7 +95,6 @@ def _get_start_indices(
     return start_indices
 
 
-
 def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     """
     Split index expr into thread-dependent and thread-independent parts
