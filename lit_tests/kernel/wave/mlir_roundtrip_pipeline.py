@@ -34,7 +34,11 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     format_diagnostics,
     PersistentEmitter,
 )
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_vanilla_attention_kernel,
+)
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.utils.graph_utils import (
@@ -196,3 +200,83 @@ def gemm_progressive_roundtrip():
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
     _run_progressive_roundtrip(gemm, options, expected_failures)
+
+
+# CHECK-LABEL: attention_progressive_roundtrip
+@run_test
+def attention_progressive_roundtrip():
+    """Test MLIR roundtrip at each stage of the attention compilation pipeline."""
+    attention, hyperparams, _ = get_vanilla_attention_kernel(
+        AttentionShape(
+            num_query_heads=8,
+            num_kv_heads=2,
+            query_seq_len=256,
+            head_size_kv=64,
+            head_size=64,
+            kv_seq_len=256,
+        ),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+        False,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+    )
+
+    # Passes whose MLIR roundtrip is known to fail for the attention kernel.
+    # See: https://github.com/iree-org/wave/issues/1019
+    expected_failures = frozenset(
+        {
+            "debug_log_hoist",
+            "initialize_iter_args",
+            "create_induction_vars",
+            "initialize_reductions",
+            "finalize_indices",
+            "substitute_vector_shapes",
+            "add_get_results",
+            "infer_types",
+            "construct_index_mapping",
+            "debug_log_write_replace",
+            "promote_placeholders",
+            "set_node_indices",
+            "reorder_workgroups",
+            "expand_graph",
+            "set_post_expansion_indices",
+            "remove_chained_getresult",
+            "decompose_vmma_ops",
+            "decompose_dot_mma",
+            "hoist_loop_invariant_ops",
+            "tensor_load_to_shared",
+            "multicast",
+            "fuse_tensor_loads",
+            "in_thread_transpose",
+            "global_to_shared_gathers",
+            "minimize_global_loads",
+            "preshuffle_scale_to_shared",
+            "specialize_kernel",
+            "gather_to_shared",
+            "gather_to_shared_swizzling",
+            "mark_hardware_transpose_candidates",
+            "apply_shared_memory_indexing_corrections",
+            "partition_ops_with_gpr_offsets",
+            "partition_strided_operators",
+            "remove_chained_extractslice",
+            "decompose_reduce_ops",
+            "decompose_scan_ops",
+            "decompose_topk_ops",
+            "schedule_graph",
+            "schedule_reordering",
+            "minimize_shared_allocs",
+            "add_shared_memory_barriers",
+            "add_cluster_barriers",
+            "compute_shared_memory_usage",
+            "partition_gather_like_ops",
+            "generate_bounds_exprs",
+            "merge_contiguous_reads",
+            "location_check_pass",
+        }
+    )
+
+    # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
+    _run_progressive_roundtrip(attention, options, expected_failures)
