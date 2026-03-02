@@ -2484,7 +2484,7 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandIndexExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultIndexExprs,
     wave::EmitErrorFn emitError) {
-  auto sourceTensorType = dyn_cast<WaveTensorType>(getOperand().getType());
+  auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
   if (!sourceTensorType) {
     emitError() << "expected source tensor type, got "
                 << getOperand().getType();
@@ -2509,17 +2509,27 @@ LogicalResult wave::BroadcastOp::verify() {
   if (!sourceType || !resultType)
     return success();
 
-  // When result is a tensor, require both source and result to be fully
-  // specified (vectors are unchanged).
+  // When result is a tensor, require it to be fully specified (vectors are
+  // unchanged).
   if (!resultType.getFullySpecified())
     return emitOpError(
         "result type must be fully specified when it is a tensor");
 
-  // Check all source symbols are in result.
+  // Check all source symbols are in result and in the correct order.
+  ArrayRef<WaveSymbolAttr> remainingResultShape = resultType.getShape();
   for (WaveSymbolAttr sym : sourceType.getShape()) {
-    if (!llvm::is_contained(resultType.getShape(), sym))
+    auto it = llvm::find(remainingResultShape, sym);
+    if (it == remainingResultShape.end()) {
+      if (llvm::is_contained(resultType.getShape(), sym)) {
+        return emitOpError() << "source dimension " << sym.getName()
+                             << " is reordered with respect to other source "
+                                "dimensions in the result shape";
+      }
       return emitOpError("source dimension '")
              << sym.getName() << "' not found in result shape";
+    }
+    remainingResultShape = remainingResultShape.drop_front(
+        std::distance(remainingResultShape.begin(), it) + 1);
   }
 
   return success();

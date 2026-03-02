@@ -658,7 +658,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // Test broadcast doesn't propagate EPT.
 normalform.module [#wave.normal_form<full_types>] {
-  func.func @broadcast_propagation_forward_identity(%mem: !wave.tensor<[@M] of f32, <global>>)
+  func.func @broadcast_no_propagation(%mem: !wave.tensor<[@M] of f32, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
 
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>

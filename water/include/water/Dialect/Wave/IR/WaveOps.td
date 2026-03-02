@@ -743,8 +743,8 @@ def BroadcastOp : WaveOp<"broadcast", [
   let summary = "Broadcast a tensor to a larger shape by replicating values";
   let description = [{
     Broadcasts the source tensor to the result shape by replicating values
-    along the broadcast dimensions, which must be the trailing dimensions
-    of the result shape.
+    along the broadcast dimensions. This may introduce new dimensions in
+    arbitrary positions but may not change the order of existing dimensions.
 
     When the result type is a tensor, it must be fully specified; broadcast
     dimensions are inferred from the difference between the source and result

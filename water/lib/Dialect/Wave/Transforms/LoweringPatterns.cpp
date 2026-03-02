@@ -620,11 +620,11 @@ class BroadcastOpLoweringPattern
     auto sourceType = cast<VectorType>(adaptor.getSource().getType());
     auto targetType = cast<VectorType>(op.getResult().getType());
     if (sourceType == targetType) {
-      rewriter.replaceOp(op, op.getSource());
+      rewriter.replaceOp(op, adaptor.getSource());
       return success();
     }
     auto vectorBroadcast = vector::BroadcastOp::create(
-        rewriter, op.getLoc(), targetType, op.getSource());
+        rewriter, op.getLoc(), targetType, adaptor.getSource());
     rewriter.replaceOp(op, vectorBroadcast);
     return success();
   }

@@ -882,6 +882,15 @@ func.func @broadcast_result_not_fully_specified(%arg0: !wave.tensor<[@M] of f32,
 
 // -----
 
+func.func @broadcast_source_dims_reordered(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // Source has [@M, @N], result has [@N, @M] - same dims but reordered.
+  // expected-error @below {{source dimension N is reordered with respect to other source dimensions in the result shape}}
+  wave.broadcast %arg0 : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@N, @M] of f32, <register>>
+  return
+}
+
+// -----
+
 func.func @broadcast_element_type_mismatch(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
   // Source and result must have matching element types.
   // expected-error @below {{expected source and result elemental types to match, got 'f32', 'f16'}}
