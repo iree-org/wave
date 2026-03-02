@@ -11,9 +11,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
     delinearize_index,
     divide_shape_into_chunks,
 )
-from wave_lang.kernel.wave.utils.mapping_utils import (
-    _simplify_sympy_expr,
-)
+from wave_lang.kernel.wave.utils.symbol_utils import simplify
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
@@ -111,10 +109,10 @@ def test_divide_shape_into_chunks():
 def test_custom_sympy_simplifications():
     a = sympy.Symbol("a", integer=True, nonnegative=True)
     mod_expr = (sympy.floor(a) * 4 + 3) % 16
-    assert str(_simplify_sympy_expr(mod_expr)) == "4*(Mod(a, 4)) + 3"
+    assert str(simplify(mod_expr)) == "4*(Mod(a, 4)) + 3"
 
     floor_expr = sympy.floor(sympy.floor(a) / 3 + sympy.sympify(1) / 6)
-    assert str(_simplify_sympy_expr(floor_expr)) == "floor(a/3)"
+    assert str(simplify(floor_expr)) == "floor(a/3)"
 
 
 @pytest.mark.skip("Too slow")
@@ -139,7 +137,7 @@ def test_fuzz_custom_sympy_simplifications_mod():
         expr = expr.subs({a: vals[0], b: vals[1], c: vals[2]})
         expr = sympy.simplify(expr)
 
-        expr2 = _simplify_sympy_expr(expr)
+        expr2 = simplify(expr)
 
         if i % 50 == 0 and i > 0:
             print(f"{100*i/outer_num_iters}%")
@@ -453,7 +451,7 @@ def test_fuzz_custom_sympy_simplifications_floor():
         expr1 = orig_expr.subs({a: vals[0], b: vals[1], c: vals[2], d: vals[3]})
         expr1 = sympy.simplify(expr1)
 
-        expr2 = _simplify_sympy_expr(expr1)
+        expr2 = simplify(expr1)
         assert expr1.subs({x: vals[4]}) == expr2.subs({x: vals[4]})
 
     check_specific(10, 11, 6, 10, 6)
@@ -477,7 +475,7 @@ def test_fuzz_custom_sympy_simplifications_floor():
             expr = orig_expr.subs({a: vals[0], b: vals[1], c: vals[2], d: vals[3]})
             expr = sympy.simplify(expr)
 
-            expr2 = _simplify_sympy_expr(expr)
+            expr2 = simplify(expr)
             if expr != expr2:
                 break
 

@@ -108,6 +108,37 @@ def test_bounds_unsupported_returns_none():
     assert expr_bounds(x**2) is None
 
 
+def test_bounds_ceiling():
+    x = _sym("x")
+    inner = sympy.Mod(x, 16, evaluate=False) / 16
+    # ceiling([0, 15/16]) = (0, 1).
+    assert expr_bounds(sympy.ceiling(inner)) == (0, 1)
+
+
+def test_bounds_piecewise():
+    x = _sym("x")
+    pw = sympy.Piecewise(
+        (sympy.Mod(x, 4, evaluate=False), x > 10),
+        (sympy.Integer(5), True),
+    )
+    # Branch 0: [0, 3], branch 1: [5, 5] → envelope [0, 5].
+    assert expr_bounds(pw) == (0, 5)
+
+
+def test_bounds_max():
+    x = _sym("x")
+    a = sympy.Mod(x, 4, evaluate=False)  # [0, 3]
+    b = sympy.Mod(x, 8, evaluate=False)  # [0, 7]
+    assert expr_bounds(sympy.Max(a, b)) == (0, 7)
+
+
+def test_bounds_min():
+    x = _sym("x")
+    a = sympy.Mod(x, 4, evaluate=False)  # [0, 3]
+    b = sympy.Mod(x, 8, evaluate=False)  # [0, 7]
+    assert expr_bounds(sympy.Min(a, b)) == (0, 3)
+
+
 # ---- simplify tests ----
 
 

@@ -63,39 +63,81 @@ _LAMBDIFY_MODULES = {
 ####################################################################
 
 
+# Ranges type: tuple of (symbol, (lo, hi)) pairs.  Hashable for lru_cache.
+SymbolRanges = tuple[tuple[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]], ...]
+
+
+def _lookup_range(
+    sym: sympy.Symbol, ranges: SymbolRanges = ()
+) -> tuple[sympy.Expr, sympy.Expr] | None:
+    """Find bounds for *sym* in *ranges*, or return None."""
+    for s, bounds in ranges:
+        if s == sym:
+            return bounds
+    return None
+
+
 @lru_cache(maxsize=1024)
-def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
+def expr_bounds(
+    expr: sympy.Expr,
+    ranges: SymbolRanges = (),
+) -> tuple[sympy.Expr, sympy.Expr] | None:
     """Compute (lo, hi) bounds for a sympy expression via interval arithmetic.
 
-    Free symbols are assumed to be non-negative integers (hardware indices).
-    Returns (lo, hi) or None if bounds cannot be determined.
+    Free symbols default to [0, ∞) (hardware indices).  Pass *ranges* as a
+    tuple of ``(symbol, (lo, hi))`` pairs to supply tighter bounds.
+    Returns ``(lo, hi)`` or ``None`` if bounds cannot be determined.
     """
     if expr.is_Integer or expr.is_Rational:
         return (expr, expr)
     if expr.is_Symbol:
+        r = _lookup_range(expr, ranges)
+        if r is not None:
+            return r
         return (sympy.Integer(0), sympy.oo) if expr.is_nonnegative else None
     if isinstance(expr, sympy.Mod):
         p, q = expr.args
         if q.is_positive and q.is_number:
-            p_bounds = expr_bounds(p)
+            p_bounds = expr_bounds(p, ranges)
             if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
                 return p_bounds
             return (sympy.Integer(0), q - 1)
         return None
     if isinstance(expr, sympy.floor):
-        inner_bounds = expr_bounds(expr.args[0])
+        inner_bounds = expr_bounds(expr.args[0], ranges)
         if inner_bounds:
             return (sympy.floor(inner_bounds[0]), sympy.floor(inner_bounds[1]))
         return None
+    if isinstance(expr, sympy.ceiling):
+        inner_bounds = expr_bounds(expr.args[0], ranges)
+        if inner_bounds:
+            return (sympy.ceiling(inner_bounds[0]), sympy.ceiling(inner_bounds[1]))
+        return None
+    if isinstance(expr, sympy.Piecewise):
+        # Envelope of all branches — any branch could be active.
+        branch_bounds = [expr_bounds(val, ranges) for val, _ in expr.args]
+        if all(b is not None for b in branch_bounds):
+            return (min(b[0] for b in branch_bounds), max(b[1] for b in branch_bounds))
+        return None
+    if isinstance(expr, sympy.Max):
+        bounds = [expr_bounds(a, ranges) for a in expr.args]
+        if all(b is not None for b in bounds):
+            return (max(b[0] for b in bounds), max(b[1] for b in bounds))
+        return None
+    if isinstance(expr, sympy.Min):
+        bounds = [expr_bounds(a, ranges) for a in expr.args]
+        if all(b is not None for b in bounds):
+            return (min(b[0] for b in bounds), min(b[1] for b in bounds))
+        return None
     if isinstance(expr, sympy.Add):
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [expr_bounds(a, ranges) for a in expr.args]
         if all(b is not None for b in bounds):
             return (sum(b[0] for b in bounds), sum(b[1] for b in bounds))
         return None
     if isinstance(expr, sympy.Mul):
         if not expr.args:
             return (sympy.Integer(1), sympy.Integer(1))
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [expr_bounds(a, ranges) for a in expr.args]
         if all(b is not None for b in bounds):
             # Bail out if any bound is infinite (0 * oo = NaN).
             if any(sympy.oo in b or -sympy.oo in b for b in bounds):
@@ -109,18 +151,31 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
-@lru_cache(maxsize=1024)
-def simplify(expr: sympy.Expr) -> sympy.Expr:
+def simplify(
+    expr: sympy.Expr,
+    ranges: dict[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]] | None = None,
+) -> sympy.Expr:
     """Simplify a sympy expression using interval arithmetic and sympy.simplify.
 
     Extends sympy.simplify with bounds-based reasoning that can resolve
     floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
     sympy cannot handle.  Iterates to a fixed point.
+
+    Pass *ranges* as ``{symbol: (lo, hi)}`` to supply tighter bounds than
+    the default [0, ∞).
     """
+    print(f"simplify: {expr}")
+    frozen: SymbolRanges = tuple(ranges.items()) if ranges else ()
+    return _simplify_impl(subs_idxc(expr), frozen)
+
+
+@lru_cache(maxsize=1024)
+def _simplify_impl(expr: sympy.Expr, ranges: SymbolRanges) -> sympy.Expr:
     if not isinstance(expr, sympy.Basic):
         return expr
     for _ in range(5):
-        new_expr = _bounds_simplify_once(expr)
+        new_expr = _algebraic_simplify(expr)
+        new_expr = _bounds_simplify_once(new_expr, ranges)
         new_expr = sympy.simplify(new_expr)
         if new_expr == expr:
             break
@@ -128,7 +183,108 @@ def simplify(expr: sympy.Expr) -> sympy.Expr:
     return expr
 
 
-def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
+@lru_cache(maxsize=1024)
+def _algebraic_simplify(expr: sympy.Expr) -> sympy.Expr:
+    """Algebraic rewrites for Mod and floor that sympy misses.
+
+    - ``(floor(a)*k + c) % m  ->  (floor(a)*k) % m + c``
+      when ``k | m`` and ``0 <= c < k`` (pulls constant out of Mod).
+    - ``floor(floor(a)/q + c)  ->  floor(floor(a)/q)``
+      when ``c < 1/q`` (drops negligible rational offset from floor).
+    """
+
+    def _check_mul_nonneg_int(mul):
+        """Return the numeric factor of *mul* if all factors are nonneg integer-ish."""
+        ret = None
+        for arg in mul.args:
+            if arg.is_number:
+                if arg < 0:
+                    return None
+                if ret is not None:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def _transform_mod(e):
+        if not isinstance(e, sympy.Mod):
+            return None
+        p, q = e.args
+        if not q.is_number or q < 0 or not isinstance(p, sympy.Add):
+            return None
+        c = None
+        terms = []
+        mult = None
+        for arg in p.args:
+            if arg.is_number:
+                if c is not None:
+                    return None
+                c = arg
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            m = _check_mul_nonneg_int(arg)
+            if m is None or q % m != 0:
+                return None
+            mult = m if mult is None or m < mult else mult
+            terms.append(arg)
+        if c is None or c >= mult:
+            return None
+        return (sum(terms) % q) + c
+
+    def _check_mul_rational(mul):
+        ret = None
+        for arg in mul.args:
+            if isinstance(arg, sympy.Rational):
+                if ret is not None:
+                    return None
+                if arg.p < 0 or arg.q < 0:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def _transform_floor(e):
+        if not isinstance(e, sympy.floor):
+            return None
+        inner = e.args[0]
+        if not isinstance(inner, sympy.Add):
+            return None
+        c = None
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                if c is not None:
+                    return None
+                c = arg
+        if c is None:
+            return None
+        terms = []
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            r = _check_mul_rational(arg)
+            if r is None or r.p != 1 or r <= c:
+                return None
+            terms.append(arg)
+        return sympy.floor(sum(terms))
+
+    expr = expr.replace(lambda e: _transform_mod(e) is not None, _transform_mod)
+    expr = expr.replace(lambda e: _transform_floor(e) is not None, _transform_floor)
+    return expr
+
+
+@lru_cache(maxsize=1024)
+def _bounds_simplify_once(expr: sympy.Expr, ranges: SymbolRanges) -> sympy.Expr:
     """Single bottom-up pass of bounds-based simplification.
 
     Mod nodes are handled specially to avoid a sympy auto-evaluation bug
@@ -138,13 +294,13 @@ def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     if not isinstance(expr, sympy.Basic) or expr.is_Atom:
         return expr
 
-    simplified_args = [_bounds_simplify_once(a) for a in expr.args]
+    simplified_args = [_bounds_simplify_once(a, ranges) for a in expr.args]
 
     # Handle Mod before reconstruction to avoid triggering the sympy bug.
     if isinstance(expr, sympy.Mod):
         p, q = simplified_args
         if q.is_positive and q.is_number:
-            p_bounds = expr_bounds(p)
+            p_bounds = expr_bounds(p, ranges)
             if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
                 return p
         # Keep Mod but prevent buggy auto-evaluation.
@@ -154,7 +310,7 @@ def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     expr = expr.func(*simplified_args)
 
     if isinstance(expr, sympy.floor):
-        bounds = expr_bounds(expr.args[0])
+        bounds = expr_bounds(expr.args[0], ranges)
         if (
             bounds
             and bounds[0] != sympy.oo
@@ -162,6 +318,15 @@ def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
             and sympy.floor(bounds[0]) == sympy.floor(bounds[1])
         ):
             return sympy.Integer(int(sympy.floor(bounds[0])))
+    if isinstance(expr, sympy.ceiling):
+        bounds = expr_bounds(expr.args[0], ranges)
+        if (
+            bounds
+            and bounds[0] != sympy.oo
+            and bounds[1] != sympy.oo
+            and sympy.ceiling(bounds[0]) == sympy.ceiling(bounds[1])
+        ):
+            return sympy.Integer(int(sympy.ceiling(bounds[0])))
     return expr
 
 
