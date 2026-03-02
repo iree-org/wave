@@ -310,7 +310,7 @@ def mlir_converter_matrix_add():
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
     # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -321,7 +321,7 @@ def mlir_converter_matrix_add():
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
     # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -332,19 +332,19 @@ def mlir_converter_matrix_add():
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
     # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
     # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
     # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
