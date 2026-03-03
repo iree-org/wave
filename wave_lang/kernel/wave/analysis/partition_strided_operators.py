@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import functools
 from collections.abc import Sequence
 from copy import deepcopy
 from itertools import groupby
@@ -30,6 +31,7 @@ from ...ops.wave_ops import (
 )
 from ..assumptions import Assumption
 from ..constraints import Constraint
+from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
@@ -433,8 +435,6 @@ def _get_physical_start(
     coordinates. For identity-mapped reads (mapping=None), reads the start
     offsets directly from the index.
     """
-    from ..utils.mapping_utils import transform_index_on_mapping
-
     if custom.mapping is not None and not custom.has_identity_mapping():
         physical = transform_index_on_mapping(
             custom.mapping, symbolic_shape, custom.index, is_read=True
@@ -457,14 +457,11 @@ def _flatten_bounds_to_mask_expr(
     mapping's transformed index contains all bounded dims (and has no
     dynamic_val_indices), the transformed index is used; otherwise the
     original logical index is used.  Returns a sympy boolean expression
-    (e.g. And(idx < bound, ...)) or None if the read has no bounds.
+    (eg. And(idx < bound, ...)) or None if the read has no bounds.
 
     """
     if not custom.bounds:
         return None
-
-    import functools
-    from ..utils.mapping_utils import transform_index_on_mapping
 
     index = custom.index
 
@@ -503,11 +500,11 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
 
     Two strategies are applied per (memory, ept) group:
 
-    1. **Pairwise contiguous merge** — pairs whose physical flat offset
+    1. **Pairwise contiguous merge**: pairs whose physical flat offset
        starts differ by exactly ``ept`` are merged into a ``2*ept`` read
        with two ExtractSlice outputs.
 
-    2. **Multi-way coalescing** (``ept==1`` only) — unmerged byte reads
+    2. **Multi-way coalescing** (``ept==1`` only): unmerged byte reads
        whose flat offsets fall within a power-of-2 aligned window (up to
        ``max_elems_per_load``) are replaced by a single wide read with
        per-byte ExtractSlice outputs.  Diffs are evaluated via numeric
@@ -736,6 +733,9 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     if len(group) < 2:
                         continue
 
+                    # Pick the smallest power-of-2 width that covers all
+                    # byte offsets in the group, and skip if it exceeds
+                    # the hardware's max load width.
                     group.sort(key=lambda x: x[3])
                     max_off = group[-1][3]
                     wide_ept = 1
