@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from wave_lang.support.ir_imports import (
+    VectorType,
     amdgpu_d,
     gpu_d,
     memref_d,
@@ -79,14 +80,24 @@ class _MemoryHandlers:
         offset_val = int(str(offsets).split("[")[1].split("]")[0])
         size_val = int(str(sizes).split("[")[1].split("]")[0])
 
+        # Convert MLIR element offsets to physical register indices.
+        # Each 32-bit VGPR holds (32 // elem_bits) elements, e.g. 4 for i8.
+        # An extract at element offset 4 on vector<8xi8> targets register 1,
+        # not register 4.
+        source_vec_type = VectorType(operation.operands[0].type)
+        elem_bits = source_vec_type.element_type.width
+        elems_per_reg = 32 // elem_bits
+
+        reg_offset = offset_val // elems_per_reg
+        reg_count = max(1, (size_val * elem_bits + 31) // 32)
+
         # Extract the appropriate subset of registers
-        if size_val == 1:
-            # Single scalar extract - return just the one register as a tuple
-            extracted_reg = source_regs[offset_val]
-            result_regs = (extracted_reg,)
+        if reg_count == 1:
+            # Single register extract - return just the one register as a tuple
+            result_regs = (source_regs[reg_offset],)
         else:
-            # Multi-element extract - return a slice
-            result_regs = source_regs[offset_val : offset_val + size_val]
+            # Multi-register extract - return a slice
+            result_regs = source_regs[reg_offset : reg_offset + reg_count]
 
         result_ssa = str(operation.result)
         self.walker.kernel_ctx.ssa_to_reg[result_ssa] = result_regs
