@@ -897,8 +897,9 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             lhs = _mul(rhs.denominator, lhs)
             rhs = rhs.numerator
         if isinstance(lhs, _Rational) and isinstance(rhs, _Rational):
-            rhs = _mul(lhs.denominator, rhs.numerator)
-            lhs = _mul(rhs.denominator, lhs.numerator)
+            new_rhs = _mul(lhs.denominator, rhs.numerator)
+            new_lhs = _mul(rhs.denominator, lhs.numerator)
+            lhs, rhs = new_lhs, new_rhs
         return lhs, rhs
 
     def _get_const(val):
@@ -916,7 +917,9 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
     # Substitute in frozen vars to simplify expression.
     if not isinstance(expr, sympy.Expr):
         expr = sympy.sympify(expr)
-    expr = expr.subs(idxc.subs)
+    else:
+        expr = sympy.sympify(subs_idxc(expr))
+
     # Why affine, for now simply create indexing expressions.
     # This can easily be adapted to affine expressions later.
     select_stack = []
