@@ -1142,7 +1142,9 @@ def get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger: bool = True):
     return mxfp4_dbuf_schedule
 
 
-def get_mxfp4_asymmetric_schedule(eliminate_epilogue: bool = False, is_bscale_shuffled: bool = False):
+def get_mxfp4_asymmetric_schedule(
+    eliminate_epilogue: bool = False, is_bscale_shuffled: bool = False
+):
     """Return an asymmetric-prefetch MXFP4 schedule for wave_compile().
 
     Asymmetric data paths:
