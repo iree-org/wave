@@ -1271,16 +1271,14 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
-    # Hoist dst indices to function level if they don't use induction variables.
-    dst_ip = ip
     if not any(
         induction_vars.intersection(set(index.start.free_symbols))
         for index in dst_idx.values()
     ):
-        while not isinstance(dst_ip.block.owner, func_d.FuncOp):
-            dst_ip = InsertionPoint(dst_ip.block.owner)
+        while not isinstance(ip.block.owner, func_d.FuncOp):
+            ip = InsertionPoint(ip.block.owner)
 
-    with dst_ip:
+    with ip:
         dst_index, _, _ = _build_start_indices(
             emitter, dst_idx, dst_dynamic_vals_map_start
         )
