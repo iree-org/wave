@@ -89,9 +89,6 @@ class WaveCompileOptions:
     wave_runtime: bool = False
     iree_launch_async: bool = True
     use_buffer_ops: bool = False
-
-    eliminate_epilogue: bool = False
-
     use_fast_math: bool = False
     use_global_to_shared: bool = False
     linearize_shared_access: bool = False
@@ -107,6 +104,7 @@ class WaveCompileOptions:
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
     specialize: bool = False
+    eliminate_epilogue: bool = False
 
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop
