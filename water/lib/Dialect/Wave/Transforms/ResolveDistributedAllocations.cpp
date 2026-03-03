@@ -6,7 +6,9 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
@@ -14,6 +16,8 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
+
+#include "llvm/ADT/TypeSwitch.h"
 
 #define DEBUG_TYPE "wave-resolve-distributed-allocations"
 
@@ -34,26 +38,37 @@ struct ResolveDistributedAllocations
   /// Set the ordered_syms attribute on ReadOp and WriteOp based on their
   /// memory operand's WaveTensorType shape.
   void setOrderedSymsOnReadWriteOps(Operation *root) {
-    root->walk([&](ReadOp readOp) {
-      if (readOp.getOrderedSymsAttr())
-        return;
+    root->walk([&](Operation *op) {
+      llvm::TypeSwitch<Operation *>(op).Case<ReadOp, WriteOp>(
+          [](auto specificOp) {
+            if (specificOp.getOrderedSymsAttr())
+              return;
 
-      auto tensorType = dyn_cast<WaveTensorType>(readOp.getMemory().getType());
-      if (!tensorType)
-        return;
+            WaveTensorType valueTensorType;
+            if constexpr (std::is_same_v<decltype(specificOp), ReadOp>)
+              valueTensorType =
+                  dyn_cast<WaveTensorType>(specificOp.getResult().getType());
+            else
+              valueTensorType = dyn_cast<WaveTensorType>(
+                  specificOp.getValueToStore().getType());
 
-      readOp.setOrderedSyms(tensorType.getShape());
-    });
+            auto memoryTensorType =
+                dyn_cast<WaveTensorType>(specificOp.getMemory().getType());
+            if (!valueTensorType && !memoryTensorType)
+              return;
 
-    root->walk([&](WriteOp writeOp) {
-      if (writeOp.getOrderedSymsAttr())
-        return;
-
-      auto tensorType = dyn_cast<WaveTensorType>(writeOp.getMemory().getType());
-      if (!tensorType)
-        return;
-
-      writeOp.setOrderedSyms(tensorType.getShape());
+            if (valueTensorType) {
+              specificOp.setOrderedSyms(valueTensorType.getShape());
+            } else {
+              SmallVector<wave::WaveSymbolAttr> orderedSyms;
+              wave::permuteShape(memoryTensorType.getShape(),
+                                 specificOp.getMappingAttr()
+                                     ? specificOp.getMappingAttr().getMap()
+                                     : AffineMap(),
+                                 /*inverse=*/false, orderedSyms);
+              specificOp.setOrderedSyms(orderedSyms);
+            }
+          });
     });
   }
 

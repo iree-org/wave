@@ -342,6 +342,35 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
   wave.write %lhs, %rhs : !wave.tensor<[@A, @B] of f32, <register>>, !wave.tensor<[@B, @C] of f32, <global>>
 }
 
+
+// -----
+
+func.func @read_memref_missing_ordered_syms(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64}>} {
+  // expected-error @below {{expects ordered_syms attribute when neither type is a symbolic tensor}}
+  %0 = wave.read %mem index [{
+      BLOCK_M : <[#wave.index_symbol<T0>] -> (T0, 1, 64)>,
+      BLOCK_N : <[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
+    }]
+    : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
+  return
+}
+
+// -----
+
+func.func @write_memref_missing_ordered_syms(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64}>} {
+  %cst = arith.constant 0.0 : f16
+  %reg = wave.register %cst : vector<8xf16>
+  // expected-error @below {{expects ordered_syms attribute when neither type is a symbolic tensor}}
+  wave.write %reg, %mem index [{
+      BLOCK_M : <[#wave.index_symbol<T0>] -> (T0, 1, 64)>,
+      BLOCK_N : <[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
+    }]
+    : vector<8xf16>, memref<64x64xf16, #gpu.address_space<workgroup>>
+  return
+}
+
 // -----
 
 // ordered_syms size must match value tensor rank.
@@ -390,6 +419,18 @@ func.func @read_ordered_syms_mismatch_with_mapping(%mem: !wave.tensor<[@N, @M] o
     ordered_syms = [#wave.symbol<"N">, #wave.symbol<"M">],
     mapping = #wave.expr_list<[] (d0, d1) -> (d1, d0)>
   } : (!wave.tensor<[@N, @M] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @read_ordered_syms_mismatch_with_mapping_no_value_type(%mem: !wave.tensor<[@N, @M] of f32, <global>>) {
+  // expected-error @below {{'ordered_syms' symbol at index 0 ('N') does not match inferred value tensor shape symbol ('M')}}
+  // expected-note @below {{value tensor shape inferred from memory shape: #wave.symbol<"M">, #wave.symbol<"N">}}
+  %0 = wave.read %mem {
+    ordered_syms = [#wave.symbol<"N">, #wave.symbol<"M">],
+    mapping = #wave.expr_list<[] (d0, d1) -> (d1, d0)>
+  } : (!wave.tensor<[@N, @M] of f32, <global>>) -> !wave.tensor<any of f32, <register>>
   return
 }
 

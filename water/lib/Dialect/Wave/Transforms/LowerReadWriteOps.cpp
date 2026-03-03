@@ -260,6 +260,10 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   }
 }
 
+// Return the index dictionary updated with respect to the mapping. Update the
+// orderedSyms and populate `updatedOrderedSyms` with the new order. Since the
+// only supported mappings are permutations now, the resulting index is the same
+// as the input and only the symbol order changes.
 static DictionaryAttr
 transformIndex(DictionaryAttr indexDict,
                ArrayRef<wave::WaveSymbolAttr> orderedSyms,
@@ -278,44 +282,16 @@ transformIndex(DictionaryAttr indexDict,
   assert(mapping.getMap().isPermutation() &&
          "NYI: only permutation mappings are currently supported");
 
+  // Mapping is (memory shape) -> (value shape) and the original orderedSyms are
+  // the value shape so we to apply the inverse mapping to obtain the new
+  // ordered symbols list.
   wave::permuteShape(orderedSyms, mapping.getMap(), /*inverse=*/true,
                      updatedOrderedSyms);
 
-  // XXX: step/stride are not permuted similarly to pywave. For step, this
-  // appears necessary to avoid losing track of the dimension that is
-  // vectorized. For stride, not sure, it may be unused at all at this stage.
-  SmallVector<NamedAttribute> newIndexDictEntries;
-  for (size_t i = 0, e = updatedOrderedSyms.size(); i < e; ++i) {
-    auto indexMappingForDimOriginallyAtCurrentPos =
-        cast<wave::WaveIndexMappingAttr>(
-            indexDict.get(orderedSyms[i].getName()));
-    auto indexMappingForCurrentNamedDim = cast<wave::WaveIndexMappingAttr>(
-        indexDict.get(updatedOrderedSyms[i].getName()));
-
-    SmallVector<Attribute> allSymbols;
-    wave::aggregateAllSymbols(
-        ArrayRef<ArrayRef<Attribute>>{
-            indexMappingForDimOriginallyAtCurrentPos.getSymbols(),
-            indexMappingForCurrentNamedDim.getSymbols()},
-        allSymbols);
-
-    AffineMap start = wave::alignMapSymbols(
-        indexMappingForDimOriginallyAtCurrentPos.getStart(),
-        indexMappingForDimOriginallyAtCurrentPos.getSymbols(), allSymbols);
-    AffineMap step = wave::alignMapSymbols(
-        indexMappingForCurrentNamedDim.getStep(),
-        indexMappingForCurrentNamedDim.getSymbols(), allSymbols);
-    AffineMap stride = wave::alignMapSymbols(
-        indexMappingForCurrentNamedDim.getStride(),
-        indexMappingForCurrentNamedDim.getSymbols(), allSymbols);
-
-    newIndexDictEntries.emplace_back(
-        updatedOrderedSyms[i].getName(),
-        wave::WaveIndexMappingAttr::get(
-            indexMappingForDimOriginallyAtCurrentPos.getContext(), allSymbols,
-            start, step, stride));
-  }
-  return DictionaryAttr::get(indexDict.getContext(), newIndexDictEntries);
+  // XXX: step/stride are not permuted similarly to pywave. For step, this works
+  // because the vectorized dimension is computed prior to permutation, but
+  // generally that looks incorrect.
+  return indexDict;
 }
 
 /// Describes access info used when lowering Wave ops to vector read/write ops.
@@ -366,19 +342,26 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
   ArrayRef<wave::WaveSymbolAttr> orderedSyms;
 
+  wave::WaveExprListAttr mapping = op.getMappingAttr();
   if (ArrayAttr orderedSymsAttr = op.getOrderedSymsAttr()) {
     orderedSymsStorage =
         llvm::to_vector(orderedSymsAttr.getAsRange<wave::WaveSymbolAttr>());
     orderedSyms = orderedSymsStorage;
   } else if (auto waveTensorType =
                  dyn_cast<wave::WaveTensorType>(memoryTypeArg)) {
-    orderedSyms = waveTensorType.getShape();
+    if (mapping) {
+      wave::permuteShape(waveTensorType.getShape(), mapping.getMap(),
+                         /*inverse=*/false, orderedSymsStorage);
+      orderedSyms = orderedSymsStorage;
+    } else {
+      // Mapping is identity.
+      orderedSyms = waveTensorType.getShape();
+    }
   } else {
     return rewriter.notifyMatchFailure(
         op, "MemRefType memory operand requires ordered_syms attribute");
   }
 
-  wave::WaveExprListAttr mapping = op.getMappingAttr();
   SmallVector<wave::WaveSymbolAttr> memoryShape;
   DictionaryAttr transformedIndexDict =
       transformIndex(indexDict, orderedSyms, mapping, memoryShape);

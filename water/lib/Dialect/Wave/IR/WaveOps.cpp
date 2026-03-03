@@ -1485,6 +1485,10 @@ wave::MmaOp::propagateElementsPerThreadBackward(
 void wave::permuteShape(ArrayRef<wave::WaveSymbolAttr> shape, AffineMap map,
                         bool inverse,
                         SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape) {
+  if (!map) {
+    permutedShape.assign(shape);
+    return;
+  }
   assert(map.isPermutation() && "expected mapping to be a permutation");
   assert(shape.size() == map.getNumResults());
   permutedShape.resize(shape.size());
@@ -1742,7 +1746,12 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
     }
   }
 
-  if (orderedSyms && valueTensorType) {
+  if (!orderedSyms && !memoryTensorType && !valueTensorType) {
+    return op->emitOpError() << "expects ordered_syms attribute when neither "
+                                "type is a symbolic tensor";
+  }
+
+  if (orderedSyms && valueTensorType && valueTensorType.getFullySpecified()) {
     ArrayRef<WaveSymbolAttr> shape = valueTensorType.getShape();
     if (orderedSyms.size() != shape.size()) {
       return op->emitOpError()
@@ -1756,6 +1765,32 @@ static LogicalResult verifyReadWriteOp(Operation *op, ArrayAttr indexAttr,
                << cast<WaveSymbolAttr>(orderedSym).getName()
                << "') does not match value tensor shape symbol ('"
                << shapeSym.getName() << "')";
+      }
+    }
+  }
+
+  if (orderedSyms && memoryTensorType && memoryTensorType.getFullySpecified()) {
+    SmallVector<WaveSymbolAttr> valueShape;
+    if (mapping) {
+      getExpectedMemoryTypeFromMapping(memoryTensorType, mapping,
+                                       /*inverse=*/false, valueShape);
+    } else {
+      valueShape.assign(memoryTensorType.getShape());
+    }
+    assert(valueShape.size() == memoryTensorType.getRank() &&
+           "expected mapping to be a permutation");
+    for (auto [i, orderedSym, valueSym] :
+         llvm::enumerate(orderedSyms, valueShape)) {
+      if (orderedSym != valueSym) {
+        InFlightDiagnostic diag =
+            op->emitOpError()
+            << "'ordered_syms' symbol at index " << i << " ('"
+            << cast<WaveSymbolAttr>(orderedSym).getName()
+            << "') does not match inferred value tensor shape symbol ('"
+            << valueSym.getName() << "')";
+        diag.attachNote() << "value tensor shape inferred from memory shape: "
+                          << valueShape;
+        return diag;
       }
     }
   }
