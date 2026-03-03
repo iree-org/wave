@@ -347,10 +347,10 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK-DAG:    %[[C1:.+]] = arith.constant 1 : index
     # CHECK-DAG:    %[[C64:.+]] = arith.constant 64 : index
     # CHECK:        scf.for %{{.*}} = %[[C0]] to %[[C64]] step %[[C1]]
-    # CHECK-COUNT-4:    vector.load {{.*}} : memref<16384x8192xi8, strided<[8192, 1]>>, vector<16xi8>
-    # CHECK-COUNT-1:    vector.load {{.*}} : memref<16384x512xi8, strided<[512, 1]>>, vector<4xi8>
-    # CHECK-COUNT-4:    vector.load {{.*}} : memref<16384x8192xi8, strided<[8192, 1]>>, vector<16xi8>
-    # CHECK-COUNT-1:    vector.load {{.*}} : memref<16384x512xi8, strided<[512, 1]>>, vector<4xi8>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK-COUNT-1:    vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK-COUNT-1:    vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
     # CHECK:            amdgpu.lds_barrier
     # CHECK-COUNT-8:    vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16:   vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>

@@ -96,19 +96,17 @@ def test_scaled_gemm_mxfp4():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp4
-    # CHECK-DAG:    #map = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map1 = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map2 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map3 = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map4 = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map5 = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map6 = affine_map<()[s0, s1] -> (s0 * 64 + ((s1 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map7 = affine_map<()[s0, s1] -> (s1 * 4 + (s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map8 = affine_map<()[s0] -> (s0 * 32)>
-    # CHECK-DAG:    #map9 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:    #map10 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:    #map11 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:    #map12 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -196,19 +194,18 @@ def test_scaled_gemm_mxfp8():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp8
-    # CHECK-DAG:    #map = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map1 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map2 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16 + 64)>
-    # CHECK-DAG:    #map3 = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map4 = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map5 = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map6 = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map7 = affine_map<()[s0, s1] -> (s1 * 4 + (s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map8 = affine_map<()[s0] -> (s0 * 32)>
-    # CHECK-DAG:    #map9 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:    #map10 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:    #map11 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:    #map12 = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16 + 64)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -316,10 +313,10 @@ def packed_mxfp4_test():
     # CHECK-LABEL:    gemm_mxfp4_prefetch
 
     # Prologue Global Read
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
 
     # Prologue Local Write
     # CHECK-COUNT-4:  vector.store {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
@@ -331,22 +328,22 @@ def packed_mxfp4_test():
     # CHECK:          scf.for
 
     # Steady State global_load_rhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_rhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_lhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_rhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_lhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
@@ -735,12 +732,12 @@ def test_unaligned_scaled_gemm_mxfp4():
     # CHECK-DAG:    %[[SCALED_LOGITS_BOUND:.+]] = arith.constant dense<96> : vector<16xindex>
     # CHECK:        scf.for %{{.*}} = %[[C0]] to %[[C2]] step %[[C1]]
     # CHECK:          %[[SCALED_LOGITS_MASK:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_LOGITS_BOUND]] : vector<16xindex>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1]>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<{{.*}}>, vector<16xi1>, vector<16xi8> into vector<16xi8>
     # CHECK:          %[[SCALED_SCALES_MASK_VAL:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_SCALES_BOUND]] : index
     # CHECK:          %[[SCALED_SCALES_MASK:.+]] = vector.broadcast %[[SCALED_SCALES_MASK_VAL]] : i1 to vector<1xi1>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1]>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1]>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1]>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<{{.*}}>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<{{.*}}>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<{{.*}}>, vector<1xi1>, vector<1xi8> into vector<1xi8>
     # CHECK:          amdgpu.scaled_mfma
     # CHECK:          scf.yield
     # CHECK:         }

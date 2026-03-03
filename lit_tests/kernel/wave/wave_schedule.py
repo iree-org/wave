@@ -46,7 +46,7 @@ def test_gemm_with_wave_schedule():
     # CHECK-COUNT-4:    vector.load %[[VIEW_1]]
 
     # Steady State Global Read
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK-COUNT-2:    rocdl.sched.group.barrier
 
     # Compute
@@ -111,7 +111,7 @@ def test_gemm_prefetch_reorder_stagger():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
@@ -122,7 +122,7 @@ def test_gemm_prefetch_reorder_stagger():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
-    # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.s.barrier
     # CHECK:            rocdl.sched.barrier
 

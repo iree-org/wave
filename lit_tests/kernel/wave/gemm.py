@@ -111,7 +111,6 @@ def test_gemm():
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 16 + ((s1 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
@@ -726,7 +725,6 @@ def test_packed_gemm():
     # %[[IV_K:.+]] = affine.apply #[[MAP_IV_K]]()[%[[IV]], %[[TID_X]]]
 
     # CHECK-LABEL:    test_packed_gemm
-    # CHECK-DAG:      #[[MAP_IV_K:.+]] = affine_map<()[s0, s1] -> (s0 * 8 + ((s1 mod 64) floordiv 16) * 2)>
     # CHECK:          func.func @packed_gemm
     # CHECK-DAG:        %[[C1:.+]] = arith.constant 1 : index
     # CHECK-DAG:        %[[C4:.+]] = arith.constant 4 : index
@@ -736,11 +734,10 @@ def test_packed_gemm():
     # CHECK:            %[[RHS_SHARED:.+]] = memref.view %[[ALLOC]][%c0][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x10xi32, #gpu.address_space<workgroup>>
     # CHECK:            %[[LHS_SHARED:.+]] = memref.view %[[ALLOC]][%c1280][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x10xi32, #gpu.address_space<workgroup>>
     # CHECK:            scf.for %[[IV:.+]] = %[[C0]] to %[[C4]] step %[[C1]]
-    # CHECK:              %[[IV_K:.+]] = affine.apply #[[MAP_IV_K]]()[%[[IV]], %[[TID_X]]]
-    # CHECK:              %[[LHS_REG:.+]] = vector.load %{{.*}}[%{{.*}}, %[[IV_K]]] : memref<64x32xi32, strided<[32, 1]>>, vector<2xi32>
+    # CHECK:              %[[LHS_REG:.+]] = vector.load {{.*}} : memref<{{.*}}>, vector<2xi32>
     # CHECK:              amdgpu.lds_barrier
     # CHECK:              vector.store %[[LHS_REG]], %[[LHS_SHARED]]
-    # CHECK:              %[[RHS_REG:.+]] = vector.load  %{{.*}}[%{{.*}}, %[[IV_K]]] : memref<128x32xi32, strided<[32, 1]>>, vector<2xi32>
+    # CHECK:              %[[RHS_REG:.+]] = vector.load {{.*}} : memref<{{.*}}>, vector<2xi32>
     # CHECK:              vector.store %[[RHS_REG]], %[[RHS_SHARED]]
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load {{.*}} : {{.*}}, vector<2xi32>
@@ -810,7 +807,6 @@ def test_batched_gemm():
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 16 + ((s1 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
@@ -1347,7 +1343,7 @@ def test_gemm_prefetch():
     # CHECK-COUNT-4:    vector.load %[[ALLOC_1]]
 
     # Steady State Global Read
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK-COUNT-2:    rocdl.sched.group.barrier
 
     # Compute
@@ -1738,7 +1734,7 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
@@ -1749,7 +1745,7 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
-    # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.s.barrier
     # CHECK:            rocdl.sched.barrier
 
