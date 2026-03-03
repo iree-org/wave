@@ -329,6 +329,29 @@ def _valid_bytes_buffer(elem_type: IrType) -> int:
     return ans
 
 
+def _compute_total_valid_bytes(
+    elem_type: IrType,
+    symbolic_shape: tuple,
+    use_real_bounds: bool,
+) -> int:
+    """Return the total valid byte count for a buffer SRD.
+
+    When *use_real_bounds* is True and *symbolic_shape* resolves to a concrete
+    number, the result is clamped to the actual tensor size (still bounded by
+    the hardware maximum).  Otherwise falls back to the hardware maximum
+    returned by ``_valid_bytes_buffer``.
+    """
+    if use_real_bounds and symbolic_shape is not None:
+        elem_bytes = elem_type.width // 8
+        total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
+        if isinstance(total_elements, (int, float)) or (
+            hasattr(total_elements, "is_number") and total_elements.is_number
+        ):
+            total_bytes = int(total_elements) * elem_bytes
+            return min(total_bytes, _valid_bytes_buffer(elem_type))
+    return _valid_bytes_buffer(elem_type)
+
+
 def _get_out_of_bounds_index(element_type: IrType) -> int:
     """
     returns the first index that's out of bounds of a buffer based on the element type and maximum bytes
@@ -375,20 +398,9 @@ def _compute_branchless_valid_bytes(
     SRD's NUM_RECORDS=0 so gather_to_lds DMA is a hardware no-op.
     """
     uint64 = IntegerType.get_signless(64)
-    elem_bytes = elem_type.width // 8
-
-    if emitter.options.eliminate_epilogue and symbolic_shape is not None:
-        total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
-        if isinstance(total_elements, (int, float)) or (
-            hasattr(total_elements, "is_number") and total_elements.is_number
-        ):
-            total_bytes = int(total_elements) * elem_bytes
-            max_valid = _valid_bytes_buffer(elem_type)
-            total_bytes = min(total_bytes, max_valid)
-        else:
-            total_bytes = _valid_bytes_buffer(elem_type)
-    else:
-        total_bytes = _valid_bytes_buffer(elem_type)
+    total_bytes = _compute_total_valid_bytes(
+        elem_type, symbolic_shape, use_real_bounds=True
+    )
 
     real_valid = arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
     zero_valid = arith_d.constant(uint64, get_constant_attr(0, uint64))
@@ -418,18 +430,12 @@ def _cast_buffer_and_encode_stride(
     if valid_bytes_override is not None:
         valid_bytes_val = valid_bytes_override
     else:
-        if emitter.options.eliminate_epilogue and symbolic_shape is not None:
-            total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
-            if isinstance(total_elements, (int, float)) or (
-                hasattr(total_elements, "is_number") and total_elements.is_number
-            ):
-                total_bytes = int(total_elements) * elem_bytes
-                max_valid = _valid_bytes_buffer(elem_type)
-                total_bytes = min(total_bytes, max_valid)
-            else:
-                total_bytes = _valid_bytes_buffer(elem_type)
-        else:
-            total_bytes = _valid_bytes_buffer(elem_type)
+        use_real_bounds = (
+            emitter.options.eliminate_epilogue and symbolic_shape is not None
+        )
+        total_bytes = _compute_total_valid_bytes(
+            elem_type, symbolic_shape, use_real_bounds
+        )
 
         # With resetOffset, the SRD base is adjusted forward by the memref's
         # offset, so validBytes must be total_bytes - offset_bytes to avoid
