@@ -35,11 +35,8 @@ from ..ops.wave_ops import (
 )
 from .constraints import HardwareConstraint, WaveConstraint, WorkgroupConstraint
 from .utils.classes import ShuffleMode
-<<<<<<< HEAD
 from .utils.general_utils import all_equal, delinearize_index
-from .utils.graph_utils import DCE, get_outer_node
-=======
->>>>>>> 04410892 (block scan changes still required)
+from .utils.graph_utils import get_outer_node
 
 
 def get_graph_node(
