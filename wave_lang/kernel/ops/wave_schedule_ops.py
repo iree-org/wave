@@ -183,7 +183,11 @@ def reorder_graph(loop: Any, clusters: Any): ...
 
 
 @define_schedule_op
-def pipeline(iterate: Sequence[fx.Node], eliminate_epilogue: bool = False, multi_buffer_count: Optional[int] = None): ...
+def pipeline(
+    iterate: Sequence[fx.Node],
+    eliminate_epilogue: bool = False,
+    multi_buffer_count: Optional[int] = None,
+): ...
 
 
 @define_schedule_op
