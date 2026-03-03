@@ -471,7 +471,7 @@ def _cast_buffer_and_encode_stride(
         # useful for reads (OOB loads return 0), and subtracting the offset
         # from a clamped total_bytes can produce values that overflow the
         # 32-bit SRD NUM_RECORDS field for output buffers larger than 2 GB.
-        if is_read:
+        if use_real_bounds and is_read:
             metadata = memref_d.extract_strided_metadata(ptr)
             offset_elements = metadata[1]
             offset_bytes = arith_d.index_cast(uint64, offset_elements)
@@ -626,6 +626,10 @@ def _create_vec_read_write(
             )
             mem = _cast_buffer_and_encode_stride(
                 mem, strides, element_type, emitter, symbolic_shape, is_read
+            )
+        elif is_global_mem and not is_read:
+            mem, offset_th = _linearize_memref(
+                mem, start_indices_wg, start_indices_th, strides
             )
         if linearize_shared_mem:
             mem = _linearize_shared_mem(mem)
