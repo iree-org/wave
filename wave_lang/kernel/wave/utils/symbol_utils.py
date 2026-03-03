@@ -241,6 +241,8 @@ def simplify(expr: sympy.Expr) -> sympy.Expr:
     if expr in _simplify_cache:
         return _simplify_cache[expr]
     orig = expr
+    # Cheap flatten before the heavier fixed-point loop.
+    expr = sympy.expand(expr)
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
         new_expr = _custom_simplify_once(new_expr)
