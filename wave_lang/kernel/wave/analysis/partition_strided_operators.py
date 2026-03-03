@@ -602,7 +602,7 @@ def merge_contiguous_reads(
     hw_constraint = get_hardware_constraint(constraints)
     while _merge_contiguous_reads_once(trace, hw_constraint):
         pass
-    _coalesce_preshuffle_global_reads(trace, constraints)
+    # _coalesce_preshuffle_global_reads(trace, constraints)
 
 
 def _get_physical_start(
@@ -660,10 +660,8 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 continue
             if custom.mapping_dynamic_vals:
                 continue
-            # Skip reads that have bounds: the merged read would lose the
-            # mapping and source→target index, making mask generation incorrect.
-            if custom.bounds is not None:
-                continue
+            # Bounded reads are allowed into the group; the merge loop
+            # below only merges pairs with identical bounds.
             key = (custom.memory, custom.elements_per_thread, region_id)
             groups[key].append(node)
 
@@ -735,6 +733,14 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     lo_custom, hi_custom = custom2, custom1
                     lo_node, hi_node = node2, node1
                 else:
+                    continue
+
+                # Only merge bounded reads when both have the exact same
+                # bounds (same OOB mask).  This lets preshuffle reads
+                # (which all share identical bounds) pass through even if
+                # they can't merge here — _coalesce_preshuffle_global_reads
+                # handles them downstream.
+                if lo_custom.bounds != hi_custom.bounds:
                     continue
 
                 # Find dimension that advances by ept.
