@@ -4,6 +4,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from typing import Any
+
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.dtype import f16, f32, i32
@@ -19,6 +21,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     torch_dtype_to_wave,
 )
+from wave_lang.support.indexing import IndexSymbol
 
 
 def get_fused_moe_gemm(
@@ -63,8 +66,8 @@ def get_fused_moe_gemm(
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.WaveConstraint(TOTAL_ELEMS, BLOCK_SHAPE),
         tkw.HardwareConstraint(
-            threads_per_wave=64,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            threads_per_wave=32,
+            mma_type=mfma_variant,
             vector_shapes={
                 E: E,
                 TOTAL_ELEMS: TOTAL_ELEMS,
@@ -246,12 +249,21 @@ def get_fused_moe_gemm(
                 )
 
     # Set hyperparameters for compilation
-    hyperparams = {
+    # BLOCK_M capped at min(m, 64) for RDNA4 (32 threads/wave, 16x16x16 MMA):
+    #   - BLOCK_M=m ensures 1 WORKGROUP_0, avoiding cross-WG race in scatter
+    #   - Cap at 64 to avoid register spill (BLOCK_M=128 needs 1024 VGPRs,
+    #     exceeding RDNA4's 512 VGPR limit per SIMD32 unit)
+    #   - For m > 64, multiple WORKGROUP_0's exist. See TODO below.
+    # TODO: For m > 64 (num_tokens > 32 with topk=2), restructure
+    #   gather/scatter to be WORKGROUP_0-aware so each WG0 handles
+    #   different tokens, eliminating the cross-WG race.
+    block_m = min(m, 64)
+    hyperparams: dict[str | IndexSymbol, Any] = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
+        BLOCK_M: block_m,
+        BLOCK_N: 32,
         BLOCK_K: 32,
         M: m,
         N: n,
@@ -321,7 +333,7 @@ def get_moe_align_block_size_kernel(
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=32,
             waves_per_block=(1, 1, 1),
             vector_shapes={
                 NUMEL: NUMEL,
@@ -591,7 +603,7 @@ def get_moe_align_block_size_kernel(
         NUMEL: numel,
         MAX_NUM_BLOCKS: max_num_blocks,
         MAX_NUM_TOKENS_PADDED: max_num_tokens_padded,
-        BLOCK_TOKENS: min(64, num_tokens) if num_tokens > 0 else 1,
+        BLOCK_TOKENS: min(32, num_tokens) if num_tokens > 0 else 1,
         BLOCK_EXPERTS: min(8, num_experts) if num_experts > 0 else 1,
         ELEMS_PER_THREAD: 4,
         BLOCK_SIZE: block_size,
@@ -637,7 +649,7 @@ def get_gemm_kernel(
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=32,
             waves_per_block=(2, 2, 1),
             mma_type=mfma_variant,
         )
@@ -666,8 +678,8 @@ def get_gemm_kernel(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
         BLOCK_K: 32,
         M: m,
         N: n,
@@ -689,12 +701,12 @@ def get_silu_and_mul_kernel(
 
     # Each workgroup works on single row of input data, and rows are further
     # split into blocks of size up to 256. We have single wave per WG,
-    # and with default wave size of 64, each thread is operating on up to 4
+    # and with default wave size of 32, each thread is operating on up to 8
     # elements.
-    wave_size = 64
+    wave_size = 32
     BLOCK_M = 1
     # Tile size cannot be dynamic, so we use a fixed value here.
-    BLOCK_N = 64
+    BLOCK_N = 32
     # Address space (for GPU, shared(1) or global(0))
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
@@ -825,7 +837,7 @@ def get_topk_kernel(
     n: int,
     k: int,
     datatype: DataType,
-    threads_per_wave: int = 64,
+    threads_per_wave: int = 32,
 ):
     """
     Wave kernel for computing top-k values and indices.
@@ -835,7 +847,7 @@ def get_topk_kernel(
         n: Number of columns (experts)
         k: Number of top elements to select
         datatype: Data type for input values
-        threads_per_wave: Number of threads per wave (default 64)
+        threads_per_wave: Number of threads per wave (default 32 - RDNA4)
     """
     # Input sizes
     M = tkl.sym.M
