@@ -109,9 +109,6 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
-_simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
-
-
 def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     """Apply custom algebraic simplifications that sympy misses.
 
@@ -221,13 +218,20 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     return expr
 
 
-def simplify(expr: sympy.Expr) -> sympy.Expr:
-    """Simplify a sympy expression using interval arithmetic and sympy.simplify.
+_simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
 
-    Extends sympy.simplify with bounds-based reasoning that can resolve
+
+def simplify(expr: sympy.Expr) -> sympy.Expr:
+    """Simplify a sympy expression using interval arithmetic and cancel.
+
+    Extends sympy.cancel with bounds-based reasoning that can resolve
     floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
     sympy cannot handle, plus custom algebraic rewrites for Mod/floor
     patterns.  Iterates to a fixed point.
+
+    Uses sympy.cancel instead of sympy.simplify because simplify tries 20+
+    strategies (trigsimp, combsimp, hyperexpand, ...) that are irrelevant for
+    integer floor/Mod arithmetic and can take 0.5s+ per expression.
 
     The cache maps both ``src -> dst`` and ``dst -> dst`` so that calling
     simplify on an already-simplified expression is a cache hit.
@@ -240,7 +244,7 @@ def simplify(expr: sympy.Expr) -> sympy.Expr:
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
         new_expr = _custom_simplify_once(new_expr)
-        new_expr = sympy.simplify(new_expr)
+        new_expr = sympy.cancel(new_expr)
         if new_expr == expr:
             break
         expr = new_expr
