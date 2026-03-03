@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from collections.abc import Sequence
 from copy import deepcopy
 from itertools import groupby
 from operator import itemgetter
@@ -17,6 +18,7 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSequence, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
+from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
     ExtractSlice,
@@ -26,6 +28,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..assumptions import Assumption
 from ..constraints import Constraint
 from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
@@ -40,6 +43,7 @@ from ..utils.mma_utils import (
 )
 from ..utils.symbol_utils import (
     _numeric_eval_constant,
+    safe_subs,
     simplify as sym_simplify,
     subs_idxc,
 )
@@ -923,3 +927,167 @@ def partition_gather_like_ops(
                 raise NotImplementedError(f"Unsupported op type: {custom}")
 
             custom.erase()
+
+
+SubstList = list[tuple[sympy.Symbol, sympy.Expr]]
+
+
+def _get_divisibility_subs(
+    constraints: Sequence[Constraint],
+) -> tuple[SubstList, SubstList]:
+    """Extract divisibility assumptions into forward/backward substitution lists.
+
+    For each ``Assumption(Eq(Mod(S, d), 0))`` we introduce a fresh integer
+    symbol ``S_div_d`` and build:
+      forward:  S  -> d * S_div_d
+      backward: S_div_d -> S / d
+    Applying forward subs lets sympy resolve ``Mod(S, d)`` to 0 and
+    ``floor(S / d)`` to ``S_div_d``, then backward subs restores the
+    original symbols.
+    """
+    forward: list[tuple[sympy.Symbol, sympy.Expr]] = []
+    backward: list[tuple[sympy.Symbol, sympy.Expr]] = []
+    for c in constraints:
+        if not isinstance(c, Assumption):
+            continue
+        expr = c.expr
+        if not isinstance(expr, sympy.Eq):
+            continue
+        lhs, rhs = expr.args
+        # Match Eq(Mod(S, d), 0).
+        if rhs != 0 or not isinstance(lhs, sympy.Mod):
+            continue
+        sym, divisor = lhs.args
+        if not sym.is_Symbol or not divisor.is_Integer:
+            continue
+        # Bail if the symbol may be negative: floor/Mod semantics differ
+        # between Euclidean and truncated division for negative operands.
+        if not sym.is_nonnegative:
+            continue
+        div_sym = sympy.Symbol(
+            f"_{sym.name}_div_{divisor}",
+            integer=True,
+            nonnegative=sym.is_nonnegative,
+            positive=sym.is_positive,
+        )
+        forward.append((sym, divisor * div_sym))
+        backward.append((div_sym, sym / divisor))
+    return forward, backward
+
+
+def _simplify_expr(
+    expr: sympy.Expr,
+    fwd: list[tuple[sympy.Symbol, sympy.Expr]],
+    bwd: list[tuple[sympy.Symbol, sympy.Expr]],
+) -> sympy.Expr:
+    """Run subs_idxc + simplify with divisibility rewriting."""
+    expr = subs_idxc(expr)
+    if fwd:
+        expr = safe_subs(expr, fwd)
+    expr = sym_simplify(expr)
+    if bwd:
+        expr = safe_subs(expr, bwd)
+    return expr
+
+
+def _simplify_symbols_map(
+    mapping: dict,
+    fwd: list,
+    bwd: list,
+) -> tuple[dict, bool]:
+    """Simplify values in a symbol map (``{dim: expr}``).
+
+    Returns ``(new_map, changed)``."""
+    new_map = {}
+    changed = False
+    for key, val in mapping.items():
+        new_val = _simplify_expr(val, fwd, bwd)
+        new_map[key] = new_val
+        if new_val != val:
+            changed = True
+    return new_map, changed
+
+
+def _simplify_mapping(
+    mapping: IndexMapping,
+    fwd: list,
+    bwd: list,
+) -> tuple[IndexMapping, bool]:
+    """Simplify expressions inside an IndexMapping.
+
+    Returns ``(new_mapping, True)`` if any expression changed,
+    ``(original_mapping, False)`` otherwise.
+    """
+    new_inputs, inp_changed = _simplify_symbols_map(mapping.input_mapping, fwd, bwd)
+    new_outputs, out_changed = _simplify_symbols_map(mapping.output_mapping, fwd, bwd)
+    new_dyn_mappings = []
+    dyn_changed = False
+    for dvm in mapping.dynamic_val_mappings or ():
+        new_dvm, c = _simplify_symbols_map(dvm, fwd, bwd)
+        new_dyn_mappings.append(new_dvm)
+        dyn_changed |= c
+    if not (inp_changed or out_changed or dyn_changed):
+        return mapping, False
+    return (
+        IndexMapping(
+            mapping.num_iterators,
+            new_inputs,
+            new_outputs,
+            dynamic_val_mappings=tuple(new_dyn_mappings),
+        ),
+        True,
+    )
+
+
+def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = ()):
+    """Pre-simplify index expressions on all ops.
+
+    Runs ``simplify(subs_idxc(component))`` on every ``start``, ``size``,
+    and ``stride`` of every ``IndexSequence`` in every op's index dict,
+    and on every expression in Read/Write index mappings.
+
+    Divisibility assumptions (``Assumption(Eq(Mod(S, d), 0))``) are
+    extracted from *constraints* and used to resolve floor/Mod sub-expressions.
+
+    This normalises indices once so downstream passes (contiguity checks,
+    merge, partition) don't each pay the simplification cost independently.
+    """
+    fwd, bwd = _get_divisibility_subs(constraints)
+    for subgraph in trace.region_graph.subgraphs.values():
+        for node in subgraph.nodes:
+            custom = get_custom(node)
+            if not isinstance(custom, CustomOp):
+                continue
+            # Simplify index mappings on Read/Write ops.
+            if isinstance(custom, (Read, Write)) and custom.mapping is not None:
+                new_mapping, mapping_changed = _simplify_mapping(
+                    custom.mapping, fwd, bwd
+                )
+                if mapping_changed:
+                    custom.mapping = new_mapping
+            # Simplify index sequences.
+            try:
+                index = custom.index
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(index, dict):
+                new_index = {}
+                changed = False
+                for dim, seq in index.items():
+                    if not isinstance(seq, IndexSequence):
+                        new_index[dim] = seq
+                        continue
+                    new_start = _simplify_expr(seq.start, fwd, bwd)
+                    new_size = _simplify_expr(seq.size, fwd, bwd)
+                    new_stride = _simplify_expr(seq.stride, fwd, bwd)
+                    if (
+                        new_start != seq.start
+                        or new_size != seq.size
+                        or new_stride != seq.stride
+                    ):
+                        new_index[dim] = IndexSequence(new_start, new_size, new_stride)
+                        changed = True
+                    else:
+                        new_index[dim] = seq
+                if changed:
+                    custom.index = new_index

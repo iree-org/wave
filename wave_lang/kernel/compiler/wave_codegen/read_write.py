@@ -62,7 +62,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
-from ...wave.utils.symbol_utils import safe_subs
+from ...wave.utils.symbol_utils import safe_subs, simplify
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -95,16 +95,6 @@ def _get_start_indices(
     return start_indices
 
 
-@functools.lru_cache
-def _simplify(expr):
-    """
-    Simple wrapper around simplify in order to utilize LRU Cache.
-    This is important to minimize compile time caused by re-simplifying
-    expressions.
-    """
-    return sympy.simplify(expr)
-
-
 def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     """
     Split index expr into thread-dependent and thread-independent parts
@@ -116,7 +106,7 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
 
     # Compute thread-independent index as `orig_index - thread_dependent_index`
     # All thread symbols and dynamic should cancel-out in the result.
-    thread_independent_index = _simplify(src - thread_dependent_index)
+    thread_independent_index = sympy.sympify(simplify(src - thread_dependent_index))
     if thread_independent_index.free_symbols - set(subs_wg.keys()):
         # If we have any symbols besides wg symbols, means some thread or
         # dynamic symbols were not canceled out, use the entire index as

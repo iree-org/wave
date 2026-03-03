@@ -309,8 +309,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -320,8 +320,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -331,20 +331,20 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)>
+    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -443,7 +443,7 @@ def mlir_converter_self_index():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_self_index
-    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (T0 mod 64) * (BLOCK_M ceildiv 128) + (BLOCK_M floordiv 2) * (T0 floordiv 64), BLOCK_M ceildiv 128, 1)>}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] : !wave.tensor<[@M] of i32, <register>>
     # CHECK: wave.write %[[SELF_INDEX]]
 
 
@@ -1242,10 +1242,10 @@ def mlir_converter_attention():
 
     # CHECK-LABEL: mlir_converter_attention
     # CHECK: wave.allocate {distributed_shape = #wave.expr_list<[] -> (17408)>} : !wave.tensor<[@B, @N, @K2, @K1] of i8, <shared>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 16, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 32, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>, #wave.symbol<"BLOCK_B">] -> (WG2 * BLOCK_B, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + (BLOCK_M ceildiv 4) * (T0 floordiv 64) + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (((T0 mod 64) floordiv 16) * 4 + T1 * BLOCK_N + WG1 * BLOCK_N + 48, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 16, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 32, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 48, 4, 16)>}] : !wave.tensor<[@B, @N, @M] of f32, <register>>
     # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @N, @M] of f32, <register>>
     # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @M] of f32, <register>>
     # CHECK-COUNT-3: wave.register {{.*}} !wave.tensor<[@B, @M, @K2] of f32, <register>>
