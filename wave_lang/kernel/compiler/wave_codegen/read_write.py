@@ -1020,6 +1020,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
         is_global
         and mask is None
         and not use_llvm_load
+        and not emitter.options.use_buffer_ops
         and not read_meets_hw_transpose_requirements(
             get_custom(node), emitter.constraints, emitter.options.target
         )
@@ -1434,7 +1435,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         sym_strides_int = []
 
     src_offset = None
-    if sym_strides_int:
+    if sym_strides_int and not emitter.options.use_buffer_ops:
         src_offset = _try_iv_split_offset(
             emitter,
             new_src_idx,
