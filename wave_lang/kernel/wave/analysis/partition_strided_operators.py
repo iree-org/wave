@@ -404,192 +404,6 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
-# TODO: I will add a field in IndexMapping to check if it is a preshuffle mapping.
-# `kind`: `preshuffle` or `shuffleb` or `linear`.
-def _is_preshuffle_mapping(mapping) -> bool:
-    """Check if a mapping uses the preshuffle e8m0_shuffle pattern."""
-    if mapping is None:
-        return False
-    # Scale buffers are always 2D: (N or M, K/32).
-    if len(mapping.output_mapping) != 2 or len(mapping.input_mapping) != 2:
-        return False
-    # Output must be identity (logical coords), input must be shuffled.
-    if not (mapping.is_output_identity() and not mapping.is_input_identity()):
-        return False
-    # The preshuffle formula uses floor (m//32, k//4) and Mod (k%4, (m//16)%2)
-    # to interleave scale bytes within each 256-byte region.
-    input_atoms = set()
-    for expr in mapping.input_mapping.values():
-        input_atoms.update(type(a) for a in sympy.preorder_traversal(expr))
-    return sympy.floor in input_atoms and sympy.Mod in input_atoms
-
-
-def _coalesce_preshuffle_global_reads(
-    trace: CapturedTrace, constraints: list[Constraint]
-):
-    """Coalesce scattered preshuffle-mapped global byte reads into dword loads.
-
-    After merge_contiguous_reads, preshuffle-mapped global reads may remain as
-    individual byte loads when the per-wave tile doesn't divide evenly into
-    groups of 4 contiguous bytes (e.g. BLOCK_N=192 with 4 waves gives 48
-    N-rows/wave, whose second 32-row e8m0 block only yields 2 reads instead
-    of 4).
-
-    Uses pairwise symbolic differences to find reads within the same 4-byte
-    aligned region, then replaces them with a single 4-byte read plus
-    ExtractSlice ops for the needed bytes.
-    """
-    from collections import defaultdict
-    from ...compiler.utils import strides_from_symbolic_shape
-    from ..._support.indexing import IndexingContext
-    from ..utils.mapping_utils import transform_index_on_mapping
-
-    idxc = IndexingContext.current()
-
-    # Collect single-byte preshuffle scale reads from global memory, grouped
-    # by their source buffer.  These are the reads that merge_contiguous_reads
-    # couldn't handle (e.g. because they have bounds, or their preshuffle
-    # offsets aren't strictly adjacent).
-    mem_groups: dict[int, list] = defaultdict(list)
-    for node in trace.walk(lambda n: isinstance(get_custom(n), Read)):
-        custom = get_custom(node)
-        # Already widened by merge_contiguous_reads
-        if custom.elements_per_thread != 1:
-            continue
-        # Only target reads with the e8m0 preshuffle mapping.
-        if not _is_preshuffle_mapping(custom.mapping):
-            continue
-        # Shared-memory reads are handled by preshuffle_scale_to_shared.
-        if subs_idxc(custom.memory_type.address_space) != GLOBAL_ADDRESS_SPACE:
-            continue
-        mem_groups[id(custom.memory)].append(node)
-
-    coalesced = 0
-    for _, nodes in mem_groups.items():
-        # Need at least 2 reads to coalesce.
-        if len(nodes) < 2:
-            continue
-
-        sample_custom = get_custom(nodes[0])
-        memory_node = sample_custom.memory
-        memory = get_custom(memory_node)
-        symbolic_shape = memory.type.symbolic_shape
-        symbolic_dims = [infer_dim(d) for d in symbolic_shape]
-        strides = strides_from_symbolic_shape(
-            idxc, symbolic_shape, allow_mixed_shapes=True
-        )
-        if strides is None:
-            continue
-
-        # For each read, compute its physical flat offset (in bytes) and store
-        # it along with the read node, custom op, and physical coordinates.
-        read_infos = []
-        for node in nodes:
-            custom = get_custom(node)
-            # Transform the logical index to physical coordinates using the mapping.
-            physical = transform_index_on_mapping(
-                custom.mapping, symbolic_shape, custom.index, is_read=True
-            )
-            if not all(dim in physical for dim in symbolic_dims):
-                continue
-            # Compute the physical flat offset (in bytes) by multiplying the
-            # physical coordinates by the corresponding stride and summing the results.
-            flat = sum(
-                physical[dim] * stride for dim, stride in zip(symbolic_dims, strides)
-            )
-            read_infos.append((node, custom, subs_idxc(flat), physical))
-
-        if len(read_infos) < 2:
-            continue
-
-        # Try all pairs to find contiguous ones (diff == ept).
-        merged = set()
-        for i in range(len(read_infos)):
-            if i in merged:
-                continue
-            node_i, custom_i, flat_i, phys_i = read_infos[i]
-
-            group = [(i, node_i, custom_i, 0, phys_i)]
-            for j in range(len(read_infos)):
-                if j == i or j in merged:
-                    continue
-                node_j, custom_j, flat_j, phys_j = read_infos[j]
-                raw_diff = subs_idxc(flat_j - flat_i)
-                diff_val = _numeric_eval_constant(raw_diff)
-                if diff_val is None:
-                    continue
-                if 0 < diff_val < 4:
-                    group.append((j, node_j, custom_j, diff_val, phys_j))
-
-            if len(group) < 2:
-                continue
-
-            group.sort(key=lambda x: x[3])
-            max_off = group[-1][3]
-            if max_off >= 4:
-                continue
-
-            base_phys = group[0][4]
-
-            earliest_node = group[0][1]
-            for g in group[1:]:
-                candidate = g[1]
-                for n in custom_i.graph.nodes:
-                    if n is candidate:
-                        earliest_node = candidate
-                        break
-                    if n is earliest_node:
-                        break
-
-            with get_custom(earliest_node).graph.inserting_before(earliest_node):
-                # Create a new wide read with 4-byte elements, using the earliest
-                # read's physical coordinates as the base.
-                wide_index = {}
-                for dim_idx, dim in enumerate(symbolic_dims):
-                    if dim_idx == len(symbolic_dims) - 1:
-                        wide_index[dim] = IndexSequence(base_phys[dim], 4, 1)
-                    else:
-                        wide_index[dim] = IndexSequence(base_phys[dim], 1, 1)
-
-                wide_read = Read(
-                    memory_node,
-                    elements_per_thread=4,
-                    mapping=None,
-                    _write_dependency=custom_i._write_dependency,
-                    flags=custom_i.flags,
-                ).add_to_graph(custom_i.graph, loc=custom_i.location)
-                wide_custom = get_custom(wide_read)
-                wide_custom.index = wide_index
-                if hasattr(earliest_node, "vector_shapes"):
-                    wide_read.vector_shapes = deepcopy(earliest_node.vector_shapes)
-                propagate_tag(group[0][1], wide_read)
-
-            # Create ExtractSlice ops for each byte in the contiguous region.
-            # because the wide read is 4-byte aligned, we need to extract the
-            # correct byte from the wide read.
-            for g_idx, g_node, g_custom, byte_pos, _ in group:
-                with g_custom.graph.inserting_before(g_node):
-                    extract = ExtractSlice(
-                        wide_read, [byte_pos], [1], [1]
-                    ).add_to_graph(g_custom.graph, loc=g_custom.location)
-                    if hasattr(g_node, "vector_shapes"):
-                        get_custom(extract).vector_shapes = deepcopy(
-                            g_node.vector_shapes
-                        )
-                    propagate_tag(g_node, extract)
-
-                g_custom.replace_all_uses_with(extract)
-                g_custom.graph.erase_node(g_node)
-
-            merged.update(g[0] for g in group)
-            coalesced += 1
-
-    if coalesced > 0:
-        logger.info(
-            f"Coalesced {coalesced} preshuffle global read group(s) into dword loads"
-        )
-
-
 def merge_contiguous_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
@@ -606,7 +420,6 @@ def merge_contiguous_reads(
     hw_constraint = get_hardware_constraint(constraints)
     while _merge_contiguous_reads_once(trace, hw_constraint):
         pass
-    # _coalesce_preshuffle_global_reads(trace, constraints)
 
 
 def _get_physical_start(
@@ -635,11 +448,22 @@ def _get_physical_start(
 
 
 def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
-    """Single merge pass: merge adjacent pairs of same-ept reads.
+    """Single merge pass: merge reads that access nearby physical memory.
 
-    Groups reads by (memory operand, ept) and merges pairs whose physical
-    flat offset starts differ by exactly ept. Returns True if any merges
-    happened.
+    Two strategies are applied per (memory, ept) group:
+
+    1. **Pairwise contiguous merge** — pairs whose physical flat offset
+       starts differ by exactly ``ept`` are merged into a ``2*ept`` read
+       with two ExtractSlice outputs.
+
+    2. **Multi-way coalescing** (``ept==1`` only) — unmerged byte reads
+       whose flat offsets fall within a power-of-2 aligned window (up to
+       ``max_elems_per_load``) are replaced by a single wide read with
+       per-byte ExtractSlice outputs.  Diffs are evaluated via numeric
+       probing (``_numeric_eval_constant``), so this handles non-constant
+       symbolic offsets such as preshuffle mappings.
+
+    Returns True if any merges or coalescing happened.
     """
     from collections import defaultdict
     from ...compiler.utils import strides_from_symbolic_shape
@@ -704,6 +528,16 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 off1, phys1, custom1, node1 = read_infos[i]
                 off2, phys2, custom2, node2 = read_infos[j]
 
+                # The pairwise merge drops the mapping and produces a
+                # physical-space read with no mask.  That is unsafe for
+                # bounded reads whose OOB behaviour relies on the mask
+                # generated from bounds + mapping.  Skip them here;
+                # bounded ept==1 reads (e.g. preshuffle scales backed by
+                # fat_raw_buffer) are handled by the multi-way coalescing
+                # pass below, where OOB loads safely return zero.
+                if custom1.bounds is not None or custom2.bounds is not None:
+                    continue
+
                 raw_diff = subs_idxc(off2 - off1)
 
                 # For reads with non-identity mappings (e.g. preshuffle
@@ -737,14 +571,6 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     lo_custom, hi_custom = custom2, custom1
                     lo_node, hi_node = node2, node1
                 else:
-                    continue
-
-                # Only merge bounded reads when both have the exact same
-                # bounds (same OOB mask).  This lets preshuffle reads
-                # (which all share identical bounds) pass through even if
-                # they can't merge here — _coalesce_preshuffle_global_reads
-                # handles them downstream.
-                if lo_custom.bounds != hi_custom.bounds:
                     continue
 
                 # Find dimension that advances by ept.
@@ -825,6 +651,107 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 merged.update({i, j})
                 merged_any = True
                 break
+
+        # Multi-way coalescing for ept==1 reads that survived the pairwise
+        # pass.  Groups reads whose numerically-probed flat offsets fall
+        # within an aligned window of max_load_width bytes, then emits a
+        # single wide read + per-byte ExtractSlice ops.  This generalises
+        # the former _coalesce_preshuffle_global_reads to all mapping types.
+        if ept == 1 and len(read_infos) >= 2:
+            element_type = get_custom(reads[0]).type.dtype
+            max_load_width = hw_constraint.max_elems_per_load(element_type)
+
+            unmerged_infos = [
+                read_infos[k] for k in range(len(read_infos)) if k not in merged
+            ]
+            if len(unmerged_infos) >= 2:
+                coalesced_set: set[int] = set()
+                for anchor_idx in range(len(unmerged_infos)):
+                    if anchor_idx in coalesced_set:
+                        continue
+                    off_a, phys_a, custom_a, node_a = unmerged_infos[anchor_idx]
+
+                    group = [(anchor_idx, node_a, custom_a, 0, phys_a)]
+                    for probe_idx in range(len(unmerged_infos)):
+                        if probe_idx == anchor_idx or probe_idx in coalesced_set:
+                            continue
+                        off_p, _, custom_p, node_p = unmerged_infos[probe_idx]
+                        raw_diff = subs_idxc(off_p - off_a)
+                        diff_val = _numeric_eval_constant(raw_diff)
+                        if diff_val is None:
+                            continue
+                        if 0 < diff_val < max_load_width:
+                            _, _, _, phys_p = unmerged_infos[probe_idx]
+                            group.append(
+                                (probe_idx, node_p, custom_p, diff_val, phys_p)
+                            )
+
+                    if len(group) < 2:
+                        continue
+
+                    group.sort(key=lambda x: x[3])
+                    max_off = group[-1][3]
+                    wide_ept = 1
+                    while wide_ept <= max_off:
+                        wide_ept *= 2
+                    if wide_ept > max_load_width:
+                        continue
+
+                    base_phys = group[0][4]
+
+                    earliest_node = group[0][1]
+                    for g in group[1:]:
+                        candidate = g[1]
+                        for n in custom_a.graph.nodes:
+                            if n is candidate:
+                                earliest_node = candidate
+                                break
+                            if n is earliest_node:
+                                break
+
+                    with get_custom(earliest_node).graph.inserting_before(
+                        earliest_node
+                    ):
+                        wide_index = {}
+                        for dim_idx, dim in enumerate(symbolic_dims):
+                            if dim_idx == len(symbolic_dims) - 1:
+                                wide_index[dim] = IndexSequence(
+                                    base_phys[dim], wide_ept, 1
+                                )
+                            else:
+                                wide_index[dim] = IndexSequence(base_phys[dim], 1, 1)
+
+                        wide_read = Read(
+                            custom_a.memory,
+                            elements_per_thread=wide_ept,
+                            mapping=None,
+                            _write_dependency=custom_a._write_dependency,
+                            flags=custom_a.flags,
+                        ).add_to_graph(custom_a.graph, loc=custom_a.location)
+                        wide_custom = get_custom(wide_read)
+                        wide_custom.index = wide_index
+                        if hasattr(earliest_node, "vector_shapes"):
+                            wide_read.vector_shapes = deepcopy(
+                                earliest_node.vector_shapes
+                            )
+                        propagate_tag(group[0][1], wide_read)
+
+                    for g_idx, g_node, g_custom, byte_pos, _ in group:
+                        with g_custom.graph.inserting_before(g_node):
+                            extract = ExtractSlice(
+                                wide_read, [byte_pos], [1], [1]
+                            ).add_to_graph(g_custom.graph, loc=g_custom.location)
+                            if hasattr(g_node, "vector_shapes"):
+                                get_custom(extract).vector_shapes = deepcopy(
+                                    g_node.vector_shapes
+                                )
+                            propagate_tag(g_node, extract)
+
+                        g_custom.replace_all_uses_with(extract)
+                        g_custom.graph.erase_node(g_node)
+
+                    coalesced_set.update(g[0] for g in group)
+                    merged_any = True
 
     return merged_any
 
