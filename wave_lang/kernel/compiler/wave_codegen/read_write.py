@@ -835,6 +835,8 @@ def _try_iv_split_offset(
     owner = ip.block.owner
     if isinstance(owner, func_d.FuncOp):
         return None
+    if owner.name != "scf.for":
+        return None
 
     step_int = _get_constant_value(owner.operands[2])
     if step_int is None or step_int <= 0:
@@ -1018,8 +1020,6 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
         is_global
         and mask is None
         and not use_llvm_load
-        and emitter.options.use_wave_asm_backend
-        and MemRefType(kb_src.type).rank > 0
         and not read_meets_hw_transpose_requirements(
             get_custom(node), emitter.constraints, emitter.options.target
         )
@@ -1423,61 +1423,56 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
 
     # Try iv-split for the source (global) address.
-    if emitter.options.use_wave_asm_backend and MemRefType(src.type).rank > 0:
-        sym_stride_vals = strides_from_symbolic_shape(
-            IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+    sym_stride_vals = strides_from_symbolic_shape(
+        IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+    )
+    try:
+        sym_strides_int = [int(subs_idxc(s)) for s in sym_stride_vals]
+    except (TypeError, ValueError):
+        sym_strides_int = []
+
+    if sym_strides_int:
+        total_offset = _try_iv_split_offset(
+            emitter,
+            new_src_idx,
+            sym_strides_int,
+            src_dynamic_vals_map_start,
+            use_subs_idxc=True,
         )
-        try:
-            sym_strides_int = [int(subs_idxc(s)) for s in sym_stride_vals]
-        except (TypeError, ValueError):
-            sym_strides_int = []
-
-        if sym_strides_int:
-            total_offset = _try_iv_split_offset(
+        if total_offset is not None:
+            mask = _build_mask(
                 emitter,
-                new_src_idx,
-                sym_strides_int,
-                src_dynamic_vals_map_start,
-                use_subs_idxc=True,
+                src_idx,
+                elements_per_thread=1,
+                bounds=src_bounds,
+                dynamic_values=src_dynamic_vals_map_start,
             )
-            if total_offset is not None:
-                mask = _build_mask(
-                    emitter,
-                    src_idx,
-                    elements_per_thread=1,
-                    bounds=src_bounds,
-                    dynamic_values=src_dynamic_vals_map_start,
-                )
-                if mask:
-                    mask = vector_d.extract(
-                        mask, static_position=[0], dynamic_position=[]
-                    )
-                    oob_index_value = _get_out_of_bounds_index(element_type)
-                    oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-                    total_offset = arith_d.select(mask, total_offset, oob_index)
+            if mask:
+                mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
+                oob_index_value = _get_out_of_bounds_index(element_type)
+                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+                total_offset = arith_d.select(mask, total_offset, oob_index)
 
-                lin_strides = [
-                    gen_sympy_index(
-                        add_emitter_subs(emitter, src_dynamic_vals_map_start), s
-                    )
-                    for s in sym_stride_vals
-                ]
-                zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(lin_strides)
-                lin_src, _ = _linearize_memref(
-                    src, zero_indices, zero_indices, lin_strides
+            lin_strides = [
+                gen_sympy_index(
+                    add_emitter_subs(emitter, src_dynamic_vals_map_start), s
                 )
-                lin_src = _cast_buffer_and_encode_stride(
-                    lin_src, lin_strides, element_type, emitter
-                )
+                for s in sym_stride_vals
+            ]
+            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(lin_strides)
+            lin_src, _ = _linearize_memref(src, zero_indices, zero_indices, lin_strides)
+            lin_src = _cast_buffer_and_encode_stride(
+                lin_src, lin_strides, element_type, emitter
+            )
 
-                amdgpu_d.gather_to_lds(
-                    src=lin_src,
-                    src_indices=[total_offset],
-                    dst=dst,
-                    dst_indices=dst_index,
-                    transfer_type=store_type,
-                )
-                return
+            amdgpu_d.gather_to_lds(
+                src=lin_src,
+                src_indices=[total_offset],
+                dst=dst,
+                dst_indices=dst_index,
+                transfer_type=store_type,
+            )
+            return
 
     # Fallback: original linearization path
     src_index, src_index_wg, src_index_th = _build_start_indices(
