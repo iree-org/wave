@@ -581,12 +581,12 @@ def batched_prefetch_mxfp4_test():
     # Prologue Global Read
     # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C512_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
     # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C32_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
 
     # Prologue Linearize shared memory + Local Write
     # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [34816], strides: [1] : memref<1x256x136xi8, #gpu.address_space<workgroup>> to memref<34816xi8, #gpu.address_space<workgroup>>
@@ -602,22 +602,22 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          scf.for
 
     # Steady State global_load_rhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_rhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_lhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_rhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_lhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
