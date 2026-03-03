@@ -4,14 +4,12 @@
 import atexit
 import sympy
 
-from wave_lang.kernel._support.tracing import CapturedTrace
 import wave_lang.kernel.wave as wave
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import (
-    Constraint,
     MMAType,
     HardwareConstraint,
 )
@@ -63,15 +61,39 @@ def _check_hyperparameters_roundtrip(
         ), f"Hyperparameter {param} mismatch: {source_subs.get(param)} vs {roundtripped_subs.get(param)}"
 
 
-def _get_read_write_trace() -> (
-    tuple[CapturedTrace, WaveCompileOptions, list[Constraint]]
-):
-    options = WaveCompileOptions(
-        subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
-        compile_to_mlir=True,
-    )
+def _assert_roundtrip(kernel, subs: dict, label: str) -> None:
+    """Compile a kernel, roundtrip through MLIR, assert equivalence."""
+    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+    compiled_kernel = wave_compile(options, kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    source_constraints = kernel.constraints
 
-    # Define constraints for the kernel
+    mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, source_constraints, options
+    )
+    errors = error_diagnostics(diagnostics)
+    assert errors == [], f"[{label}] unexpected emit errors: {errors}"
+
+    fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
+    errors = error_diagnostics(fx_diags)
+    assert errors == [], f"[{label}] unexpected import errors: {errors}"
+
+    _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
+    assert_constraints_equivalent(
+        source_constraints,
+        fx_constraints,
+        custom_comparators={
+            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
+        },
+    )
+    assert_traces_equivalent(trace, fx_trace, subs=options.subs)
+    print(f"  {label}: OK")
+
+
+# CHECK-LABEL: mlir_to_fx_minimal_roundtrip
+@run_test
+def mlir_to_fx_minimal_roundtrip():
+    """Test MLIR roundtrip for a minimal read/write kernel."""
     constraints = [
         wave.WorkgroupConstraint(M, BLOCK_M, 0),
         wave.WorkgroupConstraint(N, BLOCK_N, 1),
@@ -87,55 +109,17 @@ def _get_read_write_trace() -> (
         r = wave.read(a)
         wave.write(r, a)
 
-    compiled_kernel = wave_compile(options, dummy_kernel)
-    trace = compiled_kernel.get_compiled_graph()
-    constraints = dummy_kernel.constraints
+    subs = {M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64}
+    _assert_roundtrip(dummy_kernel, subs, "minimal roundtrip")
 
-    return trace, options, constraints
-
-
-# CHECK-LABEL: mlir_to_fx_minimal_roundtrip
-@run_test
-def mlir_to_fx_minimal_roundtrip():
-    """Test MLIR roundtrip for fully-compiled trace."""
-    # Get the fully compiled trace
-    trace, options, test_constraints = _get_read_write_trace()
-
-    # Emit MLIR from the traced kernel.
-    mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-        trace, test_constraints, options
-    )
-    errors = error_diagnostics(diagnostics)
-    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
-
-    # Convert back to FX trace
-    fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
-    errors = error_diagnostics(fx_diags)
-    assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
-
-    _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
-    assert_constraints_equivalent(
-        test_constraints,
-        fx_constraints,
-        custom_comparators={
-            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
-        },
-    )
-    assert_traces_equivalent(trace, fx_trace, subs=options.subs)
-
-    # CHECK: OK: minimal roundtrip
-    print("OK: minimal roundtrip")
+    # CHECK: minimal roundtrip: OK
 
 
 # CHECK-LABEL: mlir_to_fx_simple_matmul_roundtrip
 @run_test
 def mlir_to_fx_simple_matmul_roundtrip():
     """Test MLIR roundtrip for fully-compiled matmul trace."""
-    M = tkl.sym.M
-    N = tkl.sym.N
     K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
 
     constraints = [
@@ -164,49 +148,10 @@ def mlir_to_fx_simple_matmul_roundtrip():
 
         wave.write(repeat, c)
 
-    subs = {
-        BLOCK_M: 16,
-        BLOCK_N: 16,
-        BLOCK_K: 16,
-        M: 128,
-        N: 128,
-        K: 16,
-    }
+    subs = {BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16, M: 128, N: 128, K: 16}
+    _assert_roundtrip(matmul_simple, subs, "matmul roundtrip")
 
-    options = WaveCompileOptions(
-        subs=subs,
-        compile_to_mlir=True,
-    )
-
-    compiled_kernel = wave_compile(options, matmul_simple)
-    trace = compiled_kernel.get_compiled_graph()
-    # Get constraints from the compiled kernel
-    source_constraints = matmul_simple.constraints
-
-    # Emit MLIR from the traced kernel.
-    mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-        trace, source_constraints, options
-    )
-    errors = error_diagnostics(diagnostics)
-    assert errors == [], f"unexpected errors from wave to mlir conversion: {errors}"
-
-    # Convert back to FX trace
-    fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
-    errors = error_diagnostics(fx_diags)
-    assert errors == [], f"unexpected errors from mlir to fx conversion: {errors}"
-
-    _check_hyperparameters_roundtrip(options.subs, fx_options.subs)
-    assert_constraints_equivalent(
-        source_constraints,
-        fx_constraints,
-        custom_comparators={
-            HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip
-        },
-    )
-    assert_traces_equivalent(trace, fx_trace, subs=options.subs)
-
-    # CHECK: OK: matmul roundtrip
-    print("OK: matmul roundtrip")
+    # CHECK: matmul roundtrip: OK
 
 
 # CHECK-LABEL: mlir_to_fx_pipelined_gemm_roundtrip
@@ -394,3 +339,89 @@ def mlir_to_fx_unspecified_address_space():
 
     # CHECK: OK: unspecified address space
     print("OK: unspecified address space")
+
+
+# CHECK-LABEL: mlir_to_fx_mapping_roundtrip
+@run_test
+def mlir_to_fx_mapping_roundtrip():
+    """Test that various IndexMapping permutations survive the MLIR roundtrip."""
+    K = tkl.sym.K
+    i = wave.IndexMapping.iterator(0)
+    j = wave.IndexMapping.iterator(1)
+    k = wave.IndexMapping.iterator(2)
+
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: 64, N: 64, K: 32}
+        ),
+    ]
+    subs = {BLOCK_M: 64, BLOCK_N: 64, M: 128, N: 128, K: 128}
+
+    # Cyclic permutation: (M,N,K) -> (N,K,M).
+    @wave.wave(constraints)
+    def cyclic_read(
+        a: Memory[M, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: Memory[N, K, M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        mapping = wave.IndexMapping(
+            3, inputs={M: k, N: i, K: j}, outputs={N: i, K: j, M: k}
+        )
+        wave.write(wave.read(a, mapping=mapping), b)
+
+    _assert_roundtrip(cyclic_read, subs, "cyclic read")
+
+    # Swap of first two dims, third fixed: (M,N,K) -> (N,M,K).
+    @wave.wave(constraints)
+    def swap_read(
+        a: Memory[M, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: Memory[N, M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        mapping = wave.IndexMapping(
+            3, inputs={M: j, N: i, K: k}, outputs={N: i, M: j, K: k}
+        )
+        wave.write(wave.read(a, mapping=mapping), b)
+
+    _assert_roundtrip(swap_read, subs, "swap read")
+
+    # Identity mapping (degenerate, mapping present but no reorder).
+    @wave.wave(constraints)
+    def identity_read(
+        a: Memory[M, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: Memory[M, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        mapping = wave.IndexMapping(
+            3, inputs={M: i, N: j, K: k}, outputs={M: i, N: j, K: k}
+        )
+        wave.write(wave.read(a, mapping=mapping), b)
+
+    _assert_roundtrip(identity_read, subs, "identity read")
+
+    # Write mapping: cyclic permutation on the write side.
+    @wave.wave(constraints)
+    def cyclic_write(
+        a: Memory[M, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: Memory[N, K, M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        mapping = wave.IndexMapping(
+            3, inputs={M: i, N: j, K: k}, outputs={N: j, K: k, M: i}
+        )
+        a_reg = wave.read(a)
+        wave.write(a_reg, b, mapping=mapping)
+
+    _assert_roundtrip(cyclic_write, subs, "cyclic write")
+
+    # Note: 2D-only permutations (e.g. [M,N]->[N,M] without a third dim) are not
+    # tested here because the compiler produces wave.extract_slice ops for 2D
+    # mapped reads/writes, and wave.extract_slice is not yet supported in the
+    # MLIR-to-FX converter. The swap_read test above covers 2D swap semantics
+    # (M<->N with K fixed) via a 3D mapping.
+    #
+    # Note: dynamic_val_mappings (IndexMapping with dynamic values) are not yet
+    # represented in the MLIR attribute and are not roundtripped.
+
+    # CHECK: OK: mapping roundtrip
+    print("OK: mapping roundtrip")
