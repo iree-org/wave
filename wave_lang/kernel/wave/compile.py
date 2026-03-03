@@ -934,8 +934,10 @@ def _trace_launchable_and_get_kernel_signature(
     grid_symbols = list(launchable.bound_scalar_symbols.keys()) + list(
         options.dynamic_symbols
     )
+    # Explicit modules list prevents sympy from auto-importing scipy,
+    # which pollutes sys.modules and breaks dill serialization later.
     options.kernel_launch_info.grid = sympy.lambdify(
-        [grid_symbols], launchable.grid_type.dims
+        [grid_symbols], launchable.grid_type.dims, modules=["math"]
     )
     options.kernel_launch_info.grid_str = lambdastr(
         [grid_symbols], launchable.grid_type.dims
