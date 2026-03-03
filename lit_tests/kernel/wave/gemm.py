@@ -2296,11 +2296,11 @@ def test_broadcast_batched_gemm_with_vmma():
     # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION:.+]]} {
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[WG_ID2:.*]] = gpu.block_id z
-    # CHECK:            %[[LHS_GLOBAL:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1, 64, 64], strides: [4096, 64, 1] : memref<f16> to memref<1x64x64xf16, strided<[4096, 64, 1]>>
     # CHECK:            %[[RHS_GLOBAL:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [6, 128, 64], strides: [8192, 64, 1] : memref<f16> to memref<6x128x64xf16, strided<[8192, 64, 1]>>
     # CHECK:            %[[HKV_IDX:.+]] = affine.apply #[[MAP]]()[%[[WG_ID2]]]
+    # CHECK:            %[[LHS_GLOBAL:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{[0-9]+}}], strides: [1] : memref<f16> to memref<{{[0-9]+}}xf16, strided<[1]>>
     # CHECK:            scf.for
-    # CHECK:             %[[LHS_READ:.+]] = vector.load %[[LHS_GLOBAL]][%[[HKV_IDX]], %{{.+}}, {{.+}}] : {{.*}}, vector<8xf16>
+    # CHECK:             %[[LHS_READ:.+]] = vector.load %[[LHS_GLOBAL]][%{{.+}}] : {{.*}}, vector<8xf16>
     # CHECK:             %[[RHS_READ:.+]] = vector.load %[[RHS_GLOBAL]][%[[WG_ID2]], %{{.+}}, {{.+}}] : {{.*}}, vector<8xf16>
     # CHECK-COUNT-2:     vector.extract_strided_slice
     # CHECK-COUNT-1:     amdgpu.mfma
