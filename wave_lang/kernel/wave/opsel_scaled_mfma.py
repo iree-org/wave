@@ -98,6 +98,8 @@ def _trace_scale_chain(scale_value):
         return None
 
     slice_op = bitcast_source.owner
+    if _is_op_named(slice_op, "arith.select"):
+        slice_op = slice_op.operands[1].owner
     if not _is_op_named(slice_op, "vector.extract_strided_slice"):
         return None
 
@@ -139,9 +141,14 @@ def _trace_extract_strided_slice(
 ) -> Optional[tuple[Value, int]]:
     """Check if *value* is produced by extract_strided_slice of a vector<4xi8>.
 
+    Looks through ``arith.select`` (inserted by flatten-bounds masking)
+    to find the underlying extract_strided_slice.
+
     Returns ``(source_vec4xi8, byte_offset)`` or ``None``.
     """
     op = value.owner
+    if _is_op_named(op, "arith.select"):
+        op = op.operands[1].owner
     if not _is_op_named(op, "vector.extract_strided_slice"):
         return None
     source = op.operands[0]

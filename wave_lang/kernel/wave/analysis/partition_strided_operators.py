@@ -443,6 +443,57 @@ def _get_physical_start(
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
+def _flatten_bounds_to_mask_expr(
+    custom: Read,
+    symbolic_shape: tuple,
+):
+    """Pre-compute a read's bounds check as a flat sympy boolean.
+
+    Replicates the _build_mask_with_mapping decision logic: when the
+    mapping's transformed index contains all bounded dims (and has no
+    dynamic_val_indices), the transformed index is used; otherwise the
+    original logical index is used.  Returns a sympy boolean expression
+    (e.g. And(idx < bound, ...)) or None if the read has no bounds.
+
+    """
+    if not custom.bounds:
+        return None
+
+    import functools
+    from ..utils.mapping_utils import transform_index_on_mapping
+
+    index = custom.index
+
+    if custom.mapping is not None and not custom.has_identity_mapping():
+        transformed = transform_index_on_mapping(
+            custom.mapping, symbolic_shape, index, is_read=True
+        )
+        use_transformed = (
+            all(dim in transformed for dim in custom.bounds)
+            and not custom.mapping.dynamic_val_indices
+        )
+        if use_transformed:
+            index = transformed
+
+    conditions = []
+    for dim, bound in custom.bounds.items():
+        if dim not in index:
+            continue
+        start = (
+            index[dim].start if isinstance(index[dim], IndexSequence) else index[dim]
+        )
+        if isinstance(start, int):
+            start = sympy.Integer(start)
+        if isinstance(bound, int):
+            bound = sympy.Integer(bound)
+        conditions.append(sympy.StrictLessThan(start, bound))
+
+    if not conditions:
+        return None
+
+    return functools.reduce(sympy.And, conditions)
+
+
 def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
     """Single merge pass: merge reads that access nearby physical memory.
 
@@ -523,16 +574,6 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     continue
                 off1, phys1, custom1, node1 = read_infos[i]
                 off2, phys2, custom2, node2 = read_infos[j]
-
-                # The pairwise merge drops the mapping and produces a
-                # physical-space read with no mask.  That is unsafe for
-                # bounded reads whose OOB behaviour relies on the mask
-                # generated from bounds + mapping.  Skip them here;
-                # bounded ept==1 reads (e.g. preshuffle scales backed by
-                # fat_raw_buffer) are handled by the multi-way coalescing
-                # pass below, where OOB loads safely return zero.
-                if custom1.bounds is not None or custom2.bounds is not None:
-                    continue
 
                 raw_diff = subs_idxc(off2 - off1)
 
@@ -628,6 +669,9 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     get_custom(extract0).vector_shapes = deepcopy(
                         lo_custom.vector_shapes
                     )
+                    lo_mask = _flatten_bounds_to_mask_expr(lo_custom, symbolic_shape)
+                    if lo_mask is not None:
+                        extract0.precomputed_mask_expr = lo_mask
                     propagate_tag(lo_node, extract0)
 
                     extract1 = ExtractSlice(
@@ -637,6 +681,9 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                     get_custom(extract1).vector_shapes = deepcopy(
                         hi_custom.vector_shapes
                     )
+                    hi_mask = _flatten_bounds_to_mask_expr(hi_custom, symbolic_shape)
+                    if hi_mask is not None:
+                        extract1.precomputed_mask_expr = hi_mask
                     propagate_tag(hi_node, extract1)
 
                 lo_custom.replace_all_uses_with(extract0)
@@ -741,6 +788,11 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                                 get_custom(extract).vector_shapes = deepcopy(
                                     g_node.vector_shapes
                                 )
+                            g_mask = _flatten_bounds_to_mask_expr(
+                                g_custom, symbolic_shape
+                            )
+                            if g_mask is not None:
+                                extract.precomputed_mask_expr = g_mask
                             propagate_tag(g_node, extract)
 
                         g_custom.replace_all_uses_with(extract)
