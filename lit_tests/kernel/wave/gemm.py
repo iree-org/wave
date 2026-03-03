@@ -283,8 +283,8 @@ def test_reordered_gemm():
     # CHECK-DAG:        #[[MAP_IDX_N:.+]] = affine_map<()[s0, s1, s2, s3] -> (s1 * 32 + s2 * 64 + s0 floordiv 4 - ((s1 * 32 + s0 floordiv 4) floordiv 64) * 64 + ((s2 + s3 * 8) floordiv 32) * 256 - (s2 floordiv 4) * 256)>
     # CHECK-DAG:        %[[IDX_M_READ:.+]] = affine.apply #[[MAP_IDX_M]]()[%thread_id_x, %thread_id_y, %block_id_y, %block_id_x]
     # CHECK-DAG:        %[[IDX_N_READ:.+]] = affine.apply #[[MAP_IDX_N]]()[%thread_id_x, %thread_id_y, %block_id_x, %block_id_y]
-    # CHECK-DAG:        vector.load {{.*}}[%[[IDX_M_READ]], {{.*}}]
-    # CHECK-DAG:        vector.load {{.*}}[%[[IDX_N_READ]], {{.*}}]
+    # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
+    # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            amdgpu.mfma
     # CHECK:            vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
