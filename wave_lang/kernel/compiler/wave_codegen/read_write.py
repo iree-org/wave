@@ -1422,90 +1422,41 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         i32 = IntegerType.get_signless(32)
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
 
-    # Try iv-split for the source (global) address.
+    # Compute symbolic strides (shared by both iv-split and fallback paths).
     sym_stride_vals = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
     )
+    subs_map = add_emitter_subs(emitter, src_dynamic_vals_map_start)
+    strides = [gen_sympy_index(subs_map, s) for s in sym_stride_vals]
+
+    # Try iv-split: linearize with a single hoisted offset + scalar K stride.
     try:
         sym_strides_int = [int(subs_idxc(s)) for s in sym_stride_vals]
     except (TypeError, ValueError):
         sym_strides_int = []
 
+    src_offset = None
     if sym_strides_int:
-        total_offset = _try_iv_split_offset(
+        src_offset = _try_iv_split_offset(
             emitter,
             new_src_idx,
             sym_strides_int,
             src_dynamic_vals_map_start,
             use_subs_idxc=True,
         )
-        if total_offset is not None:
-            mask = _build_mask(
-                emitter,
-                src_idx,
-                elements_per_thread=1,
-                bounds=src_bounds,
-                dynamic_values=src_dynamic_vals_map_start,
-            )
-            if mask:
-                mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-                oob_index_value = _get_out_of_bounds_index(element_type)
-                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-                total_offset = arith_d.select(mask, total_offset, oob_index)
 
-            lin_strides = [
-                gen_sympy_index(
-                    add_emitter_subs(emitter, src_dynamic_vals_map_start), s
-                )
-                for s in sym_stride_vals
-            ]
-            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(lin_strides)
-            lin_src, _ = _linearize_memref(src, zero_indices, zero_indices, lin_strides)
-            lin_src = _cast_buffer_and_encode_stride(
-                lin_src, lin_strides, element_type, emitter
-            )
-
-            amdgpu_d.gather_to_lds(
-                src=lin_src,
-                src_indices=[total_offset],
-                dst=dst,
-                dst_indices=dst_index,
-                transfer_type=store_type,
-            )
-            return
-
-    # Fallback: original linearization path
-    src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, new_src_idx, src_dynamic_vals_map_start
-    )
-
-    strides = strides_from_symbolic_shape(
-        IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
-    )
-    strides = [
-        gen_sympy_index(add_emitter_subs(emitter, src_dynamic_vals_map_start), s)
-        for s in strides
-    ]
-
-    src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
-
-    valid_bytes_override = None
-    guard_condition = node.meta.get("g2s_guard", None)
-    if guard_condition is not None:
-        valid_bytes_override = _compute_branchless_valid_bytes(
-            emitter, src_symbolic_shape, element_type, guard_condition
+    if src_offset is not None:
+        zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(strides)
+        lin_src, _ = _linearize_memref(src, zero_indices, zero_indices, strides)
+    else:
+        src_index, src_index_wg, src_index_th = _build_start_indices(
+            emitter, new_src_idx, src_dynamic_vals_map_start
+        )
+        lin_src, src_offset = _linearize_memref(
+            src, src_index_wg, src_index_th, strides
         )
 
-    src = _cast_buffer_and_encode_stride(
-        src,
-        strides,
-        element_type,
-        (
-            valid_bytes_override
-            if valid_bytes_override is not None
-            else _compute_valid_bytes(src, element_type, src_symbolic_shape, emitter)
-        ),
-    )
+    lin_src = _cast_buffer_and_encode_stride(lin_src, strides, element_type, emitter)
 
     mask = _build_mask(
         emitter,
@@ -1518,11 +1469,11 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
         oob_index_value = _get_out_of_bounds_index(element_type)
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-        offset_th = arith_d.select(mask, offset_th, oob_index)
+        src_offset = arith_d.select(mask, src_offset, oob_index)
 
     amdgpu_d.gather_to_lds(
-        src=src,
-        src_indices=[offset_th],
+        src=lin_src,
+        src_indices=[src_offset],
         dst=dst,
         dst_indices=dst_index,
         transfer_type=store_type,
