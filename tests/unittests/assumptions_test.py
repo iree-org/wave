@@ -11,8 +11,8 @@ import unittest
 from wave_lang.kernel.lang import sym
 from wave_lang.kernel.wave.assumptions import Assumption
 from wave_lang.kernel.wave.utils.general_utils import evaluate_with_assumptions
+from wave_lang.kernel.wave.assumptions import get_divisibility_subs
 from wave_lang.kernel.wave.analysis.partition_strided_operators import (
-    _get_divisibility_subs,
     _simplify_expr,
 )
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -42,7 +42,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
         self.idxc = IndexingContext()
         self.idxc.__enter__()
         self.constraints = [Assumption(sympy.Eq(K % 32, 0))]
-        self.fwd, self.bwd = _get_divisibility_subs(self.constraints)
+        self.fwd, self.bwd = get_divisibility_subs(self.constraints)
 
     def tearDown(self):
         self.idxc.__exit__(None, None, None)
@@ -73,7 +73,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
 
     def testNoAssumptions(self):
         # Without assumptions, expressions pass through unchanged.
-        fwd, bwd = _get_divisibility_subs([])
+        fwd, bwd = get_divisibility_subs([])
         expr = sympy.floor(K / 32)
         result = _simplify_expr(expr, fwd, bwd)
         assert result == expr
@@ -84,7 +84,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
             Assumption(sympy.Eq(K % 32, 0)),
             Assumption(sympy.Eq(N % 16, 0)),
         ]
-        fwd, bwd = _get_divisibility_subs(constraints)
+        fwd, bwd = get_divisibility_subs(constraints)
         assert _simplify_expr(sympy.Mod(K, 32), fwd, bwd) == 0
         assert _simplify_expr(sympy.Mod(N, 16), fwd, bwd) == 0
         assert _simplify_expr(sympy.floor(N / 16), fwd, bwd) == N / 16
