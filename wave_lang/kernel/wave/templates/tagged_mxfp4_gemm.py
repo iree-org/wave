@@ -457,12 +457,17 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     }
     hyperparams.update(get_default_scheduling_params())
 
+    dynamic_symbols = [M, N, K]
+    for symbol in dynamic_symbols:
+        del hyperparams[symbol]
+
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         use_global_to_shared=True,
         minimize_shared_allocs=False,
+        dynamic_symbols=dynamic_symbols,
     )
 
     return gemm, options
