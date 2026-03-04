@@ -107,6 +107,11 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     # Compute thread-independent index as `orig_index - thread_dependent_index`
     # All thread symbols and dynamic should cancel-out in the result.
     diff = src - thread_dependent_index
+
+    # Fast path: if diff is zero, src has no WG symbols
+    if diff == 0:
+        return sympy.sympify(0), thread_dependent_index
+
     # Avoid sympy.simplify on Piecewise expressions — it recurses into boolean
     # condition simplification and can hang for complex dynamic-shape indices.
     # expand() handles basic polynomial cancellation and is O(fast).

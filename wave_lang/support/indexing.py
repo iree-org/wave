@@ -99,9 +99,12 @@ def piecewise_aware_subs(
     if isinstance(subs_dict, (list, tuple)):
         subs_dict = dict(subs_dict)
 
+    if expr.is_number:
+        return expr
+
     expr_syms = expr.free_symbols
-    subs_keys = set(subs_dict.keys())
-    matching = expr_syms & subs_keys
+    subs_keys = frozenset(subs_dict.keys())
+    matching = expr_syms.intersection(subs_keys)
     if not matching:
         return expr
 
