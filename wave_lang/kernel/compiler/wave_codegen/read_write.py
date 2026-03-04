@@ -75,6 +75,7 @@ from .emitter import (
     get_type_or_element_type,
     handle_op,
 )
+from ...wave.constraints import TilingConstraint
 
 
 def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:
@@ -706,15 +707,29 @@ def _try_iv_split_offset(
     use_subs_idxc : if True, apply ``subs_idxc`` before simplification
         (needed when expressions contain residual shape symbols).
     """
-    iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
-    if len(iv_syms) != 1:
-        return None
-
     ip = InsertionPoint.current
     owner = ip.block.owner
     if isinstance(owner, func_d.FuncOp):
         return None
     if owner.name != "scf.for":
+        return None
+
+    # Find the IV symbol for this scf.for directly from its block argument.
+    current_iv = owner.induction_variable
+
+    # do a reverse lookup of the dimension/symbol that the current IV is associated with
+    dim = next((d for d, v in emitter.induction_vars.items() if v == current_iv), None)
+    if dim is None:
+        return None
+    iv_sym = next(
+        (
+            c.induction_var
+            for c in emitter.constraints
+            if isinstance(c, TilingConstraint) and c.dim == dim
+        ),
+        None,
+    )
+    if iv_sym is None:
         return None
 
     step_int = _get_constant_value(owner.operands[2])
@@ -725,15 +740,7 @@ def _try_iv_split_offset(
     if len(start_exprs) != len(strides):
         return None
 
-    iv_sym = iv_syms[0]
-
-    # Symbolic linearity proof: substitute IV = step * j (j is a fresh
-    # integer symbol) keeping all other symbols (T0, WG, WAVE, ...) live.
-    # Because step is a concrete power-of-2 that aligns with tile sizes,
-    # floor/Mod sub-expressions collapse and sympy.simplify reduces the
-    # linearized offset to  c*j + f(T0, WG, ...).  Extracting the
-    # coefficient of j and verifying j doesn't appear in the remainder
-    # proves the stride is constant for all thread/wave/workgroup values.
+    # Symbolic linearity proof w.r.t. the current loop's IV only.
     _j = sympy.Symbol("_j", integer=True, nonnegative=True)
     iv_as_j = step_int * _j
     lin_sym = sympy.Integer(0)
@@ -753,7 +760,7 @@ def _try_iv_split_offset(
     if rem != 0:
         return None
 
-    iv_zero_subs = {sym: 0 for sym in iv_syms}
+    iv_zero_subs = {iv_sym: 0}
     index_no_iv = {}
     for dim, seq in index.items():
         start = _get_start_index(seq)
