@@ -24,7 +24,7 @@ namespace wave {
 /// vectorized. In case of a tie, take the dimension that is farther in the
 /// index dictionary, which is secretly a list. Return failure when the index
 /// sequence step cannot be evaluated statically.
-std::optional<uint64_t>
+std::optional<int64_t>
 getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                            mlir::DictionaryAttr indexDict,
                            wave::WaveHyperparameterAttr hyper);
@@ -63,6 +63,11 @@ llvm::LogicalResult computeWavesPerBlockFromConstraints(
         &waveConstraints,
     wave::WaveHyperparameterAttr hyperparams,
     llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
+
+/// Permute the shape according to the mapping.
+void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
+                  mlir::AffineMap map, bool inverse,
+                  llvm::SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape);
 
 } // namespace wave
 

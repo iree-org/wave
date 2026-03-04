@@ -109,15 +109,129 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
+def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
+    """Apply custom algebraic simplifications that sympy misses.
+
+    Two rewrites that sympy.simplify does not perform:
+
+    ``transform_mod``: pull a small constant addend out of Mod when every
+    other term is a multiple of the modulus divisor.
+    ``(floor(a)*4 + 3) % 16  ->  (floor(a)*4) % 16 + 3``
+
+    ``transform_floor``: drop a small rational addend inside floor when
+    it is strictly smaller than the denominator of the other term.
+    ``floor(floor(a)/3 + 1/6)  ->  floor(floor(a)/3)``
+    """
+
+    def _check_mul_integer(mul):
+        """Return the single positive numeric factor in *mul*, or None."""
+        ret = None
+        for arg in mul.args:
+            if arg.is_number:
+                if arg < 0:
+                    return None
+                if ret is not None:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def _check_mul_rational(mul):
+        """Return the single positive Rational factor in *mul*, or None."""
+        ret = None
+        for arg in mul.args:
+            if isinstance(arg, sympy.Rational):
+                if ret is not None:
+                    return None
+                if arg.p < 0 or arg.q < 0:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def transform_mod(expr):
+        if not isinstance(expr, sympy.Mod):
+            return None
+        p, q = expr.args
+        if not q.is_number or q < 0:
+            return None
+        if not isinstance(p, sympy.Add):
+            return None
+        c = None
+        terms = []
+        mult = None
+        for arg in p.args:
+            if arg.is_number:
+                if c is not None:
+                    return None
+                c = arg
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            m = _check_mul_integer(arg)
+            if (m is None) or (q % m != 0):
+                return None
+            mult = m if (mult is None) or (m < mult) else mult
+            terms.append(arg)
+        if c >= mult:
+            return None
+        return (sum(terms) % q) + c
+
+    def transform_floor(expr):
+        if not isinstance(expr, sympy.floor):
+            return None
+        inner = expr.args[0]
+        if not isinstance(inner, sympy.Add):
+            return None
+        c = None
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                if c is not None:
+                    return None
+                c = arg
+        if c is None:
+            return None
+        terms = []
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            r = _check_mul_rational(arg)
+            if r is None or r.p != 1:
+                return None
+            if r <= c:
+                return None
+            terms.append(arg)
+        return sympy.floor(sum(terms))
+
+    expr = expr.replace(lambda e: transform_mod(e) is not None, transform_mod)
+    expr = expr.replace(lambda e: transform_floor(e) is not None, transform_floor)
+    return expr
+
+
 _simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
 
 
 def simplify(expr: sympy.Expr) -> sympy.Expr:
-    """Simplify a sympy expression using interval arithmetic and sympy.simplify.
+    """Simplify a sympy expression using interval arithmetic and cancel.
 
-    Extends sympy.simplify with bounds-based reasoning that can resolve
+    Extends sympy.cancel with bounds-based reasoning that can resolve
     floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
-    sympy cannot handle.  Iterates to a fixed point.
+    sympy cannot handle, plus custom algebraic rewrites for Mod/floor
+    patterns.  Iterates to a fixed point.
+
+    Uses sympy.cancel instead of sympy.simplify because simplify tries 20+
+    strategies (trigsimp, combsimp, hyperexpand, ...) that are irrelevant for
+    integer floor/Mod arithmetic and can take 0.5s+ per expression.
 
     The cache maps both ``src -> dst`` and ``dst -> dst`` so that calling
     simplify on an already-simplified expression is a cache hit.
@@ -127,9 +241,12 @@ def simplify(expr: sympy.Expr) -> sympy.Expr:
     if expr in _simplify_cache:
         return _simplify_cache[expr]
     orig = expr
+    # Cheap flatten before the heavier fixed-point loop.
+    expr = sympy.expand(expr)
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
-        new_expr = sympy.simplify(new_expr)
+        new_expr = _custom_simplify_once(new_expr)
+        new_expr = sympy.cancel(new_expr)
         if new_expr == expr:
             break
         expr = new_expr

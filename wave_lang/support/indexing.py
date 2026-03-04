@@ -16,6 +16,7 @@ __all__ = [
     "IndexSymbol",
     "index_symbol",
     "index_expr",
+    "piecewise_aware_subs",
     "MMA_ACC_SYMBOL_NAME",
     "THREAD_SYMBOL_NAMES",
     "WORKGROUP_SYMBOL_NAMES",
@@ -56,6 +57,66 @@ class _IndexSymbolExpando:
 sym = _IndexSymbolExpando()
 
 
+def _subs_piecewise_walk(expr, subs_dict):
+    if isinstance(expr, sympy.Piecewise):
+        return sympy.Piecewise(
+            *[(e.subs(subs_dict), c.subs(subs_dict)) for e, c in expr.args]
+        )
+
+    if not isinstance(expr, sympy.Basic) or expr.is_Atom:
+        if isinstance(expr, sympy.Symbol) and expr in subs_dict:
+            return subs_dict[expr]
+        return expr
+
+    if not expr.has(sympy.Piecewise):
+        return expr.subs(subs_dict)
+
+    new_args = [_subs_piecewise_walk(arg, subs_dict) for arg in expr.args]
+    return expr.func(*new_args)
+
+
+def piecewise_aware_subs(
+    expr: "IndexExpr",
+    subs_dict,
+    simultaneous: bool = False,
+) -> "IndexExpr":
+    """Substitute into expr, handling Piecewise nodes efficiently.
+
+    Avoids sympy's expensive recursive boolean simplification in
+    Piecewise._eval_subs by substituting into each (value, condition) pair of a
+    Piecewise independently.
+
+    For expressions without Piecewise, delegates to sympy's normal subs().
+
+    subs_dict can be a dict or a list of (old, new) pairs, matching sympy convention.
+    """
+    if not isinstance(expr, sympy.Basic):
+        return expr
+
+    if simultaneous:
+        return expr.subs(subs_dict, simultaneous=True)
+
+    if isinstance(subs_dict, (list, tuple)):
+        subs_dict = dict(subs_dict)
+
+    expr_syms = expr.free_symbols
+    subs_keys = set(subs_dict.keys())
+    matching = expr_syms & subs_keys
+    if not matching:
+        return expr
+
+    filtered = {k: v for k, v in subs_dict.items() if k in matching}
+
+    if isinstance(expr, sympy.Piecewise):
+        return sympy.Piecewise(
+            *[(e.subs(filtered), c.subs(filtered)) for e, c in expr.args]
+        )
+    elif expr.has(sympy.Piecewise):
+        return _subs_piecewise_walk(expr, filtered)
+    else:
+        return expr.subs(filtered)
+
+
 @dataclass
 class IndexSequence:
     start: IndexExpr | int
@@ -68,8 +129,10 @@ class IndexSequence:
         map: dict[IndexExpr, IndexExpr],
         simultaneous: bool = False,
     ) -> int | IndexExpr:
-        if isinstance(value, (sympy.Basic, IndexSequence)):
-            return value.subs(map, simultaneous=simultaneous)  # type: ignore
+        if isinstance(value, IndexSequence):
+            return value.subs(map, simultaneous=simultaneous)
+        if isinstance(value, sympy.Basic):
+            return piecewise_aware_subs(value, map, simultaneous=simultaneous)
         return value
 
     def has(self, symbol: IndexSymbol) -> bool:
