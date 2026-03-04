@@ -287,7 +287,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
-    A and B are loaded from global to shared.
+    A is loaded from global to shared. B is shuffled and read from global memory directly to VGPRs.
     A and B scales are read from global memory using an e8m0 scale preshuffle mapping and directly stored to VGPRs.
 
 
