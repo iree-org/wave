@@ -626,99 +626,199 @@ def _resolve_symbolic_diff(raw_diff, has_complex_mapping, expected_vals=None):
     return nv
 
 
+def _do_merge(
+    lo_i, hi_i, merge_dim, read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint
+):
+    """Emit a wide read merging reads at lo_i and hi_i. Returns True on success."""
+    _, lo_phys, lo_custom, lo_node = read_infos[lo_i]
+    _, _, hi_custom, hi_node = read_infos[hi_i]
+    new_ept = 2 * ept
+    element_type = lo_custom.type.dtype
+    if new_ept > hw_constraint.max_elems_per_load(element_type):
+        return False
+    wide_mask = _build_wide_mask_expr(
+        [(0, ept, lo_custom), (ept, ept, hi_custom)],
+        symbolic_shape,
+        new_ept,
+    )
+    with lo_custom.graph.inserting_before(lo_node):
+        new_index = {
+            dim: IndexSequence(
+                lo_phys[dim],
+                new_ept if dim == merge_dim else 1,
+                1,
+            )
+            for dim in symbolic_dims
+        }
+        merged_read = _emit_wide_read(
+            lo_custom, new_index, new_ept, lo_node, mask_expr=wide_mask
+        )
+        lo_extract = _emit_extract_slice(
+            merged_read, 0, ept, lo_custom, lo_node, symbolic_shape
+        )
+        hi_extract = _emit_extract_slice(
+            merged_read, ept, ept, hi_custom, hi_node, symbolic_shape
+        )
+    lo_custom.replace_all_uses_with(lo_extract)
+    hi_custom.replace_all_uses_with(hi_extract)
+    lo_custom.graph.erase_node(lo_node)
+    hi_custom.graph.erase_node(hi_node)
+    return True
+
+
+def _find_merge_dim_from_diffs(dim_diffs, ept, symbolic_dims):
+    """Return the single dimension whose diff equals ept, or None."""
+    merge_dim = None
+    for dim in symbolic_dims:
+        d = dim_diffs[dim]
+        if d == ept:
+            if merge_dim is not None:
+                return None
+            merge_dim = dim
+        elif d != 0:
+            return None
+    return merge_dim
+
+
+# Probe value sets for numeric offset evaluation.  Diverse primes avoid
+# floor/Mod aliasing; all positive (symbols are nonneg).
+_MERGE_PROBES = [
+    lambda i: 137 + i * 31,
+    lambda i: 251 + i * 47,
+    lambda i: 503 + i * 17,
+]
+
+
+def _eval_expr(expr, probe_map):
+    """Evaluate a sympy expression with concrete symbol values."""
+    if isinstance(expr, (int, float)):
+        return int(expr)
+    return int(expr.xreplace(probe_map))
+
+
 def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint):
     """Merge pairs of reads whose flat offsets differ by exactly ``ept``.
 
     Returns ``(merged_indices, did_merge)`` where *merged_indices* is
     the set of read_infos indices that were consumed.
+
+    Evaluates each offset independently with concrete probe values and
+    uses dict lookup for O(n) candidate matching, avoiding O(n²)
+    symbolic diff resolution.
     """
+    n = len(read_infos)
+    if n < 2:
+        return set(), False
+
     merged = set()
     did_merge = False
 
-    for i in range(len(read_infos)):
-        if i in merged:
+    # Resolve all flat offsets and per-dim physical starts once.
+    resolved_flat = [subs_idxc(info[0]) for info in read_infos]
+    resolved_phys = [
+        {dim: subs_idxc(info[1][dim]) for dim in symbolic_dims} for info in read_infos
+    ]
+
+    # Collect free symbols across all expressions.
+    all_free = set()
+    for expr in resolved_flat:
+        if hasattr(expr, "free_symbols"):
+            all_free.update(expr.free_symbols)
+    for phys in resolved_phys:
+        for expr in phys.values():
+            if hasattr(expr, "free_symbols"):
+                all_free.update(expr.free_symbols)
+    free_list = sorted(all_free, key=str)
+
+    # Build probe maps.
+    probe_maps = [{s: gen(i) for i, s in enumerate(free_list)} for gen in _MERGE_PROBES]
+
+    # Evaluate flat offsets with first probe for candidate matching.
+    num_flat_0 = [None] * n
+    for i in range(n):
+        try:
+            num_flat_0[i] = _eval_expr(resolved_flat[i], probe_maps[0])
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    # Evaluate per-dim physical starts with first probe.
+    num_phys_0 = [None] * n
+    for i in range(n):
+        if num_flat_0[i] is None:
             continue
-        for j in range(i + 1, len(read_infos)):
-            if j in merged:
-                continue
-            off1, phys1, custom1, node1 = read_infos[i]
-            off2, phys2, custom2, node2 = read_infos[j]
+        try:
+            num_phys_0[i] = {
+                dim: _eval_expr(resolved_phys[i][dim], probe_maps[0])
+                for dim in symbolic_dims
+            }
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
 
-            raw_diff = subs_idxc(off2 - off1)
-            has_complex_mapping = (
-                custom1.mapping is not None and not custom1.has_identity_mapping()
-            )
-            diff = _resolve_symbolic_diff(
-                raw_diff, has_complex_mapping, expected_vals={ept, -ept}
-            )
-            if diff is None:
-                continue
+    # Build dict: numeric_flat_offset -> [indices] for O(1) partner lookup.
+    from collections import defaultdict
 
-            if diff == ept:
-                lo_phys, hi_phys = phys1, phys2
-                lo_custom, hi_custom = custom1, custom2
-                lo_node, hi_node = node1, node2
-            elif diff == -ept:
-                lo_phys, hi_phys = phys2, phys1
-                lo_custom, hi_custom = custom2, custom1
-                lo_node, hi_node = node2, node1
-            else:
-                continue
+    offset_map = defaultdict(list)
+    for i in range(n):
+        if num_flat_0[i] is not None:
+            offset_map[num_flat_0[i]].append(i)
 
-            merge_dim = None
-            for dim in symbolic_dims:
-                raw_d = subs_idxc(hi_phys[dim] - lo_phys[dim])
-                d = _resolve_symbolic_diff(
-                    raw_d, has_complex_mapping, expected_vals={ept, 0}
-                )
-                if d is None:
-                    merge_dim = None
-                    break
-                if d == ept:
-                    merge_dim = dim
-                elif d != 0:
-                    merge_dim = None
-                    break
-            if merge_dim is None:
-                continue
+    def _verify_with_extra_probes(lo_i, hi_i, expected_flat_diff, expected_dim_diffs):
+        """Confirm diffs are consistent across additional probe sets."""
+        for probe in probe_maps[1:]:
+            try:
+                flat_lo = _eval_expr(resolved_flat[lo_i], probe)
+                flat_hi = _eval_expr(resolved_flat[hi_i], probe)
+                if flat_hi - flat_lo != expected_flat_diff:
+                    return False
+                for dim in symbolic_dims:
+                    d_lo = _eval_expr(resolved_phys[lo_i][dim], probe)
+                    d_hi = _eval_expr(resolved_phys[hi_i][dim], probe)
+                    if d_hi - d_lo != expected_dim_diffs[dim]:
+                        return False
+            except (TypeError, ValueError, ZeroDivisionError):
+                return False
+        return True
 
-            new_ept = 2 * ept
-            element_type = lo_custom.type.dtype
-            if new_ept > hw_constraint.max_elems_per_load(element_type):
-                continue
-            wide_mask = _build_wide_mask_expr(
-                [(0, ept, lo_custom), (ept, ept, hi_custom)],
-                symbolic_shape,
-                new_ept,
-            )
-            with lo_custom.graph.inserting_before(lo_node):
-                new_index = {
-                    dim: IndexSequence(
-                        lo_phys[dim],
-                        new_ept if dim == merge_dim else 1,
-                        1,
-                    )
+    for i in range(n):
+        if i in merged or num_flat_0[i] is None:
+            continue
+        vi = num_flat_0[i]
+        found = False
+        for target, i_is_lo in ((vi + ept, True), (vi - ept, False)):
+            for j in offset_map.get(target, []):
+                if j in merged or j == i:
+                    continue
+                if num_phys_0[j] is None:
+                    continue
+                lo_i, hi_i = (i, j) if i_is_lo else (j, i)
+                # Per-dim check with first probe.
+                dim_diffs = {
+                    dim: num_phys_0[hi_i][dim] - num_phys_0[lo_i][dim]
                     for dim in symbolic_dims
                 }
-                merged_read = _emit_wide_read(
-                    lo_custom, new_index, new_ept, lo_node, mask_expr=wide_mask
-                )
-
-                lo_extract = _emit_extract_slice(
-                    merged_read, 0, ept, lo_custom, lo_node, symbolic_shape
-                )
-                hi_extract = _emit_extract_slice(
-                    merged_read, ept, ept, hi_custom, hi_node, symbolic_shape
-                )
-
-            lo_custom.replace_all_uses_with(lo_extract)
-            hi_custom.replace_all_uses_with(hi_extract)
-            lo_custom.graph.erase_node(lo_node)
-            hi_custom.graph.erase_node(hi_node)
-
-            merged.update({i, j})
-            did_merge = True
-            break
+                merge_dim = _find_merge_dim_from_diffs(dim_diffs, ept, symbolic_dims)
+                if merge_dim is None:
+                    continue
+                # Verify with additional probes.
+                flat_diff = num_flat_0[hi_i] - num_flat_0[lo_i]
+                if not _verify_with_extra_probes(lo_i, hi_i, flat_diff, dim_diffs):
+                    continue
+                if _do_merge(
+                    lo_i,
+                    hi_i,
+                    merge_dim,
+                    read_infos,
+                    ept,
+                    symbolic_dims,
+                    symbolic_shape,
+                    hw_constraint,
+                ):
+                    merged.update({i, j})
+                    did_merge = True
+                    found = True
+                    break
+            if found:
+                break
 
     return merged, did_merge
 
@@ -739,25 +839,63 @@ def _multiway_coalesce(
     if len(unmerged_infos) < 2:
         return False
 
+    # Pre-evaluate flat offsets with probe values to avoid symbolic diffs.
+    resolved_offs = [subs_idxc(info[0]) for info in unmerged_infos]
+    all_free = set()
+    for expr in resolved_offs:
+        if hasattr(expr, "free_symbols"):
+            all_free.update(expr.free_symbols)
+    free_list = sorted(all_free, key=str)
+    probe0 = {s: _MERGE_PROBES[0](i) for i, s in enumerate(free_list)}
+    extra_probes = [
+        {s: gen(i) for i, s in enumerate(free_list)} for gen in _MERGE_PROBES[1:]
+    ]
+    num_offs = [None] * len(unmerged_infos)
+    for i, expr in enumerate(resolved_offs):
+        try:
+            num_offs[i] = _eval_expr(expr, probe0)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
     coalesced_any = False
     coalesced_set: set[int] = set()
     for anchor_idx in range(len(unmerged_infos)):
         if anchor_idx in coalesced_set:
             continue
-        off_a, phys_a, custom_a, node_a = unmerged_infos[anchor_idx]
+        if num_offs[anchor_idx] is None:
+            continue
+        _, phys_a, custom_a, node_a = unmerged_infos[anchor_idx]
 
         group = [(anchor_idx, node_a, custom_a, 0, phys_a)]
         for probe_idx in range(len(unmerged_infos)):
             if probe_idx == anchor_idx or probe_idx in coalesced_set:
                 continue
-            off_p, _, custom_p, node_p = unmerged_infos[probe_idx]
-            raw_diff = subs_idxc(off_p - off_a)
-            diff_val = _numeric_eval_constant(raw_diff)
-            if diff_val is None:
+            if num_offs[probe_idx] is None:
                 continue
-            if 0 < diff_val < max_load_width:
-                _, _, _, phys_p = unmerged_infos[probe_idx]
-                group.append((probe_idx, node_p, custom_p, diff_val, phys_p))
+            diff_val = num_offs[probe_idx] - num_offs[anchor_idx]
+            if not (0 < diff_val < max_load_width):
+                continue
+            # Verify diff is constant across extra probes.
+            consistent = True
+            for ep in extra_probes:
+                try:
+                    va = _eval_expr(resolved_offs[anchor_idx], ep)
+                    vp = _eval_expr(resolved_offs[probe_idx], ep)
+                    if vp - va != diff_val:
+                        consistent = False
+                        break
+                except (TypeError, ValueError, ZeroDivisionError):
+                    consistent = False
+                    break
+            if not consistent:
+                continue
+            _, custom_p, node_p = (
+                unmerged_infos[probe_idx][1],
+                unmerged_infos[probe_idx][2],
+                unmerged_infos[probe_idx][3],
+            )
+            _, _, _, phys_p = unmerged_infos[probe_idx]
+            group.append((probe_idx, node_p, custom_p, diff_val, phys_p))
 
         if len(group) < 2:
             continue
@@ -862,16 +1000,28 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
             )
             read_infos.append((flat_offset, phys_start, custom, node))
 
+        import time as _time
+
+        print(f"[DEBUG merge] ept={ept} n_reads={len(read_infos)}", flush=True)
+        _t0 = _time.time()
         merged, did_merge = _pairwise_merge(
             read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint
+        )
+        print(
+            f"[DEBUG merge] _pairwise_merge {_time.time()-_t0:.3f}s merged={len(merged)} did_merge={did_merge}",
+            flush=True,
         )
         merged_any |= did_merge
 
         # Only ept==1 (byte) reads need multi-way coalescing; wider reads
         # are already handled by the pairwise merge above.
         if ept == 1 and len(read_infos) >= 2:
+            _t0 = _time.time()
             merged_any |= _multiway_coalesce(
                 read_infos, merged, reads, symbolic_dims, symbolic_shape, hw_constraint
+            )
+            print(
+                f"[DEBUG merge] _multiway_coalesce {_time.time()-_t0:.3f}s", flush=True
             )
 
     return merged_any
