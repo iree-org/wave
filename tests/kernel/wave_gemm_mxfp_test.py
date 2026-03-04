@@ -839,6 +839,7 @@ def testScaledGemmMXFP4PreshuffleMacrotiles(
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 
+
 @require_e2e
 @require_cdna4
 @pytest.mark.timeout(900)
@@ -897,6 +898,7 @@ MACROTILES_PRESHUFFLE_8WAVE_PINGPONG = [
     (64, 128, 256),
 ]
 
+
 @require_e2e
 @require_cdna4
 @pytest.mark.parametrize(
@@ -912,7 +914,6 @@ def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
-    use_water_backend: bool,
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule and scale preshuffling.
     (A&B scales preshuffled, A and B global-to-LDS).
