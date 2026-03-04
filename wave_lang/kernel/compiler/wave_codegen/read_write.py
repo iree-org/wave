@@ -828,7 +828,7 @@ def _try_iv_split_offset(
         (needed when expressions contain residual shape symbols).
     """
     iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
-    if not iv_syms:
+    if len(iv_syms) != 1:
         return None
 
     ip = InsertionPoint.current
