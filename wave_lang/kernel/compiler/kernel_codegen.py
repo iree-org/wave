@@ -64,6 +64,20 @@ from .builder import (
 from .utils import strides_from_symbolic_shape
 
 
+def get_dynamic_stride_arg_count(
+    dynamic_strides: bool, buffer_bindings: list["BindingDesc"]
+) -> int:
+    """
+    Number of stride arguments when using dynamic strides (leading dims only; innermost is unit stride).
+    Returns 0 when dynamic_strides is False.
+    """
+    if not dynamic_strides:
+        return 0
+    return sum(
+        max(0, len(b.kernel_buffer_type.symbolic_shape) - 1) for b in buffer_bindings
+    )
+
+
 def create_argument_locations(bindings: list["BindingDesc"]) -> list[Location]:
     """
     Create location information for function arguments based on binding information.

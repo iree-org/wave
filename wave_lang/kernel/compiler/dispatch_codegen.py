@@ -38,6 +38,7 @@ from .kernel_codegen import (
     BoundKernelSignature,
     KernelSignature,
     create_argument_locations,
+    get_dynamic_stride_arg_count,
 )
 from .debug_attrs import create_debug_info_for_kernel
 from .._support.location import CapturedLocation
@@ -124,13 +125,9 @@ class StreamExecutable:
 
         linear_bindings = sig.linear_bindings
 
-        # Dynamic strides: add one index argument per dimension per buffer.
-        stride_arg_count = 0
-        if dynamic_strides:
-            stride_arg_count = sum(
-                len(b.kernel_buffer_type.symbolic_shape)
-                for b in sig.kernel_buffer_bindings
-            )
+        stride_arg_count = get_dynamic_stride_arg_count(
+            dynamic_strides, sig.kernel_buffer_bindings
+        )
 
         dynamic_dim_indices = {
             "begin": len(kb_input_bindings)

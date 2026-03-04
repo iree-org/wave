@@ -26,24 +26,22 @@ def test_dynamic_strides_gemm():
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
 
-    # Export must accept 6 workload args (3 dynamic dim placeholders + 6 stride args when wave_runtime;
-    # for this gemm with no dynamic dims, all 6 are stride args).
+    # With dynamic_dims=False there are no dynamic dim placeholders; export has 3 stride args only.
+    # CHECK: stream.executable.export public @gemm workgroups(%{{.*}}: index, %{{.*}}: index, %{{.*}}: index)
 
-    # CHECK: stream.executable.export public @gemm workgroups(%{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index)
-
-    # Kernel func: 3 bindings + 6 index (stride) arguments.
-    # CHECK: func.func @gemm(%{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index)
+    # Kernel func: 3 bindings + 3 index (stride) arguments (one leading stride per buffer).
+    # CHECK: func.func @gemm(%{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index)
 
     # First buffer: reinterpret_cast uses stride arg for leading dim, 1 for innermost (vector.load requirement).
     # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg3, 1]
     # CHECK-SAME: memref<f16> to memref<1024x1024xf16, strided<[?, 1]>>
 
-    # Second buffer: strides [%arg5, 1]
-    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg5, 1]
+    # Second buffer: strides [%arg4, 1]
+    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg4, 1]
     # CHECK-SAME: memref<f16> to memref<1024x1024xf16, strided<[?, 1]>>
 
-    # Third buffer: strides [%arg7, 1]
-    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg7, 1]
+    # Third buffer: strides [%arg5, 1]
+    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg5, 1]
     # CHECK-SAME: memref<f32> to memref<1024x1024xf32, strided<[?, 1]>>
 
     # vector.load on input memrefs must show strided<[?, 1]> type (dynamic strides).

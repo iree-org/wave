@@ -154,10 +154,11 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         # Dynamic strides only with Wave runtime and LLVM backend (not ASM).
+        # Stride args only for leading dimensions (innermost always has unit stride).
         stride_arg_count = 0
         if self.options.dynamic_strides:
             stride_arg_count = sum(
-                len(b.kernel_buffer_type.symbolic_shape)
+                max(0, len(b.kernel_buffer_type.symbolic_shape) - 1)
                 for b in self.root_sig.sig.kernel_buffer_bindings
             )
             if stride_arg_count > 0:
@@ -211,17 +212,17 @@ class WaveEmitter:
                 dynamic_strides = self.options.dynamic_strides and stride_arg_count > 0
                 if dynamic_strides:
                     # vector.load requires the most minor (innermost) dim to have unit stride.
-                    # Use dynamic strides only for leading dims; keep innermost stride static 1.
+                    # Only leading (rank - 1) strides are passed; innermost is always 1.
+                    leading_count = max(0, rank - 1)
                     stride_args = list(
                         entry_block.arguments[
-                            stride_arg_offset : stride_arg_offset + rank
+                            stride_arg_offset : stride_arg_offset + leading_count
                         ]
                     )
-                    stride_arg_offset += rank
+                    stride_arg_offset += leading_count
                     dyn_stride_sentinel = MemRefType.get_dynamic_stride_or_offset()
-                    # Leading dims use dynamic stride args; innermost is always 1 (vector.load requirement).
                     static_strides = [dyn_stride_sentinel] * (rank - 1) + [1]
-                    dyn_strides = list(stride_args[:-1]) + [
+                    dyn_strides = list(stride_args) + [
                         arith_d.constant(IndexType.get(), 1)
                     ]
                 else:

@@ -35,6 +35,7 @@ from .kernel_codegen import (
     BindingDesc,
     KernelSignature,
     create_argument_locations,
+    get_dynamic_stride_arg_count,
 )
 from ..wave.constraints import DeviceConstraint
 from .host_utils import HostSignature, split_input_tensors, merge_output_slices
@@ -160,15 +161,11 @@ def isolated_test_call(
 
                 arg_dim_mapping[dim_symbol] = (arg_idx, dim_idx)
 
-        # Generate unique stride arguments for each buffer dimension.
-        stride_arg_count = 0
-        if dynamic_strides:
-            stride_arg_count = sum(
-                len(b.kernel_buffer_type.symbolic_shape)
-                for b in host_sig.buffer_bindings
-            )
-            if stride_arg_count > 0:
-                input_tensors += [IndexType.get()] * stride_arg_count
+        stride_arg_count = get_dynamic_stride_arg_count(
+            dynamic_strides, host_sig.buffer_bindings
+        )
+        if stride_arg_count > 0:
+            input_tensors += [IndexType.get()] * stride_arg_count
 
         if async_dispatch:
             fence_type = IrType.parse("!hal.fence")

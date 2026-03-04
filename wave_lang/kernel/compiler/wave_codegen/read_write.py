@@ -499,7 +499,7 @@ def _create_vec_read_write(
     stride_values = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
-    if is_global_mem and not is_read and emitter.options.dynamic_strides:
+    if emitter.options.dynamic_strides:
         strides = _get_strides_from_memref(mem)
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
