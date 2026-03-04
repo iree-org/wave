@@ -513,10 +513,17 @@ def _build_wide_mask_expr(sub_reads, symbolic_shape, wide_ept):
     """
     from ..._support.indexing import IndexingContext
 
-    masks = [
-        (offset, size, _flatten_bounds_to_mask_expr(custom, symbolic_shape))
-        for offset, size, custom in sub_reads
-    ]
+    from ..._support.indexing import index_symbol
+
+    masks = []
+    for offset, size, custom in sub_reads:
+        existing = getattr(custom.fx_node, "precomputed_mask_expr", None)
+        if existing is not None:
+            masks.append((offset, size, existing))
+        else:
+            masks.append(
+                (offset, size, _flatten_bounds_to_mask_expr(custom, symbolic_shape))
+            )
 
     if not any(m is not None for _, _, m in masks):
         return None
@@ -531,7 +538,14 @@ def _build_wide_mask_expr(sub_reads, symbolic_shape, wide_ept):
             sympy.GreaterThan(iota, offset) if offset > 0 else sympy.true,
             sympy.StrictLessThan(iota, upper),
         )
-        bound_cond = mask if mask is not None else sympy.true
+        if mask is not None:
+            # Remap any iota from a previous merge level to the new wide iota.
+            old_iota_sym = index_symbol(f"$IOTA{size}")
+            if mask.has(old_iota_sym):
+                mask = mask.subs(old_iota_sym, iota - offset)
+            bound_cond = mask
+        else:
+            bound_cond = sympy.true
         terms.append(sympy.And(lane_cond, bound_cond))
 
     return functools.reduce(sympy.Or, terms)
@@ -597,8 +611,6 @@ def _group_reads_by_memory(
             if not isinstance(custom, Read):
                 continue
             if custom.mapping_dynamic_vals:
-                continue
-            if getattr(node, "precomputed_mask_expr", None) is not None:
                 continue
             key = (custom.memory, custom.elements_per_thread, region_id)
             groups[key].append(node)
@@ -1002,7 +1014,10 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
 
         import time as _time
 
-        print(f"[DEBUG merge] ept={ept} n_reads={len(read_infos)}", flush=True)
+        print(
+            f"[DEBUG merge] mem={memory.fx_node.name} ept={ept} region={_region} n_reads={len(read_infos)}",
+            flush=True,
+        )
         _t0 = _time.time()
         merged, did_merge = _pairwise_merge(
             read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint
