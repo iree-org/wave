@@ -39,7 +39,7 @@ def _get_max_tile_size(
     return ret
 
 
-def _is_divisible(
+def is_divisible(
     dim: IndexSymbol,
     tile_size: IndexExpr,
     fwd: list[tuple[sympy.Symbol, sympy.Expr]],
@@ -86,7 +86,7 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
                 if (
                     isinstance(c, DistributionConstraint)
                     and c.dim in bounds
-                    and _is_divisible(c.dim, c.tile_size, fwd)
+                    and is_divisible(c.dim, c.tile_size, fwd)
                 ):
                     del bounds[c.dim]
             bounds = bounds or None
