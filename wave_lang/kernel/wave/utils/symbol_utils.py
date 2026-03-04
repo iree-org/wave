@@ -181,7 +181,7 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
                 return None
             mult = m if (mult is None) or (m < mult) else mult
             terms.append(arg)
-        if c >= mult:
+        if c is None or mult is None or c >= mult:
             return None
         return (sum(terms) % q) + c
 
