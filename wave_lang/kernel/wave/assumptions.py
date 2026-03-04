@@ -9,7 +9,7 @@ from typing import Sequence
 
 import sympy
 
-from .._support.indexing import IndexExpr
+from .._support.indexing import IndexExpr, subs_idxc
 
 
 @dataclass
@@ -63,7 +63,11 @@ def get_divisibility_subs(
         if rhs != 0 or not isinstance(lhs, sympy.Mod):
             continue
         sym, divisor = lhs.args
-        if not sym.is_Symbol or not divisor.is_Integer:
+        if not sym.is_Symbol:
+            continue
+        # Resolve symbolic divisors (e.g. BLOCK_M -> 32) via IndexingContext.
+        divisor = subs_idxc(divisor)
+        if not divisor.is_Integer:
             continue
         # Bail if the symbol may be negative: floor/Mod semantics differ
         # between Euclidean and truncated division for negative operands.

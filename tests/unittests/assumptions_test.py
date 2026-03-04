@@ -149,6 +149,15 @@ class IsDivisibleTest(unittest.TestCase):
         assert is_divisible(K, 256, fwd)
         assert not is_divisible(M, 256, fwd)
 
+    def testSymbolicDivisor(self):
+        # Assumption uses symbolic BLOCK_M; resolved to 128 via idxc.subs.
+        BLOCK_M = sym.BLOCK_M
+        self.idxc.subs = {BLOCK_M: 128}
+        constraints = [Assumption(sympy.Eq(M % BLOCK_M, 0))]
+        fwd, _ = get_divisibility_subs(constraints)
+        assert is_divisible(M, 128, fwd)
+        assert not is_divisible(M, 256, fwd)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
