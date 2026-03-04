@@ -235,10 +235,14 @@ def get_gather_to_shared_config(
     # We need to adjust the number of loads and elements per thread if the
     # deduced GatherToLDS width is not equal to the original vector width.
     if vector_width > load_width:
-        ratio = vector_width // load_width
-        logger.info(f"ratio={ratio}")
-        expected_number_of_loads *= ratio
-        elements_per_thread //= ratio
+        elements_per_thread = load_width // bitwidth
+        expected_number_of_loads = ceildiv(
+            total_number_of_elements, elements_per_thread * total_number_of_threads
+        )
+        logger.info(
+            f"adjusted elements_per_thread={elements_per_thread}, "
+            f"expected_number_of_loads={expected_number_of_loads}"
+        )
     else:
         ratio = load_width // vector_width
         logger.info(f"ratio={1/ratio}")
