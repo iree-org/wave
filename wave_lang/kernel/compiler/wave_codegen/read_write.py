@@ -699,7 +699,18 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
-    if mapping:
+    is_global_mem = kb_src.type.memory_space is None
+    buffer_ops_enabled = emitter.options.use_buffer_ops and is_global_mem
+
+    precomputed_mask_expr = getattr(node, "precomputed_mask_expr", None)
+    if precomputed_mask_expr is not None and not buffer_ops_enabled:
+        mask = gen_sympy_index(add_emitter_subs(emitter), precomputed_mask_expr)
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        if mask.type != mask_vec_type:
+            mask = vector_d.broadcast(mask_vec_type, mask)
+    elif mapping:
         transformed_index = transform_index_on_mapping(
             mapping, input_shape, index, is_read=True
         )
