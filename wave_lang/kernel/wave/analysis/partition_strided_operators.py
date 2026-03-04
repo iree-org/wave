@@ -29,7 +29,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
-from ..assumptions import Assumption
+from ..assumptions import get_divisibility_subs
 from ..constraints import Constraint
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.tag_utils import propagate_tag
@@ -483,10 +483,8 @@ def _flatten_bounds_to_mask_expr(
         start = (
             index[dim].start if isinstance(index[dim], IndexSequence) else index[dim]
         )
-        if isinstance(start, int):
-            start = sympy.Integer(start)
-        if isinstance(bound, int):
-            bound = sympy.Integer(bound)
+        start = sympy.sympify(start)
+        bound = sympy.sympify(bound)
         conditions.append(sympy.StrictLessThan(start, bound))
 
     if not conditions:
@@ -929,52 +927,6 @@ def partition_gather_like_ops(
             custom.erase()
 
 
-SubstList = list[tuple[sympy.Symbol, sympy.Expr]]
-
-
-def _get_divisibility_subs(
-    constraints: Sequence[Constraint],
-) -> tuple[SubstList, SubstList]:
-    """Extract divisibility assumptions into forward/backward substitution lists.
-
-    For each ``Assumption(Eq(Mod(S, d), 0))`` we introduce a fresh integer
-    symbol ``S_div_d`` and build:
-      forward:  S  -> d * S_div_d
-      backward: S_div_d -> S / d
-    Applying forward subs lets sympy resolve ``Mod(S, d)`` to 0 and
-    ``floor(S / d)`` to ``S_div_d``, then backward subs restores the
-    original symbols.
-    """
-    forward: list[tuple[sympy.Symbol, sympy.Expr]] = []
-    backward: list[tuple[sympy.Symbol, sympy.Expr]] = []
-    for c in constraints:
-        if not isinstance(c, Assumption):
-            continue
-        expr = c.expr
-        if not isinstance(expr, sympy.Eq):
-            continue
-        lhs, rhs = expr.args
-        # Match Eq(Mod(S, d), 0).
-        if rhs != 0 or not isinstance(lhs, sympy.Mod):
-            continue
-        sym, divisor = lhs.args
-        if not sym.is_Symbol or not divisor.is_Integer:
-            continue
-        # Bail if the symbol may be negative: floor/Mod semantics differ
-        # between Euclidean and truncated division for negative operands.
-        if not sym.is_nonnegative:
-            continue
-        div_sym = sympy.Symbol(
-            f"_{sym.name}_div_{divisor}",
-            integer=True,
-            nonnegative=sym.is_nonnegative,
-            positive=sym.is_positive,
-        )
-        forward.append((sym, divisor * div_sym))
-        backward.append((div_sym, sym / divisor))
-    return forward, backward
-
-
 def _simplify_expr(
     expr: sympy.Expr,
     fwd: list[tuple[sympy.Symbol, sympy.Expr]],
@@ -1052,7 +1004,7 @@ def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = (
     This normalises indices once so downstream passes (contiguity checks,
     merge, partition) don't each pay the simplification cost independently.
     """
-    fwd, bwd = _get_divisibility_subs(constraints)
+    fwd, bwd = get_divisibility_subs(constraints)
     for subgraph in trace.region_graph.subgraphs.values():
         for node in subgraph.nodes:
             custom = get_custom(node)

@@ -11,8 +11,9 @@ import unittest
 from wave_lang.kernel.lang import sym
 from wave_lang.kernel.wave.assumptions import Assumption
 from wave_lang.kernel.wave.utils.general_utils import evaluate_with_assumptions
+from wave_lang.kernel.wave.assumptions import get_divisibility_subs
+from wave_lang.kernel.wave.generate_bounds_exprs import is_divisible
 from wave_lang.kernel.wave.analysis.partition_strided_operators import (
-    _get_divisibility_subs,
     _simplify_expr,
 )
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -42,7 +43,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
         self.idxc = IndexingContext()
         self.idxc.__enter__()
         self.constraints = [Assumption(sympy.Eq(K % 32, 0))]
-        self.fwd, self.bwd = _get_divisibility_subs(self.constraints)
+        self.fwd, self.bwd = get_divisibility_subs(self.constraints)
 
     def tearDown(self):
         self.idxc.__exit__(None, None, None)
@@ -73,7 +74,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
 
     def testNoAssumptions(self):
         # Without assumptions, expressions pass through unchanged.
-        fwd, bwd = _get_divisibility_subs([])
+        fwd, bwd = get_divisibility_subs([])
         expr = sympy.floor(K / 32)
         result = _simplify_expr(expr, fwd, bwd)
         assert result == expr
@@ -84,7 +85,7 @@ class DivisibilityAssumptionTest(unittest.TestCase):
             Assumption(sympy.Eq(K % 32, 0)),
             Assumption(sympy.Eq(N % 16, 0)),
         ]
-        fwd, bwd = _get_divisibility_subs(constraints)
+        fwd, bwd = get_divisibility_subs(constraints)
         assert _simplify_expr(sympy.Mod(K, 32), fwd, bwd) == 0
         assert _simplify_expr(sympy.Mod(N, 16), fwd, bwd) == 0
         assert _simplify_expr(sympy.floor(N / 16), fwd, bwd) == N / 16
@@ -93,6 +94,69 @@ class DivisibilityAssumptionTest(unittest.TestCase):
         # floor(K/32) + Mod(K, 32) -> K/32 when 32 | K.
         expr = sympy.floor(K / 32) + sympy.Mod(K, 32)
         assert self._simplify(expr) == K / 32
+
+
+class IsDivisibleTest(unittest.TestCase):
+    """Test that is_divisible proves ceiling(dim/tile)*tile == dim."""
+
+    def setUp(self):
+        self.idxc = IndexingContext()
+        self.idxc.__enter__()
+
+    def tearDown(self):
+        self.idxc.__exit__(None, None, None)
+
+    def testExactMatch(self):
+        # K % 256 == 0 with tile=256 -> divisible.
+        fwd, _ = get_divisibility_subs([Assumption(sympy.Eq(K % 256, 0))])
+        assert is_divisible(K, 256, fwd)
+
+    def testSubMultipleDivisor(self):
+        # K % 32 == 0 with tile=32 -> divisible.
+        fwd, _ = get_divisibility_subs([Assumption(sympy.Eq(K % 32, 0))])
+        assert is_divisible(K, 32, fwd)
+
+    def testWeakAssumption(self):
+        # N % 32 == 0 with tile=256 -> NOT divisible (32 | N does not imply 256 | N).
+        fwd, _ = get_divisibility_subs([Assumption(sympy.Eq(N % 32, 0))])
+        assert not is_divisible(N, 256, fwd)
+
+    def testStrongerAssumption(self):
+        # N % 256 == 0 with tile=256 -> divisible.
+        fwd, _ = get_divisibility_subs([Assumption(sympy.Eq(N % 256, 0))])
+        assert is_divisible(N, 256, fwd)
+
+    def testAssumptionStrongerThanTile(self):
+        # M % 256 == 0 with tile=128 -> divisible (256 | M implies 128 | M).
+        fwd, _ = get_divisibility_subs([Assumption(sympy.Eq(M % 256, 0))])
+        assert is_divisible(M, 128, fwd)
+
+    def testNoAssumptions(self):
+        # No assumptions -> not divisible.
+        fwd, _ = get_divisibility_subs([])
+        assert not is_divisible(K, 256, fwd)
+
+    def testMultipleSymbols(self):
+        # Independent assumptions on different symbols.
+        constraints = [
+            Assumption(sympy.Eq(M % 128, 0)),
+            Assumption(sympy.Eq(N % 256, 0)),
+            Assumption(sympy.Eq(K % 256, 0)),
+        ]
+        fwd, _ = get_divisibility_subs(constraints)
+        assert is_divisible(M, 128, fwd)
+        assert is_divisible(N, 256, fwd)
+        assert is_divisible(K, 256, fwd)
+        assert not is_divisible(M, 256, fwd)
+
+    def testSymbolicDivisor(self):
+        # Assumption uses symbolic BLOCK_M; resolved to 128 via idxc.subs.
+        BLOCK_M = sym.BLOCK_M
+        self.idxc.subs = {BLOCK_M: 128}
+        constraints = [Assumption(sympy.Eq(M % BLOCK_M, 0))]
+        fwd, _ = get_divisibility_subs(constraints)
+        assert is_divisible(M, 128, fwd)
+        assert not is_divisible(M, 256, fwd)
 
 
 if __name__ == "__main__":
