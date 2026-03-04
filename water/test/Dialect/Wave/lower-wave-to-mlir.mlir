@@ -1341,7 +1341,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 // -----
 
 // Same as above, but using a symbolic tensor without explicit ordered_syms attribute.
-// The order should be inferered from the shape in this case.
+// The order should be inferred from the shape in this case.
 normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
   // CHECK-LABEL: @lower_symbolic_wave_tensor_read_with_non_self_inverse_mapping
   func.func @lower_symbolic_wave_tensor_read_with_non_self_inverse_mapping(%sym: !wave.tensor<[@N, @K, @M] of f16, <global>>)
