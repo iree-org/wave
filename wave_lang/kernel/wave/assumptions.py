@@ -66,7 +66,7 @@ def get_divisibility_subs(
         if not sym.is_Symbol:
             continue
         # Resolve symbolic divisors (e.g. BLOCK_M -> 32) via IndexingContext.
-        divisor = subs_idxc(divisor)
+        divisor = sympy.sympify(subs_idxc(divisor))
         if not divisor.is_Integer:
             continue
         # Bail if the symbol may be negative: floor/Mod semantics differ

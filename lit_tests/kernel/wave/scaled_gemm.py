@@ -4,6 +4,8 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from sympy import Eq
+from wave_lang.kernel.wave.assumptions import Assumption
 from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
@@ -924,6 +926,11 @@ def test_dynamic_scaled_gemm_mxfp4():
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
+    # Divisibility assumptions matching block sizes.
+    constraints += [Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [Assumption(Eq(N % BLOCK_N, 0))]
+    constraints += [Assumption(Eq(K % BLOCK_K, 0))]
+
     @tkw.wave(constraints)
     def scaled_gemm(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
@@ -979,12 +986,14 @@ def test_dynamic_scaled_gemm_mxfp4():
     # Dynamic index arguments for M, N, K.
     # CHECK:        func.func @scaled_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index, %arg7: index)
 
-    # Buffer shapes are dynamic (?) due to M, N, K being runtime values.
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg5, %{{.*}}], strides: [%{{.*}}, 1] : memref<i8> to memref<?x?xi8, strided<[?, 1]>>
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg6, %{{.*}}], strides: [%{{.*}}, 1] : memref<i8> to memref<?x?xi8, strided<[?, 1]>>
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%arg5, %arg6], strides: [%arg6, 1] : memref<f32> to memref<?x?xf32, strided<[?, 1]>>
-
     # Core loop and scaled MFMA still present.
     # CHECK:          scf.for
     # CHECK:            amdgpu.scaled_mfma
-    # CHECK-COUNT-4:  vector.maskedstore {{.*}} memref<?x?xf32
+
+    # Divisibility assumptions eliminate all masking — no masked loads/stores.
+    # CHECK-NOT:      vector.maskedload
+    # CHECK-NOT:      vector.maskedstore
+
+    # Unmasked vector stores for output.
+    # CHECK:          vector.store
+    # CHECK:          return
