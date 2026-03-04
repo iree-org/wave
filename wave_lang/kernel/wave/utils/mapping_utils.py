@@ -12,6 +12,7 @@ from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
 from .general_utils import infer_dim, get_fastest_index
 from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, simplify, subs_idxc
+from ....support.indexing import piecewise_aware_subs
 from ...compiler.utils import strides_from_symbolic_shape
 
 K = TypeVar("K")  # Key type
@@ -132,10 +133,10 @@ def check_is_mapping_contiguous(
     index_mapping = tuple(subs_idxc(i) for i in index_mapping)
     iters = mapping.iters
 
-    subs = [(sym, sym + int(i == len(iters) - 1)) for i, sym in enumerate(iters)]
+    subs = {sym: sym + int(i == len(iters) - 1) for i, sym in enumerate(iters)}
     diff = [
         approximate_difference(
-            index_mapping[i].subs(subs) - index_mapping[i],
+            piecewise_aware_subs(index_mapping[i], subs) - index_mapping[i],
             list(iters.keys())[-1:],
             elements_per_thread,
         )
@@ -266,13 +267,15 @@ def transform_index_on_mapping(
         index_mapping = mapping.map_output_indices(symbolic_shape)
 
     idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+    index_mapping = tuple(piecewise_aware_subs(i, idxc.subs) for i in index_mapping)
     iters = mapping.iters
-    subs = [
-        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
-    ] + list(idxc.subs.items())
+    subs = dict(
+        list(zip(iters.keys(), (expr.start for expr in index.values())))
+        + list(idxc.subs.items())
+    )
     transformed_index = {
-        key: m.subs(subs) for key, m in zip(symbolic_shape, index_mapping)
+        key: piecewise_aware_subs(m, subs)
+        for key, m in zip(symbolic_shape, index_mapping)
     }
 
     return transformed_index
