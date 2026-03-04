@@ -495,7 +495,49 @@ def _flatten_bounds_to_mask_expr(
     return functools.reduce(sympy.And, conditions)
 
 
-def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source):
+def _build_wide_mask_expr(sub_reads, symbolic_shape, wide_ept):
+    """Build a concatenated sympy mask for a wide read from its sub-reads.
+
+    Each entry in *sub_reads* is ``(offset, size, orig_custom)`` where
+    *offset* is the lane offset within the wide vector and *size* is the
+    number of lanes that sub-read occupies.  *wide_ept* is the total
+    number of elements in the wide read (may exceed ``sum(sizes)`` when
+    there are gaps, e.g. multiway coalesce with non-contiguous offsets).
+
+    Builds ``Or(And(lane_in_range_0, mask_0), And(lane_in_range_1, mask_1), ...)``
+    using pure boolean ops so that ``gen_sympy_index`` can lower it without
+    the nested-Piecewise ``select_stack`` ordering issue.
+
+    Returns a sympy boolean expression or ``None`` when no sub-read has
+    bounds.
+    """
+    from ..._support.indexing import IndexingContext
+
+    masks = [
+        (offset, size, _flatten_bounds_to_mask_expr(custom, symbolic_shape))
+        for offset, size, custom in sub_reads
+    ]
+
+    if not any(m is not None for _, _, m in masks):
+        return None
+
+    idxc = IndexingContext.current()
+    iota = idxc.iota(wide_ept)
+
+    terms = []
+    for offset, size, mask in masks:
+        upper = offset + size
+        lane_cond = sympy.And(
+            sympy.GreaterThan(iota, offset) if offset > 0 else sympy.true,
+            sympy.StrictLessThan(iota, upper),
+        )
+        bound_cond = mask if mask is not None else sympy.true
+        terms.append(sympy.And(lane_cond, bound_cond))
+
+    return functools.reduce(sympy.Or, terms)
+
+
+def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=None):
     """Create a merged Read node covering ``wide_ept`` elements."""
     wide_read = Read(
         anchor_custom.memory,
@@ -508,6 +550,8 @@ def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source):
     wide_custom.index = wide_index
     if hasattr(tag_source, "vector_shapes"):
         wide_read.vector_shapes = deepcopy(tag_source.vector_shapes)
+    if mask_expr is not None:
+        wide_read.precomputed_mask_expr = mask_expr
     propagate_tag(tag_source, wide_read)
     return wide_read
 
@@ -515,7 +559,7 @@ def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source):
 def _emit_extract_slice(
     wide_read, offset, size, orig_custom, orig_node, symbolic_shape
 ):
-    """Create an ExtractSlice from a wide read with bounds mask and tag."""
+    """Create an ExtractSlice from a wide read and propagate metadata."""
     extract = ExtractSlice(wide_read, [offset], [size], [1]).add_to_graph(
         orig_custom.graph, loc=orig_custom.location
     )
@@ -523,9 +567,6 @@ def _emit_extract_slice(
     extract_custom.index = deepcopy(orig_custom.index)
     if hasattr(orig_node, "vector_shapes"):
         extract_custom.vector_shapes = deepcopy(orig_node.vector_shapes)
-    mask = _flatten_bounds_to_mask_expr(orig_custom, symbolic_shape)
-    if mask is not None:
-        extract.precomputed_mask_expr = mask
     propagate_tag(orig_node, extract)
     return extract
 
@@ -556,6 +597,8 @@ def _group_reads_by_memory(
             if not isinstance(custom, Read):
                 continue
             if custom.mapping_dynamic_vals:
+                continue
+            if getattr(node, "precomputed_mask_expr", None) is not None:
                 continue
             key = (custom.memory, custom.elements_per_thread, region_id)
             groups[key].append(node)
@@ -643,6 +686,11 @@ def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constrain
             element_type = lo_custom.type.dtype
             if new_ept > hw_constraint.max_elems_per_load(element_type):
                 continue
+            wide_mask = _build_wide_mask_expr(
+                [(0, ept, lo_custom), (ept, ept, hi_custom)],
+                symbolic_shape,
+                new_ept,
+            )
             with lo_custom.graph.inserting_before(lo_node):
                 new_index = {
                     dim: IndexSequence(
@@ -652,13 +700,10 @@ def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constrain
                     )
                     for dim in symbolic_dims
                 }
-                merged_read = _emit_wide_read(lo_custom, new_index, new_ept, lo_node)
+                merged_read = _emit_wide_read(
+                    lo_custom, new_index, new_ept, lo_node, mask_expr=wide_mask
+                )
 
-                # Masks are attached per-slice rather than on the merged
-                # read because lo and hi may have different bounds
-                # conditions (e.g. lo is in-bounds while hi crosses the
-                # tensor boundary).  A single mask on the wide read
-                # cannot express that — each half needs its own.
                 lo_extract = _emit_extract_slice(
                     merged_read, 0, ept, lo_custom, lo_node, symbolic_shape
                 )
@@ -737,6 +782,11 @@ def _multiway_coalesce(
                 if n is earliest_node:
                     break
 
+        wide_mask = _build_wide_mask_expr(
+            [(byte_pos, 1, g_custom) for _, _, g_custom, byte_pos, _ in group],
+            symbolic_shape,
+            wide_ept,
+        )
         with get_custom(earliest_node).graph.inserting_before(earliest_node):
             wide_index = {}
             for dim_idx, dim in enumerate(symbolic_dims):
@@ -745,7 +795,9 @@ def _multiway_coalesce(
                 else:
                     wide_index[dim] = IndexSequence(base_phys[dim], 1, 1)
 
-            wide_read = _emit_wide_read(custom_a, wide_index, wide_ept, earliest_node)
+            wide_read = _emit_wide_read(
+                custom_a, wide_index, wide_ept, earliest_node, mask_expr=wide_mask
+            )
 
         extracts = []
         for g_idx, g_node, g_custom, byte_pos, _ in group:

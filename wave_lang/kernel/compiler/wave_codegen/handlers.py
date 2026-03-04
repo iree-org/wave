@@ -1955,22 +1955,6 @@ def handle_extract_slice(emitter: WaveEmitter, node: fx.Node):
         strides,
     )
 
-    # When reads are coalesced into a single wider load, the original
-    # per-read bounds checks are lost.  The partition pass preserves them
-    # as a precomputed sympy mask on each ExtractSlice so we can zero
-    # out-of-bounds lanes here.
-    mask_expr = getattr(node, "precomputed_mask_expr", None)
-    if mask_expr is not None:
-        mask = gen_sympy_index(add_emitter_subs(emitter), mask_expr)
-        ept = sizes[0] if sizes else 1
-        mask_vec_type = VectorType.get([ept], IntegerType.get_signless(1))
-        if mask.type != mask_vec_type:
-            mask = vector_d.broadcast(mask_vec_type, mask)
-        element_type = result_type.element_type
-        zero = arith_d.constant(element_type, get_constant_attr(0, element_type))
-        zero_vec = vector_d.broadcast(result_type, zero)
-        element = arith_d.select(mask, element, zero_vec)
-
     emitter.bind_node_proxy(node, IRProxyValue(element))
 
 
