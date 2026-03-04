@@ -10,6 +10,7 @@ from .tagged_mxfp4_gemm import (
     get_tagged_mxfp4_gemm,
     get_tagged_mxfp4_gemm_preshuffle_b,
     get_tagged_mxfp4_gemm_preshuffle_scales,
+    get_tagged_mxfp4_gemm_preshuffle_scales_and_B,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "get_tagged_mxfp4_gemm",
     "get_tagged_mxfp4_gemm_preshuffle_b",
     "get_tagged_mxfp4_gemm_preshuffle_scales",
+    "get_tagged_mxfp4_gemm_preshuffle_scales_and_B",
 ]

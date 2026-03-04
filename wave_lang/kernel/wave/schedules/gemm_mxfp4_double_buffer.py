@@ -463,6 +463,208 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
     return mxfp4_dbuf_schedule
 
 
+def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
+    use_stagger: bool = True, shape: tuple = None
+):
+    """Return a double-buffered MXFP4 schedule for wave_compile().
+
+    Args:
+        use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
+            Recommended for 8-wave configs; disable for 4-wave.
+        shape: Tuple of (M, N, K) dimensions. If provided and bigger than
+            (1024, 1024, 1024), an extra WorkgroupBarrier will be added
+            after the first SchedulingBarrier in cluster 0.
+    """
+    K = tkl.sym.K
+
+    @wave_schedule.wave_schedule()
+    def mxfp4_dbuf_schedule():
+        # =====================================================================
+        # Get tagged nodes from the kernel
+        # =====================================================================
+        k_loop = tkw.get_node_by_tag("k_loop")
+
+        # Matrix A data - GatherToLDS (global->shared) + Read (shared load)
+        all_read_a = tkw.get_node_by_tag("read_a")
+        global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
+        shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
+
+        # Matrix A scale
+        all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
+
+        # Matrix B data
+        all_read_b = tkw.get_node_by_tag("read_b")
+
+        # Matrix B scale
+        all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+
+        # Bitcast operations (needed alongside compute)
+        bitcast_a = tkw.get_node_by_tag("bitcast_a")
+        bitcast_a_scale = tkw.get_node_by_tag("bitcast_a_scale")
+        bitcast_b = tkw.get_node_by_tag("bitcast_b")
+        bitcast_b_scale = tkw.get_node_by_tag("bitcast_b_scale")
+
+        # Scaled MMA
+        scaled_mma = tkw.get_node_by_tag("scaled_mma")
+
+        # =====================================================================
+        # Create 2-stage pipeline (double buffering)
+        # =====================================================================
+        pipeline_loop = tkw.pipeline(k_loop)
+
+        with pipeline_loop as pl:
+            # Stage 0: Global-to-shared prefetch via GatherToLDS (no fusion)
+            pl.set_stage(
+                [
+                    (
+                        global_to_shared_a,
+                        all_read_b,
+                        all_read_a_scale,
+                        all_read_b_scale,
+                    ),
+                    (),
+                    (),
+                ],
+            )
+            # Stage 1: Shared memory loads + bitcasts + compute
+            pl.set_stage(
+                [
+                    (shared_load_a,),
+                    (bitcast_a, bitcast_a_scale, bitcast_b, bitcast_b_scale),
+                    (scaled_mma,),
+                ],
+            )
+
+        # =====================================================================
+        # KERNEL: Main loop body with custom cluster ordering
+        # =====================================================================
+
+        # Filter nodes for KERNEL stage
+        loop_global_to_shared = tkw.filter_nodes(
+            global_to_shared_a, subgraph=pipeline_loop.KERNEL
+        )
+
+        loop_shared_load_a = tkw.filter_nodes(
+            shared_load_a, subgraph=pipeline_loop.KERNEL
+        )
+        loop_all_read_b = tkw.filter_nodes(all_read_b, subgraph=pipeline_loop.KERNEL)
+        loop_all_read_a_scale = tkw.filter_nodes(
+            all_read_a_scale, subgraph=pipeline_loop.KERNEL
+        )
+        loop_all_read_b_scale = tkw.filter_nodes(
+            all_read_b_scale, subgraph=pipeline_loop.KERNEL
+        )
+        loop_bitcast_a = tkw.filter_nodes(bitcast_a, subgraph=pipeline_loop.KERNEL)
+        loop_bitcast_a_scale = tkw.filter_nodes(
+            bitcast_a_scale, subgraph=pipeline_loop.KERNEL
+        )
+        loop_bitcast_b = tkw.filter_nodes(bitcast_b, subgraph=pipeline_loop.KERNEL)
+        loop_bitcast_b_scale = tkw.filter_nodes(
+            bitcast_b_scale, subgraph=pipeline_loop.KERNEL
+        )
+        loop_scaled_mma = tkw.filter_nodes(scaled_mma, subgraph=pipeline_loop.KERNEL)
+
+        loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
+            loop_scaled_mma, dim=K, num_partitions=2
+        )
+        loop_shared_load_a_0, loop_shared_load_a_1 = tkw.partition_by_dim(
+            loop_shared_load_a, dim=K, num_partitions=2
+        )
+
+        loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
+            loop_bitcast_a, dim=K, num_partitions=2
+        )
+
+        loop_bitcast_b_0, loop_bitcast_b_1 = tkw.partition_by_dim(
+            loop_bitcast_b, dim=K, num_partitions=2
+        )
+
+        # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
+        # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
+        use_extra_barrier = False
+        # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
+        cluster_0_ops = [
+            tkw.SchedulingBarrier([]),
+        ]
+        if use_extra_barrier:
+            cluster_0_ops.append(tkw.WorkgroupBarrier())
+        cluster_0_ops.extend(
+            [
+                tkw.MemoryCounterWait(load=0),
+                tkw.WorkgroupBarrier(),
+                loop_global_to_shared,
+                tkw.SchedulingBarrier([]),
+                loop_shared_load_a_0,
+                loop_bitcast_a_0,
+                loop_bitcast_a_scale,
+                loop_bitcast_b_0,
+                loop_bitcast_b_scale,
+                loop_all_read_b,
+                loop_all_read_a_scale,  # prefetch A & B scales for next iteration
+                loop_all_read_b_scale,
+                tkw.SchedulingBarrier([]),
+            ]
+        )
+        if use_stagger:
+            cluster_0_ops.extend(
+                [
+                    tkw.WorkgroupBarrier(),
+                    tkw.SchedulingBarrier([]),
+                ]
+            )
+
+        clusters = [
+            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
+            tkw.cluster(cluster_0_ops),
+            # Cluster 1: First K-partition scaled_mma (high priority)
+            tkw.cluster(
+                [
+                    tkw.SetWavePrio(1),
+                    loop_scaled_mma_0,
+                    tkw.SetWavePrio(0),
+                    tkw.SchedulingBarrier([]),
+                    tkw.WorkgroupBarrier(),
+                    tkw.SchedulingBarrier([]),
+                ],
+            ),
+            # Cluster 2: Second K-partition shared loads/bitcasts
+            tkw.cluster(
+                [
+                    tkw.SchedulingBarrier([]),
+                    loop_shared_load_a_1,
+                    loop_bitcast_a_1,
+                    loop_bitcast_b_1,
+                    tkw.SchedulingBarrier([]),
+                    tkw.WorkgroupBarrier(),
+                    tkw.SchedulingBarrier([]),
+                ],
+            ),
+            # Cluster 3: Second K-partition scaled_mma (high priority)
+            tkw.cluster(
+                [
+                    tkw.SetWavePrio(1),
+                    loop_scaled_mma_1,
+                    tkw.SetWavePrio(0),
+                    tkw.SchedulingBarrier([]),
+                ],
+            ),
+        ]
+
+        # Insert barriers at loop boundaries
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
+        tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+        # tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+
+        # Apply the cluster-based reordering
+        tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
+
+        # Apply wave staggering for better overlap
+        if use_stagger:
+            tkw.stagger(pipeline_loop.KERNEL)
+
+    return mxfp4_dbuf_schedule
+
+
 def get_mxfp4_dbuf_mixed_pingpong_schedule(use_stagger: bool = True):
     """Return a double-buffered MXFP4 schedule for wave_compile().
 
