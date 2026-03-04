@@ -97,7 +97,7 @@ class StreamExecutable:
         dynamic_symbols: list[IndexSymbol] = [],
         llvm_configs: dict[str, str] = {},
         kernel_location: Optional[CapturedLocation] = None,
-        use_dynamic_strides: bool = False,
+        dynamic_strides: bool = False,
     ) -> "DispatchEntrypoint":
         """Defines a dispatch function with a signature like:
 
@@ -126,7 +126,7 @@ class StreamExecutable:
 
         # Dynamic strides: add one index argument per dimension per buffer.
         stride_arg_count = 0
-        if use_dynamic_strides:
+        if dynamic_strides:
             stride_arg_count = sum(
                 len(b.kernel_buffer_type.symbolic_shape)
                 for b in sig.kernel_buffer_bindings

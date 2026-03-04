@@ -111,6 +111,11 @@ class WaveCompileOptions:
     # 1 - one iteration apart, 2 - two, etc
     cluster_barrier_delay: Optional[int] = None
 
+    # Enable dynamic strides through Wave runtime and LLVM backend
+    @property
+    def dynamic_strides(self) -> bool:
+        return self.wave_runtime and self.backend != "asm"
+
     # === Print options ===
     mlir_print_ir_after_all: bool = False
     print_ir_after: list[str] = field(default_factory=list)

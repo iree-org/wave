@@ -135,7 +135,7 @@ def isolated_test_call(
     async_dispatch: bool = False,
     device_layout: Optional[Grid] = None,
     device_constraints: Optional[list[DeviceConstraint]] = None,
-    use_dynamic_strides: bool = False,
+    dynamic_strides: bool = False,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
 
@@ -162,7 +162,7 @@ def isolated_test_call(
 
         # Generate unique stride arguments for each buffer dimension.
         stride_arg_count = 0
-        if use_dynamic_strides:
+        if dynamic_strides:
             stride_arg_count = sum(
                 len(b.kernel_buffer_type.symbolic_shape)
                 for b in host_sig.buffer_bindings

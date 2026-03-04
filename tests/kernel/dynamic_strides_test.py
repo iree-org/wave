@@ -14,13 +14,13 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_zeros,
 )
 
-from .common.utils import require_cdna_2_or_3_or_4
+from .common.utils import param_bool, require_cdna_2_or_3_or_4
 
 
-def _compile_gemm(shape):
+def _compile_gemm(shape, dynamic_dims=False):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape,
-        dynamic_dims=False,
+        dynamic_dims=dynamic_dims,
         mfma_variant=MMAType.F32_16x16x16_F16,
     )
     options = WaveCompileOptions(
@@ -33,10 +33,11 @@ def _compile_gemm(shape):
     return wave_compile(options, gemm), options
 
 
+@param_bool("dynamic_dims", "dyn")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides():
+def test_gemm_dynamic_strides(dynamic_dims: bool):
     shape = (1024, 1024, 1024)
-    gemm, options = _compile_gemm(shape)
+    gemm, options = _compile_gemm(shape, dynamic_dims)
 
     m, n, k = shape
     a = device_randn(m, k * 4, dtype=torch.float16)
@@ -55,10 +56,11 @@ def test_gemm_dynamic_strides():
     assert_close(c, iree_ref, check_device=False)
 
 
+@param_bool("dynamic_dims", "dyn")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_non_contiguous_output():
+def test_gemm_dynamic_strides_output(dynamic_dims: bool):
     shape = (1024, 512, 512)
-    gemm, options = _compile_gemm(shape)
+    gemm, options = _compile_gemm(shape, dynamic_dims)
 
     m, n, k = shape
     a = device_randn(m, k, dtype=torch.float16)
@@ -75,10 +77,11 @@ def test_gemm_dynamic_strides_non_contiguous_output():
     assert_close(c, iree_ref, check_device=False)
 
 
+@param_bool("dynamic_dims", "dyn")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_non_contiguous_input_and_output():
+def test_gemm_dynamic_strides_input_and_output(dynamic_dims: bool):
     shape = (512, 1024, 2048)
-    gemm, options = _compile_gemm(shape)
+    gemm, options = _compile_gemm(shape, dynamic_dims)
 
     m, n, k = shape
     a = device_randn(m, k * 2, dtype=torch.float16)[:, :k]
@@ -95,10 +98,11 @@ def test_gemm_dynamic_strides_non_contiguous_input_and_output():
     assert_close(c, iree_ref, check_device=False)
 
 
+@param_bool("dynamic_dims", "dyn")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_offset():
+def test_gemm_dynamic_strides_offset(dynamic_dims: bool):
     shape = (4096, 2048, 4096)
-    gemm, options = _compile_gemm(shape)
+    gemm, options = _compile_gemm(shape, dynamic_dims)
 
     m, n, k = shape
     offset_m, offset_k = 4, 8

@@ -95,11 +95,11 @@ def invoke_with_wave_runtime(
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims[len(bound_scalar_symbols) :])
 
     # Pass strides only when kernel was compiled with dynamic strides (LLVM backend).
-    if options.wave_runtime and options.backend != "asm":
+    if options.dynamic_strides:
         stride_values = []
         for arg_tensor in chain(kernel_inputs, kernel_outputs):
-            for d in range(arg_tensor.dim()):
-                stride_values.append(arg_tensor.stride(d))
+            for s in arg_tensor.stride():
+                stride_values.append(s)
         strides = wave_runtime.Int64Vector(stride_values)
     else:
         strides = wave_runtime.Int64Vector([])
