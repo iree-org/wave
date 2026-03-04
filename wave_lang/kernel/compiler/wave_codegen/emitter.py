@@ -605,6 +605,56 @@ _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])
 
 
+def _fast_subs(expr: sympy.Expr, subs_dict: dict) -> sympy.Expr:
+    """Substitute into expr efficiently, with caching and Piecewise-aware handling.
+
+    Avoids sympy's expensive recursive boolean simplification in
+    Piecewise._eval_subs by substituting into each (value, condition) pair
+    of a Piecewise independently.
+    """
+    if not isinstance(expr, sympy.Basic):
+        return expr
+
+    expr_syms = expr.free_symbols
+    subs_keys = set(subs_dict.keys())
+    matching = expr_syms & subs_keys
+    if not matching:
+        return expr
+
+    filtered_subs = {k: v for k, v in subs_dict.items() if k in matching}
+
+    if isinstance(expr, sympy.Piecewise):
+        result = sympy.Piecewise(
+            *[(e.subs(filtered_subs), c.subs(filtered_subs)) for e, c in expr.args]
+        )
+    elif expr.has(sympy.Piecewise):
+        result = _subs_piecewise_aware(expr, filtered_subs)
+    else:
+        result = expr.subs(filtered_subs)
+
+    return result
+
+
+def _subs_piecewise_aware(expr, subs_dict):
+    """Walk the expression tree substituting while handling Piecewise nodes
+    by substituting into each (value, condition) pair independently."""
+    if isinstance(expr, sympy.Piecewise):
+        return sympy.Piecewise(
+            *[(e.subs(subs_dict), c.subs(subs_dict)) for e, c in expr.args]
+        )
+
+    if not isinstance(expr, sympy.Basic) or expr.is_Atom:
+        if isinstance(expr, sympy.Symbol) and expr in subs_dict:
+            return subs_dict[expr]
+        return expr
+
+    if not expr.has(sympy.Piecewise):
+        return expr.subs(subs_dict)
+
+    new_args = [_subs_piecewise_aware(arg, subs_dict) for arg in expr.args]
+    return expr.func(*new_args)
+
+
 def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Value:
     use_affine_expr = _use_affine_expr
     stack: list[OpResult] = []
@@ -917,7 +967,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
     # Substitute in frozen vars to simplify expression.
     if not isinstance(expr, sympy.Expr):
         expr = sympy.sympify(expr)
-    expr = expr.subs(idxc.subs)
+    expr = _fast_subs(expr, idxc.subs)
 
     # Why affine, for now simply create indexing expressions.
     # This can easily be adapted to affine expressions later.
