@@ -87,9 +87,12 @@ def invoke_with_wave_runtime(
         options.kernel_launch_info.cluster_dims[2],
     )
 
-    kern_args = [
-        arg_tensor.data_ptr() for arg_tensor in chain(kernel_inputs, kernel_outputs)
-    ]
+    # Force contiguous tensor layouts when dynamic strides are not enabled.
+    kern_args = []
+    for arg_tensor in chain(kernel_inputs, kernel_outputs):
+        if not arg_tensor.is_contiguous() and not options.dynamic_strides:
+            arg_tensor = arg_tensor.contiguous()
+        kern_args.append(arg_tensor.data_ptr())
 
     kernel_args = wave_runtime.Int64Vector(kern_args)
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims[len(bound_scalar_symbols) :])
