@@ -138,6 +138,8 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     a_address_space: tkl.AddressSpace,
     *,
     b_preshuffled: bool = False,
+    reorder_workgroups: bool = False,
+    group_size_n=32,
 ):
     """Shared implementation: preshuffle scales only, or scales + B data.
 
@@ -152,6 +154,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
+    GROUP_SIZE_N = tkl.sym.GROUP_SIZE_N
     A_ADDRESS_SPACE = tkl.sym.A_ADDRESS_SPACE
     B_ADDRESS_SPACE = tkl.sym.B_ADDRESS_SPACE
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
@@ -163,6 +166,13 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / wave_shape[0])]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    if reorder_workgroups:
+        new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
+            M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
+        )
+        constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
+        constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
 
     if b_preshuffled:
         K_PACKED = tkl.sym.K_PACKED
@@ -260,6 +270,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
         BLOCK_K: block_shape[2],
+        GROUP_SIZE_N: group_size_n,
         M: shape[0],
         N: shape[1],
         K: shape[2],
