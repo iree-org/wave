@@ -1026,10 +1026,6 @@ static void mixInThreadIndependentConstraints(
                      wave::WaveSymbolAttr>,
       "expected a range of WaveSymbolAttr");
   for (wave::WaveSymbolAttr symbol : indexingSymbols) {
-    auto it = symbolConstraints.find(symbol);
-    if (it == symbolConstraints.end())
-      continue;
-
     auto mappingIt = llvm::find_if(symbolMappings, [&](NamedAttribute attr) {
       return attr.getName() == symbol.getName();
     });
@@ -1037,6 +1033,28 @@ static void mixInThreadIndependentConstraints(
         mappingIt != symbolMappings.end()
             ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
             : nullptr;
+
+    auto it = symbolConstraints.find(symbol);
+    if (it == symbolConstraints.end()) {
+      // If no other mapping is present, default to (start=0, step=1, stride=1),
+      // assuming this will be replicated enough times by the expansion pass.
+      // When some mapping is present, we don't need to do anything as it would
+      // be equivalent to adding 0 to the start of the mapping and taking its
+      // step and stride.
+      if (!mapping) {
+        symbolMappings.emplace_back(
+            symbol.getName(),
+            wave::WaveIndexMappingAttr::get(
+                where->getContext(), /*symbols=*/{},
+                AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                               getAffineConstantExpr(0, where->getContext())),
+                AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                               getAffineConstantExpr(1, where->getContext())),
+                AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                               getAffineConstantExpr(1, where->getContext()))));
+      }
+      continue;
+    }
 
     // There is interaction between constraints of different kinds for the same
     // symbol, find them all upfront.
