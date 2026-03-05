@@ -277,6 +277,228 @@ def get_moe_histogram_kernel(
 
 
 # ---------------------------------------------------------------------------
+# Steps 2+3: Pad counts + Prefix sum — Wave kernel
+# ---------------------------------------------------------------------------
+def get_moe_pad_cumsum_kernel(num_experts: int, block_size: int):
+    """
+    Wave kernel for Steps 2+3 of MoE alignment:
+      Step 2: Pad each expert's token count up to a multiple of block_size.
+      Step 3: Compute inclusive and exclusive prefix sums of padded counts.
+
+    Dispatches a single wave of 32 threads. Each of the first num_experts
+    threads handles one expert; remaining threads read/write OOB (harmlessly
+    ignored on GPU). The cumsum uses a butterfly-shuffle scan across the wave.
+
+    Args:
+        num_experts: Number of experts (4-8 in tests).
+        block_size: Block alignment size.
+    """
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+    BLOCK_SZ = sym.BLOCK_SZ
+
+    constraints = [
+        tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 0),
+        tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS),
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={NUM_EXPERTS: NUM_EXPERTS},
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    expert_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    expert_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: i},
+        outputs={NUM_EXPERTS: d0},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    @tkw.wave(constraints)
+    def pad_cumsum_kernel(
+        expert_counts: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        padded_counts_out: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        cumsum_out: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        cumsum_exclusive_out: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        dummy: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+    ):
+        tid = tkw.scalar(THREAD_0, i32)
+
+        # Read this expert's raw count
+        count = tkw.read(
+            expert_counts,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        # Step 2: Pad — ceil_div(count, block_size) * block_size
+        bs = tkw.Register[NUM_EXPERTS, i32](BLOCK_SZ)
+        one = tkw.Register[NUM_EXPERTS, i32](1)
+        padded = ((count + bs - one) / bs) * bs
+
+        tkw.write(
+            padded,
+            padded_counts_out,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        # Step 3: Inclusive prefix sum (butterfly scan across wave)
+        prefix_sum = tkw.cumsum(padded, dim=NUM_EXPERTS)
+
+        tkw.write(
+            prefix_sum,
+            cumsum_out,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        # Exclusive prefix sum = inclusive - current element
+        exclusive = prefix_sum - padded
+        tkw.write(
+            exclusive,
+            cumsum_exclusive_out,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        # Leaf write (see AGENTS.md §6.4)
+        tkw.write(count, dummy, elements_per_thread=1)
+
+    hyperparams = {
+        NUM_EXPERTS: num_experts,
+        BLOCK_SZ: block_size,
+    }
+
+    return pad_cumsum_kernel, hyperparams
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Sorted IDs scatter — Wave kernel
+# ---------------------------------------------------------------------------
+def get_moe_sorted_ids_kernel(
+    numel: int,
+    num_experts: int,
+    max_num_tokens_padded: int,
+    threads_per_wave: int = 32,
+):
+    """
+    Wave kernel for Step 5 of MoE alignment: scatter token indices into
+    sorted order by expert.
+
+    Each thread handles one token: reads its expert assignment from topk_ids,
+    atomically claims a write position in write_pos[expert], and writes its
+    token index to sorted_ids[pos].
+
+    The caller must pre-initialize:
+      - sorted_ids[:] = numel  (padding sentinel)
+      - write_pos[:] = cumsum_exclusive[:]  (starting write positions per expert)
+
+    Args:
+        numel: Number of tokens (num_tokens * topk).
+        num_experts: Number of experts.
+        max_num_tokens_padded: Size of sorted_ids output buffer.
+        threads_per_wave: Threads per wave (32 for RDNA4).
+    """
+    NUMEL = tkl.sym.NUMEL
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+    MAX_TOKENS_PADDED = sym.MAX_TOKENS_PADDED
+    SCATTER_BLOCK = sym.SCATTER_BLOCK
+
+    constraints = [
+        tkw.WorkgroupConstraint(NUMEL, SCATTER_BLOCK, 0),
+        tkw.WaveConstraint(NUMEL, SCATTER_BLOCK),
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={
+                NUMEL: SCATTER_BLOCK,
+                NUM_EXPERTS: NUM_EXPERTS,
+                MAX_TOKENS_PADDED: MAX_TOKENS_PADDED,
+            },
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    # Map for atomic_add on write_pos[expert_id]
+    expert_scatter_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    # Map for writing token_idx to sorted_ids[pos]
+    sorted_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={MAX_TOKENS_PADDED: i},
+        outputs={MAX_TOKENS_PADDED: d0},
+        dynamic_val_mappings={MAX_TOKENS_PADDED: i},
+    )
+
+    @tkw.wave(constraints)
+    def sorted_ids_kernel(
+        topk_ids: Memory[NUMEL, GLOBAL_ADDRESS_SPACE, i32],
+        write_pos: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        sorted_ids: Memory[MAX_TOKENS_PADDED, GLOBAL_ADDRESS_SPACE, i32],
+        dummy: Memory[NUMEL, GLOBAL_ADDRESS_SPACE, i32],
+    ):
+        # Read this token's expert assignment
+        expert_id = tkw.read(topk_ids, elements_per_thread=1)
+
+        # Atomically claim a write position in write_pos[expert_id]
+        one = tkw.Register[NUM_EXPERTS, i32](1)
+        pos = tkw.atomic_add(
+            one,
+            write_pos,
+            mapping=expert_scatter_map,
+            mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
+        )
+
+        # Compute this thread's global token index
+        tid = tkw.Register[MAX_TOKENS_PADDED, i32](THREAD_0)
+        wid = tkw.Register[MAX_TOKENS_PADDED, i32](WORKGROUP_0)
+        token_idx = wid * tkw.Register[MAX_TOKENS_PADDED, i32](SCATTER_BLOCK) + tid
+
+        # Write token_idx to sorted_ids[pos]
+        tkw.write(
+            token_idx,
+            sorted_ids,
+            mapping=sorted_write_map,
+            mapping_dynamic_vals=(pos,),
+            elements_per_thread=1,
+        )
+
+        # Leaf write (atomic_add alone is not a recognized leaf — §6.4)
+        tkw.write(expert_id, dummy, elements_per_thread=1)
+
+    hyperparams = {
+        NUMEL: numel,
+        NUM_EXPERTS: num_experts,
+        MAX_TOKENS_PADDED: max_num_tokens_padded,
+        SCATTER_BLOCK: threads_per_wave,
+    }
+
+    return sorted_ids_kernel, hyperparams
+
+
+# ---------------------------------------------------------------------------
 # MoE Gather kernel — Wave replacement for moe_gather()
 # ---------------------------------------------------------------------------
 def get_moe_gather_kernel(
@@ -595,19 +817,16 @@ def moe_align_block_size_pytorch(
     torch.Tensor,
 ]:
     """
-    PyTorch host implementation of MoE token alignment and block size padding.
+    MoE token alignment and block size padding (mixed Wave + PyTorch).
 
     Sorts tokens by their assigned expert IDs and pads each expert's token list
     to align with the specified block size for efficient blocked GEMM processing.
 
-    TODO: Replace with Wave kernel implementation. The current Wave kernel
-    (get_moe_align_block_size_kernel in moe.py) has these issues to fix:
-      1. Only processes wave_size (32) topk_ids elements per workgroup — misses
-         the rest when numel > 32.
-      2. expert_ids loop uses wave-uniform symbols (I, I_MAX) causing all threads
-         to write to the same positions — last thread's expert value wins.
-      3. cumsum_exclusive is corrupted by atomic_adds in the sorted_token_ids
-         phase that reuse the same buffer.
+    Pipeline:
+      Step 1: Histogram — Wave kernel (atomic_add).
+      Steps 2+3: Pad counts + prefix sums — Wave kernel (cumsum).
+      Step 4: Expert IDs fill — vectorized PyTorch (4-8 iterations).
+      Step 5: Sorted IDs scatter — Wave kernel (atomic_add).
 
     Args:
         topk_ids: Flat tensor of expert assignments, shape (num_tokens * topk,), int32.
@@ -640,45 +859,45 @@ def moe_align_block_size_pytorch(
     # (Wave/IREE kernels may run on a separate CUDA stream)
     torch.cuda.synchronize()
 
-    # --- Step 2: Pad counts to block_size alignment ---
-    # TODO: migrate to Wave (elementwise kernel)
-    padded_counts = ((expert_counts + block_size - 1) // block_size * block_size).to(
-        torch.int32
+    # --- Steps 2+3: Pad counts + prefix sums — WAVE kernel ---
+    pad_cumsum_fn, pad_cumsum_params = get_moe_pad_cumsum_kernel(
+        num_experts, block_size
     )
-
-    # --- Step 3: Prefix sums (inclusive and exclusive) ---
-    # TODO: migrate to Wave (prefix sum / cumsum kernel)
-    cumsum = torch.cumsum(padded_counts, dim=0).to(torch.int32)
+    compiled_pad_cumsum = _compile_wave_kernel(pad_cumsum_fn, pad_cumsum_params)
+    padded_counts = torch.zeros(num_experts, dtype=torch.int32, device=device)
+    cumsum = torch.zeros(num_experts, dtype=torch.int32, device=device)
     cumsum_exclusive = torch.zeros(num_experts, dtype=torch.int32, device=device)
-    if num_experts > 1:
-        cumsum_exclusive[1:] = cumsum[:-1]
+    pad_dummy = torch.empty(num_experts, dtype=torch.int32, device=device)
+    compiled_pad_cumsum(
+        expert_counts, padded_counts, cumsum, cumsum_exclusive, pad_dummy
+    )
+    torch.cuda.synchronize()
 
     # --- Step 4: Build expert_ids — for each block, which expert owns it ---
-    # TODO: migrate to Wave (parallel expert_ids fill kernel)
-    #   The Wave version needs per-thread iteration state, not wave-uniform symbols.
-    #   Consider inverting: each block does a binary search over cumsum to find its expert.
+    # Vectorized PyTorch: for each block, find which expert's range contains it.
+    # Only iterates over num_experts (4-8), inner comparison is vectorized on GPU.
     expert_ids = torch.zeros(max_num_m_blocks, dtype=torch.int32, device=device)
-    for expert in range(num_experts):
-        start_pos = cumsum_exclusive[expert].item()
-        end_pos = cumsum[expert].item()
-        for pos in range(start_pos, end_pos, block_size):
-            block_idx = pos // block_size
-            if block_idx < max_num_m_blocks:
-                expert_ids[block_idx] = expert
+    block_starts = (
+        torch.arange(max_num_m_blocks, device=device, dtype=torch.int32) * block_size
+    )
+    for e in range(num_experts):
+        mask = (block_starts >= cumsum_exclusive[e]) & (block_starts < cumsum[e])
+        expert_ids[mask] = e
 
-    # --- Step 5: Build sorted_token_ids — place each token at its expert's offset ---
-    # Initialize with padding value (numel = num_tokens * topk = PAD_VALUE in GEMM)
-    # TODO: migrate to Wave (parallel scatter kernel)
+    # --- Step 5: Sorted IDs scatter — WAVE kernel ---
+    # Pre-initialize sorted_ids with padding sentinel (numel)
     sorted_ids = torch.full(
         (max_num_tokens_padded,), numel, dtype=torch.int32, device=device
     )
+    # write_pos starts at cumsum_exclusive; atomic_add claims positions
     write_pos = cumsum_exclusive.clone()
-    for i in range(numel):
-        expert = topk_ids_flat[i].item()
-        pos = write_pos[expert].item()
-        if pos < max_num_tokens_padded:
-            sorted_ids[pos] = i
-        write_pos[expert] += 1
+    scatter_fn, scatter_params = get_moe_sorted_ids_kernel(
+        numel, num_experts, max_num_tokens_padded
+    )
+    compiled_scatter = _compile_wave_kernel(scatter_fn, scatter_params)
+    scatter_dummy = torch.empty(numel, dtype=torch.int32, device=device)
+    compiled_scatter(topk_ids_flat.contiguous(), write_pos, sorted_ids, scatter_dummy)
+    torch.cuda.synchronize()
 
     return (
         expert_ids,
