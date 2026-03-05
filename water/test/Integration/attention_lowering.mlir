@@ -1,6 +1,6 @@
 // RUN: water-opt %s --pass-pipeline="builtin.module(water-wave-detect-normal-forms,normalform.module(water-wave-propagate-elements-per-thread,water-wave-resolve-distributed-allocations,water-wave-detect-normal-forms,lower-wave-to-mlir),lower-normalform-module,canonicalize,cse)" | FileCheck %s
 
-// This test is a LIT counterpart to $WAVE_DIR/tests/kernel/wave/water_e2e_test.py
+// This test is a LIT counterpart to $WAVE_ROOT/tests/kernel/wave/water_e2e_test.py
 // for the attention test and the MLIR produced by `emit_wave_dialect` before it is
 // passed into `override_mlir`.
 // It only checks that wave-related dialect have been successfully lowered: the

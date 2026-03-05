@@ -114,7 +114,7 @@ def test_attention_water():
             kv_seq_len=256,
         ),
         (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-        False,
+        dynamic_dims=False,
     )
 
     options_mlir = WaveCompileOptions(
@@ -124,7 +124,7 @@ def test_attention_water():
         # manages to execute it.
         enable_mark_hardware_transpose_candidates=False,
     )
-    set_default_run_config(options_mlir)
+    options_mlir = set_default_run_config(options_mlir)
     compiled_kernel = wave_compile(options_mlir, attention)
     trace = compiled_kernel.compiled_graph
     constraints = attention.constraints
