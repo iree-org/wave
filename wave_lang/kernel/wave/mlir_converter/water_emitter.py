@@ -526,11 +526,21 @@ def _emit_ops_from_graph(
                 if fx_node not in implicit_captures:
                     continue
 
+                captured_fx_node = implicit_captures[fx_node]
                 assert (
-                    implicit_captures[fx_node] in value_map
+                    captured_fx_node in value_map
                 ), f"{node} implicitly captures a value that was not translated."
 
-                value_map[fx_node] = value_map[implicit_captures[fx_node]]
+                # Body nodes downstream of implicit captures need typed inputs
+                # to infer their own types. Before infer_types runs, the type
+                # of the placeholders is unset - propagate from the
+                # already-typed captured node.
+                if node.type is None:
+                    captured_type = get_custom(captured_fx_node).type
+                    if captured_type is not None:
+                        node.type = captured_type
+
+                value_map[fx_node] = value_map[captured_fx_node]
                 continue
 
             # No MLIR ops are emitted for output nodes.
@@ -680,29 +690,41 @@ def _emit_ops_from_graph(
                         get_single_mapped_value(arg) for arg in node.init_args
                     ]
 
+                    # Derive result types from init_args rather than from
+                    # the body outputs.  init_args reside in the enclosing
+                    # graph whose nodes have already been emitted, so their
+                    # types are always available.  Body outputs may reference
+                    # nodes whose types are not yet set (e.g. reductions in
+                    # attention's online-softmax loop).
                     result_types = []
                     result_locs = []
-                    outputs = node.outputs()
-                    for fx_output in outputs:
-                        output = get_custom(fx_output)
-                        output.infer_type()
-                        result_types.append(_type_to_wave_mlir(ctx, output.type))
+                    for init_arg in node.init_args:
+                        init_custom = get_custom(init_arg)
+                        result_types.append(_type_to_wave_mlir(ctx, init_custom.type))
                         result_locs.append(
-                            output.location.to_water()
-                            if output.location
+                            init_custom.location.to_water()
+                            if init_custom.location
                             else ir.Location.current
                         )
+                    outputs = node.outputs()
 
                     mlir_op = op_builder(result_types, axis, carried_values, [])
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
 
-                    for idx, iter_arg in enumerate(node.iter_args()):
-                        iter_arg.iter_idx = idx
+                    # Collect IterArgs in graph order and assign
+                    # iter_idx before any call that sorts by it.
+                    # node.iter_args() sorts by iter_idx which may
+                    # still be None before initialize_iter_args runs.
+                    subgraph = trace.get_subgraph(node.subgraph_name)
+                    iter_arg_nodes = [
+                        n for n in subgraph.nodes if isinstance(get_custom(n), IterArg)
+                    ]
+                    for idx, ia_node in enumerate(iter_arg_nodes):
+                        get_custom(ia_node).iter_idx = idx
 
-                    # add mapping for iter args
-                    for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
+                    for wave_arg, mlir_arg in zip(iter_arg_nodes, body.arguments):
                         value_map[wave_arg] = (mlir_arg,)
 
                     # Emit subgraph of the iterate node
