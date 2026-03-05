@@ -148,10 +148,23 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @multiple_non_unit_steps(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{expected only one non-unit index step}}
+    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 2, <NULL>)>, N: <[] -> (<NULL>, 3, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>
+    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 2, <NULL>)>, N: <[] -> (<NULL>, 3, <NULL>)>}]
+      : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
 // Two dimensions with non-unit steps; pass must report "expected only one non-unit".
 // Use only register (write has its own verifier for multi-step index).
 normalform.module [#wave.normal_form<full_types>] {
-  func.func @index_multi_non_unit_step(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
+  func.func @index_multi_non_unit_step(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.constraints = []} {
     %cst = arith.constant 0.0 : f16
     // expected-error @below {{expected only one non-unit index step}}
     %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>, N : <[] -> (<NULL>, 8, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>

@@ -1621,7 +1621,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
       getUncollapsedVectorShape(tensorType.getShape(), indexDict, hyper);
   int64_t nonUnit = 1;
   bool hadDynamic = false;
-  for (auto [i, size] : llvm::enumerate(shape)) {
+  for (int64_t size : shape) {
     if (ShapedType::isDynamic(size)) {
       hadDynamic = true;
       continue;
@@ -1632,13 +1632,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
     }
     if (nonUnit == 1) {
       nonUnit = size;
-      continue;
     }
-
-    InFlightDiagnostic diag =
-        op->emitError() << "'index' has more than one entry with non-unit step";
-    diag.attachNote() << "second non-unit step dimension: " << i;
-    return diag;
   }
 
   // If there were unevaluated steps, they may end up matching later on.

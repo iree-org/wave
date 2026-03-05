@@ -602,9 +602,11 @@ func.func @bounds_wrong_rank(%mem: !wave.tensor<[@N] of f32>) {
 
 // -----
 
-func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) {
+func.func @read_index_multi_step(%mem: !wave.tensor<[@M, @N] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 1, N = 1}>
+} {
   // expected-error @below {{'index' has more than one entry with non-unit step}}
-  // expected-note @below {{second non-unit step dimension: 1}}
+  // expected-note @below {{second non-unit step dimension: "N"}}
   wave.read %mem index [{
     M : <[#wave.index_symbol<T0>] -> (T0, 2, 1)>,
     N : <[#wave.index_symbol<T1>] -> (T1, 2, 1)>
@@ -643,11 +645,25 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
   wave.hyperparameters = #wave.hyperparameters<{X = 1, Y = 1, M = 100, N = 200}>
 } {
   // expected-error @below {{'index' has more than one entry with non-unit step}}
-  // expected-note @below {{second non-unit step dimension: 1}}
+  // expected-note @below {{second non-unit step dimension: "N"}}
   wave.read %mem index [{
     M : <[#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1)>,
     N : <[#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)>
   }] : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @write_index_multi_step_eval(%val: !wave.tensor<[@M, @N] of f32, <register>>, %mem: !wave.tensor<[@M, @N] of f32, <global>>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{X = 1, Y = 1, M = 100, N = 200}>
+} {
+  // expected-error @below {{'index' has more than one entry with non-unit step}}
+  // expected-note @below {{second non-unit step dimension: "N"}}
+  wave.write %val, %mem index [{
+    M : <[#wave.index_symbol<T0>, #wave.symbol<"X">] -> (T0, 2 * X, 1)>,
+    N : <[#wave.index_symbol<T1>, #wave.symbol<"X">, #wave.symbol<"Y">] -> (T1, X + Y, 1)>
+  }] : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
   return
 }
 
