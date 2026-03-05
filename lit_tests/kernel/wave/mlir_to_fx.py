@@ -368,7 +368,7 @@ def mlir_to_fx_mapping_roundtrip():
         b: Memory[N, K, M, GLOBAL_ADDRESS_SPACE, tkl.f16],
     ):
         mapping = wave.IndexMapping(
-            3, inputs={M: k, N: i, K: j}, outputs={N: i, K: j, M: k}
+            num_iterators=3, inputs={M: k, N: i, K: j}, outputs={N: i, K: j, M: k}
         )
         wave.write(wave.read(a, mapping=mapping), b)
 
@@ -381,7 +381,7 @@ def mlir_to_fx_mapping_roundtrip():
         b: Memory[N, M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
     ):
         mapping = wave.IndexMapping(
-            3, inputs={M: j, N: i, K: k}, outputs={N: i, M: j, K: k}
+            num_iterators=3, inputs={M: j, N: i, K: k}, outputs={N: i, M: j, K: k}
         )
         wave.write(wave.read(a, mapping=mapping), b)
 

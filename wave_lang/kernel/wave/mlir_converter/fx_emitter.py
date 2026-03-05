@@ -226,10 +226,10 @@ def _convert_mapping_attr(
     value_type: WaveTensorType,
     *,
     is_read: bool,
-) -> IndexMapping:
+) -> IndexMapping | None:
     """Reconstruct an IndexMapping from a Water MLIR permutation map attribute.
 
-    The water emitter stores the mapping as an inverse permutation affine map
+    The water emitter stores the mapping as a permutation affine map
     (memory dims -> value dims). This inverts the process: extracts the
     permutation, then rebuilds input/output mappings using dimension symbols
     from the memory and value types.
@@ -242,6 +242,8 @@ def _convert_mapping_attr(
     is not currently supported.
     """
     affine_map = mapping_attr.map
+    if affine_map is None:
+        return None
     n = affine_map.n_dims
 
     inverse_perm = []
@@ -724,8 +726,9 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
         type=get_custom(mem_node).type,
     )
     if mapping is not None:
-        # type was set from memory (e.g. [N,K,M]). infer_type corrects it to
-        # match indexing_dims which uses the mapping's input shape (e.g. [M,N,K]).
+        # type was set from memory shape (e.g. [N,K,M]). infer_type corrects
+        # it to the mapping's input shape (the value-to-store/register shape,
+        # e.g. [M,N,K]).
         write_op.infer_type()
     _apply_mlir_attrs_to_fx_node(write_op.fx_node, converted_attrs)
     # No mapping added because write produces no SSA results.

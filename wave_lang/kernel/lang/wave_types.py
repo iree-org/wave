@@ -304,7 +304,7 @@ class IndexMapping:
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, IndexMapping):
-            return NotImplemented
+            return False
         return (
             self.input_mapping == other.input_mapping
             and self.output_mapping == other.output_mapping
