@@ -53,7 +53,7 @@ def get_tagged_mxfp4_gemm(
         (kernel_function, WaveCompileOptions)
     """
     assert output_dtype in [tkl.f32, tkl.bf16], f"Unsupported output dtype: {output_dtype}"
-    
+
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -108,10 +108,8 @@ def get_tagged_mxfp4_gemm(
             return acc
 
         if output_dtype == tkl.bf16:
-            repeat_bf16 = tkw.cast(repeat, tkl.bf16)
-            tkw.write(repeat_bf16, c)
-        else:
-            tkw.write(repeat, c)
+            repeat = tkw.cast(repeat, tkl.bf16)
+        tkw.write(repeat, c)
 
     hyperparams = {
         A_ADDRESS_SPACE: a_address_space,
