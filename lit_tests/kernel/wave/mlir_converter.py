@@ -21,6 +21,7 @@ from wave_lang.kernel.wave.compile import (
     build_graph_passes,
     wave_compile,
 )
+from wave_lang.kernel.wave.type_inference import infer_types
 from wave_lang.kernel.wave.constraints import Constraint, MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     format_diagnostics,
@@ -1729,8 +1730,6 @@ def mlir_converter_attention_pre_infer_types():
         compile_to_mlir=True,
     )
 
-    STOP_BEFORE = "infer_types"
-
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
         attention.initialize_wave_constraints()
@@ -1743,7 +1742,7 @@ def mlir_converter_attention_pre_infer_types():
 
         graph_passes = build_graph_passes(attention, trace, options)
         for p in graph_passes:
-            if p.__name__ == STOP_BEFORE:
+            if p.__name__ == infer_types.__name__:
                 break
             p()
 
