@@ -52,7 +52,10 @@ def get_tagged_mxfp4_gemm(
     Returns:
         (kernel_function, WaveCompileOptions)
     """
-    assert output_dtype in [tkl.f32, tkl.bf16], f"Unsupported output dtype: {output_dtype}"
+    assert output_dtype in [
+        tkl.f32,
+        tkl.bf16,
+    ], f"Unsupported output dtype: {output_dtype}"
 
     M = tkl.sym.M
     N = tkl.sym.N

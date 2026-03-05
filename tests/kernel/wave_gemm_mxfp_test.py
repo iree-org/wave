@@ -721,6 +721,7 @@ def testScaledGemmMXFP4AsymmetricSchedule(
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 
+
 @require_e2e
 @require_cdna4
 @pytest.mark.parametrize(
@@ -767,6 +768,7 @@ def testScaledGemmMXFP4AsymmetricScheduleBF16(
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)
+
 
 @require_e2e
 @require_cdna4
