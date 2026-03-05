@@ -435,7 +435,7 @@ def test_index_dict_mismatches(dict1, dict2, expected_error):
     assert expected_error in result.error
 
 
-def _find_first_read(trace):
+def _find_first_read(trace) -> fx.Node:
     """Helper to find the first Read node in a trace."""
     for node in trace.walk():
         if isinstance(get_custom(node), Read):
