@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from enum import Enum
 import itertools
+import sympy
 import sys
-from typing import Sequence
+from typing import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,24 +35,40 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects import wave, arith, amdgpu, func
     from water_mlir.water_mlir.dialects.wave import (
+        AddOp,
         AllocateOp,
+        ApplyExprOp,
         BroadcastOp,
-        MaxElementOp,
-        ReadOp,
-        WriteOp,
-        MmaOp,
-        RegisterOp,
+        CastOp as CastMlirOp,
+        DivOp,
+        Exp2Op,
+        ExtractOp as ExtractMlirOp,
         ExtractSliceOp,
         IterateOp,
+        MaxElementOp,
+        MaxOp,
+        MinOp,
+        MmaOp,
+        MulOp,
+        PermuteOp,
+        ReadOp,
+        ReciprocalOp,
+        RegisterOp,
+        ReshapeOp as ReshapeMlirOp,
+        SelectOp as SelectMlirOp,
+        SelfIndexOp,
+        SubOp,
         SumOp,
-        YieldOp,
         WaveAddressSpaceAttr,
+        WaveApplyExprCombinatorAttr,
         WaveExprListAttr,
         WaveMmaKindAttr,
         WaveReductionScope,
         WaveSymbolMappingAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
+        WriteOp,
+        YieldOp,
         iterate_make_isolated,
     )
 
@@ -87,25 +104,41 @@ from wave_lang.kernel.lang.global_symbols import (
     SHARED_ADDRESS_SPACE,
 )
 from wave_lang.kernel.ops.wave_ops import (
+    Add,
     Allocate,
+    ApplyExpr,
     Broadcast,
-    Read,
-    Write,
-    MMA,
-    MMABase,
-    Max,
-    NewRegister,
+    CastOp as CastFx,
+    Exp2,
+    Extract,
     ExtractSlice,
+    GetResult,
     Iterate,
     IterArg,
-    Placeholder,
+    Max,
+    Maximum,
+    Minimum,
+    MMA,
+    MMABase,
+    Mul,
+    NewRegister,
     Output,
-    GetResult,
+    Permute,
+    Placeholder,
+    Read,
+    Reciprocal,
+    Reshape,
+    SelectOp as SelectFx,
+    SelfIndex,
     SharedMemoryBarrier,
+    Sub,
     Sum,
+    Truediv,
+    Write,
     get_custom,
 )
 from attr_type_converter import (
+    OPERAND_SYMBOL_NAME_WAVE_PREFIX,
     convert_index_mapping_array_to_sympy,
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
@@ -135,14 +168,22 @@ class AttrNames(Enum):
 
     INDEX = ("index", "index")
     BOUNDS = ("bounds", "bounds")
+    COMBINATOR = ("combinator", "combinator")
+    DIM = ("dim", "dim")
     ELEMENTS_PER_THREAD = ("elements_per_thread", "elements_per_thread")
+    EXPR = ("expr", "expr")
     KIND = ("kind", "mma_type")
+    LOGICAL_SLICE = ("logical_slice", "logical_slice")
+    NUM_SLICES = ("num_slices", "num_slices")
     WATER_INTERNAL_ID = ("_water_internal.id", "_water_id")
     OFFSET = ("offset", "offset")
+    POSITION = ("position", "position")
+    SCOPE = ("scope", "scope")
     SIZE = ("size", "size")
     STRIDE = ("stride", "stride")
     MAPPING = ("mapping", "mapping")
     ORDERED_SYMS = ("ordered_syms", "ordered_syms")
+    TARGET_VECTOR_SHAPE = ("target_vector_shape", "target_vector_shape")
     VALUE = ("value", "value")
 
     @property
@@ -836,6 +877,301 @@ def _handle_reduction_op(
     parse_ctx.add_mapping(op.result, reduce_op.fx_node)
 
 
+def _handle_binary_op(
+    op: AddOp | SubOp | MulOp | DivOp | MaxOp | MinOp,
+    fx_cls: type,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle binary arithmetic operations (wave.add, wave.sub, etc.).
+
+    All Wave binary ops share the same structure: `lhs`, `rhs` operands
+    and a single `result`.
+    """
+    lhs_node = parse_ctx.resolve_operand(op.lhs)
+    rhs_node = parse_ctx.resolve_operand(op.rhs)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = fx_cls.create(
+        parse_ctx.graph,
+        lhs=lhs_node,
+        rhs=rhs_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_select_op(
+    op: SelectMlirOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.select operation."""
+    cond_node = parse_ctx.resolve_operand(op.condition)
+    lhs_node = parse_ctx.resolve_operand(op.lhs)
+    rhs_node = parse_ctx.resolve_operand(op.rhs)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = SelectFx.create(
+        parse_ctx.graph,
+        cond=cond_node,
+        if_true=lhs_node,
+        if_false=rhs_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_unary_op(
+    op: Exp2Op | ReciprocalOp,
+    fx_cls: type,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle unary arithmetic operations (wave.exp2, wave.reciprocal)."""
+    arg_node = parse_ctx.resolve_operand(op.argument)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = fx_cls.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_cast_op(
+    op: CastMlirOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.cast operation."""
+    arg_node = parse_ctx.resolve_operand(op.value_to_cast)
+    target_dtype = mlir_element_type_to_dtype(op.result.type.element_type)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = CastFx.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        dtype=target_dtype,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_permute_op(
+    op: PermuteOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.permute operation."""
+    value_node = parse_ctx.resolve_operand(op.value)
+    result_type = op.result.type
+    target_shape = tuple(
+        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+    )
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = Permute.create(
+        parse_ctx.graph,
+        arg=value_node,
+        target_shape=target_shape,
+        type=_convert_wave_tensor_type(result_type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_self_index_op(
+    op: SelfIndexOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.self_index operation."""
+    dim = index_symbol(symbol_attr_to_name(op.dim))
+    result_type = op.result.type
+    target_dtype = mlir_element_type_to_dtype(result_type.element_type)
+
+    ept = op.elements_per_thread.value if op.elements_per_thread is not None else None
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.DIM.mlir_name,
+            AttrNames.ELEMENTS_PER_THREAD.mlir_name,
+        },
+    )
+
+    fx_op = SelfIndex.create(
+        parse_ctx.graph,
+        dim=dim,
+        dtype=target_dtype,
+        elements_per_thread=ept,
+        type=_convert_wave_tensor_type(result_type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _combinator_to_sympy_fn(
+    combinator: wave.WaveApplyExprCombinator,
+) -> Callable[..., sympy.Basic]:
+    """Map a WaveApplyExprCombinator enum value to a sympy constructor."""
+    _MAP = {
+        wave.WaveApplyExprCombinator.Greater: sympy.StrictGreaterThan,
+        wave.WaveApplyExprCombinator.Less: sympy.StrictLessThan,
+        wave.WaveApplyExprCombinator.Equal: sympy.Eq,
+        wave.WaveApplyExprCombinator.NotEqual: sympy.Ne,
+        wave.WaveApplyExprCombinator.GreaterOrEqual: sympy.GreaterThan,
+        wave.WaveApplyExprCombinator.LessOrEqual: sympy.LessThan,
+        wave.WaveApplyExprCombinator.Maximum: sympy.Max,
+        wave.WaveApplyExprCombinator.Minimum: sympy.Min,
+    }
+    fn = _MAP.get(combinator)
+    if fn is None:
+        raise ValueError(f"Unsupported combinator: {combinator}")
+    return fn
+
+
+def _reconstruct_expr_lambda(
+    expr_attr: WaveExprListAttr,
+    num_operands: int,
+    combinator_attr: WaveApplyExprCombinatorAttr | None,
+) -> Callable[..., sympy.Basic]:
+    """Reconstruct a sympy expression lambda from a WaveExprListAttr.
+
+    The returned lambda takes `num_operands` positional arguments corresponding to
+    the operand placeholders (APPLY_EXPR_ARG_0, ...) in the affine expression.
+
+    When a combinator is present, the affine map results are combined using the
+    corresponding sympy relational or aggregation function (e.g. `<` for
+    `lt`).  This ensures the reconstructed lambda produces the same sympy
+    expression as the original.
+    """
+    sympy_results = expr_list_attr_to_exprs(expr_attr)
+
+    combinator_fn = None
+    if combinator_attr is not None:
+        combinator_fn = _combinator_to_sympy_fn(combinator_attr.value)
+
+    operand_syms = [
+        index_symbol(OPERAND_SYMBOL_NAME_WAVE_PREFIX + str(i))
+        for i in range(num_operands)
+    ]
+
+    def expr_lambda(*args):
+        subs_map = {operand_syms[i]: args[i] for i in range(len(args))}
+        results = [r.subs(subs_map) if hasattr(r, "subs") else r for r in sympy_results]
+        if combinator_fn is not None:
+            return combinator_fn(*results)
+        assert (
+            len(results) == 1
+        ), f"Expected single result without combinator, got {len(results)}"
+        return results[0]
+
+    return expr_lambda
+
+
+def _handle_apply_expr_op(
+    op: ApplyExprOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.apply_expr operation.
+
+    Reconstructs the `expr` lambda from the MLIR `WaveExprListAttr` and
+    `combinator` attribute.  In MLIR, non-affine expressions (comparisons,
+    min/max) are split into an affine map over the sub-expressions plus a
+    combinator enum that says how to combine them (e.g. `lt` for `<`).
+    `_reconstruct_expr_lambda` folds both back into a single sympy
+    expression so the round-tripped lambda is semantically identical to the
+    original. The combinator is not stored on the FX node because the
+    emitter re-derives it from the sympy expression structure.
+    """
+    arg_nodes = [parse_ctx.resolve_operand(v) for v in op.arguments]
+
+    combinator_attr = None
+    if op.combinator is not None:
+        combinator_attr = WaveApplyExprCombinatorAttr(op.combinator)
+    expr_lambda = _reconstruct_expr_lambda(
+        op.expr,
+        num_operands=len(arg_nodes),
+        combinator_attr=combinator_attr,
+    )
+
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.EXPR.mlir_name,
+            AttrNames.COMBINATOR.mlir_name,
+        },
+    )
+
+    fx_op = ApplyExpr.create(
+        parse_ctx.graph,
+        register_=arg_nodes if len(arg_nodes) > 1 else arg_nodes[0],
+        expr=expr_lambda,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_extract_op(
+    op: ExtractMlirOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.extract operation."""
+    source_node = parse_ctx.resolve_operand(op.source)
+    position_exprs = expr_list_attr_to_exprs(op.position)
+    offset = position_exprs[0] if len(position_exprs) == 1 else tuple(position_exprs)
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={AttrNames.POSITION.mlir_name},
+    )
+
+    fx_op = Extract.create(
+        parse_ctx.graph,
+        register_=source_node,
+        offset=offset,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_reshape_op(
+    op: ReshapeMlirOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.reshape operation."""
+    source_nodes = [parse_ctx.resolve_operand(v) for v in op.source]
+
+    target_vector_shape = {}
+    for named_attr in op.target_vector_shape:
+        sym = index_symbol(named_attr.name)
+        target_vector_shape[sym] = int(named_attr.attr.value)
+
+    logical_slice = op.logical_slice.value if op.logical_slice is not None else 0
+    num_slices = op.num_slices.value if op.num_slices is not None else 1
+
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.TARGET_VECTOR_SHAPE.mlir_name,
+            AttrNames.LOGICAL_SLICE.mlir_name,
+            AttrNames.NUM_SLICES.mlir_name,
+        },
+    )
+
+    fx_op = Reshape.create(
+        parse_ctx.graph,
+        args=source_nodes if len(source_nodes) > 1 else source_nodes[0],
+        target_vector_shape=target_vector_shape,
+        logical_slice=logical_slice,
+        num_slices=num_slices,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
 def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> None:
     """Handle wave.extract_slice operation."""
     src_node = parse_ctx.resolve_operand(op.memory)
@@ -914,7 +1250,7 @@ def _create_get_result_nodes(
                 result_index = (
                     iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
                 )
-            elif isinstance(output_values[idx], fx.Node):
+            elif idx < len(output_values) and isinstance(output_values[idx], fx.Node):
                 result_index = getattr(
                     output_values[idx], AttrNames.INDEX.fx_property, None
                 )
@@ -1079,6 +1415,36 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_reduction_op(op, Sum, parse_ctx)
             case MaxElementOp():
                 _handle_reduction_op(op, Max, parse_ctx)
+            case AddOp():
+                _handle_binary_op(op, Add, parse_ctx)
+            case SubOp():
+                _handle_binary_op(op, Sub, parse_ctx)
+            case MulOp():
+                _handle_binary_op(op, Mul, parse_ctx)
+            case DivOp():
+                _handle_binary_op(op, Truediv, parse_ctx)
+            case MaxOp():
+                _handle_binary_op(op, Maximum, parse_ctx)
+            case MinOp():
+                _handle_binary_op(op, Minimum, parse_ctx)
+            case SelectMlirOp():
+                _handle_select_op(op, parse_ctx)
+            case Exp2Op():
+                _handle_unary_op(op, Exp2, parse_ctx)
+            case ReciprocalOp():
+                _handle_unary_op(op, Reciprocal, parse_ctx)
+            case CastMlirOp():
+                _handle_cast_op(op, parse_ctx)
+            case PermuteOp():
+                _handle_permute_op(op, parse_ctx)
+            case SelfIndexOp():
+                _handle_self_index_op(op, parse_ctx)
+            case ApplyExprOp():
+                _handle_apply_expr_op(op, parse_ctx)
+            case ExtractMlirOp():
+                _handle_extract_op(op, parse_ctx)
+            case ReshapeMlirOp():
+                _handle_reshape_op(op, parse_ctx)
             case ExtractSliceOp():
                 _handle_extract_slice_op(op, parse_ctx)
             case IterateOp():
