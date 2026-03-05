@@ -35,6 +35,7 @@ try:
     from water_mlir.water_mlir.dialects import wave, arith, amdgpu, func
     from water_mlir.water_mlir.dialects.wave import (
         AllocateOp,
+        BroadcastOp,
         ReadOp,
         WriteOp,
         MmaOp,
@@ -84,6 +85,7 @@ from wave_lang.kernel.lang.global_symbols import (
 )
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
+    Broadcast,
     Read,
     Write,
     MMA,
@@ -605,6 +607,26 @@ def _handle_register_op(op: RegisterOp, parse_ctx: _OpParseContext) -> None:
     parse_ctx.add_mapping(op.result, register_op.fx_node)
 
 
+def _handle_broadcast_op(op: BroadcastOp, parse_ctx: _OpParseContext) -> None:
+    """Handle wave.broadcast operation."""
+    source_node = parse_ctx.resolve_operand(op.source)
+    result_type = op.result.type
+    target_shape = tuple(
+        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+    )
+    dtype = mlir_element_type_to_dtype(result_type.element_type)
+    converted_attrs = _convert_supported_attrs(op)
+
+    broadcast_op = Broadcast.create(
+        parse_ctx.graph,
+        arg=source_node,
+        target_shape=target_shape,
+        type=Register[(*target_shape, dtype)],
+    )
+    _apply_mlir_attrs_to_fx_node(broadcast_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, broadcast_op.fx_node)
+
+
 def _handle_lds_barrier_op(op: amdgpu.LDSBarrierOp, parse_ctx: _OpParseContext) -> None:
     """Handle amdgpu.lds_barrier operation."""
     # AMD GPU lds_barrier maps to SharedMemoryBarrier in FX
@@ -997,6 +1019,8 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_register_op(op, parse_ctx)
             case AllocateOp():
                 _handle_allocate_op(op, parse_ctx)
+            case BroadcastOp():
+                _handle_broadcast_op(op, parse_ctx)
             case ReadOp():
                 _handle_read_op(op, parse_ctx)
             case WriteOp():

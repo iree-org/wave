@@ -28,6 +28,7 @@ from ..constraints import HardwareConstraint, TilingConstraint
 from ...ops.wave_ops import (
     MMA,
     Allocate,
+    Broadcast,
     Conditional,
     CustomOp,
     ExtractSlice,
@@ -211,25 +212,30 @@ def _check_index_mapping_equivalent(
 def _resolve_node(node: fx.Node, node_map: dict[fx.Node, fx.Node]) -> fx.Node | None:
     """Look up the mapped counterpart of `node`.
 
-    Tries a direct lookup first.  If that fails and `node` is a
-    GetResult, falls back to looking up the underlying value.
+    Tries a direct lookup first.  If that fails, sees through wrapper
+    ops (GetResult, Broadcast) that are structurally transparent for
+    comparison purposes and retries with the underlying value.
     """
     mapped = node_map.get(node)
     if mapped is None and isinstance(get_custom(node), GetResult):
         mapped = node_map.get(get_custom(node).value)
+    if mapped is None and isinstance(get_custom(node), Broadcast):
+        mapped = node_map.get(get_custom(node).arg)
     return mapped
 
 
 def _nodes_match(expected: fx.Node, actual: fx.Node) -> bool:
-    """Check whether `actual` is the expected node.
+    """Check whether `actual` is structurally equivalent to `expected`.
 
     Returns True when `actual` is `expected` directly, or when `actual`
-    is a GetResult wrapping `expected`.
+    is a wrapper (GetResult or Broadcast) whose underlying source is `expected`.
     """
     if actual is expected:
         return True
     if isinstance(get_custom(actual), GetResult):
         return get_custom(actual).value is expected
+    if isinstance(get_custom(actual), Broadcast):
+        return get_custom(actual).arg is expected
     return False
 
 
@@ -634,7 +640,12 @@ def _compare_node_lists(
     subs: Optional[dict[IndexSymbol, int]],
     node_map: dict[fx.Node, fx.Node],
 ) -> Result:
-    """Compare two node lists positionally using _check_nodes_equivalent."""
+    """Compare two node lists positionally using _check_nodes_equivalent.
+
+    Transparent wrapper ops (GetResult, Broadcast) are expected to have
+    been filtered by the caller; this function does a straight positional
+    comparison of whatever it receives.
+    """
     if len(lhs_nodes) != len(rhs_nodes):
         return Failure(
             f"node count mismatch: {len(lhs_nodes)} vs {len(rhs_nodes)}",
@@ -672,11 +683,12 @@ def _check_graphs_equivalent(
     After placeholders are resolved, non-placeholder nodes are compared
     positionally via `_compare_node_lists`.
 
-    `GetResult` nodes are filtered automatically when the source (lhs)
-    graph contains `Iterate` nodes but no `GetResult` nodes. This
-    handles pre-canonical FX graphs where `add_get_results` has not yet
-    run: the MLIR importer always produces `GetResult` wrappers, but the
-    source FX graph may reference iterate results directly.
+    Transparent wrapper ops (GetResult, Broadcast) may appear
+    asymmetrically between the two sides.  They are filtered from the
+    node lists before comparison, and ``_nodes_match`` /
+    ``_resolve_node`` see through them when resolving operand
+    references.  Filtering rather than trace mutation avoids interfering
+    with subsequent compilation passes and their roundtrips.
     """
     lhs = (
         lhs_trace.get_root_graph()
@@ -692,15 +704,20 @@ def _check_graphs_equivalent(
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
 
-    # Auto-detect pre-canonical FX: if lhs has Iterate but no GetResult,
-    # add_get_results has not run yet. Filter GetResult from rhs so the
-    # two sides can be compared structurally.
-    # When both are present (proper canonical form), no filtering happens and
-    # GetResult nodes are compared normally on both sides.
+    # Filter transparent wrapper ops that may appear asymmetrically.
+    #
+    # GetResult: filtered from rhs when the lhs is pre-canonical
+    # (add_get_results has not yet run; the MLIR importer always produces
+    # GetResult wrappers).
     lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
     lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
     if lhs_has_iterate and not lhs_has_getresult:
         rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), GetResult)]
+
+    # Broadcast: always filtered from both sides; either trace may
+    # contain explicit broadcasts at different positions.
+    lhs_nodes = [n for n in lhs_nodes if not isinstance(get_custom(n), Broadcast)]
+    rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), Broadcast)]
 
     if lhs_graph_name is not None:
         # Subgraph: reconcile lifted placeholders, then compare non-lifted.

@@ -62,6 +62,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import (
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     ApplyExpr,
+    BinaryOpBase,
     Extract,
     ExtractSlice,
     get_custom,
@@ -78,6 +79,7 @@ from wave_lang.kernel.ops.wave_ops import (
     ReduceOp as Reduce,
     Reshape,
     SelfIndex,
+    SelectOp as Select,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
     Write,
@@ -894,6 +896,41 @@ def _emit_ops_from_graph(
                         logical_slice=node.logical_slice,
                         num_slices=node.num_slices,
                     )
+                elif isinstance(node, (BinaryOpBase, Select)):
+                    # BinaryOpBase and SelectOp allow implicit broadcasting
+                    # on the Python side (e.g. a rank-2 reduction result
+                    # used with a rank-3 tensor), but the MLIR verifier
+                    # requires matching operand ranks. Insert explicit
+                    # broadcasts for any operand whose shape differs from
+                    # the result. The broadcast target keeps each operand's own
+                    # element type so that e.g. a SelectOp condition (i1) is
+                    # broadcast to the result shape without being cast to the
+                    # result element type (e.g. f32).
+                    #
+                    # We intentionally limit this to ops with known
+                    # broadcasting semantics rather than applying it
+                    # generically, because many ops (read, mma, ...)
+                    # have operands that are intentionally shaped
+                    # differently from the result.
+                    operands = create_mlir_operands()
+                    result_shape = result_type.shape
+                    operands = [
+                        (
+                            BroadcastOp(
+                                WaveTensorType.get(
+                                    result_shape,
+                                    result_type.fully_specified,
+                                    v.type.element_type,
+                                    result_type.address_space,
+                                ),
+                                v,
+                            ).results[0]
+                            if v.type.shape != result_shape
+                            else v
+                        )
+                        for v in operands
+                    ]
+                    mlir_op = op_builder(result_type, *operands)
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())

@@ -16,7 +16,7 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.graph_utils import assert_traces_equivalent
-from wave_lang.kernel.ops.wave_ops import Allocate, MMA, get_custom
+from wave_lang.kernel.ops.wave_ops import Allocate, Broadcast, MMA, Read, get_custom
 from wave_lang.kernel.wave.utils.symbol_utils import (
     collect_allowed_induction_symbols,
     get_induction_symbol,
@@ -433,6 +433,77 @@ def test_index_dict_mismatches(dict1, dict2, expected_error):
     result = _check_index_mapping_equivalent(dict1, dict2, None)
     assert not result
     assert expected_error in result.error
+
+
+def _find_first_read(trace):
+    """Helper to find the first Read node in a trace."""
+    for node in trace.walk():
+        if isinstance(get_custom(node), Read):
+            return node
+    raise AssertionError("No Read node found in trace")
+
+
+def _insert_identity_broadcast(read_node: fx.Node) -> fx.Node:
+    """Insert a Broadcast node after `read_node` with the same shape.
+
+    The broadcast is identity (same input/output shape) and serves to test
+    that the comparison logic treats it as transparent. All downstream users
+    of the read are rewired to the broadcast.
+    """
+    custom = get_custom(read_node)
+    read_type = custom.type
+    shape = read_type.symbolic_shape
+    graph = read_node.graph
+    with graph.inserting_after(read_node):
+        bcast = Broadcast.create(
+            graph,
+            arg=read_node,
+            target_shape=shape,
+            type=read_type,
+        )
+    bcast_node = bcast.fx_node
+    for user in list(read_node.users):
+        if user is not bcast_node:
+            user.replace_input_with(read_node, bcast_node)
+    return bcast_node
+
+
+def test_broadcast_transparent_in_rhs():
+    """Extra Broadcast nodes in the rhs trace do not break equivalence."""
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    read_node = _find_first_read(trace_b)
+    _insert_identity_broadcast(read_node)
+
+    assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
+
+
+def test_broadcast_transparent_in_lhs():
+    """Extra Broadcast nodes in the lhs trace do not break equivalence."""
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    read_node = _find_first_read(trace_a)
+    _insert_identity_broadcast(read_node)
+
+    assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
+
+
+def test_broadcast_transparent_both_sides():
+    """Broadcasts at different positions on both sides do not break equivalence."""
+    trace_a, options = _trace_gemm_kernel()
+    trace_b, _ = _trace_gemm_kernel()
+
+    # Insert broadcasts at potentially different read nodes.
+    reads_a = [n for n in trace_a.walk() if isinstance(get_custom(n), Read)]
+    reads_b = [n for n in trace_b.walk() if isinstance(get_custom(n), Read)]
+    assert len(reads_a) >= 2, "Need at least two reads for a meaningful test"
+
+    _insert_identity_broadcast(reads_a[0])
+    _insert_identity_broadcast(reads_b[1])
+
+    assert_traces_equivalent(trace_a, trace_b, subs=options.subs)
 
 
 @pytest.mark.skip("Too slow")

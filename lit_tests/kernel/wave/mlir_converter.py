@@ -502,6 +502,93 @@ def mlir_converter_select():
     # CHECK: wave.write %[[SELECT]]
 
 
+# CHECK-LABEL: mlir_converter_implicit_broadcast
+@run_test
+def mlir_converter_implicit_broadcast():
+    """Verify that the emitter inserts explicit wave.broadcast ops for
+    BinaryOpBase and SelectOp when operand ranks differ from the result.
+    """
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    @wave.wave(constraints)
+    def implicit_bcast(
+        a: Memory[M, ADDRESS_SPACE_A, tkl.f32],
+        b: Memory[M, N, ADDRESS_SPACE_A, tkl.f32],
+        cond: Memory[M, ADDRESS_SPACE_A, tkl.bool],
+        out: Memory[M, N, ADDRESS_SPACE_A, tkl.f32],
+    ):
+        a_reg = wave.read(a)
+        b_reg = wave.read(b)
+        c_reg = wave.read(cond)
+        add_result = a_reg + b_reg
+        sel_result = wave.select(c_reg, add_result, a_reg)
+        wave.write(sel_result, out)
+
+    options = WaveCompileOptions(
+        subs={
+            ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+            M: 128,
+            N: 256,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+        },
+        compile_to_mlir=True,
+    )
+
+    with IndexingContext() as idxc:
+        idxc.set_subs(options.subs)
+        implicit_bcast.initialize_wave_constraints()
+        implicit_bcast.initialize_symbolic_constraints()
+        implicit_bcast.initialize_workgroup_constraints()
+
+        trace = implicit_bcast._trace(
+            location_capture_config=options.location_capture_config
+        )
+
+        graph_passes = build_graph_passes(implicit_bcast, trace, options)
+        for p in graph_passes:
+            p()
+
+        mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, implicit_bcast.constraints, options
+        )
+
+    if diagnostics:
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+    print(mlir_output)
+
+    # Two identical reads of a - graph passes duplicate the read for each use;
+    # CSE in the full pipeline would fold them.
+    # CHECK:      %[[READ_A0:.*]] = wave.read {{.*}} -> !wave.tensor<[@M] of f32, <register>>
+    # CHECK:      %[[READ_A1:.*]] = wave.read {{.*}} -> !wave.tensor<[@M] of f32, <register>>
+    # CHECK:      %[[READ_B:.*]] = wave.read {{.*}} -> !wave.tensor<[@M, @N] of f32, <register>>
+    # CHECK:      %[[READ_COND:.*]] = wave.read {{.*}} -> !wave.tensor<[@M] of i1, <register>>
+
+    # Binary add: a_reg [M] is broadcast to [M, N] before the add.
+    # CHECK:      %[[BCAST_ADD:.*]] = wave.broadcast %[[READ_A1]] {{.*}}(!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    # CHECK:      %[[ADD:.*]] = wave.add %[[BCAST_ADD]], %[[READ_B]]
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f32, <register>>
+
+    # Select: the i1 condition ([M]) is broadcast to [M, N] while preserving
+    # its element type, and a_reg [M] is broadcast to [M, N] for the if_false operand.
+    # CHECK:      %[[BCAST_COND:.*]] = wave.broadcast %[[READ_COND]] {{.*}}(!wave.tensor<[@M] of i1, <register>>) -> !wave.tensor<[@M, @N] of i1, <register>>
+    # CHECK:      %[[BCAST_SEL:.*]] = wave.broadcast %[[READ_A0]] {{.*}}(!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    # CHECK:      wave.select %[[BCAST_COND]], %[[ADD]], %[[BCAST_SEL]]
+    # CHECK-SAME: !wave.tensor<[@M, @N] of i1, <register>>
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f32, <register>>
+
+
 @run_test
 def multi_result_handling():
     constraints = [
@@ -1760,6 +1847,15 @@ def mlir_converter_attention_pre_infer_types():
 
     # Body contains the two reductions.
     # CHECK:      wave.max_element
+
+    # The emitter inserts explicit broadcasts when a binary op mixes
+    # operands of different ranks (e.g. rank-2 max result used with
+    # a rank-3 tensor). Verify a broadcast precedes the sub.
+    # CHECK:      wave.broadcast
+    # CHECK-SAME: (!wave.tensor<[@B, @M] of f32, <register>>) -> !wave.tensor<[@B, @M, @K2] of f32, <register>>
+    # CHECK:      wave.sub
+    # CHECK-SAME: !wave.tensor<[@B, @M, @K2] of f32, <register>>, !wave.tensor<[@B, @M, @K2] of f32, <register>>
+
     # CHECK:      wave.sum
 
     # Yield feeds the three updated loop-carried values back.
