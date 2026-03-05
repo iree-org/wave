@@ -118,6 +118,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
     schedule = get_mxfp4_dbuf_pingpong_schedule(use_stagger=True, shape=shape)
 
     options.print_ir_after = "all" if is_debug else []
@@ -142,6 +143,8 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
