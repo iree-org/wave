@@ -37,6 +37,7 @@ def get_tagged_mxfp4_gemm(
     b_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     reorder_workgroups=True,
     group_size_n=32,
+    output_dtype=tkl.f32,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel + compile options for CDNA4.
 
@@ -51,6 +52,8 @@ def get_tagged_mxfp4_gemm(
     Returns:
         (kernel_function, WaveCompileOptions)
     """
+    assert output_dtype in [tkl.f32, tkl.bf16], f"Unsupported output dtype: {output_dtype}"
+    
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -83,7 +86,7 @@ def get_tagged_mxfp4_gemm(
         a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, B_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -104,7 +107,11 @@ def get_tagged_mxfp4_gemm(
             )
             return acc
 
-        tkw.write(repeat, c)
+        if output_dtype == tkl.bf16:
+            repeat_bf16 = tkw.cast(repeat, tkl.bf16)
+            tkw.write(repeat_bf16, c)
+        else:
+            tkw.write(repeat, c)
 
     hyperparams = {
         A_ADDRESS_SPACE: a_address_space,
