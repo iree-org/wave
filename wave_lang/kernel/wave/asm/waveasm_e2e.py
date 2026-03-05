@@ -38,6 +38,7 @@ from typing import Optional, List, Tuple
 import torch
 
 from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+from wave_lang.kernel.wave.utils.run_utils import get_dynamic_stride_args
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 
 
@@ -664,8 +665,11 @@ def run_with_wave_runtime(
     kern_args = [tensor.data_ptr() for tensor in all_tensors]
     kernel_args = wave_runtime.Int64Vector(kern_args)
 
+    # Prepare dynamic stride arguments
+    stride_args = get_dynamic_stride_args(all_tensors)
+
     # Launch
-    wave_runtime.launch(kernel_launch_info, kernel_args, [], [])
+    wave_runtime.launch(kernel_launch_info, kernel_args, [], [], stride_args)
 
     # Sync
     torch.cuda.synchronize()

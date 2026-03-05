@@ -44,6 +44,21 @@ def get_benchmark_flags(options: WaveCompileOptions):
     return benchmark_flags
 
 
+def get_dynamic_stride_args(tensor_args: list[torch.Tensor]):
+    """
+    Get the dynamic stride arguments for the given tensors.
+    Only the leading dimensions are included.
+    """
+    import wave_runtime
+
+    stride_values = []
+    for arg_tensor in tensor_args:
+        rank = arg_tensor.dim()
+        if rank > 1:
+            stride_values.extend(arg_tensor.stride()[: rank - 1])
+    return wave_runtime.Int64Vector(stride_values)
+
+
 def invoke_with_wave_runtime(
     options: WaveCompileOptions,
     kernel_inputs: list[torch.Tensor],
@@ -99,12 +114,7 @@ def invoke_with_wave_runtime(
 
     # Pass leading strides only (innermost dim is always unit stride).
     if options.dynamic_strides:
-        stride_values = []
-        for arg_tensor in chain(kernel_inputs, kernel_outputs):
-            rank = arg_tensor.dim()
-            if rank > 1:
-                stride_values.extend(arg_tensor.stride()[: rank - 1])
-        strides = wave_runtime.Int64Vector(stride_values)
+        strides = get_dynamic_stride_args(kernel_inputs + kernel_outputs)
     else:
         strides = wave_runtime.Int64Vector([])
 
