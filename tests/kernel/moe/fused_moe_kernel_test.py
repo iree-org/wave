@@ -17,9 +17,9 @@ from wave_lang.kernel._support.dtype import f16, f32, i32
 from wave_lang.kernel.wave.templates.moe_v2 import (
     get_fused_moe_gemm,
     get_moe_gemm_only_kernel,
+    get_moe_gather_kernel,
+    get_moe_scatter_kernel,
     moe_align_block_size_pytorch,
-    moe_gather,
-    moe_scatter,
     get_moe_reduce_sum_kernel,
     get_silu_and_mul_kernel,
     get_topk_kernel,
@@ -188,6 +188,22 @@ def get_wave_moe_gemm_only(
     return wave_compile(options, kernel)
 
 
+def get_wave_moe_gather(m, k, num_blocks, block_size, pad_value):
+    kernel, symbols = get_moe_gather_kernel(m, k, num_blocks, block_size, pad_value)
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(subs=symbols)
+    options = set_default_run_config(options)
+    return wave_compile(options, kernel)
+
+
+def get_wave_moe_scatter(m, k, num_blocks, block_size, pad_value):
+    kernel, symbols = get_moe_scatter_kernel(m, k, num_blocks, block_size, pad_value)
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(subs=symbols)
+    options = set_default_run_config(options)
+    return wave_compile(options, kernel)
+
+
 def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     # Calculate buffer sizes for block-aligned computation
     max_num_tokens_padded = score.numel() + num_experts * (block_size - 1)
@@ -251,19 +267,33 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     reshaped_a = a.clone()  # capture before kernel modifies anything
     pad_value = m * topk  # sorted_ids padding sentinel
 
+    # Prepare sorted_ids for Wave gather kernel: must have exactly
+    # num_blocks * block_size entries (pad with pad_value if needed)
+    total_elems = num_blocks * block_size
+    if sorted_ids.shape[0] < total_elems:
+        sorted_ids_wave = torch.full(
+            (total_elems,), pad_value, dtype=torch.int32, device=a.device
+        )
+        sorted_ids_wave[: sorted_ids.shape[0]] = sorted_ids
+    else:
+        sorted_ids_wave = sorted_ids[:total_elems].contiguous()
+
     # Allocate output tensors
     gemm1_out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
     silu_and_mul_out = torch.zeros(
         m * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
     )
     gemm2_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
+    gather_dummy = torch.empty(total_elems, dtype=torch.int32, device=a.device)
 
     # GEMM1: Compute gate and up projections (a @ w1.T)
-    # Step 1: Gather input rows into per-block scratch buffer
+    # Step 1: Gather input rows into per-block scratch buffer (WAVE)
     a_scratch = torch.zeros(
         num_blocks, m * topk, k, dtype=torch.float16, device=a.device
     )
-    moe_gather(a, sorted_ids, a_scratch, block_size, pad_value)
+    gather1 = get_wave_moe_gather(m * topk, k, num_blocks, block_size, pad_value)
+    gather1(sorted_ids_wave, a, a_scratch, gather_dummy)
+    torch.cuda.synchronize()
 
     # Step 2: Per-expert batched GEMM on pre-gathered data
     c_scratch = torch.zeros(
@@ -281,8 +311,12 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     gemm1(a_scratch, w1, expert_ids, c_scratch)
     torch.cuda.synchronize()
 
-    # Step 3: Scatter GEMM results back to token positions
-    moe_scatter(c_scratch, sorted_ids, gemm1_out, block_size, pad_value)
+    # Step 3: Scatter GEMM results back to token positions (WAVE)
+    scatter1 = get_wave_moe_scatter(
+        m * topk, w1.shape[1], num_blocks, block_size, pad_value
+    )
+    scatter1(sorted_ids_wave, c_scratch, gemm1_out, gather_dummy)
+    torch.cuda.synchronize()
 
     # Apply SiLU activation: SiLU(gate) * up
     # d = gemm1_out.shape[-1] // 2
@@ -298,7 +332,7 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     torch.cuda.synchronize()
 
     # GEMM2: Down projection (silu_and_mul_out @ w2.T)
-    # Step 1: Gather SiLU output into per-block scratch
+    # Step 1: Gather SiLU output into per-block scratch (WAVE)
     silu_and_mul_out_f16 = silu_and_mul_out.to(torch.float16)
     a2_scratch = torch.zeros(
         num_blocks,
@@ -307,7 +341,11 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
         dtype=torch.float16,
         device=a.device,
     )
-    moe_gather(silu_and_mul_out_f16, sorted_ids, a2_scratch, block_size, pad_value)
+    gather2 = get_wave_moe_gather(
+        m * topk, silu_and_mul_out.shape[1], num_blocks, block_size, pad_value
+    )
+    gather2(sorted_ids_wave, silu_and_mul_out_f16, a2_scratch, gather_dummy)
+    torch.cuda.synchronize()
 
     # Step 2: Per-expert batched GEMM
     c2_scratch = torch.zeros(
@@ -329,8 +367,12 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     gemm2(a2_scratch, w2, expert_ids, c2_scratch)
     torch.cuda.synchronize()
 
-    # Step 3: Scatter GEMM2 results back
-    moe_scatter(c2_scratch, sorted_ids, gemm2_out, block_size, pad_value)
+    # Step 3: Scatter GEMM2 results back (WAVE)
+    scatter2 = get_wave_moe_scatter(
+        m * topk, w2.shape[1], num_blocks, block_size, pad_value
+    )
+    scatter2(sorted_ids_wave, c2_scratch, gemm2_out, gather_dummy)
+    torch.cuda.synchronize()
 
     # Reduce: Sum across output dimension
 
