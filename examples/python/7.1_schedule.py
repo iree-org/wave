@@ -129,11 +129,11 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
-    Same for B data. However , loading B directly to VGPR consumes too many VGPRs and causes spilling.
+    Same for B data. However, loading B directly to VGPR consumes too many VGPRs and causes spilling.
     A is read from global memory directly to LDS.
     """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
@@ -142,6 +142,10 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled(use_stagger=True, shape=shape)
 
     options.print_ir_after = "all" if is_debug else []
