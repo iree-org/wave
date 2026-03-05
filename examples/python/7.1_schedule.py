@@ -27,6 +27,7 @@ from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_mixed_pingpong_schedule,
     get_mxfp4_asymmetric_schedule,
     get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule,
+    get_mxfp4_dbuf_8wave_asymmetric_schedule,
 )
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
@@ -292,6 +293,60 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm(
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     print("MXFP GEMM preshuffle-B 4-wave (WaveASM backend) test passed!")
+
+
+def _compile_8wave_preshuffle_b_gemm(
+    shape, block, is_debug=False, dynamic=False,
+):
+    """Compile preshuffle-B MXFP4 GEMM with 8 waves (4M x 2N).
+
+    A scale uses GLOBAL_ADDRESS_SPACE to bypass preshuffle_scale_to_shared,
+    which has a bug with multiple M-waves (zeroes wave-dependent symbols
+    when computing LDS addresses).
+
+    Args:
+        dynamic: If True, make M, N, K dynamic (not specialized on shape).
+    """
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, block, wave_shape=(4, 2),
+        a_scale_address_space=GLOBAL_ADDRESS_SPACE,
+    )
+    if dynamic:
+        dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in dynamic_symbols:
+            del options.subs[sym]
+        options.dynamic_symbols = dynamic_symbols
+        options.backend = "llvm"
+        options.wave_runtime = True
+    else:
+        options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    schedule = get_mxfp4_dbuf_8wave_asymmetric_schedule(
+        use_stagger=True, is_bscale_shuffled=True
+    )
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    return wave_compile(options, gemm, schedule)
+
+
+def test_dbuf_8wave_mxfp_preshuffle_b_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Preshuffle-B MXFP4 GEMM with 8 waves (4M x 2N), static shapes."""
+    gemm = _compile_8wave_preshuffle_b_gemm(shape, block, is_debug, dynamic=False)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    print("MXFP GEMM preshuffle-B 8-wave static test passed!")
+
+
+def test_dbuf_8wave_mxfp_dynamic_preshuffle_b_gemm(
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+):
+    """Preshuffle-B MXFP4 GEMM with 8 waves (4M x 2N), dynamic M, N, K."""
+    gemm = _compile_8wave_preshuffle_b_gemm(shape, block, is_debug, dynamic=True)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    print("MXFP GEMM preshuffle-B 8-wave dynamic test passed!")
 
 
 if __name__ == "__main__":

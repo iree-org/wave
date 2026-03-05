@@ -701,7 +701,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 
     if mapping:
         transformed_index = transform_index_on_mapping(
-            mapping, input_shape, index, is_read=True
+            mapping, input_shape, index, is_read=True,
         )
         mask = _build_mask_with_mapping(
             emitter,

@@ -285,6 +285,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     a_scale_preshuffle: bool = True,
+    a_scale_address_space: tkl.AddressSpace = None,
     reorder_workgroups=True,
     group_size_n=32,
 ):
@@ -302,7 +303,11 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
         mfma_variant: Scaled MMA instruction type.
-        a_address_space: Address space for A and A_scale (typically SHARED).
+        a_address_space: Address space for A data (typically SHARED).
+        a_scale_preshuffle: Whether to apply e8m0 preshuffle mapping to A scale.
+        a_scale_address_space: Address space for A scale.  Defaults to
+            a_address_space.  Set to GLOBAL_ADDRESS_SPACE for 8-wave configs
+            to avoid a preshuffle_scale_to_shared bug with multiple M-waves.
 
     Returns:
         (kernel_function, WaveCompileOptions)
@@ -318,6 +323,10 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
     K_PACKED = tkl.sym.K_PACKED
     K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+
+    _a_scale_space = (
+        a_scale_address_space if a_scale_address_space is not None else A_ADDRESS_SPACE
+    )
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -416,7 +425,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     @tkw.wave(constraints)
     def gemm(
         a: tkl.Memory[M, K / 2, A_ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, _a_scale_space, tkl.i8],
         b: tkl.Memory[N, K / 2, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
