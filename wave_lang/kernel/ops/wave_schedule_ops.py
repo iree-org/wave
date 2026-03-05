@@ -810,6 +810,7 @@ class PipelinedLoop:
         self.kernel_trace = kernel_trace
         self.constraints = constraints
         self.multi_buffer_count = multi_buffer_count
+        self.unroll_factor = 1
 
         # Access options from the current ScheduleContext
         from .._support.tracing import ScheduleContext
@@ -875,6 +876,7 @@ class PipelinedLoop:
             scheduling_type=SchedulingType.MANUAL,
             visualize=False,
             multi_buffer_count=self.multi_buffer_count,
+            unroll_factor=self.unroll_factor,
         )
 
         # Store the pipelined iterate node and node mapping, then create proxies for the stages
