@@ -277,6 +277,298 @@ def get_moe_histogram_kernel(
 
 
 # ---------------------------------------------------------------------------
+# MoE Gather kernel — Wave replacement for moe_gather()
+# ---------------------------------------------------------------------------
+def get_moe_gather_kernel(
+    m: int,
+    k: int,
+    num_blocks: int,
+    block_size: int,
+    pad_value: int,
+):
+    """
+    Wave kernel for MoE gather: copies input token rows into per-block scratch buffer.
+
+    For each block, copies block_size rows from a[] at positions given by sorted_ids[]
+    into a_back[block, :block_size, :]. Padding slots (sorted_ids >= pad_value) are
+    skipped — the caller must zero-initialize a_back before calling this kernel.
+
+    This is the standalone Wave replacement for the PyTorch moe_gather() function.
+    It follows the same gather pattern as get_fused_moe_gemm (moe.py) but as a
+    separate kernel, avoiding the cross-WORKGROUP_1 race condition (see AGENTS.md §6.1).
+
+    Args:
+        m: Total token count (num_tokens * topk).
+        k: Hidden dimension.
+        num_blocks: Number of expert blocks.
+        block_size: Slots per block.
+        pad_value: Sentinel value in sorted_ids (= m) indicating padding.
+    """
+    M = tkl.sym.M
+    K = tkl.sym.K
+    NUM_BLOCKS = sym.NUM_BLOCKS
+    BLOCK_SHAPE = sym.BLOCK_SHAPE
+    PAD_VALUE = sym.PAD_VALUE
+    TOTAL_ELEMS = sym.TOTAL_ELEMS
+    SCATTER_IDX = sym.SCATTER_IDX
+    BLOCK_K = sym.BLOCK_K
+
+    total_elems = num_blocks * block_size
+
+    # One workgroup per block (TOTAL_ELEMS / BLOCK_SHAPE = num_blocks).
+    # Within each workgroup, THREAD_0 < BLOCK_SHAPE threads each handle one slot.
+    # K is tiled via iterate() — each active thread copies 16 K elements per step.
+    constraints = [
+        tkw.WorkgroupConstraint(TOTAL_ELEMS, BLOCK_SHAPE, 0),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(TOTAL_ELEMS, BLOCK_SHAPE),
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={
+                TOTAL_ELEMS: TOTAL_ELEMS,
+                BLOCK_SHAPE: BLOCK_SHAPE,
+                NUM_BLOCKS: NUM_BLOCKS,
+                M: M,
+                K: 16,
+            },
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    # Read sorted_ids at dynamic offset (block * block_size + slot)
+    sorted_ids_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={TOTAL_ELEMS: d0},
+        outputs={TOTAL_ELEMS: i},
+        dynamic_val_mappings={TOTAL_ELEMS: i},
+    )
+
+    # Read from a[token_idx, k] with indirect token_idx from sorted_ids
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    # Write to a_back[WORKGROUP_0, slot_in_block, k]
+    a_back_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={NUM_BLOCKS: WORKGROUP_0, M: d0, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    @tkw.wave(constraints)
+    def moe_gather_kernel(
+        sorted_ids: Memory[TOTAL_ELEMS, GLOBAL_ADDRESS_SPACE, i32],
+        a: Memory[M, K, GLOBAL_ADDRESS_SPACE, f16],
+        a_back: Memory[NUM_BLOCKS, M, K, GLOBAL_ADDRESS_SPACE, f16],
+        dummy: Memory[TOTAL_ELEMS, GLOBAL_ADDRESS_SPACE, i32],
+    ):
+        condition = THREAD_0 < BLOCK_SHAPE
+
+        @tkw.conditional(condition)
+        def gather_op():
+            tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
+            wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_0)
+            tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
+
+            token_idx = tkw.read(
+                sorted_ids,
+                mapping=sorted_ids_read_map,
+                mapping_dynamic_vals=(tid_offset,),
+            )
+
+            tkw.set_symbol(SCATTER_IDX, token_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
+
+            @tkw.conditional(is_not_padding)
+            def copy_valid():
+                @tkw.iterate(K, init_args=[])
+                def copy_row():
+                    a_row = tkw.read(
+                        a,
+                        mapping=a_read_map,
+                        mapping_dynamic_vals=(token_idx,),
+                        elements_per_thread=16,
+                    )
+                    tkw.write(
+                        a_row,
+                        a_back,
+                        mapping=a_back_write_map,
+                        mapping_dynamic_vals=(tid,),
+                        elements_per_thread=16,
+                    )
+
+        # Leaf write required by compiler — writes inside conditionals may not
+        # be recognized as leaves (see AGENTS.md §6.4)
+        dummy_val = tkw.read(sorted_ids, elements_per_thread=1)
+        tkw.write(dummy_val, dummy, elements_per_thread=1)
+
+    hyperparams = {
+        TOTAL_ELEMS: total_elems,
+        BLOCK_SHAPE: block_size,
+        NUM_BLOCKS: num_blocks,
+        M: m,
+        K: k,
+        PAD_VALUE: pad_value,
+        BLOCK_K: 32,
+    }
+
+    return moe_gather_kernel, hyperparams
+
+
+# ---------------------------------------------------------------------------
+# MoE Scatter kernel — Wave replacement for moe_scatter()
+# ---------------------------------------------------------------------------
+def get_moe_scatter_kernel(
+    m: int,
+    k: int,
+    num_blocks: int,
+    block_size: int,
+    pad_value: int,
+):
+    """
+    Wave kernel for MoE scatter: copies per-block GEMM results back to token positions.
+
+    For each block, copies block_size rows from c_back[block, :block_size, :] to
+    output[token_idx, :] where token_idx comes from sorted_ids. Padding slots
+    (sorted_ids >= pad_value) are skipped.
+
+    This is the standalone Wave replacement for the PyTorch moe_scatter() function.
+    It mirrors get_moe_gather_kernel with reversed read/write targets.
+
+    Args:
+        m: Total token count (num_tokens * topk).
+        k: Output hidden dimension (e.g., w1.shape[1] for GEMM1, w2.shape[1] for GEMM2).
+        num_blocks: Number of expert blocks.
+        block_size: Slots per block.
+        pad_value: Sentinel value in sorted_ids (= m) indicating padding.
+    """
+    M = tkl.sym.M
+    K = tkl.sym.K
+    NUM_BLOCKS = sym.NUM_BLOCKS
+    BLOCK_SHAPE = sym.BLOCK_SHAPE
+    PAD_VALUE = sym.PAD_VALUE
+    TOTAL_ELEMS = sym.TOTAL_ELEMS
+    SCATTER_IDX = sym.SCATTER_IDX
+    BLOCK_K = sym.BLOCK_K
+
+    total_elems = num_blocks * block_size
+
+    # Same dispatch structure as gather: one workgroup per block,
+    # THREAD_0 < BLOCK_SHAPE threads each handle one slot,
+    # K tiled via iterate().
+    constraints = [
+        tkw.WorkgroupConstraint(TOTAL_ELEMS, BLOCK_SHAPE, 0),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(TOTAL_ELEMS, BLOCK_SHAPE),
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={
+                TOTAL_ELEMS: TOTAL_ELEMS,
+                BLOCK_SHAPE: BLOCK_SHAPE,
+                NUM_BLOCKS: NUM_BLOCKS,
+                M: M,
+                K: 16,
+            },
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    # Read sorted_ids at dynamic offset (block * block_size + slot)
+    sorted_ids_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={TOTAL_ELEMS: d0},
+        outputs={TOTAL_ELEMS: i},
+        dynamic_val_mappings={TOTAL_ELEMS: i},
+    )
+
+    # Read from c_back[WORKGROUP_0, slot_in_block, k]
+    c_back_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={NUM_BLOCKS: WORKGROUP_0, M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    # Write to output[token_idx, k]
+    output_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={M: d0, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    @tkw.wave(constraints)
+    def moe_scatter_kernel(
+        sorted_ids: Memory[TOTAL_ELEMS, GLOBAL_ADDRESS_SPACE, i32],
+        c_back: Memory[NUM_BLOCKS, M, K, GLOBAL_ADDRESS_SPACE, f32],
+        output: Memory[M, K, GLOBAL_ADDRESS_SPACE, f32],
+        dummy: Memory[TOTAL_ELEMS, GLOBAL_ADDRESS_SPACE, i32],
+    ):
+        condition = THREAD_0 < BLOCK_SHAPE
+
+        @tkw.conditional(condition)
+        def scatter_op():
+            tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
+            wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_0)
+            tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
+
+            token_idx = tkw.read(
+                sorted_ids,
+                mapping=sorted_ids_read_map,
+                mapping_dynamic_vals=(tid_offset,),
+            )
+
+            tkw.set_symbol(SCATTER_IDX, token_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
+
+            @tkw.conditional(is_not_padding)
+            def copy_valid():
+                @tkw.iterate(K, init_args=[])
+                def copy_row():
+                    c_row = tkw.read(
+                        c_back,
+                        mapping=c_back_read_map,
+                        mapping_dynamic_vals=(tid,),
+                        elements_per_thread=16,
+                    )
+                    tkw.write(
+                        c_row,
+                        output,
+                        mapping=output_write_map,
+                        mapping_dynamic_vals=(token_idx,),
+                        elements_per_thread=16,
+                    )
+
+        # Leaf write required by compiler (see AGENTS.md §6.4)
+        dummy_val = tkw.read(sorted_ids, elements_per_thread=1)
+        tkw.write(dummy_val, dummy, elements_per_thread=1)
+
+    hyperparams = {
+        TOTAL_ELEMS: total_elems,
+        BLOCK_SHAPE: block_size,
+        NUM_BLOCKS: num_blocks,
+        M: m,
+        K: k,
+        PAD_VALUE: pad_value,
+        BLOCK_K: 32,
+    }
+
+    return moe_scatter_kernel, hyperparams
+
+
+# ---------------------------------------------------------------------------
 # Helper: compile a Wave kernel with default settings
 # ---------------------------------------------------------------------------
 def _compile_wave_kernel(kernel_fn, hyperparams, **compile_kwargs):
