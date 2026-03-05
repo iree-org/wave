@@ -917,6 +917,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
         if isinstance(val, _Rational):
             raise CodegenError(f"Rational is not supported yet in '{type(term)}'")
 
+    def _resolve_rational(val):
+        if isinstance(val, _Rational):
+            return floordiv_expr(val.numerator, val.denominator)
+        return val
+
     def _remove_denominators(lhs, rhs):
         """
         Converts     (z/x) < y -> z < x*y
@@ -1002,29 +1007,29 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             case sympy.StrictGreaterThan():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
+                if isinstance(rhs, _Rational) or isinstance(lhs, _Rational):
+                    lhs, rhs = _remove_denominators(lhs, rhs)
                 res = arith_d.cmpi(arith_d.CmpIPredicate.sgt, *_broadcast(lhs, rhs))
                 stack.append(res)
             case sympy.GreaterThan():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
+                if isinstance(rhs, _Rational) or isinstance(lhs, _Rational):
+                    lhs, rhs = _remove_denominators(lhs, rhs)
                 res = arith_d.cmpi(arith_d.CmpIPredicate.sge, *_broadcast(lhs, rhs))
                 stack.append(res)
             case sympy.Eq():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
+                if isinstance(rhs, _Rational) or isinstance(lhs, _Rational):
+                    lhs, rhs = _remove_denominators(lhs, rhs)
                 res = arith_d.cmpi(arith_d.CmpIPredicate.eq, *_broadcast(lhs, rhs))
                 stack.append(res)
             case sympy.Ne():
                 rhs = stack.pop()
                 lhs = stack.pop()
-                _enforce_non_rational(rhs, term)
-                _enforce_non_rational(lhs, term)
+                if isinstance(rhs, _Rational) or isinstance(lhs, _Rational):
+                    lhs, rhs = _remove_denominators(lhs, rhs)
                 res = arith_d.cmpi(arith_d.CmpIPredicate.ne, *_broadcast(lhs, rhs))
                 stack.append(res)
             case sympy.And():
@@ -1051,13 +1056,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                 stack.append(res)
             case sympy.Max():
                 count = len(term.args)
-                res = stack.pop()
-                _enforce_non_rational(res, term)
+                res = _resolve_rational(stack.pop())
                 res = _get_ir_value(res)
                 elem_type = get_type_or_element_type(res.type)
                 for _ in range(count - 1):
-                    operand = stack.pop()
-                    _enforce_non_rational(operand, term)
+                    operand = _resolve_rational(stack.pop())
                     operand = _get_ir_value(operand)
                     if is_integer_like_type(elem_type):
                         res = arith_d.maxsi(*_broadcast(res, operand))
@@ -1067,13 +1070,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                 stack.append(res)
             case sympy.Min():
                 count = len(term.args)
-                res = stack.pop()
-                _enforce_non_rational(res, term)
+                res = _resolve_rational(stack.pop())
                 res = _get_ir_value(res)
                 elem_type = get_type_or_element_type(res.type)
                 for _ in range(count - 1):
-                    operand = stack.pop()
-                    _enforce_non_rational(operand, term)
+                    operand = _resolve_rational(stack.pop())
                     operand = _get_ir_value(operand)
                     if is_integer_like_type(elem_type):
                         res = arith_d.minsi(*_broadcast(res, operand))
@@ -1143,13 +1144,14 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
                 # Build nested select operations
                 # Start with the last expression (typically the default/else case)
-                result = cases[-1][1]
+                result = _resolve_rational(cases[-1][1])
 
                 # Work backwards through earlier cases to build nested selects
                 # Piecewise((expr1, cond1), (expr2, cond2), (expr3, True)) becomes:
                 # select(cond1, expr1, select(cond2, expr2, expr3))
                 for i in range(len(cases) - 2, -1, -1):
                     cond, expr = cases[i]
+                    expr = _resolve_rational(expr)
                     result = arith_d.select(cond, *_broadcast(expr, result))
 
                 stack.append(result)

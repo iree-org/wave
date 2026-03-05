@@ -214,12 +214,13 @@ def build_guarded_pipeline_with_remainder(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ):
     """
     Build conditional + pipelined loop + remainder loop for dynamic shapes.
 
     Structure:
-        if (max_induction_variable >= num_stages):
+        if (max_induction_variable >= num_stages + unroll_factor - 1):
             pipelined_result = pipelined_loop_with_prologue_epilogue()
         else:
             pipelined_result = init_values
@@ -232,16 +233,23 @@ def build_guarded_pipeline_with_remainder(
     original_init_args = reduction.init_args
     main_graph = reduction.graph
 
-    # Create condition: max_induction_variable >= num_stages
+    if unroll_factor < 1:
+        raise ValueError(f"Expected unroll_factor >= 1, got {unroll_factor}")
+
+    # Create condition that guarantees at least one unrolled kernel iteration.
+    # Pre-unroll kernel count is: pipelined_iterations - (num_stages - 1).
+    # After unrolling by `unroll_factor`, that count must still represent at
+    # least one loop iteration, i.e. pre-unroll count >= unroll_factor.
+    min_pipelined_iterations = num_stages + unroll_factor - 1
     with main_graph.inserting_before(reduction.fx_node):
-        num_stages_scalar = get_graph_node(
-            NewScalar(num_stages, tkl.i32), main_graph, reduction.location
+        min_iters_scalar = get_graph_node(
+            NewScalar(min_pipelined_iterations, tkl.i32), main_graph, reduction.location
         )
         num_iters_scalar = get_graph_node(
             NewScalar(max_induction_variable, tkl.i32), main_graph, reduction.location
         )
         condition = get_graph_node(
-            Ge(num_iters_scalar, num_stages_scalar), main_graph, reduction.location
+            Ge(num_iters_scalar, min_iters_scalar), main_graph, reduction.location
         )
 
     # Prepare conditional subgraph
@@ -257,12 +265,23 @@ def build_guarded_pipeline_with_remainder(
         )
     )
 
-    # Compute the number of iterations the pipelined loop should process:
-    # This ensures the pipelined loop only processes complete pipeline stages
+    # Compute pipelined_iterations such that:
+    #   1) pipelined_iterations <= max_induction_variable
+    #   2) pre-unroll kernel count
+    #        (pipelined_iterations - (num_stages - 1))
+    #      is divisible by `unroll_factor`.
+    # This keeps the later unrolled scf.for from executing an extra iteration.
+    prologue_epilogue_iters = num_stages - 1
     if isinstance(max_induction_variable, (int, float)):
-        pipelined_iterations = (int(max_induction_variable) // num_stages) * num_stages
+        max_iters = int(max_induction_variable)
+        kernel_iterations = (
+            (max_iters - prologue_epilogue_iters) // unroll_factor
+        ) * unroll_factor
     else:
-        pipelined_iterations = (max_induction_variable // num_stages) * num_stages
+        kernel_iterations = (
+            (max_induction_variable - prologue_epilogue_iters) // unroll_factor
+        ) * unroll_factor
+    pipelined_iterations = kernel_iterations + prologue_epilogue_iters
 
     conditional_body_graph, body_old_to_new = graph_copy(reduction_graph)
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
@@ -420,12 +439,13 @@ def construct_pipelined_loop_adaptive(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ):
     """
     Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
 
     Structure:
-        if (num_iterations >= num_stages):
+        if (num_iterations >= num_stages + unroll_factor - 1):
             prologue
             pipelined_loop
             epilogue
@@ -477,6 +497,7 @@ def construct_pipelined_loop_adaptive(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
     )
 
 
@@ -491,6 +512,7 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
@@ -525,6 +547,7 @@ def apply_pipelined_schedule(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
     )
 
 
