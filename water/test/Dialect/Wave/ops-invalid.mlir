@@ -927,6 +927,14 @@ func.func @reduction_init_and_result_contain_axis(%input: !wave.tensor<any of f3
 
 // -----
 
+func.func @variadic_reduction_mismatched_input_types(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @K] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // expected-error @below {{all inputs must have the same type, but got '!wave.tensor<[@N, @M] of f32>' and '!wave.tensor<[@N, @K] of f32>'}}
+  %result = wave.sum %a, %b init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @K] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
 func.func @broadcast_source_dim_not_in_result(%arg0: !wave.tensor<[@M, @N] of f32, <register>>) {
   // Source has [@M, @N], result has [@M, @P, @K] - N is missing (replaced by P).
   // expected-error @below {{source dimension 'N' not found in result shape}}

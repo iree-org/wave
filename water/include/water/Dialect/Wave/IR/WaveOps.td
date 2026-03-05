@@ -106,8 +106,10 @@ class ReductionWaveOp<string mnemonic>
          WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
          RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
       WaveArithmeticOpDoc {
+  // We cannot use Variadic<WaveTensorInRegister> because Variadic requires
+  // a Type, not a TypeConstraint (same pattern as wave.iterate's iter_args).
   let arguments = !con((ins
-    Arg<WaveTensorInRegister, "Input tensor to reduce">:$input,
+    Arg<Variadic<WaveIterableType>, "Tensor(s) to reduce">:$inputs,
     Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
     Arg<WaveReductionScopeAttr, "Scope of the reduction">:$scope,
     Arg<OptionalAttr<WaveSymbolAttr>, "Reduction axis">:$axis
@@ -118,7 +120,7 @@ class ReductionWaveOp<string mnemonic>
   );
 
   let assemblyFormat =
-      "$input `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
+      "$inputs `init` `(` $init `)` (`along` custom<SingleSymbol>($axis)^)? "
       "$scope " # commonArgumentsSyntax # " attr-dict `:`"
       "functional-type(operands, results)";
 }

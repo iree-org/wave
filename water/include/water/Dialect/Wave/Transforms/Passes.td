@@ -177,4 +177,28 @@ def WaterWaveResolveDistributedAllocationsPass
   ];
 }
 
+def WaterWaveExpandVariadicReductionsPass
+    : Pass<"water-wave-expand-variadic-reductions"> {
+  let summary = "Expand variadic reduction inputs into chained single-input "
+                "reductions";
+  let description = [{
+    Rewrites reduction operations (e.g. wave.sum, wave.max_element) that have
+    multiple inputs into chains of single-input reductions. For example:
+
+      %r = wave.sum %a, %b, %c init(%init) <scope>
+
+    becomes:
+
+      %0 = wave.sum %a init(%init) <scope>
+      %1 = wave.sum %b init(%0) <scope>
+      %r = wave.sum %c init(%1) <scope>
+
+    Variadic inputs arise from the Python-side graph expansion pass, which
+    tiles the reduction dimension into multiple slices. The Wave dialect
+    supports variadic inputs for faithful roundtripping with the Python
+    representation. This pass normalizes them before lowering, which
+    requires single-input reductions.
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

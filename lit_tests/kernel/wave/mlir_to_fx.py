@@ -26,6 +26,8 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     compare_hardware_constraints_for_mlir_roundtrip,
 )
 from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
+from wave_lang.kernel.wave.compile import build_graph_passes
+from wave_lang.kernel._support.indexing import IndexingContext
 
 # Keep emitter subprocesses alive for the entire test file instead of
 # spawning fresh ones per call (~2s import overhead each).
@@ -425,3 +427,88 @@ def mlir_to_fx_mapping_roundtrip():
 
     # CHECK: OK: mapping roundtrip
     print("OK: mapping roundtrip")
+
+
+# CHECK-LABEL: mlir_to_fx_reduction_roundtrip
+@run_test
+def mlir_to_fx_reduction_roundtrip():
+    """Test MLIR roundtrip for sum and max reductions.
+
+    Stops compilation before decompose_reduce_ops so the trace still
+    contains wave.sum / wave.max_element ops.
+    """
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    subs = {
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        M: 128,
+        N: 128,
+    }
+
+    def _assert_reduction_roundtrip(kernel, label):
+        options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+        with IndexingContext() as idxc:
+            idxc.set_subs(options.subs)
+            kernel.initialize_wave_constraints()
+            kernel.initialize_symbolic_constraints()
+            kernel.initialize_workgroup_constraints()
+            trace = kernel._trace(
+                location_capture_config=options.location_capture_config
+            )
+            graph_passes = build_graph_passes(kernel, trace, options)
+            for p in graph_passes:
+                name = getattr(p, "__name__", "") or getattr(
+                    getattr(p, "func", None), "__name__", ""
+                )
+                if name == "decompose_reduce_ops":
+                    break
+                p()
+
+            mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+                trace, kernel.constraints, options
+            )
+        errors = error_diagnostics(diagnostics)
+        assert errors == [], f"[{label}] unexpected emit errors: {errors}"
+
+        fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
+        errors = error_diagnostics(fx_diags)
+        assert errors == [], f"[{label}] unexpected import errors: {errors}"
+
+        assert_traces_equivalent(trace, fx_trace, subs=options.subs)
+        print(f"  {label}: OK")
+
+    @wave.wave(constraints)
+    def sum_kernel(
+        a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        res = wave.read(a)
+        init = wave.read(c)
+        res = wave.sum(res, init, dim=N)
+        wave.write(res, c)
+
+    _assert_reduction_roundtrip(sum_kernel, "sum roundtrip")
+
+    @wave.wave(constraints)
+    def max_kernel(
+        a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        res = wave.read(a)
+        init = wave.read(c)
+        res = wave.max(res, init, dim=N)
+        wave.write(res, c)
+
+    _assert_reduction_roundtrip(max_kernel, "max roundtrip")
+
+    # CHECK: sum roundtrip: OK
+    # CHECK: max roundtrip: OK

@@ -570,7 +570,8 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
 
         NewSubclass.tkw_op_name = op_name
         pascal_op_name = op_name.replace("_", " ").title().replace(" ", "")
-        NewSubclass.__name__ = f"{pascal_op_name}"
+        NewSubclass.__name__ = pascal_op_name
+        NewSubclass.__qualname__ = pascal_op_name
         NewSubclass.__module__ = cls.__module__
         current_module = sys.modules[NewSubclass.__module__]
         setattr(current_module, NewSubclass.__name__, NewSubclass)

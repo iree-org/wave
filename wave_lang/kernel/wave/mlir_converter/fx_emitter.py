@@ -36,16 +36,19 @@ try:
     from water_mlir.water_mlir.dialects.wave import (
         AllocateOp,
         BroadcastOp,
+        MaxElementOp,
         ReadOp,
         WriteOp,
         MmaOp,
         RegisterOp,
         ExtractSliceOp,
         IterateOp,
+        SumOp,
         YieldOp,
         WaveAddressSpaceAttr,
         WaveExprListAttr,
         WaveMmaKindAttr,
+        WaveReductionScope,
         WaveSymbolMappingAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
@@ -90,6 +93,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Write,
     MMA,
     MMABase,
+    Max,
     NewRegister,
     ExtractSlice,
     Iterate,
@@ -98,6 +102,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     GetResult,
     SharedMemoryBarrier,
+    Sum,
     get_custom,
 )
 from attr_type_converter import (
@@ -788,6 +793,49 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     parse_ctx.add_mapping(op.result, mma_op.fx_node)
 
 
+def _handle_reduction_op(
+    op: SumOp | MaxElementOp,
+    reduce_cls: type,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.sum / wave.max_element operations."""
+    input_nodes = [parse_ctx.resolve_operand(v) for v in op.inputs]
+    init_node = parse_ctx.resolve_operand(op.init)
+    is_block = op.scope.value == WaveReductionScope.Block
+
+    axis_attr = op.axis
+    if axis_attr is not None:
+        dim = index_symbol(symbol_attr_to_name(axis_attr))
+    else:
+        # Infer the reduction dimension from the shape difference between
+        # input and result (the verifier guarantees fully-specified types
+        # when axis is absent).
+        input_shape = set(
+            index_symbol(symbol_attr_to_name(s)) for s in op.inputs[0].type.shape
+        )
+        result_shape = set(
+            index_symbol(symbol_attr_to_name(s)) for s in op.result.type.shape
+        )
+        reduced_dims = input_shape - result_shape
+        assert (
+            len(reduced_dims) == 1
+        ), f"Expected exactly one reduced dimension, got {reduced_dims}"
+        dim = reduced_dims.pop()
+
+    converted_attrs = _convert_supported_attrs(op, ignore_attrs={"scope", "axis"})
+
+    reduce_op = reduce_cls.create(
+        parse_ctx.graph,
+        arg=input_nodes,
+        init=init_node,
+        dim=dim,
+        block=is_block,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(reduce_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, reduce_op.fx_node)
+
+
 def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> None:
     """Handle wave.extract_slice operation."""
     src_node = parse_ctx.resolve_operand(op.memory)
@@ -1027,6 +1075,10 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_write_op(op, parse_ctx)
             case MmaOp():
                 _handle_mma_op(op, parse_ctx)
+            case SumOp():
+                _handle_reduction_op(op, Sum, parse_ctx)
+            case MaxElementOp():
+                _handle_reduction_op(op, Max, parse_ctx)
             case ExtractSliceOp():
                 _handle_extract_slice_op(op, parse_ctx)
             case IterateOp():
