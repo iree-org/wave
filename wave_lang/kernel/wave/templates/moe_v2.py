@@ -387,6 +387,131 @@ def get_moe_pad_cumsum_kernel(num_experts: int, block_size: int):
 
 
 # ---------------------------------------------------------------------------
+# Step 4: Expert IDs fill — Wave kernel (one workgroup per expert)
+# ---------------------------------------------------------------------------
+def get_moe_expert_ids_kernel(
+    num_experts: int,
+    max_num_blocks: int,
+    block_size: int,
+):
+    """
+    Wave kernel for Step 4 of MoE alignment: fill expert_ids so that each
+    block knows which expert owns it.
+
+    Dispatches one workgroup per expert. Each workgroup reads its cumsum range
+    and iterates over its block range, writing its expert index to expert_ids.
+
+    This avoids the wave-uniform bug from the monolithic kernel (§6.2 bug #2)
+    by ensuring set_symbol is correctly scoped: each workgroup handles exactly
+    one expert, so the wave-uniform symbol values are correct.
+
+    Args:
+        num_experts: Number of experts (4-8).
+        max_num_blocks: Maximum number of blocks (ceil(total_padded_tokens / block_size)).
+        block_size: Alignment block size.
+    """
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+    MAX_NUM_BLOCKS = tkl.sym.MAX_NUM_BLOCKS
+    BLOCK_SZ = sym.BLOCK_SZ
+
+    I = sym.I
+    I_MAX = sym.I_MAX
+
+    constraints = [
+        tkw.WorkgroupConstraint(NUM_EXPERTS, 1, 0),
+        tkw.WaveConstraint(NUM_EXPERTS, 1),
+        tkw.TilingConstraint(I),
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={
+                NUM_EXPERTS: 1,
+                MAX_NUM_BLOCKS: MAX_NUM_BLOCKS,
+                I: 0,
+                I_MAX: 0,
+            },
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    expert_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    expert_id_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={MAX_NUM_BLOCKS: i},
+        outputs={MAX_NUM_BLOCKS: d0},
+        dynamic_val_mappings={MAX_NUM_BLOCKS: i},
+    )
+
+    @tkw.wave(constraints)
+    def expert_ids_kernel(
+        cumsum_exclusive: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        cumsum: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+        expert_ids: Memory[MAX_NUM_BLOCKS, GLOBAL_ADDRESS_SPACE, i32],
+        dummy: Memory[NUM_EXPERTS, GLOBAL_ADDRESS_SPACE, i32],
+    ):
+        # This workgroup's expert index
+        wid = tkw.scalar(WORKGROUP_0, i32)
+
+        # Read this expert's start and end positions (token-space)
+        start_pos = tkw.read(
+            cumsum_exclusive,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(wid,),
+            elements_per_thread=1,
+        )
+        end_pos = tkw.read(
+            cumsum,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(wid,),
+            elements_per_thread=1,
+        )
+
+        # Set I_MAX for the iterate condition — wave-uniform is correct here
+        # because each workgroup handles exactly one expert.
+        tkw.set_symbol(I_MAX, end_pos)
+
+        condition = I < I_MAX
+
+        # Iterate from start_pos to end_pos in steps determined by TilingConstraint(I)
+        # Each step: write this expert's index to expert_ids[block_idx]
+        @tkw.iterate(I, start=start_pos, condition=condition, init_args=[])
+        def fill_loop():
+            i_idx = tkw.self_index(I, i32)
+            block_idx = i_idx / tkw.Register[I, i32](BLOCK_SZ)
+            expert_id_val = tkw.Register[MAX_NUM_BLOCKS, i32](WORKGROUP_0)
+            tkw.write(
+                expert_id_val,
+                expert_ids,
+                mapping=expert_id_write_map,
+                mapping_dynamic_vals=(block_idx,),
+                elements_per_thread=1,
+            )
+            # Advance induction variable by block_size
+            next_idx = i_idx + tkw.Register[I, i32](BLOCK_SZ)
+            tkw.set_symbol(I, next_idx)
+
+        # Leaf write
+        dummy_val = tkw.read(cumsum_exclusive, elements_per_thread=1)
+        tkw.write(dummy_val, dummy, elements_per_thread=1)
+
+    hyperparams = {
+        NUM_EXPERTS: num_experts,
+        MAX_NUM_BLOCKS: max_num_blocks,
+        BLOCK_SZ: block_size,
+    }
+
+    return expert_ids_kernel, hyperparams
+
+
+# ---------------------------------------------------------------------------
 # Step 5: Sorted IDs scatter — Wave kernel
 # ---------------------------------------------------------------------------
 def get_moe_sorted_ids_kernel(
@@ -873,16 +998,15 @@ def moe_align_block_size_pytorch(
     )
     torch.cuda.synchronize()
 
-    # --- Step 4: Build expert_ids — for each block, which expert owns it ---
-    # Vectorized PyTorch: for each block, find which expert's range contains it.
-    # Only iterates over num_experts (4-8), inner comparison is vectorized on GPU.
+    # --- Step 4: Expert IDs fill — WAVE kernel (one workgroup per expert) ---
     expert_ids = torch.zeros(max_num_m_blocks, dtype=torch.int32, device=device)
-    block_starts = (
-        torch.arange(max_num_m_blocks, device=device, dtype=torch.int32) * block_size
+    expert_ids_fn, expert_ids_params = get_moe_expert_ids_kernel(
+        num_experts, max_num_m_blocks, block_size
     )
-    for e in range(num_experts):
-        mask = (block_starts >= cumsum_exclusive[e]) & (block_starts < cumsum[e])
-        expert_ids[mask] = e
+    compiled_expert_ids = _compile_wave_kernel(expert_ids_fn, expert_ids_params)
+    expert_ids_dummy = torch.empty(num_experts, dtype=torch.int32, device=device)
+    compiled_expert_ids(cumsum_exclusive, cumsum, expert_ids, expert_ids_dummy)
+    torch.cuda.synchronize()
 
     # --- Step 5: Sorted IDs scatter — WAVE kernel ---
     # Pre-initialize sorted_ids with padding sentinel (numel)
