@@ -91,13 +91,16 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
     return nullptr;
   }
 
-  // Convert lower bound to sreg if it's an immediate (loop counter needs sreg
-  // type)
+  // The loop induction variable must be an SGPR (used in s_add_u32 / s_cmp).
   Value lowerBoundValue = *lowerBound;
   if (isa<ImmType>(lowerBoundValue.getType())) {
     auto sregType = ctx.createSRegType();
     lowerBoundValue =
         S_MOV_B32::create(builder, loc, sregType, lowerBoundValue);
+  } else if (isVGPRType(lowerBoundValue.getType())) {
+    auto sregType = ctx.createSRegType();
+    lowerBoundValue =
+        V_READFIRSTLANE_B32::create(builder, loc, sregType, lowerBoundValue);
   }
   initArgs.push_back(lowerBoundValue);
 
@@ -350,7 +353,13 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
       }
     }
 
-    YieldOp::create(builder, loc, yieldVals);
+    auto thenYieldOp = YieldOp::create(builder, loc, yieldVals);
+
+    for (unsigned i = 0; i < waveIfOp->getNumResults(); ++i) {
+      if (i < thenYieldOp.getResults().size()) {
+        waveIfOp->getResult(i).setType(thenYieldOp.getResults()[i].getType());
+      }
+    }
   }
 
   // Translate else region if present
@@ -369,9 +378,20 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
         cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
 
     SmallVector<Value> yieldVals;
-    for (Value res : scfYield.getResults()) {
+    for (auto [idx, res] : llvm::enumerate(scfYield.getResults())) {
       if (auto mapped = ctx.getMapper().getMapped(res)) {
-        yieldVals.push_back(*mapped);
+        Value val = *mapped;
+        // If the then-yield has a wider type (e.g. areg<4,4>) but this
+        // else-yield operand is an immediate, create a zero-initialized
+        // register of the matching type so the IfOp results are
+        // consistently typed across both branches.
+        if (idx < waveIfOp->getNumResults()) {
+          Type thenType = waveIfOp->getResult(idx).getType();
+          if (thenType != val.getType() && isAGPRType(thenType)) {
+            val = V_MOV_B32::create(builder, loc, thenType, val);
+          }
+        }
+        yieldVals.push_back(val);
       } else {
         scfYield.emitError("yield result not mapped");
         return nullptr;

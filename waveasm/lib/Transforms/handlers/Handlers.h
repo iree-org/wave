@@ -155,6 +155,8 @@ mlir::LogicalResult handleVectorFma(mlir::Operation *op,
                                     TranslationContext &ctx);
 mlir::LogicalResult handleVectorReduction(mlir::Operation *op,
                                           TranslationContext &ctx);
+mlir::LogicalResult handleVectorFromElements(mlir::Operation *op,
+                                             TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Dialect Handlers
@@ -183,6 +185,8 @@ mlir::LogicalResult handleMemRefAtomicRMW(mlir::Operation *op,
 
 mlir::LogicalResult handleReadFirstLane(mlir::Operation *op,
                                         TranslationContext &ctx);
+mlir::LogicalResult handleROCDLSchedBarrier(mlir::Operation *op,
+                                             TranslationContext &ctx);
 mlir::LogicalResult handleSWaitcnt(mlir::Operation *op,
                                    TranslationContext &ctx);
 
