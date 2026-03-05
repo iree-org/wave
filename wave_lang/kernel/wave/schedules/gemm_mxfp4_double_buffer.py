@@ -467,6 +467,8 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
     use_stagger: bool = True, shape: tuple = None
 ):
     """Return a double-buffered MXFP4 schedule for wave_compile().
+    Same as get_mxfp4_dbuf_pingpong_schedule(), but B data is shuffled and read
+    from global memory directly to VGPRs.
 
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
@@ -513,7 +515,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
         pipeline_loop = tkw.pipeline(k_loop)
 
         with pipeline_loop as pl:
-            # Stage 0: Global-to-shared prefetch via GatherToLDS (no fusion)
+            # Stage 0: Global-to-shared prefetch via GatherToLDS + Global to VGPR prefetch
             pl.set_stage(
                 [
                     (
@@ -653,7 +655,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
         # Insert barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
         tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
-        # tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
