@@ -214,6 +214,7 @@ def build_guarded_pipeline_with_remainder(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    eliminate_epilogue: bool = False,
 ):
     """
     Build conditional + pipelined loop + remainder loop for dynamic shapes.
@@ -312,6 +313,7 @@ def build_guarded_pipeline_with_remainder(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
     # node_mapping keys are from the copied body graph. Translate them back
@@ -321,12 +323,17 @@ def build_guarded_pipeline_with_remainder(
     node_mapping = {new_to_old.get(k, k): v for k, v in node_mapping.items()}
 
     # Set the count for the pipelined loop
-    # With step > 1 (e.g., from unrolling), we need to reduce the count by more
-    # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
-    # data for the "next" iteration (offset by step), so we need to ensure
-    # that stays within bounds.
     step = get_custom(pipelined_node).step
-    get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1) * step
+    if eliminate_epilogue:
+        get_custom(pipelined_node).count = pipelined_iterations
+    else:
+        # With step > 1 (e.g., from unrolling), we need to reduce the count by more
+        # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
+        # data for the "next" iteration (offset by step), so we need to ensure
+        # that stays within bounds.
+        get_custom(pipelined_node).count = (
+            pipelined_iterations - (num_stages - 1) * step
+        )
 
     # Verify we have the right number of results
     assert len(final_results) == len(
@@ -420,6 +427,7 @@ def construct_pipelined_loop_adaptive(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    eliminate_epilogue: bool = False,
 ):
     """
     Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
@@ -433,6 +441,12 @@ def construct_pipelined_loop_adaptive(
         else:
             return (0, init_values...)
         remainder_loop(start=iterations_done, end=total_iterations)
+
+    When eliminate_epilogue=True, the epilogue is not generated and the loop
+    runs for the full trip count. Out-of-bounds loads in the extra iterations
+    must return zero (guaranteed by buffer_load on GFX950). This trades wasted
+    prefetch work in the last (num_stages-1) iterations for eliminating all
+    epilogue code (MFMAs, loads, bitcasts).
     """
     # Check if we have a dynamic shape (max_induction_variable is symbolic)
     is_dynamic = not (
@@ -456,12 +470,16 @@ def construct_pipelined_loop_adaptive(
             visualize,
             use_scheduling_barriers,
             multi_buffer_count,
+            eliminate_epilogue=eliminate_epilogue,
         )
         if new_reduction:
             step = get_custom(new_reduction).step
-            get_custom(new_reduction).count = (
-                max_induction_variable - (num_stages - 1) * step
-            )
+            if eliminate_epilogue:
+                get_custom(new_reduction).count = max_induction_variable
+            else:
+                get_custom(new_reduction).count = (
+                    max_induction_variable - (num_stages - 1) * step
+                )
         return new_reduction, node_mapping
 
     # For dynamic shapes, emit conditional + pipelined loop + remainder loop
@@ -477,6 +495,7 @@ def construct_pipelined_loop_adaptive(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
 
@@ -491,6 +510,7 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
+    eliminate_epilogue: bool = False,
 ) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
@@ -525,6 +545,7 @@ def apply_pipelined_schedule(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
 

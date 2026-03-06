@@ -273,6 +273,7 @@ def attention_progressive_roundtrip():
             "compute_shared_memory_usage",
             "partition_gather_like_ops",
             "generate_bounds_exprs",
+            "guard_g2s_with_bounds_check",
             "merge_contiguous_reads",
             "location_check_pass",
             "simplify_indices",
