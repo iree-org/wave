@@ -11,7 +11,6 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
-#include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -23,6 +22,19 @@
 #include "llvm/ADT/StringSet.h"
 
 using namespace mlir;
+
+//-----------------------------------------------------------------------------
+// getHyperparameters
+//-----------------------------------------------------------------------------
+
+wave::WaveHyperparameterAttr wave::getHyperparameters(Operation *op) {
+  for (Operation *current = op; current; current = current->getParentOp()) {
+    if (auto hyperparams = current->getAttrOfType<WaveHyperparameterAttr>(
+            WaveDialect::kHyperparameterAttrName))
+      return hyperparams;
+  }
+  return nullptr;
+}
 
 //-----------------------------------------------------------------------------
 // Index attribute verification
