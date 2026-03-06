@@ -829,18 +829,11 @@ public:
 
           // Elements per thread may be 1 if _all_ dimensions have a unit step,
           // otherwise it should be the one non-unit step.
-          // TODO(#1013): this logic can be reused in the verifier.
-          if (!elementsPerThread.has_value()) {
-            elementsPerThread = (*stepValues)[0];
-          } else if (*elementsPerThread == 1) {
-            elementsPerThread = (*stepValues)[0];
-          } else if (stepValue != 1) {
-            // TODO(#1013): turn this into an assertion when the verifier is
-            // implemented.
-            op->emitError() << "expected only one non-unit index step, found "
-                            << (*stepValues)[0] << " and " << *elementsPerThread
-                            << " (missing verifier)";
-            return WalkResult::interrupt();
+          assert((!elementsPerThread.has_value() || *elementsPerThread == 1 ||
+                  stepValue == 1) &&
+                 "expected only one non-unit index step");
+          if (!elementsPerThread.has_value() || *elementsPerThread == 1) {
+            elementsPerThread = stepValue;
           }
         }
 

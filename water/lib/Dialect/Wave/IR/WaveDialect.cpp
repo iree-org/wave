@@ -18,11 +18,9 @@
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/LogicalResult.h"
-#include <algorithm>
 #include <optional>
 
 using namespace mlir;
@@ -135,55 +133,6 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
         return WalkResult::interrupt();
       });
   return failure(walkResult.wasInterrupted());
-}
-
-/// For ops with the index attribute, verify that each index expression has at
-/// most one dimension whose step evaluates to a static value different from 1
-/// (with hyperparameters substituted). Structural checks stay in op verifiers.
-static LogicalResult
-verifyIndexStepsAtMostOneNonUnit(Operation *op,
-                                 wave::WaveHyperparameterAttr hyperparams) {
-  if (!op->hasAttr(wave::WaveDialect::kIndexWaveExprListAttrName) ||
-      !op->hasTrait<wave::HasWaveIndexMapping>())
-    return success();
-
-  // Be defensive, we haven't verified the attribute structure yet.
-  auto arr = dyn_cast<ArrayAttr>(
-      op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName));
-  if (!arr)
-    return success();
-
-  for (Attribute elem : arr) {
-    auto dict = dyn_cast<DictionaryAttr>(elem);
-    if (!dict)
-      continue;
-
-    int nonUnitCount = 0;
-    for (const NamedAttribute &named : dict) {
-      auto mapping =
-          llvm::dyn_cast<wave::WaveIndexMappingAttr>(named.getValue());
-      if (!mapping || !mapping.getStep())
-        continue;
-
-      std::optional<llvm::SmallVector<int64_t>> stepValues =
-          wave::evaluateMapWithHyperparams(mapping.getStep(),
-                                           mapping.getSymbols(), hyperparams);
-      if (!stepValues || stepValues->size() != 1)
-        continue;
-      if ((*stepValues)[0] == 1 || (*stepValues)[0] == ShapedType::kDynamic)
-        continue;
-
-      if (++nonUnitCount > 1) {
-        InFlightDiagnostic diag =
-            op->emitOpError()
-            << "'index' has more than one entry with non-unit step";
-        diag.attachNote() << "second non-unit step dimension: "
-                          << named.getName();
-        return failure();
-      }
-    }
-  }
-  return success();
 }
 
 /// Verify DeviceConstraints, WorkgroupConstraints, WaveConstraints, and
@@ -474,9 +423,6 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
           return WalkResult::interrupt();
         }
       }
-
-      if (failed(verifyIndexStepsAtMostOneNonUnit(op, hyperparams)))
-        return WalkResult::interrupt();
 
       return WalkResult::advance();
     });

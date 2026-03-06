@@ -1572,9 +1572,8 @@ ReadOp::propagateBackward(MutableArrayRef<wave::WaveTensorType> operandTypes,
 
 LogicalResult ReadOp::finalizeTypeInference() { return success(); }
 
-// Check the well-formedness of the index attribute (must have at most one
-// non-unit dimension) and its correspondence with the explicit elements per
-// thread, if provided, and with the number of elements in the vector type.
+// Check the correspondence of the index attribute with the explicit elements
+// per thread, if provided, and with the number of elements in the vector type.
 static LogicalResult
 verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
                              std::optional<int64_t> elementsPerThread,
@@ -1605,7 +1604,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
   if (!indexDict)
     return success();
 
-  wave::WaveHyperparameterAttr hyper = wave::WaveHyperparameterAttr();
+  wave::WaveHyperparameterAttr hyper = nullptr;
   for (Operation *cur = op; cur != nullptr && !hyper;
        cur = cur->getParentOp()) {
     hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(

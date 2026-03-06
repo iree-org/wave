@@ -11,6 +11,7 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
+#include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -82,6 +83,38 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                  << iterSymbol.getName()
                  << " which is not defined by any parent op";
         }
+      }
+    }
+  }
+
+  // For ops with the index attribute, verify that each index expression has at
+  // most one dimension whose step evaluates to a static value different from 1
+  // (with hyperparameters substituted). Structural checks stay in op verifiers.
+  wave::WaveHyperparameterAttr hyperparams = wave::getHyperparameters(op);
+  for (DictionaryAttr dictAttr : dicts) {
+    int nonUnitCount = 0;
+    for (const NamedAttribute &named : dictAttr) {
+      auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(named.getValue());
+      if (!mapping || !mapping.getStep())
+        continue;
+
+      std::optional<SmallVector<int64_t>> stepValues =
+          wave::evaluateMapWithHyperparams(mapping.getStep(),
+                                           mapping.getSymbols(), hyperparams);
+      if (!stepValues || stepValues->size() != 1)
+        continue;
+
+      int64_t step = (*stepValues)[0];
+      if (step == 1 || step == ShapedType::kDynamic)
+        continue;
+
+      if (++nonUnitCount > 1) {
+        InFlightDiagnostic diag =
+            op->emitOpError() << "'" << WaveDialect::kIndexWaveExprListAttrName
+                              << "' has more than one entry with non-unit step";
+        diag.attachNote() << "second non-unit step dimension: "
+                          << named.getName();
+        return failure();
       }
     }
   }
