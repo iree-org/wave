@@ -690,6 +690,25 @@ func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wa
 
 // -----
 
+// Variadic reductions: multiple inputs are accepted.
+// CHECK-LABEL: @variadic_sum
+func.func @variadic_sum(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @M] of f32>, %c: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.sum %{{.*}}, %{{.*}}, %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.sum %a, %b, %c init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @variadic_max_element
+func.func @variadic_max_element(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.max_element %{{.*}}, %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.max_element %a, %b init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
 // CHECK-LABEL: @broadcast_1d_to_2d
 func.func @broadcast_1d_to_2d(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> {
   // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
