@@ -669,6 +669,46 @@ func.func @write_index_multi_step_eval(%val: !wave.tensor<[@M, @N] of f32, <regi
 
 // -----
 
+func.func @read_index_zero_step(%mem: !wave.tensor<[@M] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 128}>
+} {
+  // expected-error @below {{step in index expression must be strictly positive, got 0 for dimension "M"}}
+  wave.read %mem index [{M : <[] -> (0, 0, 1)>}] : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @read_index_negative_step(%mem: !wave.tensor<[@M] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 128}>
+} {
+  // expected-error @below {{step in index expression must be strictly positive, got -1 for dimension "M"}}
+  wave.read %mem index [{M : <[] -> (0, -1, 1)>}] : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @read_index_zero_stride(%mem: !wave.tensor<[@M] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 128}>
+} {
+  // expected-error @below {{stride in index expression must be strictly positive, got 0 for dimension "M"}}
+  wave.read %mem index [{M : <[] -> (0, 1, 0)>}] : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32, <register>>
+  return
+}
+
+// -----
+
+func.func @read_index_negative_stride(%mem: !wave.tensor<[@M] of f32>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 128}>
+} {
+  // expected-error @below {{stride in index expression must be strictly positive, got -1 for dimension "M"}}
+  wave.read %mem index [{M : <[] -> (0, 1, -1)>}] : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32, <register>>
+  return
+}
+
+// -----
+
 func.func @extract_invalid_position_rank(%src: !wave.tensor<[@M, @N] of f32>) {
   // expected-error @below {{position must contain exactly one expression, but got 2}}
   wave.extract %src[#wave.expr_list<[] -> (0, 1)>] : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M] of f32>

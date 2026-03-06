@@ -134,20 +134,6 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-// Step is zero; pass must report "expected positive step".
-normalform.module [#wave.normal_form<full_types>] {
-  func.func @index_step_zero(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
-    %cst = arith.constant 0.0 : f16
-    // expected-error @below {{expected positive step in index expressions}}
-    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 0, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
-    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 0, <NULL>)>}]
-      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
-    return
-  }
-}
-
-// -----
-
 // Index missing dimension N for result type [M, N]; pass must report missing dimensions.
 normalform.module [#wave.normal_form<full_types>] {
   func.func @index_missing_dimension(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
