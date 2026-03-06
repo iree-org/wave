@@ -754,18 +754,35 @@ def _emit_ops_from_graph(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
                 elif isinstance(node, Reduce):
-                    if isinstance(node.arg, Sequence):
-                        raise NotImplementedError(
-                            "Only single-operand reductions are currently supported."
-                        )
+                    args = node.arg if isinstance(node.arg, Sequence) else [node.arg]
+                    inputs = [get_single_mapped_value(a) for a in args]
+                    init = get_single_mapped_value(node.init)
+                    # The axis attribute is only emitted when the input type
+                    # is not fully specified (uses 'any' shapes). For
+                    # fully-specified types, the reduction dimension is
+                    # inferred from the shape difference between input and
+                    # result, and emitting axis would be rejected by the
+                    # verifier.
+                    input_type = inputs[0].type
+                    fully_specified = (
+                        isinstance(input_type, WaveTensorType)
+                        and input_type.fully_specified
+                    )
+                    axis = (
+                        symbol_name_to_attribute(node.dim.name)
+                        if node.dim is not None and not fully_specified
+                        else None
+                    )
                     mlir_op = op_builder(
                         result_type,
-                        *create_mlir_operands(),
+                        inputs,
+                        init,
                         scope=wave.WaveReductionScopeAttr.get(
                             wave.WaveReductionScope.Block
                             if node.block
                             else wave.WaveReductionScope.Warp
                         ),
+                        axis=axis,
                     )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.
