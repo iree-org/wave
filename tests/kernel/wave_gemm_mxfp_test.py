@@ -907,7 +907,12 @@ def testScaledGemmMXFP4PreshuffleMacrotiles(
 )
 @pytest.mark.parametrize(
     "block_shape,wave_shape",
-    [((128, 256, 256), (1, 4)), ((128, 32, 256), (2, 2)), ((256, 224, 256), (2, 2))],
+    [
+        ((128, 256, 256), (1, 4)),
+        ((32, 64, 256), (1, 4)),
+        ((128, 32, 256), (2, 2)),
+        ((256, 224, 256), (2, 2)),
+    ],
 )
 @pytest.mark.parametrize(
     "mfma_variant",

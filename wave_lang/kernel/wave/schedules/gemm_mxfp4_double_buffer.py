@@ -1411,6 +1411,7 @@ def get_mxfp4_asymmetric_schedule(is_bscale_shuffled: bool = False):
 
         # This forces the pipeline to use double buffering
         pipeline_loop.multi_buffer_count = 2
+        pipeline_loop.unroll_factor = 2
 
         with pipeline_loop as pl:
             pl.set_stage(

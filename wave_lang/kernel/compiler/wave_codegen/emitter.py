@@ -1139,13 +1139,14 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
                 # Build nested select operations
                 # Start with the last expression (typically the default/else case)
-                result = cases[-1][1]
+                result = _resolve_rational(cases[-1][1])
 
                 # Work backwards through earlier cases to build nested selects
                 # Piecewise((expr1, cond1), (expr2, cond2), (expr3, True)) becomes:
                 # select(cond1, expr1, select(cond2, expr2, expr3))
                 for i in range(len(cases) - 2, -1, -1):
                     cond, expr = cases[i]
+                    expr = _resolve_rational(expr)
                     result = arith_d.select(cond, *_broadcast(expr, result))
 
                 stack.append(result)

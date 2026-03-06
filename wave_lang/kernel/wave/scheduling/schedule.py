@@ -214,12 +214,13 @@ def build_guarded_pipeline_with_remainder(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ):
     """
     Build conditional + pipelined loop + remainder loop for dynamic shapes.
 
     Structure:
-        if (max_induction_variable >= num_stages):
+        if (max_induction_variable >= num_stages + unroll_factor - 1):
             pipelined_result = pipelined_loop_with_prologue_epilogue()
         else:
             pipelined_result = init_values
@@ -232,16 +233,24 @@ def build_guarded_pipeline_with_remainder(
     original_init_args = reduction.init_args
     main_graph = reduction.graph
 
-    # Create condition: max_induction_variable >= num_stages
+    if unroll_factor < 1:
+        raise ValueError(f"Expected unroll_factor >= 1, got {unroll_factor}")
+
+    from math import lcm
+
+    rounding_stride = lcm(num_stages, unroll_factor)
+
+    # Need at least rounding_stride iterations so the rounded-down
+    # pipelined_iterations is non-zero.
     with main_graph.inserting_before(reduction.fx_node):
-        num_stages_scalar = get_graph_node(
-            NewScalar(num_stages, tkl.i32), main_graph, reduction.location
+        min_iters_scalar = get_graph_node(
+            NewScalar(rounding_stride, tkl.i32), main_graph, reduction.location
         )
         num_iters_scalar = get_graph_node(
             NewScalar(max_induction_variable, tkl.i32), main_graph, reduction.location
         )
         condition = get_graph_node(
-            Ge(num_iters_scalar, num_stages_scalar), main_graph, reduction.location
+            Ge(num_iters_scalar, min_iters_scalar), main_graph, reduction.location
         )
 
     # Prepare conditional subgraph
@@ -257,12 +266,22 @@ def build_guarded_pipeline_with_remainder(
         )
     )
 
-    # Compute the number of iterations the pipelined loop should process:
-    # This ensures the pipelined loop only processes complete pipeline stages
+    # Round pipelined_iterations to a multiple of lcm(num_stages, unroll_factor).
+    # This ensures complete pipeline stages (multiple of num_stages) and that
+    # the kernel count (pipelined_iterations - (num_stages - 1)) is divisible
+    # by unroll_factor, preventing the unrolled scf.for from executing extra
+    # iterations that read invalid pipeline state.
+    from math import lcm
+
+    rounding_stride = lcm(num_stages, unroll_factor)
     if isinstance(max_induction_variable, (int, float)):
-        pipelined_iterations = (int(max_induction_variable) // num_stages) * num_stages
+        pipelined_iterations = (
+            int(max_induction_variable) // rounding_stride
+        ) * rounding_stride
     else:
-        pipelined_iterations = (max_induction_variable // num_stages) * num_stages
+        pipelined_iterations = (
+            max_induction_variable // rounding_stride
+        ) * rounding_stride
 
     conditional_body_graph, body_old_to_new = graph_copy(reduction_graph)
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
@@ -420,12 +439,13 @@ def construct_pipelined_loop_adaptive(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ):
     """
     Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
 
     Structure:
-        if (num_iterations >= num_stages):
+        if (num_iterations >= num_stages + unroll_factor - 1):
             prologue
             pipelined_loop
             epilogue
@@ -477,6 +497,7 @@ def construct_pipelined_loop_adaptive(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
     )
 
 
@@ -491,6 +512,7 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
 ) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
@@ -525,6 +547,7 @@ def apply_pipelined_schedule(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
     )
 
 
