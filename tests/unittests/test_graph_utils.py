@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import numpy as np
 import pytest
 import sympy
 import torch.fx as fx
@@ -27,7 +26,6 @@ from wave_lang.kernel.ops.wave_ops import (
 )
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel._support.indexing import IndexSymbol
-from wave_lang.kernel._support.dtype import DataType
 
 
 def create_simple_graph():

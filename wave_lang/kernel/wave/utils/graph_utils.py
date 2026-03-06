@@ -154,7 +154,7 @@ def _truncate_float_to_dtype(value: float, dtype: DataType) -> float:
 
     MLIR stores scalar constants (e.g. `arith.constant`) at the target
     element type's precision, so a Python f64 value roundtripped through
-    e.g. f16 will come back truncated.  asting both sides to the target
+    e.g. f16 will come back truncated. Casting both sides to the target
     dtype before comparison makes the check exact.
     """
     np_dtype = _DTYPE_NAME_TO_NUMPY.get(str(dtype))
@@ -297,29 +297,27 @@ def _check_callable_equivalent(lhs: SympyCallable, rhs: SympyCallable) -> Result
             f"callable arity mismatch: {len(lhs_params)} vs {len(rhs_params)}"
         )
 
+    # Plain Symbols (no assumptions) to avoid spurious simplifications:
+    # index_symbol() adds nonnegative=True which could make unequal
+    # expressions simplify to zero (e.g. abs(x) - x with nonneg x).
     test_syms = [sympy.Symbol(f"_cmp_{i}") for i in range(len(lhs_params))]
     lhs_result = lhs(*test_syms)
     rhs_result = rhs(*test_syms)
 
-    if isinstance(lhs_result, (list, tuple)) or isinstance(rhs_result, (list, tuple)):
-        lhs_elems = (
-            list(lhs_result) if isinstance(lhs_result, (list, tuple)) else [lhs_result]
+    lhs_elems = (
+        list(lhs_result) if isinstance(lhs_result, (list, tuple)) else [lhs_result]
+    )
+    rhs_elems = (
+        list(rhs_result) if isinstance(rhs_result, (list, tuple)) else [rhs_result]
+    )
+    if len(lhs_elems) != len(rhs_elems):
+        return Failure(
+            f"callable result count mismatch: {len(lhs_elems)} vs {len(rhs_elems)}"
         )
-        rhs_elems = (
-            list(rhs_result) if isinstance(rhs_result, (list, tuple)) else [rhs_result]
-        )
-        if len(lhs_elems) != len(rhs_elems):
-            return Failure(
-                f"callable result count mismatch: {len(lhs_elems)} vs {len(rhs_elems)}"
-            )
-        for i, (l, r) in enumerate(zip(lhs_elems, rhs_elems)):
-            if not _sympy_equiv(l, r):
-                return Failure(f"callable result[{i}] mismatch: {l} vs {r}")
-        return Success()
-
-    if _sympy_equiv(lhs_result, rhs_result):
-        return Success()
-    return Failure(f"callable result mismatch: {lhs_result} vs {rhs_result}")
+    for i, (l, r) in enumerate(zip(lhs_elems, rhs_elems)):
+        if not _sympy_equiv(l, r):
+            return Failure(f"callable result[{i}] mismatch: {l} vs {r}")
+    return Success()
 
 
 def _check_payloads_equivalent(
@@ -507,12 +505,10 @@ def _check_nodes_equivalent(
 
             # MLIR stores scalar constants at the target element type
             # precision (e.g. f16/f32), truncating the Python f64 value.
-            # Cast both sides to the node's dtype before comparing.
-            if (
-                isinstance(lhs_val, float)
-                and isinstance(rhs_val, float)
-                and lhs_val != rhs_val
-            ):
+            # Always cast both sides to the node's dtype before comparing
+            # so the comparison is dtype-aware even when values happen to
+            # match at f64 precision.
+            if isinstance(lhs_val, float) and isinstance(rhs_val, float):
                 node_dtype = getattr(lhs_custom, "dtype", None)
                 if node_dtype is not None:
                     lhs_val = _truncate_float_to_dtype(lhs_val, node_dtype)

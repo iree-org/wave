@@ -879,7 +879,7 @@ def _handle_reduction_op(
 
 def _handle_binary_op(
     op: AddOp | SubOp | MulOp | DivOp | MaxOp | MinOp,
-    fx_cls: type,
+    fx_cls: type[Add | Sub | Mul | Truediv | Maximum | Minimum],
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle binary arithmetic operations (wave.add, wave.sub, etc.).
@@ -924,7 +924,7 @@ def _handle_select_op(
 
 def _handle_unary_op(
     op: Exp2Op | ReciprocalOp,
-    fx_cls: type,
+    fx_cls: type[Exp2 | Reciprocal],
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle unary arithmetic operations (wave.exp2, wave.reciprocal)."""
@@ -1045,7 +1045,7 @@ def _reconstruct_expr_lambda(
     `lt`).  This ensures the reconstructed lambda produces the same sympy
     expression as the original.
     """
-    sympy_results = expr_list_attr_to_exprs(expr_attr)
+    sympy_results: list[sympy.Expr | int] = expr_list_attr_to_exprs(expr_attr)
 
     combinator_fn = None
     if combinator_attr is not None:
@@ -1058,12 +1058,15 @@ def _reconstruct_expr_lambda(
 
     def expr_lambda(*args):
         subs_map = {operand_syms[i]: args[i] for i in range(len(args))}
-        results = [r.subs(subs_map) if hasattr(r, "subs") else r for r in sympy_results]
+        results = [
+            r.subs(subs_map) if isinstance(r, sympy.Basic) else r for r in sympy_results
+        ]
         if combinator_fn is not None:
             return combinator_fn(*results)
-        assert (
-            len(results) == 1
-        ), f"Expected single result without combinator, got {len(results)}"
+        assert len(results) == 1, (
+            f"Multiple expression results ({len(results)}) require a "
+            f"combinator attribute to reduce them to a single value"
+        )
         return results[0]
 
     return expr_lambda
@@ -1250,6 +1253,9 @@ def _create_get_result_nodes(
                 result_index = (
                     iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
                 )
+            # idx can exceed output_values when the iterate body yields
+            # more results than the original output list (e.g. after
+            # variadic reduction expansion adds extra carry values).
             elif idx < len(output_values) and isinstance(output_values[idx], fx.Node):
                 result_index = getattr(
                     output_values[idx], AttrNames.INDEX.fx_property, None

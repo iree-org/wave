@@ -3,6 +3,7 @@
 
 import atexit
 import sympy
+from collections.abc import Callable
 
 import wave_lang.kernel.wave as wave
 import wave_lang.kernel.lang as tkl
@@ -64,16 +65,39 @@ def _check_hyperparameters_roundtrip(
         ), f"Hyperparameter {param} mismatch: {source_subs.get(param)} vs {roundtripped_subs.get(param)}"
 
 
-def _assert_roundtrip(kernel, subs: dict, label: str) -> None:
-    """Compile a kernel, roundtrip through MLIR, assert equivalence."""
-    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
-    compiled_kernel = wave_compile(options, kernel)
-    trace = compiled_kernel.get_compiled_graph()
-    source_constraints = kernel.constraints
+def _assert_roundtrip(
+    kernel,
+    subs: dict,
+    label: str,
+    stop_before: Callable[[], None] | None = None,
+) -> None:
+    """Compile a kernel, roundtrip through MLIR, and assert equivalence.
 
-    mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-        trace, source_constraints, options
-    )
+    When `stop_before` is None, runs all graph passes.
+    When set, runs graph passes up to but not including `stop_before`.
+    """
+    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+    with IndexingContext() as idxc:
+        idxc.set_subs(options.subs)
+        kernel.initialize_wave_constraints()
+        kernel.initialize_symbolic_constraints()
+        kernel.initialize_workgroup_constraints()
+        trace = kernel._trace(location_capture_config=options.location_capture_config)
+        graph_passes = build_graph_passes(kernel, trace, options)
+        # Check that the specified `stop_before` pass is in the graph passes.
+        if stop_before is not None:
+            assert any(
+                p.__name__ == stop_before.__name__ for p in graph_passes
+            ), f"stop_before={stop_before.__name__!r} not found in graph passes"
+        for p in graph_passes:
+            if stop_before is not None and p.__name__ == stop_before.__name__:
+                break
+            p()
+        source_constraints = kernel.constraints
+        mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, source_constraints, options
+        )
+
     errors = error_diagnostics(diagnostics)
     assert errors == [], f"[{label}] unexpected emit errors: {errors}"
 
@@ -512,41 +536,6 @@ def mlir_to_fx_reduction_roundtrip():
     # CHECK: max roundtrip: OK
 
 
-def _assert_pre_decompose_roundtrip(kernel, subs: dict, label: str) -> None:
-    """Compile through graph passes (stopping before decompose_reduce_ops),
-    emit MLIR, roundtrip, and assert equivalence.
-
-    Runs the full pipeline up to but not including `decompose_reduce_ops`
-    (which introduces `wave.shuffle` ops not yet supported by the
-    importer).
-    """
-    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
-    with IndexingContext() as idxc:
-        idxc.set_subs(options.subs)
-        kernel.initialize_wave_constraints()
-        kernel.initialize_symbolic_constraints()
-        kernel.initialize_workgroup_constraints()
-        trace = kernel._trace(location_capture_config=options.location_capture_config)
-        graph_passes = build_graph_passes(kernel, trace, options)
-        for p in graph_passes:
-            if p.__name__ == decompose_reduce_ops.__name__:
-                break
-            p()
-
-        mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-            trace, kernel.constraints, options
-        )
-    errors = error_diagnostics(diagnostics)
-    assert errors == [], f"[{label}] unexpected emit errors: {errors}"
-
-    fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
-    errors = error_diagnostics(fx_diags)
-    assert errors == [], f"[{label}] unexpected import errors: {errors}"
-
-    assert_traces_equivalent(trace, fx_trace, subs=options.subs)
-    print(f"  {label}: OK")
-
-
 # CHECK-LABEL: mlir_to_fx_binary_op_roundtrip
 @run_test
 def mlir_to_fx_binary_op_roundtrip():
@@ -574,7 +563,7 @@ def mlir_to_fx_binary_op_roundtrip():
         res = a_reg + b_reg
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(add_kernel, subs, "add")
+    _assert_roundtrip(add_kernel, subs, "add", stop_before=decompose_reduce_ops)
 
     @wave.wave(constraints)
     def sub_kernel(
@@ -587,7 +576,7 @@ def mlir_to_fx_binary_op_roundtrip():
         res = a_reg - b_reg
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(sub_kernel, subs, "sub")
+    _assert_roundtrip(sub_kernel, subs, "sub", stop_before=decompose_reduce_ops)
 
     @wave.wave(constraints)
     def mul_kernel(
@@ -600,7 +589,7 @@ def mlir_to_fx_binary_op_roundtrip():
         res = a_reg * b_reg
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(mul_kernel, subs, "mul")
+    _assert_roundtrip(mul_kernel, subs, "mul", stop_before=decompose_reduce_ops)
 
     # NOTE: Division (`a / b`) is not tested here because the Python-side FX
     # op name is "truediv" but the Water emitter maps it as "div". This is a
@@ -618,7 +607,7 @@ def mlir_to_fx_binary_op_roundtrip():
         mn = wave.minimum(a_reg, b_reg)
         wave.write(mx + mn, c)
 
-    _assert_pre_decompose_roundtrip(max_min_kernel, subs, "max_min")
+    _assert_roundtrip(max_min_kernel, subs, "max_min", stop_before=decompose_reduce_ops)
 
     # CHECK: add: OK
     # CHECK: sub: OK
@@ -651,7 +640,7 @@ def mlir_to_fx_unary_op_roundtrip():
         res = wave.exp2(a_reg)
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(exp2_kernel, subs, "exp2")
+    _assert_roundtrip(exp2_kernel, subs, "exp2", stop_before=decompose_reduce_ops)
 
     @wave.wave(constraints)
     def reciprocal_kernel(
@@ -662,7 +651,9 @@ def mlir_to_fx_unary_op_roundtrip():
         res = wave.reciprocal(a_reg)
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(reciprocal_kernel, subs, "reciprocal")
+    _assert_roundtrip(
+        reciprocal_kernel, subs, "reciprocal", stop_before=decompose_reduce_ops
+    )
 
     # CHECK: exp2: OK
     # CHECK: reciprocal: OK
@@ -693,7 +684,9 @@ def mlir_to_fx_cast_roundtrip():
         res = wave.cast(a_reg, tkl.f32)
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(cast_kernel, subs, "cast f16->f32")
+    _assert_roundtrip(
+        cast_kernel, subs, "cast f16->f32", stop_before=decompose_reduce_ops
+    )
 
     # CHECK: cast f16->f32: OK
 
@@ -723,18 +716,19 @@ def mlir_to_fx_permute_roundtrip():
         res = wave.permute(a_reg, target_shape=[N, M])
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(permute_kernel, subs, "permute")
+    _assert_roundtrip(permute_kernel, subs, "permute", stop_before=decompose_reduce_ops)
 
     # CHECK: permute: OK
 
 
-# CHECK-LABEL: mlir_to_fx_self_index_roundtrip
+# CHECK-LABEL: mlir_to_fx_mask_pattern_roundtrip
 @run_test
-def mlir_to_fx_self_index_roundtrip():
-    """Test MLIR roundtrip for self_index, apply_expr, cast, and select.
+def mlir_to_fx_mask_pattern_roundtrip():
+    """Test MLIR roundtrip for the attention mask pattern.
 
-    The kernel mimics the attention mask pattern: create an index, compare
-    it against a dimension bound, cast to i1, broadcast, and select.
+    Exercises self_index, apply_expr, cast, broadcast, and select in
+    combination: create an index, compare it against a dimension bound,
+    cast to i1, broadcast, and select.
     """
     K2 = tkl.sym.K2
     BLOCK_K2 = tkl.sym.BLOCK_K2
@@ -764,8 +758,11 @@ def mlir_to_fx_self_index_roundtrip():
         res = wave.select(mask, a_reg, a_reg)
         wave.write(res, c)
 
-    _assert_pre_decompose_roundtrip(
-        self_index_kernel, subs, "self_index + apply_expr + select"
+    _assert_roundtrip(
+        self_index_kernel,
+        subs,
+        "self_index + apply_expr + select",
+        stop_before=decompose_reduce_ops,
     )
 
     # CHECK: self_index + apply_expr + select: OK
