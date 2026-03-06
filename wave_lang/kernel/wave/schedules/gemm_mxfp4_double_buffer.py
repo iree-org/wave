@@ -367,13 +367,25 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         loop_shared_load_b_0, loop_shared_load_b_1 = tkw.partition_by_dim(
             loop_shared_load_b, dim=K, num_partitions=2
         )
+        loop_all_read_a_scale_0, loop_all_read_a_scale_1 = tkw.partition_by_dim(
+            loop_all_read_a_scale, dim=K, num_partitions=2
+        )
+        loop_all_read_b_scale_0, loop_all_read_b_scale_1 = tkw.partition_by_dim(
+            loop_all_read_b_scale, dim=K, num_partitions=2
+        )
 
         loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
             loop_bitcast_a, dim=K, num_partitions=2
         )
+        loop_bitcast_a_scale_0, loop_bitcast_a_scale_1 = tkw.partition_by_dim(
+            loop_bitcast_a_scale, dim=K, num_partitions=2
+        )
 
         loop_bitcast_b_0, loop_bitcast_b_1 = tkw.partition_by_dim(
             loop_bitcast_b, dim=K, num_partitions=2
+        )
+        loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = tkw.partition_by_dim(
+            loop_bitcast_b_scale, dim=K, num_partitions=2
         )
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
@@ -394,11 +406,11 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                 loop_shared_load_a_0,
                 loop_shared_load_b_0,
                 loop_bitcast_a_0,
-                loop_bitcast_a_scale,
+                loop_bitcast_a_scale_0,
                 loop_bitcast_b_0,
-                loop_bitcast_b_scale,
-                loop_all_read_a_scale,  # prefetch A & B scales for next iteration
-                loop_all_read_b_scale,
+                loop_bitcast_b_scale_0,
+                loop_all_read_a_scale_0,  # prefetch A & B scales for next iteration
+                loop_all_read_b_scale_0,
                 tkw.SchedulingBarrier([]),
             ]
         )
@@ -431,7 +443,11 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                     loop_shared_load_a_1,
                     loop_shared_load_b_1,
                     loop_bitcast_a_1,
+                    loop_bitcast_a_scale_1,
                     loop_bitcast_b_1,
+                    loop_bitcast_b_scale_1,
+                    loop_all_read_a_scale_1,
+                    loop_all_read_b_scale_1,
                     tkw.SchedulingBarrier([]),
                     tkw.WorkgroupBarrier(),
                     tkw.SchedulingBarrier([]),

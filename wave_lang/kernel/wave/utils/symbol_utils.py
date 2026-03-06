@@ -7,7 +7,7 @@ from copy import deepcopy
 from functools import lru_cache
 import math
 import operator as op
-from typing import Optional
+from typing import Callable, Optional
 
 import sympy
 
@@ -181,7 +181,7 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
                 return None
             mult = m if (mult is None) or (m < mult) else mult
             terms.append(arg)
-        if c >= mult:
+        if c is None or mult is None or c >= mult:
             return None
         return (sum(terms) % q) + c
 
@@ -378,6 +378,38 @@ def _compile_evaluator(expr):
     return free, f
 
 
+def get_start_expr(value):
+    """Return the scalar start expression for an index or IndexSequence."""
+    return value.start if isinstance(value, IndexSequence) else value
+
+
+def eval_expr(expr: sympy.Expr | int | float, probe_map: dict) -> int:
+    """Evaluate a sympy expression with concrete symbol values."""
+    if isinstance(expr, (int, float)):
+        return int(expr)
+    return int(expr.xreplace(probe_map))
+
+
+def expr_is_zero_under_probes(
+    expr: sympy.Expr | int,
+    probe_generators: tuple[Callable[[int], int], ...] | list[Callable[[int], int]],
+    divisibility_fwd=None,
+) -> bool:
+    """Check whether an expression evaluates to zero on all provided probes."""
+    expr = subs_idxc(expr)
+    if divisibility_fwd:
+        expr = safe_subs(expr, divisibility_fwd)
+    free_list = sorted(getattr(expr, "free_symbols", ()), key=str)
+    for gen in probe_generators:
+        probe = {s: gen(i) for i, s in enumerate(free_list)}
+        try:
+            if eval_expr(expr, probe) != 0:
+                return False
+        except (TypeError, ValueError, ZeroDivisionError):
+            return False
+    return True
+
+
 # TODO: Presburger arithmetic (MLIR's IntegerRelation) for a formal proof.
 # correct by construction but much heavier
 @lru_cache(maxsize=4096)
@@ -409,6 +441,8 @@ def _numeric_eval_constant(expr, num_samples: int = 48):
         free, evaluator = (), None
 
     if not free:
+        if isinstance(expr, int):
+            return expr
         if expr.has(*_BAD_ATOMS):
             return None
         if expr.is_integer is not True:
