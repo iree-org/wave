@@ -786,19 +786,77 @@ def testScaledGemmMXFP4AsymmetricScheduleBF16(
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
 @use_water_backend_bool("use_water_backend")
-def testScaledGemmMXFP4PreshuffleB(
+def testScaledGemmMXFP4AsymmetricScheduleBF16(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
+    use_water_backend: bool,
+):
+    """End-to-end test for asymmetric MXFP4 GEMM: A through LDS, B direct from global."""
+    gemm, options = get_tagged_mxfp4_gemm(
+        shape,
+        block_shape,
+        wave_shape=(1, 4),
+        mfma_variant=mfma_variant,
+        b_address_space=GLOBAL_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
+    )
+    schedule = get_mxfp4_asymmetric_schedule()
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.use_water_backend = use_water_backend
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    out = device_zeros(x.shape[0], w.shape[1], dtype=torch.bfloat16)
+
+    w_t = w.T.contiguous()
+    gemm(x, x_scales, w_t, w_scales, out)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape, block_shape, wave_shape",
+    [
+        ((1024, 1024, 8192), (256, 256, 256), (1, 4)),
+        ((1024, 1024, 8192), (64, 192, 256), (1, 4)),
+        ((32 * 32, 32 * 64, 16384), (32, 64, 256), (1, 4)),
+        ((640, 256, 768), (64, 64, 256), (1, 4)),
+        ((4224, 4096, 768), (64, 64, 256), (1, 4)),
+    ],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+@param_bool("dynamic_shapes", "dyn")
+@use_water_backend_bool("use_water_backend")
+def testScaledGemmMXFP4PreshuffleB(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    wave_shape: tuple[int, int],
+    mfma_variant: ScaledMMAType,
+    dynamic_shapes: bool,
     use_water_backend: bool,
 ):
     """End-to-end test for MXFP4 GEMM with preshuffled B data and B scales."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
         shape,
         block_shape,
-        wave_shape=(1, 4),
+        wave_shape=wave_shape,
         mfma_variant=mfma_variant,
     )
+    if dynamic_shapes:
+        for sym in [tkl.sym.M, tkl.sym.N, tkl.sym.K]:
+            del options.subs[sym]
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        options.wave_runtime = True
     schedule = get_mxfp4_asymmetric_schedule()
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
