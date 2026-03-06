@@ -379,6 +379,12 @@ def main():
         help="Benchmark iterations for hipblaslt-bench (default: 1)",
     )
     parser.add_argument(
+        "--compare-rocroller",
+        action="store_true",
+        default=False,
+        help="Also benchmark rocRoller baseline for comparison",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         default=None,
@@ -407,11 +413,16 @@ def main():
     bench_shapes = _read_shapes_csv(args.shapes)
     print(f"Loaded {len(bench_shapes)} shapes from {args.shapes}")
 
+    compare_rocroller = args.compare_rocroller
+    total_steps = 7 if compare_rocroller else 5
+
     dump_dir = tempfile.mkdtemp(prefix="wave_rocroller_bench_")
     print(f"Intermediate dump directory: {dump_dir}")
 
     # --- Step 1: Compile wave kernel ---
-    print(f"\n[1/7] Compiling Wave kernel (block={BLOCK_M}x{BLOCK_N}x{BLOCK_K})...")
+    print(
+        f"\n[1/{total_steps}] Compiling Wave kernel (block={BLOCK_M}x{BLOCK_N}x{BLOCK_K})..."
+    )
     try:
         compiled_gemm, options = _compile_wave_kernel(block_shape, dump_dir)
     except Exception as e:
@@ -420,7 +431,7 @@ def main():
     print("  Compilation succeeded.")
 
     # --- Step 2: Validate wave kernel ---
-    print(f"\n[2/7] Validating against torch reference...")
+    print(f"\n[2/{total_steps}] Validating against torch reference...")
     try:
         _validate_wave_kernel(compiled_gemm, VALIDATION_SHAPES)
     except Exception as e:
@@ -429,7 +440,7 @@ def main():
     print("  All validations passed.")
 
     # --- Step 3: Patch assembly and stage for later ---
-    print(f"\n[3/7] Patching assembly...")
+    print(f"\n[3/{total_steps}] Patching assembly...")
     try:
         rocmasm_path = _find_rocmasm(dump_dir)
         entry_function = _patch_and_install_asm(
@@ -441,29 +452,39 @@ def main():
         print(f"ERROR: Assembly patching failed: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # --- Step 4: Build rocRoller baseline (empty kernels.yaml) ---
-    print(f"\n[4/7] Building rocRoller baseline (no custom kernels)...")
-    try:
-        _write_empty_kernel_yaml(kernel_yaml_path)
-        _build_hipblaslt(rocm_libraries)
-    except Exception as e:
-        print(f"ERROR: Baseline build failed: {e}", file=sys.stderr)
-        sys.exit(1)
-    print("  Build succeeded.")
+    step = 3
 
-    # --- Step 5: Benchmark rocRoller baseline (without --swizzleA) ---
-    print(f"\n[5/7] Benchmarking rocRoller baseline ({len(bench_shapes)} shapes)...")
-    rr_results = _bench_all_shapes(
-        "ROCROLLER",
-        rocm_libraries,
-        bench_shapes,
-        cold_iters=args.cold_iters,
-        bench_iters=args.bench_iters,
-        swizzle_a=False,
-    )
+    # --- Steps 4-5 (optional): rocRoller baseline ---
+    rr_results = None
+    if compare_rocroller:
+        step += 1
+        print(
+            f"\n[{step}/{total_steps}] Building rocRoller baseline (no custom kernels)..."
+        )
+        try:
+            _write_empty_kernel_yaml(kernel_yaml_path)
+            _build_hipblaslt(rocm_libraries)
+        except Exception as e:
+            print(f"ERROR: Baseline build failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        print("  Build succeeded.")
 
-    # --- Step 6: Build with wave kernel ---
-    print(f"\n[6/7] Building with Wave kernel ({entry_function})...")
+        step += 1
+        print(
+            f"\n[{step}/{total_steps}] Benchmarking rocRoller baseline ({len(bench_shapes)} shapes)..."
+        )
+        rr_results = _bench_all_shapes(
+            "ROCROLLER",
+            rocm_libraries,
+            bench_shapes,
+            cold_iters=args.cold_iters,
+            bench_iters=args.bench_iters,
+            swizzle_a=False,
+        )
+
+    # --- Build with wave kernel ---
+    step += 1
+    print(f"\n[{step}/{total_steps}] Building with Wave kernel ({entry_function})...")
     try:
         _write_kernel_yaml(kernel_yaml_path, entry_function, block_shape, block_size)
         _build_hipblaslt(rocm_libraries)
@@ -472,8 +493,11 @@ def main():
         sys.exit(1)
     print("  Build succeeded.")
 
-    # --- Step 7: Benchmark wave kernel ---
-    print(f"\n[7/7] Benchmarking Wave kernel ({len(bench_shapes)} shapes)...")
+    # --- Benchmark wave kernel ---
+    step += 1
+    print(
+        f"\n[{step}/{total_steps}] Benchmarking Wave kernel ({len(bench_shapes)} shapes)..."
+    )
     wave_results = _bench_all_shapes(
         "WAVE",
         rocm_libraries,
@@ -488,25 +512,31 @@ def main():
     print(f"{'='*70}")
 
     for i, (M, N, K) in enumerate(bench_shapes):
-        rr = rr_results[i]
         wv = wave_results[i]
-
-        if rr["runtime_us"] > 0 and wv["runtime_us"] > 0:
-            speedup = (rr["runtime_us"] - wv["runtime_us"]) / rr["runtime_us"] * 100
-            delta_str = f"{speedup:+.0f}%"
-        else:
-            delta_str = "N/A"
-
-        rr_status = "CORRECT" if rr["correct"] else "WRONG"
         wv_status = "CORRECT" if wv["correct"] else "WRONG"
 
-        print(f"[{i+1}/{len(bench_shapes)}] {M}x{N}x{K}     {delta_str}")
-        print(
-            f"         [ROCROLLER] {rr['tflops']:.2f} TFLOPs, {rr['runtime_us']:.1f} us, {rr_status}"
-        )
-        print(
-            f"         [WAVE]      {wv['tflops']:.2f} TFLOPs, {wv['runtime_us']:.1f} us, {wv_status}"
-        )
+        if compare_rocroller:
+            rr = rr_results[i]
+            rr_status = "CORRECT" if rr["correct"] else "WRONG"
+
+            if rr["runtime_us"] > 0 and wv["runtime_us"] > 0:
+                speedup = (rr["runtime_us"] - wv["runtime_us"]) / rr["runtime_us"] * 100
+                delta_str = f"{speedup:+.0f}%"
+            else:
+                delta_str = "N/A"
+
+            print(f"[{i+1}/{len(bench_shapes)}] {M}x{N}x{K}     {delta_str}")
+            print(
+                f"         [ROCROLLER] {rr['tflops']:.2f} TFLOPs, {rr['runtime_us']:.1f} us, {rr_status}"
+            )
+            print(
+                f"         [WAVE]      {wv['tflops']:.2f} TFLOPs, {wv['runtime_us']:.1f} us, {wv_status}"
+            )
+        else:
+            print(
+                f"[{i+1}/{len(bench_shapes)}] {M}x{N}x{K}     "
+                f"{wv['tflops']:.2f} TFLOPs, {wv['runtime_us']:.1f} us, {wv_status}"
+            )
 
     print(f"{'='*70}")
 
@@ -521,30 +551,30 @@ def main():
         "wave_tflops",
         "wave_us",
         "wave_correct",
-        "rocroller_tflops",
-        "rocroller_us",
-        "rocroller_correct",
     ]
+    if compare_rocroller:
+        fieldnames += ["rocroller_tflops", "rocroller_us", "rocroller_correct"]
+
     rows = []
     for i, (M, N, K) in enumerate(bench_shapes):
-        rr = rr_results[i]
         wv = wave_results[i]
-        rows.append(
-            {
-                "BLOCK_M": BLOCK_M,
-                "BLOCK_N": BLOCK_N,
-                "BLOCK_K": BLOCK_K,
-                "M": M,
-                "N": N,
-                "K": K,
-                "wave_tflops": wv["tflops"],
-                "wave_us": wv["runtime_us"],
-                "wave_correct": wv["correct"],
-                "rocroller_tflops": rr["tflops"],
-                "rocroller_us": rr["runtime_us"],
-                "rocroller_correct": rr["correct"],
-            }
-        )
+        row = {
+            "BLOCK_M": BLOCK_M,
+            "BLOCK_N": BLOCK_N,
+            "BLOCK_K": BLOCK_K,
+            "M": M,
+            "N": N,
+            "K": K,
+            "wave_tflops": wv["tflops"],
+            "wave_us": wv["runtime_us"],
+            "wave_correct": wv["correct"],
+        }
+        if compare_rocroller:
+            rr = rr_results[i]
+            row["rocroller_tflops"] = rr["tflops"]
+            row["rocroller_us"] = rr["runtime_us"]
+            row["rocroller_correct"] = rr["correct"]
+        rows.append(row)
 
     with open(output_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
