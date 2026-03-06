@@ -106,8 +106,9 @@ class ReductionWaveOp<string mnemonic>
          WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
          RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
       WaveArithmeticOpDoc {
-  // We cannot use Variadic<WaveTensorInRegister> because Variadic requires
-  // a Type, not a TypeConstraint (same pattern as wave.iterate's iter_args).
+  // TODO(#889): We cannot use Variadic<WaveTensorInRegister> because Variadic
+  // requires a Type, not a TypeConstraint (same pattern as wave.iterate's
+  // iter_args).
   let arguments = !con((ins
     Arg<Variadic<WaveIterableType>, "Tensor(s) to reduce">:$inputs,
     Arg<WaveTensorInRegister, "Initial value for the reduction">:$init,
@@ -477,7 +478,7 @@ def ReshapeOp : WaveOp<"reshape", [
   }];
 
   let arguments = !con((ins
-    // TODO: cannot use WaveTensorInRegister here because it's not a Type, requires
+    // TODO(#889): cannot use WaveTensorInRegister here because it's not a Type, requires
     // an upstream change to Variadic to allow TypeConstraint.
     Arg<Variadic<AnyType>,
         "Tensor to reshape, potentially composed from a sequence "
@@ -696,7 +697,8 @@ def ApplyExprOp : WaveOp<"apply_expr",
   }] # baseDescription;
 
   // Accept both WaveTensorType (before PropagateElementsPerThread) and
-  // 1D vectors (after). We cannot use Variadic<WaveTensorInRegister> because
+  // 1D vectors (after).
+  // TODO(#889): We cannot use Variadic<WaveTensorInRegister> because
   // Variadic requires a Type and not a TypeConstraint.
   let arguments = !con((ins
     Arg<Variadic<WaveIterableType>, "Input registers">:$arguments,

@@ -795,7 +795,7 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
 
 def _handle_reduction_op(
     op: SumOp | MaxElementOp,
-    reduce_cls: type,
+    reduce_cls: type[Sum | Max],
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle wave.sum / wave.max_element operations."""

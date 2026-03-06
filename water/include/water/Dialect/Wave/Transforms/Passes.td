@@ -198,6 +198,10 @@ def WaterWaveExpandVariadicReductionsPass
     supports variadic inputs for faithful roundtripping with the Python
     representation. This pass normalizes them before lowering, which
     requires single-input reductions.
+
+    This corresponds to the "source reduce" step (step 1) of the Python-side
+    `decompose_reduce_ops` pass, which additionally performs local element
+    reduction, cross-thread butterfly shuffles, and accumulator combination.
   }];
 }
 

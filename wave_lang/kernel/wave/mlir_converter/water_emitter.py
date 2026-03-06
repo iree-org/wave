@@ -765,7 +765,7 @@ def _emit_ops_from_graph(
                     # verifier.
                     input_type = inputs[0].type
                     fully_specified = (
-                        hasattr(input_type, "fully_specified")
+                        isinstance(input_type, WaveTensorType)
                         and input_type.fully_specified
                     )
                     axis = (
