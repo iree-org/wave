@@ -39,10 +39,10 @@ try:
         AllocateOp,
         ApplyExprOp,
         BroadcastOp,
-        CastOp as CastMlirOp,
+        CastOp,
         DivOp,
         Exp2Op,
-        ExtractOp as ExtractMlirOp,
+        ExtractOp,
         ExtractSliceOp,
         IterateOp,
         MaxElementOp,
@@ -54,8 +54,8 @@ try:
         ReadOp,
         ReciprocalOp,
         RegisterOp,
-        ReshapeOp as ReshapeMlirOp,
-        SelectOp as SelectMlirOp,
+        ReshapeOp,
+        SelectOp,
         SelfIndexOp,
         SubOp,
         SumOp,
@@ -108,7 +108,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     ApplyExpr,
     Broadcast,
-    CastOp as CastFx,
+    CastOp as Cast,
     Exp2,
     Extract,
     ExtractSlice,
@@ -128,7 +128,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Read,
     Reciprocal,
     Reshape,
-    SelectOp as SelectFx,
+    SelectOp as Select,
     SelfIndex,
     SharedMemoryBarrier,
     Sub,
@@ -902,7 +902,7 @@ def _handle_binary_op(
 
 
 def _handle_select_op(
-    op: SelectMlirOp,
+    op: SelectOp,
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle wave.select operation."""
@@ -911,7 +911,7 @@ def _handle_select_op(
     rhs_node = parse_ctx.resolve_operand(op.rhs)
     converted_attrs = _convert_supported_attrs(op)
 
-    fx_op = SelectFx.create(
+    fx_op = Select.create(
         parse_ctx.graph,
         cond=cond_node,
         if_true=lhs_node,
@@ -941,7 +941,7 @@ def _handle_unary_op(
 
 
 def _handle_cast_op(
-    op: CastMlirOp,
+    op: CastOp,
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle wave.cast operation."""
@@ -949,7 +949,7 @@ def _handle_cast_op(
     target_dtype = mlir_element_type_to_dtype(op.result.type.element_type)
     converted_attrs = _convert_supported_attrs(op)
 
-    fx_op = CastFx.create(
+    fx_op = Cast.create(
         parse_ctx.graph,
         arg=arg_node,
         dtype=target_dtype,
@@ -1117,7 +1117,7 @@ def _handle_apply_expr_op(
 
 
 def _handle_extract_op(
-    op: ExtractMlirOp,
+    op: ExtractOp,
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle wave.extract operation."""
@@ -1140,7 +1140,7 @@ def _handle_extract_op(
 
 
 def _handle_reshape_op(
-    op: ReshapeMlirOp,
+    op: ReshapeOp,
     parse_ctx: _OpParseContext,
 ) -> None:
     """Handle wave.reshape operation."""
@@ -1433,13 +1433,13 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_binary_op(op, Maximum, parse_ctx)
             case MinOp():
                 _handle_binary_op(op, Minimum, parse_ctx)
-            case SelectMlirOp():
+            case SelectOp():
                 _handle_select_op(op, parse_ctx)
             case Exp2Op():
                 _handle_unary_op(op, Exp2, parse_ctx)
             case ReciprocalOp():
                 _handle_unary_op(op, Reciprocal, parse_ctx)
-            case CastMlirOp():
+            case CastOp():
                 _handle_cast_op(op, parse_ctx)
             case PermuteOp():
                 _handle_permute_op(op, parse_ctx)
@@ -1447,9 +1447,9 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_self_index_op(op, parse_ctx)
             case ApplyExprOp():
                 _handle_apply_expr_op(op, parse_ctx)
-            case ExtractMlirOp():
+            case ExtractOp():
                 _handle_extract_op(op, parse_ctx)
-            case ReshapeMlirOp():
+            case ReshapeOp():
                 _handle_reshape_op(op, parse_ctx)
             case ExtractSliceOp():
                 _handle_extract_slice_op(op, parse_ctx)
