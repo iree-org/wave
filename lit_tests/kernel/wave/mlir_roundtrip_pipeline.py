@@ -228,17 +228,6 @@ def attention_progressive_roundtrip():
     # See: https://github.com/iree-org/wave/issues/1019
     expected_failures = frozenset(
         {
-            "debug_log_hoist",
-            "initialize_iter_args",
-            "create_induction_vars",
-            "initialize_reductions",
-            "finalize_indices",
-            "substitute_vector_shapes",
-            "add_get_results",
-            "infer_types",
-            "construct_index_mapping",
-            "debug_log_write_replace",
-            "promote_placeholders",
             "set_node_indices",
             "reorder_workgroups",
             "expand_graph",
