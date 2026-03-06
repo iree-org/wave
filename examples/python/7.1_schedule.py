@@ -88,6 +88,23 @@ def _run_mxfp_gemm_preshuffle(gemm, shape, all=False, only_scale=False, only_b=F
     )
 
 
+def _get_8wave_shape_from_block(block):
+    """Choose an 8-wave shape (4x2 or 2x4) from block M/N dims.
+
+    If either block M or N is 32, force that corresponding wave dimension to 2.
+    """
+    m_blk, n_blk = block[0], block[1]
+    if m_blk == 32 and n_blk == 32:
+        raise ValueError(
+            "Cannot satisfy both M and N=32 with an 8-wave shape constrained to (4, 2) or (2, 4)."
+        )
+    if m_blk == 32:
+        return (2, 4)
+    if n_blk == 32:
+        return (4, 2)
+    return (4, 2)
+
+
 def test_dbuf_4wave_mxfp_gemm(
     is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
 ):
@@ -106,19 +123,29 @@ def test_dbuf_4wave_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
     A and B are read from global memory directly to LDS.
+
+    Note: for dynamic mode, keep block MxN at or below 128x256 or 256x128
+    to avoid exceeding shared-memory limits.
     """
+    wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
-        shape, block, wave_shape=(4, 2)
+        shape, block, wave_shape=wave_shape
     )
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
+
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+
     schedule = get_mxfp4_dbuf_pingpong_schedule(use_stagger=True, shape=shape)
 
     options.print_ir_after = "all" if is_debug else []
@@ -126,7 +153,10 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, only_scale=True)
-    print("MXFP GEMM double-buffer 8-wave ping pong with scale shuffling test passed!")
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM double-buffer 8-wave ping pong with scale shuffling ({mode}) test passed!"
+    )
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
@@ -137,8 +167,9 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
     Same for B data. However, loading B directly to VGPR consumes too many VGPRs and causes spilling.
     A is read from global memory directly to LDS.
     """
+    wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
-        shape, block, wave_shape=(4, 2)
+        shape, block, wave_shape=wave_shape
     )
     options.specialize = True
     options.use_buffer_ops = True
@@ -156,7 +187,10 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
-    print("MXFP GEMM double-buffer 8-wave ping pong with scale shuffling test passed!")
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM double-buffer 8-wave ping pong with scale shuffling and B shuffled ({mode}) test passed!"
+    )
 
 
 def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
