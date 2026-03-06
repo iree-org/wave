@@ -31,6 +31,7 @@ from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 from ..common.utils import (
     require_e2e,
     require_cdna_3_or_4,
+    require_cdna4,
     require_rdna4,
 )
 
@@ -129,6 +130,86 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
         dynamic_symbols=[K],  # K is dynamic to trigger dynamic pipelining
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,  # Enable pipelining
+        run_bench=run_bench,
+    )
+    compile_options = set_default_run_config(compile_options)
+
+    compiled_gemm = wave_compile(compile_options, gemm)
+
+    compiled_gemm(a, b, c)
+
+    assert_close(c, ref_result, rtol=1e-3, atol=1e-3)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape,block",
+    [
+        pytest.param(
+            (640, 256, 768),
+            (64, 64, 256),
+            id="640x256x768_block64x64x256",
+        ),
+    ],
+)
+def test_gemm_pipelined_remainder_start(shape, block, run_bench):
+    """Verify remainder loop starts from 0 when K < rounding_stride."""
+    m_size, n_size, k_size = shape
+    block_m, block_n, block_k = block
+
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE_0, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE_0, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    torch.manual_seed(42)
+    a = device_randn((m_size, k_size), dtype=torch.float16)
+    b = device_randn((n_size, k_size), dtype=torch.float16)
+    c = device_zeros((m_size, n_size), dtype=torch.float32)
+
+    ref_result = torch.matmul(a.to(torch.float32), b.T.to(torch.float32))
+
+    subs = {
+        M: m_size,
+        N: n_size,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
+    }
+    subs.update(get_default_scheduling_params())
+
+    compile_options = WaveCompileOptions(
+        subs=subs,
+        dynamic_symbols=[K],
+        canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
         run_bench=run_bench,
     )
     compile_options = set_default_run_config(compile_options)
