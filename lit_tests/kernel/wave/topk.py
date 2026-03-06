@@ -102,7 +102,7 @@ def test_topk():
     # CHECK: vector.from_elements{{.*}} : vector<2xi32>
 
     # Write operations for both values and indices (linearized 1D stores)
-    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [1073741822], strides: [1] : memref<f16>
-    # CHECK: vector.store {{.*}} : memref<1073741822xf16{{.*}}>, vector<2xf16>
-    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [536870910], strides: [1] : memref<i32>
-    # CHECK: vector.store {{.*}} : memref<536870910xi32{{.*}}>, vector<2xi32>
+    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [2147483646], strides: [1] : memref<f16>
+    # CHECK: vector.store {{.*}} : memref<2147483646xf16{{.*}}>, vector<2xf16>
+    # CHECK: memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [1073741822], strides: [1] : memref<i32>
+    # CHECK: vector.store {{.*}} : memref<1073741822xi32{{.*}}>, vector<2xi32>
