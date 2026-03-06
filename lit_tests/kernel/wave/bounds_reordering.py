@@ -7,6 +7,9 @@
 # symbol must be replaced by the reordered expression (which involves both
 # WORKGROUP_0 and WORKGROUP_1), so the emitted affine.apply that computes
 # the bound references both %block_id_x and %block_id_y.
+#
+# Dynamic M, N, K mirrors the real use case (e.g. 256x224x256 block size
+# with varying problem shapes).
 
 from sympy import ceiling
 
@@ -78,9 +81,6 @@ def test_bounds_respect_workgroup_reordering():
 
     options = WaveCompileOptions(
         subs={
-            M: 256,
-            N: 256,
-            K: 256,
             BLOCK_M: 64,
             BLOCK_N: 48,
             BLOCK_K: 16,
@@ -89,6 +89,7 @@ def test_bounds_respect_workgroup_reordering():
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
+        dynamic_symbols=(M, N, K),
         compile_to_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -106,14 +107,12 @@ def test_bounds_respect_workgroup_reordering():
 
     # CHECK-LABEL:   test_bounds_respect_workgroup_reordering
 
-    # The N-dimension bound comes from WaveConstraint.get_index_bound (wave_tile
-    # 24 is not divisible by MMA vector size 16).  The raw bound contains
-    # WORKGROUP_1; after workgroup reordering it must reference both block_id_x
-    # and block_id_y.  Without the fix the affine.apply would only use
-    # %block_id_y.
-
-    # CHECK:         %[[N_BOUND:.+]] = affine.apply #{{.+}}()[%block_id_x, %block_id_y, %thread_id_y]
-    # CHECK-NEXT:    %[[N_BOUND_CLAMPED:.+]] = arith.minsi %[[N_BOUND]], %c256 : index
+    # The reordered N-dimension bound uses %arg3 (dynamic M, needed for
+    # ceiling(M/BLOCK_M) in the swizzle), plus both block IDs and thread_id_y.
+    # Without the fix the affine.apply would reference only %block_id_y and
+    # %thread_id_y.
+    # CHECK:         %[[N_BOUND:.+]] = affine.apply #{{.+}}()[%arg3, %block_id_y, %block_id_x, %thread_id_y]
+    # CHECK-NEXT:    %[[N_BOUND_CLAMPED:.+]] = arith.minsi %[[N_BOUND]], %arg4 : index
 
     # The clamped bound is used in a comparison for masking.
     # CHECK:         arith.cmpi slt, %{{.+}}, %[[N_BOUND_CLAMPED]] : index
