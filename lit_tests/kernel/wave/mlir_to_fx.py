@@ -89,6 +89,8 @@ def _assert_roundtrip(
     ), "stop_before and stop_after are mutually exclusive"
     options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
     with IndexingContext() as idxc:
+        # The indexing context is usually initialized by wave_compile.
+        # To enable running graph passes manually, we initialize it here.
         idxc.set_subs(options.subs)
         kernel.initialize_wave_constraints()
         kernel.initialize_symbolic_constraints()
