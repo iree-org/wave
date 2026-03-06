@@ -361,9 +361,9 @@ def packed_mxfp4_test():
     # CHECK:          }
 
     # Epilogue Local Read
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16: vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Epilogue MFMA
@@ -471,8 +471,8 @@ def packed_mxfp4_global_to_lds_test():
     # CHECK:            rocdl.s.waitcnt
     # CHECK:            amdgpu.lds_barrier
 
-    # Steady state local loads
-    # CHECK-COUNT-48:   vector.load{{.*}} memref<{{.*}}, #gpu.address_space<workgroup>>
+    # Steady state local loads (8+4 scale loads as vector<8xi8> + 16+8 data loads as vector<16xi8>)
+    # CHECK-COUNT-36:   vector.load{{.*}} memref<{{.*}}, #gpu.address_space<workgroup>>
 
     # Steady State global load to lds
     # CHECK-COUNT-34:   amdgpu.gather_to_lds
@@ -637,9 +637,9 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          }
 
     # Epilogue Local Read
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16: vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-8:  vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Epilogue MFMA

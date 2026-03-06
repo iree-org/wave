@@ -485,6 +485,7 @@ def _create_vec_read_write(
     memory: CustomOp,
     mask: Optional[Value],
     node_index: Optional[IndexSequence] = None,
+    use_wide_load_select: bool = False,
 ) -> Optional[Value]:
     is_read = value is None
     uint32 = IntegerType.get_signless(32)
@@ -577,7 +578,8 @@ def _create_vec_read_write(
     indices = [offset_th] if buffer_ops_enabled else start_indices
 
     if no_masked_load_store_ops:
-        # find the index at which memory out of bounds of buffer
+        scalar_offset_th = offset_th
+
         oob_index_value = _get_out_of_bounds_index(element_type)
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
 
@@ -601,7 +603,6 @@ def _create_vec_read_write(
 
         # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
         selected_index = arith_d.select(mask, offsets_vec, oob_index)
-        elems = list()
 
         if splatted_mask:
             # mask is same for all of them, can just pick the first index
@@ -614,27 +615,28 @@ def _create_vec_read_write(
                 vector_d.store(value, mem, indices=[selected_index])
                 return
 
-        for i in range(elements_per_thread):
-            # mask is not same for all elements, need to unroll
-            this_index = extract(selected_index, i)  # this element
+        if is_read and use_wide_load_select:
+            result = vector_d.load(vector_type, mem, indices=[scalar_offset_th])
+            zero_vec = vector_d.broadcast(vector_type, zero)
+            return arith_d.select(mask, result, zero_vec)
 
-            # Unmasked load, using selected_index
-            singlenumvec_type = VectorType.get([1], vector_type.element_type)
-            if is_read:
+        if is_read:
+            elems = []
+            for i in range(elements_per_thread):
+                this_index = extract(selected_index, i)
+                singlenumvec_type = VectorType.get([1], vector_type.element_type)
                 elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
                 elem = extract(elem, 0)
                 elems.append(elem)
-            else:
-                elem = extract(value, i)
-                single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
-                vector_d.store(single_num_vector, mem, indices=[this_index])
-
-        if is_read:
-            # now make a vector from all the elements loaded
             return vector_d.from_elements(vector_type, elems)
 
-        else:  # it was a store, return
-            return
+        for i in range(elements_per_thread):
+            this_index = extract(selected_index, i)
+            elem = extract(value, i)
+            singlenumvec_type = VectorType.get([1], vector_type.element_type)
+            single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
+            vector_d.store(single_num_vector, mem, indices=[this_index])
+        return
 
     else:
         # normal masked load/store
@@ -718,7 +720,18 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
-    if mapping:
+    is_global_mem = kb_src.type.memory_space is None
+    buffer_ops_enabled = emitter.options.use_buffer_ops and is_global_mem
+
+    precomputed_mask_expr = getattr(node, "precomputed_mask_expr", None)
+    if precomputed_mask_expr is not None:
+        mask = gen_sympy_index(add_emitter_subs(emitter), precomputed_mask_expr)
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        if mask.type != mask_vec_type:
+            mask = vector_d.broadcast(mask_vec_type, mask)
+    elif mapping:
         transformed_index = transform_index_on_mapping(
             mapping, input_shape, index, is_read=True
         )
@@ -763,6 +776,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             get_custom(memory),
             mask,
             node_index=index,
+            use_wide_load_select=precomputed_mask_expr is not None,
         )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))

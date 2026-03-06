@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import functools
 from collections.abc import Sequence
 from copy import deepcopy
 from itertools import groupby
@@ -30,6 +31,7 @@ from ...ops.wave_ops import (
 )
 from ..assumptions import get_divisibility_subs
 from ..constraints import Constraint
+from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
@@ -433,8 +435,6 @@ def _get_physical_start(
     coordinates. For identity-mapped reads (mapping=None), reads the start
     offsets directly from the index.
     """
-    from ..utils.mapping_utils import transform_index_on_mapping
-
     if custom.mapping is not None and not custom.has_identity_mapping():
         physical = transform_index_on_mapping(
             custom.mapping, symbolic_shape, custom.index, is_read=True
@@ -447,21 +447,140 @@ def _get_physical_start(
     return {dim: custom.index[dim].start for dim in symbolic_dims}
 
 
-def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
-    """Single merge pass: merge adjacent pairs of same-ept reads.
+def _flatten_bounds_to_mask_expr(
+    custom: Read,
+    symbolic_shape: tuple,
+):
+    """Pre-compute a read's bounds check as a flat sympy boolean.
 
-    Groups reads by (memory operand, ept) and merges pairs whose physical
-    flat offset starts differ by exactly ept. Returns True if any merges
-    happened.
+    Replicates the _build_mask_with_mapping decision logic: when the
+    mapping's transformed index contains all bounded dims (and has no
+    dynamic_val_indices), the transformed index is used; otherwise the
+    original logical index is used.  Returns a sympy boolean expression
+    (eg. And(idx < bound, ...)) or None if the read has no bounds.
+
     """
-    from collections import defaultdict
-    from ...compiler.utils import strides_from_symbolic_shape
+    if not custom.bounds:
+        return None
+
+    index = custom.index
+
+    if custom.mapping is not None and not custom.has_identity_mapping():
+        transformed = transform_index_on_mapping(
+            custom.mapping, symbolic_shape, index, is_read=True
+        )
+        use_transformed = (
+            all(dim in transformed for dim in custom.bounds)
+            and not custom.mapping.dynamic_val_indices
+        )
+        if use_transformed:
+            index = transformed
+
+    conditions = []
+    for dim, bound in custom.bounds.items():
+        if dim not in index:
+            continue
+        start = (
+            index[dim].start if isinstance(index[dim], IndexSequence) else index[dim]
+        )
+        start = sympy.sympify(start)
+        bound = sympy.sympify(bound)
+        conditions.append(sympy.StrictLessThan(start, bound))
+
+    if not conditions:
+        return None
+
+    return functools.reduce(sympy.And, conditions)
+
+
+def _build_wide_mask_expr(sub_reads, symbolic_shape, wide_ept):
+    """Build a concatenated sympy mask for a wide read from its sub-reads.
+
+    Each entry in *sub_reads* is ``(offset, size, orig_custom)`` where
+    *offset* is the lane offset within the wide vector and *size* is the
+    number of lanes that sub-read occupies.  *wide_ept* is the total
+    number of elements in the wide read (may exceed ``sum(sizes)`` when
+    there are gaps, e.g. multiway coalesce with non-contiguous offsets).
+
+    Builds ``Or(And(lane_in_range_0, mask_0), And(lane_in_range_1, mask_1), ...)``
+    using pure boolean ops so that ``gen_sympy_index`` can lower it without
+    the nested-Piecewise ``select_stack`` ordering issue.
+
+    Returns a sympy boolean expression or ``None`` when no sub-read has
+    bounds.
+    """
     from ..._support.indexing import IndexingContext
 
-    # Group reads by (memory, ept, region).  A new region starts at each
-    # subgraph boundary and whenever a side-effecting op (write, barrier, ...)
-    # is encountered, so we never merge reads across such ops.  Reads with
-    # dynamic mapping values are skipped to keep the merge logic simple.
+    masks = [
+        (offset, size, _flatten_bounds_to_mask_expr(custom, symbolic_shape))
+        for offset, size, custom in sub_reads
+    ]
+
+    if not any(m is not None for _, _, m in masks):
+        return None
+
+    idxc = IndexingContext.current()
+    iota = idxc.iota(wide_ept)
+
+    terms = []
+    for offset, size, mask in masks:
+        upper = offset + size
+        lane_cond = sympy.And(
+            sympy.GreaterThan(iota, offset) if offset > 0 else sympy.true,
+            sympy.StrictLessThan(iota, upper),
+        )
+        bound_cond = mask if mask is not None else sympy.true
+        terms.append(sympy.And(lane_cond, bound_cond))
+
+    return functools.reduce(sympy.Or, terms)
+
+
+def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=None):
+    """Create a merged Read node covering ``wide_ept`` elements."""
+    wide_read = Read(
+        anchor_custom.memory,
+        elements_per_thread=wide_ept,
+        mapping=None,
+        _write_dependency=anchor_custom._write_dependency,
+        flags=anchor_custom.flags,
+    ).add_to_graph(anchor_custom.graph, loc=anchor_custom.location)
+    wide_custom = get_custom(wide_read)
+    wide_custom.index = wide_index
+    if hasattr(tag_source, "vector_shapes"):
+        wide_read.vector_shapes = deepcopy(tag_source.vector_shapes)
+    if mask_expr is not None:
+        wide_read.precomputed_mask_expr = mask_expr
+    propagate_tag(tag_source, wide_read)
+    return wide_read
+
+
+def _emit_extract_slice(
+    wide_read, offset, size, orig_custom, orig_node, symbolic_shape
+):
+    """Create an ExtractSlice from a wide read and propagate metadata."""
+    extract = ExtractSlice(wide_read, [offset], [size], [1]).add_to_graph(
+        orig_custom.graph, loc=orig_custom.location
+    )
+    extract_custom = get_custom(extract)
+    extract_custom.index = deepcopy(orig_custom.index)
+    if hasattr(orig_node, "vector_shapes"):
+        extract_custom.vector_shapes = deepcopy(orig_node.vector_shapes)
+    propagate_tag(orig_node, extract)
+    return extract
+
+
+def _group_reads_by_memory(
+    trace: CapturedTrace,
+) -> dict[tuple, list[fx.Node]]:
+    """Group reads by (memory, ept, region).
+
+    A new region starts at each subgraph boundary and whenever a
+    side-effecting op (write, barrier, ...) is encountered, so we never
+    merge reads across such ops.  Reads with dynamic mapping values are
+    skipped to keep the merge logic simple.
+    """
+    from collections import defaultdict
+
     groups: dict[tuple, list[fx.Node]] = defaultdict(list)
     region_id = 0
     for subgraph in trace.region_graph.subgraphs.values():
@@ -477,13 +596,245 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
                 continue
             if custom.mapping_dynamic_vals:
                 continue
-            # Skip reads that have bounds: the merged read would lose the
-            # mapping and source→target index, making mask generation incorrect.
-            if custom.bounds is not None:
+            if getattr(node, "precomputed_mask_expr", None) is not None:
                 continue
             key = (custom.memory, custom.elements_per_thread, region_id)
             groups[key].append(node)
+    return groups
 
+
+def _resolve_symbolic_diff(raw_diff, has_complex_mapping, expected_vals=None):
+    """Resolve a raw sympy offset difference to a value, or None.
+
+    Strategy:
+      1. If already a plain int / sympy.Integer, return it directly.
+      2. If the mapping is complex (non-identity), use numeric probing.
+      3. Otherwise try sym_simplify.  If ``expected_vals`` is given and
+         the result isn't among them, fall back to numeric probing;
+         return None when neither approach succeeds.
+    """
+    if isinstance(raw_diff, (int, sympy.Integer)):
+        return int(raw_diff)
+    if has_complex_mapping:
+        return _numeric_eval_constant(raw_diff)
+    simplified = sym_simplify(raw_diff)
+    if expected_vals is None or simplified in expected_vals:
+        return simplified
+    nv = _numeric_eval_constant(raw_diff)
+    return nv
+
+
+def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint):
+    """Merge pairs of reads whose flat offsets differ by exactly ``ept``.
+
+    Returns ``(merged_indices, did_merge)`` where *merged_indices* is
+    the set of read_infos indices that were consumed.
+    """
+    merged = set()
+    did_merge = False
+
+    for i in range(len(read_infos)):
+        if i in merged:
+            continue
+        for j in range(i + 1, len(read_infos)):
+            if j in merged:
+                continue
+            off1, phys1, custom1, node1 = read_infos[i]
+            off2, phys2, custom2, node2 = read_infos[j]
+
+            raw_diff = subs_idxc(off2 - off1)
+            has_complex_mapping = (
+                custom1.mapping is not None and not custom1.has_identity_mapping()
+            )
+            diff = _resolve_symbolic_diff(
+                raw_diff, has_complex_mapping, expected_vals={ept, -ept}
+            )
+            if diff is None:
+                continue
+
+            if diff == ept:
+                lo_phys, hi_phys = phys1, phys2
+                lo_custom, hi_custom = custom1, custom2
+                lo_node, hi_node = node1, node2
+            elif diff == -ept:
+                lo_phys, hi_phys = phys2, phys1
+                lo_custom, hi_custom = custom2, custom1
+                lo_node, hi_node = node2, node1
+            else:
+                continue
+
+            merge_dim = None
+            for dim in symbolic_dims:
+                raw_d = subs_idxc(hi_phys[dim] - lo_phys[dim])
+                d = _resolve_symbolic_diff(
+                    raw_d, has_complex_mapping, expected_vals={ept, 0}
+                )
+                if d is None:
+                    merge_dim = None
+                    break
+                if d == ept:
+                    merge_dim = dim
+                elif d != 0:
+                    merge_dim = None
+                    break
+            if merge_dim is None:
+                continue
+
+            new_ept = 2 * ept
+            element_type = lo_custom.type.dtype
+            if new_ept > hw_constraint.max_elems_per_load(element_type):
+                continue
+            wide_mask = _build_wide_mask_expr(
+                [(0, ept, lo_custom), (ept, ept, hi_custom)],
+                symbolic_shape,
+                new_ept,
+            )
+            with lo_custom.graph.inserting_before(lo_node):
+                new_index = {
+                    dim: IndexSequence(
+                        lo_phys[dim],
+                        new_ept if dim == merge_dim else 1,
+                        1,
+                    )
+                    for dim in symbolic_dims
+                }
+                merged_read = _emit_wide_read(
+                    lo_custom, new_index, new_ept, lo_node, mask_expr=wide_mask
+                )
+
+                lo_extract = _emit_extract_slice(
+                    merged_read, 0, ept, lo_custom, lo_node, symbolic_shape
+                )
+                hi_extract = _emit_extract_slice(
+                    merged_read, ept, ept, hi_custom, hi_node, symbolic_shape
+                )
+
+            lo_custom.replace_all_uses_with(lo_extract)
+            hi_custom.replace_all_uses_with(hi_extract)
+            lo_custom.graph.erase_node(lo_node)
+            hi_custom.graph.erase_node(hi_node)
+
+            merged.update({i, j})
+            did_merge = True
+            break
+
+    return merged, did_merge
+
+
+def _multiway_coalesce(
+    read_infos, merged, reads, symbolic_dims, symbolic_shape, hw_constraint
+):
+    """Coalesce unmerged ept==1 reads whose flat offsets fall in an aligned window.
+
+    Groups reads whose numerically-probed flat offsets fall within a
+    power-of-2 aligned window (up to ``max_elems_per_load``), then emits
+    a single wide read with per-byte ExtractSlice ops.
+    """
+    element_type = get_custom(reads[0]).type.dtype
+    max_load_width = hw_constraint.max_elems_per_load(element_type)
+
+    unmerged_infos = [read_infos[k] for k in range(len(read_infos)) if k not in merged]
+    if len(unmerged_infos) < 2:
+        return False
+
+    coalesced_any = False
+    coalesced_set: set[int] = set()
+    for anchor_idx in range(len(unmerged_infos)):
+        if anchor_idx in coalesced_set:
+            continue
+        off_a, phys_a, custom_a, node_a = unmerged_infos[anchor_idx]
+
+        group = [(anchor_idx, node_a, custom_a, 0, phys_a)]
+        for probe_idx in range(len(unmerged_infos)):
+            if probe_idx == anchor_idx or probe_idx in coalesced_set:
+                continue
+            off_p, _, custom_p, node_p = unmerged_infos[probe_idx]
+            raw_diff = subs_idxc(off_p - off_a)
+            diff_val = _numeric_eval_constant(raw_diff)
+            if diff_val is None:
+                continue
+            if 0 < diff_val < max_load_width:
+                _, _, _, phys_p = unmerged_infos[probe_idx]
+                group.append((probe_idx, node_p, custom_p, diff_val, phys_p))
+
+        if len(group) < 2:
+            continue
+
+        group.sort(key=lambda x: x[3])
+        max_off = group[-1][3]
+        wide_ept = 1
+        while wide_ept <= max_off:
+            wide_ept *= 2
+        if wide_ept > max_load_width:
+            continue
+
+        base_phys = group[0][4]
+
+        earliest_node = group[0][1]
+        for g in group[1:]:
+            candidate = g[1]
+            for n in custom_a.graph.nodes:
+                if n is candidate:
+                    earliest_node = candidate
+                    break
+                if n is earliest_node:
+                    break
+
+        wide_mask = _build_wide_mask_expr(
+            [(byte_pos, 1, g_custom) for _, _, g_custom, byte_pos, _ in group],
+            symbolic_shape,
+            wide_ept,
+        )
+        with get_custom(earliest_node).graph.inserting_before(earliest_node):
+            wide_index = {}
+            for dim_idx, dim in enumerate(symbolic_dims):
+                if dim_idx == len(symbolic_dims) - 1:
+                    wide_index[dim] = IndexSequence(base_phys[dim], wide_ept, 1)
+                else:
+                    wide_index[dim] = IndexSequence(base_phys[dim], 1, 1)
+
+            wide_read = _emit_wide_read(
+                custom_a, wide_index, wide_ept, earliest_node, mask_expr=wide_mask
+            )
+
+        extracts = []
+        for g_idx, g_node, g_custom, byte_pos, _ in group:
+            with g_custom.graph.inserting_before(g_node):
+                ext = _emit_extract_slice(
+                    wide_read, byte_pos, 1, g_custom, g_node, symbolic_shape
+                )
+                extracts.append((ext, g_custom, g_node))
+
+        for ext, g_custom, g_node in extracts:
+            g_custom.replace_all_uses_with(ext)
+            g_custom.graph.erase_node(g_node)
+
+        coalesced_set.update(g[0] for g in group)
+        coalesced_any = True
+
+    return coalesced_any
+
+
+def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
+    """Single merge pass: merge reads that access nearby physical memory.
+
+    Two strategies are applied per (memory, ept) group:
+
+    1. **Pairwise contiguous merge** (``_pairwise_merge``): pairs whose
+       physical flat offset starts differ by exactly ``ept`` are merged
+       into a ``2*ept`` read with two ExtractSlice outputs.
+
+    2. **Multi-way coalescing** (``_multiway_coalesce``, ``ept==1`` only):
+       unmerged byte reads whose flat offsets fall within a power-of-2
+       aligned window are replaced by a single wide read with per-byte
+       ExtractSlice outputs.
+
+    Returns True if any merges or coalescing happened.
+    """
+    from ...compiler.utils import strides_from_symbolic_shape
+    from ..._support.indexing import IndexingContext
+
+    groups = _group_reads_by_memory(trace)
     idxc = IndexingContext.current()
     merged_any = False
 
@@ -509,129 +860,17 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
             )
             read_infos.append((flat_offset, phys_start, custom, node))
 
-        merged = set()
-        for i in range(len(read_infos)):
-            if i in merged:
-                continue
-            for j in range(i + 1, len(read_infos)):
-                if j in merged:
-                    continue
-                off1, phys1, custom1, node1 = read_infos[i]
-                off2, phys2, custom2, node2 = read_infos[j]
+        merged, did_merge = _pairwise_merge(
+            read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint
+        )
+        merged_any |= did_merge
 
-                raw_diff = subs_idxc(off2 - off1)
-
-                # For reads with non-identity mappings (e.g. preshuffle
-                # scales), the flat-offset diff contains complex floor/Mod
-                # expressions that sympy.simplify cannot reduce.  Use fast
-                # numeric probing instead.
-                has_complex_mapping = (
-                    custom1.mapping is not None and not custom1.has_identity_mapping()
-                )
-
-                # subs_idxc may fully resolve to a plain int.
-                if isinstance(raw_diff, (int, sympy.Integer)):
-                    diff = int(raw_diff)
-                elif has_complex_mapping:
-                    diff = _numeric_eval_constant(raw_diff)
-                    if diff is None:
-                        continue
-                else:
-                    diff = sym_simplify(raw_diff)
-                    if diff != ept and diff != -ept:
-                        nv = _numeric_eval_constant(raw_diff)
-                        if nv is not None:
-                            diff = nv
-
-                if diff == ept:
-                    lo_phys, hi_phys = phys1, phys2
-                    lo_custom, hi_custom = custom1, custom2
-                    lo_node, hi_node = node1, node2
-                elif diff == -ept:
-                    lo_phys, hi_phys = phys2, phys1
-                    lo_custom, hi_custom = custom2, custom1
-                    lo_node, hi_node = node2, node1
-                else:
-                    continue
-
-                # Find dimension that advances by ept.
-                merge_dim = None
-                for dim in symbolic_dims:
-                    raw_d = subs_idxc(hi_phys[dim] - lo_phys[dim])
-                    if isinstance(raw_d, (int, sympy.Integer)):
-                        d = int(raw_d)
-                    elif has_complex_mapping:
-                        d = _numeric_eval_constant(raw_d)
-                        if d is None:
-                            merge_dim = None
-                            break
-                    else:
-                        d = sym_simplify(raw_d)
-                        if d != ept and d != 0:
-                            nv = _numeric_eval_constant(raw_d)
-                            if nv is not None:
-                                d = nv
-                    if d == ept:
-                        merge_dim = dim
-                    elif not (d == 0):
-                        merge_dim = None
-                        break
-                if merge_dim is None:
-                    continue
-
-                # Respect hardware vector width limit.
-                new_ept = 2 * ept
-                element_type = lo_custom.type.dtype
-                if new_ept > hw_constraint.max_elems_per_load(element_type):
-                    continue
-                with lo_custom.graph.inserting_before(lo_node):
-                    new_index = {
-                        dim: IndexSequence(
-                            lo_phys[dim],
-                            new_ept if dim == merge_dim else 1,
-                            1,
-                        )
-                        for dim in symbolic_dims
-                    }
-
-                    merged_read = Read(
-                        lo_custom.memory,
-                        elements_per_thread=new_ept,
-                        mapping=None,
-                        _write_dependency=lo_custom._write_dependency,
-                        flags=lo_custom.flags,
-                    ).add_to_graph(lo_custom.graph, loc=lo_custom.location)
-                    merged_custom = get_custom(merged_read)
-                    merged_custom.index = new_index
-                    merged_custom.vector_shapes = deepcopy(lo_custom.vector_shapes)
-                    propagate_tag(lo_node, merged_read)
-
-                    extract0 = ExtractSlice(merged_read, [0], [ept], [1]).add_to_graph(
-                        lo_custom.graph, loc=lo_custom.location
-                    )
-                    get_custom(extract0).index = deepcopy(lo_custom.index)
-                    get_custom(extract0).vector_shapes = deepcopy(
-                        lo_custom.vector_shapes
-                    )
-                    propagate_tag(lo_node, extract0)
-
-                    extract1 = ExtractSlice(
-                        merged_read, [ept], [ept], [1]
-                    ).add_to_graph(lo_custom.graph, loc=lo_custom.location)
-                    get_custom(extract1).index = deepcopy(hi_custom.index)
-                    get_custom(extract1).vector_shapes = deepcopy(
-                        hi_custom.vector_shapes
-                    )
-                    propagate_tag(hi_node, extract1)
-
-                lo_custom.replace_all_uses_with(extract0)
-                hi_custom.replace_all_uses_with(extract1)
-                lo_custom.graph.erase_node(lo_node)
-                hi_custom.graph.erase_node(hi_node)
-
-                merged.update({i, j})
-                merged_any = True
-                break
+        # Only ept==1 (byte) reads need multi-way coalescing; wider reads
+        # are already handled by the pairwise merge above.
+        if ept == 1 and len(read_infos) >= 2:
+            merged_any |= _multiway_coalesce(
+                read_infos, merged, reads, symbolic_dims, symbolic_shape, hw_constraint
+            )
 
     return merged_any
 

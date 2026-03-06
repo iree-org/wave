@@ -98,6 +98,8 @@ def _trace_scale_chain(scale_value):
         return None
 
     slice_op = bitcast_source.owner
+    if _is_op_named(slice_op, "arith.select"):
+        slice_op = slice_op.operands[1].owner
     if not _is_op_named(slice_op, "vector.extract_strided_slice"):
         return None
 
@@ -139,9 +141,14 @@ def _trace_extract_strided_slice(
 ) -> Optional[tuple[Value, int]]:
     """Check if *value* is produced by extract_strided_slice of a vector<4xi8>.
 
+    Looks through ``arith.select`` (inserted by flatten-bounds masking)
+    to find the underlying extract_strided_slice.
+
     Returns ``(source_vec4xi8, byte_offset)`` or ``None``.
     """
     op = value.owner
+    if _is_op_named(op, "arith.select"):
+        op = op.operands[1].owner
     if not _is_op_named(op, "vector.extract_strided_slice"):
         return None
     source = op.operands[0]
@@ -165,16 +172,18 @@ def _find_yield_op(for_view) -> Optional[Operation]:
 def _find_mergeable_groups(
     for_view, yield_op: Operation
 ) -> list[tuple[Value, Value, dict[int, int]]]:
-    """Find groups of 4 ``vector<1xi8>`` iter_args that can be coalesced.
+    """Find groups of ``vector<1xi8>`` iter_args that can be coalesced.
 
     A group is valid when:
-    * All 4 init values are ``extract_strided_slice`` at offsets
-      {0, 1, ..., SCALE_VECTOR_WIDTH-1} from the same ``vector<4xi8>``
-      source.
-    * All 4 yield values follow the same pattern from a (possibly
-      different) ``vector<4xi8>`` source.
+    * At least 2 init values are ``extract_strided_slice`` at distinct
+      offsets from the same ``vector<4xi8>`` source.
+    * The corresponding yield values follow the same pattern from a
+      (possibly different) ``vector<4xi8>`` source.
     * For each member, init_offset == yield_offset (byte identity is
       preserved across iterations).
+
+    Partial groups (e.g. only offsets {0, 2}) are accepted — the
+    coalesced ``vector<4xi8>`` iter_arg simply carries unused bytes.
 
     Returns a list of ``(init_source, yield_source, {offset: iter_index})``.
     """
@@ -199,9 +208,6 @@ def _find_mergeable_groups(
             continue
         eligible.append((i, init_off, init_src, yield_src))
 
-    # Group by init source.  Multiple args can share the same source
-    # (e.g. two MFMAs using the same scale load), so partition by offset
-    # to form distinct groups of exactly 4.
     by_init_src = defaultdict(list)
     for entry in eligible:
         _, _, init_src, _ = entry
@@ -214,12 +220,16 @@ def _find_mergeable_groups(
             _, off, _, _ = entry
             by_offset[off].append(entry)
 
-        while all(len(by_offset[o]) > 0 for o in range(SCALE_VECTOR_WIDTH)):
+        # Greedily form groups from available offsets. Accept any group
+        # with >= 2 distinct offsets (full groups of 4 are the common
+        # case; partial groups like {0, 2} arise from preshuffle scales).
+        present_offsets = [o for o in range(SCALE_VECTOR_WIDTH) if by_offset[o]]
+        while len(present_offsets) >= 2:
             members = {}
             init_source = None
             yield_owners = set()
             yield_source = None
-            for o in range(SCALE_VECTOR_WIDTH):
+            for o in present_offsets:
                 idx, _, isrc, ysrc = by_offset[o].pop(0)
                 members[o] = idx
                 init_source = isrc
@@ -227,6 +237,7 @@ def _find_mergeable_groups(
                 yield_owners.add(id(ysrc.owner))
             if len(yield_owners) == 1:
                 result.append((init_source, yield_source, members))
+            present_offsets = [o for o in range(SCALE_VECTOR_WIDTH) if by_offset[o]]
 
     return result
 
@@ -314,15 +325,13 @@ def _rewire_for_results(
         members = plan.groups[g_idx][2]
         new_idx = plan.group_new_iter_idx[g_idx]
         has_users = any(
-            any(True for _ in old_results[members[o]].uses)
-            for o in range(SCALE_VECTOR_WIDTH)
+            any(True for _ in old_results[members[o]].uses) for o in members
         )
         if not has_users:
             continue
 
         with InsertionPoint(for_op):
-            for o in range(SCALE_VECTOR_WIDTH):
-                old_i = members[o]
+            for o, old_i in members.items():
                 if not any(True for _ in old_results[old_i].uses):
                     continue
                 extract_slice = make_extract_slice(new_results[new_idx], o)
@@ -330,12 +339,15 @@ def _rewire_for_results(
 
 
 def _coalesce_vector_iter_args(module: Module) -> None:
-    """Merge groups of 4 ``vector<1xi8>`` scf.for iter_args into ``vector<4xi8>``.
+    """Merge groups of ``vector<1xi8>`` scf.for iter_args into ``vector<4xi8>``.
 
-    Pipeline double-buffering splits a ``vector<4xi8>`` scale load into 4
+    Pipeline double-buffering splits a ``vector<4xi8>`` scale load into
     individual bytes for loop-carry.  This pass merges them back so that
     ``_trace_scale_chain`` sees the full ``extract_strided_slice`` pattern
     inside the loop body and the opsel optimisation fires.
+
+    Handles both full groups (all 4 offsets present) and partial groups
+    (e.g. only offsets {0, 2} from preshuffle scales).
     """
     i8 = IntegerType.get_signless(8)
     i64 = IntegerType.get_signless(64)
@@ -364,7 +376,7 @@ def _coalesce_vector_iter_args(module: Module) -> None:
         if not groups:
             continue
 
-        logger.debug(f"Coalescing {len(groups)} group(s) of 4 vector<1xi8> iter_args")
+        logger.debug(f"Coalescing {len(groups)} group(s) of vector<1xi8> iter_args")
 
         plan = _build_coalesce_plan(groups, for_view, yield_op)
         old_iter_args = list(for_view.inner_iter_args)
@@ -396,8 +408,7 @@ def _coalesce_vector_iter_args(module: Module) -> None:
         with InsertionPoint(first_op):
             for g_idx, (_, _, members) in enumerate(groups):
                 merged_arg = new_for.inner_iter_args[plan.group_new_iter_idx[g_idx]]
-                for offset in range(SCALE_VECTOR_WIDTH):
-                    iter_idx = members[offset]
+                for offset, iter_idx in members.items():
                     extract_slice = make_extract_slice(merged_arg, offset)
                     extract_results[iter_idx] = extract_slice.result
 
