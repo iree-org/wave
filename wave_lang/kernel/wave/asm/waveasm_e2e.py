@@ -210,11 +210,6 @@ class WaveASMCompiler:
             "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",  # Register allocation.
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",  # Insert waits.
             f"--waveasm-hazard-mitigation=target={self.target}",  # Handle hazards.
             "--emit-assembly",
