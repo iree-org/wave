@@ -26,7 +26,11 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     assert_constraints_equivalent,
     compare_hardware_constraints_for_mlir_roundtrip,
 )
-from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder
+from wave_lang.kernel.ops.wave_ops import (
+    get_custom,
+    Placeholder,
+    ShuffleOp as ShuffleFxOp,
+)
 from wave_lang.kernel.wave.compile import build_graph_passes
 from wave_lang.kernel.wave.decompose_reduce_ops import decompose_reduce_ops
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -766,3 +770,104 @@ def mlir_to_fx_mask_pattern_roundtrip():
     )
 
     # CHECK: self_index + apply_expr + select: OK
+
+
+# CHECK-LABEL: mlir_to_fx_shuffle_roundtrip
+@run_test
+def mlir_to_fx_shuffle_roundtrip():
+    """Test MLIR roundtrip for shuffle ops introduced by decompose_reduce_ops.
+
+    Runs through decompose_reduce_ops to generate butterfly shuffles,
+    emits MLIR, imports back, and verifies the ShuffleOp nodes have the
+    correct attributes.
+    """
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+        ),
+    ]
+
+    subs = {BLOCK_M: 64, BLOCK_N: 64, M: 128, N: 128}
+
+    def _check_shuffle_roundtrip(kernel, label):
+        options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+        with IndexingContext() as idxc:
+            idxc.set_subs(options.subs)
+            kernel.initialize_wave_constraints()
+            kernel.initialize_symbolic_constraints()
+            kernel.initialize_workgroup_constraints()
+            trace = kernel._trace(
+                location_capture_config=options.location_capture_config
+            )
+            graph_passes = build_graph_passes(kernel, trace, options)
+            for p in graph_passes:
+                p()
+                if p.__name__ == decompose_reduce_ops.__name__:
+                    break
+
+            orig_shuffles = [
+                get_custom(n)
+                for n in trace.walk(lambda n: isinstance(get_custom(n), ShuffleFxOp))
+            ]
+            assert len(orig_shuffles) > 0, f"[{label}] no shuffles after decomposition"
+
+            mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+                trace, kernel.constraints, options
+            )
+        errors = error_diagnostics(diagnostics)
+        assert errors == [], f"[{label}] unexpected emit errors: {errors}"
+
+        fx_trace, _, _, fx_diags = emitter.mlir_to_fx(mlir_text)
+        errors = error_diagnostics(fx_diags)
+        assert errors == [], f"[{label}] unexpected import errors: {errors}"
+
+        rt_shuffles = [
+            get_custom(n)
+            for n in fx_trace.walk(lambda n: isinstance(get_custom(n), ShuffleFxOp))
+        ]
+        assert len(rt_shuffles) == len(orig_shuffles), (
+            f"[{label}] shuffle count mismatch: "
+            f"{len(orig_shuffles)} vs {len(rt_shuffles)}"
+        )
+        for orig, rt in zip(orig_shuffles, rt_shuffles):
+            assert (
+                orig.offset == rt.offset
+            ), f"[{label}] offset mismatch: {orig.offset} vs {rt.offset}"
+            assert (
+                orig.width == rt.width
+            ), f"[{label}] width mismatch: {orig.width} vs {rt.width}"
+            assert (
+                orig.mode == rt.mode
+            ), f"[{label}] mode mismatch: {orig.mode} vs {rt.mode}"
+        print(f"  {label}: OK")
+
+    @wave.wave(constraints)
+    def sum_shuffle_kernel(
+        a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        res = wave.read(a)
+        init = wave.read(c)
+        res = wave.sum(res, init, dim=N)
+        wave.write(res, c)
+
+    _check_shuffle_roundtrip(sum_shuffle_kernel, "sum shuffle")
+
+    @wave.wave(constraints)
+    def max_shuffle_kernel(
+        a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f16],
+    ):
+        res = wave.read(a)
+        init = wave.read(c)
+        res = wave.max(res, init, dim=N)
+        wave.write(res, c)
+
+    _check_shuffle_roundtrip(max_shuffle_kernel, "max shuffle")
+
+    # CHECK: sum shuffle: OK
+    # CHECK: max shuffle: OK

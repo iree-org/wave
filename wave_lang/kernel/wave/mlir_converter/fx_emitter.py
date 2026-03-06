@@ -57,6 +57,7 @@ try:
         ReshapeOp,
         SelectOp,
         SelfIndexOp,
+        ShuffleOp,
         SubOp,
         SumOp,
         WaveAddressSpaceAttr,
@@ -64,6 +65,7 @@ try:
         WaveExprListAttr,
         WaveMmaKindAttr,
         WaveReductionScope,
+        WaveShuffleModeAttr,
         WaveSymbolMappingAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
@@ -131,12 +133,14 @@ from wave_lang.kernel.ops.wave_ops import (
     SelectOp as Select,
     SelfIndex,
     SharedMemoryBarrier,
+    ShuffleOp as ShuffleFx,
     Sub,
     Sum,
     Truediv,
     Write,
     get_custom,
 )
+from wave_lang.kernel.wave.utils.classes import ShuffleMode
 from attr_type_converter import (
     OPERAND_SYMBOL_NAME_WAVE_PREFIX,
     convert_index_mapping_array_to_sympy,
@@ -981,6 +985,40 @@ def _handle_permute_op(
     parse_ctx.add_mapping(op.result, fx_op.fx_node)
 
 
+_WAVE_SHUFFLE_MODE_TO_FX: dict[wave.WaveShuffleMode, ShuffleMode] = {
+    wave.WaveShuffleMode.XOR: ShuffleMode.XOR,
+    wave.WaveShuffleMode.DOWN: ShuffleMode.DOWN,
+    wave.WaveShuffleMode.UP: ShuffleMode.UP,
+    wave.WaveShuffleMode.IDX: ShuffleMode.IDX,
+}
+
+
+def _handle_shuffle_op(
+    op: ShuffleOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.shuffle operation."""
+    arg_node = parse_ctx.resolve_operand(op.value)
+    offset = op.offset.value
+    width = op.width.value
+    mode_attr = WaveShuffleModeAttr(op.mode)
+    mode = _WAVE_SHUFFLE_MODE_TO_FX[mode_attr.value]
+    converted_attrs = _convert_supported_attrs(
+        op, ignore_attrs={"offset", "width", "mode"}
+    )
+
+    fx_op = ShuffleFx.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        offset=offset,
+        width=width,
+        mode=mode,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
 def _handle_self_index_op(
     op: SelfIndexOp,
     parse_ctx: _OpParseContext,
@@ -1451,6 +1489,8 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_extract_op(op, parse_ctx)
             case ReshapeOp():
                 _handle_reshape_op(op, parse_ctx)
+            case ShuffleOp():
+                _handle_shuffle_op(op, parse_ctx)
             case ExtractSliceOp():
                 _handle_extract_slice_op(op, parse_ctx)
             case IterateOp():
