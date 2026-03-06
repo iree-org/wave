@@ -997,6 +997,7 @@ def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule and scale preshuffling.
     (A&B scales preshuffled, A and B global-to-LDS).
+    Note: In dynamic mode, this test only covers selected block shapes to avoid exceeding LDS memory limits.
     """
     if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
         pytest.skip("Dynamic mode is only covered for selected block shapes.")
