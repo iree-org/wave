@@ -283,13 +283,13 @@ def build_guarded_pipeline_with_remainder(
             max_induction_variable // rounding_stride
         ) * rounding_stride
 
-    # When the pipeline guard is false (max_iv < min_pipelined_iterations),
+    # When the pipeline guard is false (max_iv < rounding_stride),
     # the conditional returns init values and the remainder loop must start
     # from 0 rather than pipelined_iterations.
     remainder_start = sympy.Piecewise(
         (
             pipelined_iterations,
-            sympy.Ge(max_induction_variable, min_pipelined_iterations),
+            sympy.Ge(max_induction_variable, rounding_stride),
         ),
         (0, True),
     )
