@@ -291,6 +291,88 @@ def test_reordered_gemm():
 
 
 @run_test
+def test_reordered_gemm_dynamic():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    wg0, wg1 = WORKGROUP_0, WORKGROUP_1
+    num_wg_0 = ceiling(M / BLOCK_M)
+
+    flat_wg_index = wg1 * num_wg_0 + wg0
+    num_wg_group = GROUP_SIZE_N * num_wg_0
+    group_id = flat_wg_index // num_wg_group
+    first_wg_id_1 = group_id * GROUP_SIZE_N
+    new_wg0 = (flat_wg_index % num_wg_group) // GROUP_SIZE_N
+    new_wg1 = first_wg_id_1 + (flat_wg_index % num_wg_group) % GROUP_SIZE_N
+
+    constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
+    constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            GROUP_SIZE_N: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        dynamic_symbols=(M, N, K),
+        compile_to_mlir=True,
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # With dynamic shapes + workgroup reordering, _split_index must allow
+    # dynamic symbols (M, N, K) in the thread-independent part so the wg
+    # offset is computed via reinterpret_cast rather than folded into the
+    # store index.  The key check is that the output reinterpret_cast keeps
+    # 2D shape [%arg3, %arg4] (not linearized 1D) and stores use separate
+    # row/col indices via affine.apply maps that reference both block_ids
+    # and the dynamic M symbol (ceildiv 64).
+
+    # CHECK-LABEL:    test_reordered_gemm_dynamic
+    # CHECK-DAG:        #[[STORE_ROW:.+]] = affine_map<()[s0, s1, s2, s3] -> {{.*}}s0 ceildiv 64{{.*}}>
+    # CHECK-DAG:        #[[STORE_COL:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> {{.*}}s3 ceildiv 64{{.*}}>
+    # CHECK:          func.func @gemm
+    # CHECK-SAME:       %arg3: index, %arg4: index, %arg5: index
+    # CHECK:            %[[C_REINTERPRET:.+]] = memref.reinterpret_cast {{.*}} to offset: [0], sizes: [%arg3, %arg4], strides: [%arg4, 1] : memref<f32> to memref<?x?xf32, strided<[?, 1]>>
+    # CHECK:            amdgpu.mfma
+    # CHECK:            %[[STORE_ROW_IDX:.+]] = affine.apply #[[STORE_ROW]]()[%arg3, %block_id_y, %block_id_x, %thread_id_x]
+    # CHECK:            %[[STORE_COL_IDX:.+]] = affine.apply #[[STORE_COL]]()[%thread_id_x, %block_id_x, %block_id_y, %arg3, %thread_id_y]
+    # CHECK:            vector.maskedstore %[[C_REINTERPRET]][%[[STORE_ROW_IDX]], %[[STORE_COL_IDX]]], {{.*}} : memref<?x?xf32, strided<[?, 1]>>
+
+
+@run_test
 def test_gemm_small_tile_size():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
