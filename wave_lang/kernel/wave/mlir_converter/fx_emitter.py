@@ -869,9 +869,13 @@ def _handle_reduction_op(
 
     converted_attrs = _convert_supported_attrs(op, ignore_attrs={"scope", "axis"})
 
+    # The MLIR op always has a variadic input list, but pre-expansion
+    # the FX graph uses a single node. Unwrap to match.
+    arg = input_nodes[0] if len(input_nodes) == 1 else input_nodes
+
     reduce_op = reduce_cls.create(
         parse_ctx.graph,
-        arg=input_nodes,
+        arg=arg,
         init=init_node,
         dim=dim,
         block=is_block,
@@ -1083,7 +1087,10 @@ def _reconstruct_expr_lambda(
     `lt`).  This ensures the reconstructed lambda produces the same sympy
     expression as the original.
     """
-    sympy_results: list[sympy.Expr | int] = expr_list_attr_to_exprs(expr_attr)
+    sympy_results: list[sympy.Basic] = [
+        r if isinstance(r, sympy.Basic) else sympy.Integer(r)
+        for r in expr_list_attr_to_exprs(expr_attr)
+    ]
 
     combinator_fn = None
     if combinator_attr is not None:
@@ -1096,9 +1103,7 @@ def _reconstruct_expr_lambda(
 
     def expr_lambda(*args):
         subs_map = {operand_syms[i]: args[i] for i in range(len(args))}
-        results = [
-            r.subs(subs_map) if isinstance(r, sympy.Basic) else r for r in sympy_results
-        ]
+        results = [r.subs(subs_map) for r in sympy_results]
         if combinator_fn is not None:
             return combinator_fn(*results)
         assert len(results) == 1, (
