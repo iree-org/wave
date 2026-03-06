@@ -26,6 +26,10 @@ using EmitErrorFn = llvm::function_ref<mlir::InFlightDiagnostic()>;
 
 class WaveTensorType;
 
+/// Get the hyperparameters from an ancestor operation.
+/// Returns nullptr if no hyperparameters are found.
+WaveHyperparameterAttr getHyperparameters(mlir::Operation *op);
+
 //-----------------------------------------------------------------------------
 // HasWaveIndexMapping trait
 //-----------------------------------------------------------------------------
@@ -176,7 +180,8 @@ public:
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
-    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    // Use the first input for type propagation.
+    unsigned inputOperandNum = concrete.getInputs().getBeginOperandIndex();
     return detail::propagateReductionTypesForward(
         axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
@@ -188,15 +193,17 @@ public:
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
-    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    // Use the first input for type propagation.
+    unsigned inputOperandNum = concrete.getInputs().getBeginOperandIndex();
     return detail::propagateReductionTypesBackward(
         axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
 
   llvm::LogicalResult finalizeTypeInference() {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    if (detail::isReductionTypeInferenceComplete(
-            concrete.getInput(), concrete.getInit(), concrete.getResult()))
+    if (detail::isReductionTypeInferenceComplete(concrete.getInputs().front(),
+                                                 concrete.getInit(),
+                                                 concrete.getResult()))
       concrete.removeAxisAttr();
     return llvm::success();
   }
@@ -732,16 +739,24 @@ llvm::LogicalResult verifyReductionOperation(mlir::Operation *op,
 template <typename OpTy>
 static inline WaveSymbolAttr getReducedSymbol(OpTy op) {
   return wave::detail::getReducedSymbol(op, op.getAxisAttr(),
-                                        op.getInput().getType());
+                                        op.getInputs().front().getType());
 }
 
-// Common verification logic for reduction operations. We expect the input type
-// to have one more dimension that precisely matches the reduction axis.
+// Common verification logic for reduction operations. All inputs must have the
+// same type; we verify against the first input.
 template <typename OpTy>
 static inline llvm::LogicalResult verifyReductionOperation(OpTy op) {
+  if (op.getInputs().empty())
+    return op.emitOpError("expected at least one input");
+  mlir::Type firstInputType = op.getInputs().front().getType();
+  for (mlir::Value input : op.getInputs().drop_front()) {
+    if (input.getType() != firstInputType)
+      return op.emitOpError() << "all inputs must have the same type, but got "
+                              << firstInputType << " and " << input.getType();
+  }
   return wave::detail::verifyReductionOperation(
-      op, op.getInput().getType(), op.getInit().getType(),
-      op.getResult().getType(), op.getAxisAttr());
+      op, firstInputType, op.getInit().getType(), op.getResult().getType(),
+      op.getAxisAttr());
 }
 } // namespace detail
 

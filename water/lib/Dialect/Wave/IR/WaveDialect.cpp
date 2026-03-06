@@ -14,14 +14,13 @@
 #include "mlir/IR/Dialect.h"
 
 #include "water/Dialect/Wave/IR/WaveDialect.cpp.inc"
+#include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/LogicalResult.h"
-#include <algorithm>
 #include <optional>
 
 using namespace mlir;

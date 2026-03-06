@@ -1363,9 +1363,16 @@ public:
                   "unsupported reduction kind");
     // Expect PropagateElementsPerThread pass to have run, converting
     // WaveTensorType results to VectorType.
+
+    // Variadic reductions must be expanded to single-input form by the
+    // water-wave-expand-variadic-reductions pass before lowering.
+    if (adaptor.getInputs().size() != 1)
+      return op.emitOpError("expected single input, run "
+                            "--water-wave-expand-variadic-reductions first");
+
     Location loc = op.getLoc();
 
-    Value input = adaptor.getInput();
+    Value input = adaptor.getInputs().front();
     Value init = adaptor.getInit();
     bool isBlockReduction = op.getScope() == wave::WaveReductionScope::Block;
 
