@@ -220,7 +220,7 @@ def test_read_dynamic_3d_buffer():
 
     # Gets offset to tensor's base pointer, then set memref_offset = indexing_offset + base_tensor_offset.
     # CHECK:            %{{.*}}, %[[BASE_TENSOR_OFFSET:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %[[ARG0]] : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> -> memref<f16>, index, index, index, index, index, index, index
-    # CHECK:            %[[MEMREF_OFFSET:.+]] = arith.addi %{{.*}}, %[[BASE_TENSOR_OFFSET]] overflow<nsw> : index
+    # CHECK:            %[[MEMREF_OFFSET:.+]] = arith.addi %{{.*}}, %[[BASE_TENSOR_OFFSET]] : index
 
     # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] to offset: [%[[MEMREF_OFFSET]]], {{.*}}: memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
     # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
@@ -259,8 +259,8 @@ def test_read_write():
     # CHECK:            %[[S0:.*]] = memref.reinterpret_cast %[[D0]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[I0:.*]] = affine.apply #[[MAP0]]()[%[[thread_id_x]]]
     # CHECK:            %[[V:.*]] = vector.load %[[S0]][%[[I0]], %[[C0]]] : memref<16x16xf16, strided<[16, 1]>>, vector<16xf16>
-    # CHECK:            memref.reinterpret_cast %[[D1]] to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>
-    # CHECK:            vector.store %[[V]], {{.*}}[{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<16xf16>
+    # CHECK:            memref.reinterpret_cast %[[D1]] to offset: [0], sizes: [2147483646], strides: [1] : memref<f16> to memref<2147483646xf16, strided<[1]>>
+    # CHECK:            vector.store %[[V]], {{.*}}[{{.*}}] : memref<2147483646xf16, strided<[1]>>, vector<16xf16>
     # CHECK:            return
 
 
