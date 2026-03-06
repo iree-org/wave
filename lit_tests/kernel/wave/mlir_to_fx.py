@@ -33,6 +33,7 @@ from wave_lang.kernel.ops.wave_ops import (
 )
 from wave_lang.kernel.wave.compile import build_graph_passes
 from wave_lang.kernel.wave.decompose_reduce_ops import decompose_reduce_ops
+from wave_lang.kernel.wave.expansion.expansion import expand_graph
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 
@@ -475,54 +476,30 @@ def mlir_to_fx_mapping_roundtrip():
 def mlir_to_fx_reduction_roundtrip():
     """Test MLIR roundtrip for sum and max reductions.
 
-    Stops compilation before decompose_reduce_ops so the trace still
-    contains wave.sum / wave.max_element ops.
+    Tests both reduction input representations with the same kernel:
+    - Single-input (stop_before=expand_graph): reduction arg is a
+      single node; verifies the importer unwraps single-element
+      variadic inputs back to a scalar.
+    - Variadic-input (stop_before=decompose_reduce_ops): reduction arg
+      is a list of tiled slices; verifies multi-input reductions
+      roundtrip as lists.
+
+    A single wave covers N so that the halved vector shape produces
+    dim_scaling = tile / (waves * vshape) = 128 / (1 * 64) = 2,
+    giving two reduction tiles after expansion.
     """
     constraints = [
         wave.WorkgroupConstraint(M, BLOCK_M, 0),
         wave.WorkgroupConstraint(N, BLOCK_N, 1),
         wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
-        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.WaveConstraint(N, BLOCK_N),
         wave.HardwareConstraint(
-            threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}
+            threads_per_wave=64,
+            vector_shapes={M: BLOCK_M, N: sympy.floor(BLOCK_N / 2)},
         ),
     ]
 
-    subs = {
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        M: 128,
-        N: 128,
-    }
-
-    def _assert_reduction_roundtrip(kernel, label):
-        options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
-        with IndexingContext() as idxc:
-            idxc.set_subs(options.subs)
-            kernel.initialize_wave_constraints()
-            kernel.initialize_symbolic_constraints()
-            kernel.initialize_workgroup_constraints()
-            trace = kernel._trace(
-                location_capture_config=options.location_capture_config
-            )
-            graph_passes = build_graph_passes(kernel, trace, options)
-            for p in graph_passes:
-                if p.__name__ == decompose_reduce_ops.__name__:
-                    break
-                p()
-
-            mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-                trace, kernel.constraints, options
-            )
-        errors = error_diagnostics(diagnostics)
-        assert errors == [], f"[{label}] unexpected emit errors: {errors}"
-
-        fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
-        errors = error_diagnostics(fx_diags)
-        assert errors == [], f"[{label}] unexpected import errors: {errors}"
-
-        assert_traces_equivalent(trace, fx_trace, subs=options.subs)
-        print(f"  {label}: OK")
+    subs = {BLOCK_M: 64, BLOCK_N: 128, M: 128, N: 128}
 
     @wave.wave(constraints)
     def sum_kernel(
@@ -534,8 +511,6 @@ def mlir_to_fx_reduction_roundtrip():
         res = wave.sum(res, init, dim=N)
         wave.write(res, c)
 
-    _assert_reduction_roundtrip(sum_kernel, "sum roundtrip")
-
     @wave.wave(constraints)
     def max_kernel(
         a: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
@@ -546,10 +521,19 @@ def mlir_to_fx_reduction_roundtrip():
         res = wave.max(res, init, dim=N)
         wave.write(res, c)
 
-    _assert_reduction_roundtrip(max_kernel, "max roundtrip")
+    _assert_roundtrip(sum_kernel, subs, "sum single-input", stop_before=expand_graph)
+    _assert_roundtrip(max_kernel, subs, "max single-input", stop_before=expand_graph)
+    _assert_roundtrip(
+        sum_kernel, subs, "sum variadic-input", stop_before=decompose_reduce_ops
+    )
+    _assert_roundtrip(
+        max_kernel, subs, "max variadic-input", stop_before=decompose_reduce_ops
+    )
 
-    # CHECK: sum roundtrip: OK
-    # CHECK: max roundtrip: OK
+    # CHECK: sum single-input: OK
+    # CHECK: max single-input: OK
+    # CHECK: sum variadic-input: OK
+    # CHECK: max variadic-input: OK
 
 
 # CHECK-LABEL: mlir_to_fx_binary_op_roundtrip
