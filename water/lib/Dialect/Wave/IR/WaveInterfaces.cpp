@@ -797,11 +797,11 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 //-----------------------------------------------------------------------------
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
-    : value(nullptr, kUninitializedState) {}
+    : value(nullptr, kUninitializedState), priority(kLowestPriority) {}
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    DictionaryAttr concreteValue)
-    : value(concreteValue, kSpecificTypeState) {}
+    DictionaryAttr concreteValue, int32_t priority)
+    : value(concreteValue, kSpecificTypeState), priority(priority) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
@@ -1165,12 +1165,18 @@ static FailureOr<AffineMap> getIndexExprStepStrideJoinedMap(
   return failure();
 }
 
-// Join two concrete index expressions mappings by joining their
-// start/step/stride maps independently. See getIndexExprStartJoinedMap and
-// getIndexExprStepStrideJoinedMap for more details.
+// Join two concrete index expressions mappings either by picking the
+// higher-priority one or by joining their start/step/stride maps independently.
+// See getIndexExprStartJoinedMap and getIndexExprStepStrideJoinedMap for more
+// details on independent joining.
 static wave::WaveIndexMappingAttr
 getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
-                          wave::WaveIndexMappingAttr rhs) {
+                          wave::WaveIndexMappingAttr rhs, int32_t lhsPriority,
+                          int32_t rhsPriority) {
+  if (lhsPriority > rhsPriority)
+    return lhs;
+  if (rhsPriority > lhsPriority)
+    return rhs;
 
   // Collect all unique symbol names from both index mappings in order.
   llvm::SmallVector<Attribute> allSymbols;
@@ -1230,7 +1236,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
               namedAttr.getName().getValue());
         });
     return IndexExprsLatticeStorage(
-        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered));
+        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered),
+        rhs.getPriority());
   }
 
   if (rhs.isBottom())
@@ -1263,17 +1270,21 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     if (lhsValue == rhsValue)
       continue;
 
-    wave::WaveIndexMappingAttr joinedMapping =
-        getIndexExprsJoinMappings(lhsValue, rhsValue);
+    wave::WaveIndexMappingAttr joinedMapping = getIndexExprsJoinMappings(
+        lhsValue, rhsValue, lhs.getPriority(), rhs.getPriority());
     if (!joinedMapping)
       return IndexExprsLatticeStorage::top();
 
     result[namedAttr.getName()] = joinedMapping;
   }
   return IndexExprsLatticeStorage(
-      DictionaryAttr::get(ctx, llvm::map_to_vector(result, [](auto &&pair) {
-                            return NamedAttribute(pair.first, pair.second);
-                          })));
+      DictionaryAttr::get(ctx, llvm::map_to_vector(result,
+                                                   [](auto &&pair) {
+                                                     return NamedAttribute(
+                                                         pair.first,
+                                                         pair.second);
+                                                   })),
+      std::max(lhs.getPriority(), rhs.getPriority()));
 }
 
 wave::IndexExprsLatticeStorage
@@ -1305,7 +1316,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
     return bottom();
 
   return IndexExprsLatticeStorage(
-      DictionaryAttr::get(getConcreteValue().getContext(), filtered));
+      DictionaryAttr::get(getConcreteValue().getContext(), filtered),
+      getPriority());
 }
 
 wave::IndexExprsLatticeStorage
@@ -1325,7 +1337,8 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         }
         return NamedAttribute(attr.getName(), value);
       });
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated));
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated),
+                                  getPriority());
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
@@ -1334,7 +1347,7 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   } else if (isTop()) {
     os << "<top>";
   } else {
-    os << getConcreteValue();
+    os << "[pri: " << getPriority() << "] " << getConcreteValue();
   }
 }
 

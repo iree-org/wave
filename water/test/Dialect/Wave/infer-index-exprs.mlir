@@ -633,6 +633,7 @@ normalform.module [#wave.normal_form<full_types>] {
     ]} {
 
     // expected-error @below {{failed to infer index expressions for value to store}}
+    // expected-error @below {{the error above may be caused by the following: couldn't find vector shapes in the contiguity check}}
     wave.write %src, %dst : !wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32, <global>>
 
     return
@@ -959,6 +960,251 @@ normalform.module [#wave.normal_form<full_types>] {
     // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
     wave.write %permuted, %dst : !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32, <global>>
+
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @propagate_from_write
+  func.func @propagate_from_write(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>,
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    // CHECK: wave.read
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    // CHECK: wave.read
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    wave.write %sum, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Elements per thread provided on the op used instead of the value inferred from workgroup constraints.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @propagate_from_write_explicit_ept
+  func.func @propagate_from_write_explicit_ept(
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    %cst = arith.constant 0.0 : f32
+    %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * 8 + WG0 * BLOCK_M, 8, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Elements per thread is used for the trailing dimension because its vector shape is no longer 1.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @propagate_from_write_vector_shape
+  func.func @propagate_from_write_vector_shape(
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 16 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    %cst = arith.constant 0.0 : f32
+    %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64 + WG0 * BLOCK_M, 1, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 8, 1)>
+    wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Test that unmapped dimensions get default (0, 1, 1) index expressions
+// when there are no workgroup/wave/tiling constraints for them.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @unmapped_dimension_default
+  func.func @unmapped_dimension_default(
+    %a: !wave.tensor<[@B, @M, @N] of f32>,
+    %output: !wave.tensor<[@B, @M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{B = 8, M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    // Read should get default index expression for B dimension (no constraints)
+    // and computed expressions for M and N dimensions
+    // CHECK: wave.read
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %a_reg = wave.read %a : (!wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
+
+    // Write should preserve the same index expressions
+    // CHECK: wave.write
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    wave.write %a_reg, %output : !wave.tensor<[@B, @M, @N] of f32, <register>>, !wave.tensor<[@B, @M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Test priority-based propagation with multiple write operations.
+// All writes should establish index expressions with the same priority,
+// and the join should succeed since they agree.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @multiple_writes_consistent
+  func.func @multiple_writes_consistent(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>,
+    %out1: !wave.tensor<[@M, @N] of f32>,
+    %out2: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    // CHECK: wave.read
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // CHECK: wave.read
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // Both writes establish the same index expressions
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    wave.write %sum, %out1 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    wave.write %a_reg, %out2 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Test write when all dimension symbols are absent from constraints.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @write_all_dimensions_unmapped
+  func.func @write_all_dimensions_unmapped(
+    %a: !wave.tensor<[@P, @Q] of f32>,
+    %output: !wave.tensor<[@P, @Q] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {P = 1 : i64, Q = 1 : i64}>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{P = 8 : i64, Q = 16 : i64}>
+  } {
+    // CHECK: wave.read
+    // CHECK-DAG: P : <[] -> (0, 1, 1)>
+    // CHECK-DAG: Q : <[] -> (0, 1, 1)>
+    %a_reg = wave.read %a : (!wave.tensor<[@P, @Q] of f32>) -> !wave.tensor<[@P, @Q] of f32, <register>>
+
+    // CHECK: wave.write
+    // CHECK-DAG: P : <[] -> (0, 1, 1)>
+    // CHECK-DAG: Q : <[] -> (0, 1, 1)>
+    wave.write %a_reg, %output : !wave.tensor<[@P, @Q] of f32, <register>>, !wave.tensor<[@P, @Q] of f32>
+
+    return
+  }
+}
+
+
+// -----
+
+// MMa index expression has higher priority than write.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @write_after_mma_priority
+  func.func @write_after_mma_priority(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>,
+      #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>,
+      #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    %a_reg = wave.read %a : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16, <register>>
+    %b_reg = wave.read %b : (!wave.tensor<[@N, @K] of f16>) -> !wave.tensor<[@N, @K] of f16, <register>>
+    %mma = wave.mma %a_reg, %b_reg, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    // Write in isolation would have inferred step=floordiv(BLOCK_M, 64) since M is mapped
+    // to workgroup X with 64 threads in it, but we obtain step=4 propagate from the mma
+    // above, because that has higher priority.
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N
+    wave.write %mma, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
   }
