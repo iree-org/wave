@@ -299,6 +299,11 @@ class LaunchableWave(Launchable):
             for name, op in custom_ops.items():
                 context.register_custom_op(name, op)
 
+            # Route __getitem__ on fx.Proxy to GetResult during kernel
+            # tracing so that e.g. iterate_result[0] creates a GetResult
+            # node directly.
+            context.register_custom_op("getitem", wave_ops.GetResult)
+
             with region_graph.subtracer() as subtracer:
                 root_name, _ = subtracer.trace(self._f)
                 kernel_location = capture_function_location(

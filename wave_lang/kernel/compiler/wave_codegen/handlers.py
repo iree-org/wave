@@ -2061,13 +2061,6 @@ def handle_get_result(emitter: WaveEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(for_op.results[res_idx]))
 
 
-@handle_op(operator.getitem)
-def handle_getitem(emitter: WaveEmitter, node: fx.Node):
-    if not node.users:
-        return
-    raise NotImplementedError("getitem: Currently only stub implementation")
-
-
 def get_float_type(bitwidth: int):
     match bitwidth:
         case 16:
