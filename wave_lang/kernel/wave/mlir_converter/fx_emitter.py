@@ -133,7 +133,7 @@ from wave_lang.kernel.ops.wave_ops import (
     SelectOp as Select,
     SelfIndex,
     SharedMemoryBarrier,
-    ShuffleOp as ShuffleFx,
+    ShuffleOp as Shuffle,
     Sub,
     Sum,
     Truediv,
@@ -1007,7 +1007,7 @@ def _handle_shuffle_op(
         op, ignore_attrs={"offset", "width", "mode"}
     )
 
-    fx_op = ShuffleFx.create(
+    fx_op = Shuffle.create(
         parse_ctx.graph,
         arg=arg_node,
         offset=offset,
@@ -1160,8 +1160,10 @@ def _handle_extract_op(
 ) -> None:
     """Handle wave.extract operation."""
     source_node = parse_ctx.resolve_operand(op.source)
-    position_exprs = expr_list_attr_to_exprs(op.position)
-    offset = position_exprs[0] if len(position_exprs) == 1 else tuple(position_exprs)
+    # Keep as a list: despite the scalar type annotation on Extract,
+    # offset is used as a sequence throughout the codebase (e.g.
+    # len(node.offset) in wave_ops.py and water_emitter.py).
+    offset = expr_list_attr_to_exprs(op.position)
     converted_attrs = _convert_supported_attrs(
         op,
         ignore_attrs={AttrNames.POSITION.mlir_name},

@@ -29,7 +29,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.ops.wave_ops import (
     get_custom,
     Placeholder,
-    ShuffleOp as ShuffleFxOp,
+    ShuffleOp as Shuffle,
 )
 from wave_lang.kernel.wave.compile import build_graph_passes
 from wave_lang.kernel.wave.decompose_reduce_ops import decompose_reduce_ops
@@ -809,11 +809,11 @@ def mlir_to_fx_shuffle_roundtrip():
                 if p.__name__ == decompose_reduce_ops.__name__:
                     break
 
-            orig_shuffles = [
-                get_custom(n)
-                for n in trace.walk(lambda n: isinstance(get_custom(n), ShuffleFxOp))
-            ]
-            assert len(orig_shuffles) > 0, f"[{label}] no shuffles after decomposition"
+            has_shuffles = any(
+                isinstance(get_custom(n), Shuffle)
+                for n in trace.walk(lambda n: isinstance(get_custom(n), Shuffle))
+            )
+            assert has_shuffles, f"[{label}] no shuffles after decomposition"
 
             mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
                 trace, kernel.constraints, options
@@ -825,24 +825,7 @@ def mlir_to_fx_shuffle_roundtrip():
         errors = error_diagnostics(fx_diags)
         assert errors == [], f"[{label}] unexpected import errors: {errors}"
 
-        rt_shuffles = [
-            get_custom(n)
-            for n in fx_trace.walk(lambda n: isinstance(get_custom(n), ShuffleFxOp))
-        ]
-        assert len(rt_shuffles) == len(orig_shuffles), (
-            f"[{label}] shuffle count mismatch: "
-            f"{len(orig_shuffles)} vs {len(rt_shuffles)}"
-        )
-        for orig, rt in zip(orig_shuffles, rt_shuffles):
-            assert (
-                orig.offset == rt.offset
-            ), f"[{label}] offset mismatch: {orig.offset} vs {rt.offset}"
-            assert (
-                orig.width == rt.width
-            ), f"[{label}] width mismatch: {orig.width} vs {rt.width}"
-            assert (
-                orig.mode == rt.mode
-            ), f"[{label}] mode mismatch: {orig.mode} vs {rt.mode}"
+        assert_traces_equivalent(trace, fx_trace, subs=options.subs)
         print(f"  {label}: OK")
 
     @wave.wave(constraints)
