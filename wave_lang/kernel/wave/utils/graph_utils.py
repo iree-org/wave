@@ -268,11 +268,14 @@ def _sympy_equiv(a: sympy.Basic, b: sympy.Basic) -> bool:
     """Check symbolic equivalence of two sympy expressions.
 
     For numeric/algebraic expressions this checks `simplify(a - b) == 0`.
-    For relational expressions (e.g. `x < 5`) and other non-numeric sympy
-    objects where subtraction is not defined, structural equality is used.
+    For relational expressions (e.g. `x < 5`), both sides must use the
+    same comparison operator and their canonical `lhs - rhs` forms must
+    be algebraically equivalent.
     """
     if a == b:
         return True
+    if isinstance(a, sympy.Rel) and type(a) is type(b):
+        return sympy.simplify((a.lhs - a.rhs) - (b.lhs - b.rhs)) == 0
     try:
         return sympy.simplify(a - b) == 0
     except TypeError:
@@ -1638,11 +1641,11 @@ def prepare_subgraph_for_conditional(
     When adding nodes to the subgraph, you can use the dictionary to map from outer nodes to their placeholders.
     Eg.
 
-    ``
+    ```
         subgraph, captures, placeholders = prepare_subgraph_for_conditional(name, [arg1, arg2], [arg2])
         write_val = Write(placeholders[arg1], placeholders[arg2], 1).add_to_graph(subgraph)
         finish_conditional_subgraph(trace, graph, condition, subgraph, captures)
-    ``
+    ```
 
 
     Args:
