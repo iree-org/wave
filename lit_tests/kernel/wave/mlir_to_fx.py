@@ -34,6 +34,7 @@ from wave_lang.kernel.ops.wave_ops import (
 from wave_lang.kernel.wave.compile import build_graph_passes
 from wave_lang.kernel.wave.decompose_reduce_ops import decompose_reduce_ops
 from wave_lang.kernel._support.indexing import IndexingContext
+from wave_lang.kernel._support.tracing import CapturedTrace
 
 # Keep emitter subprocesses alive for the entire test file instead of
 # spawning fresh ones per call (~2s import overhead each).
@@ -74,12 +75,18 @@ def _assert_roundtrip(
     subs: dict,
     label: str,
     stop_before: Callable[[], None] | None = None,
-) -> None:
+    stop_after: Callable[[], None] | None = None,
+) -> CapturedTrace:
     """Compile a kernel, roundtrip through MLIR, and assert equivalence.
 
-    When `stop_before` is None, runs all graph passes.
-    When set, runs graph passes up to but not including `stop_before`.
+    When neither `stop_before` nor `stop_after` is set, runs all
+    graph passes. `stop_before` stops just before the named pass;
+    `stop_after` runs it and then stops. Returns the original trace
+    for additional caller-side assertions.
     """
+    assert (
+        stop_before is None or stop_after is None
+    ), "stop_before and stop_after are mutually exclusive"
     options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
@@ -88,15 +95,17 @@ def _assert_roundtrip(
         kernel.initialize_workgroup_constraints()
         trace = kernel._trace(location_capture_config=options.location_capture_config)
         graph_passes = build_graph_passes(kernel, trace, options)
-        # Check that the specified `stop_before` pass is in the graph passes.
-        if stop_before is not None:
+        stop_pass = stop_before or stop_after
+        if stop_pass is not None:
             assert any(
-                p.__name__ == stop_before.__name__ for p in graph_passes
-            ), f"stop_before={stop_before.__name__!r} not found in graph passes"
+                p.__name__ == stop_pass.__name__ for p in graph_passes
+            ), f"stop pass {stop_pass.__name__!r} not found in graph passes"
         for p in graph_passes:
             if stop_before is not None and p.__name__ == stop_before.__name__:
                 break
             p()
+            if stop_after is not None and p.__name__ == stop_after.__name__:
+                break
         source_constraints = kernel.constraints
         mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
             trace, source_constraints, options
@@ -119,6 +128,7 @@ def _assert_roundtrip(
     )
     assert_traces_equivalent(trace, fx_trace, subs=options.subs)
     print(f"  {label}: OK")
+    return trace
 
 
 # CHECK-LABEL: mlir_to_fx_minimal_roundtrip
@@ -778,8 +788,7 @@ def mlir_to_fx_shuffle_roundtrip():
     """Test MLIR roundtrip for shuffle ops introduced by decompose_reduce_ops.
 
     Runs through decompose_reduce_ops to generate butterfly shuffles,
-    emits MLIR, imports back, and verifies the ShuffleOp nodes have the
-    correct attributes.
+    emits MLIR, imports back, and checks full trace equivalence.
     """
     constraints = [
         wave.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -793,40 +802,11 @@ def mlir_to_fx_shuffle_roundtrip():
 
     subs = {BLOCK_M: 64, BLOCK_N: 64, M: 128, N: 128}
 
-    def _check_shuffle_roundtrip(kernel, label):
-        options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
-        with IndexingContext() as idxc:
-            idxc.set_subs(options.subs)
-            kernel.initialize_wave_constraints()
-            kernel.initialize_symbolic_constraints()
-            kernel.initialize_workgroup_constraints()
-            trace = kernel._trace(
-                location_capture_config=options.location_capture_config
-            )
-            graph_passes = build_graph_passes(kernel, trace, options)
-            for p in graph_passes:
-                p()
-                if p.__name__ == decompose_reduce_ops.__name__:
-                    break
-
-            has_shuffles = any(
-                isinstance(get_custom(n), Shuffle)
-                for n in trace.walk(lambda n: isinstance(get_custom(n), Shuffle))
-            )
-            assert has_shuffles, f"[{label}] no shuffles after decomposition"
-
-            mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
-                trace, kernel.constraints, options
-            )
-        errors = error_diagnostics(diagnostics)
-        assert errors == [], f"[{label}] unexpected emit errors: {errors}"
-
-        fx_trace, _, _, fx_diags = emitter.mlir_to_fx(mlir_text)
-        errors = error_diagnostics(fx_diags)
-        assert errors == [], f"[{label}] unexpected import errors: {errors}"
-
-        assert_traces_equivalent(trace, fx_trace, subs=options.subs)
-        print(f"  {label}: OK")
+    def _assert_has_shuffles(trace: CapturedTrace, label: str) -> None:
+        assert any(
+            isinstance(get_custom(n), Shuffle)
+            for n in trace.walk(lambda n: isinstance(get_custom(n), Shuffle))
+        ), f"[{label}] no shuffles after decomposition"
 
     @wave.wave(constraints)
     def sum_shuffle_kernel(
@@ -838,7 +818,10 @@ def mlir_to_fx_shuffle_roundtrip():
         res = wave.sum(res, init, dim=N)
         wave.write(res, c)
 
-    _check_shuffle_roundtrip(sum_shuffle_kernel, "sum shuffle")
+    trace = _assert_roundtrip(
+        sum_shuffle_kernel, subs, "sum shuffle", stop_after=decompose_reduce_ops
+    )
+    _assert_has_shuffles(trace, "sum shuffle")
 
     @wave.wave(constraints)
     def max_shuffle_kernel(
@@ -850,7 +833,10 @@ def mlir_to_fx_shuffle_roundtrip():
         res = wave.max(res, init, dim=N)
         wave.write(res, c)
 
-    _check_shuffle_roundtrip(max_shuffle_kernel, "max shuffle")
+    trace = _assert_roundtrip(
+        max_shuffle_kernel, subs, "max shuffle", stop_after=decompose_reduce_ops
+    )
+    _assert_has_shuffles(trace, "max shuffle")
 
     # CHECK: sum shuffle: OK
     # CHECK: max shuffle: OK
