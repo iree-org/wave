@@ -582,7 +582,12 @@ def build_graph_passes(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
-        partial(generate_bounds_exprs, trace, launchable.constraints),
+        partial(
+            generate_bounds_exprs,
+            trace,
+            launchable.constraints,
+            launchable.reordering_constraints,
+        ),
         partial(
             merge_contiguous_reads,
             trace,
