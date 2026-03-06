@@ -181,7 +181,7 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
                 return None
             mult = m if (mult is None) or (m < mult) else mult
             terms.append(arg)
-        if c >= mult:
+        if c is None or mult is None or c >= mult:
             return None
         return (sum(terms) % q) + c
 
@@ -409,6 +409,8 @@ def _numeric_eval_constant(expr, num_samples: int = 48):
         free, evaluator = (), None
 
     if not free:
+        if isinstance(expr, int):
+            return expr
         if expr.has(*_BAD_ATOMS):
             return None
         if expr.is_integer is not True:
