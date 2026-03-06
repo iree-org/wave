@@ -1164,7 +1164,9 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
+  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
+      DictionaryAttr::get(getContext(), symbolMappings),
+      wave::IndexExprsLatticeStorage::kMmaPriority));
 
   return llvm::success();
 }
@@ -1175,8 +1177,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
 // well as workgroup constraints (thread-independent).
 LogicalResult MmaOp::initializeIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    const wave::IndexExprsAnalysisInit &initObject,
-    wave::EmitErrorFn emitError) {
+    const wave::IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter) {
   auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
   auto lhsType = llvm::cast<wave::WaveTensorType>(getLhs().getType());
   assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() >= 2 &&
@@ -1242,13 +1244,16 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   operandExprs[getLhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), lhsSymbolMappings));
+          DictionaryAttr::get(getContext(), lhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   operandExprs[getRhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), rhsSymbolMappings));
+          DictionaryAttr::get(getContext(), rhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   operandExprs[getAccumulatorMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
+          DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   return llvm::success();
 }
 
@@ -2233,6 +2238,174 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsForward(
   return ChangeResult::NoChange;
 }
 
+/// Computes the vector stride for each dimension: stride[i] is the product of
+/// vector shapes for dimensions i+1 .. rank-1 (so the last dimension has
+/// stride 1). A dimension is contiguous iff its stride is 1.
+static FailureOr<SmallVector<int64_t>>
+getVectorStrides(wave::WaveTensorType tensorType,
+                 HardwareConstraintAttr hardwareConstraint) {
+  assert(tensorType.getFullySpecified() &&
+         "expected fully-specified tensor type");
+  DictionaryAttr vectorShapes = hardwareConstraint.getVectorShapes();
+  if (!vectorShapes)
+    return failure();
+  int64_t rank = tensorType.getRank();
+  SmallVector<int64_t> strides(rank);
+  strides[rank - 1] = 1;
+  for (int64_t i = rank - 2; i >= 0; --i) {
+    Attribute vectorShape =
+        vectorShapes.get(tensorType.getShape()[i + 1].getName());
+    if (!vectorShape)
+      return failure();
+    int64_t shape = cast<IntegerAttr>(vectorShape).getValue().getSExtValue();
+    strides[i] = shape * strides[i + 1];
+  }
+  return strides;
+}
+
+LogicalResult WriteOp::initializeIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter) {
+
+  // TODO: figure out how to propagate elements per threads from constraints to
+  // operations while avoiding the clash with index sequences. When propagating,
+  // we don't have sequences yet.
+  WaveTensorType tensorType = cast<WaveTensorType>(getValueToStore().getType());
+  HardwareConstraintAttr hardwareConstraint = initObject.hardwareConstraint;
+
+  assert(tensorType.getFullySpecified());
+  FailureOr<SmallVector<int64_t>> stridesOr =
+      getVectorStrides(tensorType, hardwareConstraint);
+  // XXX: don't report this error immediately since we may be able to proceed
+  // without it, e.g., when index expressions may be propagated from
+  // operations with higher priority operations to this one. This is a
+  // questionable design choice carried over from the initial Python
+  // prototype, but is needed for initial consistency. Consider revising.
+  if (failed(stridesOr)) {
+    delayedErrorEmitter = [](InFlightDiagnostic &diag) {
+      diag << "couldn't find vector shapes in the contiguity check";
+    };
+    return success();
+  }
+  llvm::ArrayRef<int64_t> strides = *stridesOr;
+  // XXX: pywave confusingly calls this "contiguous" but it is actually the
+  // dimension along which SIMD vectorization is applied, i.e., the deepest
+  // dimension for which the per-thread vector shape is not 1 or, alternatively,
+  // the product of vector shapes for trailing dimensions remains 1.
+  int64_t vectorizedDimPos = -1;
+  for (int64_t i = 0, e = tensorType.getRank(); i < e; ++i)
+    if (strides[i] == 1) {
+      vectorizedDimPos = i;
+      break;
+    }
+
+  SmallVector<NamedAttribute> indexMappings;
+  for (int64_t i = 0, e = tensorType.getRank(); i < e; ++i) {
+    AffineExpr elementsPerThread = nullptr;
+    bool isVectorized = (i == vectorizedDimPos);
+
+    // The absence of constraints for a dimension means it is not mapped to
+    // workgroups/wave/items, so there is nothing to do here.
+    // We expect it to be handled by thread-independent constraints setting
+    // the default (0, 1, 1) index expression or following the tiling
+    // constraint.
+    auto it = initObject.symbolConstraints.find(tensorType.getShape()[i]);
+    if (it == initObject.symbolConstraints.end())
+      continue;
+    auto wgConstraintIt =
+        llvm::find_if(it->second, llvm::IsaPred<WorkgroupConstraintAttr>);
+    if (wgConstraintIt == it->second.end())
+      continue;
+    WorkgroupConstraintAttr wgConstraint =
+        cast<WorkgroupConstraintAttr>(*wgConstraintIt);
+
+    // The innermost dimension with vectorized size other than 1 is the one we
+    // want to vectorize along.
+    std::optional<int64_t> opElementsPerThread = getElementsPerThread();
+    SmallVector<Attribute> symbols;
+    if (isVectorized) {
+      if (opElementsPerThread) {
+        elementsPerThread =
+            getAffineConstantExpr(*opElementsPerThread, getContext());
+      } else {
+        AffineMap tileSizeMap = wgConstraint.getTileSize().getMap();
+        assert(tileSizeMap.getNumResults() == 1 &&
+               "expected a single expression in tile size affine map");
+        unsigned numThreads = [&]() {
+          switch (wgConstraint.getWorkgroupDim().getValue()) {
+          case WaveWorkgroupDim::X:
+            return initObject.wavesPerBlock[0] *
+                   initObject.hardwareConstraint.getThreadsPerWave();
+          case WaveWorkgroupDim::Y:
+            return initObject.wavesPerBlock[1];
+          case WaveWorkgroupDim::Z:
+            return initObject.wavesPerBlock[2];
+          }
+        }();
+
+        elementsPerThread = tileSizeMap.getResult(0).ceilDiv(numThreads);
+        llvm::append_range(symbols, wgConstraint.getTileSize().getSymbols());
+      }
+    } else {
+      elementsPerThread = getAffineConstantExpr(1, getContext());
+    }
+
+    int64_t stride = strides[i];
+    assert(stride > 0 && "stride should be positive");
+
+    WaveIndexSymbol threadSymbol = [&]() {
+      switch (wgConstraint.getWorkgroupDim().getValue()) {
+      case WaveWorkgroupDim::X:
+        return WaveIndexSymbol::THREAD_0;
+      case WaveWorkgroupDim::Y:
+        return WaveIndexSymbol::THREAD_1;
+      case WaveWorkgroupDim::Z:
+        return WaveIndexSymbol::THREAD_2;
+      }
+    }();
+    WaveIndexSymbolAttr threadSymbolAttr =
+        WaveIndexSymbolAttr::get(getContext(), threadSymbol);
+    symbols.push_back(threadSymbolAttr);
+
+    AffineExpr startExpr =
+        getAffineSymbolExpr(symbols.size() - 1, getContext());
+    if (wgConstraint.getWorkgroupDim().getValue() == WaveWorkgroupDim::X) {
+      startExpr = startExpr % hardwareConstraint.getThreadsPerWave();
+    } else {
+      // TODO: in pywave, we always do `startExpr % threadsPerWave` where
+      // threadsPerWave == 1 for workgroup dims other than X, making it
+      // always zero. It mentions an assumption about the (64, 1, 1) thread
+      // shape, but it is unclear whether that assumption always holds.
+      // It looks like the intention for this was to express lane ID rather
+      // than thread ID, but it is unclear how it accounts for multiple
+      // wavefronts running in parallel.
+      startExpr = getAffineConstantExpr(0, getContext());
+    }
+
+    auto indexMapping = WaveIndexMappingAttr::get(
+        getContext(), symbols,
+        AffineMap::get(/*dimCount=*/0, symbols.size(),
+                       startExpr * elementsPerThread),
+        AffineMap::get(/*dimCount=*/0, symbols.size(), elementsPerThread),
+        AffineMap::get(/*dimCount=*/0, symbols.size(),
+                       getAffineConstantExpr(stride, getContext())));
+    indexMappings.emplace_back(tensorType.getShape()[i].getName(),
+                               indexMapping);
+  }
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      tensorType.getShape(), initObject.symbolConstraints, indexMappings);
+  operandExprs[getValueToStoreMutable().getOperandNumber()] =
+      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
+                               IndexExprsLatticeStorage::kWritePriority);
+  operandExprs[getMemoryMutable().getOperandNumber()] =
+      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
+                               IndexExprsLatticeStorage::kWritePriority);
+
+  return success();
+}
+
 // Propagating "sideways" between operands, but only if this would not result
 // in conflicts.
 llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
@@ -2761,7 +2934,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
         NamedAttribute(StringAttr::get(ctx, srcSymbol.getName()), newMapping));
   }
 
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings));
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
+                                  inputLattice.getPriority());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(

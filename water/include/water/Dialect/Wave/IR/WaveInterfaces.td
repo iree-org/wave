@@ -264,7 +264,8 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       "initializeIndexExprsBackward",
       (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
            "const ::wave::IndexExprsAnalysisInit &":$initObject,
-           "::wave::EmitErrorFn":$emitError),
+           "::wave::EmitErrorFn":$emitError,
+           "::wave::EmitDelayedErrorFn &":$delayedErrorEmitter),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
         return ::llvm::success();
