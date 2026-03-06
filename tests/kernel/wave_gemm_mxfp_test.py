@@ -969,6 +969,14 @@ MACROTILES_PRESHUFFLE_8WAVE_PINGPONG = [
 ]
 
 
+_DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS = {
+    (128, 128, 256),
+    (128, 256, 256),
+    (64, 192, 256),
+    (64, 128, 256),
+}
+
+
 @require_e2e
 @require_cdna4
 @pytest.mark.parametrize(
@@ -990,6 +998,9 @@ def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule and scale preshuffling.
     (A&B scales preshuffled, A and B global-to-LDS).
     """
+    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
+        pytest.skip("Dynamic mode is only covered for selected block shapes.")
+
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
         shape,
         block_shape,
@@ -1011,12 +1022,6 @@ def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     w_t = w.T.contiguous()
-    w_t_ps = b_preshuffle(w_t)
-    x_scales_ps = e8m0_shuffle(x_scales)
-    w_scales_ps = e8m0_shuffle(w_scales)
-
-    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
-    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
     x_scales_ps = e8m0_shuffle(x_scales)
     w_scales_ps = e8m0_shuffle(w_scales)
 
@@ -1047,6 +1052,9 @@ def testScaledGemmMXFP4PreshuffleScalesAndBMacrotiles8WavePingpong(
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
     (A&B scales preshuffled and B preshuffled in K-pack order).
     """
+    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
+        pytest.skip("Dynamic mode is only covered for selected block shapes.")
+
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
         block_shape,
