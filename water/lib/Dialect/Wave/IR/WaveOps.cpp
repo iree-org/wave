@@ -1572,9 +1572,8 @@ ReadOp::propagateBackward(MutableArrayRef<wave::WaveTensorType> operandTypes,
 
 LogicalResult ReadOp::finalizeTypeInference() { return success(); }
 
-// Check the well-formedness of the index attribute (must have at most one
-// non-unit dimension) and its correspondence with the explicit elements per
-// thread, if provided, and with the number of elements in the vector type.
+// Check the correspondence of the index attribute with the explicit elements
+// per thread, if provided, and with the number of elements in the vector type.
 static LogicalResult
 verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
                              std::optional<int64_t> elementsPerThread,
@@ -1605,7 +1604,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
   if (!indexDict)
     return success();
 
-  wave::WaveHyperparameterAttr hyper = wave::WaveHyperparameterAttr();
+  wave::WaveHyperparameterAttr hyper = nullptr;
   for (Operation *cur = op; cur != nullptr && !hyper;
        cur = cur->getParentOp()) {
     hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(
@@ -1621,7 +1620,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
       getUncollapsedVectorShape(tensorType.getShape(), indexDict, hyper);
   int64_t nonUnit = 1;
   bool hadDynamic = false;
-  for (auto [i, size] : llvm::enumerate(shape)) {
+  for (int64_t size : shape) {
     if (ShapedType::isDynamic(size)) {
       hadDynamic = true;
       continue;
@@ -1632,13 +1631,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
     }
     if (nonUnit == 1) {
       nonUnit = size;
-      continue;
     }
-
-    InFlightDiagnostic diag =
-        op->emitError() << "'index' has more than one entry with non-unit step";
-    diag.attachNote() << "second non-unit step dimension: " << i;
-    return diag;
   }
 
   // If there were unevaluated steps, they may end up matching later on.

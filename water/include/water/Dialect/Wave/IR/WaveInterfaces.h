@@ -26,6 +26,10 @@ using EmitErrorFn = llvm::function_ref<mlir::InFlightDiagnostic()>;
 
 class WaveTensorType;
 
+/// Get the hyperparameters from an ancestor operation.
+/// Returns nullptr if no hyperparameters are found.
+WaveHyperparameterAttr getHyperparameters(mlir::Operation *op);
+
 //-----------------------------------------------------------------------------
 // HasWaveIndexMapping trait
 //-----------------------------------------------------------------------------
