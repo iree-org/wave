@@ -378,6 +378,40 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// Check that an unmapped dimension gets the default (0, 1, 1) index expression.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @mma_32x32x8_f16_3d
+  func.func @mma_32x32x8_f16_3d(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                                %b: !wave.tensor<[@B, @N, @K] of f16>,
+                                %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
+      : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_16x16x32_f16
   func.func @mma_16x16x32_f16(%a: !wave.tensor<[@M, @K] of f16>,
