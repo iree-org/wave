@@ -5,11 +5,16 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
+import sympy
 import torch.fx as fx
+from wave_lang.kernel._support.dtype import DataType
 from wave_lang.kernel.wave.utils.graph_utils import (
     is_barrier_between,
     is_barrier_between_same_graph,
     _check_nodes_equivalent,
+    _sympy_equiv,
+    _check_callable_equivalent,
+    _truncate_float_to_dtype,
 )
 from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
@@ -21,7 +26,6 @@ from wave_lang.kernel.ops.wave_ops import (
 )
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel._support.indexing import IndexSymbol
-from wave_lang.kernel._support.dtype import DataType
 
 
 def create_simple_graph():
@@ -380,6 +384,64 @@ class TestOutputComparison:
             node_map,
         )
         assert result
+
+
+class TestCheckCallableEquivalent:
+    """Tests for _check_callable_equivalent."""
+
+    def test_identical_lambdas(self):
+        f = lambda x: x + 1
+        assert _check_callable_equivalent(f, f)
+
+    def test_equivalent_lambdas(self):
+        f = lambda x: x + x
+        g = lambda x: 2 * x
+        assert _check_callable_equivalent(f, g)
+
+    def test_inequivalent_lambdas(self):
+        f = lambda x: x + 1
+        g = lambda x: x + 2
+        assert not _check_callable_equivalent(f, g)
+
+    def test_arity_mismatch(self):
+        f = lambda x: x
+        g = lambda x, y: x + y
+        result = _check_callable_equivalent(f, g)
+        assert not result
+        assert "arity" in result.error
+
+    def test_relational_lambdas_equal(self):
+        K = sympy.Symbol("K")
+        f = lambda x: x < K
+        g = lambda x: x < K
+        assert _check_callable_equivalent(f, g)
+
+    def test_relational_lambdas_unequal(self):
+        K = sympy.Symbol("K")
+        f = lambda x: x < K
+        g = lambda x: x > K
+        assert not _check_callable_equivalent(f, g)
+
+    def test_multi_arg_equivalent(self):
+        f = lambda x, y: x + y
+        g = lambda a, b: a + b
+        assert _check_callable_equivalent(f, g)
+
+    def test_tuple_result_equivalent(self):
+        f = lambda x: (x, x + 1)
+        g = lambda x: (x, x + 1)
+        assert _check_callable_equivalent(f, g)
+
+    def test_tuple_result_inequivalent(self):
+        f = lambda x: (x, x + 1)
+        g = lambda x: (x, x + 2)
+        assert not _check_callable_equivalent(f, g)
+
+    def test_tuple_vs_scalar_mismatch(self):
+        f = lambda x: (x, x)
+        g = lambda x: x
+        result = _check_callable_equivalent(f, g)
+        assert not result
 
 
 if __name__ == "__main__":

@@ -496,6 +496,21 @@ def define_op(op_name: str) -> Callable[[T], T]:
     return decorator
 
 
+def _register_dynamic_subclass(subclass: type, op_name: str, parent_cls: type) -> None:
+    """Set identity attributes and register a dynamically-created subclass.
+
+    Sets `__name__`, `__qualname__`, and `__module__` so that the class
+    can be found by module-level lookup and serialized/deserialized correctly
+    by `dill`.  Without `__qualname__`, `dill` treats the class as a
+    local/nested definition and fails to reconstruct it across processes.
+    """
+    pascal_name = op_name.replace("_", " ").title().replace(" ", "")
+    subclass.__name__ = pascal_name
+    subclass.__qualname__ = pascal_name
+    subclass.__module__ = parent_cls.__module__
+    setattr(sys.modules[subclass.__module__], pascal_name, subclass)
+
+
 def define_py_op(py_op: Callable) -> Callable[[T], T]:
     """
     Register python internal operators as custom ops.
@@ -512,10 +527,7 @@ def define_py_op(py_op: Callable) -> Callable[[T], T]:
             pass
 
         NewSubclass.tkw_op_name = op_name
-        NewSubclass.__name__ = f"{op_name.capitalize()}"
-        NewSubclass.__module__ = cls.__module__
-        current_module = sys.modules[cls.__module__]
-        setattr(current_module, NewSubclass.__name__, NewSubclass)
+        _register_dynamic_subclass(NewSubclass, op_name, cls)
 
         original_handler = None
         # Some py operator has trailing "_", which needs to be removed
@@ -569,12 +581,7 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
             pass
 
         NewSubclass.tkw_op_name = op_name
-        pascal_op_name = op_name.replace("_", " ").title().replace(" ", "")
-        NewSubclass.__name__ = pascal_op_name
-        NewSubclass.__qualname__ = pascal_op_name
-        NewSubclass.__module__ = cls.__module__
-        current_module = sys.modules[NewSubclass.__module__]
-        setattr(current_module, NewSubclass.__name__, NewSubclass)
+        _register_dynamic_subclass(NewSubclass, op_name, cls)
         if cls.__name__ == NewSubclass.__name__:
             raise ValueError(
                 f'Subclass cannot have same name as base interface class{cls.__name__}. Did you mean to use"define_op" instead.'
@@ -592,6 +599,7 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
             return handler(*args, **kwargs)
 
         new_function.__name__ = op_name
+        current_module = sys.modules[cls.__module__]
         setattr(current_module, op_name, new_function)
         NewSubclass._tracing_function = new_function
         return cls
@@ -662,7 +670,7 @@ class CustomOp(ABC):
     """
     Base class for all custom fx nodes.
 
-    Fields with ``compare=False`` are infrastructure or scheduling artifacts
+    Fields with `compare=False` are infrastructure or scheduling artifacts
     and do not participate in semantic equality used for trace equivalence.
     """
 
@@ -2701,7 +2709,7 @@ class DebugLog(CustomOp):
     The nested dictionaries have a `value` field with the log tensor, and other keys (eg. `symbolic_shape`).
 
     IE the debug_logs dictionary will look like:
-    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}``
+    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}`
 
     Note that the logs collected in the `debug_logs` field, or handled by `printer` or `handler` represent a global view of the log after all writes, not limited to any one wave or loop iteration.
 

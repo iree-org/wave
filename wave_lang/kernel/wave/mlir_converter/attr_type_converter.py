@@ -123,6 +123,8 @@ def symbol_attr_to_name(symbol_attr: ir.Attribute) -> str:
         if name is None:
             raise ValueError(f"Unsupported index symbol: {symbol_attr.value}")
         return name
+    if isinstance(symbol_attr, wave.WaveOperandAttr):
+        return OPERAND_SYMBOL_NAME_WAVE_PREFIX + str(symbol_attr.operand_number)
     raise ValueError(f"Unsupported symbol attribute: {symbol_attr}")
 
 
