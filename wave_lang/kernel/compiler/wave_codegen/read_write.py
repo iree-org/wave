@@ -95,7 +95,10 @@ def _get_start_indices(
     return start_indices
 
 
-def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
+def _split_index(
+    src: IndexExpr | int,
+    dynamic_symbols: set[IndexExpr] | None = None,
+) -> tuple[IndexExpr, IndexExpr]:
     """
     Split index expr into thread-dependent and thread-independent parts
     """
@@ -114,10 +117,13 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
         thread_independent_index = sympy.expand(diff)
     else:
         thread_independent_index = sympy.sympify(simplify(diff))
-    if thread_independent_index.free_symbols - set(subs_wg.keys()):
-        # If we have any symbols besides wg symbols, means some thread or
-        # dynamic symbols were not canceled out, use the entire index as
-        # thread dependent index.
+    allowed_symbols = set(subs_wg.keys())
+    if dynamic_symbols:
+        allowed_symbols |= dynamic_symbols
+    if thread_independent_index.free_symbols - allowed_symbols:
+        # If we have any symbols besides wg and dynamic symbols, means
+        # some thread symbols were not canceled out, use the entire index
+        # as thread dependent index.
         thread_independent_index = sympy.sympify(0)
         thread_dependent_index = src
 
@@ -150,7 +156,8 @@ def _build_start_indices(
     dynamic_values: dict[IndexExpr, Any] = {},
 ) -> tuple[list[OpResult], list[OpResult], list[OpResult]]:
     start_indices = _get_start_indices(src_indices)
-    split_indices = [_split_index(i) for i in start_indices]
+    dyn_syms = set(emitter.dynamic_symbols) if emitter.dynamic_symbols else None
+    split_indices = [_split_index(i, dyn_syms) for i in start_indices]
     subs = add_emitter_subs(emitter, dynamic_values)
     indices = [gen_sympy_index(subs, i) for i in start_indices]
     indices_wg = [gen_sympy_index(subs, i[0]) for i in split_indices]
