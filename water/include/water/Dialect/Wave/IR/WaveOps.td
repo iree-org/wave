@@ -574,7 +574,7 @@ def WriteOp : WaveOp<"write", [
     DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
-        ["getIndexExprValuesAndDescriptions"]>,
+        ["getIndexExprValuesAndDescriptions", "initializeIndexExprsBackward"]>,
     RequiresSidewaysBackwardPropagationOpTrait]> {
   let summary = "Writes into memory";
   let description = [{

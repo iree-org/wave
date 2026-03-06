@@ -7,6 +7,7 @@
 #ifndef WATER_DIALECT_WAVE_TRANSFORMS_DATAFLOWANALYSES_H
 #define WATER_DIALECT_WAVE_TRANSFORMS_DATAFLOWANALYSES_H
 
+#include "water/Dialect/Wave/Transforms/Utils.h"
 #include "llvm/ADT/FunctionExtras.h"
 
 namespace llvm {
@@ -23,7 +24,7 @@ class DictionaryAttr;
 
 namespace wave {
 using SetIndexLatticeFn =
-    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr)>;
+    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr, int32_t)>;
 using OverrideInitializationFn = llvm::function_ref<llvm::LogicalResult(
     mlir::Operation *, SetIndexLatticeFn)>;
 
@@ -36,13 +37,18 @@ struct WaveIndexExprsAnalysisOptions {
 };
 
 // Add analyses for index expression propagation to the solver.
-void addWaveIndexExprsAnalyses(mlir::DataFlowSolver &solver,
-                               mlir::SymbolTableCollection &symbolTable,
-                               WaveIndexExprsAnalysisOptions options = {});
+wave::DelayedErrorEmitterInfo
+addWaveIndexExprsAnalyses(mlir::DataFlowSolver &solver,
+                          mlir::SymbolTableCollection &symbolTable,
+                          WaveIndexExprsAnalysisOptions options = {});
 
-llvm::LogicalResult
-setWaveIndexExprAnalysisResults(mlir::Operation *top,
-                                const mlir::DataFlowSolver &solver);
+// Set the index attribute attributes on operations nested under `top` using the
+// lattices computed by the dataflow analyses in the given solver. Emit delayed
+// errors if they are related to operations for which we failed to infer index
+// expressions.
+llvm::LogicalResult setWaveIndexExprAnalysisResults(
+    mlir::Operation *top, const mlir::DataFlowSolver &solver,
+    const wave::DelayedErrorEmitterInfo &delayedErrorInfo);
 
 // Run the dataflow analyses and capture whether some diagnostics were emitted.
 // Only emit a generic diagnostic if no more specific diagnostic was emitted.
