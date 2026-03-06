@@ -420,7 +420,8 @@ def merge_contiguous_reads(
     physical flat offset starts differ by exactly ept are merged.
     """
     hw_constraint = get_hardware_constraint(constraints)
-    while _merge_contiguous_reads_once(trace, hw_constraint):
+    fwd, _ = get_divisibility_subs(constraints)
+    while _merge_contiguous_reads_once(trace, hw_constraint, divisibility_fwd=fwd):
         pass
 
 
@@ -708,7 +709,9 @@ def _eval_expr(expr, probe_map):
     return int(expr.xreplace(probe_map))
 
 
-def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint):
+def _pairwise_merge(
+    read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint, divisibility_fwd=None
+):
     """Merge pairs of reads whose flat offsets differ by exactly ``ept``.
 
     Returns ``(merged_indices, did_merge)`` where *merged_indices* is
@@ -730,6 +733,15 @@ def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constrain
     resolved_phys = [
         {dim: subs_idxc(info[1][dim]) for dim in symbolic_dims} for info in read_infos
     ]
+
+    # Apply divisibility forward subs so that floordiv/Mod with symbolic
+    # divisors evaluate consistently across probe points.
+    if divisibility_fwd:
+        resolved_flat = [safe_subs(e, divisibility_fwd) for e in resolved_flat]
+        resolved_phys = [
+            {dim: safe_subs(e, divisibility_fwd) for dim, e in phys.items()}
+            for phys in resolved_phys
+        ]
 
     # Collect free symbols across all expressions.
     all_free = set()
@@ -836,7 +848,13 @@ def _pairwise_merge(read_infos, ept, symbolic_dims, symbolic_shape, hw_constrain
 
 
 def _multiway_coalesce(
-    read_infos, merged, reads, symbolic_dims, symbolic_shape, hw_constraint
+    read_infos,
+    merged,
+    reads,
+    symbolic_dims,
+    symbolic_shape,
+    hw_constraint,
+    divisibility_fwd=None,
 ):
     """Coalesce unmerged ept==1 reads whose flat offsets fall in an aligned window.
 
@@ -853,6 +871,8 @@ def _multiway_coalesce(
 
     # Pre-evaluate flat offsets with probe values to avoid symbolic diffs.
     resolved_offs = [subs_idxc(info[0]) for info in unmerged_infos]
+    if divisibility_fwd:
+        resolved_offs = [safe_subs(e, divisibility_fwd) for e in resolved_offs]
     all_free = set()
     for expr in resolved_offs:
         if hasattr(expr, "free_symbols"):
@@ -967,7 +987,9 @@ def _multiway_coalesce(
     return coalesced_any
 
 
-def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
+def _merge_contiguous_reads_once(
+    trace: CapturedTrace, hw_constraint, divisibility_fwd=None
+) -> bool:
     """Single merge pass: merge reads that access nearby physical memory.
 
     Two strategies are applied per (memory, ept) group:
@@ -1020,7 +1042,12 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
         )
         _t0 = _time.time()
         merged, did_merge = _pairwise_merge(
-            read_infos, ept, symbolic_dims, symbolic_shape, hw_constraint
+            read_infos,
+            ept,
+            symbolic_dims,
+            symbolic_shape,
+            hw_constraint,
+            divisibility_fwd=divisibility_fwd,
         )
         print(
             f"[DEBUG merge] _pairwise_merge {_time.time()-_t0:.3f}s merged={len(merged)} did_merge={did_merge}",
@@ -1033,7 +1060,13 @@ def _merge_contiguous_reads_once(trace: CapturedTrace, hw_constraint) -> bool:
         if ept == 1 and len(read_infos) >= 2:
             _t0 = _time.time()
             merged_any |= _multiway_coalesce(
-                read_infos, merged, reads, symbolic_dims, symbolic_shape, hw_constraint
+                read_infos,
+                merged,
+                reads,
+                symbolic_dims,
+                symbolic_shape,
+                hw_constraint,
+                divisibility_fwd=divisibility_fwd,
             )
             print(
                 f"[DEBUG merge] _multiway_coalesce {_time.time()-_t0:.3f}s", flush=True
