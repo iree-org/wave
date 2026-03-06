@@ -149,7 +149,6 @@ def test_gemm_pipelined_dynamic_K(K_value, mma_type, threads_per_wave, run_bench
         pytest.param(
             (640, 256, 768),
             (64, 64, 256),
-            id="640x256x768_block64x64x256",
         ),
     ],
 )
@@ -197,6 +196,7 @@ def test_gemm_pipelined_remainder_start(shape, block, run_bench):
     subs = {
         M: m_size,
         N: n_size,
+        K: k_size,
         BLOCK_M: block_m,
         BLOCK_N: block_n,
         BLOCK_K: block_k,
@@ -205,9 +205,13 @@ def test_gemm_pipelined_remainder_start(shape, block, run_bench):
     }
     subs.update(get_default_scheduling_params())
 
+    dynamic_symbols = [M, N, K]
+    for sym in dynamic_symbols:
+        del subs[sym]
+
     compile_options = WaveCompileOptions(
         subs=subs,
-        dynamic_symbols=[K],
+        dynamic_symbols=dynamic_symbols,
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
         run_bench=run_bench,
