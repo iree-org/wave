@@ -10,6 +10,7 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_broadcasted_scale_gemm_mxfp4,
 )
@@ -997,3 +998,57 @@ def test_dynamic_scaled_gemm_mxfp4():
     # Unmasked vector stores for output.
     # CHECK:          vector.store
     # CHECK:          return
+
+
+@run_test
+def test_dynamic_preshuffle_b_scale_coalescing():
+    """Verify B-scale reads coalesce into clean vector<16xi8> with dynamic dims.
+
+    Uses the preshuffle-B MXFP4 template with dynamic M, N, K and small
+    block sizes.  The K % 256 divisibility assumption lets the coalescer
+    apply divisibility substitutions during numeric probing, so the 2D
+    decomposition (row = offset floordiv K/2, col = offset mod K/2) gives
+    consistent per-dim diffs across probe sets.  Without this fix, probes
+    like K=137 make K/2=68, causing inconsistent row/col diffs and
+    fragmenting 16-byte scale reads into {2, 16, 8, 4} loads glued by
+    vector.from_elements.
+    """
+    shape = (256, 256, 256)
+    block = (128, 128, 256)
+    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block,
+        wave_shape=(2, 2),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        reorder_workgroups=False,
+    )
+    dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+    for sym in dynamic_symbols:
+        del options.subs[sym]
+    options.dynamic_symbols = dynamic_symbols
+    options.schedule = SchedulingType.NONE
+    options.use_buffer_ops = True
+    options.compile_to_mlir = True
+    options.device = "hip"
+    options.target = "gfx950"
+    result = wave_compile(options, kernel)
+    print(result.asm)
+
+    # CHECK-LABEL: test_dynamic_preshuffle_b_scale_coalescing
+
+    # Dynamic index arguments for M, N, K.
+    # CHECK: func.func @gemm(%arg0: {{.*}}, %arg1: {{.*}}, %arg2: {{.*}}, %arg3: {{.*}}, %arg4: {{.*}}, %arg5: index, %arg6: index, %arg7: index)
+
+    # Buffer ops: fat_raw_buffer_cast for global buffers.
+    # CHECK: amdgpu.fat_raw_buffer_cast
+
+    # B-scale reads are clean vector<16xi8> from fat_raw_buffer — no
+    # fragmentation into mixed-width loads glued by from_elements.
+    # A-scale reads are vector<4xi8>.
+    # CHECK: scf.for
+    # CHECK-COUNT-8: vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-2: vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK: amdgpu.scaled_mfma
+
+    # No byte-level reassembly — coalescing succeeded.
+    # CHECK-NOT: vector.from_elements
