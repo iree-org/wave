@@ -198,6 +198,55 @@ def mlir_to_fx_simple_matmul_roundtrip():
     # CHECK: matmul roundtrip: OK
 
 
+# CHECK-LABEL: mlir_to_fx_multi_result_iterate_roundtrip
+@run_test
+def mlir_to_fx_multi_result_iterate_roundtrip():
+    """Test that multi-result iterate preserves GetResult ordering.
+
+    A single-result iterate doesn't exercise GetResult ordering because
+    there is only one result. With multiple init_args the FX importer
+    must emit GetResult nodes in the same order as the original trace.
+    """
+    K = tkl.sym.K
+    BLOCK_K = tkl.sym.BLOCK_K
+
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.TilingConstraint(K, BLOCK_K),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_16x16x16_F16),
+    ]
+
+    @wave.wave(constraints)
+    def multi_result_iterate(
+        a: tkl.Memory[M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        acc_reg = tkl.Register[M, N, tkl.f32](0.0)
+        extra_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @wave.iterate(K, init_args=[acc_reg, extra_reg])
+        def repeat(
+            acc: tkl.Register[M, N, tkl.f32],
+            extra: tkl.Register[M, N, tkl.f32],
+        ) -> tuple[tkl.Register[M, N, tkl.f32], tkl.Register[M, N, tkl.f32]]:
+            a_reg = wave.read(a, bounds={M: M, K: K})
+            b_reg = wave.read(b, bounds={N: N, K: K})
+            acc = wave.mma(a_reg, b_reg, acc)
+            return acc, extra
+
+        result = repeat[0] + repeat[1]
+        wave.write(result, c)
+
+    subs = {BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16, M: 128, N: 128, K: 16}
+    _assert_roundtrip(multi_result_iterate, subs, "multi-result iterate roundtrip")
+
+    # CHECK: multi-result iterate roundtrip: OK
+
+
 # CHECK-LABEL: mlir_to_fx_pipelined_gemm_roundtrip
 @run_test
 def mlir_to_fx_pipelined_gemm_roundtrip():
