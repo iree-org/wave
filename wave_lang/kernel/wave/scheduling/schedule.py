@@ -283,6 +283,17 @@ def build_guarded_pipeline_with_remainder(
             max_induction_variable // rounding_stride
         ) * rounding_stride
 
+    # When the pipeline guard is false (max_iv < rounding_stride),
+    # the conditional returns init values and the remainder loop must start
+    # from 0 rather than pipelined_iterations.
+    remainder_start = sympy.Piecewise(
+        (
+            pipelined_iterations,
+            sympy.Ge(max_induction_variable, rounding_stride),
+        ),
+        (0, True),
+    )
+
     conditional_body_graph, body_old_to_new = graph_copy(reduction_graph)
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
     placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
@@ -395,11 +406,11 @@ def build_guarded_pipeline_with_remainder(
     main_graph.subgraphs[remainder_subgraph_name] = remainder_graph
     trace.region_graph.subgraphs[remainder_subgraph_name] = remainder_graph
 
-    # Create a scalar node for the starting iteration (where pipelined loop ended)
-    # This will be pipelined_iterations
+    # Create a scalar node for the starting iteration.
+    # When the pipeline ran, this is pipelined_iterations; otherwise 0.
     with main_graph.inserting_before(reduction.fx_node):
         start_iter = get_graph_node(
-            NewScalar(pipelined_iterations, tkl.index), main_graph, reduction.location
+            NewScalar(remainder_start, tkl.index), main_graph, reduction.location
         )
 
         remainder_reduction = Iterate(
