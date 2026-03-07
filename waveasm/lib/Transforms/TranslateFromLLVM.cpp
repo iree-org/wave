@@ -183,6 +183,28 @@ static LogicalResult handleWorkitemIdX(ROCDL::ThreadIdXOp op,
   return success();
 }
 
+// rocdl.workgroup.id.{x,y,z} → system SGPRs (set by hardware dispatch).
+template <typename OpTy>
+static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
+                                       int dimIndex) {
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
+
+  if (dimIndex == 0)
+    ctx.setUsesWorkgroupIdX(true);
+  else if (dimIndex == 1)
+    ctx.setUsesWorkgroupIdY(true);
+  else
+    ctx.setUsesWorkgroupIdZ(true);
+
+  int64_t sgprIndex = ctx.getWorkgroupIdSgprIndex(dimIndex);
+  auto sregType = ctx.createSRegType();
+  auto blockId = PrecoloredSRegOp::create(builder, loc, sregType, sgprIndex, 1);
+  ctx.getMapper().mapValue(op.getResult(), blockId);
+  return success();
+}
+
 // i32↔i64 casts are identity on a 32-bit GPU.
 static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
   st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
@@ -388,6 +410,9 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
   return llvm::TypeSwitch<Operation *, LogicalResult>(op)
       .Case([&](LLVM::ConstantOp o) { return handleConstant(o, st); })
       .Case([&](ROCDL::ThreadIdXOp o) { return handleWorkitemIdX(o, st); })
+      .Case([&](ROCDL::BlockIdXOp o) { return handleWorkgroupId(o, st, 0); })
+      .Case([&](ROCDL::BlockIdYOp o) { return handleWorkgroupId(o, st, 1); })
+      .Case([&](ROCDL::BlockIdZOp o) { return handleWorkgroupId(o, st, 2); })
       .Case([&](LLVM::SExtOp o) { return handleSext(o, st); })
       .Case([&](LLVM::ZExtOp o) { return handleZext(o, st); })
       .Case([&](LLVM::TruncOp o) { return handleTrunc(o, st); })
