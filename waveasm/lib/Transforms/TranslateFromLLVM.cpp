@@ -109,7 +109,7 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
   auto targetAttr =
       TargetAttr::get(mlirCtx, getTargetKindAttr(mlirCtx, targetId), 5);
   auto abiAttr = KernelABIAttr::get(mlirCtx, 0, 0, std::nullopt, std::nullopt,
-                                     std::nullopt);
+                                    std::nullopt);
 
   auto [wgX, wgY, wgZ] = getWorkgroupSize(func);
   SmallVector<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgX),
@@ -179,20 +179,17 @@ static LogicalResult handleWorkitemIdX(ROCDL::ThreadIdXOp op,
 
 // i32↔i64 casts are identity on a 32-bit GPU.
 static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(),
-                              resolve(op.getOperand(), st.ctx));
+  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
   return success();
 }
 
 static LogicalResult handleZext(LLVM::ZExtOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(),
-                              resolve(op.getOperand(), st.ctx));
+  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
   return success();
 }
 
 static LogicalResult handleTrunc(LLVM::TruncOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(),
-                              resolve(op.getOperand(), st.ctx));
+  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
   return success();
 }
 
@@ -207,16 +204,36 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   // V_CMP_* ops set VCC implicitly (no SSA result).
   using Pred = LLVM::ICmpPredicate;
   switch (op.getPredicate()) {
-  case Pred::slt: V_CMP_LT_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::sgt: V_CMP_GT_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::sle: V_CMP_LE_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::sge: V_CMP_GE_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::eq:  V_CMP_EQ_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::ne:  V_CMP_NE_I32::create(builder, loc, lhs, rhs); break;
-  case Pred::ult: V_CMP_LT_U32::create(builder, loc, lhs, rhs); break;
-  case Pred::ugt: V_CMP_GT_U32::create(builder, loc, lhs, rhs); break;
-  case Pred::ule: V_CMP_LE_U32::create(builder, loc, lhs, rhs); break;
-  case Pred::uge: V_CMP_GE_U32::create(builder, loc, lhs, rhs); break;
+  case Pred::slt:
+    V_CMP_LT_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::sgt:
+    V_CMP_GT_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::sle:
+    V_CMP_LE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::sge:
+    V_CMP_GE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::eq:
+    V_CMP_EQ_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::ne:
+    V_CMP_NE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::ult:
+    V_CMP_LT_U32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::ugt:
+    V_CMP_GT_U32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::ule:
+    V_CMP_LE_U32::create(builder, loc, lhs, rhs);
+    break;
+  case Pred::uge:
+    V_CMP_GE_U32::create(builder, loc, lhs, rhs);
+    break;
   }
 
   // Map result to a placeholder — V_CNDMASK reads VCC implicitly.
@@ -226,8 +243,7 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   return success();
 }
 
-static LogicalResult handleSelect(LLVM::SelectOp op,
-                                  LLVMTranslationState &st) {
+static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
@@ -427,10 +443,9 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
 
     S_ENDPGM::create(builder, func.getLoc());
 
-    program->setAttr(
-        "num_kernel_args",
-        builder.getI64IntegerAttr(
-            static_cast<int64_t>(ctx.getNumKernelArgs())));
+    program->setAttr("num_kernel_args",
+                     builder.getI64IntegerAttr(
+                         static_cast<int64_t>(ctx.getNumKernelArgs())));
 
     int64_t ldsSize = ctx.getTotalLDSSize();
     if (ldsSize > 0)

@@ -432,9 +432,93 @@ def water_waveasm_lowering_pipeline(
     if options.print_mlir:
         print(lowered_mlir)
 
-    # TODO Step 2: waveasm-translate consumes the LLVM dialect gpu.module,
-    # translates to WaveASM IR, runs regalloc + assembly emission, and
-    # produces an HSACO binary.  For now, return the lowered MLIR.
+    # Step 2: waveasm-translate — LLVM dialect → WaveASM → regalloc → assembly.
+    from wave_lang.support.detect_waveasm import get_waveasm_translate
+
+    waveasm_translate = get_waveasm_translate()
+    waveasm_args = [
+        waveasm_translate,
+        f"--target={target_chip}",
+        "--waveasm-translate-from-llvm",
+        "--waveasm-scoped-cse",
+        "--waveasm-peephole",
+        "--waveasm-memory-offset-opt",
+        "--canonicalize",
+        "--waveasm-scoped-cse",
+        "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+        "--waveasm-insert-waitcnt=ticketed-waitcnt=true",
+        f"--waveasm-hazard-mitigation=target={target_chip}",
+        "--emit-assembly",
+    ]
+    if options.mlir_print_ir_after_all:
+        waveasm_args.append("--mlir-print-ir-after-all")
+
+    try:
+        result = subprocess.run(
+            waveasm_args, input=lowered_mlir, text=True, capture_output=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"waveasm-translate failed (rc={result.returncode}):\n"
+                f"{result.stderr}"
+            )
+        asm_text = result.stdout
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"waveasm-translate failed: {e}") from e
+
+    # Step 3: assemble + link → HSACO binary (skip if compile_to_mlir only).
+    if not options.compile_to_mlir:
+        from wave_lang.support.detect_waveasm import get_clang
+
+        clang = get_clang()
+        with tempfile.NamedTemporaryFile(
+            suffix=".s", mode="w", delete=False
+        ) as asm_file:
+            asm_file.write(asm_text)
+            asm_path = asm_file.name
+
+        obj_path = asm_path.replace(".s", ".o")
+        hsaco_path = asm_path.replace(".s", ".hsaco")
+
+        try:
+            subprocess.check_call(
+                [
+                    clang,
+                    "-x",
+                    "assembler",
+                    "-target",
+                    "amdgcn-amd-amdhsa",
+                    f"-mcpu={target_chip}",
+                    "-mwavefrontsize64",
+                    "-c",
+                    asm_path,
+                    "-o",
+                    obj_path,
+                ],
+                timeout=60,
+            )
+            subprocess.check_call(
+                [
+                    clang,
+                    "-target",
+                    "amdgcn-amd-amdhsa",
+                    "-Xlinker",
+                    "--build-id=sha1",
+                    "-o",
+                    hsaco_path,
+                    obj_path,
+                ],
+                timeout=60,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Assembly/linking failed (rc={e.returncode}).") from e
+        finally:
+            Path(asm_path).unlink(missing_ok=True)
+            Path(obj_path).unlink(missing_ok=True)
+
+        options.hsaco_path = hsaco_path
 
     with module.context:
         return Module.parse(lowered_mlir)
