@@ -262,4 +262,23 @@ def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// Translate from LLVM Dialect Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm", "::mlir::ModuleOp"> {
+  let summary = "Translate LLVM dialect kernels to WaveASM IR";
+  let description = [{
+    Translates gpu.module { llvm.func } with rocdl intrinsics into
+    waveasm.program ops.  Fails on any unhandled op (strict mode).
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+           "Target GPU architecture">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 #endif // WaveASM_TRANSFORMS_PASSES
