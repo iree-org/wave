@@ -2,7 +2,9 @@
 // Verify the LLVM→WaveASM translation pass handles a copy kernel.
 
 // CHECK: gpu.module @gpu_module
-// CHECK:   waveasm.program @test
+// CHECK:   llvm.func @test
+// CHECK:   waveasm.program @test__waveasm
+// CHECK-SAME: kernel_name = "test"
 // CHECK: waveasm.precolored.vreg
 // CHECK: waveasm.v_cmp_lt_i32
 // CHECK: waveasm.v_cndmask_b32

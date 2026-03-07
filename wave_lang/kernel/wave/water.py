@@ -373,19 +373,16 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
 def water_waveasm_lowering_pipeline(
     module: Module, options: WaveCompileOptions
 ) -> Module:
-    """Lower to LLVM dialect via water-opt, then codegen via waveasm-translate.
+    """Lower via water-opt → waveasm-translate → water-opt.
 
-    Step 1 (water-opt): memref decomposition, lower-affine, gpu/amdgpu → rocdl,
-    vector → llvm.  Produces a gpu.module with LLVM dialect IR.
-
-    Step 2 (waveasm-translate): translate LLVM dialect to WaveASM IR, run
-    register allocation, emit assembly, assemble and link into HSACO.
-
-    The result is fed back into the water host pipeline for runtime wrapping.
+    Step 1 (water-opt): lower to LLVM dialect on both host and device sides.
+    Step 2 (waveasm-translate): LLVM → WaveASM → regalloc → HSACO → gpu.binary.
+    Step 3 (water-opt): host runtime wrapping (gpu.binary → runtime calls).
     """
     water_opt = get_water_opt()
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
+    lld_path = get_water_mlir_pkg_path() / "llvm" / "bin" / "ld.lld"
 
     def add_opt(pipeline):
         if options.optimization_level:
@@ -402,44 +399,61 @@ def water_waveasm_lowering_pipeline(
         "pipeline": 'any(int-range-optimizations,arith-int-range-narrowing{int-bitwidths-supported="32"},canonicalize,cse)',
     }
 
-    # Step 1: water-opt lowers to LLVM dialect (keep SCF, no scf-to-cf).
+    # Step 1: water-opt lowers host + device to LLVM dialect.
     lowering_pipeline = [
         "water-memref-decomposition",
         *add_opt(canonicalize_cse),
         "lower-affine",
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
+        "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         (
             "convert-gpu-to-rocdl",
             {"use-bare-ptr-memref-call-conv": "1"},
             "gpu.module",
         ),
+        ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "convert-vector-to-llvm",
         "reconcile-unrealized-casts",
         *add_opt(canonicalize_cse),
     ]
 
-    args = [water_opt, make_linear_pass_pipeline(lowering_pipeline)]
-    if options.mlir_print_ir_after_all:
-        args.append("--mlir-print-ir-after-all")
+    def run_subprocess(args, input_text, tool_name):
+        try:
+            result = subprocess.run(
+                args, input=input_text, text=True, capture_output=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"{tool_name} failed (rc={result.returncode}):\n{result.stderr}"
+                )
+            return result.stdout
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"{tool_name} failed: {e}") from e
 
-    try:
-        lowered_mlir = subprocess.check_output(args, input=mlir_asm, text=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"water-opt lowering failed (rc={e.returncode}).") from e
+    water_args = [water_opt, make_linear_pass_pipeline(lowering_pipeline)]
+    if options.mlir_print_ir_after_all:
+        water_args.append("--mlir-print-ir-after-all")
+    lowered_mlir = run_subprocess(water_args, mlir_asm, "water-opt (lowering)")
 
     if options.print_mlir:
+        print("=== After water-opt lowering ===")
         print(lowered_mlir)
 
-    # Step 2: waveasm-translate — LLVM dialect → WaveASM → regalloc → assembly.
+    if options.compile_to_mlir:
+        with module.context:
+            return Module.parse(lowered_mlir)
+
+    # Step 2: waveasm-translate — LLVM → WaveASM → regalloc → gpu.binary.
     from wave_lang.support.detect_waveasm import get_waveasm_translate
 
     waveasm_translate = get_waveasm_translate()
     waveasm_args = [
         waveasm_translate,
-        f"--target={target_chip}",
-        "--waveasm-translate-from-llvm",
+        f"--waveasm-translate-from-llvm=target={target_chip}",
         "--waveasm-scoped-cse",
         "--waveasm-peephole",
         "--waveasm-memory-offset-opt",
@@ -448,80 +462,33 @@ def water_waveasm_lowering_pipeline(
         "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
         "--waveasm-insert-waitcnt=ticketed-waitcnt=true",
         f"--waveasm-hazard-mitigation=target={target_chip}",
-        "--emit-assembly",
+        f"--waveasm-gpu-module-to-binary=target={target_chip} lld-path={lld_path}",
     ]
     if options.mlir_print_ir_after_all:
         waveasm_args.append("--mlir-print-ir-after-all")
+    binary_mlir = run_subprocess(waveasm_args, lowered_mlir, "waveasm-translate")
 
-    try:
-        result = subprocess.run(
-            waveasm_args, input=lowered_mlir, text=True, capture_output=True
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"waveasm-translate failed (rc={result.returncode}):\n"
-                f"{result.stderr}"
-            )
-        asm_text = result.stdout
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"waveasm-translate failed: {e}") from e
+    if options.print_mlir:
+        print("=== After waveasm-translate ===")
+        print(binary_mlir[:500], "..." if len(binary_mlir) > 500 else "")
 
-    # Step 3: assemble + link → HSACO binary (skip if compile_to_mlir only).
-    if not options.compile_to_mlir:
-        from wave_lang.support.detect_waveasm import get_clang
+    # Step 3: water-opt host runtime wrapping.
+    host_pipeline = [
+        "water-gpu-to-gpu-runtime",
+        "symbol-dce",
+        *add_opt(canonicalize_cse),
+    ]
+    host_args = [water_opt, make_linear_pass_pipeline(host_pipeline)]
+    if options.mlir_print_ir_after_all:
+        host_args.append("--mlir-print-ir-after-all")
+    final_mlir = run_subprocess(host_args, binary_mlir, "water-opt (host)")
 
-        clang = get_clang()
-        with tempfile.NamedTemporaryFile(
-            suffix=".s", mode="w", delete=False
-        ) as asm_file:
-            asm_file.write(asm_text)
-            asm_path = asm_file.name
-
-        obj_path = asm_path.replace(".s", ".o")
-        hsaco_path = asm_path.replace(".s", ".hsaco")
-
-        try:
-            subprocess.check_call(
-                [
-                    clang,
-                    "-x",
-                    "assembler",
-                    "-target",
-                    "amdgcn-amd-amdhsa",
-                    f"-mcpu={target_chip}",
-                    "-mwavefrontsize64",
-                    "-c",
-                    asm_path,
-                    "-o",
-                    obj_path,
-                ],
-                timeout=60,
-            )
-            subprocess.check_call(
-                [
-                    clang,
-                    "-target",
-                    "amdgcn-amd-amdhsa",
-                    "-Xlinker",
-                    "--build-id=sha1",
-                    "-o",
-                    hsaco_path,
-                    obj_path,
-                ],
-                timeout=60,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Assembly/linking failed (rc={e.returncode}).") from e
-        finally:
-            Path(asm_path).unlink(missing_ok=True)
-            Path(obj_path).unlink(missing_ok=True)
-
-        options.hsaco_path = hsaco_path
+    if options.print_mlir:
+        print("=== After water-opt host ===")
+        print(final_mlir)
 
     with module.context:
-        return Module.parse(lowered_mlir)
+        return Module.parse(final_mlir)
 
 
 def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:

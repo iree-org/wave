@@ -116,12 +116,18 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
                                      builder.getI64IntegerAttr(wgY),
                                      builder.getI64IntegerAttr(wgZ)};
 
+  // Mangle the program name to avoid symbol collision with the original
+  // llvm.func (which we keep alive for gpu.launch_func verification).
+  // Store the original kernel name for assembly emission.
+  std::string programName = (func.getName() + "__waveasm").str();
   auto program =
-      ProgramOp::create(builder, loc, func.getName(), targetAttr, abiAttr,
+      ProgramOp::create(builder, loc, programName, targetAttr, abiAttr,
                         /*vgprs=*/int64_t{256},
                         /*sgprs=*/int64_t{104},
                         /*workgroup_size=*/builder.getArrayAttr(sizes),
                         /*lds_size=*/IntegerAttr{});
+
+  program->setAttr("kernel_name", builder.getStringAttr(func.getName()));
 
   if (program.getBody().empty())
     program.getBody().emplaceBlock();
@@ -455,8 +461,6 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
     int64_t ldsSize = ctx.getTotalLDSSize();
     if (ldsSize > 0)
       program->setAttr("lds_size", builder.getI64IntegerAttr(ldsSize));
-
-    func.erase();
   }
 
   return success();
