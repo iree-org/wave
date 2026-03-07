@@ -1307,11 +1307,6 @@ def _generate_asm_code_waveasm(mlir_asm, options):
             "--waveasm-scoped-cse",
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",

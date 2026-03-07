@@ -604,11 +604,6 @@ def compile_cpp_backend(
             "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             "--waveasm-insert-waitcnt",
             f"--waveasm-hazard-mitigation=target={target}",
             "--emit-assembly",
