@@ -5,26 +5,23 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===----------------------------------------------------------------------===//
-// WAVEASMGPUModuleToBinary: compile LLVM dialect gpu.module → gpu.binary.
+// WAVEASMGPUModuleToBinary: emit assembly, assemble, link, gpu.binary.
 //
-// End-to-end pass that translates LLVM dialect to WaveASM IR, runs the full
-// optimization pipeline, emits AMDGCN assembly, assembles + links to HSACO
-// via LLVM MC, and embeds the binary as a gpu.binary op.
+// Final pass in the WaveASM pipeline.  Expects gpu.module ops containing
+// waveasm.program ops (already register-allocated and scheduled).  Emits
+// AMDGCN assembly, assembles + links to HSACO, and replaces each gpu.module
+// with a gpu.binary holding the code object.
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Transforms/Passes.h"
-#include "waveasm/Transforms/RegAlloc.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVM/ROCDL/Utils.h"
-#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 
@@ -49,50 +46,19 @@ struct WAVEASMGPUModuleToBinaryPass
   void runOnOperation() override {
     auto module = getOperation();
 
-    // Check if there are LLVM kernels to compile.
-    bool hasLLVMKernels = false;
-    module.walk([&](LLVM::LLVMFuncOp func) {
-      if (func->hasAttr("gpu.kernel") || func->hasAttr("rocdl.kernel"))
-        hasLLVMKernels = true;
+    // Collect gpu.modules that contain waveasm.program ops.
+    SmallVector<gpu::GPUModuleOp> gpuModules;
+    module.walk([&](gpu::GPUModuleOp m) {
+      bool hasProgram = false;
+      m.walk([&](waveasm::ProgramOp) { hasProgram = true; });
+      if (hasProgram)
+        gpuModules.push_back(m);
     });
 
-    if (!hasLLVMKernels)
+    if (gpuModules.empty())
       return;
 
-    // Snapshot gpu.module metadata before the inner pipeline erases them.
-    struct GPUModuleInfo {
-      StringAttr name;
-      Location loc;
-      Attribute target; // First target attr, if any.
-    };
-    SmallVector<GPUModuleInfo> gpuModuleInfos;
-    module.walk([&](gpu::GPUModuleOp m) {
-      Attribute target;
-      if (m.getTargetsAttr() && !m.getTargetsAttr().empty())
-        target = m.getTargetsAttr()[0];
-      gpuModuleInfos.push_back({m.getNameAttr(), m.getLoc(), target});
-    });
-
-    // Step 1: Run the LLVM→WaveASM translation + optimization pipeline.
-    PassManager pm(module.getContext());
-    pm.addPass(waveasm::createWAVEASMTranslateFromLLVM(
-        {/*targetArch=*/targetArch.getValue()}));
-    pm.addPass(waveasm::createWAVEASMScopedCSE());
-    pm.addPass(waveasm::createWAVEASMPeephole());
-    pm.addPass(waveasm::createWAVEASMMemoryOffsetOpt());
-    pm.addPass(createCanonicalizerPass());
-    pm.addPass(waveasm::createWAVEASMScopedCSE());
-    pm.addPass(waveasm::createWAVEASMLinearScan(
-        {/*maxVGPRs=*/512, /*maxSGPRs=*/104, /*maxAGPRs=*/512}));
-    pm.addPass(waveasm::createWAVEASMInsertWaitcnt(
-        {/*insertAfterLoads=*/false, /*ticketedWaitcnt=*/true}));
-    pm.addPass(waveasm::createWAVEASMHazardMitigation(
-        {/*targetArch=*/targetArch.getValue()}));
-
-    if (failed(pm.run(module)))
-      return signalPassFailure();
-
-    // Step 2: Emit assembly for each program.
+    // Step 1: Emit assembly for all programs.
     waveasm::PhysicalMapping mapping;
     std::string asmText;
     llvm::raw_string_ostream asmStream(asmText);
@@ -107,7 +73,7 @@ struct WAVEASMGPUModuleToBinaryPass
       return signalPassFailure();
     }
 
-    // Step 3: Assemble + link to HSACO.
+    // Step 2: Assemble + link to HSACO.
     ROCDL::SerializeGPUModuleBase::init();
 
     auto emitError = [&]() -> InFlightDiagnostic {
@@ -138,14 +104,17 @@ struct WAVEASMGPUModuleToBinaryPass
     if (failed(hsaco))
       return signalPassFailure();
 
-    // Step 4: Create gpu.binary from saved metadata and erase waveasm.program.
+    // Step 3: Replace each gpu.module with gpu.binary.
     OpBuilder builder(module.getContext());
-    builder.setInsertionPointToEnd(module.getBody());
     StringAttr binaryAttr = builder.getStringAttr(
         StringRef(hsaco->data(), hsaco->size()));
 
-    for (auto &info : gpuModuleInfos) {
-      Attribute target = info.target;
+    for (auto gpuModule : gpuModules) {
+      builder.setInsertionPointAfter(gpuModule);
+
+      Attribute target;
+      if (gpuModule.getTargetsAttr() && !gpuModule.getTargetsAttr().empty())
+        target = gpuModule.getTargetsAttr()[0];
       if (!target)
         target = ROCDL::ROCDLTargetAttr::get(
             module.getContext(), /*optLevel=*/2, kTriple, cpu);
@@ -154,16 +123,11 @@ struct WAVEASMGPUModuleToBinaryPass
           target, gpu::CompilationTarget::Binary, binaryAttr,
           /*properties=*/DictionaryAttr{}, /*kernels=*/gpu::KernelTableAttr{});
 
-      gpu::BinaryOp::create(builder, info.loc, info.name,
+      gpu::BinaryOp::create(builder, gpuModule.getLoc(), gpuModule.getName(),
                             /*offloadingHandler=*/nullptr,
                             builder.getArrayAttr({objectAttr}));
+      gpuModule->erase();
     }
-
-    // Clean up waveasm.program ops (they've been serialized into the binary).
-    SmallVector<waveasm::ProgramOp> programs;
-    module.walk([&](waveasm::ProgramOp p) { programs.push_back(p); });
-    for (auto p : programs)
-      p->erase();
   }
 };
 

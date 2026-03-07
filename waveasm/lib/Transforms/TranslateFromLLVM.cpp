@@ -419,7 +419,12 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
 
   for (auto func : kernels) {
     OpBuilder builder(module.getContext());
-    builder.setInsertionPointToEnd(module.getBody());
+    // Insert program inside the gpu.module that contains this kernel.
+    auto *parentOp = func->getParentOp();
+    if (auto gpuModule = dyn_cast<gpu::GPUModuleOp>(parentOp))
+      builder.setInsertionPointToEnd(gpuModule.getBody());
+    else
+      builder.setInsertionPointToEnd(module.getBody());
 
     auto program = createProgramFromLLVMFunc(func, builder, targetId);
     builder.setInsertionPointToStart(&program.getBodyBlock());
@@ -453,15 +458,6 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
 
     func.erase();
   }
-
-  // Clean up empty gpu.module containers.
-  SmallVector<gpu::GPUModuleOp> emptyModules;
-  module.walk([&](gpu::GPUModuleOp gpuModule) {
-    if (gpuModule.getBody()->getOperations().size() <= 1)
-      emptyModules.push_back(gpuModule);
-  });
-  for (auto m : emptyModules)
-    m.erase();
 
   return success();
 }
