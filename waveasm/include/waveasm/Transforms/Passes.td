@@ -243,6 +243,30 @@ def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
 // Translate from LLVM Dialect Pass
 //===----------------------------------------------------------------------===//
 
+def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary", "::mlir::ModuleOp"> {
+  let summary = "Compile LLVM dialect gpu.module to gpu.binary via WaveASM";
+  let description = [{
+    End-to-end compilation of gpu.module { llvm.func } kernels:
+    1. Translate LLVM dialect → WaveASM IR
+    2. Run WaveASM optimization passes + register allocation
+    3. Emit AMDGCN assembly
+    4. Assemble + link to HSACO via LLVM MC
+    5. Replace gpu.module with gpu.binary containing the code object
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+           "Target GPU architecture">,
+    Option<"lldPath", "lld-path", "std::string", "\"\"",
+           "Path to ld.lld for linking HSACO">
+  ];
+
+  let dependentDialects = [
+    "::waveasm::WaveASMDialect",
+    "::mlir::gpu::GPUDialect"
+  ];
+}
+
 def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm", "::mlir::ModuleOp"> {
   let summary = "Translate LLVM dialect kernels to WaveASM IR";
   let description = [{

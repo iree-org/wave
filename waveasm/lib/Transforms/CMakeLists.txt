@@ -31,6 +31,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MemoryOffsetOptimization.cpp
   ScalePackElimination.cpp
   BufferLoadStrengthReduction.cpp
+  GPUModuleToBinary.cpp
   LoopAddressPromotion.cpp
   ${HANDLERS_FULL_PATHS}
 
@@ -54,6 +55,8 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRLLVMDialect
   MLIRMathDialect
   MLIRROCDLDialect
+  MLIRROCDLTarget
+  MLIRPass
   MLIRIR
   MLIRSupport
 )
