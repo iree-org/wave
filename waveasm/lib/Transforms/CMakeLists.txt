@@ -56,7 +56,6 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRMathDialect
   MLIRROCDLDialect
   MLIRROCDLTarget
-  MLIRPass
   MLIRIR
   MLIRSupport
 )
