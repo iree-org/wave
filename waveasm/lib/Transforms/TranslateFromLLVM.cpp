@@ -409,6 +409,16 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
 static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
   return llvm::TypeSwitch<Operation *, LogicalResult>(op)
       .Case([&](LLVM::ConstantOp o) { return handleConstant(o, st); })
+      .Case([&](LLVM::PoisonOp o) {
+        // Poison is undefined — materialize as zero.
+        auto immTy = st.ctx.createImmType(0);
+        auto &builder = st.ctx.getBuilder();
+        auto imm = ConstantOp::create(builder, o.getLoc(), immTy, int64_t{0});
+        auto vregTy = st.ctx.createVRegType();
+        auto mov = V_MOV_B32::create(builder, o.getLoc(), vregTy, imm);
+        st.ctx.getMapper().mapValue(o.getResult(), mov);
+        return success();
+      })
       .Case([&](ROCDL::ThreadIdXOp o) { return handleWorkitemIdX(o, st); })
       .Case([&](ROCDL::BlockIdXOp o) { return handleWorkgroupId(o, st, 0); })
       .Case([&](ROCDL::BlockIdYOp o) { return handleWorkgroupId(o, st, 1); })
