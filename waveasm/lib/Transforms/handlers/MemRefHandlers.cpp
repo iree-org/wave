@@ -286,12 +286,18 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
-/// Handle memref.cast - pass through source
+/// Handle memref.cast - pass through source and propagate pending SRD
+/// adjustment so that cast chains (reinterpret_cast -> cast -> cast ->
+/// fat_raw_buffer_cast) do not silently lose the per-workgroup offset.
 LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx) {
   auto castOp = cast<memref::CastOp>(op);
 
   if (auto src = ctx.getMapper().getMapped(castOp.getSource())) {
     ctx.getMapper().mapValue(castOp.getResult(), *src);
+  }
+  if (auto *adj = ctx.getPendingSRDBaseAdjust(castOp.getSource())) {
+    ctx.setPendingSRDBaseAdjust(castOp.getResult(), adj->elementOffset,
+                                adj->srcSrdBase, adj->elementBytes);
   }
   return success();
 }

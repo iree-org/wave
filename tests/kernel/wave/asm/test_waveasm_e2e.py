@@ -1532,8 +1532,16 @@ def _pipelined_g2s_params():
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _pipelined_g2s_params())
+@pytest.mark.parametrize("use_buffer_ops", [False, True])
 def test_gemm_pipelined_cpp_backend(
-    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+    shape,
+    block_k,
+    config,
+    use_global_to_shared,
+    use_buffer_ops,
+    compiler,
+    backend,
+    dump_asm,
 ):
     """End-to-end test for GEMM with PREFETCH pipelining using C++ ASM backend.
 
@@ -1657,6 +1665,7 @@ def test_gemm_pipelined_cpp_backend(
         wave_runtime=True,
         compile_to_mlir=False,
         use_global_to_shared=use_global_to_shared,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
 
@@ -1665,7 +1674,8 @@ def test_gemm_pipelined_cpp_backend(
 
     # Test ID for file naming
     g2s_str = "g2s" if use_global_to_shared else "no_g2s"
-    test_id = f"gemm_pipelined_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}"
+    buf_str = "bufops" if use_buffer_ops else "flat"
+    test_id = f"gemm_pipelined_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}_{buf_str}"
 
     # Compile with C++ backend
     cpp_result = compiler.compile_full(

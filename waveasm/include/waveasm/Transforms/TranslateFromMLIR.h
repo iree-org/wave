@@ -374,13 +374,14 @@ public:
     return (maxSrdEnd + 3) & ~3;
   }
 
-  /// Get next available swizzle SRD index (for cache swizzle SRDs)
-  /// These are allocated after all regular SRDs, computed in emitSRDPrologue()
+  /// Get next available swizzle SRD index (for cache swizzle SRDs and
+  /// per-workgroup SRD base adjustments).
+  /// These are allocated after all regular SRDs, computed in emitSRDPrologue().
+  /// Each allocation reserves 5 SGPRs: s[N..N+3] for the SRD quad plus
+  /// s[N+4] as a temporary for the multiply low-half result.
   int64_t getNextSwizzleSRDIndex() {
-    // If nextSwizzleSRDIndex hasn't been computed yet (emitSRDPrologue not
-    // called), compute it from pendingSRDs.
     if (nextSwizzleSRDIndex < 0) {
-      int64_t maxSrdEnd = 24; // Minimum fallback
+      int64_t maxSrdEnd = 24;
       for (const auto &pending : pendingSRDs) {
         int64_t srdEnd = pending.srdBaseIndex + 4;
         maxSrdEnd = std::max(maxSrdEnd, srdEnd);
@@ -388,7 +389,9 @@ public:
       nextSwizzleSRDIndex = (maxSrdEnd + 3) & ~3; // Align to 4
     }
     int64_t idx = nextSwizzleSRDIndex;
-    nextSwizzleSRDIndex += 4; // Each SRD uses 4 consecutive SGPRs
+    // 4 SRD SGPRs + 1 temp for byteOffLo, padded to next 4-aligned index
+    // (SRD buffer descriptors require 4-SGPR alignment on AMDGCN).
+    nextSwizzleSRDIndex = (idx + 5 + 3) & ~3;
     return idx;
   }
 
@@ -535,6 +538,19 @@ public:
   /// Clear a pending SRD base adjustment after it has been applied
   void clearPendingSRDBaseAdjust(mlir::Value memref) {
     pendingSRDBaseAdjustMap.erase(memref);
+  }
+
+  /// Default max buffer size (~2 GiB, dword-aligned) used when no matching
+  /// SRD is found.  Disables hardware OOB checking but keeps valid alignment.
+  static constexpr int64_t kDefaultMaxBufferSize = 0x7FFFFFFC;
+
+  /// Look up buffer size for an SRD by its SGPR base index
+  int64_t getBufferSizeForSRD(int64_t srdBase) const {
+    for (const auto &pending : pendingSRDs) {
+      if (pending.srdBaseIndex == srdBase)
+        return pending.bufferSize;
+    }
+    return kDefaultMaxBufferSize;
   }
 
   //===--------------------------------------------------------------------===//
@@ -724,6 +740,16 @@ VOffsetResult computeVOffsetFromIndices(mlir::MemRefType memrefType,
                                         mlir::ValueRange indices,
                                         TranslationContext &ctx,
                                         mlir::Location loc);
+
+/// Emit inline SRD base adjustment for per-workgroup buffer addressing.
+/// Allocates a new SRD (5 SGPRs: base pair, hi/lo temporaries, offset temp),
+/// copies the source SRD base, multiplies the element offset by elementBytes,
+/// adds the byte offset into the base, and fills num_records + stride.
+/// Returns a precolored SGPR quad representing the adjusted SRD.
+mlir::Value
+emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
+                      mlir::Value memref, TranslationContext &ctx,
+                      mlir::Location loc);
 
 mlir::Value lookupSRD(mlir::Value memref, TranslationContext &ctx,
                       mlir::Location loc);
