@@ -370,6 +370,76 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         print("[info] No out-of-bounds accesses detected.")
 
 
+def water_waveasm_lowering_pipeline(
+    module: Module, options: WaveCompileOptions
+) -> Module:
+    """Lower to LLVM dialect via water-opt, then codegen via waveasm-translate.
+
+    Step 1 (water-opt): memref decomposition, lower-affine, gpu/amdgpu → rocdl,
+    vector → llvm.  Produces a gpu.module with LLVM dialect IR.
+
+    Step 2 (waveasm-translate): translate LLVM dialect to WaveASM IR, run
+    register allocation, emit assembly, assemble and link into HSACO.
+
+    The result is fed back into the water host pipeline for runtime wrapping.
+    """
+    water_opt = get_water_opt()
+    mlir_asm = module.operation.get_asm()
+    target_chip = options.target
+
+    def add_opt(pipeline):
+        if options.optimization_level:
+            return [pipeline]
+        return []
+
+    canonicalize_cse = "composite-fixed-point-pass", {
+        "name": "canonicalize_cse",
+        "pipeline": "any(canonicalize,cse)",
+    }
+
+    int_range_optimizations = "composite-fixed-point-pass", {
+        "name": "int-range-optimizations",
+        "pipeline": 'any(int-range-optimizations,arith-int-range-narrowing{int-bitwidths-supported="32"},canonicalize,cse)',
+    }
+
+    # Step 1: water-opt lowers to LLVM dialect (keep SCF, no scf-to-cf).
+    lowering_pipeline = [
+        "water-memref-decomposition",
+        *add_opt(canonicalize_cse),
+        "lower-affine",
+        *add_opt(int_range_optimizations),
+        *add_opt("loop-invariant-code-motion"),
+        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
+        (
+            "convert-gpu-to-rocdl",
+            {"use-bare-ptr-memref-call-conv": "1"},
+            "gpu.module",
+        ),
+        "convert-vector-to-llvm",
+        "reconcile-unrealized-casts",
+        *add_opt(canonicalize_cse),
+    ]
+
+    args = [water_opt, make_linear_pass_pipeline(lowering_pipeline)]
+    if options.mlir_print_ir_after_all:
+        args.append("--mlir-print-ir-after-all")
+
+    try:
+        lowered_mlir = subprocess.check_output(args, input=mlir_asm, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"water-opt lowering failed (rc={e.returncode}).") from e
+
+    if options.print_mlir:
+        print(lowered_mlir)
+
+    # TODO Step 2: waveasm-translate consumes the LLVM dialect gpu.module,
+    # translates to WaveASM IR, runs regalloc + assembly emission, and
+    # produces an HSACO binary.  For now, return the lowered MLIR.
+
+    with module.context:
+        return Module.parse(lowered_mlir)
+
+
 def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
     binary = get_water_opt()
     mlir_asm = module.operation.get_asm()
