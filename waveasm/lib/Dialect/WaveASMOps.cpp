@@ -21,10 +21,6 @@ using namespace waveasm;
 // ProgramOp
 //===----------------------------------------------------------------------===//
 
-// Note: ProgramOp now uses the new attribute format from WAVEASMAttrs.td
-// Verification is handled by TableGen-generated code for basic structure.
-// Custom verification can be added here if needed.
-
 //===----------------------------------------------------------------------===//
 // MFMA Operation Verifiers
 //===----------------------------------------------------------------------===//
