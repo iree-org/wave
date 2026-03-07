@@ -31,6 +31,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   ScalePackElimination.cpp
   ScopedCSE.cpp
   Ticketing.cpp
+  TranslateFromLLVM.cpp
   TranslateFromMLIR.cpp
   ${HANDLERS_FULL_PATHS}
 
@@ -47,8 +48,10 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRLLVMDialect
   MLIRMathDialect
   MLIRMemRefDialect
+  MLIRROCDLDialect
   MLIRSCFDialect
   MLIRSupport
   MLIRVectorDialect

@@ -25,6 +25,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -128,6 +130,8 @@ int main(int argc, char **argv) {
   registry.insert<memref::MemRefDialect>();
   registry.insert<scf::SCFDialect>();
   registry.insert<vector::VectorDialect>();
+  registry.insert<LLVM::LLVMDialect>();
+  registry.insert<ROCDL::ROCDLDialect>();
   registry.insert<amdgpu::AMDGPUDialect>();
 
   MLIRContext context(registry);
@@ -155,8 +159,17 @@ int main(int argc, char **argv) {
   bool hasWaveASMPrograms = false;
   module->walk([&](waveasm::ProgramOp) { hasWaveASMPrograms = true; });
 
-  // If not already WAVEASM IR, translate from MLIR
-  if (!hasWaveASMPrograms) {
+  // Check if input contains LLVM dialect kernels (handled by the
+  // --waveasm-translate-from-llvm pass flag, not auto-translation).
+  bool hasLLVMKernels = false;
+  module->walk([&](LLVM::LLVMFuncOp func) {
+    if (func->hasAttr("gpu.kernel") || func->hasAttr("rocdl.kernel"))
+      hasLLVMKernels = true;
+  });
+
+  // Auto-translate high-level MLIR dialects (not LLVM dialect, not already
+  // WaveASM).
+  if (!hasWaveASMPrograms && !hasLLVMKernels) {
     // Run pre-translation MLIR passes.
     {
       PassManager prePm(&context);
