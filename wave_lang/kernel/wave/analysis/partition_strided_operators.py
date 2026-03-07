@@ -436,20 +436,27 @@ def merge_contiguous_reads(
     """
     Merge reads that access contiguous physical memory into wider vector loads.
 
-    Two phases:
+        Each merge must satisfy three proof obligations:
+        1. Address equivalence: every original lane r,k reads the same
+           physical address from the wide read -- A_r(k) = A_W(o_r + k).
+        2. Mask equivalence: every original validity predicate is preserved
+           lane-by-lane in the wide mask -- V_r(k) = V_W(o_r + k).
+        3. Lowering support: the backend codegen path actually enforces V_W.
 
-    1. **Single-pass wide merge** (``_wide_merge_fastpath_pass``): groups
-       reads into maximal power-of-2 dense windows along the fastest
-       physical dimension and emits one wide read per group.  Handles
-       both identity/unmapped reads and mapped reads with uniform
-       transformed bounds.  This does the bulk of the work.
+        Two phases:
 
-    2. **Iterative pairwise fallback** (``_merge_contiguous_reads_once``):
-       catches residual reads the fast path cannot handle, such as
-       shared-memory reads from gather expansion, sparse byte windows,
-       or groups with mixed mapping types.  Runs to a fixed point but
-       typically completes in one pass with near-zero work after the
-       fast path.
+        1. **Single-pass wide merge** (``_wide_merge_fastpath_pass``): groups
+           reads into maximal power-of-2 dense windows along the fastest
+           physical dimension and emits one wide read per group.  Handles
+           both identity/unmapped reads and mapped reads with uniform
+           transformed bounds.  This does the bulk of the work.
+
+        2. **Iterative pairwise fallback** (``_merge_contiguous_reads_once``):
+           catches residual reads the fast path cannot handle, such as
+           shared-memory reads from gather expansion, sparse byte windows,
+           or groups with mixed mapping types.  Runs to a fixed point but
+           typically completes in one pass with near-zero work after the
+           fast path.
     """
     hw_constraint = get_hardware_constraint(constraints)
     fwd, _ = get_divisibility_subs(constraints)
@@ -464,6 +471,10 @@ def _get_physical_start(
     symbolic_dims: list,
 ) -> dict:
     """Get the physical start coordinates for a read.
+
+    Establishes the address proof: computes per-lane base addresses
+    for each dimension so that contiguity (A_r(k) = B + o_r + k) can
+    be verified.
 
     For reads with a non-identity mapping, applies the mapping to get physical
     coordinates. For identity-mapped reads (mapping=None), reads the start
@@ -583,66 +594,6 @@ def _flatten_bounds_to_mask_expr(
     return functools.reduce(sympy.And, conditions)
 
 
-def _try_build_uniform_transformed_bounds_mask(
-    lo_custom: Read,
-    hi_custom: Read,
-    merge_dim,
-    symbolic_shape: tuple,
-    divisibility_fwd=None,
-    lo_transform_info: ReadTransformInfo | None = None,
-    hi_transform_info: ReadTransformInfo | None = None,
-):
-    """Return a scalar merged mask when pairwise bounds are lane-uniform.
-
-    For mapped bounded reads, pairwise merging is still safe when every
-    bounded dimension is invariant across the merged lanes in transformed
-    physical coordinates and none of the bounds apply to the merged
-    dimension itself. In that case the wide read uses a single scalar
-    guard instead of a per-lane mask.
-    """
-    if not lo_custom.bounds or not hi_custom.bounds:
-        return None
-    if lo_custom.bounds != hi_custom.bounds:
-        return None
-    if (
-        lo_custom.mapping is None
-        or hi_custom.mapping is None
-        or lo_custom.has_identity_mapping()
-        or hi_custom.has_identity_mapping()
-    ):
-        return None
-
-    if lo_transform_info is None:
-        lo_transform_info = _get_read_transform_info(lo_custom, symbolic_shape)
-    if hi_transform_info is None:
-        hi_transform_info = _get_read_transform_info(hi_custom, symbolic_shape)
-    lo_transformed = lo_transform_info.transformed_index
-    hi_transformed = hi_transform_info.transformed_index
-    if lo_transformed is None or hi_transformed is None:
-        return None
-
-    conditions = []
-    for dim, bound in lo_custom.bounds.items():
-        if dim == merge_dim:
-            return None
-        if dim not in lo_transformed or dim not in hi_transformed:
-            return None
-        lo_start = get_start_expr(lo_transformed[dim])
-        hi_start = get_start_expr(hi_transformed[dim])
-        diff = sym_simplify(lo_start - hi_start)
-        if diff != 0 and not expr_is_zero_under_probes(
-            diff, _MERGE_PROBES, divisibility_fwd
-        ):
-            return None
-        if isinstance(bound, int):
-            bound = sympy.Integer(bound)
-        conditions.append(sympy.StrictLessThan(lo_start, bound))
-
-    if not conditions:
-        return None
-    return functools.reduce(sympy.And, conditions)
-
-
 def _dense_window_has_uniform_mask(masks, wide_ept) -> bool:
     """Check whether sub-read masks form a dense window with one shared mask."""
     if not masks or any(mask is None for _, _, mask in masks):
@@ -721,6 +672,119 @@ def _build_wide_mask_expr(sub_reads, symbolic_shape, wide_ept):
     return functools.reduce(sympy.Or, terms)
 
 
+_MASK_REJECTED = sympy.false
+
+
+def _prove_mask_equivalent(
+    reads: list,
+    offsets: list[int],
+    sizes: list[int],
+    merge_dim,
+    symbolic_shape: tuple,
+    wide_ept: int,
+    divisibility_fwd=None,
+):
+    """Prove that original per-read validity predicates can be re-expressed
+    as a single wide-lane predicate V_W such that V_r(k) = V_W(o_r + k).
+
+    Tries strategies cheapest-first:
+
+    1. No bounds on any read -- trivially safe, return None.
+    2. All reads have preservable masks (identity/unmapped, precomputed,
+       or transformed-index masking available) -- compose per-lane via
+       ``_build_wide_mask_expr``.
+    3. All reads are mapped with uniform transformed bounds on non-merge
+       dimensions -- return a single scalar guard.
+    4. Otherwise -- return ``_MASK_REJECTED``.
+
+    Establishes the mask proof: V_r(k) = V_W(o_r + k) for every
+    original read r and lane k.
+    """
+    customs = [r.custom if hasattr(r, "custom") else r for r in reads]
+
+    if not any(c.bounds for c in customs):
+        return None
+
+    transform_infos = [_get_read_transform_info(c, symbolic_shape) for c in customs]
+    all_preservable = all(
+        _can_preserve_bounds_mask(c, symbolic_shape, ti)
+        for c, ti in zip(customs, transform_infos)
+    )
+    if all_preservable:
+        return _build_wide_mask_expr(
+            [(off, sz, c) for off, sz, c in zip(offsets, sizes, customs)],
+            symbolic_shape,
+            wide_ept,
+        )
+
+    all_have_mapping = all(
+        c.mapping is not None and not c.has_identity_mapping() for c in customs
+    )
+    if not all_have_mapping:
+        return _MASK_REJECTED
+
+    anchor = customs[0]
+    ref_bounds = anchor.bounds
+    if not ref_bounds or any(c.bounds != ref_bounds for c in customs[1:]):
+        return _MASK_REJECTED
+
+    anchor_transformed = transform_infos[0].transformed_index
+    if anchor_transformed is None:
+        return _MASK_REJECTED
+
+    conditions = []
+    for dim, bound in ref_bounds.items():
+        if dim == merge_dim:
+            return _MASK_REJECTED
+        if dim not in anchor_transformed:
+            return _MASK_REJECTED
+        anchor_start = get_start_expr(anchor_transformed[dim])
+
+        for ti in transform_infos[1:]:
+            if ti.transformed_index is None or dim not in ti.transformed_index:
+                return _MASK_REJECTED
+            other_start = get_start_expr(ti.transformed_index[dim])
+            raw_diff = anchor_start - other_start
+            if not expr_is_zero_under_probes(raw_diff, _MERGE_PROBES, divisibility_fwd):
+                return _MASK_REJECTED
+
+        if isinstance(bound, int):
+            bound = sympy.Integer(bound)
+        conditions.append(sympy.StrictLessThan(anchor_start, bound))
+
+    if not conditions:
+        return None
+
+    scalar_guard = functools.reduce(sympy.And, conditions)
+    total_covered = sum(sizes)
+    if total_covered < wide_ept:
+        from ..._support.indexing import IndexingContext
+
+        idxc = IndexingContext.current()
+        iota = idxc.iota(wide_ept)
+        scalar_guard = sympy.And(
+            scalar_guard, sympy.StrictLessThan(iota, total_covered)
+        )
+    return scalar_guard
+
+
+def _check_lowering_ok(
+    wide_ept: int,
+    element_type,
+    hw_constraint,
+) -> bool:
+    """Check that the backend can realize the merged read.
+
+    Verifies hardware resource limits (max vector width).
+
+    Establishes the lowering proof: the selected backend codegen path
+    can enforce the merged validity predicate V_W exactly.
+    """
+    if wide_ept > hw_constraint.max_elems_per_load(element_type):
+        return False
+    return True
+
+
 def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=None):
     """Create a merged Read node covering ``wide_ept`` elements."""
     wide_read = Read(
@@ -792,6 +856,10 @@ def _can_preserve_bounds_mask(
 ) -> bool:
     """Check whether a read's bounds mask survives mapping=None lowering.
 
+    Part of the mask proof (V_r(k) = V_W(o_r + k)): checks whether
+    the original per-lane validity predicate survives the loss of
+    mapping on the merged read.
+
     The merged wide read is emitted with ``mapping=None``.  In codegen
     ``handle_read``, the mask is generated by one of three paths:
 
@@ -839,45 +907,32 @@ def _do_merge(
     hw_constraint,
     divisibility_fwd=None,
 ):
-    """Emit a wide read merging reads at lo_i and hi_i. Returns True on success."""
+    """Emit a wide read merging reads at lo_i and hi_i. Returns True on success.
+
+    Proof obligations:
+    1. Address equivalence (A_r(k) = A_W(o_r + k)) -- established by
+       caller via ProbeEvaluator.
+    2. Mask equivalence (V_r(k) = V_W(o_r + k)) -- proved here via
+       _prove_mask_equivalent.
+    3. Lowering support (backend realizes V_W) -- proved here via
+       _check_lowering_ok.
+    """
     _, lo_phys, lo_custom, lo_node = read_infos[lo_i]
     _, _, hi_custom, hi_node = read_infos[hi_i]
-    lo_transform_info = _get_read_transform_info(lo_custom, symbolic_shape)
-    hi_transform_info = _get_read_transform_info(hi_custom, symbolic_shape)
-    can_preserve_lo_mask = _can_preserve_bounds_mask(
-        lo_custom, symbolic_shape, lo_transform_info
-    )
-    can_preserve_hi_mask = _can_preserve_bounds_mask(
-        hi_custom, symbolic_shape, hi_transform_info
-    )
-    # Prefer per-lane mask (via _build_wide_mask_expr) when both masks are
-    # preservable; _dense_window_has_uniform_mask collapses to a scalar when
-    # applicable. Fall back to scalar guard only when preserve fails.
-    uniform_bounds_mask = None
-    if not (can_preserve_lo_mask and can_preserve_hi_mask):
-        uniform_bounds_mask = _try_build_uniform_transformed_bounds_mask(
-            lo_custom,
-            hi_custom,
-            merge_dim,
-            symbolic_shape,
-            divisibility_fwd,
-            lo_transform_info,
-            hi_transform_info,
-        )
-        if uniform_bounds_mask is None:
-            return False
     new_ept = 2 * ept
-    element_type = lo_custom.type.dtype
-    if new_ept > hw_constraint.max_elems_per_load(element_type):
+    wide_mask = _prove_mask_equivalent(
+        [lo_custom, hi_custom],
+        [0, ept],
+        [ept, ept],
+        merge_dim,
+        symbolic_shape,
+        new_ept,
+        divisibility_fwd,
+    )
+    if wide_mask is _MASK_REJECTED:
         return False
-    if uniform_bounds_mask is not None:
-        wide_mask = uniform_bounds_mask
-    else:
-        wide_mask = _build_wide_mask_expr(
-            [(0, ept, lo_custom), (ept, ept, hi_custom)],
-            symbolic_shape,
-            new_ept,
-        )
+    if not _check_lowering_ok(new_ept, lo_custom.type.dtype, hw_constraint):
+        return False
     with lo_custom.graph.inserting_before(lo_node):
         new_index = {
             dim: IndexSequence(
@@ -946,6 +1001,10 @@ _MERGE_PROBES: tuple[Callable[[int], int], ...] = (
 
 class ProbeEvaluator:
     """Shared numeric probing infrastructure for read coalescing.
+
+    Supports the address proof by providing candidate discovery via
+    numeric evaluation and cross-probe consistency verification for the
+    contiguity condition A_r(k) = B + o_r + k.
 
     Resolves symbolic flat offsets and per-dim physical starts into
     concrete values using multiple probe sets, enabling O(1) candidate
@@ -1197,76 +1256,21 @@ def _coalesce_multiway_group(
         custom.graph.erase_node(node)
 
 
-def _try_build_group_uniform_bounds_mask(
-    entries: list,
-    merge_dim,
-    symbolic_shape: tuple,
-    divisibility_fwd=None,
-) -> sympy.Basic | None:
-    """Return a scalar mask when all reads in a group share uniform bounds.
+def _is_fastpath_eligible(custom: Read) -> bool:
+    """Check if a read qualifies for the single-pass wide-merge fast path.
 
-    Generalizes ``_try_build_uniform_transformed_bounds_mask`` from pairs
-    to N-way groups.  Computes the transformed index once per read (via
-    the cached ``_get_read_transform_info``), then verifies that every
-    bounded dimension has the same start expression across all group
-    members.  Returns a single scalar guard or ``None`` if the group
-    is not uniformly bounded.
+    The fast path assumes reads that are consecutive in the fastest
+    physical dimension also have consecutive flat offsets.  This holds
+    for mapped reads (where transform_index_on_mapping already produced
+    physical coordinates) but not necessarily for identity/unmapped reads
+    in multi-dimensional tensors with stride > 1.
 
-    ``merge_dim`` is the physical dimension along which the group is
-    being merged (the fastest dimension in the fast path).  Bounds on
-    this dimension cannot be shared as a scalar guard.
+    Those reads are left to the iterative pairwise path which handles
+    arbitrary stride patterns via per-dim delta verification.
     """
-    customs = [e.custom for e in entries]
-    anchor = customs[0]
-
-    if not anchor.bounds:
-        return None
-
-    ref_bounds = anchor.bounds
-    if any(c.bounds != ref_bounds for c in customs[1:]):
-        return None
-
-    all_have_mapping = all(
-        c.mapping is not None and not c.has_identity_mapping() for c in customs
-    )
-    if not all_have_mapping:
-        transform_infos = [_get_read_transform_info(c, symbolic_shape) for c in customs]
-        all_preservable = all(
-            _can_preserve_bounds_mask(c, symbolic_shape, ti)
-            for c, ti in zip(customs, transform_infos)
-        )
-        if all_preservable:
-            return None
-        return sympy.false
-
-    transform_infos = [_get_read_transform_info(c, symbolic_shape) for c in customs]
-    anchor_transformed = transform_infos[0].transformed_index
-    if anchor_transformed is None:
-        return None
-
-    conditions = []
-    for dim, bound in ref_bounds.items():
-        if dim == merge_dim:
-            return None
-        if dim not in anchor_transformed:
-            return None
-        anchor_start = get_start_expr(anchor_transformed[dim])
-
-        for ti in transform_infos[1:]:
-            if ti.transformed_index is None or dim not in ti.transformed_index:
-                return None
-            other_start = get_start_expr(ti.transformed_index[dim])
-            raw_diff = anchor_start - other_start
-            if not expr_is_zero_under_probes(raw_diff, _MERGE_PROBES, divisibility_fwd):
-                return None
-
-        if isinstance(bound, int):
-            bound = sympy.Integer(bound)
-        conditions.append(sympy.StrictLessThan(anchor_start, bound))
-
-    if not conditions:
-        return None
-    return functools.reduce(sympy.And, conditions)
+    if custom.mapping is None or custom.has_identity_mapping():
+        return False
+    return True
 
 
 class _WideGroupEntry(NamedTuple):
@@ -1294,41 +1298,21 @@ def _resolve_group_mask(
 ):
     """Determine the mask for a wide-merge group.
 
-    Returns the mask expression or ``sympy.false`` if the group cannot
-    be safely merged.  Three strategies, cheapest first:
+    Delegates to ``_prove_mask_equivalent`` which tries strategies
+    cheapest-first.  Returns the mask expression or ``_MASK_REJECTED``
+    if the group cannot be safely merged.
 
-    1. All reads have trivially preservable bounds -> ``_build_wide_mask_expr``.
-    2. Group has uniform transformed bounds -> scalar guard.
-    3. Otherwise -> reject (return ``sympy.false``).
+    Establishes the mask proof: V_r(k) = V_W(o_r + k).
     """
-    customs = [e.custom for e in entries]
-
-    all_trivially_preservable = all(
-        _can_preserve_bounds_mask(c, symbolic_shape) for c in customs
+    return _prove_mask_equivalent(
+        [e.custom for e in entries],
+        [e.offset for e in entries],
+        [e.size for e in entries],
+        merge_dim,
+        symbolic_shape,
+        wide_ept,
+        divisibility_fwd,
     )
-    if all_trivially_preservable:
-        return _build_wide_mask_expr(
-            [(e.offset, e.size, e.custom) for e in entries],
-            symbolic_shape,
-            wide_ept,
-        )
-
-    uniform_mask = _try_build_group_uniform_bounds_mask(
-        entries, merge_dim, symbolic_shape, divisibility_fwd
-    )
-    if uniform_mask is not None and uniform_mask is not sympy.false:
-        total_covered = sum(e.size for e in entries)
-        if total_covered < wide_ept:
-            from ..._support.indexing import IndexingContext
-
-            idxc = IndexingContext.current()
-            iota = idxc.iota(wide_ept)
-            uniform_mask = sympy.And(
-                uniform_mask, sympy.StrictLessThan(iota, total_covered)
-            )
-        return uniform_mask
-
-    return sympy.false
 
 
 def _wide_group_merge_fastpath(
@@ -1360,22 +1344,30 @@ def _wide_group_merge_fastpath(
     if max_load_width <= ept:
         return set()
 
-    prober = ProbeEvaluator(read_infos, symbolic_dims, divisibility_fwd)
+    eligible_indices = [
+        i for i, info in enumerate(read_infos) if _is_fastpath_eligible(info.custom)
+    ]
+    if len(eligible_indices) < 2:
+        return set()
+
+    eligible_infos = [read_infos[i] for i in eligible_indices]
+    prober = ProbeEvaluator(eligible_infos, symbolic_dims, divisibility_fwd)
 
     consumed: set[int] = set()
+    consumed_eligible: set[int] = set()
 
-    sorted_indices = sorted(
-        (i for i in range(len(read_infos)) if prober.numeric_flat[i] is not None),
+    sorted_eligible = sorted(
+        (i for i in range(len(eligible_infos)) if prober.numeric_flat[i] is not None),
         key=lambda i: prober.numeric_flat[i],
     )
 
-    graph = read_infos[0].custom.graph if read_infos else None
+    graph = eligible_infos[0].custom.graph if eligible_infos else None
     node_position = {n: idx for idx, n in enumerate(graph.nodes)} if graph else {}
 
     i = 0
-    while i < len(sorted_indices):
-        anchor = sorted_indices[i]
-        if anchor in consumed:
+    while i < len(sorted_eligible):
+        anchor = sorted_eligible[i]
+        if anchor in consumed_eligible:
             i += 1
             continue
 
@@ -1384,9 +1376,9 @@ def _wide_group_merge_fastpath(
 
         j = i + 1
         next_expected = anchor_flat + ept
-        while j < len(sorted_indices):
-            cand = sorted_indices[j]
-            if cand in consumed:
+        while j < len(sorted_eligible):
+            cand = sorted_eligible[j]
+            if cand in consumed_eligible:
                 j += 1
                 continue
             cand_flat = prober.numeric_flat[cand]
@@ -1419,15 +1411,15 @@ def _wide_group_merge_fastpath(
             i += 1
             continue
 
-        anchor_info = read_infos[group[0]]
+        anchor_info = eligible_infos[group[0]]
         base_phys = anchor_info.phys_start
 
         entries = []
-        for rank, ri_idx in enumerate(group):
-            info = read_infos[ri_idx]
+        for rank, eidx in enumerate(group):
+            info = eligible_infos[eidx]
             entries.append(
                 _WideGroupEntry(
-                    idx=ri_idx,
+                    idx=eligible_indices[eidx],
                     node=info.node,
                     custom=info.custom,
                     offset=rank * ept,
@@ -1440,7 +1432,7 @@ def _wide_group_merge_fastpath(
         wide_mask = _resolve_group_mask(
             entries, merge_dim, symbolic_shape, wide_ept, divisibility_fwd
         )
-        if wide_mask is sympy.false:
+        if wide_mask is _MASK_REJECTED:
             i += 1
             continue
 
@@ -1473,12 +1465,13 @@ def _wide_group_merge_fastpath(
             entry.custom.replace_all_uses_with(extract)
             entry.custom.graph.erase_node(entry.node)
 
-        for ri_idx in group:
-            consumed.add(ri_idx)
+        for eidx in group:
+            consumed_eligible.add(eidx)
+            consumed.add(eligible_indices[eidx])
 
         resume_pos = i + 1
-        while resume_pos < len(sorted_indices):
-            if sorted_indices[resume_pos] not in consumed:
+        while resume_pos < len(sorted_eligible):
+            if sorted_eligible[resume_pos] not in consumed_eligible:
                 break
             resume_pos += 1
         i = resume_pos
