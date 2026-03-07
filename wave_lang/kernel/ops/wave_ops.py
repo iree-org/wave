@@ -1510,14 +1510,10 @@ class Placeholder(CustomOp):
         if not isinstance(custom, NestedRegionOp):
             return
 
-        # Cleanup dead captures
+        # A region's explicit capture list is derived from the lifted
+        # placeholders that remain in its body.
         subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        live_captures = []
-        for var in custom.implicit_captures:
-            if custom.get_captured_fx_node(subgraph, var):
-                live_captures.append(var)
-
-        custom.update_arg("implicit_captures", live_captures)
+        custom.refresh_captures(subgraph)
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2339,6 +2335,89 @@ class NestedRegionOp(CustomOp):
                 return var
 
         return None
+
+    def get_capture_bindings(self, graph: fx.Graph) -> list[tuple[fx.Node, fx.Node]]:
+        """Return the region's captures in signature order.
+
+        The parent op stores the ordered capture list, and the subgraph contains
+        the corresponding lifted placeholders. Returning both together gives
+        passes a single view of the region interface.
+        """
+        bindings: list[tuple[fx.Node, fx.Node]] = []
+        for outer_node in self.implicit_captures:
+            placeholder = self.get_captured_fx_node(graph, outer_node)
+            if placeholder is None:
+                continue
+            bindings.append((self.get_outer_node(outer_node), placeholder))
+        return bindings
+
+    def refresh_captures(self, graph: fx.Graph) -> None:
+        """Refresh the region signature from the lifted placeholders in `graph`."""
+        self.update_arg(
+            "implicit_captures",
+            [
+                self.capture_source(placeholder)
+                for placeholder in self.captured_vars(graph)
+                if get_custom(placeholder).get_captured_fx_node() is not None
+            ],
+        )
+
+    @staticmethod
+    def capture_source(node: fx.Node | CustomOp) -> fx.Node:
+        """Return the defining source for a value that may be a lifted capture."""
+        if isinstance(node, CustomOp):
+            node = node.fx_node
+        # Supports deeper for nested regions.
+        while "lifted" in node.meta:
+            node = node.meta["lifted"]
+        return node
+
+    @classmethod
+    def materialize_capture_placeholder(
+        cls,
+        graph: fx.Graph,
+        outer_node: fx.Node | CustomOp,
+        location: Optional[CapturedLocation] = None,
+    ) -> fx.Node:
+        """Insert a lifted placeholder that represents `outer_node` in `graph`."""
+        outer_node = cls.capture_source(outer_node)
+        placeholder = Placeholder(outer_node.name, outer_node.type)
+        with graph.inserting_after(cls._last_placeholder_or_root(graph)):
+            placeholder_node = placeholder.add_to_graph(graph, loc=location)
+        placeholder_node.type = outer_node.type
+        placeholder_node.meta["lifted"] = outer_node
+        return placeholder_node
+
+    @staticmethod
+    def _last_placeholder_or_root(graph: fx.Graph) -> fx.Node:
+        """Return the last placeholder in the graph's leading placeholder block."""
+        last = graph._root
+        for node in graph.nodes:
+            if isinstance(get_custom(node), Placeholder):
+                last = node
+            else:
+                break
+        return last
+
+    def get_or_add_capture(
+        self,
+        graph: fx.Graph,
+        outer_node: fx.Node | CustomOp,
+        location: Optional[CapturedLocation] = None,
+    ) -> fx.Node:
+        """Return the placeholder that represents `outer_node` in `graph`."""
+        if isinstance(outer_node, CustomOp):
+            outer_node = outer_node.fx_node
+        outer_node = self.get_outer_node(outer_node)
+        if existing := self.get_captured_fx_node(graph, outer_node):
+            return existing
+
+        placeholder_node = self.materialize_capture_placeholder(
+            graph, outer_node, location
+        )
+        self.refresh_captures(graph)
+
+        return placeholder_node
 
     def get_root_graph(self):
         """

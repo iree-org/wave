@@ -15,7 +15,14 @@ from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
-from ..ops.wave_ops import Read, Write, GatherToLDS, TensorLoadToLDS, get_custom
+from ..ops.wave_ops import (
+    GatherToLDS,
+    NestedRegionOp,
+    Read,
+    TensorLoadToLDS,
+    Write,
+    get_custom,
+)
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -53,7 +60,7 @@ def is_transposed_read(custom: Read) -> bool:
     the same as fastest dim in global memory.
     """
     assert isinstance(custom, Read) and "Expected input to be Read"
-    global_fastest_dim = get_custom(custom.memory).type.symbolic_shape[-1]
+    global_fastest_dim = custom.memory_type.symbolic_shape[-1]
     fastest_dim_idx = get_fastest_index(custom.index)
     register_fastest_dim = list(custom.index)[fastest_dim_idx]
     return register_fastest_dim != global_fastest_dim
@@ -134,13 +141,14 @@ def identify_optimizable_loads(
         num_global_loads > (M * N) / (T * L)
     where the memory has shape [M, N], there are T threads and each thread can load L elements.
     """
-    optimizable_loads: dict[fx.Node, tuple[int, list[Read], set["Custom"]]] = {}
+    optimizable_loads: dict[fx.Node, tuple[int, fx.Node, list[Read], set["Custom"]]] = {}
     processed_memories = set()
     for read_node in global_read_nodes:
         custom = get_custom(read_node)
-        if custom.memory in processed_memories:
-            if custom.memory in optimizable_loads:
-                optimizable_loads[custom.memory][1].append(custom)
+        memory = NestedRegionOp.capture_source(custom.memory)
+        if memory in processed_memories:
+            if memory in optimizable_loads:
+                optimizable_loads[memory][2].append(custom)
             continue
 
         # TODO: We need to properly update index/elements_per_thread on dependent reads.
@@ -148,7 +156,7 @@ def identify_optimizable_loads(
             if not allow_dynamic_transposed:
                 continue
 
-        processed_memories.add(custom.memory)
+        processed_memories.add(memory)
         symbolic_shape = custom.type.symbolic_shape
         if use_memory_type:
             symbolic_shape = custom.memory_type.symbolic_shape
@@ -164,7 +172,11 @@ def identify_optimizable_loads(
             total_number_of_elements, max_elements_per_load
         )
         actual_number_of_loads = len(
-            [x for x in global_read_nodes if get_custom(x).memory == custom.memory]
+            [
+                x
+                for x in global_read_nodes
+                if NestedRegionOp.capture_source(get_custom(x).memory) == memory
+            ]
         )
         if expected_number_of_loads >= actual_number_of_loads:
             continue
@@ -206,8 +218,9 @@ def identify_optimizable_loads(
             else:
                 # Optimization do not handle other cases than above, so skip.
                 continue
-        optimizable_loads[custom.memory] = (
+        optimizable_loads[memory] = (
             expected_number_of_loads,
+            custom.memory,
             [custom],
             expanded_dynamic_vals,
             memory_load_elems_per_thread,
@@ -227,6 +240,7 @@ def add_optimized_nodes(
     optimized_writes = defaultdict(list)
     for memory, (
         expected_number_of_loads,
+        region_memory,
         custom_loads,
         expanded_dynamic_vals,
         load_elems_per_thread,
@@ -239,7 +253,7 @@ def add_optimized_nodes(
         for i in range(expected_number_of_loads):
             with custom.graph.inserting_before(custom.fx_node):
                 read = Read(
-                    memory,
+                    region_memory,
                     load_elems_per_thread,
                     custom.mapping,
                     flags=custom.flags,
@@ -280,7 +294,9 @@ def add_optimized_nodes(
                         )
                         write.index = read.index
                         write.pre_expansion_id = custom.pre_expansion_id
-                        optimized_writes[custom_user.memory].append(write)
+                        optimized_writes[
+                            NestedRegionOp.capture_source(custom_user.memory)
+                        ].append(write)
                         write.vector_shapes = custom.vector_shapes
                         break
     return optimized_writes
@@ -307,7 +323,7 @@ def update_shared_memory_read(
     shared_read.update_arg("mapping", metadata.mapping)
     # If we are doing a gather from shared memory, we need to update the
     # shape of the alloc as well.
-    custom_memory = get_custom(shared_read.memory)
+    custom_memory = get_custom(NestedRegionOp.capture_source(shared_read.memory))
     custom_memory_shape = custom_memory.type.symbolic_shape
     if custom_memory_shape != metadata.memory_shape:
         permutation = [custom_memory_shape.index(k) for k in metadata.memory_shape]
@@ -339,12 +355,20 @@ def update_write_dependencies(
                 return False
 
             custom = get_custom(node)
-            if is_shared_write(custom) and custom.memory == memory:
+            if (
+                is_shared_write(custom)
+                and NestedRegionOp.capture_source(custom.memory) == memory
+            ):
                 return True
-            if isinstance(custom, GatherToLDS) and custom.dst == memory:
+            if (
+                isinstance(custom, GatherToLDS)
+                and NestedRegionOp.capture_source(custom.dst) == memory
+            ):
                 return True
             if isinstance(custom, TensorLoadToLDS):
-                return all(dst == memory for dst in custom.dst)
+                return all(
+                    NestedRegionOp.capture_source(dst) == memory for dst in custom.dst
+                )
             return False
 
         for replaceable_write in trace.walk(is_replaceable_write):

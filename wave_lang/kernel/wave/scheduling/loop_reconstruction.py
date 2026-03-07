@@ -15,7 +15,6 @@ from ...ops.wave_ops import (
     MMABase,
     NewRegister,
     Output,
-    Placeholder,
     SchedulingGroupBarrier,
     get_custom,
 )
@@ -237,19 +236,15 @@ def add_nodes_by_schedule(
 
 
 def push_placeholders(
-    implicit_captures: list[fx.Node],
+    reduction: Iterate,
     reduction_subgraph: fx.Node,
     arg_context: ArgumentContext,
 ):
     """
     Push placeholders into the argument context for the reduction graph.
     """
-    for node in reduction_subgraph.nodes:
-        custom = get_custom(node)
-        if isinstance(custom, Placeholder) and not isinstance(custom, IterArg):
-            root_node = [x for x in implicit_captures if x.name == node.name][0]
-            assert root_node is not None
-            arg_context.map_arg_all(node, root_node)
+    for outer_node, placeholder in reduction.get_capture_bindings(reduction_subgraph):
+        arg_context.map_arg_all(placeholder, outer_node)
 
 
 def add_missing_registers(graph: fx.Graph):
@@ -388,7 +383,7 @@ def construct_prologue(
 
     populate_prologue_outer_vars(arg_context, outer_vars)
 
-    push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
+    push_placeholders(reduction, reduction_subgraph, arg_context)
     with reduction.graph.inserting_before(reduction.fx_node):
         for i in range(num_stages - 1):
             add_nodes_by_schedule(
@@ -570,7 +565,7 @@ def construct_kernel(
             reduction.init_args,
             num_stages,
         )
-        push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
+        push_placeholders(reduction, reduction_subgraph, arg_context)
 
         # For the original iter args, we just map the old ones to the new ones.
         # Do this for all stages, since the original iter args are "dummy" nodes
@@ -734,7 +729,7 @@ def construct_epilogue(
 
         # Push the rotating registers onto the argument map.
         push_rotating_registers(arg_context, rotating_registers, None, False)
-        push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
+        push_placeholders(reduction, reduction_subgraph, arg_context)
 
         counter = offset + len(flattened_rotating_registers)
         populate_epilogue_outer_vars(
