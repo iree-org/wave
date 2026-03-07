@@ -111,6 +111,24 @@ def test_copy(
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+def test_copy_water_waveasm(
+    shape: tuple[int, int],
+    run_bench: bool,
+) -> None:
+    """Test copy kernel through the water+waveasm pipeline (LLVM dialect input)."""
+    options, test = get_copy_template(
+        shape,
+        run_bench=run_bench,
+        use_water_backend=True,
+    )
+    options = set_default_run_config(options)
+    options.backend = "asm"
+    options.compile_to_mlir = True
+    test = wave_compile(options, test)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @use_water_backend_bool("use_water_backend")
 def test_dynamic_copy(
