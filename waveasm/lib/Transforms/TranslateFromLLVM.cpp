@@ -23,6 +23,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -340,15 +341,47 @@ static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
   return success();
 }
 
+/// Try to extract a constant integer from an LLVM SSA value.
+static std::optional<int64_t> getConstantInt(Value v) {
+  if (auto constOp = v.getDefiningOp<LLVM::ConstantOp>())
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().getSExtValue();
+  return std::nullopt;
+}
+
 static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
                                           LLVMTranslationState &st) {
   auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
 
   // The base pointer was set up as an SRD in the prologue via queueSRDSetup.
   Value basePtr = op.getBase();
   auto srdVal = ctx.getMapper().getMapped(basePtr);
   if (!srdVal)
     return op->emitOpError("SRD not found for base pointer");
+
+  // The prologue used s_mov_b64 to copy the 64-bit pointer into SRD[0:1].
+  // This corrupts SRD word 1 bits [31:16] (stride/swizzle) with pointer bits.
+  // Also, the prologue hardcodes SRD[3]=0x20000 but make.buffer.rsrc may
+  // want different flags. Patch both now that we know the actual values.
+  auto srdOp = dyn_cast<PrecoloredSRegOp>(srdVal->getDefiningOp());
+  if (srdOp) {
+    int64_t srdBase = srdOp.getIndex();
+
+    // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
+    std::string andStr = "s_and_b32 s" + std::to_string(srdBase + 1) + ", s" +
+                         std::to_string(srdBase + 1) + ", 0xFFFF";
+    RawOp::create(builder, loc, andStr);
+
+    // Patch SRD[3] with the actual flags from make.buffer.rsrc.
+    auto flags = getConstantInt(op.getFlags());
+    if (flags && *flags != 0x20000) {
+      std::string movFlags = "s_mov_b32 s" + std::to_string(srdBase + 3) +
+                             ", 0x" + llvm::utohexstr(*flags);
+      RawOp::create(builder, loc, movFlags);
+    }
+  }
 
   st.mapBufferRsrc(op.getResult(), *srdVal);
 
