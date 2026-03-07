@@ -1,7 +1,8 @@
 // RUN: waveasm-translate %s --waveasm-translate-from-llvm | FileCheck %s
 // Verify the LLVM→WaveASM translation pass handles a copy kernel.
 
-// CHECK: waveasm.program @test
+// CHECK: gpu.module @gpu_module
+// CHECK:   waveasm.program @test
 // CHECK: waveasm.precolored.vreg
 // CHECK: waveasm.v_cmp_lt_i32
 // CHECK: waveasm.v_cndmask_b32
