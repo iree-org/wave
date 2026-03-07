@@ -156,6 +156,20 @@ static Value resolve(Value v, TranslationContext &ctx) {
 // Op handlers
 //===----------------------------------------------------------------------===//
 
+static LogicalResult handlePoison(LLVM::PoisonOp op, LLVMTranslationState &st) {
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
+
+  // Poison is undefined — materialize as zero.
+  auto immTy = ctx.createImmType(0);
+  auto imm = ConstantOp::create(builder, loc, immTy, int64_t{0});
+  auto vregTy = ctx.createVRegType();
+  auto mov = V_MOV_B32::create(builder, loc, vregTy, imm);
+  ctx.getMapper().mapValue(op.getResult(), mov);
+  return success();
+}
+
 static LogicalResult handleConstant(LLVM::ConstantOp op,
                                     LLVMTranslationState &st) {
   auto &ctx = st.ctx;
@@ -295,6 +309,20 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   auto sel =
       V_CNDMASK_B32::create(builder, loc, vregTy, falseVal, trueVal, cond);
   ctx.getMapper().mapValue(op.getResult(), sel);
+  return success();
+}
+
+static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
+
+  Value lhs = resolve(op.getLhs(), ctx);
+  Value rhs = resolve(op.getRhs(), ctx);
+
+  auto vregTy = ctx.createVRegType();
+  auto add = V_ADD_U32::create(builder, loc, vregTy, lhs, rhs);
+  ctx.getMapper().mapValue(op.getResult(), add);
   return success();
 }
 
@@ -468,16 +496,7 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
 static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
   return llvm::TypeSwitch<Operation *, LogicalResult>(op)
       .Case([&](LLVM::ConstantOp o) { return handleConstant(o, st); })
-      .Case([&](LLVM::PoisonOp o) {
-        // Poison is undefined — materialize as zero.
-        auto immTy = st.ctx.createImmType(0);
-        auto &builder = st.ctx.getBuilder();
-        auto imm = ConstantOp::create(builder, o.getLoc(), immTy, int64_t{0});
-        auto vregTy = st.ctx.createVRegType();
-        auto mov = V_MOV_B32::create(builder, o.getLoc(), vregTy, imm);
-        st.ctx.getMapper().mapValue(o.getResult(), mov);
-        return success();
-      })
+      .Case([&](LLVM::PoisonOp o) { return handlePoison(o, st); })
       .Case([&](ROCDL::ThreadIdXOp o) { return handleWorkitemIdX(o, st); })
       .Case([&](ROCDL::BlockIdXOp o) { return handleWorkgroupId(o, st, 0); })
       .Case([&](ROCDL::BlockIdYOp o) { return handleWorkgroupId(o, st, 1); })
@@ -488,6 +507,7 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
       .Case([&](LLVM::ICmpOp o) { return handleICmp(o, st); })
       .Case([&](LLVM::SelectOp o) { return handleSelect(o, st); })
       .Case([&](LLVM::MulOp o) { return handleMul(o, st); })
+      .Case([&](LLVM::AddOp o) { return handleAdd(o, st); })
       .Case([&](ROCDL::MakeBufferRsrcOp o) {
         return handleMakeBufferRsrc(o, st);
       })
