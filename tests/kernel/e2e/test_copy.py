@@ -204,6 +204,7 @@ def test_copy_water_waveasm(
         shape,
         run_bench=run_bench,
         use_water_backend=True,
+        use_buffer_ops=True,
     )
     options = set_default_run_config(options)
     options.backend = "asm"
