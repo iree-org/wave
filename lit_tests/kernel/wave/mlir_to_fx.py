@@ -32,6 +32,7 @@ from wave_lang.kernel.ops.wave_ops import (
     ShuffleOp as Shuffle,
 )
 from wave_lang.kernel.wave.compile import build_graph_passes
+from wave_lang.kernel.wave.analysis.index_sequence_analysis import set_node_indices
 from wave_lang.kernel.wave.decompose_reduce_ops import decompose_reduce_ops
 from wave_lang.kernel.wave.expansion.expansion import expand_graph
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -245,6 +246,74 @@ def mlir_to_fx_multi_result_iterate_roundtrip():
     _assert_roundtrip(multi_result_iterate, subs, "multi-result iterate roundtrip")
 
     # CHECK: multi-result iterate roundtrip: OK
+
+
+# CHECK-LABEL: mlir_to_fx_batched_mma_roundtrip
+@run_test
+def mlir_to_fx_batched_mma_roundtrip():
+    """Test roundtrip for a batched MMA kernel through set_node_indices.
+
+    Exercises the MMA batch-dimension index fix: the MLIR importer must
+    reconstruct batch dimensions (B) in MMA index dicts, not just M/N/K.
+    Without this, accessing mma_node.index[B] raises KeyError when the
+    comparison dereferences the MMA's acc_index property.
+    """
+    B = tkl.sym.B
+    K = tkl.sym.K
+    BLOCK_B = tkl.sym.BLOCK_B
+    BLOCK_K = tkl.sym.BLOCK_K
+
+    constraints = [
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.WorkgroupConstraint(B, BLOCK_B, 2),
+        wave.TilingConstraint(K, BLOCK_K),
+        wave.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+        wave.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
+        wave.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=MMAType.F32_16x16x16_F16,
+            vector_shapes={B: 0},
+        ),
+    ]
+
+    @wave.wave(constraints)
+    def batched_matmul(
+        a: tkl.Memory[B, M, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[B, N, K, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+        @wave.iterate(K, init_args=[c_reg])
+        def repeat(
+            acc: tkl.Register[B, M, N, tkl.f32],
+        ) -> tkl.Register[B, M, N, tkl.f32]:
+            a_reg = wave.read(a, bounds={M: M, K: K})
+            b_reg = wave.read(b, bounds={N: N, K: K})
+            acc = wave.mma(a_reg, b_reg, acc)
+            return acc
+
+        wave.write(repeat, c)
+
+    subs = {
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_B: 1,
+        BLOCK_K: 16,
+        M: 128,
+        N: 128,
+        B: 8,
+        K: 64,
+    }
+    _assert_roundtrip(
+        batched_matmul,
+        subs,
+        "batched MMA after set_node_indices",
+        stop_after=set_node_indices,
+    )
+
+    # CHECK: batched MMA after set_node_indices: OK
 
 
 # CHECK-LABEL: mlir_to_fx_pipelined_gemm_roundtrip

@@ -352,14 +352,20 @@ def convert_index_mapping_array_to_sympy(
     result_index = _convert_index_mapping_dict_to_sympy(array_attr[3])
     mk_symbols = set(lhs_index.keys())
     nk_symbols = set(rhs_index.keys())
-    m_symbol = (mk_symbols - nk_symbols).pop()
-    n_symbol = (nk_symbols - mk_symbols).pop()
-    k_symbol = (mk_symbols.intersection(nk_symbols)).pop()
+    # Batch dimensions appear in all operands; exclude them before
+    # identifying the unique M, N, K roles via set difference.
+    acc_symbols = set(acc_index.keys())
+    batch_symbols = mk_symbols & nk_symbols & acc_symbols
+    mk_unique = mk_symbols - batch_symbols
+    nk_unique = nk_symbols - batch_symbols
+    m_symbol = (mk_unique - nk_unique).pop()
+    n_symbol = (nk_unique - mk_unique).pop()
+    k_symbol = (mk_unique & nk_unique).pop()
     assert lhs_index[k_symbol] == rhs_index[k_symbol]
     assert rhs_index[n_symbol] == acc_index[n_symbol]
     assert acc_index[m_symbol] == result_index[m_symbol]
     assert acc_index[n_symbol] == result_index[n_symbol]
-    return {
+    index = {
         m_symbol: _make_piecewise_sequence(
             (lhs_index[m_symbol], ~index_symbol(MMA_ACC_SYMBOL_NAME)),
             (acc_index[m_symbol], index_symbol(MMA_ACC_SYMBOL_NAME)),
@@ -367,3 +373,8 @@ def convert_index_mapping_array_to_sympy(
         n_symbol: rhs_index[n_symbol],
         k_symbol: lhs_index[k_symbol],
     }
+    # Restore batch dimensions from the accumulator index (they are identical
+    # across all operands).
+    for s in batch_symbols:
+        index[s] = acc_index[s]
+    return index
