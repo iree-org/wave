@@ -31,7 +31,9 @@ def infer_types(
                 trace, constraints, trace.region_graph.subgraphs[custom.subgraph_name]
             )
         custom.infer_type(constraints)
-        # For implicit captures, get type from variables in root graph.
-        if "lifted" in custom.fx_node.meta:
-            custom.type = custom.fx_node.meta["lifted"].type
+        # Captured placeholders represent outer values, so their type should be
+        # inherited from that defining source rather than re-inferred locally.
+        captured_source = NestedRegionOp.capture_source(custom.fx_node)
+        if captured_source is not custom.fx_node:
+            custom.type = captured_source.type
         logger.debug(f"Setting type for {custom.fx_node} = {custom.type}")

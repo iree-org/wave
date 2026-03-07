@@ -101,9 +101,9 @@ def get_hoistable_ops(
                 # with their corresponding lifted values.
                 for placeholder, operand in [(lhs, "lhs"), (rhs, "rhs")]:
                     if is_placeholder(placeholder):
-                        assert "lifted" in placeholder.fx_node.meta
                         custom_node.update_arg(
-                            operand, placeholder.fx_node.meta["lifted"]
+                            operand,
+                            NestedRegionOp.capture_source(placeholder.fx_node),
                         )
                 hoistable_ops.append(custom_node)
         else:
@@ -113,18 +113,11 @@ def get_hoistable_ops(
 
 
 def remove_unused_captured_vars(reduction: CustomOp, subgraph: fx.Graph):
-    captured_vars = reduction.captured_vars(subgraph)
-    new_implicit_captures = list(reduction.implicit_captures)
-    for captured_idx in reversed(range(len(captured_vars))):
-        if len(captured_vars[captured_idx].users) == 0:
-            get_custom(captured_vars[captured_idx]).erase()
-            # Order of captured_vars in subgraph do not necessarily match order of root
-            # implicit_capture. Especially if we introduce instruction reoderings.
-            root_capture_idx = new_implicit_captures.index(
-                captured_vars[captured_idx].meta["lifted"]
-            )
-            new_implicit_captures.pop(root_capture_idx)
-            reduction.update_arg("implicit_captures", new_implicit_captures)
+    for captured in reversed(reduction.captured_vars(subgraph)):
+        if captured.users:
+            continue
+        get_custom(captured).erase()
+    reduction.refresh_captures(subgraph)
 
 
 def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]):
@@ -146,11 +139,16 @@ def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]
                     )
                     for hoistable_op in hoistable_ops:
                         new_op = hoistable_op.copy(new_graph=root_graph)
-                        hoistable_op.replace_all_uses_with(new_op)
-                        hoistable_op.erase()
                         if isinstance(hoistable_op, Read):
-                            root_var = hoistable_op.memory.meta["lifted"]
+                            root_var = NestedRegionOp.capture_source(
+                                hoistable_op.memory
+                            )
                             new_op.update_arg("memory", root_var)
+                        capture = custom_node.get_or_add_capture(
+                            subgraph, new_op, hoistable_op.location
+                        )
+                        hoistable_op.replace_all_uses_with(capture)
+                        hoistable_op.erase()
                     # Clear/Remove unused captured var to correct codegen. Ops inside
                     # scf.for will be indexing/loading from the wrong bindings otherwise.
                     remove_unused_captured_vars(custom_node, subgraph)

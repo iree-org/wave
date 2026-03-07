@@ -15,6 +15,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     _sympy_equiv,
     _check_callable_equivalent,
     _truncate_float_to_dtype,
+    get_users,
 )
 from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
@@ -22,6 +23,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Iterate,
     Conditional,
     Output,
+    Placeholder,
     get_custom,
 )
 from wave_lang.kernel._support.tracing import CapturedTrace
@@ -310,6 +312,24 @@ class TestIsBarrierBetweenNestedGraphs:
         result = is_barrier_between(node_sibling1, node_sibling2)
         assert result is not None
         assert result == barrier_main
+
+
+class TestRegionCaptureTraversal:
+    def test_get_users_maps_outer_value_to_capture_placeholder(self):
+        """Captured region placeholders are reported as users of the outer value."""
+        main_graph, subgraph, iterate_node = create_nested_graph_with_iterate()
+        outer_value = add_test_node(main_graph, "captured_outer")
+        iterate = get_custom(iterate_node)
+        capture_placeholder = iterate.get_or_add_capture(subgraph, outer_value)
+        subgraph_user = add_test_node(subgraph, "subgraph_user")
+        subgraph_user.update_arg(0, capture_placeholder)
+
+        users, region = get_users(outer_value)
+
+        assert region == iterate
+        assert capture_placeholder in users
+        assert isinstance(get_custom(capture_placeholder), Placeholder)
+        assert subgraph_user in capture_placeholder.users
 
 
 class TestOutputComparison:

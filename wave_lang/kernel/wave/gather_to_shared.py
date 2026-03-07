@@ -22,6 +22,7 @@ from ..ops.wave_ops import (
     CustomOp,
     GatherToLDS,
     IndexSequence,
+    NestedRegionOp,
     Read,
     Write,
     get_custom,
@@ -400,9 +401,10 @@ def emit_global_to_lds(
         if hasattr(read, "tag") and read.tag:
             new_write.tag = read.tag
 
-        new_writes[write.memory].append(new_write)
+        memory = NestedRegionOp.capture_source(write.memory)
+        new_writes[memory].append(new_write)
         if config.drop_padding:
-            custom_memory = get_custom(write.memory)
+            custom_memory = get_custom(memory)
             padding = custom_memory.padding
             if padding != 0:
                 custom_memory.update_arg("padding", 0)
@@ -413,7 +415,7 @@ def emit_global_to_lds(
                 )
 
         if config.tail_padding != 0:
-            custom_memory = get_custom(write.memory)
+            custom_memory = get_custom(memory)
             custom_memory.update_arg("tail_padding", config.tail_padding)
 
     return new_writes
