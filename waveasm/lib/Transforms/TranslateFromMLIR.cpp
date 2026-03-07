@@ -9,6 +9,7 @@
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -227,7 +228,7 @@ void TranslationContext::emitSRDPrologue() {
 
     // Step 2.5: Branch to aligned entry point (gfx95* requirement)
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
-    std::string kernelName = program.getSymName().str();
+    std::string kernelName = getKernelName(program);
     std::string mainLabel = ".L_" + kernelName + "_main";
 
     RawOp::create(builder, loc, "s_branch " + mainLabel);
