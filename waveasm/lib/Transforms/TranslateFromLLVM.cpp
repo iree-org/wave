@@ -74,9 +74,19 @@ public:
     return nullptr;
   }
 
+  /// Track base-pointer byte offset from bare-pointer GEPs.
+  /// These offsets accumulate and get added to voffset when the pointer
+  /// is used via make.buffer.rsrc + buffer GEP.
+  void setBaseOffset(Value ptr, Value offset) { baseOffsets[ptr] = offset; }
+  Value getBaseOffset(Value ptr) const {
+    auto it = baseOffsets.find(ptr);
+    return it != baseOffsets.end() ? it->second : Value{};
+  }
+
 private:
   DenseMap<Value, Value> rsrcToSRD;
   DenseMap<Value, BufferPtrInfo> gepMap;
+  DenseMap<Value, Value> baseOffsets;
 };
 
 //===----------------------------------------------------------------------===//
@@ -313,6 +323,13 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     return op->emitOpError("SRD not found for base pointer");
 
   st.mapBufferRsrc(op.getResult(), *srdVal);
+
+  // Propagate any base offset from bare-pointer GEPs so buffer GEPs
+  // can add it to their voffset.
+  Value baseOff = st.getBaseOffset(basePtr);
+  if (baseOff)
+    st.setBaseOffset(op.getResult(), baseOff);
+
   return success();
 }
 
@@ -331,9 +348,38 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
 
   Value newOffset = resolve(idx, ctx);
 
-  // Base can be a make.buffer.rsrc result or a previous GEP result.
+  // Bare-pointer GEP (!llvm.ptr, not <7>): pointer arithmetic before
+  // make.buffer.rsrc. Propagate the mapper entry and accumulate
+  // the byte offset so it can be added to voffset at load/store time.
+  auto baseTy = op.getBase().getType();
+  if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(baseTy)) {
+    if (ptrTy.getAddressSpace() == 0) {
+      // Forward mapper entry so make.buffer.rsrc can find the SRD.
+      auto mapped = ctx.getMapper().getMapped(base);
+      if (mapped)
+        ctx.getMapper().mapValue(op.getResult(), *mapped);
+
+      // Accumulate base offset.
+      Value prevOffset = st.getBaseOffset(base);
+      if (prevOffset) {
+        auto vregTy = ctx.createVRegType();
+        newOffset =
+            V_ADD_U32::create(builder, loc, vregTy, prevOffset, newOffset);
+      }
+      st.setBaseOffset(op.getResult(), newOffset);
+      return success();
+    }
+  }
+
+  // Buffer GEP (ptr<7>): decompose into (SRD, voffset).
   auto srd = st.lookupSRD(base);
   if (srd) {
+    // Check if the make.buffer.rsrc had a base offset from bare-pointer GEPs.
+    Value baseOff = st.getBaseOffset(base);
+    if (baseOff) {
+      auto vregTy = ctx.createVRegType();
+      newOffset = V_ADD_U32::create(builder, loc, vregTy, baseOff, newOffset);
+    }
     st.mapGEP(op.getResult(), {*srd, newOffset});
     return success();
   }
