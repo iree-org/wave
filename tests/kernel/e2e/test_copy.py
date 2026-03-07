@@ -17,7 +17,12 @@ from wave_lang.kernel.wave.utils.general_utils import check_leaks
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from ..common.utils import param_bool, require_e2e, use_water_backend_bool
+from ..common.utils import (
+    param_bool,
+    require_cdna4,
+    require_e2e,
+    use_water_backend_bool,
+)
 from ._test_util import get_test_shapes
 
 
@@ -110,6 +115,7 @@ def test_copy(
 
 
 @require_e2e
+@require_cdna4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 def test_copy_water_waveasm(
     shape: tuple[int, int],
@@ -124,8 +130,12 @@ def test_copy_water_waveasm(
     )
     options = set_default_run_config(options)
     options.backend = "asm"
-    options.compile_to_mlir = True
     test = wave_compile(options, test)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    test(a, b)
+    assert_close(a, b)
 
 
 @require_e2e

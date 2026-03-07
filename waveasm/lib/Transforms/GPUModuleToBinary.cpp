@@ -76,13 +76,11 @@ struct WAVEASMGPUModuleToBinaryPass
     // Step 2: Assemble + link to HSACO.
     ROCDL::SerializeGPUModuleBase::init();
 
-    auto emitError = [&]() -> InFlightDiagnostic {
-      return module.emitError();
-    };
+    auto emitError = [&]() -> InFlightDiagnostic { return module.emitError(); };
 
     std::string cpu = targetArch.getValue();
-    FailureOr<SmallVector<char, 0>> objectCode = ROCDL::assembleIsa(
-        asmText, kTriple, cpu, /*features=*/"", emitError);
+    FailureOr<SmallVector<char, 0>> objectCode =
+        ROCDL::assembleIsa(asmText, kTriple, cpu, /*features=*/"", emitError);
     if (failed(objectCode))
       return signalPassFailure();
 
@@ -106,8 +104,8 @@ struct WAVEASMGPUModuleToBinaryPass
 
     // Step 3: Replace each gpu.module with gpu.binary.
     OpBuilder builder(module.getContext());
-    StringAttr binaryAttr = builder.getStringAttr(
-        StringRef(hsaco->data(), hsaco->size()));
+    StringAttr binaryAttr =
+        builder.getStringAttr(StringRef(hsaco->data(), hsaco->size()));
 
     for (auto gpuModule : gpuModules) {
       builder.setInsertionPointAfter(gpuModule);
@@ -116,8 +114,8 @@ struct WAVEASMGPUModuleToBinaryPass
       if (gpuModule.getTargetsAttr() && !gpuModule.getTargetsAttr().empty())
         target = gpuModule.getTargetsAttr()[0];
       if (!target)
-        target = ROCDL::ROCDLTargetAttr::get(
-            module.getContext(), /*optLevel=*/2, kTriple, cpu);
+        target = ROCDL::ROCDLTargetAttr::get(module.getContext(),
+                                             /*optLevel=*/2, kTriple, cpu);
 
       auto objectAttr = builder.getAttr<gpu::ObjectAttr>(
           target, gpu::CompilationTarget::Binary, binaryAttr,

@@ -19,6 +19,16 @@
 
 namespace waveasm {
 
+/// Return the kernel name for assembly emission.
+/// Uses the "kernel_name" attribute if present, otherwise falls back to
+/// sym_name. The kernel_name attribute is set when the program is given a
+/// mangled sym_name to avoid symbol collisions with the original llvm.func.
+inline std::string getKernelName(ProgramOp program) {
+  if (auto attr = program->getAttrOfType<mlir::StringAttr>("kernel_name"))
+    return attr.getValue().str();
+  return program.getSymName().str();
+}
+
 //===----------------------------------------------------------------------===//
 // Instruction Formatter
 //===----------------------------------------------------------------------===//
