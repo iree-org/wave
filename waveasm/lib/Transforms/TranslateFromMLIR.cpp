@@ -9,6 +9,7 @@
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -278,7 +279,7 @@ void TranslationContext::emitSRDPrologue() {
     // same, and loading them before the branch leaves the overflow arg stale
     // on gfx95 hardware.
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
-    std::string kernelName = program.getSymName().str();
+    std::string kernelName = getKernelName(program);
     std::string mainLabel = ".L_" + kernelName + "_main";
 
     RawOp::create(builder, loc, "s_branch " + mainLabel);

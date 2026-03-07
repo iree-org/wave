@@ -99,7 +99,7 @@ llvm::SmallVector<std::string> MetadataEmitter::emitPrologue() {
   lines.push_back(".text");
   lines.push_back("");
 
-  std::string symName = program.getSymName().str();
+  std::string symName = getKernelName(program);
   lines.push_back(".protected " + symName);
   lines.push_back(".globl " + symName);
   lines.push_back(".p2align 8");
@@ -176,7 +176,7 @@ llvm::SmallVector<std::string>
 MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
                                       int64_t peakAGPRs, int64_t ldsSize) {
   llvm::SmallVector<std::string> lines;
-  std::string symName = program.getSymName().str();
+  std::string symName = getKernelName(program);
 
   bool usesWorkgroupIdX, usesWorkgroupIdY, usesWorkgroupIdZ, usesWorkitemId;
   scanSystemRegisterUsage(program, usesWorkgroupIdX, usesWorkgroupIdY,
@@ -309,7 +309,7 @@ llvm::SmallVector<std::string>
 MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
                                   int64_t peakAGPRs, int64_t ldsSize) {
   llvm::SmallVector<std::string> lines;
-  std::string symName = program.getSymName().str();
+  std::string symName = getKernelName(program);
 
   lines.push_back(".amdgpu_metadata");
   lines.push_back("---");
