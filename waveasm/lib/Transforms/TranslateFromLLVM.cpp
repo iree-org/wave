@@ -318,12 +318,9 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
 static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
   Value base = op.getBase();
-
-  // Base must be a make.buffer.rsrc result (ptr<7>).
-  auto srd = st.lookupSRD(base);
-  if (!srd)
-    return op->emitOpError("GEP base is not a tracked buffer resource");
 
   // GEP index is a dynamic Value (not a constant attr).
   auto indices = op.getIndices();
@@ -332,8 +329,24 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   if (!idx)
     return op->emitOpError("GEP with constant index attr not yet supported");
 
-  Value voffset = resolve(idx, ctx);
-  st.mapGEP(op.getResult(), {*srd, voffset});
+  Value newOffset = resolve(idx, ctx);
+
+  // Base can be a make.buffer.rsrc result or a previous GEP result.
+  auto srd = st.lookupSRD(base);
+  if (srd) {
+    st.mapGEP(op.getResult(), {*srd, newOffset});
+    return success();
+  }
+
+  auto *baseGEP = st.lookupGEP(base);
+  if (!baseGEP)
+    return op->emitOpError("GEP base is not a tracked buffer resource");
+
+  // Chain: add this offset to the base GEP's offset.
+  auto vregTy = ctx.createVRegType();
+  auto sum =
+      V_ADD_U32::create(builder, loc, vregTy, baseGEP->voffset, newOffset);
+  st.mapGEP(op.getResult(), {baseGEP->srd, sum});
   return success();
 }
 
