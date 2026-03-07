@@ -55,9 +55,10 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     CustomOp,
-    TensorLoadToLDS,
     IndexSequence,
+    NestedRegionOp,
     Read,
+    TensorLoadToLDS,
     Write,
     get_custom,
 )
@@ -244,7 +245,7 @@ def emit_tensor_load_to_shared(
     if hasattr(read, "tag") and read.tag:
         tensor_write.tag = read.tag
 
-    tensor_writes[write.memory].append(tensor_write)
+    tensor_writes[NestedRegionOp.capture_source(write.memory)].append(tensor_write)
 
     return tensor_writes
 
@@ -272,7 +273,7 @@ def clear_padding(write: Write):
     """
     Clear shared memory padding if it's not supported by tensor op.
     """
-    custom_memory = get_custom(write.memory)
+    custom_memory = get_custom(NestedRegionOp.capture_source(write.memory))
     padding = custom_memory.padding
     if padding == 0:
         return
