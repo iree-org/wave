@@ -17,6 +17,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   AssemblyEmitter.cpp
   BufferLoadStrengthReduction.cpp
   ExtractScalarization.cpp
+  GPUModuleToBinary.cpp
   HazardMitigation.cpp
   LinearScanPass.cpp
   LinearScanRegAlloc.cpp
@@ -51,7 +52,9 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRLLVMDialect
   MLIRMathDialect
   MLIRMemRefDialect
+  MLIRPass
   MLIRROCDLDialect
+  MLIRROCDLTarget
   MLIRSCFDialect
   MLIRSupport
   MLIRVectorDialect
