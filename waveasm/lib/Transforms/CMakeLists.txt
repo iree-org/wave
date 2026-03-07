@@ -23,6 +23,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MetadataEmitter.cpp
   LiteralMaterialization.cpp
   TranslateFromMLIR.cpp
+  TranslateFromLLVM.cpp
   RegionBuilder.cpp
   ScopedCSE.cpp
   Peephole.cpp
@@ -50,7 +51,9 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRMemRefDialect
   MLIRSCFDialect
   MLIRVectorDialect
+  MLIRLLVMDialect
   MLIRMathDialect
+  MLIRROCDLDialect
   MLIRIR
   MLIRSupport
 )
