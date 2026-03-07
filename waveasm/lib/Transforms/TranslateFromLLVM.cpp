@@ -458,7 +458,22 @@ static LogicalResult handleLoad(LLVM::LoadOp op, LLVMTranslationState &st) {
     loadOp =
         BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregTy}, ptr->srd,
                                   ptr->voffset, zeroSoffset, /*instOffset=*/0);
-  else
+  else if (numBytes == 8) {
+    auto wideTy = ctx.createVRegType(2, 2);
+    loadOp = BUFFER_LOAD_DWORDX2::create(builder, loc, TypeRange{wideTy},
+                                         ptr->srd, ptr->voffset, zeroSoffset,
+                                         /*instOffset=*/0);
+  } else if (numBytes == 12) {
+    auto wideTy = ctx.createVRegType(3, 3);
+    loadOp = BUFFER_LOAD_DWORDX3::create(builder, loc, TypeRange{wideTy},
+                                         ptr->srd, ptr->voffset, zeroSoffset,
+                                         /*instOffset=*/0);
+  } else if (numBytes == 16) {
+    auto wideTy = ctx.createVRegType(4, 4);
+    loadOp = BUFFER_LOAD_DWORDX4::create(builder, loc, TypeRange{wideTy},
+                                         ptr->srd, ptr->voffset, zeroSoffset,
+                                         /*instOffset=*/0);
+  } else
     return op->emitOpError("unsupported load size: ") << numBytes << " bytes";
 
   ctx.getMapper().mapValue(op.getResult(), loadOp->getResult(0));
@@ -483,6 +498,15 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
   else if (numBytes == 4)
     BUFFER_STORE_DWORD::create(builder, loc, data, ptr->srd, ptr->voffset,
                                /*instOffset=*/0);
+  else if (numBytes == 8)
+    BUFFER_STORE_DWORDX2::create(builder, loc, data, ptr->srd, ptr->voffset,
+                                 /*instOffset=*/0);
+  else if (numBytes == 12)
+    BUFFER_STORE_DWORDX3::create(builder, loc, data, ptr->srd, ptr->voffset,
+                                 /*instOffset=*/0);
+  else if (numBytes == 16)
+    BUFFER_STORE_DWORDX4::create(builder, loc, data, ptr->srd, ptr->voffset,
+                                 /*instOffset=*/0);
   else
     return op->emitOpError("unsupported store size: ") << numBytes << " bytes";
 
