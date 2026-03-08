@@ -120,7 +120,11 @@ from .cache import (
     is_cache_enabled,
 )
 
-from .water import water_leak_in_bounds_check, water_lowering_pipeline
+from .water import (
+    water_leak_in_bounds_check,
+    water_lowering_pipeline,
+    water_waveasm_lowering_pipeline,
+)
 from wave_lang.runtime.launch import Launchable
 from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .wave import LaunchableWave
@@ -1163,7 +1167,16 @@ def wave_compile(
         ]
         options.kernel_usages = kernel_usages
 
-        if options.compile_to_asm or options.backend == "asm":
+        if options.use_water_backend and options.backend == "asm":
+            # Water + WaveASM flow: lower to LLVM dialect, then waveasm.
+            module = water_waveasm_lowering_pipeline(mb.module_op, options)
+            return WaveKernelExecutionEngine(
+                options,
+                module,
+                asm,
+                create_execution_engine=not options.compile_to_mlir,
+            )
+        elif options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
 
@@ -1307,11 +1320,6 @@ def _generate_asm_code_waveasm(mlir_asm, options):
             "--waveasm-scoped-cse",
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
@@ -1410,4 +1418,5 @@ def validate_options(options: WaveCompileOptions):
         )
 
     if options.backend == "asm" and not options.wave_runtime:
-        raise ValueError("ASM backend requires wave_runtime=True")
+        if not options.use_water_backend:
+            raise ValueError("ASM backend requires wave_runtime=True")

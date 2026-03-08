@@ -239,4 +239,45 @@ def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// Translate from LLVM Dialect Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary", "::mlir::ModuleOp"> {
+  let summary = "Emit assembly and link gpu.module { waveasm.program } to gpu.binary";
+  let description = [{
+    Final pass in the WaveASM pipeline.  Expects gpu.module ops containing
+    register-allocated waveasm.program ops.  Emits AMDGCN assembly, assembles
+    + links to HSACO via LLVM MC, and replaces each gpu.module with a
+    gpu.binary holding the code object.
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+           "Target GPU architecture">,
+    Option<"lldPath", "lld-path", "std::string", "\"\"",
+           "Path to ld.lld for linking HSACO">
+  ];
+
+  let dependentDialects = [
+    "::waveasm::WaveASMDialect",
+    "::mlir::gpu::GPUDialect"
+  ];
+}
+
+def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm", "::mlir::ModuleOp"> {
+  let summary = "Translate LLVM dialect kernels to WaveASM IR";
+  let description = [{
+    Translates gpu.module { llvm.func } with rocdl intrinsics into
+    waveasm.program ops.  Fails on any unhandled op (strict mode).
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+           "Target GPU architecture">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 #endif // WaveASM_TRANSFORMS_PASSES

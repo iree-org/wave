@@ -293,7 +293,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
             workgroup_size,
             lds_size,
             $_builder.getI64IntegerAttr(kernarg_preload_length));
-      // Ensure the body region has a block (region is created by generated builder)
+      // Ensure the body region has a block (region is created by generated builder).
       if ($_state.regions.back()->empty())
         $_state.regions.back()->emplaceBlock();
     }]>

@@ -370,6 +370,127 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         print("[info] No out-of-bounds accesses detected.")
 
 
+def water_waveasm_lowering_pipeline(
+    module: Module, options: WaveCompileOptions
+) -> Module:
+    """Lower via water-opt → waveasm-translate → water-opt.
+
+    Step 1 (water-opt): lower to LLVM dialect on both host and device sides.
+    Step 2 (waveasm-translate): LLVM → WaveASM → regalloc → HSACO → gpu.binary.
+    Step 3 (water-opt): host runtime wrapping (gpu.binary → runtime calls).
+    """
+    water_opt = get_water_opt()
+    mlir_asm = module.operation.get_asm()
+    target_chip = options.target
+    lld_path = get_water_mlir_pkg_path() / "llvm" / "bin" / "ld.lld"
+
+    def add_opt(pipeline):
+        if options.optimization_level:
+            return [pipeline]
+        return []
+
+    canonicalize_cse = "composite-fixed-point-pass", {
+        "name": "canonicalize_cse",
+        "pipeline": "any(canonicalize,cse)",
+    }
+
+    int_range_optimizations = "composite-fixed-point-pass", {
+        "name": "int-range-optimizations",
+        "pipeline": 'any(int-range-optimizations,arith-int-range-narrowing{int-bitwidths-supported="32"},canonicalize,cse)',
+    }
+
+    # Step 1: water-opt lowers host + device to LLVM dialect.
+    lowering_pipeline = [
+        "water-memref-decomposition",
+        *add_opt(canonicalize_cse),
+        "lower-affine",
+        *add_opt(int_range_optimizations),
+        *add_opt("loop-invariant-code-motion"),
+        "convert-scf-to-cf",
+        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
+        (
+            "convert-gpu-to-rocdl",
+            {"use-bare-ptr-memref-call-conv": "1"},
+            "gpu.module",
+        ),
+        ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
+        "convert-vector-to-llvm",
+        "reconcile-unrealized-casts",
+        *add_opt(canonicalize_cse),
+    ]
+
+    def run_subprocess(args, input_text, tool_name):
+        try:
+            result = subprocess.run(
+                args, input=input_text, text=True, capture_output=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"{tool_name} failed (rc={result.returncode}):\n{result.stderr}"
+                )
+            return result.stdout
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"{tool_name} failed: {e}") from e
+
+    water_args = [water_opt, make_linear_pass_pipeline(lowering_pipeline)]
+    if options.mlir_print_ir_after_all:
+        water_args.append("--mlir-print-ir-after-all")
+    lowered_mlir = run_subprocess(water_args, mlir_asm, "water-opt (lowering)")
+
+    if options.print_mlir:
+        print("=== After water-opt lowering ===")
+        print(lowered_mlir)
+
+    if options.compile_to_mlir:
+        with module.context:
+            return Module.parse(lowered_mlir)
+
+    # Step 2: waveasm-translate — LLVM → WaveASM → regalloc → gpu.binary.
+    from wave_lang.support.detect_waveasm import get_waveasm_translate
+
+    waveasm_translate = get_waveasm_translate()
+    waveasm_args = [
+        waveasm_translate,
+        f"--waveasm-translate-from-llvm=target={target_chip}",
+        "--waveasm-scoped-cse",
+        "--waveasm-peephole",
+        "--waveasm-memory-offset-opt",
+        "--canonicalize",
+        "--waveasm-scoped-cse",
+        "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+        "--waveasm-insert-waitcnt=ticketed-waitcnt=true",
+        f"--waveasm-hazard-mitigation=target={target_chip}",
+        f"--waveasm-gpu-module-to-binary=target={target_chip} lld-path={lld_path}",
+    ]
+    if options.mlir_print_ir_after_all:
+        waveasm_args.append("--mlir-print-ir-after-all")
+    binary_mlir = run_subprocess(waveasm_args, lowered_mlir, "waveasm-translate")
+
+    if options.print_mlir:
+        print("=== After waveasm-translate ===")
+        print(binary_mlir[:500], "..." if len(binary_mlir) > 500 else "")
+
+    # Step 3: water-opt host runtime wrapping.
+    host_pipeline = [
+        "water-gpu-to-gpu-runtime",
+        "symbol-dce",
+        *add_opt(canonicalize_cse),
+    ]
+    host_args = [water_opt, make_linear_pass_pipeline(host_pipeline)]
+    if options.mlir_print_ir_after_all:
+        host_args.append("--mlir-print-ir-after-all")
+    final_mlir = run_subprocess(host_args, binary_mlir, "water-opt (host)")
+
+    if options.print_mlir:
+        print("=== After water-opt host ===")
+        print(final_mlir)
+
+    with module.context:
+        return Module.parse(final_mlir)
+
+
 def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
     binary = get_water_opt()
     mlir_asm = module.operation.get_asm()

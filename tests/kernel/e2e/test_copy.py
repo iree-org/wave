@@ -17,7 +17,12 @@ from wave_lang.kernel.wave.utils.general_utils import check_leaks
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from ..common.utils import param_bool, require_e2e, use_water_backend_bool
+from ..common.utils import (
+    param_bool,
+    require_cdna4,
+    require_e2e,
+    use_water_backend_bool,
+)
 from ._test_util import get_test_shapes
 
 
@@ -101,6 +106,34 @@ def test_copy(
         use_water_backend=use_water_backend,
     )
     options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    test(a, b)
+    assert_close(a, b)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+def test_copy_water_waveasm(
+    shape: tuple[int, int],
+    run_bench: bool,
+) -> None:
+    """Test copy kernel through the water+waveasm pipeline (LLVM dialect input)."""
+    # Shapes that don't tile evenly generate vector constants for bounds
+    # checking, which require a scalarization pass not yet implemented.
+    if shape == (111, 813):
+        pytest.skip("vector constants not yet supported in waveasm")
+    options, test = get_copy_template(
+        shape,
+        run_bench=run_bench,
+        use_water_backend=True,
+        use_buffer_ops=True,
+    )
+    options = set_default_run_config(options)
+    options.backend = "asm"
     test = wave_compile(options, test)
 
     a = device_randn(shape, dtype=torch.float16)
