@@ -288,6 +288,34 @@ def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary"> {
   ];
 }
 
+def WAVEASMArithLegalization : Pass<"waveasm-arith-legalization"> {
+  let summary = "Lower generic arithmetic pseudo-ops to concrete SALU/VALU ops";
+  let description = [{
+    Lowers register-file-agnostic arith pseudo-ops (arith.add, arith.mul,
+    arith.cmp, arith.select, arith.trunc, arith.sext, arith.zext) to
+    concrete SALU or VALU machine ops.
+
+    Register file assignment (demand-driven divergence):
+    - If any operand is a VGPR → use VALU, result is VGPR.
+    - If all operands are SGPR/immediate → use SALU, result is SGPR.
+
+    Constant bus enforcement:
+    - VALU ops can read at most one SGPR per instruction.
+    - If both operands are SGPRs, one is moved to VGPR via v_mov_b32.
+
+    Type legalization (i64 narrowing):
+    - Wide (size>1) operands are truncated to their low sub-register.
+    - TODO: Full i64 carry-chain expansion.
+  }];
+
+  let statistics = [
+    Statistic<"numOpsLegalized", "Pseudo-ops legalized", "count">,
+    Statistic<"numSGPRToVGPRMoves", "SGPR-to-VGPR moves inserted", "count">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
   let summary = "Translate LLVM dialect kernels to WaveASM IR";
   let description = [{

@@ -14,6 +14,7 @@ foreach(src ${HANDLERS_SRCS})
 endforeach()
 
 add_mlir_dialect_library(MLIRWaveASMTransforms
+  ArithLegalization.cpp
   AssemblyEmitter.cpp
   BufferLoadStrengthReduction.cpp
   ExtractScalarization.cpp
