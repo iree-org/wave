@@ -32,6 +32,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   ScalePackElimination.cpp
   BufferLoadStrengthReduction.cpp
   GPUModuleToBinary.cpp
+  ArithLegalization.cpp
   LoopAddressPromotion.cpp
   ${HANDLERS_FULL_PATHS}
 
