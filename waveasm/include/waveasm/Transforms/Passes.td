@@ -224,6 +224,29 @@ def WAVEASMScalePackElimination : Pass<"waveasm-scale-pack-elimination"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Extract Scalarization Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMExtractScalarization
+    : Pass<"waveasm-extract-scalarization"> {
+  let summary = "Scalarize vector.extract from broadcast+dense-const patterns";
+  let description = [{
+    Pre-translation pass that rewrites
+      vector.extract[k]( index_cast?( select?( addi(broadcast(x), dense<[...]>) )))
+    into scalar operations: arith.addi %x, dense[k], with an optional scalar
+    arith.select if the original chain included one.
+
+    This eliminates non-splat dense vector constants before the WaveASM
+    translator runs, so translation handlers only see ordinary scalar IR.
+  }];
+
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::vector::VectorDialect"
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Offset Optimization Pass
 //===----------------------------------------------------------------------===//
 

@@ -173,6 +173,27 @@ LogicalResult handleMemRefReinterpretCast(Operation *op,
     ctx.updateSRDBufferSize(castOp.getSource(), bufferSize);
   }
 
+  // Track dynamic strides so load/store handlers can compute correct offsets.
+  // Dynamic stride operands fill positions where static_strides == kDynamic.
+  if (auto memrefType = dyn_cast<MemRefType>(castOp.getResult().getType())) {
+    SmallVector<int64_t, 4> staticStrides;
+    int64_t memrefOff;
+    if (succeeded(memrefType.getStridesAndOffset(staticStrides, memrefOff))) {
+      auto dynamicStrides = castOp.getStrides();
+      unsigned dynIdx = 0;
+      for (unsigned dim = 0; dim < staticStrides.size(); ++dim) {
+        if (staticStrides[dim] == ShapedType::kDynamic &&
+            dynIdx < dynamicStrides.size()) {
+          auto mapped = ctx.getMapper().getMapped(dynamicStrides[dynIdx]);
+          if (mapped) {
+            ctx.setDynamicStride(castOp.getResult(), dim, *mapped);
+          }
+          ++dynIdx;
+        }
+      }
+    }
+  }
+
   return success();
 }
 
@@ -286,19 +307,34 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
-/// Handle memref.cast - pass through source and propagate pending SRD
-/// adjustment so that cast chains (reinterpret_cast -> cast -> cast ->
-/// fat_raw_buffer_cast) do not silently lose the per-workgroup offset.
+/// Handle memref.cast - pass through source and propagate metadata.
+/// memref.cast only changes the static type (e.g. erasing dynamic info);
+/// it does not change the underlying buffer, so all runtime metadata
+/// (dynamic strides, SRD adjustments, LDS offsets) must be forwarded.
 LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx) {
   auto castOp = cast<memref::CastOp>(op);
 
   if (auto src = ctx.getMapper().getMapped(castOp.getSource())) {
     ctx.getMapper().mapValue(castOp.getResult(), *src);
   }
+
+  // Propagate dynamic strides through cast chains.
+  auto sourceType = cast<MemRefType>(castOp.getSource().getType());
+  for (unsigned dim = 0; dim < (unsigned)sourceType.getRank(); ++dim) {
+    if (auto dynStride = ctx.getDynamicStride(castOp.getSource(), dim)) {
+      ctx.setDynamicStride(castOp.getResult(), dim, *dynStride);
+    }
+  }
+
   if (auto *adj = ctx.getPendingSRDBaseAdjust(castOp.getSource())) {
     ctx.setPendingSRDBaseAdjust(castOp.getResult(), adj->elementOffset,
                                 adj->srcSrdBase, adj->elementBytes);
   }
+
+  if (auto ldsOffset = ctx.getLDSBaseOffset(castOp.getSource())) {
+    ctx.setLDSBaseOffset(castOp.getResult(), *ldsOffset);
+  }
+
   return success();
 }
 

@@ -16,6 +16,7 @@
 #include "Handlers.h"
 
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -26,6 +27,22 @@
 using namespace mlir;
 
 namespace waveasm {
+
+// Materializes VCC (set by a preceding V_CMP) into a VGPR holding 0 or 1.
+// V_CNDMASK_B32 implicitly reads VCC; the op definition lacks Pure/ArithmeticOp
+// traits so CSE will never merge distinct instances.
+static Value materializeVCCToBoolVGPR(OpBuilder &builder, Location loc,
+                                      TranslationContext &ctx) {
+  auto vregType = ctx.createVRegType();
+  auto immZero = ctx.createImmType(0);
+  auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
+  auto immOne = ctx.createImmType(1);
+  auto oneConst = ConstantOp::create(builder, loc, immOne, 1);
+  Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
+  Value boolVgpr = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
+                                         oneVgpr, zeroConst);
+  return boolVgpr;
+}
 
 //===----------------------------------------------------------------------===//
 // Constant Handler
@@ -60,17 +77,26 @@ LogicalResult handleArithConstant(Operation *op, TranslationContext &ctx) {
     return success();
   }
 
-  // Handle dense vector constants (e.g., dense<0.0> for accumulator init)
+  // Handle dense vector constants.
+  // The C++ backend is SIMT: each thread processes one vector element.
+  // For splat constants, map to the scalar value.
+  // Non-splat dense vectors are left unmapped and must be handled by a
+  // consumer that can prove a sound scalarization.
   if (auto denseAttr = dyn_cast<DenseElementsAttr>(value)) {
     if (denseAttr.isSplat()) {
       auto splatVal = denseAttr.getSplatValue<Attribute>();
       if (auto floatAttr = dyn_cast<FloatAttr>(splatVal)) {
         double floatVal = floatAttr.getValueAsDouble();
-        if (floatVal == 0.0) {
-          auto immType = ctx.createImmType(0);
-          auto immOp = ConstantOp::create(builder, loc, immType, 0);
-          ctx.getMapper().mapValue(constOp.getResult(), immOp);
-        }
+        float f = static_cast<float>(floatVal);
+        int32_t bits = (floatVal == 0.0) ? 0 : bitCast<int32_t>(f);
+        auto immType = ctx.createImmType(bits);
+        auto immOp = ConstantOp::create(builder, loc, immType, bits);
+        ctx.getMapper().mapValue(constOp.getResult(), immOp);
+      } else if (auto intAttr = dyn_cast<IntegerAttr>(splatVal)) {
+        int64_t intVal = intAttr.getInt();
+        auto immType = ctx.createImmType(intVal);
+        auto immOp = ConstantOp::create(builder, loc, immType, intVal);
+        ctx.getMapper().mapValue(constOp.getResult(), immOp);
       }
     }
     return success();
@@ -302,8 +328,60 @@ LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx) {
     return failure();
   }
 
-  // Emit comparison based on predicate
-  // These operations set VCC implicitly (no SSA result)
+  // When both operands are scalar (SGPR or immediate), use S_CMP which
+  // produces an SGPR result directly.  This is required for scf.if/scf.for
+  // conditions that feed waveasm.if/waveasm.condition (which require SGPRs).
+  bool lhsScalar = isSGPRType(lhs->getType()) || isImmType(lhs->getType());
+  bool rhsScalar = isSGPRType(rhs->getType()) || isImmType(rhs->getType());
+
+  if (lhsScalar && rhsScalar) {
+    auto sregType = ctx.createSRegType();
+    // S_CMP requires SGPR operands; move immediates to SGPRs first.
+    Value lhsOp = *lhs;
+    Value rhsOp = *rhs;
+    if (isImmType(lhsOp.getType()))
+      lhsOp = S_MOV_B32::create(builder, loc, sregType, lhsOp);
+    if (isImmType(rhsOp.getType()))
+      rhsOp = S_MOV_B32::create(builder, loc, sregType, rhsOp);
+    Value result;
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+      result = S_CMP_EQ_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::ne:
+      result = S_CMP_NE_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::slt:
+      result = S_CMP_LT_I32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::sle:
+      result = S_CMP_LE_I32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::sgt:
+      result = S_CMP_GT_I32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::sge:
+      result = S_CMP_GE_I32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::ult:
+      result = S_CMP_LT_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::ule:
+      result = S_CMP_LE_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::ugt:
+      result = S_CMP_GT_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    case arith::CmpIPredicate::uge:
+      result = S_CMP_GE_U32::create(builder, loc, sregType, lhsOp, rhsOp);
+      break;
+    }
+    ctx.getMapper().mapValue(cmpOp.getResult(), result);
+    return success();
+  }
+
+  // Vector path: at least one operand is a VGPR, so use V_CMP which writes
+  // to VCC implicitly.
   switch (cmpOp.getPredicate()) {
   case arith::CmpIPredicate::eq:
     V_CMP_EQ_U32::create(builder, loc, *lhs, *rhs);
@@ -337,10 +415,8 @@ LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx) {
     break;
   }
 
-  // Map result to a placeholder (the select handler will use VCC implicitly)
-  auto immOne = ctx.createImmType(1);
-  auto one = ConstantOp::create(builder, loc, immOne, 1);
-  ctx.getMapper().mapValue(cmpOp.getResult(), one);
+  Value boolVgpr = materializeVCCToBoolVGPR(builder, loc, ctx);
+  ctx.getMapper().mapValue(cmpOp.getResult(), boolVgpr);
   return success();
 }
 
@@ -357,6 +433,11 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
   if (!cond || !trueVal || !falseVal) {
     return op->emitError("operands not mapped");
   }
+
+  // Restore the materialized boolean VGPR (0/1) back into VCC
+  auto immZero = ctx.createImmType(0);
+  auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
+  V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);
 
   auto result =
       V_CNDMASK_B32::create(builder, loc, vregType, *falseVal, *trueVal, *cond);
@@ -425,10 +506,8 @@ LogicalResult handleArithCmpF(Operation *op, TranslationContext &ctx) {
     break;
   }
 
-  // Map result to a placeholder (the select handler will use VCC implicitly)
-  auto immOne = ctx.createImmType(1);
-  auto one = ConstantOp::create(builder, loc, immOne, 1);
-  ctx.getMapper().mapValue(cmpOp.getResult(), one);
+  Value boolVgpr = materializeVCCToBoolVGPR(builder, loc, ctx);
+  ctx.getMapper().mapValue(cmpOp.getResult(), boolVgpr);
   return success();
 }
 

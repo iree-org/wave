@@ -143,8 +143,15 @@ void TranslationContext::queueSRDSetup(Value memref, int64_t argIndex,
   setSRDIndex(memref, srdBase);
 }
 
+void TranslationContext::queueScalarArgLoad(Value blockArg, int64_t argIndex) {
+  PendingScalarArg pending;
+  pending.blockArg = blockArg;
+  pending.argIndex = argIndex;
+  pendingScalarArgs.push_back(pending);
+}
+
 void TranslationContext::emitSRDPrologue() {
-  if (srdPrologueEmitted || pendingSRDs.empty())
+  if (srdPrologueEmitted || (pendingSRDs.empty() && pendingScalarArgs.empty()))
     return;
 
   srdPrologueEmitted = true;
@@ -158,7 +165,8 @@ void TranslationContext::emitSRDPrologue() {
   // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
   int64_t userSgprCount = 2; // kernarg ptr
   if (isGFX95) {
-    userSgprCount += pendingSRDs.size() * 2; // preloaded args
+    userSgprCount +=
+        getNumKernelArgs() * 2; // preloaded args (bindings + scalars)
   }
   int64_t systemSgprCount = 3; // workgroup_id_x, y, z
   int64_t srdStartIndex =
@@ -200,6 +208,14 @@ void TranslationContext::emitSRDPrologue() {
                                  /*size=*/2);
       }
     }
+    for (const auto &pending : pendingScalarArgs) {
+      int64_t preloadBase = 2 + pending.argIndex * 2;
+      if (reservedPreloadBases.insert(preloadBase).second) {
+        auto preloadType = createSRegType(2, 2);
+        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
+                                 /*size=*/2);
+      }
+    }
   }
 
   if (isGFX95) {
@@ -213,6 +229,19 @@ void TranslationContext::emitSRDPrologue() {
         PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
     for (const auto &pending : pendingSRDs) {
+      int64_t loadBase = 2 + pending.argIndex * 2;
+      int64_t kernargOffset = pending.argIndex * 8;
+
+      auto loadDstType = createSRegType(2, loadBase);
+      auto offsetImm = builder.getType<ImmType>(kernargOffset);
+      auto offsetConst =
+          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
+      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
+                             offsetConst);
+    }
+
+    // Also load scalar kernel arguments (index types) from kernarg buffer
+    for (const auto &pending : pendingScalarArgs) {
       int64_t loadBase = 2 + pending.argIndex * 2;
       int64_t kernargOffset = pending.argIndex * 8;
 
@@ -269,6 +298,19 @@ void TranslationContext::emitSRDPrologue() {
 
       mapper.mapValue(pending.memref, srdReg);
     }
+
+    // Move scalar args from preload SGPRs to VGPRs.
+    // Lower 32 bits of the preload pair hold the value (little-endian).
+    for (const auto &pending : pendingScalarArgs) {
+      int64_t preloadBase = 2 + pending.argIndex * 2;
+      auto vregType = createVRegType();
+      auto vreg =
+          PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
+      RawOp::create(builder, loc,
+                    "v_mov_b32 v" + std::to_string(pending.argIndex) + ", s" +
+                        std::to_string(preloadBase));
+      mapper.mapValue(pending.blockArg, vreg);
+    }
   } else {
     // Non-GFX95* path (e.g., gfx942): Load directly into SRD positions
     // This eliminates the s_mov_b64 copies by loading args directly into the
@@ -292,6 +334,27 @@ void TranslationContext::emitSRDPrologue() {
           ConstantOp::create(builder, loc, offsetImm, kernargOffset);
       S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
                              offsetConst);
+    }
+
+    // Load scalar kernel arguments (index types) into pinned SGPRs after
+    // all SRDs.  Must use RawOp + PrecoloredSRegOp so the register
+    // allocator does not move the load destinations away from the SGPRs
+    // that the subsequent RawOp v_mov_b32 references.
+    int64_t scalarSgprBase =
+        (srdStartIndex + (int64_t)pendingSRDs.size() * 4 + 3) &
+        ~3; // Align to 4, after all SRDs
+    for (size_t i = 0; i < pendingScalarArgs.size(); ++i) {
+      const auto &pending = pendingScalarArgs[i];
+      int64_t sgprIdx = scalarSgprBase + (int64_t)i;
+      int64_t kernargOffset = pending.argIndex * 8;
+
+      // Pin the destination SGPR so regalloc doesn't reuse it.
+      PrecoloredSRegOp::create(builder, loc, createSRegType(1, 1), sgprIdx, 1);
+
+      // Use RawOp to load directly into the pinned SGPR.
+      RawOp::create(builder, loc,
+                    "s_load_dword s" + std::to_string(sgprIdx) + ", s[0:1], " +
+                        std::to_string(kernargOffset));
     }
 
     // Step 2: Wait for all scalar loads to complete
@@ -319,6 +382,20 @@ void TranslationContext::emitSRDPrologue() {
       RawOp::create(builder, loc, movStrideStr);
 
       mapper.mapValue(pending.memref, srdReg);
+    }
+
+    // Move scalar args from SGPRs to VGPRs
+    for (size_t i = 0; i < pendingScalarArgs.size(); ++i) {
+      const auto &pending = pendingScalarArgs[i];
+      int64_t sgprIdx = scalarSgprBase + (int64_t)i;
+
+      auto vregType = createVRegType();
+      auto vreg =
+          PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
+      RawOp::create(builder, loc,
+                    "v_mov_b32 v" + std::to_string(pending.argIndex) + ", s" +
+                        std::to_string(sgprIdx));
+      mapper.mapValue(pending.blockArg, vreg);
     }
   }
 
@@ -362,7 +439,8 @@ void TranslationContext::updateSRDBufferSize(Value memref, int64_t bufferSize) {
 
 VOffsetResult computeVOffsetFromIndices(MemRefType memrefType,
                                         ValueRange indices,
-                                        TranslationContext &ctx, Location loc) {
+                                        TranslationContext &ctx, Location loc,
+                                        Value base) {
   auto &builder = ctx.getBuilder();
   Type elementType = memrefType.getElementType();
   int64_t elementBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
@@ -378,6 +456,36 @@ VOffsetResult computeVOffsetFromIndices(MemRefType memrefType,
       if (!idxMapped)
         continue;
       Value idx = *idxMapped;
+
+      // Handle dynamic strides: look up the runtime stride value from
+      // the reinterpret_cast that created this memref.
+      if (strides[i] == ShapedType::kDynamic && base) {
+        auto dynStride = ctx.getDynamicStride(base, i);
+        if (dynStride) {
+          // dimOffset = idx * (runtimeStride * elementBytes)
+          // First: compute runtimeStride * elementBytes if elementBytes > 1
+          Value bytesPerElement;
+          if (elementBytes > 1) {
+            auto elemBytesImm = ConstantOp::create(
+                builder, loc, ctx.createImmType(elementBytes), elementBytes);
+            bytesPerElement = V_MUL_LO_U32::create(
+                builder, loc, ctx.createVRegType(), *dynStride, elemBytesImm);
+          } else {
+            bytesPerElement = *dynStride;
+          }
+          // dimOffset = idx * bytesPerElement
+          Value dimOffset = V_MUL_LO_U32::create(
+              builder, loc, ctx.createVRegType(), idx, bytesPerElement);
+          if (!voffset) {
+            voffset = dimOffset;
+          } else {
+            voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                        voffset, dimOffset);
+          }
+          continue;
+        }
+      }
+
       int64_t strideBytes = strides[i] * elementBytes;
       if (strideBytes == 0)
         continue;
@@ -1014,14 +1122,11 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
     ctx.getMapper().mapValue(loadOp.getResult(), readOp->getResult(0));
   } else {
     // Global load - buffer_load_dwordx* with splitting for large vectors
-    auto [voffset, instOffset] =
-        computeVOffsetFromIndices(memrefType, loadOp.getIndices(), ctx, loc);
+    auto [voffset, instOffset] = computeVOffsetFromIndices(
+        memrefType, loadOp.getIndices(), ctx, loc, loadOp.getBase());
 
     Value srd;
 
-    // Check for pending per-workgroup SRD base adjustment (from linearized
-    // reinterpret_cast when use_buffer_ops=True). Create an adjusted SRD
-    // with the workgroup offset baked into the base address.
     if (auto *adj = ctx.getPendingSRDBaseAdjust(loadOp.getBase())) {
       srd = emitSRDBaseAdjustment(*adj, loadOp.getBase(), ctx, loc);
     } else {
@@ -1042,40 +1147,71 @@ LogicalResult handleVectorLoad(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
-/// Handle vector.maskedload - emit buffer_load unconditionally.
-///
-/// NOTE: The mask and passthrough operands are intentionally ignored.
-/// In the split-K GEMM context, masked loads are generated with all-true
-/// masks (the SRD is configured with correct buffer bounds, so out-of-bounds
-/// lanes return zero via hardware). If this assumption is violated, the
-/// loaded values for masked-off lanes will be incorrect.
+/// Emit exec masking: save exec, AND with VCC derived from mask VGPR.
+/// Returns the saved-exec SSA value for later restoration.
+static Value emitExecMask(Value maskVgpr, TranslationContext &ctx,
+                          OpBuilder &builder, Location loc) {
+  auto immZero = ctx.createImmType(0);
+  auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
+  V_CMP_NE_U32::create(builder, loc, maskVgpr, zeroConst);
+  auto sregType64 = ctx.createSRegType(2, 2);
+  return S_AND_SAVEEXEC_B64::create(builder, loc, sregType64);
+}
+
+/// Restore exec from saved value.
+static void emitExecRestore(Value savedExec, TranslationContext &ctx,
+                            OpBuilder &builder, Location loc) {
+  S_MOV_B64_EXEC::create(builder, loc, savedExec);
+}
+
+/// Handle vector.maskedload with exec masking.
+/// Pre-fills the result register with the passthrough value, then exec-masks
+/// the buffer_load so only active lanes overwrite their result.
 LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
   auto maskedLoadOp = cast<vector::MaskedLoadOp>(op);
+  auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
 
   auto memrefType = cast<MemRefType>(maskedLoadOp.getBase().getType());
   auto vectorType = maskedLoadOp.getVectorType();
   int64_t numBytes = getVectorBytes(vectorType);
 
-  if (numBytes <= 0) {
-    return op->emitError(
-        "vector.maskedload with zero-size vector type is invalid");
+  if (numBytes <= 0)
+    return op->emitError("vector.maskedload with zero-size vector is invalid");
+
+  // Pre-fill result with passthrough value so inactive lanes get the right data
+  auto passthrough = ctx.getMapper().getMapped(maskedLoadOp.getPassThru());
+  Value resultReg;
+  if (passthrough) {
+    resultReg = *passthrough;
+  } else {
+    auto immZero = ctx.createImmType(0);
+    resultReg = ConstantOp::create(builder, loc, immZero, 0);
   }
 
-  LLVM_DEBUG(llvm::dbgs() << "vector.maskedload: mask and passthrough "
-                             "operands are ignored (assuming all-true mask)\n");
+  // Get mask VGPR (the mask is broadcast from a scalar i1 comparison)
+  auto mask = ctx.getMapper().getMapped(maskedLoadOp.getMask());
+  if (!mask)
+    return op->emitError("mask operand not mapped");
 
+  // Save exec and apply mask
+  Value savedExec = emitExecMask(*mask, ctx, builder, loc);
+
+  // Emit buffer_load (only active lanes execute)
   auto [voffset, instOffset] = computeVOffsetFromIndices(
-      memrefType, maskedLoadOp.getIndices(), ctx, loc);
+      memrefType, maskedLoadOp.getIndices(), ctx, loc, maskedLoadOp.getBase());
   Value srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
   auto loadResults =
       emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
 
+  // Restore exec
+  emitExecRestore(savedExec, ctx, builder, loc);
+
+  // Map result
   if (!loadResults.empty()) {
     ctx.getMapper().mapValue(maskedLoadOp.getResult(), loadResults[0]);
-    if (loadResults.size() > 1) {
+    if (loadResults.size() > 1)
       ctx.registerSplitResults(maskedLoadOp.getResult(), loadResults);
-    }
   }
 
   return success();
@@ -1312,6 +1448,32 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
           continue;
 
         Value idx = *idxMapped;
+
+        // Handle dynamic strides from reinterpret_cast
+        if (strides[i] == ShapedType::kDynamic) {
+          auto dynStride = ctx.getDynamicStride(storeOp.getBase(), i);
+          if (dynStride) {
+            Value bytesPerElement;
+            if (elementBytes > 1) {
+              auto elemBytesImm = ConstantOp::create(
+                  builder, loc, ctx.createImmType(elementBytes), elementBytes);
+              bytesPerElement = V_MUL_LO_U32::create(
+                  builder, loc, ctx.createVRegType(), *dynStride, elemBytesImm);
+            } else {
+              bytesPerElement = *dynStride;
+            }
+            Value dimOffset = V_MUL_LO_U32::create(
+                builder, loc, ctx.createVRegType(), idx, bytesPerElement);
+            if (!voffset) {
+              voffset = dimOffset;
+            } else {
+              voffset = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
+                                          voffset, dimOffset);
+            }
+            continue;
+          }
+        }
+
         int64_t strideBytes = strides[i] * elementBytes;
 
         if (strideBytes == 0)
@@ -1469,6 +1631,109 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
       splitIndex++;
     }
   }
+
+  return success();
+}
+
+/// Handle vector.maskedstore with exec masking.
+/// Sets exec to mask lanes before the buffer_store so inactive lanes
+/// do not write to memory, then restores exec.
+LogicalResult handleVectorMaskedStore(Operation *op, TranslationContext &ctx) {
+  auto maskedStoreOp = cast<vector::MaskedStoreOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto memrefType = cast<MemRefType>(maskedStoreOp.getBase().getType());
+  Type elementType = memrefType.getElementType();
+
+  auto data = ctx.getMapper().getMapped(maskedStoreOp.getValueToStore());
+  if (!data)
+    return op->emitError("maskedstore data value not mapped");
+
+  auto vectorType = maskedStoreOp.getValueToStore().getType();
+  auto vecType = dyn_cast<VectorType>(vectorType);
+  int64_t numBytes = vecType ? getVectorBytes(vecType)
+                             : (vectorType.getIntOrFloatBitWidth() + 7) / 8;
+
+  if (isLDSMemRef(memrefType))
+    return op->emitError("maskedstore to LDS not yet supported");
+
+  // Get mask VGPR
+  auto mask = ctx.getMapper().getMapped(maskedStoreOp.getMask());
+  if (!mask)
+    return op->emitError("mask operand not mapped");
+
+  // Save exec and apply mask
+  Value savedExec = emitExecMask(*mask, ctx, builder, loc);
+
+  // Compute address (same as handleVectorStore global path)
+  auto [voffset, instOffset] =
+      computeVOffsetFromIndices(memrefType, maskedStoreOp.getIndices(), ctx,
+                                loc, maskedStoreOp.getBase());
+
+  Value srd;
+  if (auto *adj = ctx.getPendingSRDBaseAdjust(maskedStoreOp.getBase())) {
+    srd = emitSRDBaseAdjustment(*adj, maskedStoreOp.getBase(), ctx, loc);
+  } else {
+    srd = lookupSRD(maskedStoreOp.getBase(), ctx, loc);
+  }
+
+  auto splitResults = ctx.getSplitResults(maskedStoreOp.getValueToStore());
+
+  if (vecType && elementType.isBF16() && data.has_value()) {
+    int64_t numElems = vecType.getNumElements();
+    auto [converted, newNumBytes] =
+        convertF32ToBF16ForStore(*data, numElems, ctx, builder, loc);
+    data = converted;
+    numBytes = newNumBytes;
+  }
+
+  // Emit buffer_store (only active lanes execute)
+  int64_t bytesRemaining = numBytes;
+  int64_t currentOffset = instOffset;
+  size_t splitIndex = 0;
+
+  while (bytesRemaining > 0) {
+    int64_t storeBytes = (bytesRemaining >= 16)  ? 16
+                         : (bytesRemaining >= 8) ? 8
+                         : (bytesRemaining >= 4) ? 4
+                         : (bytesRemaining >= 2) ? 2
+                                                 : 1;
+
+    Value storeData = *data;
+    if (!splitResults.empty() && splitIndex < splitResults.size())
+      storeData = splitResults[splitIndex];
+
+    if (isAGPRType(storeData.getType())) {
+      int64_t storeDwords = (storeBytes + 3) / 4;
+      auto vregType =
+          ctx.createVRegType(storeDwords, storeDwords > 1 ? storeDwords : 1);
+      storeData = V_ACCVGPR_READ_B32::create(builder, loc, vregType, storeData);
+    }
+
+    if (storeBytes >= 16)
+      BUFFER_STORE_DWORDX4::create(builder, loc, storeData, srd, voffset,
+                                   currentOffset);
+    else if (storeBytes >= 8)
+      BUFFER_STORE_DWORDX2::create(builder, loc, storeData, srd, voffset,
+                                   currentOffset);
+    else if (storeBytes >= 4)
+      BUFFER_STORE_DWORD::create(builder, loc, storeData, srd, voffset,
+                                 currentOffset);
+    else if (storeBytes == 2)
+      BUFFER_STORE_SHORT::create(builder, loc, storeData, srd, voffset,
+                                 currentOffset);
+    else
+      BUFFER_STORE_BYTE::create(builder, loc, storeData, srd, voffset,
+                                currentOffset);
+
+    bytesRemaining -= storeBytes;
+    currentOffset += storeBytes;
+    splitIndex++;
+  }
+
+  // Restore exec
+  emitExecRestore(savedExec, ctx, builder, loc);
 
   return success();
 }
@@ -1657,6 +1922,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(vector::LoadOp, handleVectorLoad);
   REGISTER_HANDLER(vector::MaskedLoadOp, handleVectorMaskedLoad);
   REGISTER_HANDLER(vector::StoreOp, handleVectorStore);
+  REGISTER_HANDLER(vector::MaskedStoreOp, handleVectorMaskedStore);
   REGISTER_HANDLER(vector::ExtractStridedSliceOp,
                    handleVectorExtractStridedSlice);
   REGISTER_HANDLER(vector::BroadcastOp, handleVectorBroadcast);
@@ -1765,8 +2031,11 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
         // Queue SRD setup for this binding
         int64_t bufferSize = computeBufferSizeFromMemRef(memrefType);
         ctx.queueSRDSetup(arg, argIdx, bufferSize);
+      } else if (arg.getType().isIndex() || arg.getType().isInteger()) {
+        // Scalar kernel arg (index, i32, i64) - load from kernarg buffer
+        ctx.queueScalarArgLoad(arg, argIdx);
       } else {
-        // Non-memref args (i32, index, etc.) - map to VGPR
+        // Other args (stream.binding, etc.) - placeholder VGPR
         auto vregType = ctx.createVRegType();
         auto vreg = PrecoloredVRegOp::create(builder, gpuFunc.getLoc(),
                                              vregType, argIdx, 1);
@@ -1863,8 +2132,11 @@ LogicalResult translateModule(ModuleOp module, StringRef targetId) {
         // Queue SRD setup for this binding
         int64_t bufferSize = computeBufferSizeFromMemRef(memrefType);
         ctx.queueSRDSetup(arg, argIdx, bufferSize);
+      } else if (arg.getType().isIndex() || arg.getType().isInteger()) {
+        // Scalar kernel arg (index, i32, i64) - load from kernarg buffer
+        ctx.queueScalarArgLoad(arg, argIdx);
       } else {
-        // Non-memref args (i32, index, etc.) - map to VGPR
+        // Other args (stream.binding, etc.) - placeholder VGPR
         auto vregType = ctx.createVRegType();
         auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType,
                                              argIdx, 1);
@@ -2047,6 +2319,8 @@ LogicalResult translateModule(ModuleOp module,
       if (auto memrefType = dyn_cast<MemRefType>(arg.getType())) {
         int64_t bufferSize = computeBufferSizeFromMemRef(memrefType);
         transCtx.queueSRDSetup(arg, argIdx, bufferSize);
+      } else if (arg.getType().isIndex() || arg.getType().isInteger()) {
+        transCtx.queueScalarArgLoad(arg, argIdx);
       } else {
         auto vregType = transCtx.createVRegType();
         auto vreg = PrecoloredVRegOp::create(builder, funcOp.getLoc(), vregType,

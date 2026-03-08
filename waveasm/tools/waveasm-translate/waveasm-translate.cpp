@@ -157,13 +157,16 @@ int main(int argc, char **argv) {
 
   // If not already WAVEASM IR, translate from MLIR
   if (!hasWaveASMPrograms) {
-    // Run pre-translation MLIR passes (e.g., CSE to reduce redundant
-    // computations)
-    if (runPreTranslationCSE) {
+    // Run pre-translation MLIR passes.
+    {
       PassManager prePm(&context);
-      prePm.addPass(mlir::createCSEPass());
+      // Scalarize vector.extract from broadcast+dense-const patterns so the
+      // translator only sees ordinary scalar IR.
+      prePm.addPass(waveasm::createWAVEASMExtractScalarization());
+      if (runPreTranslationCSE)
+        prePm.addPass(mlir::createCSEPass());
       if (failed(prePm.run(*module))) {
-        llvm::errs() << "Pre-translation CSE failed\n";
+        llvm::errs() << "Pre-translation passes failed\n";
         return 1;
       }
     }
