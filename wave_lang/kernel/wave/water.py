@@ -390,6 +390,27 @@ def water_waveasm_lowering_pipeline(
             return [pipeline]
         return []
 
+    def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
+        nonlocal mlir_asm
+        # Erase the last '}' closing the module, append the transform, re-close.
+        last_close = mlir_asm.rfind("}")
+        if last_close != -1:
+            mlir_asm = mlir_asm[:last_close]
+        mlir_asm += transform
+        mlir_asm += "}\n"
+        return ("transform-interpreter", {"entry-point": entry_point})
+
+    alloca_to_global = """
+  transform.named_sequence @__transform_alloca_to_global(%arg0: !transform.any_op {transform.readonly}) {
+    %alloca = transform.structured.match ops{["memref.alloca"]} in %arg0
+        : (!transform.any_op) -> !transform.op<"memref.alloca">
+    %get_global, %global = transform.memref.alloca_to_global %alloca
+          : (!transform.op<"memref.alloca">)
+            -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+"""
+
     canonicalize_cse = "composite-fixed-point-pass", {
         "name": "canonicalize_cse",
         "pipeline": "any(canonicalize,cse)",
@@ -407,7 +428,8 @@ def water_waveasm_lowering_pipeline(
         "lower-affine",
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
-        "convert-scf-to-cf",
+        ("water-alloc-to-alloca", {}, "gpu.module"),
+        add_transform(alloca_to_global, "__transform_alloca_to_global"),
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         (
             "convert-gpu-to-rocdl",
@@ -417,6 +439,8 @@ def water_waveasm_lowering_pipeline(
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "convert-vector-to-llvm",
         "reconcile-unrealized-casts",
+        "water-drop-transform-ops",
+        "symbol-dce",
         *add_opt(canonicalize_cse),
     ]
 
