@@ -1,8 +1,8 @@
 # WaveASM Legalization Design
 
 This document describes the legalization strategy for the WaveASM backend:
-how pseudo-ops are lowered to legal AMDGCN machine ops with correct
-register placement and operand widths.
+how illegal or generic operations are lowered to legal AMDGCN machine
+instructions with correct register placement and operand widths.
 
 ## Problem Statement
 
@@ -23,7 +23,7 @@ Both frontends face the same set of legalization problems:
    must be in VGPRs.
 - **Constant bus**: VALU instructions can read at most one SGPR operand per
    instruction (pre-GFX10). Violations require inserting SGPR-to-VGPR moves.
-- **Instruction selection**: A pseudo-op `arith.add` can lower to `s_add_u32` (scalar),
+- **Instruction selection**: A generic "add" can lower to `s_add_u32` (scalar),
    `v_add_u32` (vector), or a carry chain for i64.
 
 ## Architecture
@@ -37,7 +37,7 @@ in dedicated post-translation passes.
 ```
   Translation (TranslateFromMLIR / TranslateFromLLVM)
        │
-       │  Emits pseudo-ops for arithmetic.
+       │  Emits generic pseudo-ops for arithmetic.
        │  Does NOT make register placement or width decisions.
        │
        ▼
@@ -58,13 +58,14 @@ in dedicated post-translation passes.
   │  - Assigns SGPR vs VGPR per value    │
   │  - Inserts v_mov_b32 for SGPR→VGPR   │
   │  - Enforces constant bus limits      │
+  │  - Caches moves to avoid duplicates  │
   └──────────────┬───────────────────────┘
                  │
                  ▼
   ┌──────────────────────────────────────┐
   │     Instruction Selection Pass       │
   │                                      │
-  │  - Lowers pseudo-ops to concrete     │
+  │  - Lowers generic ops to concrete    │
   │    machine ops (s_add/v_add/etc.)    │
   │  - Selects SALU vs VALU encoding     │
   └──────────────┬───────────────────────┘
@@ -77,32 +78,32 @@ Note: these three passes may be combined into fewer passes if the separation
 proves unnecessary. The logical ordering matters more than the physical pass
 count.
 
-## Pseudo-Operations
+## Generic (Pseudo) Operations
 
-Translation emits a targeted set of **pseudo-ops** for cases where the
+Translation emits a targeted set of **generic ops** for cases where the
 register file and/or width decision is non-trivial. These ops carry the
 original type information and are lowered by legalization.
 
 ### Scope
 
-Pseudo-ops are introduced only for arithmetic and comparison -- operations
+Generic ops are introduced only for arithmetic and comparison — operations
 where the SGPR/VGPR and width choice depends on context. Operations with
 unambiguous lowering (SRD setup, buffer loads, MFMA, barriers, branch, endpgm)
 continue to emit concrete machine ops directly during translation.
 
-### Implemented pseudo-ops
+### Proposed generic ops
 
-| Pseudo-op | Lowers to (SALU) | Lowers to (VALU) |
-|-----------|-----------------|-------------------|
+| Generic op | Lowers to (SALU) | Lowers to (VALU) |
+|------------|-----------------|-------------------|
 | `waveasm.arith.add : iN` | `s_add_u32` (+ `s_addc_u32` for i64) | `v_add_u32` (+ `v_addc_co_u32` for i64) |
-| `waveasm.arith.mul : iN` | `s_mul_i32` (+ `s_mul_hi_u32` for i64) | `v_mul_lo_u32` (+ partial products for i64) |
+| `waveasm.arith.mul : iN` | `s_mul_i32` (or pseudo for i64) | `v_mul_lo_u32` (+ partial products for i64) |
 | `waveasm.arith.cmp_XX : iN` | `s_cmp_XX_u32/i32` | `v_cmp_XX_u32/i32` (+ hi/lo for i64) |
-| `waveasm.arith.sext : i32 -> i64` | `s_ashr_i32` + pack | `v_ashrrev_i32` + pack |
-| `waveasm.arith.zext : i32 -> i64` | `s_mov_b32(0)` + pack | `v_mov_b32(0)` + pack |
-| `waveasm.arith.trunc : i64 -> i32` | extract sub-register | extract sub-register |
+| `waveasm.arith.sext : iM → iN` | `s_mov_b32` + `s_ashr_i32` | `v_mov_b32` + `v_ashrrev_i32` |
+| `waveasm.arith.trunc : iN → iM` | extract sub-register | extract sub-register |
 | `waveasm.arith.select` | `s_cselect_b32` | `v_cndmask_b32` |
+| `waveasm.arith.mov : iN` | `s_mov_b32` | `v_mov_b32` |
 
-The pseudo-ops use a register-file-agnostic type (e.g., a plain integer type
+The generic ops use a register-file-agnostic type (e.g., a plain integer type
 or a new `!waveasm.greg` virtual type) to defer the SGPR/VGPR decision.
 
 ### What stays concrete
@@ -178,7 +179,8 @@ After register assignment, scan each VALU instruction. If it reads more than
 one distinct SGPR:
 1. Pick one SGPR operand (prefer the one with fewer uses, to minimize moves).
 2. Insert `v_mov_b32` to copy it to a VGPR.
-3. Rely on CSE to deduplicate identical moves.
+3. Cache the move: if the same SGPR is used in multiple instructions, reuse the
+   same VGPR copy (subject to liveness).
 
 ### VGPR → SGPR (future)
 
@@ -191,7 +193,7 @@ accommodate it.
 
 | Aspect | LLVM AMDGPU | WaveASM |
 |--------|------------|---------|
-| Pseudo-ops | G_ADD, G_MUL (GlobalISel) | waveasm.arith.add, .mul |
+| Generic ops | G_ADD, G_MUL (GlobalISel) | waveasm.arith.add, .mul |
 | Type legalization | LegalizerInfo rules | Dedicated pass |
 | Register placement | RegBankSelect + UniformityAnalysis | Demand-driven + constant bus pass |
 | Constant bus | SIInstrInfo::legalizeOperands (post-ISel) | Register legalization pass |
@@ -204,33 +206,35 @@ the same ground for the subset of IR patterns we generate.
 
 ## Implementation Plan
 
-### Phase 1: Pseudo-ops + type legalization
+### Phase 1: Generic ops + type legalization
 
-1. Define arithmetic pseudo-ops in `WaveASMOps.td`.
-2. Update `TranslateFromLLVM` to emit pseudo-ops instead of concrete ops with
+1. Define generic arithmetic ops in `WaveASMOps.td`.
+2. Update `TranslateFromLLVM` to emit generic ops instead of concrete ops with
    inline `ensure32Bit`/`ensureVGPR` calls.
 3. Implement type legalization pass (i64 narrowing only).
 
 ### Phase 2: Register legalization
 
 1. Implement register legalization pass: SGPR/VGPR assignment + constant bus.
-2. Update `TranslateFromMLIR` to also emit pseudo-ops where appropriate.
+2. Update `TranslateFromMLIR` to also emit generic ops where appropriate.
 3. Remove all inline register fixup code from both translators.
 
 ### Phase 3: Full i64 + instruction selection
 
 1. Add i64 carry-chain expansion to type legalization.
-2. Add instruction selection pass (pseudo-op → concrete, SALU vs VALU).
+2. Add instruction selection pass (generic → concrete, SALU vs VALU).
 3. Add VGPR→SGPR support (`v_readfirstlane_b32`) if needed.
 
-## Resolved Questions
+## Open Questions
 
-- **Pseudo-op type representation**: pseudo-ops use polymorphic result types
-  (register-file-agnostic `!waveasm.sreg`/`!waveasm.vreg`/`!waveasm.imm`).
-  Width is inferred from operand register sizes.
-- **Pass count**: type legalization, register legalization, and instruction
-  selection are currently combined in a single `ArithLegalization` pass.
-  Splitting into separate passes is tracked as future work.
-- **Value range analysis**: not needed. The LLVM frontend already emits
-  explicit `trunc` ops where narrowing is safe; legalization lowers those
-  and uses i64 carry-chain expansion for true 64-bit arithmetic.
+- **Should generic ops carry an explicit type attribute (i32/i64) or use a
+  polymorphic result type?** Explicit attribute is simpler to pattern-match in
+  passes; polymorphic type is more MLIR-idiomatic.
+- **Should type and register legalization be one pass or two?** If width
+  decisions always precede register decisions, two passes are cleaner. If they
+  interact (e.g., i64 scalar add uses SALU carry chain, i64 vector add uses
+  VALU carry chain), a combined pass may be simpler.
+- **Value range analysis for narrowing**: should the type legalization pass
+  accept annotations (e.g., "this arg is a tensor dimension, fits in i32") or
+  should it analyze value ranges? Annotations are simpler and sufficient for
+  our use cases.
