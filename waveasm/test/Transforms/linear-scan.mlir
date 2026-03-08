@@ -102,9 +102,43 @@ waveasm.program @loop_result_alloc target = #waveasm.target<#waveasm.gfx942, 5> 
     waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
   }
 
-  // Post-loop use: loop result should have same physical register as init/body
+  // Post-loop use: loop result should have same physical register as init/body.
   // CHECK: waveasm.v_add_u32 {{.*}}!waveasm.pvreg<[[LR]]>{{.*}} -> !waveasm.pvreg<
   %final = waveasm.v_add_u32 %sum_out, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}
+
+// Test 7: Init arg with post-loop uses must NOT be coalesced with block arg.
+// If the init arg (constant 0) is coalesced with the loop IV block arg,
+// the loop body increments the shared register and corrupts the post-loop
+// use that expects the original value.
+// CHECK-LABEL: waveasm.program @init_arg_post_loop_use
+waveasm.program @init_arg_post_loop_use target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+  %c1 = waveasm.constant 1 : !waveasm.imm<1>
+  %c4 = waveasm.constant 4 : !waveasm.imm<4>
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+
+  // This value is used as both loop init arg AND post-loop operand.
+  // CHECK: waveasm.v_mov_b32 {{.*}} -> !waveasm.pvreg<[[INIT:[0-9]+]]>
+  %init_val = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
+
+  %init_i = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
+
+  // The loop uses %init_val as init arg for the IV.
+  %iv_out = waveasm.loop(%iv = %init_val) : (!waveasm.vreg) -> (!waveasm.vreg) {
+    %next_iv = waveasm.v_add_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
+    %cond_s = waveasm.v_readfirstlane_b32 %next_iv : !waveasm.vreg -> !waveasm.sreg
+    %ub_s = waveasm.v_readfirstlane_b32 %init_i : !waveasm.vreg -> !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.vreg
+  }
+
+  // Post-loop use of %init_val. It must still hold 0, not the loop's final IV.
+  // The register must differ from the IV's block arg register.
+  // CHECK: waveasm.v_add_u32 {{.*}}!waveasm.pvreg<[[INIT]]>{{.*}} -> !waveasm.pvreg<
+  %result = waveasm.v_add_u32 %init_val, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
