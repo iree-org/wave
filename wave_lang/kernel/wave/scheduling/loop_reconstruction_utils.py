@@ -192,6 +192,28 @@ class ArgumentContext:
                 return self.argument_map[iteration][stage][key]
         return None
 
+    def resolve_from_iteration(
+        self, iteration: int, key: fx.Node, preferred_stage: Optional[int]
+    ) -> fx.Node:
+        """
+        Resolve chained argument mappings for the given iteration.
+
+        Scheduling reconstruction can first map a region placeholder to the
+        original outer value and later map that outer value to the replacement
+        node created for the reconstructed graph. Users need the final node.
+        """
+        resolved = key
+        seen = {key}
+        while self.contains_in_iteration(iteration, resolved):
+            next_value = self.get_from_iteration(iteration, resolved, preferred_stage)
+            if next_value is None or next_value == resolved:
+                return resolved
+            if next_value in seen:
+                raise AssertionError(f"Cyclic argument mapping for {key}")
+            seen.add(next_value)
+            resolved = next_value
+        return resolved
+
     def dump(self):
         """
         Dump the argument context to the logger.
@@ -243,13 +265,23 @@ def compute_lifetime(
     """
     lifetime: dict[fx.Node, int] = defaultdict(int)
     name = "absolute_cycle" if use_absolute_cycle else "stage"
+    dependency_users: dict[fx.Node, list[fx.Node]] = defaultdict(list)
+    for user in graph.nodes:
+        custom_user = get_custom(user)
+        for arg in custom_user.node_args.values():
+            if isinstance(arg, Sequence):
+                for elem in arg:
+                    dependency_users[elem.fx_node].append(user)
+            else:
+                dependency_users[arg.fx_node].append(user)
     for node in graph.nodes:
         custom = get_custom(node)
         if custom.scheduling_parameters is None:
             continue
 
         node_stage = custom.scheduling_parameters[name]
-        for user in custom.users:
+        for user_node in dependency_users[node]:
+            user = get_custom(user_node)
             if user.scheduling_parameters is None:
                 continue
 
@@ -311,7 +343,6 @@ def compute_multi_buffer_count(
                 result[shared_memory_operand] = multi_buffer_count
                 continue
 
-            assert node in lifetime, f"Node {node} not found in lifetime"
             # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
             # so we need to add 1 to the lifetime to get the number of clocks the result is live.
             # Ceildiv is required for cases like (lifetime=3, initiation_interval=2) which would otherwise
@@ -319,7 +350,7 @@ def compute_multi_buffer_count(
             # 000
             #   111
             #     222
-            buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
+            buffer_count = ceildiv(lifetime.get(node, 0) + 1, initiation_interval)
             logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
             if buffer_count < 2:
                 continue

@@ -111,8 +111,8 @@ def test_scaled_gemm_mxfp4():
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
-    # CHECK:              vector.load
     # CHECK:              amdgpu.lds_barrier
+    # CHECK:              vector.load
     # CHECK:              vector.store
     # CHECK:              vector.load
     # CHECK:              vector.store
@@ -213,20 +213,17 @@ def test_scaled_gemm_mxfp8():
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
-    # CHECK:              vector.load
     # CHECK:              amdgpu.lds_barrier
-    # CHECK:              vector.store
     # CHECK:              vector.load
     # CHECK:              vector.store
     # CHECK:              vector.load
     # CHECK:              vector.store
     # CHECK:              vector.load
     # CHECK:              vector.store
-    # CHECK:              amdgpu.lds_barrier
+    # CHECK:              vector.load
+    # CHECK:              vector.store
     # CHECK:              memref.load
-    # CHECK-COUNT-2:      vector.load
-    # CHECK:              memref.load
-    # CHECK-COUNT-2:      vector.load
+    # CHECK:              vector.load
     # CHECK:              amdgpu.scaled_mfma
     # CHECK-COUNT-4:    vector.store
 

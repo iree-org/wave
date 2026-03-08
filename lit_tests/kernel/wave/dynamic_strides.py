@@ -51,4 +51,4 @@ def test_dynamic_strides_gemm():
     # Output is linearized using dynamic strides from extract_strided_metadata, then stored to 1D view.
     # CHECK: memref.extract_strided_metadata %reinterpret_cast_1 : memref<1024x1024xf32, strided<[?, 1]>>
     # CHECK: memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [536870910], strides: [1]
-    # CHECK: vector.store {{.*}} %reinterpret_cast_3{{.*}} : memref<536870910xf32, strided<[1], offset: ?>>
+    # CHECK: vector.store {{.*}} %reinterpret_cast_2{{.*}} : memref<536870910xf32, strided<[1], offset: ?>>

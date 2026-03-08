@@ -401,7 +401,7 @@ def emit_global_to_lds(
         if hasattr(read, "tag") and read.tag:
             new_write.tag = read.tag
 
-        memory = NestedRegionOp.capture_source(write.memory)
+        memory = write.get_memory_source()
         new_writes[memory].append(new_write)
         if config.drop_padding:
             custom_memory = get_custom(memory)
@@ -615,10 +615,14 @@ def gather_to_shared_swizzling(
         reads = [
             get_custom(read) for read in mem.users if isinstance(get_custom(read), Read)
         ]
+        if not reads:
+            logger.info(f"Skipping swizzle for {mem}: no shared reads remain")
+            continue
         gather = gathers[0]
         read = reads[0]
 
-        shape = get_custom(mem).type.symbolic_shape
+        mem_source = read.get_memory_source()
+        shape = get_custom(mem_source).type.symbolic_shape
         if len(shape) < 2:
             logger.info(f"shape={shape} must be at least 2D")
             continue
@@ -626,7 +630,7 @@ def gather_to_shared_swizzling(
         col_dim = infer_dim(shape[-1])
         row_dim = infer_dim(shape[-2])
 
-        mem_custom = get_custom(mem)
+        mem_custom = get_custom(mem_source)
         distributed_shape = mem_custom.distributed_shape
         col_size = subs_idxc(distributed_shape[-1])
 

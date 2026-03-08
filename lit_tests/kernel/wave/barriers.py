@@ -245,7 +245,9 @@ def test_gemm():
     # CHECK-NEXT: %acc_M:1_N:0_K:0
     # CHECK-NEXT: %acc_M:1_N:1_K:0
     # CHECK-NEXT: %a
+    # CHECK-NEXT: %allocate_2
     # CHECK-NEXT: %b
+    # CHECK-NEXT: %allocate_3
     # CHECK-NEXT: %read_M:0_N:0_K:0
     # CHECK-NEXT: %read_M:0_N:0_K:1
     # CHECK-NEXT: %read_M:1_N:0_K:0

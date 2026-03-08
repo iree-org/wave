@@ -245,7 +245,7 @@ def emit_tensor_load_to_shared(
     if hasattr(read, "tag") and read.tag:
         tensor_write.tag = read.tag
 
-    tensor_writes[NestedRegionOp.capture_source(write.memory)].append(tensor_write)
+    tensor_writes[write.get_memory_source()].append(tensor_write)
 
     return tensor_writes
 
@@ -273,7 +273,7 @@ def clear_padding(write: Write):
     """
     Clear shared memory padding if it's not supported by tensor op.
     """
-    custom_memory = get_custom(NestedRegionOp.capture_source(write.memory))
+    custom_memory = get_custom(write.get_memory_source())
     padding = custom_memory.padding
     if padding == 0:
         return

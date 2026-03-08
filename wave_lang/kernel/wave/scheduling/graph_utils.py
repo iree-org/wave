@@ -393,10 +393,11 @@ def get_scheduling_weight(node: fx.Node) -> EdgeWeight:
 def erase_placeholder_nodes(graph: fx.Graph, ignore_nodes: set[fx.Node]) -> None:
     """
     This function erases nodes in the ignore list from the graph. We replace uses
-    of the node with None.
+    of lifted placeholders with their defining source and all other ignored nodes
+    with None.
     """
     for node in ignore_nodes:
-        node.replace_all_uses_with(None)
+        node.replace_all_uses_with(node.meta.get("lifted"))
         graph.erase_node(node)
 
 

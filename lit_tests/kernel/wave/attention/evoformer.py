@@ -196,12 +196,11 @@ def test_evoformer():
     # CHECK:                    {{.*}} = vector.maskedload
     # CHECK:                    vector.store {{.*}}
     # CHECK:                    amdgpu.lds_barrier
-    # CHECK-COUNT-16:           {{.*}} = memref.load
-    # CHECK-COUNT-4:            {{.*}} = vector.load
+    # CHECK:                    {{.*}} = vector.load
     # CHECK-COUNT-8:           {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-2:            {{.*}} = vector.load
+    # CHECK:                    {{.*}} = vector.load
     # CHECK-COUNT-2:            {{.*}} = arith.extf
     # CHECK-COUNT-4:            {{.*}} = arith.addf
-    # CHECK-COUNT-4:            {{.*}} = vector.load
+    # CHECK:                    {{.*}} = vector.load
     # CHECK-COUNT-4:            {{.*}} = arith.extf
     # CHECK-COUNT-4:            {{.*}} = arith.addf

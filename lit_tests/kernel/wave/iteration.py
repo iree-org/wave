@@ -415,6 +415,8 @@ def test_partial_unroll_iteration():
         # CHECK: placeholder
         # CHECK-NEXT: placeholder
         # CHECK-NEXT: placeholder
+        # CHECK-NEXT: placeholder
+        # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]
         # CHECK-NEXT: [write]
         # CHECK-NEXT: [read]
@@ -434,6 +436,8 @@ def test_partial_unroll_iteration():
         # TODO: Check that the bounds are correct, and steps
 
         # CHECK: placeholder
+        # CHECK-NEXT: placeholder
+        # CHECK-NEXT: placeholder
         # CHECK-NEXT: placeholder
         # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]
@@ -460,6 +464,8 @@ def test_partial_unroll_iteration():
         assert iterate.step == 4  # step multiplied again (2 * 2 = 4)
 
         # CHECK: placeholder
+        # CHECK-NEXT: placeholder
+        # CHECK-NEXT: placeholder
         # CHECK-NEXT: placeholder
         # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]

@@ -905,7 +905,12 @@ def _emit_ops_from_graph(
                             node.type.symbolic_shape[-1]: node.target_vector_shape
                         }
                     else:
-                        target_vector_shape = node.target_vector_shape
+                        result_dims = set(node.type.symbolic_shape)
+                        target_vector_shape = {
+                            dim: size
+                            for dim, size in node.target_vector_shape.items()
+                            if dim in result_dims
+                        }
                     mlir_op = op_builder(
                         result_type,
                         source=create_mlir_operands(),

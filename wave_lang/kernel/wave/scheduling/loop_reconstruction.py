@@ -1,5 +1,6 @@
 from collections import defaultdict, deque
 from enum import Enum
+import re
 
 import torch.fx as fx
 
@@ -15,6 +16,7 @@ from ...ops.wave_ops import (
     MMABase,
     NewRegister,
     Output,
+    Placeholder,
     SchedulingGroupBarrier,
     get_custom,
 )
@@ -135,10 +137,8 @@ def add_nodes_by_schedule(
             new_node = custom_node.copy(
                 new_name=f"{node.name}_mapped_{iteration}_{stage}",
                 new_graph=reduction_graph,
-                arg_transform=lambda x: (
-                    arg_context.get_from_iteration(iteration, x, preferred_stage)
-                    if arg_context.contains_in_iteration(iteration, x)
-                    else x
+                arg_transform=lambda x: arg_context.resolve_from_iteration(
+                    iteration, x, preferred_stage
                 ),
             )
             if custom_node.scheduling_parameters["prefetch_stage"]:
@@ -245,6 +245,65 @@ def push_placeholders(
     """
     for outer_node, placeholder in reduction.get_capture_bindings(reduction_subgraph):
         arg_context.map_arg_all(placeholder, outer_node)
+
+
+def _mapped_suffix(name: str) -> str | None:
+    match = re.search(r"(_mapped_\d+_\d+)$", name)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _mapped_iteration(name: str) -> int | None:
+    match = re.search(r"_mapped_(\d+)_\d+$", name)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def repair_leaked_capture_uses(
+    reduction: Iterate,
+    reduction_subgraph: fx.Graph,
+    node_mapping: dict[fx.Node, list[fx.Node]],
+) -> None:
+    """
+    Reconnect any remaining users of nodes from the old reduction subgraph.
+
+    Once pipelining reconstructs the loop, the original reduction subgraph is
+    about to be erased. Any surviving use of one of its nodes is invalid and
+    must point either to the reconstructed mapped node or, for lifted
+    placeholders, back to the enclosing source value.
+    """
+    for node in reduction_subgraph.nodes:
+        mapped_nodes = node_mapping.get(node, [])
+        lifted_node = node.meta.get("lifted")
+        for user in list(node.users):
+            replacement = None
+            suffix = _mapped_suffix(user.name)
+            iteration = _mapped_iteration(user.name)
+            if suffix:
+                replacement = next(
+                    (mapped for mapped in mapped_nodes if mapped.name.endswith(suffix)),
+                    None,
+                )
+            if replacement is None and iteration is not None:
+                same_iteration = [
+                    mapped
+                    for mapped in mapped_nodes
+                    if _mapped_iteration(mapped.name) == iteration
+                ]
+                if len(same_iteration) == 1:
+                    replacement = same_iteration[0]
+            if replacement is None and len(mapped_nodes) == 1:
+                replacement = mapped_nodes[0]
+            if replacement is None:
+                replacement = lifted_node
+            if replacement is None:
+                continue
+            custom_user = get_custom(user)
+            for i, arg in enumerate(user.args):
+                if arg is node:
+                    custom_user.update_arg(i, replacement)
 
 
 def add_missing_registers(graph: fx.Graph):
@@ -912,6 +971,7 @@ def construct_pipelined_loop(
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph
+    repair_leaked_capture_uses(reduction, graph, node_mapping)
     reduction.erase()
 
     # All allocs should be replaced by the multi-buffer allocs at this point.

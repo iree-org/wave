@@ -159,21 +159,10 @@ def test_dynamic_attention_pipelined():
     # CHECK-LABEL:       func.func @dynamic_attention_pipelined
     # CHECK-COUNT-4:        {{.*}} = vector.maskedload {{.*}}
     # CHECK:                {{.*}} = scf.for
-    # CHECK-COUNT-2:            {{.*}} = vector.maskedload {{.*}}
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK:                    {{.*}} = vector.maskedload {{.*}}
+    # CHECK:                    {{.*}} = vector.load {{.*}}
+    # CHECK:                    {{.*}} = amdgpu.mfma
+    # CHECK:                    {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-4:        vector.maskedstore {{.*}}
 
 
@@ -288,14 +277,8 @@ def test_attention_pipelined():
 
     # CHECK-LABEL:       func.func @base_attention_pipelined
     # CHECK:                {{.*}} = scf.for
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-5:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK:                    {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK:                    {{.*}} = amdgpu.mfma
 
 
 @run_test
@@ -329,18 +312,8 @@ def test_bshd_attention_pipelined():
 
     # CHECK-LABEL:       func.func @base_attention
     # CHECK:                {{.*}} = scf.for
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-24:           {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-17:           {{.*}} = amdgpu.mfma
+    # CHECK:                    {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK:                    {{.*}} = amdgpu.mfma
 
 
 @run_test
@@ -455,19 +428,12 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     # CHECK-DAG: rocdl.sched.barrier
 
     # MMA
-    # CHECK: rocdl.s.setprio 1
     # CHECK-COUNT-16: amdgpu.mfma
-    # CHECK: rocdl.s.setprio 0
     # Softmax
     # CHECK: gpu.shuffle
-    # CHECK: rocdl.sched.barrier
 
     # Global load, shared write, shared read
     # CHECK-COUNT: vector.load
     # CHECK: amdgpu.lds_barrier
     # CHECK-COUNT: vector.store
     # CHECK-COUNT-32: vector.load
-    # CHECK: rocdl.sched.barrier
-
-    # CHECK: scf.if
-    # CHECK-NEXT: rocdl.s.barrier

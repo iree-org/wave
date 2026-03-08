@@ -97,14 +97,6 @@ def get_hoistable_ops(
             rhs = get_custom(custom_node.rhs)
             lhs = get_custom(custom_node.lhs)
             if is_hoistable(lhs) and is_hoistable(rhs):
-                # Since this binary op is going to be hoisted, we replace the placeholders
-                # with their corresponding lifted values.
-                for placeholder, operand in [(lhs, "lhs"), (rhs, "rhs")]:
-                    if is_placeholder(placeholder):
-                        custom_node.update_arg(
-                            operand,
-                            NestedRegionOp.capture_source(placeholder.fx_node),
-                        )
                 hoistable_ops.append(custom_node)
         else:
             continue
@@ -128,6 +120,7 @@ def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]
         match custom_node:
             case Iterate():
                 with root_graph.inserting_before(custom_node.fx_node):
+                    hoisted_to_root: dict[fx.Node, fx.Node] = {}
                     induction_variable = get_induction_variable(
                         custom_node, constraints
                     )
@@ -137,13 +130,25 @@ def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]
                     hoistable_ops = get_hoistable_ops(
                         subgraph, captured_vars, induction_variable
                     )
+
+                    def map_hoisted_arg(arg):
+                        if not isinstance(arg, fx.Node):
+                            return arg
+                        if arg in hoisted_to_root:
+                            return hoisted_to_root[arg]
+                        custom_arg = get_custom(arg)
+                        if isinstance(custom_arg, Placeholder) and not isinstance(
+                            custom_arg, IterArg
+                        ):
+                            return NestedRegionOp.capture_source(arg)
+                        return arg
+
                     for hoistable_op in hoistable_ops:
-                        new_op = hoistable_op.copy(new_graph=root_graph)
-                        if isinstance(hoistable_op, Read):
-                            root_var = NestedRegionOp.capture_source(
-                                hoistable_op.memory
-                            )
-                            new_op.update_arg("memory", root_var)
+                        new_op = hoistable_op.copy(
+                            new_graph=root_graph,
+                            arg_transform=map_hoisted_arg,
+                        )
+                        hoisted_to_root[hoistable_op.fx_node] = new_op.fx_node
                         capture = custom_node.get_or_add_capture(
                             subgraph, new_op, hoistable_op.location
                         )

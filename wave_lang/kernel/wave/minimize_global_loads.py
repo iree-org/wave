@@ -147,7 +147,7 @@ def identify_optimizable_loads(
     processed_memories = set()
     for read_node in global_read_nodes:
         custom = get_custom(read_node)
-        memory = NestedRegionOp.capture_source(custom.memory)
+        memory = custom.get_memory_source()
         if memory in processed_memories:
             if memory in optimizable_loads:
                 optimizable_loads[memory][2].append(custom)
@@ -177,7 +177,7 @@ def identify_optimizable_loads(
             [
                 x
                 for x in global_read_nodes
-                if NestedRegionOp.capture_source(get_custom(x).memory) == memory
+                if get_custom(x).get_memory_source() == memory
             ]
         )
         if expected_number_of_loads >= actual_number_of_loads:
@@ -296,9 +296,7 @@ def add_optimized_nodes(
                         )
                         write.index = read.index
                         write.pre_expansion_id = custom.pre_expansion_id
-                        optimized_writes[
-                            NestedRegionOp.capture_source(custom_user.memory)
-                        ].append(write)
+                        optimized_writes[custom_user.get_memory_source()].append(write)
                         write.vector_shapes = custom.vector_shapes
                         break
     return optimized_writes
@@ -325,7 +323,7 @@ def update_shared_memory_read(
     shared_read.update_arg("mapping", metadata.mapping)
     # If we are doing a gather from shared memory, we need to update the
     # shape of the alloc as well.
-    custom_memory = get_custom(NestedRegionOp.capture_source(shared_read.memory))
+    custom_memory = get_custom(shared_read.get_memory_source())
     custom_memory_shape = custom_memory.type.symbolic_shape
     if custom_memory_shape != metadata.memory_shape:
         permutation = [custom_memory_shape.index(k) for k in metadata.memory_shape]
@@ -359,7 +357,7 @@ def update_write_dependencies(
             custom = get_custom(node)
             if (
                 is_shared_write(custom)
-                and NestedRegionOp.capture_source(custom.memory) == memory
+                and custom.get_memory_source() == memory
             ):
                 return True
             if (

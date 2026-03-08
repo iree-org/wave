@@ -45,6 +45,7 @@ from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     ExtractSlice,
     GatherToLDS,
+    NestedRegionOp,
     Read,
     Write,
     get_custom,
@@ -192,7 +193,7 @@ def preshuffle_scale_to_shared(trace: CapturedTrace, constraints: list[Constrain
 
     memory_groups: dict[fx.Node, list] = defaultdict(list)
     for node, write, input_read in writes_to_process:
-        memory_groups[write.memory].append((node, write, input_read))
+        memory_groups[write.get_memory_source()].append((node, write, input_read))
 
     for alloc_node, group in memory_groups.items():
         _transform_scale_memory(alloc_node, group, trace, constraints)
@@ -232,7 +233,7 @@ def _transform_scale_memory(
     """
     from ..lang.global_symbols import SHARED_ADDRESS_SPACE, THREAD_0
 
-    alloc = get_custom(alloc_node)
+    alloc = get_custom(NestedRegionOp.capture_source(alloc_node))
     symbolic_shape = alloc.shape
 
     dim_0 = infer_dim(symbolic_shape[0])  # K/32 (outer dimension)

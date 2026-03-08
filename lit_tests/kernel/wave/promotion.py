@@ -199,17 +199,19 @@ def test_gemm():
     # iterate subgraph:
     # CHECK: %acc
     # CHECK-NEXT: %a
+    # CHECK-NEXT: %allocate_2
     # CHECK-NEXT: %b
+    # CHECK-NEXT: %allocate_3
     # CHECK-NEXT: %read
     # CHECK-NEXT: %write
-    # CHECK-SAME: (%read, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
+    # CHECK-SAME: (%read, %allocate_3, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %read_2
-    # CHECK-SAME: (%allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write])
+    # CHECK-SAME: (%allocate_3, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write])
     # CHECK-NEXT: %read_1
     # CHECK-NEXT: %write_1
-    # CHECK-SAME: (%read_1, %allocate_1, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
+    # CHECK-SAME: (%read_1, %allocate_2, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %read_3
-    # CHECK-SAME: (%allocate_1, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1])
+    # CHECK-SAME: (%allocate_2, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1])
     # CHECK-NEXT: %mma
     # CHECK-SAME: (%read_2, %read_3, %acc, None)
 

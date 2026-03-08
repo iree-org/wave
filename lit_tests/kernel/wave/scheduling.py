@@ -217,7 +217,7 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
 
     # CHECK-NEXT: %iterate_1
-    # CHECK-SAME: (K, [%mma_M:0_N:0_K:1_mapped_0_1, %mma_M:0_N:1_K:1_mapped_0_1, %mma_M:1_N:0_K:1_mapped_0_1, %mma_M:1_N:1_K:1_mapped_0_1, %read_4_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:1_N:0_K:0_mapped_1_0, %read_2_shared_M:1_N:0_K:1_mapped_1_0], pipelined_iterate, [%a, %b], 1, None, None)
+    # CHECK-SAME: (K, [%mma_M:0_N:0_K:1_mapped_0_1, %mma_M:0_N:1_K:1_mapped_0_1, %mma_M:1_N:0_K:1_mapped_0_1, %mma_M:1_N:1_K:1_mapped_0_1, %read_4_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:1_N:0_K:0_mapped_1_0, %read_2_shared_M:1_N:0_K:1_mapped_1_0], pipelined_iterate, [%a, %allocate_1, %b, %allocate], 1, None, None)
 
     # CHECK-NEXT: %get_result_M:0_N:0_K:0
     # CHECK-SAME: (%iterate_1, 0)

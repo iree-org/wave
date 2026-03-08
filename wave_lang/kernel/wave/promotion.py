@@ -143,9 +143,7 @@ def fix_manual_allocate_dependencies(trace: CapturedTrace):
     writes_by_allocate = {}
     for node in write_nodes:
         custom = get_custom(node)
-        writes_by_allocate.setdefault(
-            NestedRegionOp.capture_source(custom.memory), []
-        ).append(node)
+        writes_by_allocate.setdefault(custom.get_memory_source(), []).append(node)
 
     root_graph = trace.get_root_graph()
     for subgraph in root_graph.subgraphs.values():
@@ -156,7 +154,7 @@ def fix_manual_allocate_dependencies(trace: CapturedTrace):
             custom = get_custom(node)
             if custom._write_dependency is not None:
                 continue
-            memory = NestedRegionOp.capture_source(custom.memory)
+            memory = custom.get_memory_source()
             if memory not in writes_by_allocate:
                 continue
 
@@ -205,7 +203,7 @@ def promote_node(
         constrained_shape = get_constrained_shape(symbolic_shape, constraints)
         # If the read/write operation already has a set distributed shape at the kernel
         # we use that for allocation. Otherwise deduce the shape from constraints.
-        memory_node = get_custom(NestedRegionOp.capture_source(node.memory))
+        memory_node = get_custom(node.get_memory_source())
         if isinstance(memory_node, Allocate) and memory_node.distributed_shape:
             constrained_shape = memory_node.distributed_shape
         padding, padded_shape = apply_padding(

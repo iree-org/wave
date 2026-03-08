@@ -202,28 +202,30 @@ def get_attention_prefetch_schedule():
 
         # ==================== Apply ping-pong cluster ordering and staggering ====================
         # Filter nodes for the KERNEL stage only
-        global_to_shared_k_kernel = tkw.filter_nodes(
-            global_to_shared_k, subgraph=pipeline_loop.KERNEL
-        )
-        shared_load_k_kernel = tkw.filter_nodes(
-            shared_load_k, subgraph=pipeline_loop.KERNEL
-        )
-        global_to_shared_v_kernel = tkw.filter_nodes(
-            global_to_shared_v, subgraph=pipeline_loop.KERNEL
-        )
-        shared_load_v_kernel = tkw.filter_nodes(
-            shared_load_v, subgraph=pipeline_loop.KERNEL
-        )
-        mma_qk_init_kernel = tkw.filter_nodes(
-            mma_qk_init, subgraph=pipeline_loop.KERNEL
-        )
-        mma_qk_kernel = tkw.filter_nodes(mma_qk, subgraph=pipeline_loop.KERNEL)
-        mma_pv_kernel = tkw.filter_nodes(mma_pv, subgraph=pipeline_loop.KERNEL)
+        def filter_kernel_stage(nodes):
+            if not nodes:
+                return []
+            return tkw.filter_nodes(nodes, subgraph=pipeline_loop.KERNEL)
+
+        def prune_empty_items(items):
+            return [
+                item
+                for item in items
+                if not isinstance(item, list) or item
+            ]
+
+        global_to_shared_k_kernel = filter_kernel_stage(global_to_shared_k)
+        shared_load_k_kernel = filter_kernel_stage(shared_load_k)
+        global_to_shared_v_kernel = filter_kernel_stage(global_to_shared_v)
+        shared_load_v_kernel = filter_kernel_stage(shared_load_v)
+        mma_qk_init_kernel = filter_kernel_stage(mma_qk_init)
+        mma_qk_kernel = filter_kernel_stage(mma_qk)
+        mma_pv_kernel = filter_kernel_stage(mma_pv)
         softmax0_ops_kernel = [
-            tkw.filter_nodes(op, subgraph=pipeline_loop.KERNEL) for op in softmax0_ops
+            filter_kernel_stage(op) for op in softmax0_ops
         ]
         softmax1_ops_kernel = [
-            tkw.filter_nodes(op, subgraph=pipeline_loop.KERNEL) for op in softmax1_ops
+            filter_kernel_stage(op) for op in softmax1_ops
         ]
 
         # Filter out empty lists from softmax ops (some ops may not be in KERNEL stage)
@@ -242,40 +244,40 @@ def get_attention_prefetch_schedule():
         clusters = [
             # Cluster 0: QK computation and softmax1 (high priority through barrier)
             tkw.cluster(
-                [
+                prune_empty_items([
                     tkw.SetWavePrio(1),
                     mma_qk_init_kernel,
                     mma_qk_kernel,
                     *softmax1_ops_kernel,
                     tkw.WorkgroupBarrier(),
                     tkw.SetWavePrio(0),  # Lower priority after barrier
-                ],
+                ]),
             ),
             # Cluster 1: K data movement (global_to_shared_k) + local load V
             tkw.cluster(
-                [
+                prune_empty_items([
                     shared_load_v_kernel,
                     global_to_shared_k_kernel,
                     tkw.WorkgroupBarrier(),
-                ],
+                ]),
             ),
             # Cluster 2: PV computation and softmax0 (high priority through barrier)
             tkw.cluster(
-                [
+                prune_empty_items([
                     tkw.SetWavePrio(1),
                     mma_pv_kernel,
                     *softmax0_ops_kernel,
                     tkw.WorkgroupBarrier(),
                     tkw.SetWavePrio(0),
-                ],
+                ]),
             ),
             # Cluster 3: V data movement (global_to_shared_v) + local load K
             tkw.cluster(
-                [
+                prune_empty_items([
                     shared_load_k_kernel,
                     global_to_shared_v_kernel,
                     tkw.WorkgroupBarrier(),
-                ],
+                ]),
             ),
         ]
 

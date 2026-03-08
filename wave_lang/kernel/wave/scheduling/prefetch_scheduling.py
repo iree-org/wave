@@ -12,6 +12,7 @@ import torch.fx as fx
 from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation
 from .scheduler_utils import get_scheduling_stage, BaseScheduler, GemmScheduler
+from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE
 from ...ops.wave_ops import (
     get_custom,
     Read,
@@ -157,7 +158,7 @@ class MMAGroup:
         for node in nodes:
             custom = get_custom(node)
             if isinstance(custom, Read):
-                if custom.memory is None:
+                if custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE:
                     self.global_reads.add(node)
                 else:
                     self.shared_reads.add(node)

@@ -2198,6 +2198,10 @@ class Read(CustomOp):
     def memory_type(self) -> "Memory":
         return get_custom(self.memory).type
 
+    def get_memory_source(self) -> fx.Node:
+        """Return the defining storage value referenced by this read."""
+        return NestedRegionOp.capture_source(self.memory)
+
     @property
     def dtype(self) -> DataType:
         return self.memory_type.dtype
@@ -2676,6 +2680,10 @@ class Write(CustomOp):
     @property
     def memory_type(self) -> "Memory":
         return get_custom(self.memory).type
+
+    def get_memory_source(self) -> fx.Node:
+        """Return the defining storage value referenced by this write."""
+        return NestedRegionOp.capture_source(self.memory)
 
     @property
     def register_type(self) -> "Register":

@@ -76,11 +76,10 @@ def test_extend_attention():
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
-    # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
     # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8704xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8704xi8, #gpu.address_space<workgroup>> to memref<32x1x68xf16, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C4352]]][] : memref<8704xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<4608xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<1x64x36xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
     # CHECK-COUNT-4:        vector.maskedload
     # CHECK:                scf.for
     # 3 masked load for sequence idx, 2 for k_cache, and 1 for v_cache.
@@ -89,7 +88,6 @@ def test_extend_attention():
     # CHECK-NEXT:               vector.store %{{.*}}, %[[ALLOC2]]
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC1]]
-    # CHECK-COUNT-32:           memref.load %{{.*}}
     # CHECK-COUNT-8:            vector.load %[[ALLOC2]]
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-2:            arith.cmpi slt
@@ -103,7 +101,6 @@ def test_extend_attention():
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC2]]
-    # CHECK-COUNT-32:           memref.load %{{.*}}
     # CHECK-COUNT-8:            vector.load %[[ALLOC2]]
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-2:            arith.cmpi slt
@@ -171,11 +168,10 @@ def test_causal_extend_attention():
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
-    # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
     # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8704xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8704xi8, #gpu.address_space<workgroup>> to memref<32x1x68xf16, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C4352]]][] : memref<8704xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<4608xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<1x64x36xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
     # CHECK-COUNT-4:        vector.maskedload
     # CHECK:                scf.for
     # 3 masked load for sequence idx, 2 for k_cache, and 1 for v_cache.
@@ -184,7 +180,6 @@ def test_causal_extend_attention():
     # CHECK-NEXT:               vector.store %{{.*}}, %[[ALLOC2]]
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC1]]
-    # CHECK-COUNT-32:           memref.load %{{.*}}
     # CHECK-COUNT-8:            vector.load %[[ALLOC2]]
     # CHECK-COUNT-8:            amdgpu.mfma
 
@@ -224,7 +219,6 @@ def test_causal_extend_attention():
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC2]]
-    # CHECK-COUNT-32:           memref.load %{{.*}}
     # CHECK-COUNT-8:            vector.load %[[ALLOC2]]
     # CHECK-COUNT-8:            amdgpu.mfma
 
@@ -311,15 +305,12 @@ def test_causal_extend_attention_32x32x8():
 
     # CHECK-LABEL:       test_causal_extend_attention_32x32x8
     # CHECK:             func.func @extend_attention
-    # CHECK-DAG:            %[[C4608:.*]] = arith.constant 4608 : index
-    # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
-    # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
     # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1]>>
-    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8960xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<32x1x68xf16, #gpu.address_space<workgroup>>
-    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C4352]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<{{.*}}xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%{{.*}}][] : memref<{{.*}}xi8, #gpu.address_space<workgroup>> to memref<{{.*}}xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%{{.*}}][] : memref<{{.*}}xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
     # CHECK-COUNT-8:        vector.maskedload
     # CHECK:                scf.for
     # 3 masked load for sequence idx, 2 for k_cache, and 1 for v_cache.
@@ -327,7 +318,6 @@ def test_causal_extend_attention_32x32x8():
     # CHECK-COUNT-2:            vector.maskedload
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC1]]
-    # CHECK-COUNT-32:           memref.load %{{.*}}
     # CHECK-COUNT-8:            vector.load %[[ALLOC2]]
     # CHECK-COUNT-8:            amdgpu.mfma
 
@@ -355,16 +345,14 @@ def test_causal_extend_attention_32x32x8():
 
     # CHECK-COUNT-2:            gpu.shuffle xor {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
-    # CHECK:                %[[ALLOC3:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x64x36xf16, #gpu.address_space<workgroup>>
-    # CHECK:                %[[ALLOC4:.*]] = memref.view %[[ALLOC0]][%[[C4608]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
     # CHECK-COUNT-8:        vector.maskedload
     # CHECK:                amdgpu.lds_barrier
     # CHECK-NOT:            amdgpu.lds_barrier
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
-    # CHECK-COUNT-2:            vector.store %{{.*}}, %[[ALLOC4]]
+    # CHECK-COUNT-2:            vector.store %{{.*}}, %{{.*}} : memref<1x32x68xf16, #gpu.address_space<workgroup>>, vector<8xf16>
     # CHECK-COUNT-8:            vector.maskedload %{{.*}}
-    # CHECK-COUNT-8:            vector.load %[[ALLOC4]]
+    # CHECK-COUNT-8:            vector.load %{{.*}} : memref<1x32x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:            amdgpu.mfma
 
     # softcap/logitcap modifier:

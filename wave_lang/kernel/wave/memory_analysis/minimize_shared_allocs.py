@@ -62,6 +62,10 @@ def compute_live_intervals(allocs: list[fx.Node]):
     return live_intervals
 
 
+def has_live_uses(live_interval: LiveInterval) -> bool:
+    return live_interval.start != (10000,) and live_interval.end != (-1,)
+
+
 def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
     return subs_idxc(get_custom(alloc).allocation_size)
 
@@ -71,7 +75,7 @@ def get_use(
 ) -> fx.Node:
     users, _ = get_users(alloc, None)
     users = flatten_list([propagate_user(u) for u in users])
-    matches = [x for x in users if x._sort_key == live_interval.start]
+    matches = [x for x in users if x._sort_key == match_sort_key]
     if len(matches) != 1:
         raise ValueError(
             f"Expected 1 match for {alloc} and {match_sort_key}, got {len(matches)}"
@@ -123,6 +127,9 @@ def get_alloc_info(trace: CapturedTrace):
     if not allocs:
         return None, None, None
     live_intervals = compute_live_intervals(allocs)
+    allocs = [alloc for alloc in allocs if has_live_uses(live_intervals[alloc])]
+    if not allocs:
+        return None, None, None
 
     alloc_info = [
         (

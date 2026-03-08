@@ -15,6 +15,7 @@ from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2
 from ..ops.wave_ops import (
+    NestedRegionOp,
     TensorLoadToLDS,
     get_custom,
 )
@@ -99,7 +100,7 @@ def _scale_distributed_shape(
     on the leftmost, return the updated distributed shape for the given load and multiplier.
     """
     assert len(load.dst) == 1, "Only one destination memory is supported"
-    mem = get_custom(load.dst[0])
+    mem = get_custom(NestedRegionOp.capture_source(load.dst[0]))
     symbolic_shape = mem.type.symbolic_shape
     distributed_shape = [load.distributed_shape[k] for k in symbolic_shape]
     mem_distributed_shape = mem.distributed_shape

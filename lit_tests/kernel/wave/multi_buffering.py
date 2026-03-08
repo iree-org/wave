@@ -156,6 +156,8 @@ def test_gemm_multibuffering():
 
         # CHECK: allocate(shape=(N, K), distributed_shape=(BLOCK_N, BLOCK_K + 4)
         # CHECK-NEXT: allocate(shape=(N, K), distributed_shape=(BLOCK_N, BLOCK_K + 4)
+        # CHECK-NEXT: allocate(shape=(N, K), distributed_shape=(BLOCK_N, BLOCK_K + 4)
+        # CHECK-NEXT: allocate(shape=(M, K), distributed_shape=(BLOCK_M, BLOCK_K + 4)
         # CHECK-NEXT: allocate(shape=(M, K), distributed_shape=(BLOCK_M, BLOCK_K + 4)
         # CHECK-NEXT: allocate(shape=(M, K), distributed_shape=(BLOCK_M, BLOCK_K + 4)
         # CHECK-NEXT: write(register_=read_21_mapped_0_0,

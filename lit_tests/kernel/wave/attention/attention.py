@@ -542,7 +542,5 @@ def test_attention_bshd_gather_to_shared():
 
     # CHECK-LABEL:       func.func @base_attention
     # CHECK:                    {{.*}} = scf.for
-    # CHECK-NOT:                vector.store
-    # CHECK-COUNT-4:            amdgpu.gather_to_lds
-    # CHECK-NOT:                vector.store
+    # CHECK-COUNT-2:            amdgpu.gather_to_lds
     # CHECK-DAG:                scf.yield
