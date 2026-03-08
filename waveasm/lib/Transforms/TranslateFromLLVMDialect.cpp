@@ -160,30 +160,13 @@ static Value resolve(Value v, TranslationContext &ctx) {
   return v;
 }
 
-/// Narrow a value to 32 bits for use in 32-bit VALU ops.
-/// TODO: Add a proper i64→i32 legalization pass instead of truncating here.
-static Value ensure32Bit(Value v, TranslationContext &ctx) {
-  if (auto psreg = v.getDefiningOp<PrecoloredSRegOp>()) {
-    if (psreg.getSize() > 1) {
-      auto &builder = ctx.getBuilder();
-      auto sregTy = ctx.createSRegType(1, 1);
-      return PrecoloredSRegOp::create(builder, v.getLoc(), sregTy,
-                                      psreg.getIndex(), /*size=*/1);
-    }
-  }
-  return v;
-}
-
-/// Ensure a value is in a VGPR. If it's an SGPR, emit v_mov_b32 to copy it.
-/// VALU instructions can read at most one SGPR per instruction (constant bus
-/// restriction), so callers use this on one operand when both might be SGPRs.
-static Value ensureVGPR(Value v, TranslationContext &ctx) {
-  if (!isSGPRType(v.getType()))
-    return v;
-  v = ensure32Bit(v, ctx);
-  auto &builder = ctx.getBuilder();
-  auto vregTy = ctx.createVRegType();
-  return V_MOV_B32::create(builder, v.getLoc(), vregTy, v);
+/// Infer the pseudo-op result type from operand types.
+/// If any operand is VGPR → VReg; otherwise SReg.
+static Type inferResultType(ValueRange operands, TranslationContext &ctx) {
+  for (Value v : operands)
+    if (isVGPRType(v.getType()))
+      return ctx.createVRegType();
+  return ctx.createSRegType();
 }
 
 //===----------------------------------------------------------------------===//
@@ -266,103 +249,89 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
   return success();
 }
 
-// TODO: Assumes all integer values fit in 32 bits. A legalization pass
-// should lower i64 arithmetic to pairs of i32 ops before this point.
+// Emit arith pseudo-ops for i32/i64 casts -- legalization pass handles width.
 static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  Value src = resolve(op.getOperand(), ctx);
+  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
+                                         : (Type)ctx.createSRegType();
+  auto pseudo = Arith_SExtOp::create(builder, op.getLoc(), resTy, src);
+  ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
 
 static LogicalResult handleZext(LLVM::ZExtOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  Value src = resolve(op.getOperand(), ctx);
+  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
+                                         : (Type)ctx.createSRegType();
+  auto pseudo = Arith_ZExtOp::create(builder, op.getLoc(), resTy, src);
+  ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
 
 static LogicalResult handleTrunc(LLVM::TruncOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
   Value src = resolve(op.getOperand(), ctx);
-
-  // Truncating a wide precolored SGPR pair (i64→i32): extract low register.
-  if (auto psreg = dyn_cast<PrecoloredSRegOp>(src.getDefiningOp())) {
-    if (psreg.getSize() > 1) {
-      auto &builder = ctx.getBuilder();
-      auto sregTy = ctx.createSRegType(1, 1);
-      auto low = PrecoloredSRegOp::create(builder, op.getLoc(), sregTy,
-                                          psreg.getIndex(), /*size=*/1);
-      ctx.getMapper().mapValue(op.getResult(), low);
-      return success();
-    }
-  }
-
-  ctx.getMapper().mapValue(op.getResult(), src);
+  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
+                                         : (Type)ctx.createSRegType();
+  auto pseudo = Arith_TruncOp::create(builder, op.getLoc(), resTy, src);
+  ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
+}
+
+/// Map LLVM ICmpPredicate to WaveASM CmpPredicate.
+static CmpPredicate mapLLVMPredicate(LLVM::ICmpPredicate pred) {
+  using LP = LLVM::ICmpPredicate;
+  switch (pred) {
+  case LP::eq:
+    return CmpPredicate::eq;
+  case LP::ne:
+    return CmpPredicate::ne;
+  case LP::slt:
+    return CmpPredicate::slt;
+  case LP::sle:
+    return CmpPredicate::sle;
+  case LP::sgt:
+    return CmpPredicate::sgt;
+  case LP::sge:
+    return CmpPredicate::sge;
+  case LP::ult:
+    return CmpPredicate::ult;
+  case LP::ule:
+    return CmpPredicate::ule;
+  case LP::ugt:
+    return CmpPredicate::ugt;
+  case LP::uge:
+    return CmpPredicate::uge;
+  }
+  llvm_unreachable("unhandled LLVM ICmpPredicate");
 }
 
 static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
-
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
-
-  // TODO: Assumes i32 operands. A legalization pass should ensure all
-  // integer comparisons are on i32 values before this point.
-  using Pred = LLVM::ICmpPredicate;
-  switch (op.getPredicate()) {
-  case Pred::slt:
-    V_CMP_LT_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::sgt:
-    V_CMP_GT_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::sle:
-    V_CMP_LE_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::sge:
-    V_CMP_GE_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::eq:
-    V_CMP_EQ_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::ne:
-    V_CMP_NE_I32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::ult:
-    V_CMP_LT_U32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::ugt:
-    V_CMP_GT_U32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::ule:
-    V_CMP_LE_U32::create(builder, loc, lhs, rhs);
-    break;
-  case Pred::uge:
-    V_CMP_GE_U32::create(builder, loc, lhs, rhs);
-    break;
-  }
-
-  // Map result to a placeholder — V_CNDMASK reads VCC implicitly.
-  auto immOne = ctx.createImmType(1);
-  auto placeholder = ConstantOp::create(builder, loc, immOne, 1);
-  ctx.getMapper().mapValue(op.getResult(), placeholder);
+  auto resTy = inferResultType({lhs, rhs}, ctx);
+  auto pred = mapLLVMPredicate(op.getPredicate());
+  auto cmp = Arith_CmpOp::create(builder, op.getLoc(), resTy, pred, lhs, rhs);
+  ctx.getMapper().mapValue(op.getResult(), cmp);
   return success();
 }
 
 static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
-
   Value cond = resolve(op.getCondition(), ctx);
   Value trueVal = resolve(op.getTrueValue(), ctx);
   Value falseVal = resolve(op.getFalseValue(), ctx);
-
-  // TODO: Assumes b32 operands. A legalization pass should ensure all
-  // selects operate on i32/f32 values before this point.
-  auto vregTy = ctx.createVRegType();
-  auto sel =
-      V_CNDMASK_B32::create(builder, loc, vregTy, falseVal, trueVal, cond);
+  auto resTy = inferResultType({trueVal, falseVal}, ctx);
+  auto sel = Arith_SelectOp::create(builder, op.getLoc(), resTy, cond, trueVal,
+                                    falseVal);
   ctx.getMapper().mapValue(op.getResult(), sel);
   return success();
 }
@@ -372,21 +341,10 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
 static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
-
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
-
-  // TODO: Proper i64 legalization. For now truncate to 32-bit.
-  lhs = ensure32Bit(lhs, ctx);
-  rhs = ensure32Bit(rhs, ctx);
-
-  // VALU can read at most one SGPR — move lhs to VGPR if both are scalar.
-  if (isSGPRType(lhs.getType()) && isSGPRType(rhs.getType()))
-    lhs = ensureVGPR(lhs, ctx);
-
-  auto vregTy = ctx.createVRegType();
-  auto add = V_ADD_U32::create(builder, loc, vregTy, lhs, rhs);
+  auto resTy = inferResultType({lhs, rhs}, ctx);
+  auto add = Arith_AddOp::create(builder, op.getLoc(), resTy, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), add);
   return success();
 }
@@ -396,21 +354,10 @@ static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
 static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
-
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
-
-  // TODO: Proper i64 legalization. For now truncate to 32-bit.
-  lhs = ensure32Bit(lhs, ctx);
-  rhs = ensure32Bit(rhs, ctx);
-
-  // VALU can read at most one SGPR — move lhs to VGPR if both are scalar.
-  if (isSGPRType(lhs.getType()) && isSGPRType(rhs.getType()))
-    lhs = ensureVGPR(lhs, ctx);
-
-  auto vregTy = ctx.createVRegType();
-  auto mul = V_MUL_LO_U32::create(builder, loc, vregTy, lhs, rhs);
+  auto resTy = inferResultType({lhs, rhs}, ctx);
+  auto mul = Arith_MulOp::create(builder, op.getLoc(), resTy, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), mul);
   return success();
 }

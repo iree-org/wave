@@ -6,9 +6,9 @@
 // CHECK:   waveasm.program @test__waveasm
 // CHECK-SAME: kernel_name = "test"
 // CHECK: waveasm.precolored.vreg
-// CHECK: waveasm.v_cmp_lt_i32
-// CHECK: waveasm.v_cndmask_b32
-// CHECK: waveasm.v_mul_lo_u32
+// CHECK: waveasm.arith.cmp slt
+// CHECK: waveasm.arith.select
+// CHECK: waveasm.arith.mul
 // CHECK: waveasm.buffer_load_ushort
 // CHECK: waveasm.buffer_store_short
 // CHECK: waveasm.s_endpgm
