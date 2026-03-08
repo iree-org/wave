@@ -470,8 +470,7 @@ LivenessInfo computeLiveness(ProgramOp program) {
         Value initArg = loopOp.getInitArgs()[i];
         auto initRangeIt = info.ranges.find(initArg);
         auto loopPosIt = opToIdx.find(loopOp.getOperation());
-        if (initRangeIt != info.ranges.end() &&
-            loopPosIt != opToIdx.end() &&
+        if (initRangeIt != info.ranges.end() && loopPosIt != opToIdx.end() &&
             initRangeIt->second.end > loopPosIt->second) {
           initArgCanCoalesce = false;
           LLVM_DEBUG(llvm::dbgs()

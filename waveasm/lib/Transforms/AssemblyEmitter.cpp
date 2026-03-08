@@ -598,11 +598,11 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             int64_t width = getRegSize(body.getArgument(i).getType());
             for (int64_t r = 0; r < width; ++r) {
               if (isSGPR)
-                os << "  s_mov_b32 s" << (dstPhys + r) << ", s"
-                   << (srcPhys + r) << "\n";
+                os << "  s_mov_b32 s" << (dstPhys + r) << ", s" << (srcPhys + r)
+                   << "\n";
               else
-                os << "  v_mov_b32 v" << (dstPhys + r) << ", v"
-                   << (srcPhys + r) << "\n";
+                os << "  v_mov_b32 v" << (dstPhys + r) << ", v" << (srcPhys + r)
+                   << "\n";
             }
           }
         }
