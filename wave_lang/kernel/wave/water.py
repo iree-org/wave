@@ -454,6 +454,7 @@ def water_waveasm_lowering_pipeline(
     waveasm_args = [
         waveasm_translate,
         f"--waveasm-translate-from-llvm=target={target_chip}",
+        "--waveasm-arith-legalization",
         "--waveasm-scoped-cse",
         "--waveasm-peephole",
         "--waveasm-memory-offset-opt",
