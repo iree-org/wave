@@ -152,6 +152,32 @@ static Value resolve(Value v, TranslationContext &ctx) {
   return v;
 }
 
+/// Narrow a value to 32 bits for use in 32-bit VALU ops.
+/// TODO: Add a proper i64→i32 legalization pass instead of truncating here.
+static Value ensure32Bit(Value v, TranslationContext &ctx) {
+  if (auto psreg = v.getDefiningOp<PrecoloredSRegOp>()) {
+    if (psreg.getSize() > 1) {
+      auto &builder = ctx.getBuilder();
+      auto sregTy = ctx.createSRegType(1, 1);
+      return PrecoloredSRegOp::create(builder, v.getLoc(), sregTy,
+                                      psreg.getIndex(), /*size=*/1);
+    }
+  }
+  return v;
+}
+
+/// Ensure a value is in a VGPR. If it's an SGPR, emit v_mov_b32 to copy it.
+/// VALU instructions can read at most one SGPR per instruction (constant bus
+/// restriction), so callers use this on one operand when both might be SGPRs.
+static Value ensureVGPR(Value v, TranslationContext &ctx) {
+  if (!isSGPRType(v.getType()))
+    return v;
+  v = ensure32Bit(v, ctx);
+  auto &builder = ctx.getBuilder();
+  auto vregTy = ctx.createVRegType();
+  return V_MOV_B32::create(builder, v.getLoc(), vregTy, v);
+}
+
 //===----------------------------------------------------------------------===//
 // Op handlers
 //===----------------------------------------------------------------------===//
@@ -241,7 +267,22 @@ static LogicalResult handleZext(LLVM::ZExtOp op, LLVMTranslationState &st) {
 }
 
 static LogicalResult handleTrunc(LLVM::TruncOp op, LLVMTranslationState &st) {
-  st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
+  auto &ctx = st.ctx;
+  Value src = resolve(op.getOperand(), ctx);
+
+  // Truncating a wide precolored SGPR pair (i64→i32): extract low register.
+  if (auto psreg = dyn_cast<PrecoloredSRegOp>(src.getDefiningOp())) {
+    if (psreg.getSize() > 1) {
+      auto &builder = ctx.getBuilder();
+      auto sregTy = ctx.createSRegType(1, 1);
+      auto low = PrecoloredSRegOp::create(builder, op.getLoc(), sregTy,
+                                          psreg.getIndex(), /*size=*/1);
+      ctx.getMapper().mapValue(op.getResult(), low);
+      return success();
+    }
+  }
+
+  ctx.getMapper().mapValue(op.getResult(), src);
   return success();
 }
 
@@ -252,6 +293,13 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
 
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
+
+  // TODO: Proper i64 legalization. For now truncate to 32-bit.
+  lhs = ensure32Bit(lhs, ctx);
+  rhs = ensure32Bit(rhs, ctx);
+
+  // v_cmp needs at least one VGPR operand and can read at most one SGPR.
+  lhs = ensureVGPR(lhs, ctx);
 
   // V_CMP_* ops set VCC implicitly (no SSA result).
   using Pred = LLVM::ICmpPredicate;
@@ -304,6 +352,10 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   Value trueVal = resolve(op.getTrueValue(), ctx);
   Value falseVal = resolve(op.getFalseValue(), ctx);
 
+  // TODO: Proper i64 legalization. For now truncate to 32-bit.
+  trueVal = ensure32Bit(trueVal, ctx);
+  falseVal = ensure32Bit(falseVal, ctx);
+
   // v_cndmask_b32: dst = vcc ? src1 : src0 (falseVal=src0, trueVal=src1).
   auto vregTy = ctx.createVRegType();
   auto sel =
@@ -320,6 +372,14 @@ static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
 
+  // TODO: Proper i64 legalization. For now truncate to 32-bit.
+  lhs = ensure32Bit(lhs, ctx);
+  rhs = ensure32Bit(rhs, ctx);
+
+  // VALU can read at most one SGPR — move lhs to VGPR if both are scalar.
+  if (isSGPRType(lhs.getType()) && isSGPRType(rhs.getType()))
+    lhs = ensureVGPR(lhs, ctx);
+
   auto vregTy = ctx.createVRegType();
   auto add = V_ADD_U32::create(builder, loc, vregTy, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), add);
@@ -333,6 +393,14 @@ static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
 
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
+
+  // TODO: Proper i64 legalization. For now truncate to 32-bit.
+  lhs = ensure32Bit(lhs, ctx);
+  rhs = ensure32Bit(rhs, ctx);
+
+  // VALU can read at most one SGPR — move lhs to VGPR if both are scalar.
+  if (isSGPRType(lhs.getType()) && isSGPRType(rhs.getType()))
+    lhs = ensureVGPR(lhs, ctx);
 
   auto vregTy = ctx.createVRegType();
   auto mul = V_MUL_LO_U32::create(builder, loc, vregTy, lhs, rhs);
@@ -607,13 +675,31 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
     TranslationContext ctx(builder, program, target);
     LLVMTranslationState st(ctx);
 
-    // Map llvm.func arguments — all are !llvm.ptr (bare pointers).
+    // Map llvm.func arguments: pointers get SRD setup, scalars get mapped
+    // to their preloaded SGPR positions directly.
+    SmallVector<BlockArgument> scalarArgs;
     for (auto arg : func.getBody().getArguments()) {
-      int64_t argIdx = arg.getArgNumber();
-      ctx.queueSRDSetup(arg, argIdx, /*bufferSize=*/0x7FFFFFFC);
+      if (isa<LLVM::LLVMPointerType>(arg.getType())) {
+        int64_t argIdx = arg.getArgNumber();
+        ctx.queueSRDSetup(arg, argIdx, /*bufferSize=*/0x7FFFFFFC);
+      } else {
+        scalarArgs.push_back(arg);
+      }
     }
 
+    ctx.setTotalKernelArgs(func.getNumArguments());
     ctx.emitSRDPrologue();
+
+    // Map scalar (non-pointer) args to their preloaded SGPR positions.
+    // On gfx950, arg N is preloaded at s[2+N*2 : 2+N*2+1] (64-bit each).
+    for (auto arg : scalarArgs) {
+      int64_t argIdx = arg.getArgNumber();
+      int64_t preloadBase = 2 + argIdx * 2;
+      auto sregTy = ctx.createSRegType(2, 2);
+      auto sreg = PrecoloredSRegOp::create(builder, arg.getLoc(), sregTy,
+                                           preloadBase, /*size=*/2);
+      ctx.getMapper().mapValue(arg, sreg);
+    }
 
     // Enable all workgroup IDs so the SGPR layout is predictable.
     // The real LLVM backend does the same (enables all three).
@@ -629,8 +715,7 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
     S_ENDPGM::create(builder, func.getLoc());
 
     program->setAttr("num_kernel_args",
-                     builder.getI64IntegerAttr(
-                         static_cast<int64_t>(ctx.getNumKernelArgs())));
+                     builder.getI64IntegerAttr(func.getNumArguments()));
 
     int64_t ldsSize = ctx.getTotalLDSSize();
     if (ldsSize > 0)

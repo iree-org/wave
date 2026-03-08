@@ -155,11 +155,12 @@ void TranslationContext::emitSRDPrologue() {
   // branch+alignment)
   bool isGFX95 = llvm::isa<GFX950TargetAttr>(target);
 
-  // Recompute SRD base indices now that we know the total number of args
-  // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
+  // Recompute SRD base indices now that we know the total number of args.
+  // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs).
+  size_t numPreloadedArgs = getNumKernelArgs();
   int64_t userSgprCount = 2; // kernarg ptr
   if (isGFX95) {
-    userSgprCount += pendingSRDs.size() * 2; // preloaded args
+    userSgprCount += numPreloadedArgs * 2; // preloaded args
   }
   int64_t systemSgprCount = 3; // workgroup_id_x, y, z
   int64_t srdStartIndex =
@@ -192,14 +193,12 @@ void TranslationContext::emitSRDPrologue() {
   if (isGFX95) {
     // On gfx95*, the prologue loads kernarg data into preload locations
     // s[2:3], s[4:5], etc. Reserve those pairs so regalloc doesn't use them.
-    llvm::DenseSet<int64_t> reservedPreloadBases;
-    for (const auto &pending : pendingSRDs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
-      if (reservedPreloadBases.insert(preloadBase).second) {
-        auto preloadType = createSRegType(2, 2);
-        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
-                                 /*size=*/2);
-      }
+    // Reserve all arg positions, not just pointer args with SRDs.
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t preloadBase = 2 + i * 2;
+      auto preloadType = createSRegType(2, 2);
+      PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
+                               /*size=*/2);
     }
   }
 
@@ -213,9 +212,10 @@ void TranslationContext::emitSRDPrologue() {
     auto kernargBase =
         PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
-    for (const auto &pending : pendingSRDs) {
-      int64_t loadBase = 2 + pending.argIndex * 2;
-      int64_t kernargOffset = pending.argIndex * 8;
+    // Load all kernel args (pointers and scalars) into preload positions.
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t loadBase = 2 + i * 2;
+      int64_t kernargOffset = i * 8;
 
       auto loadDstType = createSRegType(2, loadBase);
       auto offsetImm = builder.getType<ImmType>(kernargOffset);

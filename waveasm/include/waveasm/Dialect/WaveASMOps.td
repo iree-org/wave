@@ -422,7 +422,7 @@ def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
 // This enables AGPR zero-init for MFMA accumulator loop init args on gfx950,
 // eliminating 128 VGPRs of accumulator zero-init pressure.
 def WaveASM_V_MOV_B32 : WAVEASMOp<"v_mov_b32", [Pure, WaveASM_ArithmeticOp]> {
-  let arguments = (ins WaveASM_VRegOrImm:$src);
+  let arguments = (ins WaveASM_VALUSrc:$src);
   let results = (outs WaveASM_AnyVecReg:$dst);
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst)";
 }
