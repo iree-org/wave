@@ -256,12 +256,16 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   lines.push_back("  .amdhsa_next_free_vgpr " + std::to_string(nextFreeVGPR));
   lines.push_back("  .amdhsa_next_free_sgpr " + std::to_string(nextFreeSGPR));
 
+  // Always enable all workgroup IDs when any is used.
+  // This matches the real LLVM backend and ensures the SGPR layout
+  // is predictable (base+0=x, base+1=y, base+2=z) without gaps.
+  bool anyWgId = usesWorkgroupIdX || usesWorkgroupIdY || usesWorkgroupIdZ;
   lines.push_back("  .amdhsa_system_sgpr_workgroup_id_x " +
-                  std::to_string(usesWorkgroupIdX ? 1 : 0));
+                  std::to_string(anyWgId ? 1 : 0));
   lines.push_back("  .amdhsa_system_sgpr_workgroup_id_y " +
-                  std::to_string(usesWorkgroupIdY ? 1 : 0));
+                  std::to_string(anyWgId ? 1 : 0));
   lines.push_back("  .amdhsa_system_sgpr_workgroup_id_z " +
-                  std::to_string(usesWorkgroupIdZ ? 1 : 0));
+                  std::to_string(anyWgId ? 1 : 0));
 
   int64_t systemVgprWorkitemId = 0;
   auto workgroupSize = program.getWorkgroupSize();

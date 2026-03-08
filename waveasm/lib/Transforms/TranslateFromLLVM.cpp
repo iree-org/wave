@@ -616,6 +616,10 @@ static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
 
     ctx.emitSRDPrologue();
 
+    // Enable all workgroup IDs so the SGPR layout is predictable.
+    // The real LLVM backend does the same (enables all three).
+    ctx.enableAllWorkgroupIds();
+
     for (Operation &op : func.getBody().front()) {
       if (isa<LLVM::ReturnOp>(op))
         continue;
