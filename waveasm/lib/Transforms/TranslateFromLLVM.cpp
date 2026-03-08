@@ -11,7 +11,6 @@
 // Fails on any unhandled op — no silent fallthrough.
 //===----------------------------------------------------------------------===//
 
-#include "waveasm/Transforms/TranslateFromLLVM.h"
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
