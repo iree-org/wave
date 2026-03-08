@@ -471,6 +471,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return result;
       })
 
+      .Case<S_MOV_B32_PHYS>([&](S_MOV_B32_PHYS movOp) {
+        return formatter.format("s_mov_b32", {resolveValue(movOp.getDst()),
+                                              resolveValue(movOp.getSrc())});
+      })
+      .Case<S_MOV_B64_PHYS>([&](S_MOV_B64_PHYS movOp) {
+        return formatter.format("s_mov_b64", {resolveValue(movOp.getDst()),
+                                              resolveValue(movOp.getSrc())});
+      })
       .Case<S_BRANCH>([&](S_BRANCH branchOp) {
         return std::string("  s_branch ") +
                branchOp.getTarget().getRootReference().str();

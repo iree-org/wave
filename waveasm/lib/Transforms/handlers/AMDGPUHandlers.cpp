@@ -423,25 +423,48 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     return success();
   }
 
-  std::string mov0 = "s_mov_b32 s" + std::to_string(newSrdBase) + ", s" +
-                     std::to_string(srcSrdBase);
-  RawOp::create(builder, loc, mov0);
+  auto *mlirCtx = builder.getContext();
 
-  std::string and1 = "s_and_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                     std::to_string(srcSrdBase + 1) + ", 0xffff";
-  RawOp::create(builder, loc, and1);
+  // SRD[0] = srcSrd[0]
+  auto dst0Type = PSRegType::get(mlirCtx, newSrdBase, 1);
+  auto dst0 = PrecoloredSRegOp::create(builder, loc, dst0Type, newSrdBase, 1);
+  auto src0Type = PSRegType::get(mlirCtx, srcSrdBase, 1);
+  auto src0 = PrecoloredSRegOp::create(builder, loc, src0Type, srcSrdBase, 1);
+  S_MOV_B32_PHYS::create(builder, loc, dst0, src0);
 
-  std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                    std::to_string(newSrdBase + 1) + ", 0x40400000";
-  RawOp::create(builder, loc, or1);
+  // SRD[1] = (srcSrd[1] & 0xffff) | 0x40400000
+  // Compute in SSA (Pure ops with data dependency) then write once.
+  auto dst1Type = PSRegType::get(mlirCtx, newSrdBase + 1, 1);
+  auto dst1 =
+      PrecoloredSRegOp::create(builder, loc, dst1Type, newSrdBase + 1, 1);
+  auto src1Type = PSRegType::get(mlirCtx, srcSrdBase + 1, 1);
+  auto src1 =
+      PrecoloredSRegOp::create(builder, loc, src1Type, srcSrdBase + 1, 1);
+  auto maskImm =
+      ConstantOp::create(builder, loc, ctx.createImmType(0xffff), 0xffff);
+  auto sregTy = ctx.createSRegType(1);
+  auto andResult = S_AND_B32::create(builder, loc, sregTy, src1, maskImm);
 
-  std::string mov2 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0x7ffffffd";
-  RawOp::create(builder, loc, mov2);
+  auto orImm = ConstantOp::create(builder, loc, ctx.createImmType(0x40400000),
+                                  0x40400000);
+  auto orResult = S_OR_B32::create(builder, loc, sregTy, andResult, orImm);
+  S_MOV_B32_PHYS::create(builder, loc, dst1, orResult);
 
-  std::string mov3 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x27000";
-  RawOp::create(builder, loc, mov3);
+  // SRD[2] = 0x7ffffffd (num_records)
+  auto dst2Type = PSRegType::get(mlirCtx, newSrdBase + 2, 1);
+  auto dst2 =
+      PrecoloredSRegOp::create(builder, loc, dst2Type, newSrdBase + 2, 1);
+  auto sizeImm = ConstantOp::create(builder, loc, ctx.createImmType(0x7ffffffd),
+                                    0x7ffffffd);
+  S_MOV_B32_PHYS::create(builder, loc, dst2, sizeImm);
+
+  // SRD[3] = 0x27000 (stride / descriptor flags)
+  auto dst3Type = PSRegType::get(mlirCtx, newSrdBase + 3, 1);
+  auto dst3 =
+      PrecoloredSRegOp::create(builder, loc, dst3Type, newSrdBase + 3, 1);
+  auto strideImm =
+      ConstantOp::create(builder, loc, ctx.createImmType(0x27000), 0x27000);
+  S_MOV_B32_PHYS::create(builder, loc, dst3, strideImm);
 
   auto srdType = ctx.createSRegType(4, 4);
   auto newSrd = PrecoloredSRegOp::create(builder, loc, srdType, newSrdBase, 4);

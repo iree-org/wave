@@ -38,17 +38,17 @@ func.func @buffer_ops_test(%arg0: memref<f16>, %arg1: memref<f32>) {
         to memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
 
   // The load SRD should be adjusted with the workgroup offset via SALU:
-  //   s_mov_b64 (copy base), v_readfirstlane_b32 (wg offset to SGPR),
+  //   s_mov_b64_phys (copy base), v_readfirstlane_b32 (wg offset to SGPR),
   //   s_mul_i32 (byte offset), s_add_u32 + s_addc_u32 (adjust base),
-  //   s_mov_b32 (num_records = 0x7FFFFFFC, not a tiny value)
-  // CHECK: s_mov_b64 s[{{[0-9]+}}:{{[0-9]+}}], s[{{[0-9]+}}:{{[0-9]+}}]
+  //   s_mov_b32_phys (num_records, stride)
+  // CHECK: waveasm.s_mov_b64_phys
   // CHECK: waveasm.v_readfirstlane_b32
   // CHECK: waveasm.s_mul_hi_u32
   // CHECK: waveasm.s_mul_i32
   // CHECK: waveasm.s_add_u32
   // CHECK: waveasm.s_addc_u32
-  // CHECK: s_mov_b32 s{{[0-9]+}}, 0x7FFFFFFC
-  // CHECK: s_mov_b32 s{{[0-9]+}}, 0x20000
+  // CHECK: waveasm.s_mov_b32_phys {{.*}} !waveasm.imm<2147483644>
+  // CHECK: waveasm.s_mov_b32_phys {{.*}} !waveasm.imm<131072>
   // CHECK: waveasm.buffer_load_dwordx2
   %loaded = vector.load %buf0[%th_offset]
       : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf16>
@@ -72,14 +72,14 @@ func.func @buffer_ops_test(%arg0: memref<f16>, %arg1: memref<f32>) {
   %ext = arith.extf %elem : vector<1xf16> to vector<1xf32>
 
   // The store SRD should also be adjusted, with correct num_records (0x7FFFFFF8)
-  // CHECK: s_mov_b64 s[{{[0-9]+}}:{{[0-9]+}}], s[{{[0-9]+}}:{{[0-9]+}}]
+  // CHECK: waveasm.s_mov_b64_phys
   // CHECK: waveasm.v_readfirstlane_b32
   // CHECK: waveasm.s_mul_hi_u32
   // CHECK: waveasm.s_mul_i32
   // CHECK: waveasm.s_add_u32
   // CHECK: waveasm.s_addc_u32
-  // CHECK: s_mov_b32 s{{[0-9]+}}, 0x7FFFFFF8
-  // CHECK: s_mov_b32 s{{[0-9]+}}, 0x20000
+  // CHECK: waveasm.s_mov_b32_phys {{.*}} !waveasm.imm<2147483640>
+  // CHECK: waveasm.s_mov_b32_phys {{.*}} !waveasm.imm<131072>
   // CHECK: waveasm.buffer_store_dword
   vector.store %ext, %buf1[%thread_id]
       : memref<?xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf32>
