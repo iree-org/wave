@@ -1,10 +1,8 @@
 // RUN: waveasm-translate %s --waveasm-translate-from-llvm | FileCheck %s
-// Verify llvm.add is translated to v_add_u32 and constants become immediates.
+// Verify llvm.add is translated to arith.add pseudo-op.
 
 // CHECK: waveasm.program @test__waveasm
-// CHECK: waveasm.constant 42
-// CHECK: waveasm.constant 7
-// CHECK: waveasm.v_add_u32
+// CHECK: waveasm.arith.add
 // CHECK: waveasm.s_endpgm
 
 gpu.module @gpu_module {
