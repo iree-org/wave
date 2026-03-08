@@ -26,6 +26,22 @@ from ..common.utils import (
 from ._test_util import get_test_shapes
 
 
+def _get_waveasm_test_shapes(test_name: str, extra_xfails: set):
+    """Wrap get_test_shapes with xfail markers for unsupported waveasm shapes."""
+    xfails = extra_xfails
+    shapes = get_test_shapes(test_name)
+    return [
+        (
+            pytest.param(
+                s, marks=pytest.mark.xfail(reason="not yet supported in waveasm")
+            )
+            if s in xfails
+            else s
+        )
+        for s in shapes
+    ]
+
+
 def get_copy_template(
     shape: tuple[int, int],
     use_dynamic_dims: bool = False,
@@ -116,21 +132,56 @@ def test_copy(
 
 @require_e2e
 @require_cdna4
-@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+@pytest.mark.parametrize(
+    "shape",
+    _get_waveasm_test_shapes(
+        "test_copy",
+        # (111, 813): requires vector constant scalarization for bounds checks.
+        extra_xfails={(111, 813)},
+    ),
+)
 def test_copy_water_waveasm(
     shape: tuple[int, int],
     run_bench: bool,
 ) -> None:
     """Test copy kernel through the water+waveasm pipeline (LLVM dialect input)."""
-    # Shapes that don't tile evenly generate vector constants for bounds
-    # checking, which require a scalarization pass not yet implemented.
-    if shape == (111, 813):
-        pytest.skip("vector constants not yet supported in waveasm")
     options, test = get_copy_template(
         shape,
         run_bench=run_bench,
         use_water_backend=True,
         use_buffer_ops=True,
+    )
+    options = set_default_run_config(options)
+    options.backend = "asm"
+    test = wave_compile(options, test)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    test(a, b)
+    assert_close(a, b)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    _get_waveasm_test_shapes(
+        "test_copy",
+        # Require vector constant scalarization for bounds checks.
+        extra_xfails={(111, 813), (1, 128), (256, 128), (256, 256), (256, 1024)},
+    ),
+)
+def test_dynamic_copy_water_waveasm(
+    shape: tuple[int, int],
+    run_bench: bool,
+) -> None:
+    """Test dynamic copy kernel through the water+waveasm pipeline."""
+    options, test = get_copy_template(
+        shape,
+        run_bench=run_bench,
+        use_water_backend=True,
+        use_buffer_ops=True,
+        use_dynamic_dims=True,
     )
     options = set_default_run_config(options)
     options.backend = "asm"

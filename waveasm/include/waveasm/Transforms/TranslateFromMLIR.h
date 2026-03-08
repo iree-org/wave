@@ -407,7 +407,7 @@ public:
   /// Update buffer size for a pending SRD (called when we see reinterpret_cast)
   void updateSRDBufferSize(mlir::Value memref, int64_t bufferSize);
 
-  /// Get the number of kernel arguments (bindings + scalar args)
+  /// Get the number of kernel arguments (bindings + scalar args).
   size_t getNumKernelArgs() const {
     return pendingSRDs.size() + pendingScalarArgs.size();
   }
@@ -758,7 +758,8 @@ private:
       -1; // Will be computed lazily, starts after user+system SGPRs
   int64_t nextSwizzleSRDIndex =
       -1; // Will be computed in emitSRDPrologue(), after all regular SRDs
-  int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
+  int64_t totalLDSSize = 0;   // Total LDS allocation size in bytes
+  size_t totalKernelArgs = 0; // Total kernel args (set for mixed ptr/scalar)
   // Running byte offset for typed LDS allocations (pattern b in
   // handleMemRefAlloc). Reset implicitly: a fresh TranslationContext is
   // created per gpu.func in translateModule / createProgramFromFunc.
