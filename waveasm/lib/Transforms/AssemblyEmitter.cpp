@@ -570,9 +570,44 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
         std::string buf;
         llvm::raw_string_ostream os(buf);
-        os << labelName << ":\n";
 
+        // Emit copies from init arg registers to block arg registers when
+        // they differ (i.e. coalescing was broken because the init arg has
+        // post-loop uses).
         Block &body = loopOp.getBodyBlock();
+        for (unsigned i = 0; i < body.getNumArguments(); ++i) {
+          if (i >= loopOp.getInitArgs().size())
+            break;
+          auto [srcPhys, isSGPR] = [&]() -> std::pair<int64_t, bool> {
+            Type ty = loopOp.getInitArgs()[i].getType();
+            if (auto psreg = dyn_cast<PSRegType>(ty))
+              return {psreg.getIndex(), true};
+            if (auto pvreg = dyn_cast<PVRegType>(ty))
+              return {pvreg.getIndex(), false};
+            return {-1, false};
+          }();
+          auto [dstPhys, dstIsSGPR] = [&]() -> std::pair<int64_t, bool> {
+            Type ty = body.getArgument(i).getType();
+            if (auto psreg = dyn_cast<PSRegType>(ty))
+              return {psreg.getIndex(), true};
+            if (auto pvreg = dyn_cast<PVRegType>(ty))
+              return {pvreg.getIndex(), false};
+            return {-1, false};
+          }();
+          if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
+            int64_t width = getRegSize(body.getArgument(i).getType());
+            for (int64_t r = 0; r < width; ++r) {
+              if (isSGPR)
+                os << "  s_mov_b32 s" << (dstPhys + r) << ", s"
+                   << (srcPhys + r) << "\n";
+              else
+                os << "  v_mov_b32 v" << (dstPhys + r) << ", v"
+                   << (srcPhys + r) << "\n";
+            }
+          }
+        }
+
+        os << labelName << ":\n";
         for (Operation &bodyOp : body) {
           if (auto condOp = dyn_cast<ConditionOp>(&bodyOp)) {
             {
