@@ -19,15 +19,13 @@
 
 namespace waveasm {
 
-/// Attribute name for the original kernel name before mangling.
-constexpr llvm::StringLiteral kKernelNameAttr("kernel_name");
-
 /// Return the kernel name for assembly emission.
 /// Uses the "kernel_name" attribute if present, otherwise falls back to
 /// sym_name. The kernel_name attribute is set when the program is given a
 /// mangled sym_name to avoid symbol collisions with the original llvm.func.
 inline mlir::StringRef getKernelName(ProgramOp program) {
-  if (auto attr = program->getAttrOfType<mlir::StringAttr>(kKernelNameAttr))
+  auto attrName = WaveASMDialect::getKernelNameAttrName();
+  if (auto attr = program->getAttrOfType<mlir::StringAttr>(attrName))
     return attr.getValue();
   return program.getSymName();
 }
