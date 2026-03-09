@@ -5,11 +5,11 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 add_mlir_dialect_library(MLIRWaveASMDialect
-  WaveASMDialect.cpp
-  WaveASMTypes.cpp
   WaveASMAttrs.cpp
-  WaveASMOps.cpp
   WaveASMControlFlowOps.cpp
+  WaveASMDialect.cpp
+  WaveASMOps.cpp
+  WaveASMTypes.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/waveasm
@@ -18,9 +18,9 @@ add_mlir_dialect_library(MLIRWaveASMDialect
   MLIRWaveASMIncGen
 
   LINK_LIBS PUBLIC
-  MLIRIR
-  MLIRSupport
   MLIRControlFlowInterfaces
   MLIRFunctionInterfaces
+  MLIRIR
   MLIRLoopLikeInterface
+  MLIRSupport
 )

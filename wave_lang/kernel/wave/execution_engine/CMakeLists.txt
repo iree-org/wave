@@ -70,8 +70,8 @@ endif()
 target_include_directories(wave_execution_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(wave_execution_engine PRIVATE
-  Python::Python
   Python::Module
+  Python::Python
 
   LLVM${LLVM_NATIVE_ARCH}AsmParser
   LLVM${LLVM_NATIVE_ARCH}CodeGen

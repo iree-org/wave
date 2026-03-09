@@ -9,17 +9,17 @@ set(LIBS
         MLIRLLVMToLLVMIRTranslation
         MLIRLinalgTransformOps
         MLIRMemRefTransformOps
+        MLIRNormalFormDialect
+        MLIRNormalFormTransforms
         MLIROptLib
         MLIRROCDLDialect
         MLIRTransformDialectTransforms
+        MLIRWaterPipelines
         MLIRWaterTransforms
         MLIRWaveTransforms
-        MLIRNormalFormDialect
-        MLIRNormalFormTransforms
-        MLIRWaterPipelines
 
-        MLIRWaterTestTransforms
         MLIRWaterTestDialect
+        MLIRWaterTestTransforms
 )
 
 add_llvm_executable(water-opt

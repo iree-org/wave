@@ -12,24 +12,24 @@ llvm_update_compile_flags(waveasm-translate)
 
 target_link_libraries(waveasm-translate
   PRIVATE
-  MLIRWaveASMDialect
-  MLIRWaveASMTransforms
-  MLIRWaveASMTarget
+  LLVMCore
+  LLVMSupport
   MLIRAffineDialect
   MLIRAMDGPUDialect
   MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect
+  MLIRIR
   MLIRMemRefDialect
-  MLIRSCFDialect
-  MLIRTransforms
-  MLIRVectorDialect
   MLIRParser
   MLIRPass
+  MLIRSCFDialect
   MLIRSupport
-  MLIRIR
-  LLVMSupport
-  LLVMCore
+  MLIRTransforms
+  MLIRVectorDialect
+  MLIRWaveASMDialect
+  MLIRWaveASMTarget
+  MLIRWaveASMTransforms
 )
 
 install(TARGETS waveasm-translate

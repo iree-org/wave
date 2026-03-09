@@ -22,12 +22,12 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRMathDialect
+  MLIRMemRefDialect
   MLIRNormalFormDialect
   MLIRPass
   MLIRSCFDialect
   MLIRTransforms
   MLIRVectorDialect
-  MLIRMathDialect
-  MLIRMemRefDialect
   MLIRWaveDialect
 )

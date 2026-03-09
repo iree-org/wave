@@ -14,24 +14,24 @@ foreach(src ${HANDLERS_SRCS})
 endforeach()
 
 add_mlir_dialect_library(MLIRWaveASMTransforms
-  Liveness.cpp
-  LinearScanRegAlloc.cpp
-  LinearScanPass.cpp
-  Ticketing.cpp
-  HazardMitigation.cpp
   AssemblyEmitter.cpp
-  MetadataEmitter.cpp
-  LiteralMaterialization.cpp
-  TranslateFromMLIR.cpp
-  RegionBuilder.cpp
-  ScopedCSE.cpp
+  BufferLoadStrengthReduction.cpp
   ExtractScalarization.cpp
-  Peephole.cpp
+  HazardMitigation.cpp
+  LinearScanPass.cpp
+  LinearScanRegAlloc.cpp
+  LiteralMaterialization.cpp
+  Liveness.cpp
+  LoopAddressPromotion.cpp
   M0RedundancyElimination.cpp
   MemoryOffsetOptimization.cpp
+  MetadataEmitter.cpp
+  Peephole.cpp
+  RegionBuilder.cpp
   ScalePackElimination.cpp
-  BufferLoadStrengthReduction.cpp
-  LoopAddressPromotion.cpp
+  ScopedCSE.cpp
+  Ticketing.cpp
+  TranslateFromMLIR.cpp
   ${HANDLERS_FULL_PATHS}
 
   ADDITIONAL_HEADER_DIRS
@@ -41,17 +41,17 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   MLIRWaveASMPassesIncGen
 
   LINK_LIBS PUBLIC
-  MLIRWaveASMDialect
-  MLIRWaveASMTarget
   MLIRAffineDialect
   MLIRAMDGPUDialect
   MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect
+  MLIRIR
+  MLIRMathDialect
   MLIRMemRefDialect
   MLIRSCFDialect
-  MLIRVectorDialect
-  MLIRMathDialect
-  MLIRIR
   MLIRSupport
+  MLIRVectorDialect
+  MLIRWaveASMDialect
+  MLIRWaveASMTarget
 )
