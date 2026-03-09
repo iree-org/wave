@@ -584,10 +584,10 @@ def batched_prefetch_mxfp4_test():
     # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
 
     # Prologue Global Read
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [4294967294], strides: [1] : memref<i8> to memref<4294967294xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C512_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [4294967294], strides: [1] : memref<i8> to memref<4294967294xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C32_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
@@ -847,10 +847,10 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:    #[[MAP17:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 192) floordiv 256) * 256 + 192)>
     # CHECK:        func.func @batched_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index) attributes {translation_info = #translation} {
     # CHECK-DAG:        %[[CST1:.*]] = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : vector<16xi32>
-    # CHECK-DAG:        %[[CST2:.*]] = arith.constant dense<2147483647> : vector<16xindex>
+    # CHECK-DAG:        %[[CST2:.*]] = arith.constant dense<4294967295> : vector<16xindex>
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C8192:.*]] = arith.constant 8192 : index
-    # CHECK-DAG:        %[[C2147483646_I64:.*]] = arith.constant 2147483646 : i64
+    # CHECK-DAG:        %[[C2147483646_I64:.*]] = arith.constant 4294967294 : i64
     # CHECK-DAG:        %[[C_NEG_8192_I14:.*]] = arith.constant -8192 : i14
     # CHECK-DAG:        %[[BLOCK_ID_X:.*]] = gpu.block_id  x
     # CHECK-DAG:        %[[BLOCK_ID_Z:.*]] = gpu.block_id  z
@@ -858,16 +858,16 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:        %[[THREAD_ID_Y:.*]] = gpu.thread_id  y upper_bound 2
     # CHECK-DAG:        %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
     # CHECK-DAG:        %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
-    # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] overflow<nsw> : index
-    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
-    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<2147483646xi8, strided<[1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] : index
+    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [4294967294], strides: [1] : memref<i8> to memref<4294967294xi8, strided<[1], offset: ?>>
+    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<4294967294xi8, strided<[1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[CAST]] validBytes(%[[C2147483646_I64]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index
     # CHECK:            %[[BROADCAST1:.*]] = vector.broadcast %[[CMP1]] : i1 to vector<16xi1>
     # CHECK:            %[[AFFINE_APPLY4:.*]] = affine.apply #[[MAP17]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
-    # CHECK:            %[[MUL2:.*]] = arith.muli %[[AFFINE_APPLY4]], %[[C8192]] overflow<nsw> : index
-    # CHECK:            %[[ADD1:.*]] = arith.addi %[[MUL2]], %[[AFFINE_APPLY1]] overflow<nsw> : index
+    # CHECK:            %[[MUL2:.*]] = arith.muli %[[AFFINE_APPLY4]], %[[C8192]] : index
+    # CHECK:            %[[ADD1:.*]] = arith.addi %[[MUL2]], %[[AFFINE_APPLY1]] : index
     # CHECK:            %[[IDX_CAST1:.*]] = arith.index_cast %[[ADD1]] : index to i32
     # CHECK:            %[[BROADCAST2:.*]] = vector.broadcast %[[IDX_CAST1]] : i32 to vector<16xi32>
     # CHECK:            %[[ADD3:.*]] = arith.addi %[[BROADCAST2]], %[[CST1]] : vector<16xi32>

@@ -217,7 +217,7 @@ def _get_max_buffer_size(elem_type: IrType) -> int:
 
     Buffer ops offsets are i32, return maximum memref size in elements.
     """
-    return ((1 << 31) - 1) // (elem_type.width // 8)
+    return ((1 << 32) - 1) // (elem_type.width // 8)
 
 
 def _get_strides_from_memref(mem: Value) -> list[Value]:
@@ -248,7 +248,7 @@ def _linearize_memref(
     memref_type = mem.type
     offset = None
     offset_th = None
-    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+    overflow_flags = arith_d.IntegerOverflowFlags.none
     for ind_wg, ind_th, stride in zip(offsets_wg, offsets_th, strides):
         if isinstance(ind_wg, int):
             ind_wg = arith_d.constant(IndexType.get(), ind_wg)
@@ -349,7 +349,7 @@ def _valid_bytes_buffer(elem_type: IrType) -> int:
     """
     Make valid bytes to be the address of the last byte of the second to last element that can fit in a 32 bit offset to memory address
     """
-    ans = (1 << 31) - 1 - (elem_type.width // 8)
+    ans = (1 << 32) - 1 - (elem_type.width // 8)
 
     assert isinstance(ans, int)
     return ans
@@ -366,7 +366,7 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     assert (oob_index_value * element_width_in_bytes) > _valid_bytes_buffer(
         element_type
     )
-    assert (oob_index_value * element_width_in_bytes) < (1 << 31)
+    assert (oob_index_value * element_width_in_bytes) < (1 << 32)
     return oob_index_value
 
 
