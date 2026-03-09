@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===----------------------------------------------------------------------===//
-// TranslateFromLLVM: Strict LLVM dialect → WaveASM translation.
+// TranslateFromLLVM: Strict LLVM dialect -> WaveASM translation.
 //
 // Consumes gpu.module { llvm.func @kernel ... } with rocdl intrinsics.
 // Fails on any unhandled op — no silent fallthrough.
@@ -21,6 +21,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/StringExtras.h"
@@ -50,23 +51,18 @@ struct BufferPtrInfo {
   Value voffset; // Byte offset VGPR.
 };
 
-/// State for LLVM→WaveASM translation, layered on top of TranslationContext.
+/// State for LLVM->WaveASM translation, layered on top of TranslationContext.
 class LLVMTranslationState {
 public:
   explicit LLVMTranslationState(TranslationContext &ctx) : ctx(ctx) {}
 
   TranslationContext &ctx;
 
-  /// Map rocdl.make.buffer.rsrc result → SRD SGPR value from prologue.
+  /// Map rocdl.make.buffer.rsrc result -> SRD SGPR value from prologue.
   void mapBufferRsrc(Value rsrc, Value srd) { rsrcToSRD[rsrc] = srd; }
-  std::optional<Value> lookupSRD(Value rsrc) const {
-    auto it = rsrcToSRD.find(rsrc);
-    if (it != rsrcToSRD.end())
-      return it->second;
-    return std::nullopt;
-  }
+  Value lookupSRD(Value rsrc) const { return rsrcToSRD.lookup(rsrc); }
 
-  /// Map GEP result → decomposed (SRD, voffset).
+  /// Map GEP result -> decomposed (SRD, voffset).
   void mapGEP(Value gep, BufferPtrInfo info) { gepMap[gep] = info; }
   const BufferPtrInfo *lookupGEP(Value gep) const {
     auto it = gepMap.find(gep);
@@ -146,7 +142,8 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
   return program;
 }
 
-/// Resolve an LLVM SSA value to its WaveASM counterpart via the mapper.
+/// Resolve an LLVM SSA value to its WaveASM counterpart via the mapper
+/// or return the value itself if unmapped.
 static Value resolve(Value v, TranslationContext &ctx) {
   if (auto mapped = ctx.getMapper().getMapped(v))
     return *mapped;
@@ -193,13 +190,13 @@ static LogicalResult handleConstant(LLVM::ConstantOp op,
   return success();
 }
 
-static LogicalResult handleWorkitemIdX(ROCDL::ThreadIdXOp op,
+static LogicalResult handleThreadIdX(ROCDL::ThreadIdXOp op,
                                        LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
 
-  // rocdl.workitem.id.x → hardware v0 (flat workitem ID).
+  // rocdl.workitem.id.x -> hardware v0 (flat workitem ID).
   ctx.setUsesWorkitemId(true);
   auto vregTy = ctx.createVRegType();
   auto v0 = PrecoloredVRegOp::create(builder, loc, vregTy, /*regIndex=*/0,
@@ -208,7 +205,7 @@ static LogicalResult handleWorkitemIdX(ROCDL::ThreadIdXOp op,
   return success();
 }
 
-// rocdl.workgroup.id.{x,y,z} → system SGPRs (set by hardware dispatch).
+// rocdl.workgroup.id.{x,y,z} -> system SGPRs (set by hardware dispatch).
 template <typename OpTy>
 static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
                                        int dimIndex) {
@@ -230,7 +227,7 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
   return success();
 }
 
-// i32↔i64 casts are identity on a 32-bit GPU.
+// i32<->i64 casts are identity on a 32-bit GPU.
 static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
   st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
   return success();
@@ -341,14 +338,6 @@ static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
   return success();
 }
 
-/// Try to extract a constant integer from an LLVM SSA value.
-static std::optional<int64_t> getConstantInt(Value v) {
-  if (auto constOp = v.getDefiningOp<LLVM::ConstantOp>())
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
-      return intAttr.getValue().getSExtValue();
-  return std::nullopt;
-}
-
 static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
                                           LLVMTranslationState &st) {
   auto &ctx = st.ctx;
@@ -375,7 +364,7 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     RawOp::create(builder, loc, andStr);
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
-    auto flags = getConstantInt(op.getFlags());
+    auto flags = getConstantIntValue(op.getFlags());
     if (flags && *flags != 0x20000) {
       std::string movFlags = "s_mov_b32 s" + std::to_string(srdBase + 3) +
                              ", 0x" + llvm::utohexstr(*flags);
@@ -441,7 +430,7 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
       auto vregTy = ctx.createVRegType();
       newOffset = V_ADD_U32::create(builder, loc, vregTy, baseOff, newOffset);
     }
-    st.mapGEP(op.getResult(), {*srd, newOffset});
+    st.mapGEP(op.getResult(), {srd, newOffset});
     return success();
   }
 
@@ -554,7 +543,7 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
   return llvm::TypeSwitch<Operation *, LogicalResult>(op)
       .Case([&](LLVM::ConstantOp o) { return handleConstant(o, st); })
       .Case([&](LLVM::PoisonOp o) { return handlePoison(o, st); })
-      .Case([&](ROCDL::ThreadIdXOp o) { return handleWorkitemIdX(o, st); })
+      .Case([&](ROCDL::ThreadIdXOp o) { return handleThreadIdX(o, st); })
       .Case([&](ROCDL::BlockIdXOp o) { return handleWorkgroupId(o, st, 0); })
       .Case([&](ROCDL::BlockIdYOp o) { return handleWorkgroupId(o, st, 1); })
       .Case([&](ROCDL::BlockIdZOp o) { return handleWorkgroupId(o, st, 2); })
