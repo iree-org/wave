@@ -48,11 +48,10 @@ struct WAVEASMGPUModuleToBinaryPass
 
     // Collect gpu.modules that contain waveasm.program ops.
     SmallVector<gpu::GPUModuleOp> gpuModules;
-    module.walk([&](gpu::GPUModuleOp m) {
-      bool hasProgram = false;
-      m.walk([&](waveasm::ProgramOp) { hasProgram = true; });
-      if (hasProgram)
+    module.walk<WalkOrder::PreOrder>([&](gpu::GPUModuleOp m) -> WalkResult {
+      if (!m.getOps<waveasm::ProgramOp>().empty())
         gpuModules.push_back(m);
+      return WalkResult::skip();
     });
 
     if (gpuModules.empty())
@@ -63,10 +62,14 @@ struct WAVEASMGPUModuleToBinaryPass
     std::string asmText;
     llvm::raw_string_ostream asmStream(asmText);
 
-    module.walk([&](waveasm::ProgramOp program) {
-      if (failed(waveasm::writeAssembly(program, mapping, asmStream)))
-        signalPassFailure();
-    });
+    WalkResult walkResult =
+        module.walk<WalkOrder::PreOrder>([&](waveasm::ProgramOp program) {
+          if (failed(waveasm::writeAssembly(program, mapping, asmStream)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
+    if (walkResult.wasInterrupted())
+      return signalPassFailure();
 
     if (asmText.empty()) {
       module.emitError("no assembly generated");
@@ -79,8 +82,8 @@ struct WAVEASMGPUModuleToBinaryPass
     auto emitError = [&]() -> InFlightDiagnostic { return module.emitError(); };
 
     std::string gpuArch = targetArch.getValue();
-    FailureOr<SmallVector<char, 0>> objectCode =
-        ROCDL::assembleIsa(asmText, kTriple, gpuArch, /*features=*/"", emitError);
+    FailureOr<SmallVector<char, 0>> objectCode = ROCDL::assembleIsa(
+        asmText, kTriple, gpuArch, /*features=*/"", emitError);
     if (failed(objectCode))
       return signalPassFailure();
 
