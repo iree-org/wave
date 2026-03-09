@@ -145,7 +145,8 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
                         /*workgroup_size=*/builder.getArrayAttr(sizes),
                         /*lds_size=*/IntegerAttr{});
 
-  program->setAttr(kKernelNameAttr, builder.getStringAttr(func.getName()));
+  program->setAttr(WaveASMDialect::getKernelNameAttrName(),
+                   builder.getStringAttr(func.getName()));
   if (program.getBody().empty())
     program.getBody().emplaceBlock();
   return program;
