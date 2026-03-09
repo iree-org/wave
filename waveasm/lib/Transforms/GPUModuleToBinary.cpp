@@ -116,8 +116,12 @@ struct WAVEASMGPUModuleToBinaryPass
       builder.setInsertionPointAfter(gpuModule);
 
       Attribute target;
-      if (gpuModule.getTargetsAttr() && !gpuModule.getTargetsAttr().empty())
+      if (gpuModule.getTargetsAttr() && !gpuModule.getTargetsAttr().empty()) {
         target = gpuModule.getTargetsAttr()[0];
+        if (gpuModule.getTargetsAttr().size() > 1)
+          gpuModule.emitWarning("multiple targets specified, only the first "
+                                "is used; remaining targets are ignored");
+      }
       if (!target)
         target = ROCDL::ROCDLTargetAttr::get(rootOp->getContext(),
                                              /*optLevel=*/2, kTriple, gpuArch);
