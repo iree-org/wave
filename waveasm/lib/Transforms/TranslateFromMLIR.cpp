@@ -39,10 +39,8 @@ using namespace mlir;
 
 namespace waveasm {
 
-// Named constants for SRD descriptor fields and limits.
-// kDefaultMaxBufferSize lives in TranslationContext (header).
-static constexpr int64_t kSRDStrideSwizzle = 0x20000;
-static constexpr int64_t kMaxNumRecords32 = 0xFFFFFFFF;
+constexpr int64_t kSRDStrideDescriptor = 0x20000;
+constexpr int64_t kMaxSRDNumRecords = 0xFFFFFFFF;
 
 //===----------------------------------------------------------------------===//
 // TranslationContext Implementation
@@ -240,9 +238,9 @@ void TranslationContext::emitSRDPrologue() {
     RawOp::create(builder, loc, mainLabel + ":");
 
     // Step 3: Copy from preload locations to SRD positions and fill
-    // size/stride. Must use RawOp: S_MOV_B64/S_MOV_B32 are Pure (SALUUnaryOp)
-    // and write to physical registers with no SSA consumer, so CSE/DCE
-    // eliminates them.
+    // size/stride. Uses SALUPhys ops (non-Pure, SpecialRegOp trait) so that
+    // writes to physical registers survive DCE/CSE.
+    auto *mlirCtx = builder.getContext();
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -252,20 +250,31 @@ void TranslationContext::emitSRDPrologue() {
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       // Copy base address with s_mov_b64
-      std::string movB64Str = "s_mov_b64 s[" + std::to_string(srdBase) + ":" +
-                              std::to_string(srdBase + 1) + "], s[" +
-                              std::to_string(preloadBase) + ":" +
-                              std::to_string(preloadBase + 1) + "]";
-      RawOp::create(builder, loc, movB64Str);
+      auto dstBaseType = PSRegType::get(mlirCtx, srdBase, 2);
+      auto dstBaseReg =
+          PrecoloredSRegOp::create(builder, loc, dstBaseType, srdBase, 2);
+      auto srcBaseType = PSRegType::get(mlirCtx, preloadBase, 2);
+      auto srcBaseReg =
+          PrecoloredSRegOp::create(builder, loc, srcBaseType, preloadBase, 2);
+      S_MOV_B64_PHYS::create(builder, loc, dstBaseReg, srcBaseReg);
 
-      int64_t clampedSize = std::min(pending.bufferSize, kMaxNumRecords32);
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(clampedSize);
-      RawOp::create(builder, loc, movSizeStr);
+      // Fill size and stride (clamp to 32-bit max for >4GB buffers;
+      // per-workgroup SRD adjustment handles the actual addressing)
+      int64_t clampedSize = std::min(pending.bufferSize, kMaxSRDNumRecords);
+      auto dstSizeType = PSRegType::get(mlirCtx, srdBase + 2, 1);
+      auto dstSizeReg =
+          PrecoloredSRegOp::create(builder, loc, dstSizeType, srdBase + 2, 1);
+      auto sizeImm = ConstantOp::create(
+          builder, loc, createImmType(clampedSize), clampedSize);
+      S_MOV_B32_PHYS::create(builder, loc, dstSizeReg, sizeImm);
 
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) +
-                                 ", 0x" + llvm::utohexstr(kSRDStrideSwizzle);
-      RawOp::create(builder, loc, movStrideStr);
+      auto dstStrideType = PSRegType::get(mlirCtx, srdBase + 3, 1);
+      auto dstStrideReg =
+          PrecoloredSRegOp::create(builder, loc, dstStrideType, srdBase + 3, 1);
+      auto strideImm =
+          ConstantOp::create(builder, loc, createImmType(kSRDStrideDescriptor),
+                             kSRDStrideDescriptor);
+      S_MOV_B32_PHYS::create(builder, loc, dstStrideReg, strideImm);
 
       mapper.mapValue(pending.memref, srdReg);
     }
@@ -301,7 +310,8 @@ void TranslationContext::emitSRDPrologue() {
                       /*expcnt=*/IntegerAttr{});
 
     // Step 3: Fill SRD[2:3] with size and stride.
-    // Must use RawOp: Pure S_MOV_B32 to physical registers gets DCE'd.
+    // Uses S_MOV_B32_PHYS (non-Pure, SpecialRegOp) to survive DCE/CSE.
+    auto *mlirCtx = builder.getContext();
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -309,14 +319,24 @@ void TranslationContext::emitSRDPrologue() {
       auto srdType = createSRegType(4, 4);
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
-      int64_t clampedSize = std::min(pending.bufferSize, kMaxNumRecords32);
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(clampedSize);
-      RawOp::create(builder, loc, movSizeStr);
+      // Fill size (clamp to 32-bit max for >4GB buffers;
+      // per-workgroup SRD adjustment handles the actual addressing)
+      int64_t clampedSize = std::min(pending.bufferSize, kMaxSRDNumRecords);
+      auto dstSizeType = PSRegType::get(mlirCtx, srdBase + 2, 1);
+      auto dstSizeReg =
+          PrecoloredSRegOp::create(builder, loc, dstSizeType, srdBase + 2, 1);
+      auto sizeImm = ConstantOp::create(
+          builder, loc, createImmType(clampedSize), clampedSize);
+      S_MOV_B32_PHYS::create(builder, loc, dstSizeReg, sizeImm);
 
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) +
-                                 ", 0x" + llvm::utohexstr(kSRDStrideSwizzle);
-      RawOp::create(builder, loc, movStrideStr);
+      // Fill stride descriptor
+      auto dstStrideType = PSRegType::get(mlirCtx, srdBase + 3, 1);
+      auto dstStrideReg =
+          PrecoloredSRegOp::create(builder, loc, dstStrideType, srdBase + 3, 1);
+      auto strideImm =
+          ConstantOp::create(builder, loc, createImmType(kSRDStrideDescriptor),
+                             kSRDStrideDescriptor);
+      S_MOV_B32_PHYS::create(builder, loc, dstStrideReg, strideImm);
 
       mapper.mapValue(pending.memref, srdReg);
     }
@@ -447,13 +467,13 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   assert(N + 4 < 108 && "SRD allocation exceeds SGPR limit");
 
   // Copy source SRD base to new SRD.
-  // Must use RawOp: S_MOV_B64 is Pure (SALUUnaryOp) and writes to a
-  // physical register with no SSA consumer, so CSE/DCE eliminates it.
-  std::string copyBase = "s_mov_b64 s[" + std::to_string(N) + ":" +
-                         std::to_string(N + 1) + "], s[" +
-                         std::to_string(adj.srcSrdBase) + ":" +
-                         std::to_string(adj.srcSrdBase + 1) + "]";
-  RawOp::create(builder, loc, copyBase);
+  // S_MOV_B64_PHYS (non-Pure, SpecialRegOp) survives DCE/CSE.
+  auto dstBaseType = PSRegType::get(mlirCtx, N, 2);
+  auto dstBaseReg = PrecoloredSRegOp::create(builder, loc, dstBaseType, N, 2);
+  auto srcBaseType = PSRegType::get(mlirCtx, adj.srcSrdBase, 2);
+  auto srcBaseReg =
+      PrecoloredSRegOp::create(builder, loc, srcBaseType, adj.srcSrdBase, 2);
+  S_MOV_B64_PHYS::create(builder, loc, dstBaseReg, srcBaseReg);
 
   // Get element offset -> SGPR via v_readfirstlane_b32 (or s_mov_b32 if
   // already scalar).  Pinned to s[N+3].
@@ -488,15 +508,24 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   S_ADD_U32::create(builder, loc, base0Type, sccType, base0, byteOffLo);
   S_ADDC_U32::create(builder, loc, base1Type, sccType, base1, byteOffHi);
 
-  // Set num_records and stride using buffer size from the source SRD.
+  // Set num_records and stride.
+  // S_MOV_B32_PHYS (non-Pure, SpecialRegOp) survives DCE/CSE.
   int64_t bufferSize = ctx.getBufferSizeForSRD(adj.srcSrdBase);
-  int64_t clampedSize = std::min(bufferSize, kMaxNumRecords32);
-  std::string movSize = "s_mov_b32 s" + std::to_string(N + 2) + ", 0x" +
-                        llvm::utohexstr(clampedSize);
-  RawOp::create(builder, loc, movSize);
-  std::string movStride = "s_mov_b32 s" + std::to_string(N + 3) + ", 0x" +
-                          llvm::utohexstr(kSRDStrideSwizzle);
-  RawOp::create(builder, loc, movStride);
+  int64_t clampedSize = std::min(bufferSize, kMaxSRDNumRecords);
+  auto dstSizeType = PSRegType::get(mlirCtx, N + 2, 1);
+  auto dstSizeReg =
+      PrecoloredSRegOp::create(builder, loc, dstSizeType, N + 2, 1);
+  auto sizeImm = ConstantOp::create(
+      builder, loc, ctx.createImmType(clampedSize), clampedSize);
+  S_MOV_B32_PHYS::create(builder, loc, dstSizeReg, sizeImm);
+
+  auto dstStrideType = PSRegType::get(mlirCtx, N + 3, 1);
+  auto dstStrideReg =
+      PrecoloredSRegOp::create(builder, loc, dstStrideType, N + 3, 1);
+  auto strideImm =
+      ConstantOp::create(builder, loc, ctx.createImmType(kSRDStrideDescriptor),
+                         kSRDStrideDescriptor);
+  S_MOV_B32_PHYS::create(builder, loc, dstStrideReg, strideImm);
 
   auto srdType = ctx.createSRegType(4, 4);
   auto srd = PrecoloredSRegOp::create(builder, loc, srdType, N, 4);

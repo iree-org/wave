@@ -129,6 +129,17 @@ class SALUCmpOp<string mnemonic, list<Trait> traits = []>
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($result)";
 }
 
+// SALU Physical-Register Write (unary): write src to a physical SGPR dst.
+// The destination is an input operand (a PrecoloredSReg reference), not an
+// SSA result. Marked with SpecialRegOp to prevent DCE/CSE -- the write is
+// a side effect visible only through the physical register file.
+class SALUPhysUnaryOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_SpecialRegOp], traits)> {
+  let arguments = (ins WaveASM_AnySGPR:$dst, WaveASM_SRegOrImm:$src);
+  let results = (outs);
+  let assemblyFormat = "$dst `,` $src attr-dict `:` type($dst) `,` type($src)";
+}
+
 // MFMA: Matrix multiply-accumulate with tied accumulator
 // The result is tied to operand index 2 (the accumulator) when acc is a VGPR.
 // MFMA instructions support inline 0 for the accumulator (no tying needed).
@@ -689,6 +700,16 @@ def WaveASM_S_FLBIT_I32_B64 : SALUUnaryOp<"s_flbit_i32_b64">;
 def WaveASM_S_ABS_I32 : SALUUnaryOp<"s_abs_i32">;
 def WaveASM_S_SEXT_I32_I8 : SALUUnaryOp<"s_sext_i32_i8">;
 def WaveASM_S_SEXT_I32_I16 : SALUUnaryOp<"s_sext_i32_i16">;
+
+//===----------------------------------------------------------------------===//
+// SALU Physical-Register Write Instructions
+//===----------------------------------------------------------------------===//
+// Non-Pure variants for writing to physical (precolored) SGPRs as a side
+// effect.  Used for SRD setup and cache-swizzle descriptor construction
+// where the destination register has no SSA consumer.
+
+def WaveASM_S_MOV_B32_PHYS : SALUPhysUnaryOp<"s_mov_b32_phys">;
+def WaveASM_S_MOV_B64_PHYS : SALUPhysUnaryOp<"s_mov_b64_phys">;
 
 //===----------------------------------------------------------------------===//
 // SALU Binary Instructions
