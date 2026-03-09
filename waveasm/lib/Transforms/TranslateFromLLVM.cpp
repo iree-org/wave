@@ -23,7 +23,6 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -572,28 +571,24 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
 // Core translation logic
 //===----------------------------------------------------------------------===//
 
-static LogicalResult translateLLVMModule(ModuleOp module, StringRef targetId) {
-  auto target = getTargetKindAttr(module.getContext(), targetId);
+static LogicalResult translateLLVMModule(Operation *rootOp,
+                                         StringRef targetId) {
+  auto target = getTargetKindAttr(rootOp->getContext(), targetId);
   if (!target)
-    return module.emitError() << "unknown target: " << targetId;
+    return rootOp->emitError() << "unknown target: " << targetId;
 
   SmallVector<LLVM::LLVMFuncOp> kernels;
-  module.walk([&](LLVM::LLVMFuncOp func) {
+  rootOp->walk([&](LLVM::LLVMFuncOp func) {
     if (func->hasAttr("gpu.kernel") || func->hasAttr("rocdl.kernel"))
       kernels.push_back(func);
   });
 
   if (kernels.empty())
-    return module.emitError() << "no llvm.func kernel found in module";
+    return success();
 
-  for (auto func : kernels) {
-    OpBuilder builder(module.getContext());
-    // Insert program inside the gpu.module that contains this kernel.
-    auto *parentOp = func->getParentOp();
-    if (auto gpuModule = dyn_cast<gpu::GPUModuleOp>(parentOp))
-      builder.setInsertionPointToEnd(gpuModule.getBody());
-    else
-      builder.setInsertionPointToEnd(module.getBody());
+  for (LLVM::LLVMFuncOp func : kernels) {
+    OpBuilder builder(rootOp->getContext());
+    builder.setInsertionPointAfter(func);
 
     auto program = createProgramFromLLVMFunc(func, builder, targetId);
     builder.setInsertionPointToStart(&program.getBodyBlock());
@@ -644,18 +639,7 @@ struct WAVEASMTranslateFromLLVMPass
   using WAVEASMTranslateFromLLVMBase::WAVEASMTranslateFromLLVMBase;
 
   void runOnOperation() override {
-    auto module = getOperation();
-
-    bool hasLLVMKernels = false;
-    module.walk([&](LLVM::LLVMFuncOp func) {
-      if (func->hasAttr("gpu.kernel") || func->hasAttr("rocdl.kernel"))
-        hasLLVMKernels = true;
-    });
-
-    if (!hasLLVMKernels)
-      return;
-
-    if (failed(translateLLVMModule(module, targetArch)))
+    if (failed(translateLLVMModule(getOperation(), targetArch)))
       return signalPassFailure();
   }
 };

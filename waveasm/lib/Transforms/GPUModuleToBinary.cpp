@@ -44,11 +44,11 @@ struct WAVEASMGPUModuleToBinaryPass
   using WAVEASMGPUModuleToBinaryBase::WAVEASMGPUModuleToBinaryBase;
 
   void runOnOperation() override {
-    auto module = getOperation();
+    Operation *rootOp = getOperation();
 
     // Collect gpu.modules that contain waveasm.program ops.
     SmallVector<gpu::GPUModuleOp> gpuModules;
-    module.walk<WalkOrder::PreOrder>([&](gpu::GPUModuleOp m) -> WalkResult {
+    rootOp->walk<WalkOrder::PreOrder>([&](gpu::GPUModuleOp m) -> WalkResult {
       if (!m.getOps<waveasm::ProgramOp>().empty())
         gpuModules.push_back(m);
       return WalkResult::skip();
@@ -63,7 +63,7 @@ struct WAVEASMGPUModuleToBinaryPass
     llvm::raw_string_ostream asmStream(asmText);
 
     WalkResult walkResult =
-        module.walk<WalkOrder::PreOrder>([&](waveasm::ProgramOp program) {
+        rootOp->walk<WalkOrder::PreOrder>([&](waveasm::ProgramOp program) {
           if (failed(waveasm::writeAssembly(program, mapping, asmStream)))
             return WalkResult::interrupt();
           return WalkResult::advance();
@@ -72,14 +72,16 @@ struct WAVEASMGPUModuleToBinaryPass
       return signalPassFailure();
 
     if (asmText.empty()) {
-      module.emitError("no assembly generated");
+      rootOp->emitError("no assembly generated");
       return signalPassFailure();
     }
 
     // Step 2: Assemble + link to HSACO.
     ROCDL::SerializeGPUModuleBase::init();
 
-    auto emitError = [&]() -> InFlightDiagnostic { return module.emitError(); };
+    auto emitError = [&]() -> InFlightDiagnostic {
+      return rootOp->emitError();
+    };
 
     std::string gpuArch = targetArch.getValue();
     FailureOr<SmallVector<char, 0>> objectCode = ROCDL::assembleIsa(
@@ -94,7 +96,7 @@ struct WAVEASMGPUModuleToBinaryPass
       llvm::sys::path::append(actualLldPath, "llvm", "bin", "ld.lld");
     }
     if (!llvm::sys::fs::exists(actualLldPath)) {
-      module.emitError()
+      rootOp->emitError()
           << "ld.lld not found (set --lld-path or ROCM_PATH). Tried: "
           << actualLldPath;
       return signalPassFailure();
@@ -106,7 +108,7 @@ struct WAVEASMGPUModuleToBinaryPass
       return signalPassFailure();
 
     // Step 3: Replace each gpu.module with gpu.binary.
-    OpBuilder builder(module.getContext());
+    OpBuilder builder(rootOp->getContext());
     StringAttr binaryAttr =
         builder.getStringAttr(StringRef(hsaco->data(), hsaco->size()));
 
@@ -117,7 +119,7 @@ struct WAVEASMGPUModuleToBinaryPass
       if (gpuModule.getTargetsAttr() && !gpuModule.getTargetsAttr().empty())
         target = gpuModule.getTargetsAttr()[0];
       if (!target)
-        target = ROCDL::ROCDLTargetAttr::get(module.getContext(),
+        target = ROCDL::ROCDLTargetAttr::get(rootOp->getContext(),
                                              /*optLevel=*/2, kTriple, gpuArch);
 
       auto objectAttr = builder.getAttr<gpu::ObjectAttr>(

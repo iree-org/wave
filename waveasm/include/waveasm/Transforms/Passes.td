@@ -266,7 +266,7 @@ def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
 // Translate from LLVM Dialect Pass
 //===----------------------------------------------------------------------===//
 
-def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary", "::mlir::ModuleOp"> {
+def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary"> {
   let summary = "Emit assembly and link gpu.module { waveasm.program } to gpu.binary";
   let description = [{
     Final pass in the WaveASM pipeline.  Expects gpu.module ops containing
@@ -288,7 +288,7 @@ def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary", "::mlir::Mod
   ];
 }
 
-def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm", "::mlir::ModuleOp"> {
+def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
   let summary = "Translate LLVM dialect kernels to WaveASM IR";
   let description = [{
     Translates gpu.module { llvm.func } with rocdl intrinsics into
