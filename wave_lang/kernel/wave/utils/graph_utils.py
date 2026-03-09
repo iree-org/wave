@@ -876,6 +876,7 @@ def assert_traces_mutually_equivalent(
     assert_traces_equivalent(rhs, lhs, subs=subs)
 
 
+
 def assert_constraints_equivalent(
     lhs_constraints: Sequence[Any],
     rhs_constraints: Sequence[Any],

@@ -200,7 +200,11 @@ def conditional(
 
 
 def iterate(
-    axis: IndexExpr, init_args: Sequence["Register"]
+    axis: IndexExpr,
+    init_args: Sequence["Register"],
+    step: int = 1,
+    start: Optional[IndexExpr] = None,
+    condition: Optional[IndexExpr] = None,
 ) -> Callable[[Callable[[AccT], AccT]], AccT]: ...
 
 
