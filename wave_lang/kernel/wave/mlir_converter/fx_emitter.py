@@ -1277,9 +1277,6 @@ def _create_get_result_nodes(
     iterate's output tuple.  The index is used as-is: `Iterate.index`
     delegates to `MMA.acc_index` which already specialises MMA_ACC and
     drops the reduction dimension before the emitters serialise it.
-
-    # TODO: revisit when converting partially-compiled traces where
-    # index analysis has not yet run.
     """
     # inserting_after pins the insertion point, so each new node would land
     # at the same spot and reverse the order. Advance the cursor after each
