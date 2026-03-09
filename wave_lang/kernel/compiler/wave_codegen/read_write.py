@@ -217,7 +217,8 @@ def _get_max_buffer_size(elem_type: IrType) -> int:
 
     Buffer ops offsets are i32, return maximum memref size in elements.
     """
-    return ((1 << 31) - 1) // (elem_type.width // 8)
+    # Use _elem_bytes to avoid division-by-zero for sub-byte types (e.g. mxfp4).
+    return ((1 << 31) - 1) // _elem_bytes(elem_type)
 
 
 def _get_strides_from_memref(mem: Value) -> list[Value]:
@@ -345,11 +346,19 @@ def _get_splat_input(src: Optional[Value]) -> Optional[Value]:
     return None
 
 
+def _elem_bytes(elem_type: IrType) -> int:
+    """Return the byte width of *elem_type*, rounding up for sub-byte types
+    (e.g. 4-bit mxfp4 -> 1 byte) so that SRD valid-bytes and OOB index
+    calculations never collapse to zero."""
+    return max(1, (elem_type.width + 7) // 8)
+
+
 def _valid_bytes_buffer(elem_type: IrType) -> int:
     """
     Make valid bytes to be the address of the last byte of the second to last element that can fit in a 32 bit offset to memory address
     """
-    ans = (1 << 31) - 1 - (elem_type.width // 8)
+    # Use _elem_bytes to avoid zero for sub-byte types (e.g. mxfp4).
+    ans = (1 << 31) - 1 - _elem_bytes(elem_type)
 
     assert isinstance(ans, int)
     return ans
@@ -368,7 +377,8 @@ def _compute_total_valid_bytes(
     returned by ``_valid_bytes_buffer``.
     """
     if use_real_bounds and symbolic_shape is not None:
-        elem_bytes = elem_type.width // 8
+        # Use _elem_bytes to avoid zero total_bytes for sub-byte types (e.g. mxfp4).
+        elem_bytes = _elem_bytes(elem_type)
         total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
         if isinstance(total_elements, (int, float)) or (
             hasattr(total_elements, "is_number") and total_elements.is_number
@@ -382,7 +392,8 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     """
     returns the first index that's out of bounds of a buffer based on the element type and maximum bytes
     """
-    element_width_in_bytes = element_type.width // 8
+    # Use _elem_bytes to avoid division-by-zero for sub-byte types (e.g. mxfp4).
+    element_width_in_bytes = _elem_bytes(element_type)
     oob_index_value = (
         _valid_bytes_buffer(element_type) + element_width_in_bytes
     ) // element_width_in_bytes
@@ -440,53 +451,45 @@ def _compute_branchless_valid_bytes(
     return arith_d.select(cond_val, real_valid, zero_valid)
 
 
+def _compute_valid_bytes(
+    ptr: Value,
+    elem_type: IrType,
+    symbolic_shape: tuple,
+    emitter: WaveEmitter,
+) -> Value:
+    """Compute the SRD valid-bytes value for a buffer.
+
+    When eliminate_epilogue is enabled and symbolic_shape is provided, the
+    result is clamped to the real tensor size minus the memref offset so that
+    OOB loads in the extended epilogue iterations return zero.  Otherwise
+    falls back to the hardware maximum.
+    """
+    use_real_bounds = emitter.options.eliminate_epilogue and symbolic_shape is not None
+    total_bytes = _compute_total_valid_bytes(elem_type, symbolic_shape, use_real_bounds)
+    uint64 = IntegerType.get_signless(64)
+
+    if use_real_bounds:
+        metadata = memref_d.extract_strided_metadata(ptr)
+        offset_elements = metadata[1]
+        offset_bytes = arith_d.index_cast(uint64, offset_elements)
+        # Use _elem_bytes to avoid zero offset_bytes for sub-byte types (e.g. mxfp4).
+        elem_bytes_val = arith_d.constant(
+            uint64, get_constant_attr(_elem_bytes(elem_type), uint64)
+        )
+        offset_bytes = arith_d.muli(offset_bytes, elem_bytes_val)
+        total_val = arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
+        return arith_d.subi(total_val, offset_bytes)
+
+    return arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
+
+
 def _cast_buffer_and_encode_stride(
     ptr: Value,
     strides: tuple[Value],
     elem_type: IrType,
-    emitter: WaveEmitter,
-    symbolic_shape: tuple = None,
-    is_read: bool = True,
-    valid_bytes_override: Value = None,
+    valid_bytes: Value,
 ) -> Value:
-    uint64 = IntegerType.get_signless(64)
     uint14 = IntegerType.get_signless(14)
-    elem_bytes = elem_type.width // 8
-
-    if valid_bytes_override is not None:
-        valid_bytes_val = valid_bytes_override
-    else:
-        use_real_bounds = (
-            emitter.options.eliminate_epilogue and symbolic_shape is not None
-        )
-        total_bytes = _compute_total_valid_bytes(
-            elem_type, symbolic_shape, use_real_bounds
-        )
-
-        # With resetOffset, the SRD base is adjusted forward by the memref's
-        # offset, so validBytes must be total_bytes - offset_bytes to avoid
-        # over-reporting the valid range past the actual allocation.
-        #
-        # For writes, skip the offset subtraction: real buffer bounds are only
-        # useful for reads (OOB loads return 0), and subtracting the offset
-        # from a clamped total_bytes can produce values that overflow the
-        # 32-bit SRD NUM_RECORDS field for output buffers larger than 2 GB.
-        if use_real_bounds and is_read:
-            metadata = memref_d.extract_strided_metadata(ptr)
-            offset_elements = metadata[1]
-            offset_bytes = arith_d.index_cast(uint64, offset_elements)
-            elem_bytes_val = arith_d.constant(
-                uint64, get_constant_attr(elem_bytes, uint64)
-            )
-            offset_bytes = arith_d.muli(offset_bytes, elem_bytes_val)
-            total_bytes_val = arith_d.constant(
-                uint64, get_constant_attr(total_bytes, uint64)
-            )
-            valid_bytes_val = arith_d.subi(total_bytes_val, offset_bytes)
-        else:
-            valid_bytes_val = arith_d.constant(
-                uint64, get_constant_attr(total_bytes, uint64)
-            )
 
     stride_rank = len(strides)
     swizzle_stride = None
@@ -506,14 +509,14 @@ def _cast_buffer_and_encode_stride(
             cache_swizzle_stride=swizzle_stride,
             bounds_check=True,
             reset_offset=True,
-            valid_bytes=valid_bytes_val,
+            valid_bytes=valid_bytes,
         )
     else:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
             bounds_check=True,
             reset_offset=True,
-            valid_bytes=valid_bytes_val,
+            valid_bytes=valid_bytes,
         )
 
     return ptr
@@ -533,7 +536,8 @@ def _create_llvm_read_write(
     ptr = memref_d.extract_aligned_pointer_as_index(kb_mem)
     strides, _ = kb_ir_type.get_strides_and_offset()
     offset = arith_d.constant(IndexType.get(), 0)
-    elem_size_bytes = element_type.width // 8
+    # Use _elem_bytes to avoid zero stride for sub-byte types (e.g. mxfp4).
+    elem_size_bytes = _elem_bytes(element_type)
 
     for idx, stride in zip(start_indices, strides):
         if not isinstance(idx.type, IndexType):
@@ -625,7 +629,15 @@ def _create_vec_read_write(
                 mem, start_indices_wg, start_indices_th, strides
             )
             mem = _cast_buffer_and_encode_stride(
-                mem, strides, element_type, emitter, symbolic_shape, is_read
+                mem,
+                strides,
+                element_type,
+                _compute_valid_bytes(
+                    mem,
+                    element_type,
+                    symbolic_shape if is_read else None,
+                    emitter,
+                ),
             )
         elif is_global_mem and not is_read:
             mem, offset_th = _linearize_memref(
@@ -672,7 +684,15 @@ def _create_vec_read_write(
             mem, start_indices_wg, start_indices_th, strides
         )
         mem = _cast_buffer_and_encode_stride(
-            mem, strides, element_type, emitter, symbolic_shape, is_read
+            mem,
+            strides,
+            element_type,
+            _compute_valid_bytes(
+                mem,
+                element_type,
+                symbolic_shape if is_read else None,
+                emitter,
+            ),
         )
 
     indices = [offset_th] if buffer_ops_enabled else start_indices
@@ -1255,9 +1275,11 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         src,
         strides,
         element_type,
-        emitter,
-        src_symbolic_shape,
-        valid_bytes_override=valid_bytes_override,
+        (
+            valid_bytes_override
+            if valid_bytes_override is not None
+            else _compute_valid_bytes(src, element_type, src_symbolic_shape, emitter)
+        ),
     )
 
     # We previously checked mask is same for all elements, so we can use

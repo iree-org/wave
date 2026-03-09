@@ -1124,9 +1124,14 @@ class Pipeline(CustomScheduleOp):
         constraints: list[Constraint],
         iterate: Sequence[fx.Node],
         eliminate_epilogue: bool = False,
+        multi_buffer_count: Optional[int] = None,
     ):
         real_pipelined_loop = PipelinedLoop(
-            iterate, kernel_trace, constraints, eliminate_epilogue=eliminate_epilogue
+            iterate,
+            kernel_trace,
+            constraints,
+            eliminate_epilogue=eliminate_epilogue,
+            multi_buffer_count=multi_buffer_count,
         )
 
         # Return the real object directly (no proxy needed)

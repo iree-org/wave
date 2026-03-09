@@ -851,6 +851,14 @@ MACROTILES_PRESHUFFLE = [(block, (1, 4)) for block in MACROTILES_PRESHUFFLE_1x4]
     (block, (2, 2)) for block in MACROTILES_PRESHUFFLE_2x2
 ]
 
+MACROTILES_PRESHUFFLE_DYNAMIC = [
+    ((128, 256, 256), (1, 4)),
+    ((32, 64, 256), (1, 4)),
+    ((64, 64, 256), (1, 4)),
+    ((128, 32, 256), (2, 2)),
+    ((256, 224, 256), (2, 2)),
+]
+
 
 @require_e2e
 @require_cdna4
@@ -864,12 +872,14 @@ MACROTILES_PRESHUFFLE = [(block, (1, 4)) for block in MACROTILES_PRESHUFFLE_1x4]
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
 @pytest.mark.parametrize("a_scale_preshuffle", [False])
+@pytest.mark.parametrize("eliminate_epilogue", [True, False])
 def testScaledGemmMXFP4PreshuffleMacrotiles(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     wave_shape: tuple[int, int],
     mfma_variant: ScaledMMAType,
     a_scale_preshuffle: bool,
+    eliminate_epilogue: bool,
 ):
     """Preshuffle MXFP4 GEMM over macrotiles with a_scale_preshuffle on/off."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
@@ -879,7 +889,8 @@ def testScaledGemmMXFP4PreshuffleMacrotiles(
         mfma_variant=mfma_variant,
         a_scale_preshuffle=a_scale_preshuffle,
     )
-    schedule = get_mxfp4_asymmetric_schedule()
+    options.eliminate_epilogue = eliminate_epilogue
+    schedule = get_mxfp4_asymmetric_schedule(eliminate_epilogue=eliminate_epilogue)
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.use_buffer_ops = True
@@ -908,25 +919,18 @@ def testScaledGemmMXFP4PreshuffleMacrotiles(
     "shape",
     [(1024, 1024, 8192)],
 )
-@pytest.mark.parametrize(
-    "block_shape,wave_shape",
-    [
-        ((128, 256, 256), (1, 4)),
-        ((32, 64, 256), (1, 4)),
-        ((64, 64, 256), (1, 4)),
-        ((128, 32, 256), (2, 2)),
-        ((256, 224, 256), (2, 2)),
-    ],
-)
+@pytest.mark.parametrize("block_shape,wave_shape", MACROTILES_PRESHUFFLE_DYNAMIC)
 @pytest.mark.parametrize(
     "mfma_variant",
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
+@pytest.mark.parametrize("eliminate_epilogue", [True, False])
 def testScaledGemmMXFP4PreshuffleBDynamic(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     wave_shape: tuple[int, int],
     mfma_variant: ScaledMMAType,
+    eliminate_epilogue: bool,
 ):
     """End-to-end test for MXFP4 GEMM with preshuffled B and dynamic M, N, K."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
@@ -939,7 +943,10 @@ def testScaledGemmMXFP4PreshuffleBDynamic(
     for sym in dynamic_symbols:
         del options.subs[sym]
     options.dynamic_symbols = dynamic_symbols
-    schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+    options.eliminate_epilogue = eliminate_epilogue
+    schedule = get_mxfp4_asymmetric_schedule(
+        eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+    )
     options.use_buffer_ops = True
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
