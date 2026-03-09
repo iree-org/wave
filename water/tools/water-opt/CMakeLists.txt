@@ -16,6 +16,7 @@ set(LIBS
         MLIRWaveTransforms
         MLIRNormalFormDialect
         MLIRNormalFormTransforms
+        MLIRWaterPipelines
 
         MLIRWaterTestTransforms
         MLIRWaterTestDialect
