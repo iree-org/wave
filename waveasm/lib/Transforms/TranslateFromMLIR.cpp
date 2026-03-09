@@ -1767,6 +1767,8 @@ LogicalResult handleMemRefSubView(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx);
+LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
+                                                 TranslationContext &ctx);
 
 // From SCFHandlers.cpp
 LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx);
@@ -1966,6 +1968,8 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(memref::LoadOp, handleMemRefLoad);
   REGISTER_HANDLER(memref::StoreOp, handleMemRefStore);
   REGISTER_HANDLER(memref::CastOp, handleMemRefCast);
+  REGISTER_HANDLER(memref::ExtractStridedMetadataOp,
+                   handleMemRefExtractStridedMetadata);
 
   // SCF dialect
   REGISTER_HANDLER(scf::ForOp, handleSCFFor);
