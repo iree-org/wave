@@ -169,7 +169,9 @@ static LogicalResult handlePoison(LLVM::PoisonOp op, LLVMTranslationState &st) {
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
 
-  // Poison is undefined — materialize as zero.
+  // Poison is undefined -- materialize as zero.
+  // TODO: Assumes b32. A legalization pass should ensure all poison values
+  // are i32/f32 before this point.
   auto immTy = ctx.createImmType(0);
   auto imm = ConstantOp::create(builder, loc, immTy, int64_t{0});
   auto vregTy = ctx.createVRegType();
@@ -191,7 +193,8 @@ static LogicalResult handleConstant(LLVM::ConstantOp op,
   else
     return op->emitOpError("unsupported constant type");
 
-  // Materialize as v_mov_b32 into a VGPR.
+  // TODO: Assumes i32. A legalization pass should reject or widen non-b32
+  // constants before this point.
   auto immTy = ctx.createImmType(intVal);
   auto immOp = ConstantOp::create(builder, loc, immTy, intVal);
   auto vregTy = ctx.createVRegType();
@@ -237,7 +240,8 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
   return success();
 }
 
-// i32<->i64 casts are identity on a 32-bit GPU.
+// TODO: Assumes all integer values fit in 32 bits. A legalization pass
+// should lower i64 arithmetic to pairs of i32 ops before this point.
 static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
   st.ctx.getMapper().mapValue(op.getResult(), resolve(op.getOperand(), st.ctx));
   return success();
@@ -261,7 +265,8 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
 
-  // V_CMP_* ops set VCC implicitly (no SSA result).
+  // TODO: Assumes i32 operands. A legalization pass should ensure all
+  // integer comparisons are on i32 values before this point.
   using Pred = LLVM::ICmpPredicate;
   switch (op.getPredicate()) {
   case Pred::slt:
@@ -312,7 +317,8 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   Value trueVal = resolve(op.getTrueValue(), ctx);
   Value falseVal = resolve(op.getFalseValue(), ctx);
 
-  // v_cndmask_b32: dst = vcc ? src1 : src0 (falseVal=src0, trueVal=src1).
+  // TODO: Assumes b32 operands. A legalization pass should ensure all
+  // selects operate on i32/f32 values before this point.
   auto vregTy = ctx.createVRegType();
   auto sel =
       V_CNDMASK_B32::create(builder, loc, vregTy, falseVal, trueVal, cond);
@@ -320,6 +326,8 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   return success();
 }
 
+// TODO: Assumes i32. A legalization pass should ensure all integer
+// arithmetic is on i32 values before this point.
 static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
@@ -334,6 +342,8 @@ static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
   return success();
 }
 
+// TODO: Assumes i32. A legalization pass should ensure all integer
+// arithmetic is on i32 values before this point.
 static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
