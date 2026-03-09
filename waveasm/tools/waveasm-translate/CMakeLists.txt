@@ -20,6 +20,8 @@ target_link_libraries(waveasm-translate
   MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect
+  MLIRLLVMDialect
+  MLIRROCDLDialect
   MLIRMemRefDialect
   MLIRSCFDialect
   MLIRTransforms

@@ -462,8 +462,27 @@ LivenessInfo computeLiveness(ProgramOp program) {
       llvm::SmallVector<Value> members;
       members.push_back(blockArg);
 
-      // Init arg -> block arg
+      // Check if init arg can be coalesced with its block arg. If the
+      // init arg has uses after the loop, coalescing would let the loop
+      // body modify the shared register and corrupt the post-loop value.
+      bool initArgCanCoalesce = true;
       if (i < loopOp.getInitArgs().size()) {
+        Value initArg = loopOp.getInitArgs()[i];
+        auto initRangeIt = info.ranges.find(initArg);
+        auto loopPosIt = opToIdx.find(loopOp.getOperation());
+        if (initRangeIt != info.ranges.end() && loopPosIt != opToIdx.end() &&
+            initRangeIt->second.end > loopPosIt->second) {
+          initArgCanCoalesce = false;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Skipping init arg coalescing for block arg " << i
+                     << ": init arg has post-loop uses (range end "
+                     << initRangeIt->second.end << " > loop position "
+                     << loopPosIt->second << ")\n");
+        }
+      }
+
+      // Init arg -> block arg (only if init arg has no post-loop uses).
+      if (initArgCanCoalesce && i < loopOp.getInitArgs().size()) {
         Value initArg = loopOp.getInitArgs()[i];
         if (info.ranges.contains(initArg))
           members.push_back(initArg);
@@ -519,10 +538,10 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
 
       // Build tiedPairs for the allocator:
-      //   block_arg -> init_arg
+      //   block_arg -> init_arg   (only if no post-loop uses)
       //   iter_arg  -> block_arg
       //   loop_result -> block_arg
-      if (i < loopOp.getInitArgs().size()) {
+      if (initArgCanCoalesce && i < loopOp.getInitArgs().size()) {
         Value initArg = loopOp.getInitArgs()[i];
         if (info.ranges.contains(initArg))
           tc.tiedPairs[blockArg] = initArg;

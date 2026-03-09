@@ -30,6 +30,25 @@ def WaveASM_RegClass : I32EnumAttr<"RegClass", "Register class", [
 }
 
 //===----------------------------------------------------------------------===//
+// Comparison Predicate Enum
+//===----------------------------------------------------------------------===//
+
+def WaveASM_CmpPred : I64EnumAttr<"CmpPredicate", "Integer comparison predicate", [
+  I64EnumAttrCase<"eq",  0, "eq">,
+  I64EnumAttrCase<"ne",  1, "ne">,
+  I64EnumAttrCase<"slt", 2, "slt">,
+  I64EnumAttrCase<"sle", 3, "sle">,
+  I64EnumAttrCase<"sgt", 4, "sgt">,
+  I64EnumAttrCase<"sge", 5, "sge">,
+  I64EnumAttrCase<"ult", 6, "ult">,
+  I64EnumAttrCase<"ule", 7, "ule">,
+  I64EnumAttrCase<"ugt", 8, "ugt">,
+  I64EnumAttrCase<"uge", 9, "uge">,
+]> {
+  let cppNamespace = "::waveasm";
+}
+
+//===----------------------------------------------------------------------===//
 // Virtual Register Types (Pre-Allocation)
 //===----------------------------------------------------------------------===//
 

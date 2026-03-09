@@ -217,6 +217,7 @@ class LDSStoreOp<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 include "waveasm/Dialect/WaveASMControlFlowOps.td"
+include "waveasm/Dialect/WaveASMArithOps.td"
 
 //===----------------------------------------------------------------------===//
 // Program Container
@@ -293,7 +294,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
             workgroup_size,
             lds_size,
             $_builder.getI64IntegerAttr(kernarg_preload_length));
-      // Ensure the body region has a block (region is created by generated builder)
+      // Ensure the body region has a block (region is created by generated builder).
       if ($_state.regions.back()->empty())
         $_state.regions.back()->emplaceBlock();
     }]>
@@ -422,7 +423,7 @@ def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
 // This enables AGPR zero-init for MFMA accumulator loop init args on gfx950,
 // eliminating 128 VGPRs of accumulator zero-init pressure.
 def WaveASM_V_MOV_B32 : WAVEASMOp<"v_mov_b32", [Pure, WaveASM_ArithmeticOp]> {
-  let arguments = (ins WaveASM_VRegOrImm:$src);
+  let arguments = (ins WaveASM_VALUSrc:$src);
   let results = (outs WaveASM_AnyVecReg:$dst);
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst)";
 }

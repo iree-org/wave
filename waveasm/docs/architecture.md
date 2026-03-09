@@ -26,7 +26,12 @@ This document describes the architecture of the WaveASM C++ backend, which trans
                     ║                            ▼                                ║
                     ║  ┌─────────────────────────────────────────────────────┐    ║
                     ║  │              WaveASM Dialect IR                     │    ║
-                    ║  │         (Pure SSA with virtual registers)           │    ║
+                    ║  │    (Generic pseudo-ops + concrete machine ops)      │    ║
+                    ║  └─────────────────────────┬───────────────────────────┘    ║
+                    ║                            ▼                                ║
+                    ║  ┌─────────────────────────────────────────────────────┐    ║
+                    ║  │              Legalization Passes                    │    ║
+                    ║  │    (Type legalization, register placement, ISel)    │    ║
                     ║  └─────────────────────────┬───────────────────────────┘    ║
                     ║                            ▼                                ║
                     ║  ┌─────────────────────────────────────────────────────┐    ║
@@ -134,9 +139,24 @@ The WaveASM dialect is a pure SSA representation close to AMDGCN assembly.
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. Optimization Passes
+### 3. Legalization (see [legalization.md](legalization.md))
 
-The pass pipeline optimizes the WaveASM IR before register allocation.
+Translation emits generic pseudo-ops (`waveasm.arith.add`, `.mul`, `.cmp_*`)
+for arithmetic, deferring type width and register file decisions. Dedicated
+legalization passes then:
+
+1. **Type legalization** — narrows i64 to i32 (or expands to carry chains).
+2. **Register legalization** — assigns SGPR vs VGPR, enforces constant bus
+   limits, inserts `v_mov_b32` copies as needed.
+3. **Instruction selection** — lowers generic ops to concrete machine ops
+   (`s_add_u32` / `v_add_u32` / etc.).
+
+Operations with unambiguous lowering (buffer ops, MFMA, control flow, LDS)
+emit concrete machine ops directly during translation and skip legalization.
+
+### 4. Optimization Passes
+
+The pass pipeline optimizes the legalized WaveASM IR before register allocation.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────┐
@@ -183,7 +203,7 @@ The pass pipeline optimizes the WaveASM IR before register allocation.
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4. Register Allocation
+### 5. Register Allocation
 
 Linear scan register allocation converts virtual registers to physical registers.
 
@@ -229,7 +249,7 @@ Linear scan register allocation converts virtual registers to physical registers
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5. Assembly Emission
+### 6. Assembly Emission
 
 The assembly emitter generates AMDGCN assembly with full HSA metadata.
 
