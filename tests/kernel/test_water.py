@@ -66,7 +66,7 @@ class TestWaterLowering:
                 args, kwargs = mock_subprocess.call_args
                 assert args[0][0] == "/mock/water-opt"
                 assert "--allow-unregistered-dialect" in args[0]
-                assert "--pass-pipeline=builtin.module(" in args[0][2]
+                assert "--water-middle-end-lowering" in args[0]
                 assert kwargs["input"] == mlir_input
                 assert kwargs["text"] is True
 
