@@ -30,6 +30,13 @@ def parse_args():
         default=None,
         help="Block size of the test, e.g. 256,256,256",
     )
+    parser.add_argument(
+        "--splitk",
+        type=int,
+        default=None,
+        metavar="NUM_SPLITS",
+        help="Enable split-K with the given number of splits (e.g. --splitk 2)",
+    )
 
     args = parser.parse_args()
 
@@ -50,7 +57,15 @@ def list_tests(module_globals):
         print(f"  {test}")
 
 
-def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block=None):
+def run_test(
+    test_name,
+    module_globals,
+    debug=False,
+    repeat=1,
+    shape=None,
+    block=None,
+    splitk=None,
+):
     """Run a test function multiple times."""
     if test_name not in module_globals:
         print(f"Error: Test '{test_name}' not found")
@@ -62,6 +77,8 @@ def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block
         kwargs["shape"] = shape
     if block is not None:
         kwargs["block"] = block
+    if splitk is not None:
+        kwargs["splitk"] = splitk
 
     for i in range(repeat):
         try:

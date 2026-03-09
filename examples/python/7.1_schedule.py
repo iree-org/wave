@@ -4,10 +4,13 @@ MXFP4 Scaled GEMM Scheduling for GFX950 (MI350)
 Double-buffered MXFP4 GEMM with 4-wave and 8-wave configurations.
 Uses get_tagged_mxfp4_gemm (templates) + get_mxfp4_dbuf_schedule (schedules).
 
+The --splitk N flag enables split-K with N splits for supported tests.
+
 Usage:
     python 7.1_schedule.py --test test_dbuf_4wave_mxfp_gemm
-    python 7.1_schedule.py --test test_dbuf_8wave_mxfp_gemm
-    python 7.1_schedule.py --test test_dbuf_8wave_mxfp_gemm --debug
+    python 7.1_schedule.py --test test_dbuf_4wave_mxfp_gemm --splitk 2
+    python 7.1_schedule.py --test test_dbuf_8wave_pingpong_mxfp_gemm
+    python 7.1_schedule.py --test test_dbuf_8wave_pingpong_mxfp_gemm --splitk 2
     python 7.1_schedule.py --test test_splitk_preshuffle_scales_gemm_cpp
     python 7.1_schedule.py --list_tests
 """
@@ -23,6 +26,9 @@ from wave_lang.kernel.wave.templates import (
     get_tagged_mxfp4_gemm_preshuffle_b,
     get_tagged_mxfp4_gemm_preshuffle_scales,
     get_tagged_mxfp4_gemm_preshuffle_scales_and_B,
+    get_tagged_splitk_mxfp4_gemm,
+    get_tagged_splitk_mxfp4_gemm_preshuffle_b,
+    get_tagged_splitk_mxfp4_gemm_preshuffle_scales,
 )
 from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
 from wave_lang.kernel.wave.schedules import (
@@ -126,10 +132,17 @@ def _get_8wave_shape_from_block(block):
 
 
 def test_dbuf_4wave_mxfp_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), splitk=None
 ):
     """Double-buffered MXFP4 GEMM, 4 waves, no stagger."""
-    gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(2, 2))
+    if splitk and block == (256, 256, 256):
+        block = (128, 128, 256)
+    if splitk:
+        gemm, options = get_tagged_splitk_mxfp4_gemm(
+            shape, num_splits=splitk, block_shape=block, wave_shape=(2, 2)
+        )
+    else:
+        gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(2, 2))
     schedule = get_mxfp4_dbuf_schedule(use_stagger=False)
 
     options.print_ir_after = "all" if is_debug else []
@@ -139,11 +152,16 @@ def test_dbuf_4wave_mxfp_gemm(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm(gemm, shape)
-    print("MXFP GEMM double-buffer 4-wave test passed!")
+    sk = f" split-K({splitk})" if splitk else ""
+    print(f"MXFP GEMM double-buffer 4-wave{sk} test passed!")
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256), dynamic=False
+    is_debug=False,
+    shape=(1024, 1024, 8192),
+    block=(128, 256, 256),
+    dynamic=False,
+    splitk=None,
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -153,9 +171,14 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
     to avoid exceeding shared-memory limits.
     """
     wave_shape = _get_8wave_shape_from_block(block)
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
-        shape, block, wave_shape=wave_shape
-    )
+    if splitk:
+        gemm, options = get_tagged_splitk_mxfp4_gemm_preshuffle_scales(
+            shape, num_splits=splitk, block_shape=block, wave_shape=wave_shape
+        )
+    else:
+        gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
+            shape, block, wave_shape=wave_shape
+        )
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
@@ -174,19 +197,28 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
 
     _run_mxfp_gemm_preshuffle(gemm, shape, only_scale=True)
     mode = "dynamic" if dynamic else "static"
+    sk = f", split-K({splitk})" if splitk else ""
     print(
-        f"MXFP GEMM double-buffer 8-wave ping pong with scale shuffling ({mode}) test passed!"
+        f"MXFP GEMM double-buffer 8-wave ping pong with scale shuffling ({mode}{sk}) test passed!"
     )
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False,
+    shape=(1024, 1024, 8192),
+    block=(256, 256, 256),
+    dynamic=False,
+    splitk=None,
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
     Same for B data. However, loading B directly to VGPR consumes too many VGPRs and causes spilling.
     A is read from global memory directly to LDS.
     """
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with B-shuffled ping-pong schedule"
+        )
     wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape, block, wave_shape=wave_shape
@@ -214,7 +246,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), splitk=None
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, with stagger.
 
@@ -235,6 +267,10 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
     barrier releases, effectively hiding the second barrier's latency behind
     the early loads and compute.
     """
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with the mixed ping-pong schedule"
+        )
     gemm, options = get_tagged_mxfp4_gemm(shape, block, wave_shape=(4, 2))
     options.specialize = True
     options.use_buffer_ops = True
@@ -250,7 +286,7 @@ def test_dbuf_8wave_mixed_pingpong_mxfp_gemm(
 
 
 def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
-    is_debug=False, shape=(16384, 16384, 16384), block=(256, 256, 256)
+    is_debug=False, shape=(16384, 16384, 16384), block=(256, 256, 256), splitk=None
 ):
     """Like :func:`test_dbuf_8wave_mixed_pingpong_mxfp_gemm` but with A_scale & B_scale
     preshuffled and prefetched to VGPRs.
@@ -258,7 +294,10 @@ def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
     Note: preshuffling B and loading it directly to VGPRs combined with prefetching
     consumes too many VGPRs and causes spilling.
     """
-
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with the mixed ping-pong shuffle schedule"
+        )
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
         shape, block, wave_shape=(4, 2)
     )
@@ -277,9 +316,13 @@ def test_dbuf_8wave_mixed_pingpong_shuffle_mxfp_gemm(
 
 
 def test_dbuf_4wave_mxfp_asymmetric_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), splitk=None
 ):
     """Asymmetric-prefetch MXFP4 GEMM: A through LDS (2x prefetch), B direct from global."""
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with the asymmetric schedule"
+        )
     gemm, options = get_tagged_mxfp4_gemm(
         shape, block, wave_shape=(1, 4), b_address_space=GLOBAL_ADDRESS_SPACE
     )
@@ -305,9 +348,17 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     shape=(1024, 1024, 8192),
     block=(128, 256, 256),
     eliminate_epilogue=True,
+    splitk=None,
 ):
     """Asymmetric MXFP4 GEMM with preshuffled B data and B scales."""
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    if splitk:
+        gemm, options = get_tagged_splitk_mxfp4_gemm_preshuffle_b(
+            shape, num_splits=splitk, block_shape=block, wave_shape=(1, 4)
+        )
+    else:
+        gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+            shape, block, wave_shape=(1, 4)
+        )
     options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.use_buffer_ops = True
@@ -322,13 +373,18 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
-    print("MXFP GEMM preshuffle-B 4-wave test passed!")
+    sk = f" split-K({splitk})" if splitk else ""
+    print(f"MXFP GEMM preshuffle-B 4-wave{sk} test passed!")
 
 
 def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
-    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256), splitk=None
 ):
     """Asymmetric MXFP4 GEMM using C++ WaveASM backend (no preshuffle)."""
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with the asymmetric C++ backend"
+        )
     gemm, options = get_tagged_mxfp4_gemm(
         shape, block, wave_shape=(1, 4), b_address_space=GLOBAL_ADDRESS_SPACE
     )
@@ -346,9 +402,14 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
 
 
 def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
-    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256)
+    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256), splitk=None
 ):
     """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
+    if splitk:
+        raise NotImplementedError(
+            "split-K with WaveASM backend hits register alignment errors in "
+            "the assembler; use test_dbuf_4wave_mxfp_preshuffle_b_gemm instead"
+        )
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
     options.backend = "asm"
     options.use_buffer_ops = False
@@ -369,8 +430,13 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm(
     shape=(1024, 1024, 8192),
     block=(128, 256, 256),
     eliminate_epilogue=True,
+    splitk=None,
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K."""
+    if splitk:
+        raise NotImplementedError(
+            "split-K is not yet supported with the dynamic preshuffle-B schedule"
+        )
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
     # Make M, N, K dynamic so the compiler does not specialize on problem size.
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
@@ -397,11 +463,13 @@ def test_splitk_preshuffle_scales_gemm_cpp(
     is_debug=False,
     shape=(1024, 1024, 8192),
     block=(128, 128, 256),
+    splitk=None,
 ):
     """Split-K MXFP4 GEMM using C++ WaveASM backend (preshuffled scales)."""
+    num_splits = splitk if splitk else 2
     splitk_fn, hyperparams = get_splitk_mxfp4_gemm_kernel(
         shape,
-        num_splits=2,
+        num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
         block_shape=block,
         waves_per_block=(2, 2),
@@ -440,6 +508,12 @@ if __name__ == "__main__":
         exit(1)
 
     success = run_test(
-        args.test, globals(), args.debug, args.repeat, args.shape, args.block
+        args.test,
+        globals(),
+        args.debug,
+        args.repeat,
+        args.shape,
+        args.block,
+        args.splitk,
     )
     exit(0 if success else 1)
