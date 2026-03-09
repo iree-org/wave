@@ -42,6 +42,14 @@ namespace waveasm {
 // LLVM Translation State
 //===----------------------------------------------------------------------===//
 
+// AMDGPU SRD (Shader Resource Descriptor) constants.
+// SRD is 4 consecutive SGPRs: [base_lo, base_hi|stride, num_records, flags].
+
+/// Mask for SRD word 1 to keep only base_addr[47:32] (lower 16 bits).
+static constexpr int64_t kSRDWord1BaseMask = 0xFFFF;
+/// Default SRD word 3 flags set by the prologue (OOB_SELECT=2).
+static constexpr int64_t kSRDDefaultFlags = 0x20000;
+
 /// Tracks decomposed buffer pointer info from GEP operations.
 /// A GEP on ptr<7> decomposes into (SRD, byte-offset-vgpr).
 /// TODO: consider a separate decomposition pass for ptr<7>.
@@ -112,15 +120,19 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
   auto *mlirCtx = builder.getContext();
   auto loc = func.getLoc();
 
+  // Code object version 5: supports kernel argument preloading.
   auto targetAttr =
-      TargetAttr::get(mlirCtx, getTargetKindAttr(mlirCtx, targetId), 5);
-  auto abiAttr = KernelABIAttr::get(mlirCtx, 0, 0, std::nullopt, std::nullopt,
-                                    std::nullopt);
+      TargetAttr::get(mlirCtx, getTargetKindAttr(mlirCtx, targetId),
+                      /*code_object_version=*/5);
+  auto abiAttr = KernelABIAttr::get(mlirCtx, /*tid=*/0, /*kernarg=*/0,
+                                    /*wg_id_x=*/std::nullopt,
+                                    /*wg_id_y=*/std::nullopt,
+                                    /*wg_id_z=*/std::nullopt);
 
   auto [wgX, wgY, wgZ] = getWorkgroupSize(func);
-  SmallVector<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgX),
-                                     builder.getI64IntegerAttr(wgY),
-                                     builder.getI64IntegerAttr(wgZ)};
+  std::array<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgX),
+                                    builder.getI64IntegerAttr(wgY),
+                                    builder.getI64IntegerAttr(wgZ)};
 
   // Mangle the program name to avoid symbol collision with the original
   // llvm.func (which we keep alive for gpu.launch_func verification).
@@ -357,12 +369,13 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
     std::string andStr = "s_and_b32 s" + std::to_string(srdBase + 1) + ", s" +
-                         std::to_string(srdBase + 1) + ", 0xFFFF";
+                         std::to_string(srdBase + 1) + ", 0x" +
+                         llvm::utohexstr(kSRDWord1BaseMask);
     RawOp::create(builder, loc, andStr);
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
     auto flags = getConstantIntValue(op.getFlags());
-    if (flags && *flags != 0x20000) {
+    if (flags && *flags != kSRDDefaultFlags) {
       std::string movFlags = "s_mov_b32 s" + std::to_string(srdBase + 3) +
                              ", 0x" + llvm::utohexstr(*flags);
       RawOp::create(builder, loc, movFlags);
