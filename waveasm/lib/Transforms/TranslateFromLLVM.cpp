@@ -14,6 +14,7 @@
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Transforms/Passes.h"
 #include "waveasm/Transforms/TranslateFromMLIR.h"
 
@@ -137,7 +138,7 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
                         /*workgroup_size=*/builder.getArrayAttr(sizes),
                         /*lds_size=*/IntegerAttr{});
 
-  program->setAttr("kernel_name", builder.getStringAttr(func.getName()));
+  program->setAttr(kKernelNameAttr, builder.getStringAttr(func.getName()));
 
   if (program.getBody().empty())
     program.getBody().emplaceBlock();

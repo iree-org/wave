@@ -279,7 +279,7 @@ void TranslationContext::emitSRDPrologue() {
     // same, and loading them before the branch leaves the overflow arg stale
     // on gfx95 hardware.
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
-    std::string kernelName = getKernelName(program);
+    std::string kernelName = getKernelName(program).str();
     std::string mainLabel = ".L_" + kernelName + "_main";
 
     RawOp::create(builder, loc, "s_branch " + mainLabel);
