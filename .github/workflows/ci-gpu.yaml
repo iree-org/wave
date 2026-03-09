@@ -410,7 +410,7 @@ jobs:
       - name: Post coverage comment on PR
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd cmake_build
           {
@@ -422,15 +422,21 @@ jobs:
             echo '```'
           } > comment-body.txt
 
-          EXISTING=$(gh api repos/${{ github.repository }}/issues/${{ github.event.number }}/comments \
-            --jq '.[] | select(.body | contains("<!-- water-coverage -->")) | .id' | head -1)
+          API_URL="https://api.github.com/repos/${{ github.repository }}"
+          AUTH_HEADER="Authorization: token $GITHUB_TOKEN"
+
+          EXISTING=$(curl -s -H "$AUTH_HEADER" \
+            "$API_URL/issues/${{ github.event.number }}/comments" | \
+            jq '.[] | select(.body | contains("<!-- water-coverage -->")) | .id' | head -1)
+
+          PAYLOAD=$(jq -Rs '{body: .}' comment-body.txt)
 
           if [ -n "$EXISTING" ]; then
-            jq -Rs '{body: .}' comment-body.txt | \
-              gh api repos/${{ github.repository }}/issues/comments/$EXISTING -X PATCH --input -
+            curl -s -X PATCH -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$API_URL/issues/comments/$EXISTING"
           else
-            jq -Rs '{body: .}' comment-body.txt | \
-              gh api repos/${{ github.repository }}/issues/${{ github.event.number }}/comments --input -
+            curl -s -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$API_URL/issues/${{ github.event.number }}/comments"
           fi
 
       - name: Upload coverage HTML report
