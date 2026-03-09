@@ -78,9 +78,9 @@ struct WAVEASMGPUModuleToBinaryPass
 
     auto emitError = [&]() -> InFlightDiagnostic { return module.emitError(); };
 
-    std::string cpu = targetArch.getValue();
+    std::string gpuArch = targetArch.getValue();
     FailureOr<SmallVector<char, 0>> objectCode =
-        ROCDL::assembleIsa(asmText, kTriple, cpu, /*features=*/"", emitError);
+        ROCDL::assembleIsa(asmText, kTriple, gpuArch, /*features=*/"", emitError);
     if (failed(objectCode))
       return signalPassFailure();
 
@@ -107,7 +107,7 @@ struct WAVEASMGPUModuleToBinaryPass
     StringAttr binaryAttr =
         builder.getStringAttr(StringRef(hsaco->data(), hsaco->size()));
 
-    for (auto gpuModule : gpuModules) {
+    for (gpu::GPUModuleOp gpuModule : gpuModules) {
       builder.setInsertionPointAfter(gpuModule);
 
       Attribute target;
@@ -115,7 +115,7 @@ struct WAVEASMGPUModuleToBinaryPass
         target = gpuModule.getTargetsAttr()[0];
       if (!target)
         target = ROCDL::ROCDLTargetAttr::get(module.getContext(),
-                                             /*optLevel=*/2, kTriple, cpu);
+                                             /*optLevel=*/2, kTriple, gpuArch);
 
       auto objectAttr = builder.getAttr<gpu::ObjectAttr>(
           target, gpu::CompilationTarget::Binary, binaryAttr,
