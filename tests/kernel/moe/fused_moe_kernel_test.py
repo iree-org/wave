@@ -14,17 +14,21 @@ from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_par
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.lang import DataType
 from wave_lang.kernel._support.dtype import f16, f32, i32
-from wave_lang.kernel.wave.templates.moe_v2 import (
-    get_fused_moe_gemm,
+from wave_lang.kernel.wave.templates.moe import (
     get_moe_gemm_only_kernel,
     get_moe_gather_kernel,
     get_moe_scatter_kernel,
-    moe_align_block_size_pytorch,
     get_moe_reduce_sum_kernel,
     get_silu_and_mul_kernel,
     get_topk_kernel,
+    compile_moe_align_kernels,
+    moe_align_block_size,
 )
 import torch.nn.functional as F
+
+# pyright: reportGeneralTypeIssues=false
+# pyright: reportArgumentType=false
+# pyright: reportOperatorIssue=false
 
 torch.manual_seed(0)
 
@@ -101,37 +105,6 @@ def torch_ref_moe(
         out.view(B, -1, w2.shape[1]) * topk_weights.view(B, -1, 1).to(out.dtype)
     ).sum(dim=1)
     return final, gemm1_result, silu_mul_result
-
-
-def get_wave_moe_fused_gemm_kernel(
-    m: int,
-    n: int,
-    k: int,
-    e,
-    block_shape: int,
-    total_elems: int,
-    num_experts: int,
-    mfma_variant: MMAType,
-    datatype: DataType,
-):
-    gemm, symbols = get_fused_moe_gemm(
-        m,
-        n,
-        k,
-        e,
-        block_shape,
-        total_elems,
-        num_experts,
-        mfma_variant,
-        datatype,
-    )
-    symbols.update(get_default_scheduling_params())
-
-    options = WaveCompileOptions(
-        subs=symbols,
-    )
-    options = set_default_run_config(options)
-    return wave_compile(options, gemm)
 
 
 def get_wave_silu_and_mul_kernel(m: int, n: int, dtype: DataType):
@@ -234,8 +207,15 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     topk_weights = topk_weights.view(-1)
     topk_ids = topk_ids.view(-1)
 
-    # TODO: Replace with Wave kernel (see moe.py get_moe_align_block_size_kernel)
-    # Using PyTorch host fallback for token alignment
+    # Token alignment: histogram, pad+cumsum, expert_ids, sorted_ids (all Wave)
+    numel = num_tokens * topk
+    align_kernels = compile_moe_align_kernels(
+        numel,
+        num_experts,
+        block_size,
+        max_num_tokens_padded,
+        max_num_m_blocks,
+    )
     (
         expert_ids,
         sorted_ids,
@@ -243,12 +223,13 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
         padded_counts_buffer,
         cumsum_buffer,
         cumsum_exclusive,
-    ) = moe_align_block_size_pytorch(
+    ) = moe_align_block_size(
         topk_ids.to(torch.int32),
         num_experts,
         block_size,
         max_num_tokens_padded,
         max_num_m_blocks,
+        compiled_kernels=align_kernels,
     )
 
     num_blocks = expert_ids.shape[0]
@@ -436,8 +417,8 @@ def test_fused_moe(
     torch.manual_seed(0)  # per-test seed for determinism regardless of order
     device = "cuda"
 
-    if dtype == torch.float16 and k == 1024:
-        pytest.skip("This combination generates NaNs and INFs")
+    # if dtype == torch.float16 and k == 1024:
+    #     pytest.skip("This combination generates NaNs and INFs")
 
     # TODO: investigate why using torch.randn would have precision issue in silu computation
     a = torch.randn(num_tokens, k, dtype=dtype, device=device)
