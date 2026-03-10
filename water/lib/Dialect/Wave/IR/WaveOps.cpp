@@ -870,7 +870,7 @@ void MmaSingleIndexExprBuilder::populate(
 // dimension.
 static llvm::LogicalResult
 populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
-                        llvm::ArrayRef<unsigned> wavesPerWorkgroup,
+                        llvm::ArrayRef<int32_t> wavesPerWorkgroup,
                         int64_t threadsPerWave, wave::WaveSymbolAttr mSymbol,
                         wave::WaveSymbolAttr nSymbol,
                         wave::WaveSymbolAttr kSymbol,

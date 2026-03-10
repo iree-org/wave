@@ -889,11 +889,11 @@ wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
   // If waves_per_block is explicitly provided, copy it to storage. Note that we
   // have verified they match the result of dividing block tiles with wave tiles
   // previously.
-  if (!initObject.hardwareConstraint.getWavesPerBlock().empty()) {
+  if (initObject.hardwareConstraint.getWavesPerBlock()) {
     assert(initObject.hardwareConstraint.getWavesPerBlock().size() == 3 &&
            "expected waves_per_block to have 3 elements");
-    llvm::ArrayRef<unsigned> explicitWpb =
-        initObject.hardwareConstraint.getWavesPerBlock();
+    llvm::ArrayRef<int32_t> explicitWpb =
+        initObject.hardwareConstraint.getWavesPerBlock().asArrayRef();
     initObject.wavesPerBlock.assign(explicitWpb);
     return initObject;
   }

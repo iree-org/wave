@@ -708,12 +708,11 @@ WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult HardwareConstraintAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, unsigned threadsPerWave,
-    ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
+    DenseI32ArrayAttr wavesPerBlock, WaveMmaKindAttr mmaType,
     DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
 
-  if (!(wavesPerBlock.empty() || wavesPerBlock.size() == 3))
-    return emitError() << "waves_per_block (" << wavesPerBlock
-                       << ") should have 3 elements";
+  if (wavesPerBlock && wavesPerBlock.size() != 3)
+    return emitError() << "waves_per_block should have 3 elements";
 
   if (vectorShapes) {
     for (NamedAttribute attr : vectorShapes) {

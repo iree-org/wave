@@ -315,10 +315,10 @@ verifyConstraints(ArrayAttr constraints,
   // verify consistency between wave constraints and waves_per_block
   // * If both wave constraints and waves_per_block are present, the computed
   // number of waves per dimension should match the waves_per_block attribute.
-  if (hardwareConstraint && !hardwareConstraint.getWavesPerBlock().empty() &&
+  if (hardwareConstraint && hardwareConstraint.getWavesPerBlock() &&
       !waveConstraints.empty()) {
-    llvm::ArrayRef<unsigned> wavesPerBlock =
-        hardwareConstraint.getWavesPerBlock();
+    llvm::ArrayRef<int32_t> wavesPerBlock =
+        hardwareConstraint.getWavesPerBlock().asArrayRef();
     for (auto &&[symbol, waveConstraint] : waveConstraints) {
       wave::WorkgroupConstraintAttr wgConstraint = workgroupConstraints[symbol];
       unsigned wgDim =

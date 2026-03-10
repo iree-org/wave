@@ -475,7 +475,7 @@ mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr);
 /// Creates a new HardwareConstraintAttr
 MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
     MlirContext mlirCtx, unsigned threadsPerWave, size_t wavesPerBlockSize,
-    unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    int32_t *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
     unsigned maxBitsPerLoad);
 
 /// Returns the typeID of a HardwareConstraintAttr.
@@ -486,7 +486,7 @@ MLIR_CAPI_EXPORTED unsigned
 mlirHardwareConstraintAttrGetThreadsPerWave(MlirAttribute attr);
 MLIR_CAPI_EXPORTED intptr_t
 mlirHardwareConstraintAttrGetNumWavesPerBlock(MlirAttribute attr);
-MLIR_CAPI_EXPORTED unsigned
+MLIR_CAPI_EXPORTED int32_t
 mlirHardwareConstraintAttrGetWavesPerBlockElem(MlirAttribute attr, intptr_t i);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirHardwareConstraintAttrGetMmaType(MlirAttribute attr);
