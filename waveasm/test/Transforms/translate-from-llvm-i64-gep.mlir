@@ -3,14 +3,12 @@
 
 // CHECK-LABEL: waveasm.program @test_i64_gep_offset__waveasm
 
-// zext i32 -> i64: pack {lo, 0} into vreg<2>.
-// CHECK: waveasm.pack %{{.*}}, %{{.*}} : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2, 2>
+// zext i32 -> i64: pack {mul_result, 0} into vreg<2>.
+// CHECK: %[[MUL:.*]] = waveasm.v_mul_lo_u32
+// CHECK: waveasm.pack %[[MUL]], %{{.*}} : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2, 2>
 
-// Trunc i64 -> i32 for buffer voffset: extract lo half.
-// CHECK: %[[OFFSET:.*]] = waveasm.extract %{{.*}}[0] : !waveasm.vreg<2, 2> -> !waveasm.vreg
-
-// Buffer load uses i32 voffset, not i64.
-// CHECK: waveasm.buffer_load_ushort %{{.*}}, %[[OFFSET]], %{{.*}} : !waveasm.sreg<4, 4>, !waveasm.vreg, !waveasm.imm<0>
+// Trunc looks through pack, uses mul result directly as buffer voffset.
+// CHECK: waveasm.buffer_load_ushort %{{.*}}, %[[MUL]], %{{.*}} : !waveasm.sreg<4, 4>, !waveasm.vreg, !waveasm.imm<0>
 
 // No arith pseudo-ops should remain.
 // CHECK-NOT: waveasm.arith.
