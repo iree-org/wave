@@ -137,8 +137,13 @@ LogicalResult ExtractOp::verify() {
     return emitOpError() << "index must be non-negative, got " << index;
   }
 
-  // Preserve vector register bank (VGPR <-> VGPR, AGPR <-> AGPR).
-  if (isAGPRType(vectorType) != isAGPRType(resultType)) {
+  // Preserve register bank (VGPR <-> VGPR, AGPR <-> AGPR, SGPR <-> SGPR).
+  bool bankMismatch = false;
+  if (isSGPRType(vectorType) != isSGPRType(resultType))
+    bankMismatch = true;
+  else if (isAGPRType(vectorType) != isAGPRType(resultType))
+    bankMismatch = true;
+  if (bankMismatch) {
     return emitOpError()
            << "result register class must match source register class: source "
            << vectorType << ", result " << resultType;
