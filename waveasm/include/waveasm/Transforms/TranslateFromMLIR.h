@@ -137,6 +137,8 @@ struct BitRange {
   static BitRange fromConstant(int64_t value) {
     if (value == 0)
       return BitRange(0, 0);
+    if (value < 0)
+      return BitRange(0, 31);
     int64_t bits = 0;
     int64_t v = value;
     while (v > 0) {
