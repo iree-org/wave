@@ -127,8 +127,10 @@ waveasm.program @init_arg_post_loop_use target = #waveasm.target<#waveasm.gfx942
   %init_i = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
 
   // The loop uses %init_val as init arg for the IV.
+  // The block arg must get a different register than [[INIT]].
+  // CHECK-NOT: waveasm.v_mul_lo_u32{{.*}}!waveasm.pvreg<[[INIT]]>
   %iv_out = waveasm.loop(%iv = %init_val) : (!waveasm.vreg) -> (!waveasm.vreg) {
-    %next_iv = waveasm.v_add_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
+    %next_iv = waveasm.v_mul_lo_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %cond_s = waveasm.v_readfirstlane_b32 %next_iv : !waveasm.vreg -> !waveasm.sreg
     %ub_s = waveasm.v_readfirstlane_b32 %init_i : !waveasm.vreg -> !waveasm.sreg
     %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
