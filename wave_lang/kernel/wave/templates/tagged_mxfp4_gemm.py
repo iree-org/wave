@@ -144,6 +144,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     wave_shape: tuple[int, int],
     mfma_variant: ScaledMMAType,
     a_address_space: tkl.AddressSpace,
+    b_address_space: tkl.AddressSpace | None = None,
     *,
     b_preshuffled: bool = False,
     reorder_workgroups: bool = False,
@@ -151,10 +152,13 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
 ):
     """Shared implementation: preshuffle scales only, or scales + B data.
 
-    When b_preshuffled is False: A and B are loaded from global to shared;
-        scales are read from global with e8m0 preshuffle.
-    When b_preshuffled is True: A to shared; B is preshuffled and read from
-        global directly; scales as above.
+    When b_preshuffled is False: B uses the regular (non-preshuffled) read path.
+    When b_preshuffled is True: B reads use the preshuffle mapping.
+
+    Whether A/B are read directly from global to VGPR or staged through shared memory
+    is controlled by the selected address spaces (`a_address_space` and
+    `b_address_space`).
+
     """
     M = tkl.sym.M
     N = tkl.sym.N
@@ -273,7 +277,11 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
 
     hyperparams = {
         A_ADDRESS_SPACE: a_address_space,
-        B_ADDRESS_SPACE: (GLOBAL_ADDRESS_SPACE if b_preshuffled else a_address_space),
+        B_ADDRESS_SPACE: (
+            b_address_space
+            if b_address_space is not None
+            else (GLOBAL_ADDRESS_SPACE if b_preshuffled else a_address_space)
+        ),
         C_ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: block_shape[0],
         BLOCK_N: block_shape[1],
@@ -309,7 +317,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales(
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
     A and B are loaded from global to shared.
-    A and B scales are read from global memory using an e8m0 scale preshuffle mapping and directly stored to VGPRs.
+    A_scales and B_scales are read from global memory using an e8m0 scale preshuffle mapping and directly stored to VGPRs.
 
     All ops are tagged for use with MXFP4 schedule functions.
 
@@ -318,6 +326,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales(
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
         mfma_variant: Scaled MMA instruction type.
+        a_address_space: Address space for A.
 
     Returns:
         (kernel_function, WaveCompileOptions)
@@ -338,10 +347,11 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
     wave_shape: tuple[int, int] = (2, 2),
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
+    b_address_space: tkl.AddressSpace | None = None,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
-    A is loaded from global to shared. B is shuffled and read from global memory directly to VGPRs.
+    You can specify the address space to which A and B are loaded.
     A and B scales are read from global memory using an e8m0 scale preshuffle mapping and directly stored to VGPRs.
 
     All ops are tagged for use with MXFP4 schedule functions.
@@ -351,7 +361,8 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
         wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
         mfma_variant: Scaled MMA instruction type.
-
+        a_address_space: Address space for A.
+        b_address_space: Address space for B.
     Returns:
         (kernel_function, WaveCompileOptions)
     """
@@ -361,6 +372,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         wave_shape,
         mfma_variant,
         a_address_space,
+        b_address_space,
         b_preshuffled=True,
     )
 

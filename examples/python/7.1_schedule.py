@@ -29,6 +29,7 @@ from wave_lang.kernel.wave.schedules import (
     get_mxfp4_asymmetric_schedule,
     get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled,
+    get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds,
 )
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
@@ -36,7 +37,10 @@ from wave_lang.kernel.wave.utils.mxfp_utils import (
     b_preshuffle,
     e8m0_shuffle,
 )
-from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    SHARED_ADDRESS_SPACE,
+)
 from utils import parse_args, list_tests, run_test
 
 
@@ -123,7 +127,7 @@ def test_dbuf_4wave_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm(
-    is_debug=False, shape=(1024, 1024, 8192), block=(128, 256, 256), dynamic=False
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -160,11 +164,11 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False, shape=(16384, 16384, 16384), block=(256, 160, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
-    Same for B data. However, loading B directly to VGPR consumes too many VGPRs and causes spilling.
+    Same for B data. However, prefetching shuffled B directly to VGPR consumes too many VGPRs and causes spilling.
     A is read from global memory directly to LDS.
     """
     wave_shape = _get_8wave_shape_from_block(block)
@@ -189,7 +193,46 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
     mode = "dynamic" if dynamic else "static"
     print(
-        f"MXFP GEMM double-buffer 8-wave ping pong with scale shuffling and B shuffled ({mode}) test passed!"
+        f"MXFP GEMM double-buffer 8-wave ping pong with scale and B shuffling and B->VGPR ({mode}) test passed!"
+    )
+
+
+def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
+    is_debug=False, shape=(16384, 16384, 16384), block=(256, 160, 256), dynamic=False
+):
+    """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
+    A&B scales are preshuffled and read from global memory directly to VGPRs.
+    B data is preshuffled and loaded to LDS (shared memory), not directly to VGPRs.
+    A data is read from global memory directly to LDS.
+    """
+    wave_shape = _get_8wave_shape_from_block(block)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
+        shape,
+        block,
+        wave_shape=wave_shape,
+        b_address_space=SHARED_ADDRESS_SPACE,
+    )
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = False
+    options.linearize_shared_access = True
+
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+    schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
+        use_stagger=True, shape=shape
+    )
+
+    options.print_ir_after = "all" if is_debug else []
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
     )
 
 
@@ -291,7 +334,6 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm(
     options.dump_intermediates = "build/intermediates"
     schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
 
-    options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
