@@ -2662,6 +2662,9 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsForward(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandIndexExprs,
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultIndexExprs,
     wave::EmitErrorFn emitError) {
+  // XXX: pywave doesn't seem to propagate across broadcast.
+  return ChangeResult::NoChange;
+
   // Forward propagation is identity: it will propagate expressions for symbols
   // present in the source to the result and make sure they are joined with
   // those. Additional propagation backward from the result users will be needed
@@ -2675,6 +2678,9 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandIndexExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultIndexExprs,
     wave::EmitErrorFn emitError) {
+  // XXX: pywave doesn't seem to propagate across broadcast.
+  return ChangeResult::NoChange;
+
   auto sourceTensorType = dyn_cast<WaveTensorType>(getSource().getType());
   if (!sourceTensorType) {
     emitError() << "expected source tensor type, got " << getSource().getType();
