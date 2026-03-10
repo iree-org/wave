@@ -1312,7 +1312,7 @@ def _generate_asm_code_waveasm(mlir_asm, options):
             "--waveasm-scoped-cse",
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
+            "--waveasm-insert-waitcnt=ticketed-waitcnt=true",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
             f"--workgroup-size-x={wg[0]}",
