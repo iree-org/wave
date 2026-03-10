@@ -214,6 +214,7 @@ class WaveCacheManager(object):
             options.reorder_allocs,
             options.override_schedule,
             options.use_bound_check,
+            options.use_water_backend,
         ]
 
         # Add kernel/helper function specific hashes.

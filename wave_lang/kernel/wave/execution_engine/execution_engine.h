@@ -96,6 +96,9 @@ public:
   llvm::Expected<void *> lookup(ModuleHandle handle,
                                 llvm::StringRef name) const;
 
+  /// Load a pre-compiled object file into the execution engine.
+  llvm::Expected<ModuleHandle> loadFromObjectFile(llvm::StringRef filename);
+
   /// Dump object code to output file `filename`.
   llvm::Error dumpToObjectFile(llvm::StringRef filename);
 
