@@ -202,14 +202,36 @@ static LogicalResult handleConstant(LLVM::ConstantOp op,
   else
     return op->emitOpError("unsupported constant type");
 
-  // TODO: Assumes i32. A legalization pass should reject or widen non-b32
-  // constants before this point.
-  auto immTy = ctx.createImmType(intVal);
-  auto immOp = ConstantOp::create(builder, loc, immTy, intVal);
-  auto vregTy = ctx.createVRegType();
-  auto mov = V_MOV_B32::create(builder, loc, vregTy, immOp);
-  ctx.getMapper().mapValue(op.getResult(), mov);
-  return success();
+  auto intType = dyn_cast<IntegerType>(op.getResult().getType());
+  if (!intType)
+    return op->emitOpError("expected integer constant");
+
+  if (intType.getWidth() <= 32) {
+    auto immTy = ctx.createImmType(intVal);
+    auto immOp = ConstantOp::create(builder, loc, immTy, intVal);
+    auto vregTy = ctx.createVRegType();
+    auto mov = V_MOV_B32::create(builder, loc, vregTy, immOp);
+    ctx.getMapper().mapValue(op.getResult(), mov);
+    return success();
+  }
+
+  if (intType.getWidth() <= 64) {
+    // Split i64 constant into lo/hi halves and pack into vreg<2>.
+    int32_t lo = static_cast<int32_t>(intVal & 0xFFFFFFFF);
+    int32_t hi = static_cast<int32_t>(static_cast<uint64_t>(intVal) >> 32);
+    auto vregTy = ctx.createVRegType();
+    auto loImm = ConstantOp::create(builder, loc, ctx.createImmType(lo), lo);
+    auto hiImm = ConstantOp::create(builder, loc, ctx.createImmType(hi), hi);
+    Value loMov = V_MOV_B32::create(builder, loc, vregTy, loImm);
+    Value hiMov = V_MOV_B32::create(builder, loc, vregTy, hiImm);
+    auto wideTy = ctx.createVRegType(2, 2);
+    Value packed =
+        PackOp::create(builder, loc, wideTy, ValueRange{loMov, hiMov});
+    ctx.getMapper().mapValue(op.getResult(), packed);
+    return success();
+  }
+
+  return op->emitOpError("unsupported constant width (expected i32 or i64)");
 }
 
 static LogicalResult handleThreadIdX(ROCDL::ThreadIdXOp op,
@@ -330,8 +352,9 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   Value trueVal = resolve(op.getTrueValue(), ctx);
   Value falseVal = resolve(op.getFalseValue(), ctx);
   auto resTy = inferResultType({trueVal, falseVal}, ctx);
-  auto sel = Arith_SelectOp::create(builder, op.getLoc(), resTy, cond, trueVal,
-                                    falseVal);
+  // ODS declaration order: (falseVal, trueVal, condition).
+  auto sel = Arith_SelectOp::create(builder, op.getLoc(), resTy, falseVal,
+                                    trueVal, cond);
   ctx.getMapper().mapValue(op.getResult(), sel);
   return success();
 }
