@@ -670,8 +670,8 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
     use_stagger: bool = True, shape: tuple = None
 ):
     """Return a double-buffered MXFP4 schedule for wave_compile().
-    Same as get_mxfp4_dbuf_pingpong_schedule(), but B data is shuffled and read
-    from global memory directly to VGPRs.
+    Same as get_mxfp4_dbuf_pingpong_schedule_Bshuffled(), but B data is read
+    from global memory to LDS.
 
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
@@ -697,7 +697,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         # Matrix A scale
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
 
-        # Matrix B data
+        # Matrix B data - GatherToLDS (global->shared) + Read (shared load)
         all_read_b = tkw.get_node_by_tag("read_b")
         global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
         shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)

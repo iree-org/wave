@@ -164,7 +164,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
-    is_debug=False, shape=(16384, 16384, 16384), block=(256, 160, 256), dynamic=False
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -198,7 +198,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
-    is_debug=False, shape=(16384, 16384, 16384), block=(256, 160, 256), dynamic=False
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
