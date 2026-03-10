@@ -62,10 +62,13 @@ from .utils.symbol_utils import subs_idxc
 logger = get_logger("wave.preshuffle_scale_to_shared")
 
 
-def _is_preshuffle_mapping(mapping) -> bool:
-    """Check if a mapping is a preshuffle-style mapping:
-    output is identity (logical coords pass through) but input is non-identity
-    (physical coords are shuffled)."""
+def _is_scale_preshuffle_mapping(mapping) -> bool:
+    """Check if a mapping is the *scale* preshuffle mapping.
+    - output is identity, input is non-identity (preshuffle shape),
+    - contains floor/Mod shuffle structure,
+    - uses K_SCALE_SHUFFLED (scale formula),
+    - does not use K_PACKED (packed B-data formula).
+    """
     if mapping is None:
         return False
     if len(mapping.output_mapping) != 2:
@@ -79,7 +82,15 @@ def _is_preshuffle_mapping(mapping) -> bool:
     input_atoms = set()
     for expr in mapping.input_mapping.values():
         input_atoms.update(type(a) for a in sympy.preorder_traversal(expr))
-    return sympy.floor in input_atoms and sympy.Mod in input_atoms
+    if not (sympy.floor in input_atoms and sympy.Mod in input_atoms):
+        return False
+
+    symbol_names = set()
+    for expr in mapping.input_mapping.values():
+        symbol_names.update(str(s) for s in expr.free_symbols)
+    # Keep this pass scale-only: scale preshuffle uses K_SCALE_SHUFFLED,
+    # while packed B-data preshuffle uses K_PACKED and must be skipped.
+    return "K_SCALE_SHUFFLED" in symbol_names and "K_PACKED" not in symbol_names
 
 
 def _create_wide_read_1d(
@@ -180,7 +191,7 @@ def preshuffle_scale_to_shared(trace: CapturedTrace, constraints: list[Constrain
             continue
         if subs_idxc(input_read.memory_type.address_space) != GLOBAL_ADDRESS_SPACE:
             continue
-        if not _is_preshuffle_mapping(input_read.mapping):
+        if not _is_scale_preshuffle_mapping(input_read.mapping):
             continue
         if input_read.mapping_dynamic_vals:
             continue
