@@ -203,6 +203,54 @@ def schedule_reduction(
     )
 
 
+def _can_skip_pipeline_guard(
+    max_induction_variable,
+    rounding_stride: int,
+    constraints: list[Constraint],
+) -> bool:
+    """Check if assumptions prove max_induction_variable >= rounding_stride.
+
+    Uses divisibility forward substitutions to relate inequality
+    assumptions (e.g. ``K > BLOCK_K * 6``) to the simplified
+    max_induction_variable (e.g. ``K / 256``).  Returns True when a
+    static lower bound can be derived that satisfies the guard.
+    """
+    from ..assumptions import get_divisibility_subs
+    from ..utils.general_utils import get_assumptions
+
+    assumptions = get_assumptions(constraints)
+    if not assumptions:
+        return False
+
+    fwd, _ = get_divisibility_subs(constraints)
+    if not fwd:
+        return False
+
+    max_iv_fwd = max_induction_variable.subs(fwd) if isinstance(
+        max_induction_variable, sympy.Basic
+    ) else max_induction_variable
+    if not isinstance(max_iv_fwd, sympy.Symbol):
+        return False
+
+    for assumption in assumptions:
+        expr = subs_idxc(assumption.expr)
+        if not isinstance(expr, sympy.core.relational.StrictGreaterThan):
+            continue
+        lhs, rhs = expr.args
+        if not rhs.is_number:
+            continue
+        lhs_fwd = lhs.subs(fwd) if isinstance(lhs, sympy.Basic) else lhs
+        coeff = lhs_fwd.as_coefficient(max_iv_fwd)
+        if coeff is not None and coeff.is_number and coeff > 0:
+            # lhs = coeff * max_iv_fwd > rhs
+            # => max_iv_fwd > rhs / coeff
+            # Since max_iv_fwd is a positive integer: max_iv_fwd >= floor(rhs/coeff) + 1
+            lower_bound = int(rhs / coeff) + 1
+            if lower_bound >= rounding_stride:
+                return True
+    return False
+
+
 def build_guarded_pipeline_with_remainder(
     trace: CapturedTrace,
     reduction: Iterate,
@@ -488,8 +536,20 @@ def construct_pipelined_loop_adaptive(
         )
     )
 
-    if not is_dynamic:
-        # For static shapes, use the old implementation
+    # When assumptions prove the guard is always satisfied, treat the
+    # symbolic max_induction_variable like a static value: emit
+    # prologue + pipelined loop + epilogue with no conditional guard
+    # and no remainder loop — exactly the same structure as the static
+    # path but with symbolic address computation.
+    from math import lcm
+
+    rounding_stride = lcm(num_stages, unroll_factor)
+    if not is_dynamic or _can_skip_pipeline_guard(
+        max_induction_variable, rounding_stride, constraints
+    ):
+        concrete_max_iv = (
+            int(max_induction_variable) if not is_dynamic else max_induction_variable
+        )
         new_reduction, node_mapping, _ = construct_pipelined_loop(
             trace,
             reduction,
@@ -497,7 +557,7 @@ def construct_pipelined_loop_adaptive(
             constraints,
             num_stages,
             initiation_interval,
-            int(max_induction_variable),
+            concrete_max_iv,
             visualize,
             use_scheduling_barriers,
             multi_buffer_count,
@@ -513,8 +573,8 @@ def construct_pipelined_loop_adaptive(
                 )
         return new_reduction, node_mapping
 
-    # For dynamic shapes, emit conditional + pipelined loop + remainder loop
-    # Call helper function to build the conditional structure
+    # Fallback: dynamic shapes without sufficient assumptions —
+    # emit conditional + pipelined loop + remainder loop.
     return build_guarded_pipeline_with_remainder(
         trace,
         reduction,
