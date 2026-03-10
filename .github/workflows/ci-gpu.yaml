@@ -396,6 +396,8 @@ jobs:
           cd cmake_build
           llvm-profdata merge -sparse coverage/*.profraw -o coverage.profdata
           llvm-cov report ./bin/water-opt                                      \
+            -show-region-summary=false                                         \
+            -show-functions=false                                              \
             -instr-profile=coverage.profdata                                   \
             -sources ${GITHUB_WORKSPACE}/water/lib                             \
                      ${GITHUB_WORKSPACE}/water/include                         \
