@@ -778,8 +778,6 @@ def _get_or_create_flat_memref(
     All reads from the same source buffer share one reinterpret_cast,
     so the backend maps them all to a single SRD — no per-read SRD copies.
     """
-    if not hasattr(emitter, "_flat_memref_cache"):
-        emitter._flat_memref_cache = {}
     key = id(mem)
     if key in emitter._flat_memref_cache:
         return emitter._flat_memref_cache[key]
@@ -1038,9 +1036,10 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
         )
     ):
         kb_type = MemRefType(kb_src.type)
-        phys_strides, _ = kb_type.get_strides_and_offset()
+        phys_strides, phys_offset = kb_type.get_strides_and_offset()
         dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
-        if not any(s == dyn_sentinel for s in phys_strides):
+        offset_safe = phys_offset == 0 or phys_offset == dyn_sentinel
+        if offset_safe and not any(s == dyn_sentinel for s in phys_strides):
             total_offset = _try_iv_split_offset(
                 emitter,
                 index,

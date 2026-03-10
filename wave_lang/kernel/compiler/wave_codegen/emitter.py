@@ -105,6 +105,7 @@ class WaveEmitter:
         self.dynamic_symbols = self.options.dynamic_symbols
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
+        self._flat_memref_cache: dict[int, Value] = {}
 
     def emit_program_invariants(self):
         grid = self.grid

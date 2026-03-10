@@ -150,6 +150,8 @@ def get_async_two_cluster_triple_buffer():
         unroll_factor = 2
         tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
+        # Drain all outstanding async global loads from the last iteration
+        # before the epilogue reads the final buffer contents.
         tkw.insert_after(pipeline_loop.KERNEL, tkw.MemoryCounterWaitBarrier(load=0))
 
     return async_two_cluster_three_stage_schedule
