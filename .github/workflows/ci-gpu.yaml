@@ -409,10 +409,18 @@ jobs:
             --format=html -output-dir=coverage-html
           cat coverage-summary.txt
 
+      - name: Upload coverage HTML report
+        id: upload-coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: water-coverage-html
+          path: cmake_build/coverage-html
+
       - name: Post coverage comment on PR
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          ARTIFACT_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-coverage.outputs.artifact-id }}
         run: |
           cd cmake_build
           {
@@ -422,6 +430,8 @@ jobs:
             echo '```'
             cat coverage-summary.txt
             echo '```'
+            echo ''
+            echo "[Download full HTML report]($ARTIFACT_URL)"
           } > comment-body.txt
 
           API_URL="https://api.github.com/repos/${{ github.repository }}"
@@ -440,12 +450,6 @@ jobs:
             curl -s -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
               -d "$PAYLOAD" "$API_URL/issues/${{ github.event.number }}/comments"
           fi
-
-      - name: Upload coverage HTML report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: water-coverage-html
-          path: cmake_build/coverage-html
 
 
   test_linux_waveasm:
