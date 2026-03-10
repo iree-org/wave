@@ -233,6 +233,27 @@ def _get_strides_from_memref(mem: Value) -> list[Value]:
     return list(metadata[2 + rank : 2 + 2 * rank])
 
 
+def _symbolic_strides_match_physical(memory, symbolic_shape) -> bool:
+    """Return True when it is safe to linearize a write using symbolic strides.
+
+    Memories with an explicit physical_layout whose shape differs from the
+    symbolic shape will have memref strides that don't match the strides
+    computed by strides_from_symbolic_shape.  Linearizing with the wrong
+    strides produces incorrect offsets, so we must fall back to
+    multi-dimensional stores in that case.
+    """
+    mem_type = getattr(memory, "type", None)
+    if mem_type is None:
+        return True
+    layout = getattr(mem_type, "physical_layout", None)
+    if layout is None:
+        return True
+    layout_shape = layout.shape
+    if len(layout_shape) != len(symbolic_shape):
+        return False
+    return all(l == s for l, s in zip(layout_shape, symbolic_shape))
+
+
 def _linearize_memref(
     mem: Value,
     offsets_wg: tuple[Value | int],
@@ -639,7 +660,11 @@ def _create_vec_read_write(
                     emitter,
                 ),
             )
-        elif is_global_mem and not is_read:
+        elif (
+            is_global_mem
+            and not is_read
+            and _symbolic_strides_match_physical(memory, symbolic_shape)
+        ):
             mem, offset_th = _linearize_memref(
                 mem, start_indices_wg, start_indices_th, strides
             )
