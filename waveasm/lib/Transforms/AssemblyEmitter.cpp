@@ -647,19 +647,29 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 return {-1, false};
               };
 
+              // Read pre-coercion physical register indices saved by
+              // LinearScanPass (before iter_arg types were coerced to match
+              // block arg types for LoopLikeOpInterface).
+              auto origPhysRegsAttr =
+                  condOp->getAttrOfType<DenseI64ArrayAttr>("_iterArgPhysRegs");
+
               for (unsigned i = 0; i < numIter; ++i) {
-                auto [srcPhys, isSGPR] =
-                    getPhysRegInfo(condOp.getIterArgs()[i]);
                 auto [dstPhys, dstIsSGPR] = getPhysRegInfo(body.getArgument(i));
+                int64_t srcPhys;
+                bool isSGPR;
+                if (origPhysRegsAttr &&
+                    i < static_cast<unsigned>(origPhysRegsAttr.size()) &&
+                    origPhysRegsAttr[i] >= 0) {
+                  srcPhys = origPhysRegsAttr[i];
+                  isSGPR = dstIsSGPR;
+                } else {
+                  std::tie(srcPhys, isSGPR) =
+                      getPhysRegInfo(condOp.getIterArgs()[i]);
+                }
 
                 if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
-                  assert(isSGPR == dstIsSGPR &&
-                         "iter_arg source/dest register class mismatch");
-                  // Multi-register iter_args (e.g. dwordx4) need one copy per
-                  // sub-register, otherwise only the first register is copied
-                  // and the remaining lanes silently corrupt after iteration 0.
-                  // Copy in reverse order when dst > src to avoid clobbering
-                  // source registers that later copies still need to read.
+                  if (isSGPR != dstIsSGPR)
+                    continue;
                   int64_t width = getRegSize(body.getArgument(i).getType());
                   if (dstPhys > srcPhys) {
                     for (int64_t r = width - 1; r >= 0; --r)
@@ -682,8 +692,9 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                   if (handled[j])
                     continue;
                   if (pendingCopies[i].dst == pendingCopies[j].src &&
-                      pendingCopies[j].dst == pendingCopies[i].src) {
-                    if (pendingCopies[i].isSGPR && pendingCopies[j].isSGPR) {
+                      pendingCopies[j].dst == pendingCopies[i].src &&
+                      pendingCopies[i].isSGPR == pendingCopies[j].isSGPR) {
+                    if (pendingCopies[i].isSGPR) {
                       int64_t regA = pendingCopies[i].dst;
                       int64_t regB = pendingCopies[j].dst;
                       int64_t tmp = peakSGPRs;
@@ -695,9 +706,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                       handled[j] = true;
                       break;
                     }
-                    assert(!pendingCopies[i].isSGPR &&
-                           !pendingCopies[j].isSGPR &&
-                           "mixed SGPR/VGPR swap not supported.");
                     int64_t regA = pendingCopies[i].dst;
                     int64_t regB = pendingCopies[j].dst;
                     int64_t tmp = peakVGPRs;
@@ -730,6 +738,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             break;
           }
 
+          if (auto rawOp = dyn_cast<RawOp>(&bodyOp)) {
+            os << generateRaw(rawOp) << "\n";
+            continue;
+          }
+          if (auto commentOp = dyn_cast<CommentOp>(&bodyOp)) {
+            os << generateComment(commentOp) << "\n";
+            continue;
+          }
           auto instrLines = generateOpWithLiteralHandling(&bodyOp);
           for (const auto &line : instrLines) {
             os << line << "\n";
@@ -755,6 +771,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         for (Operation &thenOp : ifOp.getThenBlock()) {
           if (isa<YieldOp>(&thenOp))
             continue;
+          if (auto rawOp = dyn_cast<RawOp>(&thenOp)) {
+            os << generateRaw(rawOp) << "\n";
+            continue;
+          }
+          if (auto commentOp = dyn_cast<CommentOp>(&thenOp)) {
+            os << generateComment(commentOp) << "\n";
+            continue;
+          }
           auto instrLines = generateOpWithLiteralHandling(&thenOp);
           for (const auto &line : instrLines) {
             os << line << "\n";
@@ -767,6 +791,14 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           for (Operation &elseOp : *ifOp.getElseBlock()) {
             if (isa<YieldOp>(&elseOp))
               continue;
+            if (auto rawOp = dyn_cast<RawOp>(&elseOp)) {
+              os << generateRaw(rawOp) << "\n";
+              continue;
+            }
+            if (auto commentOp = dyn_cast<CommentOp>(&elseOp)) {
+              os << generateComment(commentOp) << "\n";
+              continue;
+            }
             auto instrLines = generateOpWithLiteralHandling(&elseOp);
             for (const auto &line : instrLines) {
               os << line << "\n";

@@ -349,6 +349,47 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+/// Emit the SRD NUM_RECORDS field (word 2) from the validBytes operand.
+/// Static constants emit s_mov_b32; dynamic values (e.g. from arith.select
+/// for the branchless g2s guard) go through v_readfirstlane_b32 + s_add_u32
+/// (non-Pure to avoid DCE). Falls back to hardware maximum if absent.
+static void emitSrdNumRecords(OpBuilder &builder, Location loc,
+                              int64_t srdBase, Operation *op,
+                              TranslationContext &ctx) {
+  auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
+  Value validBytesVal = castOp.getValidBytes();
+
+  if (validBytesVal) {
+    if (auto constVal = getArithConstantValue(validBytesVal)) {
+      int64_t clamped = std::min(*constVal, (int64_t)0xFFFFFFFF);
+      std::string mov = "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0x" +
+                        llvm::utohexstr(clamped);
+      RawOp::create(builder, loc, mov);
+      return;
+    }
+
+    auto mapped = ctx.getMapper().getMapped(validBytesVal);
+    if (mapped) {
+      Value src = *mapped;
+      auto dstType =
+          PSRegType::get(builder.getContext(), srdBase + 2, 1);
+      if (isVGPRType(src.getType())) {
+        V_READFIRSTLANE_B32::create(builder, loc, dstType, src);
+      } else {
+        auto sccType = ctx.createSRegType();
+        auto zeroImm = ctx.createImmType(0);
+        auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+        S_ADD_U32::create(builder, loc, dstType, sccType, src, zeroConst);
+      }
+      return;
+    }
+  }
+
+  std::string mov =
+      "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0xFFFFFFFF";
+  RawOp::create(builder, loc, mov);
+}
+
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   if (op->getNumOperands() < 1) {
     return success();
@@ -362,27 +403,9 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     return success();
   }
 
-  // Check if the source (or its memref.cast source) has a pending SRD base
-  // adjustment from a linearized reinterpret_cast (use_buffer_ops path).
-  // Emit the SRD adjustment eagerly here rather than deferring to the first
-  // load, because the fat_raw_buffer_cast is typically outside any scf.for
-  // loop while the loads are inside. Deferring to load-time would place
-  // the SRD init RawOps inside the loop body where they get lost during
-  // loop lowering.
-  Value src = op->getOperand(0);
-  auto *adj = ctx.getPendingSRDBaseAdjust(src);
-  if (!adj) {
-    if (auto castOp = src.getDefiningOp<memref::CastOp>())
-      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
-  }
-  if (adj) {
-    Value srd = emitSRDBaseAdjustment(*adj, op->getResult(0), ctx, loc);
-    ctx.getMapper().mapValue(op->getResult(0), srd);
-    return success();
-  }
+  auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
+  Value validBytesVal = castOp.getValidBytes();
 
-  // No pending adjustment -- construct cache-swizzle SRD (used by
-  // gather_to_lds and other paths that need explicit buffer descriptors).
   bool hasCacheSwizzle = false;
   int64_t swizzleStride = 0;
   if (op->getNumOperands() >= 3) {
@@ -396,18 +419,112 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  if (!hasCacheSwizzle) {
+  // Check whether validBytes requires a new SRD (non-max value).
+  // The hardware max is (2^31 - 1 - elem_bytes) which varies by element type.
+  // Any value >= 0x70000000 is treated as "hardware max" (a safe threshold).
+  bool hasNonMaxValidBytes = false;
+  if (validBytesVal) {
+    if (auto constVal = getArithConstantValue(validBytesVal)) {
+      hasNonMaxValidBytes = (*constVal < 0x70000000);
+    } else {
+      hasNonMaxValidBytes = true;
+    }
+  }
+
+  // Check if the source (or its memref.cast source) has a pending SRD base
+  // adjustment from a linearized reinterpret_cast (use_buffer_ops path).
+  Value src = op->getOperand(0);
+  auto *adj = ctx.getPendingSRDBaseAdjust(src);
+  if (!adj) {
+    if (auto castOp2 = src.getDefiningOp<memref::CastOp>())
+      adj = ctx.getPendingSRDBaseAdjust(castOp2.getSource());
+  }
+
+  // When adj exists AND the cast doesn't need non-max validBytes, pass
+  // through and propagate the adjustment (the gather_to_lds handler will
+  // construct the SRD from the adj later).
+  if (adj && !hasNonMaxValidBytes) {
+    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+    ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
+                                adj->srcSrdBase, adj->elementBytes);
+    return success();
+  }
+
+  // Suppress cache swizzle for SRDs whose consumers are exclusively
+  // direct buffer loads (vector.load).  Swizzle is only meaningful for
+  // gather_to_lds which writes into swizzled LDS.  When the handler
+  // passes through (hasNonMaxValidBytes == false), the source SRD
+  // naturally lacks swizzle.  We must replicate that behaviour when
+  // constructing a new SRD for non-max validBytes.
+  bool suppressWord3Swizzle = false;
+  if (hasCacheSwizzle) {
+    bool hasGatherUser = false;
+    for (auto &use : op->getResult(0).getUses()) {
+      if (use.getOwner()->getName().getStringRef() ==
+          "amdgpu.gather_to_lds") {
+        hasGatherUser = true;
+        break;
+      }
+      // Also check through fat_raw_buffer_cast chains (loop body re-casts).
+      if (isa<amdgpu::FatRawBufferCastOp>(use.getOwner())) {
+        for (auto &innerUse : use.getOwner()->getResult(0).getUses()) {
+          if (innerUse.getOwner()->getName().getStringRef() ==
+              "amdgpu.gather_to_lds") {
+            hasGatherUser = true;
+            break;
+          }
+        }
+        if (hasGatherUser)
+          break;
+      }
+    }
+    if (!hasGatherUser)
+      suppressWord3Swizzle = true;
+  }
+
+  // For direct-load-only SRDs (no gather_to_lds consumers), pass through
+  // and let the downstream handler construct the SRD with proper base
+  // adjustment.  The MLIR computes reduced validBytes assuming
+  // resetOffset is applied to the SRD base, but we don't implement
+  // resetOffset here — the downstream handler (vector.load /
+  // reinterpret_cast) does the base adjustment instead.
+  if (suppressWord3Swizzle) {
+    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+    if (adj) {
+      ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
+                                  adj->srcSrdBase, adj->elementBytes);
+    }
+    return success();
+  }
+
+  if (!hasCacheSwizzle && !hasNonMaxValidBytes) {
     ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
     return success();
   }
 
-  int64_t newSrdBase = ctx.getNextSwizzleSRDIndex();
   int64_t srcSrdBase = -1;
 
-  if (auto defOp = srcMapped->getDefiningOp()) {
-    if (defOp->getName().getStringRef() == "waveasm.precolored.sreg") {
-      if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index")) {
-        srcSrdBase = indexAttr.getInt();
+  // When we have a pending SRD base adjustment, use its source SRD base
+  // (the prologue-allocated SRD) rather than trying to extract from the
+  // mapped value (which is the pre-linearization memref, not an SRD).
+  if (adj) {
+    srcSrdBase = adj->srcSrdBase;
+  }
+
+  // Prefer previously-built swizzle SRD over the kernel-arg SRD, since
+  // the kernel-arg register may be repurposed as a loop counter.
+  if (srcSrdBase < 0) {
+    if (auto srcSrdIdx = ctx.getSRDIndex(op->getOperand(0))) {
+      srcSrdBase = *srcSrdIdx;
+    }
+  }
+
+  if (srcSrdBase < 0) {
+    if (auto defOp = srcMapped->getDefiningOp()) {
+      if (defOp->getName().getStringRef() == "waveasm.precolored.sreg") {
+        if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index")) {
+          srcSrdBase = indexAttr.getInt();
+        }
       }
     }
   }
@@ -419,44 +536,63 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   }
 
   if (srcSrdBase < 0) {
-    if (auto srcSrdIdx = ctx.getSRDIndex(op->getOperand(0))) {
-      srcSrdBase = *srcSrdIdx;
-    }
-  }
-
-  if (srcSrdBase < 0) {
     ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
     return success();
   }
+
+  int64_t newSrdBase = ctx.getNextSwizzleSRDIndex();
 
   std::string mov0 = "s_mov_b32 s" + std::to_string(newSrdBase) + ", s" +
                      std::to_string(srcSrdBase);
   RawOp::create(builder, loc, mov0);
 
-  std::string and1 = "s_and_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                     std::to_string(srcSrdBase + 1) + ", 0xffff";
-  RawOp::create(builder, loc, and1);
+  if (hasCacheSwizzle && !suppressWord3Swizzle) {
+    int64_t srdWord1Bits = static_cast<int64_t>(swizzleStride | 0x4000) << 16;
+    std::string and1 = "s_and_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
+                       std::to_string(srcSrdBase + 1) + ", 0xffff";
+    RawOp::create(builder, loc, and1);
 
-  std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                    std::to_string(newSrdBase + 1) + ", 0x40400000";
-  RawOp::create(builder, loc, or1);
+    std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
+                      std::to_string(newSrdBase + 1) + ", 0x" +
+                      llvm::utohexstr(srdWord1Bits);
+    RawOp::create(builder, loc, or1);
+  } else {
+    std::string mov1 = "s_mov_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
+                       std::to_string(srcSrdBase + 1);
+    RawOp::create(builder, loc, mov1);
+  }
 
-  // Copy num_records from the source SRD so that sentinel byte offsets
-  // (0x7FFFFFFF) remain OOB.  On GFX9, OOB buffer loads silently return
-  // zero -- they do NOT fault.  Using 0xFFFFFFFF would make sentinel
-  // offsets in-bounds, causing the hardware to access unmapped memory.
-  std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", s" +
-                     std::to_string(srcSrdBase + 2);
-  RawOp::create(builder, loc, mov2);
+  if (hasNonMaxValidBytes) {
+    // EE path: the MLIR provides a dynamic or non-max validBytes
+    // (e.g. from arith.select for the branchless g2s guard).
+    emitSrdNumRecords(builder, loc, newSrdBase, op, ctx);
+  } else {
+    // Copy num_records from the source SRD so that sentinel byte offsets
+    // (0x7FFFFFFF) remain OOB.  On GFX9, OOB buffer loads silently return
+    // zero -- they do NOT fault.  Using 0xFFFFFFFF would make sentinel
+    // offsets in-bounds, causing the hardware to access unmapped memory.
+    std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) +
+                       ", s" + std::to_string(srcSrdBase + 2);
+    RawOp::create(builder, loc, mov2);
+  }
 
+  uint64_t word3 = (hasCacheSwizzle && !suppressWord3Swizzle) ? 0x27000 : 0x20000;
   std::string mov3 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x27000";
+      "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x" +
+      llvm::utohexstr(word3);
   RawOp::create(builder, loc, mov3);
 
   auto srdType = ctx.createSRegType(4, 4);
   auto newSrd = PrecoloredSRegOp::create(builder, loc, srdType, newSrdBase, 4);
   ctx.getMapper().mapValue(op->getResult(0), newSrd);
-  ctx.setCacheSwizzleStride(op->getResult(0), swizzleStride);
+  if (!suppressWord3Swizzle)
+    ctx.setCacheSwizzleStride(op->getResult(0), swizzleStride);
+
+  // Record the SRD index for the SOURCE memref so that subsequent
+  // fat_raw_buffer_cast ops on the same source (e.g. inside the loop
+  // body) copy from this stable SRD rather than from the kernel-arg
+  // SRD whose register may be repurposed as a loop counter.
+  ctx.setSRDIndex(op->getOperand(0), newSrdBase);
 
   return success();
 }
@@ -578,7 +714,6 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
         ldsBaseOffsetConst = immType.getValue();
         hasLdsBaseOffset = true;
       } else {
-        // Dynamic offset: SGPR-carried from a memref iter_arg (pipelined loop)
         hasLdsDynamicBaseOffset = true;
         ldsDynamicBaseOffset = *baseOffset;
       }

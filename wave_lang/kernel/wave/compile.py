@@ -1286,6 +1286,13 @@ def _generate_asm_code(mb, options):
         mlir_file.write(kernel_mlir)
         mlir_path = mlir_file.name
 
+    if options.dump_intermediates:
+        ee_tag = f"_ee_{options.eliminate_epilogue}" if hasattr(options, 'eliminate_epilogue') else ""
+        dbg_path = os.path.join(options.dump_intermediates, f"waveasm_actual_input{ee_tag}.mlir")
+        os.makedirs(options.dump_intermediates, exist_ok=True)
+        with open(dbg_path, "w") as f:
+            f.write(kernel_mlir)
+
     try:
         cmd = [
             waveasm_translate,
@@ -1311,6 +1318,9 @@ def _generate_asm_code(mb, options):
             mlir_path,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.stderr:
+            import sys
+            sys.stderr.write(result.stderr)
         if result.returncode != 0:
             raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
         asm_text = result.stdout

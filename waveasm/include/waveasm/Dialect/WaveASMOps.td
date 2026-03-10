@@ -454,7 +454,7 @@ def WaveASM_V_SIN_F32 : VALUUnaryOp<"v_sin_f32">;
 def WaveASM_V_COS_F32 : VALUUnaryOp<"v_cos_f32">;
 
 // Lane operations (VGPR -> SGPR)
-def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", [Pure]> {
+def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", []> {
   let summary = "Read first lane of VGPR to SGPR";
   let description = [{
     Reads the value from the first active lane of a VGPR and places it in an SGPR.

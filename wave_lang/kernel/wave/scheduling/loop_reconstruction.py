@@ -832,8 +832,11 @@ def guard_g2s_with_bounds_check(
 
     This makes the hardware DMA a no-op (reads nothing) without any branch.
     """
-    for node in trace.walk(lambda n: isinstance(get_custom(n), Iterate)):
-        if not node.meta.get("eliminate_epilogue", False):
+    all_nodes = list(trace.walk(lambda n: True))
+    iterate_nodes = [n for n in all_nodes if isinstance(get_custom(n), Iterate)]
+    for node in iterate_nodes:
+        ee = node.meta.get("eliminate_epilogue", False)
+        if not ee:
             continue
 
         iterate = get_custom(node)

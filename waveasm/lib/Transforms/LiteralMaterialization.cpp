@@ -104,6 +104,15 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
     return lines;
   }
 
+  // v_cndmask_b32 has a dedicated Case handler in generateOp that
+  // materializes literals AND drops the implicit VCC condition operand.
+  if (mnemonic == "v_cndmask_b32") {
+    if (auto line = generateOp(op)) {
+      lines.push_back(*line);
+    }
+    return lines;
+  }
+
   // VOP2: literal MUST be in src0. Swap for commutative ops, materialize
   // otherwise.
   bool isCommutative = op->hasTrait<mlir::OpTrait::IsCommutative>();

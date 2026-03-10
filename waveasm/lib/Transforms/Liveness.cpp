@@ -495,10 +495,37 @@ LivenessInfo computeLiveness(ProgramOp program) {
           members.push_back(loopResult);
       }
 
-      // Condition iter_arg -> block arg
+      // Condition iter_arg -> block arg.
+      // Skip when swap pattern or WAR hazard (see tiedPairs section).
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        if (info.ranges.contains(iterArg))
+        bool isSwap = false;
+        if (auto ba = dyn_cast<BlockArgument>(iterArg)) {
+          if (ba.getOwner() == &bodyBlock && ba.getArgNumber() != i)
+            isSwap = true;
+        }
+        bool hasWAR = false;
+        if (!isSwap && !isa<BlockArgument>(iterArg)) {
+          if (auto *defOp = iterArg.getDefiningOp()) {
+            auto opName = defOp->getName().getStringRef();
+            if (opName.contains("buffer_load") &&
+                !opName.contains("_lds")) {
+              auto iterDefIt = info.defPoints.find(iterArg);
+              auto baUseIt = info.usePoints.find(blockArg);
+              if (iterDefIt != info.defPoints.end() &&
+                  baUseIt != info.usePoints.end()) {
+                int64_t loadDef = iterDefIt->second;
+                for (int64_t usePoint : baUseIt->second) {
+                  if (usePoint >= loadDef) {
+                    hasWAR = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (!isSwap && !hasWAR && info.ranges.contains(iterArg))
           members.push_back(iterArg);
       }
 
@@ -548,7 +575,56 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        if (info.ranges.contains(iterArg) && !tc.tiedPairs.contains(iterArg))
+        bool isSwapPattern = false;
+        if (auto ba = dyn_cast<BlockArgument>(iterArg)) {
+          if (ba.getOwner() == &bodyBlock && ba.getArgNumber() != i)
+            isSwapPattern = true;
+        }
+        // Also skip the tie when the iter_arg's live range overlaps
+        // with the block_arg's live range.  When the schedule
+        // interleaves new-value loads with old-value consumers (e.g.
+        // B-matrix loads interleaved with MFMAs that still read the
+        // old iter_arg data), tying would assign them the same
+        // physical register, creating a WAR hazard: the load
+        // overwrites the register before the last MFMA reads it.
+        // Also skip when the iter_arg is a global buffer load whose result
+        // is interleaved with MFMAs that still consume the old block_arg.
+        // Tying would assign them the same physical register, creating a
+        // WAR hazard: the load overwrites the register before the last
+        // MFMA reads it.  Only buffer loads (BUFFER_LOAD_DWORD*) and
+        // ds_read (DS_READ_B*) suffer from this — MFMA accumulators are
+        // fine because the MFMA instruction latches inputs atomically.
+        // Untie when the iter_arg is a global buffer load whose
+        // definition overlaps with active uses of the block_arg.
+        // In pipelined schedules, next-iteration B-data loads can be
+        // interleaved with MFMAs that still need the current iteration's
+        // B-data.  Hardware data dependencies cause the MFMA to stall
+        // until the buffer_load completes, so tying would force the MFMA
+        // to consume the NEW data instead of the OLD iter_arg value.
+        bool hasWARHazard = false;
+        if (!isSwapPattern && !isa<BlockArgument>(iterArg)) {
+          if (auto *defOp = iterArg.getDefiningOp()) {
+            auto opName = defOp->getName().getStringRef();
+            if (opName.contains("buffer_load") &&
+                !opName.contains("_lds")) {
+              auto iterDefIt = info.defPoints.find(iterArg);
+              auto baUseIt = info.usePoints.find(blockArg);
+              if (iterDefIt != info.defPoints.end() &&
+                  baUseIt != info.usePoints.end()) {
+                int64_t loadDef = iterDefIt->second;
+                for (int64_t usePoint : baUseIt->second) {
+                  if (usePoint >= loadDef) {
+                    hasWARHazard = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (!isSwapPattern && !hasWARHazard &&
+            info.ranges.contains(iterArg) &&
+            !tc.tiedPairs.contains(iterArg))
           tc.tiedPairs[iterArg] = blockArg;
       }
       if (i < loopOp->getNumResults()) {
