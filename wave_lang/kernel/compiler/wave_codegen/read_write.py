@@ -769,41 +769,6 @@ def _create_vec_read_write(
             return
 
 
-def _get_or_create_flat_memref(
-    emitter: WaveEmitter,
-    mem: Value,
-) -> Value:
-    """Return a rank-1 view of *mem* with offset 0 (pure shape change).
-
-    All reads from the same source buffer share one reinterpret_cast,
-    so the backend maps them all to a single SRD — no per-read SRD copies.
-    """
-    key = id(mem)
-    if key in emitter._flat_memref_cache:
-        return emitter._flat_memref_cache[key]
-
-    kb_type = MemRefType(mem.type)
-    max_buf = _get_max_buffer_size(kb_type.element_type) - 1
-    result_type = MemRefType.get(
-        [max_buf],
-        kb_type.element_type,
-        layout=Attribute.parse("strided<[1], offset: 0>"),
-        memory_space=kb_type.memory_space,
-    )
-    flat = memref_d.reinterpret_cast(
-        result_type,
-        mem,
-        offsets=[],
-        sizes=[],
-        strides=[],
-        static_offsets=[0],
-        static_sizes=[max_buf],
-        static_strides=[1],
-    )
-    emitter._flat_memref_cache[key] = flat
-    return flat
-
-
 def _try_iv_split_offset(
     emitter: WaveEmitter,
     index: dict[IndexExpr, IndexSequence | IndexExpr],
@@ -1036,10 +1001,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
         )
     ):
         kb_type = MemRefType(kb_src.type)
-        phys_strides, phys_offset = kb_type.get_strides_and_offset()
+        phys_strides, _ = kb_type.get_strides_and_offset()
         dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
-        offset_safe = phys_offset == 0 or phys_offset == dyn_sentinel
-        if offset_safe and not any(s == dyn_sentinel for s in phys_strides):
+        if not any(s == dyn_sentinel for s in phys_strides):
             total_offset = _try_iv_split_offset(
                 emitter,
                 index,
@@ -1047,13 +1011,20 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
                 dynamic_vals_map_start,
             )
             if total_offset is not None:
-                # Load from a shared flat rank-1 view (one SRD per buffer).
                 ip = InsertionPoint.current
                 owner = ip.block.owner
                 hoist_ip = InsertionPoint(owner)
                 with hoist_ip:
-                    flat_mem = _get_or_create_flat_memref(emitter, kb_src)
-                result = vector_d.load(vector_type, flat_mem, [total_offset])
+                    strides_vals = [
+                        arith_d.constant(IndexType.get(), s) for s in phys_strides
+                    ]
+                    zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(
+                        phys_strides
+                    )
+                    lin_src, _ = _linearize_memref(
+                        kb_src, zero_indices, zero_indices, strides_vals
+                    )
+                result = vector_d.load(vector_type, lin_src, [total_offset])
                 emitter.bind_node_proxy(node, IRProxyValue(result))
                 return
 
@@ -1469,7 +1440,25 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             src, src_index_wg, src_index_th, strides
         )
 
-    lin_src = _cast_buffer_and_encode_stride(lin_src, strides, element_type, emitter)
+    valid_bytes_override = None
+    guard_condition = node.meta.get("g2s_guard", None)
+    if guard_condition is not None:
+        valid_bytes_override = _compute_branchless_valid_bytes(
+            emitter, src_symbolic_shape, element_type, guard_condition
+        )
+
+    lin_src = _cast_buffer_and_encode_stride(
+        lin_src,
+        strides,
+        element_type,
+        (
+            valid_bytes_override
+            if valid_bytes_override is not None
+            else _compute_valid_bytes(
+                lin_src, element_type, src_symbolic_shape, emitter
+            )
+        ),
+    )
 
     mask = _build_mask(
         emitter,
