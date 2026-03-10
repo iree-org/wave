@@ -281,6 +281,52 @@ waveasm.program @test_cmp_i64_eq
   waveasm.s_endpgm
 }
 
+// CHECK-LABEL: waveasm.program @test_cmp_i64_slt_valu
+waveasm.program @test_cmp_i64_slt_valu
+  target = #waveasm.target<#waveasm.gfx950, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 16 : i64} {
+
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.vreg
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.vreg
+  %va = waveasm.pack %v0, %v0 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
+  %vb = waveasm.pack %v1, %v1 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
+
+  // Ordered i64 slt (VALU): hi signed + lo unsigned + select on hi equality.
+  // CHECK: waveasm.v_cmp_lt_i32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_cmp_lt_u32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_cmp_eq_i32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_cmp_ne_i32
+  %cmp = waveasm.arith.cmp slt, %va, %vb : (!waveasm.vreg<2>, !waveasm.vreg<2>) -> !waveasm.vreg
+
+  // CHECK-NOT: waveasm.arith.
+  waveasm.s_endpgm
+}
+
+// CHECK-LABEL: waveasm.program @test_cmp_i64_slt_salu
+waveasm.program @test_cmp_i64_slt_salu
+  target = #waveasm.target<#waveasm.gfx950, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 16 : i64} {
+
+  %a = waveasm.precolored.sreg 0, 2 : !waveasm.sreg<2, 2>
+  %b = waveasm.precolored.sreg 2, 2 : !waveasm.sreg<2, 2>
+
+  // Ordered i64 slt (SALU): hiLt | (hiEq & loLt).
+  // CHECK: waveasm.s_cmp_lt_i32
+  // CHECK: waveasm.s_cmp_eq_i32
+  // CHECK: waveasm.s_cmp_lt_u32
+  // CHECK: waveasm.s_and_b32
+  // CHECK: waveasm.s_or_b32
+  %cmp = waveasm.arith.cmp slt, %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg
+
+  // CHECK-NOT: waveasm.arith.
+  waveasm.s_endpgm
+}
+
 // CHECK-LABEL: waveasm.program @test_select_i64
 waveasm.program @test_select_i64
   target = #waveasm.target<#waveasm.gfx950, 5>
