@@ -7,29 +7,22 @@
 // i64 constant 100 split into v_mov_b32(100) + v_mov_b32(0) + pack.
 // CHECK-DAG: %[[C100_LO:.*]] = waveasm.v_mov_b32 %{{.*}} : !waveasm.imm<100> -> !waveasm.vreg
 // CHECK-DAG: %[[C100_HI:.*]] = waveasm.v_mov_b32 %{{.*}} : !waveasm.imm<0> -> !waveasm.vreg
-// CHECK: %[[C100:.*]] = waveasm.pack %[[C100_LO]], %[[C100_HI]]
+// CHECK: waveasm.pack %[[C100_LO]], %[[C100_HI]]
 // CHECK-SAME: -> !waveasm.vreg<2, 2>
 
 // sext i32 -> i64: v_ashrrev_i32 for sign extension + pack.
 // CHECK: %[[TID:.*]] = waveasm.precolored.vreg 0 : !waveasm.vreg
 // CHECK: %[[SIGN:.*]] = waveasm.v_ashrrev_i32 %{{.*}}, %[[TID]]
-// CHECK: %[[SEXT:.*]] = waveasm.pack %[[TID]], %[[SIGN]]
+// CHECK: waveasm.pack %[[TID]], %[[SIGN]]
 // CHECK-SAME: -> !waveasm.vreg<2, 2>
 
 // i32 compare sets VCC.
 // CHECK: waveasm.v_cmp_lt_i32
 
-// i64 select: split both operands, v_cndmask_b32 each half.
-// CHECK: %[[TRUE_LO:.*]] = waveasm.extract %[[SEXT]][0]
-// CHECK: %[[TRUE_HI:.*]] = waveasm.extract %[[SEXT]][1]
-// CHECK: %[[FALSE_LO:.*]] = waveasm.extract %[[C100]][0]
-// CHECK: %[[FALSE_HI:.*]] = waveasm.extract %[[C100]][1]
-// CHECK: waveasm.v_cndmask_b32 %[[FALSE_LO]], %[[TRUE_LO]], %{{.*}}
-// CHECK: waveasm.v_cndmask_b32 %[[FALSE_HI]], %[[TRUE_HI]], %{{.*}}
+// i64 select: splitI64 looks through pack, uses original lo/hi directly.
+// CHECK: waveasm.v_cndmask_b32 %[[C100_LO]], %[[TID]], %{{.*}}
+// CHECK: waveasm.v_cndmask_b32 %[[C100_HI]], %[[SIGN]], %{{.*}}
 // CHECK: waveasm.pack %{{.*}}, %{{.*}} : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2, 2>
-
-// Trunc extracts lo half.
-// CHECK: waveasm.extract %{{.*}}[0]
 
 // No arith pseudo-ops should remain.
 // CHECK-NOT: waveasm.arith.

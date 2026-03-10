@@ -68,6 +68,15 @@ static LogicalResult checkWidth(Operation *op, int64_t width) {
 /// Split an i64 (size-2) register into {lo, hi} i32 halves.
 static std::pair<Value, Value> splitI64(Value v, OpBuilder &builder,
                                         Location loc) {
+  // Look through pack ops to avoid extract/pack round-trips.
+  // The register allocator does not insert copies for pack, so extracting
+  // from a pack whose inputs are at different physical registers would
+  // read stale data.
+  if (auto pack = v.getDefiningOp<PackOp>()) {
+    auto operands = pack.getOperands();
+    assert(operands.size() == 2 && "expected 2-element pack for i64");
+    return {operands[0], operands[1]};
+  }
   if (isSGPRType(v.getType())) {
     // For precolored SGPRs, create precolored extracts at known indices.
     if (auto psreg = v.getDefiningOp<PrecoloredSRegOp>()) {

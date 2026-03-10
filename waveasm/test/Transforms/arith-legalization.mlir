@@ -158,9 +158,7 @@ waveasm.program @test_add_i64_valu
   %va = waveasm.pack %a, %a : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
   %vb = waveasm.pack %b, %b : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
 
-  // VGPR i64 add: extract halves, v_add_co_u32 + v_addc_co_u32.
-  // CHECK: waveasm.extract
-  // CHECK: waveasm.extract
+  // VGPR i64 add: splitI64 looks through pack, uses originals directly.
   // CHECK: waveasm.v_add_co_u32
   // CHECK-NEXT: waveasm.v_addc_co_u32
   // CHECK: waveasm.pack
@@ -317,8 +315,8 @@ waveasm.program @test_trunc_i64
   %v0 = waveasm.precolored.vreg 0 : !waveasm.vreg
   %va = waveasm.pack %v0, %v0 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
 
-  // Trunc i64 VGPR -> extract lo.
-  // CHECK: waveasm.extract %{{.*}}[0]
+  // Trunc i64 VGPR from pack -> returns pack input directly (no extract).
+  // CHECK-NOT: waveasm.extract
   %trunc = waveasm.arith.trunc %va : (!waveasm.vreg<2>) -> !waveasm.vreg
 
   // CHECK-NOT: waveasm.arith.
