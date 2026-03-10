@@ -160,8 +160,20 @@ static Value resolve(Value v, TranslationContext &ctx) {
   return v;
 }
 
+/// Truncate an i64 WaveASM value to i32 via an arith.trunc pseudo-op.
+/// Returns the value unchanged if the LLVM source type is already <= 32 bits.
+static Value truncToI32(Value v, Type llvmType, OpBuilder &builder,
+                        Location loc, TranslationContext &ctx) {
+  auto intTy = dyn_cast<IntegerType>(llvmType);
+  if (!intTy || intTy.getWidth() <= 32)
+    return v;
+  Type resTy = isVGPRType(v.getType()) ? (Type)ctx.createVRegType()
+                                       : (Type)ctx.createSRegType();
+  return Arith_TruncOp::create(builder, loc, resTy, v);
+}
+
 /// Infer the pseudo-op result type from operand types.
-/// If any operand is VGPR → VReg; otherwise SReg.
+/// If any operand is VGPR -> VReg; otherwise SReg.
 static Type inferResultType(ValueRange operands, TranslationContext &ctx) {
   for (Value v : operands)
     if (isVGPRType(v.getType()))
@@ -445,6 +457,9 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     return op->emitOpError("GEP with constant index attr not yet supported");
 
   Value newOffset = resolve(idx, ctx);
+
+  // Buffer voffsets are 32-bit. Truncate i64 GEP indices.
+  newOffset = truncToI32(newOffset, idx.getType(), builder, loc, ctx);
 
   // Bare-pointer GEP (!llvm.ptr, not <7>): pointer arithmetic before
   // make.buffer.rsrc. Propagate the mapper entry and accumulate
