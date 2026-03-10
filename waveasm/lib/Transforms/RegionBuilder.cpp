@@ -324,7 +324,9 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
   auto waveIfOp =
       IfOp::create(builder, loc, resultTypes, conditionValue, hasElse);
 
-  // Translate then region
+  // Translate then region.  thenYieldVals is needed later by else-branch
+  // type coercion, so it's declared outside the insertion guard scope.
+  SmallVector<Value> thenYieldVals;
   {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&waveIfOp.getThenBlock());
@@ -340,17 +342,24 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
     auto scfYield =
         cast<scf::YieldOp>(ifOp.getThenRegion().front().getTerminator());
 
-    SmallVector<Value> yieldVals;
     for (Value res : scfYield.getResults()) {
       if (auto mapped = ctx.getMapper().getMapped(res)) {
-        yieldVals.push_back(*mapped);
+        thenYieldVals.push_back(*mapped);
       } else {
         scfYield.emitError("yield result not mapped");
         return nullptr;
       }
     }
 
-    YieldOp::create(builder, loc, yieldVals);
+    YieldOp::create(builder, loc, thenYieldVals);
+
+    // Update the if-op result types to match actual then-yield types, since
+    // the initial result types were guessed before translating the then body.
+    for (unsigned i = 0; i < waveIfOp->getNumResults(); ++i) {
+      if (i < thenYieldVals.size()) {
+        waveIfOp->getResult(i).setType(thenYieldVals[i].getType());
+      }
+    }
   }
 
   // Translate else region if present
@@ -368,17 +377,43 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
     auto scfYield =
         cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
 
-    SmallVector<Value> yieldVals;
+    SmallVector<Value> elseYieldVals;
     for (Value res : scfYield.getResults()) {
       if (auto mapped = ctx.getMapper().getMapped(res)) {
-        yieldVals.push_back(*mapped);
+        elseYieldVals.push_back(*mapped);
       } else {
         scfYield.emitError("yield result not mapped");
         return nullptr;
       }
     }
 
-    YieldOp::create(builder, loc, yieldVals);
+    // Coerce else-yield values to match then-yield types.  The then branch
+    // may produce AGPR/VGPR accumulators while the else branch yields bare
+    // immediates (e.g. zero constants).  The waveasm.if verifier requires
+    // both branches to yield type-compatible values.
+    for (unsigned i = 0; i < elseYieldVals.size(); ++i) {
+      if (i >= thenYieldVals.size())
+        break;
+      Type thenType = thenYieldVals[i].getType();
+      Type elseType = elseYieldVals[i].getType();
+      if (!typesCompatible(thenType, elseType)) {
+        if (isAGPRType(thenType)) {
+          auto aregType = cast<ARegType>(thenType);
+          elseYieldVals[i] =
+              V_MOV_B32::create(builder, loc, aregType, elseYieldVals[i]);
+        } else if (isVGPRType(thenType)) {
+          auto vregType = cast<VRegType>(thenType);
+          elseYieldVals[i] =
+              V_MOV_B32::create(builder, loc, vregType, elseYieldVals[i]);
+        } else if (isSGPRType(thenType)) {
+          auto sregType = cast<SRegType>(thenType);
+          elseYieldVals[i] =
+              S_MOV_B32::create(builder, loc, sregType, elseYieldVals[i]);
+        }
+      }
+    }
+
+    YieldOp::create(builder, loc, elseYieldVals);
   }
 
   // Map if results
