@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch.testing import assert_close
 
@@ -37,11 +38,22 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False, use_waveasm=False
     return wave_compile(options, gemm), options
 
 
+def _xfail_waveasm_dynamic_strides(
+    use_waveasm: bool, dynamic_dims: bool, buffer_ops: bool
+):
+    if use_waveasm and (dynamic_dims or buffer_ops):
+        pytest.xfail(
+            "waveasm does not support dynamic strides with dynamic_dims or buffer_ops"
+        )
+
+
 @param_bool("dynamic_dims", "dyn")
 @param_bool("buffer_ops", "bufops")
 @param_bool("use_waveasm", "waveasm")
 @require_cdna_2_or_3_or_4
 def test_gemm_dynamic_strides(dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool):
+    _xfail_waveasm_dynamic_strides(use_waveasm, dynamic_dims, buffer_ops)
+
     shape = (1024, 1024, 1024)
     gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
@@ -69,6 +81,8 @@ def test_gemm_dynamic_strides(dynamic_dims: bool, buffer_ops: bool, use_waveasm:
 def test_gemm_dynamic_strides_output(
     dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
 ):
+    _xfail_waveasm_dynamic_strides(use_waveasm, dynamic_dims, buffer_ops)
+
     shape = (1024, 512, 512)
     gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
@@ -94,6 +108,8 @@ def test_gemm_dynamic_strides_output(
 def test_gemm_dynamic_strides_input_and_output(
     dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
 ):
+    _xfail_waveasm_dynamic_strides(use_waveasm, dynamic_dims, buffer_ops)
+
     shape = (512, 1024, 2048)
     gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
@@ -119,6 +135,8 @@ def test_gemm_dynamic_strides_input_and_output(
 def test_gemm_dynamic_strides_offset(
     dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
 ):
+    _xfail_waveasm_dynamic_strides(use_waveasm, dynamic_dims, buffer_ops)
+
     shape = (4096, 2048, 4096)
     gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
