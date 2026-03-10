@@ -905,13 +905,15 @@ def propagate_indices(
             if not should_update_index(
                 source, source_index, source_vector_shapes, symbolic_constraints
             ):
+                print(
+                    f"## Decided not to update index for {source};\n"
+                    f"{source.type.symbolic_shape}, {source_vector_shapes}, {symbolic_constraints}\n"
+                    f"{source_index.keys()}\n"
+                )
                 continue
-            # GetResults inherit their index from the Iterate node
-            # and hence we don't need to update their index.
             source.vector_shapes = deepcopy(source_vector_shapes)
-            if not isinstance(source, GetResult):
-                source_index = source.transform_index(source_index)
-                source.index = combine_indices(source.index, source_index)
+            source_index = source.transform_index(source_index)
+            source.index = combine_indices(source.index, source_index)
             append_aliased_shapes(source, symbolic_constraints)
         visited.add(source)
         for func in [get_inputs, get_users]:
@@ -933,6 +935,8 @@ def set_thread_dependent_index_from_mma(
     """
     Set the thread dependent index based on the hardware constraint.
     """
+    # print_trace(trace)
+
     hardware_constraint = get_hardware_constraint(constraints)
     sources: list[MMABase] = list(mma_mapping.keys())
     assert sources and len(sources) >= 1, "Unexpected empty MMA mapping."
@@ -959,6 +963,7 @@ def set_thread_dependent_index_from_mma(
         else:
             assert False, "Invalid MMA type"
 
+        print(f"## Populating sources from mma: {source}.")
         visited = propagate_indices(
             new_sources,
             visited,

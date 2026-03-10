@@ -1209,3 +1209,53 @@ normalform.module [#wave.normal_form<full_types>] {
     return
   }
 }
+
+// -----
+
+// Test that identity ops (e.g. add) get index expressions initialized from
+// thread-independent constraints during forward init.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @identity_init_forward
+  func.func @identity_init_forward(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+  } {
+    // Add (identity trait) gets result index exprs from init (thread-independent constraints).
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    %sum = wave.add %a, %b : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
+// Test that reduction ops get index expressions initialized from thread-independent
+// constraints for both result (forward) and operands (backward init).
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @reduction_init
+  func.func @reduction_init(
+    %input: !wave.tensor<[@N, @M] of f32>,
+    %init: !wave.tensor<[@N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <x>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{N = 128, M = 64, BLOCK_N = 32 : i64}>
+  } {
+    // Reduction result has shape [@N]; init has shape [@N]; input has [@N, @M].
+    // CHECK: wave.max_element
+    // CHECK-DAG: N : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_N">] -> (WG0 * BLOCK_N, 1, 1)>
+    %result = wave.max_element %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+    return
+  }
+}

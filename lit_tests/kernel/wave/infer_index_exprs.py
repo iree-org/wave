@@ -188,10 +188,11 @@ def testAttention():
         run_bench=False,
         # check_water_analysis=True,
         print_mlir_before_water=True,
-        print_ir_after="all",
+        # print_ir_after="all",
+        compile_to_mlir=True,
         # TODO(#982): this pass creates IR that appears malformed, though pywave
         # manages to execute it.
-        enable_mark_hardware_transpose_candidates=False,
+        # enable_mark_hardware_transpose_candidates=False,
     )
     options_mlir = set_default_run_config(options_mlir)
     compiled_kernel = wave_compile(options_mlir, attention)
@@ -200,6 +201,6 @@ def testAttention():
 
 if __name__ == "__main__":
     testAttention()
-    testMatrixAdd()
-    testMmaChain()
-    testGemm()
+    # testMatrixAdd()
+    # testMmaChain()
+    # testGemm()

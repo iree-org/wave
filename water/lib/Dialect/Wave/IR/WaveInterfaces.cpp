@@ -521,6 +521,73 @@ FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsBackward(
 }
 
 //-----------------------------------------------------------------------------
+// Index expr initialization
+//-----------------------------------------------------------------------------
+
+static void initializeIndexExprsWithThreadIndependentConstraints(
+    Operation *op, Type type, wave::IndexExprsLatticeStorage &storage,
+    const wave::IndexExprsAnalysisInit &initObject) {
+  llvm::SmallVector<mlir::NamedAttribute> symbolMappings;
+  wave::detail::buildThreadIndependentIndexMappings(op, type, initObject,
+                                                    symbolMappings);
+  if (symbolMappings.empty())
+    return;
+
+  storage.unsafeSet(wave::IndexExprsLatticeStorage(
+      DictionaryAttr::get(op->getContext(), symbolMappings),
+      wave::IndexExprsLatticeStorage::kLowestPriority));
+}
+
+LogicalResult wave::detail::defaultInitializeIndexExprsForward(
+    WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    const wave::IndexExprsAnalysisInit &initObject,
+    wave::EmitErrorFn emitError) {
+  SmallVector<Value> indexedValues;
+  iface.getIndexExprValuesAndDescriptions(indexedValues);
+  for (Value value : indexedValues) {
+    auto opResult = dyn_cast<OpResult>(value);
+    if (!opResult || opResult.getOwner() != iface.getOperation())
+      continue;
+
+    initializeIndexExprsWithThreadIndependentConstraints(
+        iface, opResult.getType(), resultExprs[opResult.getResultNumber()],
+        initObject);
+  }
+  return success();
+}
+
+LogicalResult wave::detail::defaultInitializeIndexExprsBackward(
+    WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter) {
+  SmallVector<Value> indexedValues;
+  iface.getIndexExprValuesAndDescriptions(indexedValues);
+  for (Value value : indexedValues) {
+    auto opResult = dyn_cast<OpResult>(value);
+    if (opResult && opResult.getOwner() == iface.getOperation())
+      continue;
+
+    // A value may be used repeatedly as operand, make sure to update all
+    // corresponding operand expression even though they go to the same lattice
+    // after all.
+    [[maybe_unused]] bool updated = false;
+    for (unsigned i = 0, e = operandExprs.size(); i < e; ++i) {
+      if (iface->getOperand(i) != value)
+        continue;
+
+      initializeIndexExprsWithThreadIndependentConstraints(
+          iface, iface->getOperand(i).getType(), operandExprs[i], initObject);
+      updated = true;
+    }
+    assert(updated && "value declared in getIndexExprValuesAndDescriptions is "
+                      "neither op operand nor result");
+  }
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // WaveElementsPerThreadOpInterface helpers
 //-----------------------------------------------------------------------------
 

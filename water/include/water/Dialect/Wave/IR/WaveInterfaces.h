@@ -61,6 +61,8 @@ void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
 //-----------------------------------------------------------------------------
 
 class IndexExprsLatticeStorage;
+class IndexExprsAnalysisInit;
+class WaveInferIndexExprsOpInterface;
 
 namespace detail {
 // Propagate shape information from `from` tensor types to `to` tensor types.
@@ -718,6 +720,30 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             mlir::TypeRange toTypes, llvm::StringRef fromName,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
+
+// Build thread-independent index mapping for a single tensor type and append to
+// symbolMappings. Used by identity and reduction index expr initialization.
+// Defined in WaveOps.cpp to use mixInThreadIndependentConstraints.
+// TODO: move the definition to WaveInterfaces.cpp and declare it in
+// WaveInterfaces.h so it is usable from WaveOps.cpp.
+void buildThreadIndependentIndexMappings(
+    mlir::Operation *op, mlir::Type type,
+    const IndexExprsAnalysisInit &initObject,
+    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings);
+
+// Default implementation for interface: initialize index expressions with
+// thread-independent constraints for all values returned by
+// getIndexExprValuesAndDescriptions. Forward analysis initializes results,
+// backward analysis initializes operands.
+llvm::LogicalResult defaultInitializeIndexExprsForward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError);
+llvm::LogicalResult defaultInitializeIndexExprsBackward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter);
 
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an

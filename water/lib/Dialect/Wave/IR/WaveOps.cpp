@@ -1106,6 +1106,19 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
+void wave::detail::buildThreadIndependentIndexMappings(
+    Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
+    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings) {
+  auto tensorType = dyn_cast<wave::WaveTensorType>(type);
+  if (!tensorType)
+    return;
+
+  ArrayRef<wave::WaveSymbolAttr> indexingSymbols = tensorType.getShape();
+  mixInThreadIndependentConstraints(
+      op, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1187,16 +1200,18 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   ArrayRef<wave::WaveSymbolAttr> batchSymbols =
       resultType.getShape().drop_back(2);
+  llvm::SmallVector<wave::WaveSymbolAttr> operandSymbols(batchSymbols);
+  llvm::append_range(operandSymbols, ArrayRef{mSymbol, nSymbol, kSymbol});
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
-      llvm::concat<const WaveSymbolAttr>(batchSymbols,
-                                         ArrayRef{mSymbol, nSymbol, kSymbol}),
-      initObject.symbolConstraints, operandSymbolMappings);
+      llvm::ArrayRef(operandSymbols), initObject.symbolConstraints,
+      operandSymbolMappings);
+  llvm::SmallVector<wave::WaveSymbolAttr> accumulatorSymbols(batchSymbols);
+  llvm::append_range(accumulatorSymbols, ArrayRef{mSymbol, nSymbol});
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
-      llvm::concat<const WaveSymbolAttr>(batchSymbols,
-                                         ArrayRef{mSymbol, nSymbol}),
-      initObject.symbolConstraints, accumulatorSymbolMappings);
+      llvm::ArrayRef(accumulatorSymbols), initObject.symbolConstraints,
+      accumulatorSymbolMappings);
 
   // Create the LHS and RHS mappings that are not using symbols
   // irrelevant for them.
