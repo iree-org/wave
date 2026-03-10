@@ -17,7 +17,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 from .common.utils import param_bool, require_cdna_2_or_3_or_4
 
 
-def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False):
+def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False, use_waveasm=False):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape,
         dynamic_dims=dynamic_dims,
@@ -29,6 +29,8 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False):
         dynamic_symbols=dynamic_symbols,
         wave_runtime=True,
         use_buffer_ops=buffer_ops,
+        backend="asm" if use_waveasm else "llvm",
+        use_wave_asm_backend=use_waveasm,
     )
     options = set_default_run_config(options)
     return wave_compile(options, gemm), options
@@ -36,10 +38,11 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False):
 
 @param_bool("dynamic_dims", "dyn")
 @param_bool("buffer_ops", "bufops")
+@param_bool("use_waveasm", "waveasm")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides(dynamic_dims: bool, buffer_ops: bool):
+def test_gemm_dynamic_strides(dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool):
     shape = (1024, 1024, 1024)
-    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops)
+    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
     m, n, k = shape
     a = device_randn(m, k * 4, dtype=torch.float16)
@@ -60,10 +63,13 @@ def test_gemm_dynamic_strides(dynamic_dims: bool, buffer_ops: bool):
 
 @param_bool("dynamic_dims", "dyn")
 @param_bool("buffer_ops", "bufops")
+@param_bool("use_waveasm", "waveasm")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_output(dynamic_dims: bool, buffer_ops: bool):
+def test_gemm_dynamic_strides_output(
+    dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
+):
     shape = (1024, 512, 512)
-    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops)
+    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
     m, n, k = shape
     a = device_randn(m, k, dtype=torch.float16)
@@ -82,10 +88,13 @@ def test_gemm_dynamic_strides_output(dynamic_dims: bool, buffer_ops: bool):
 
 @param_bool("dynamic_dims", "dyn")
 @param_bool("buffer_ops", "bufops")
+@param_bool("use_waveasm", "waveasm")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_input_and_output(dynamic_dims: bool, buffer_ops: bool):
+def test_gemm_dynamic_strides_input_and_output(
+    dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
+):
     shape = (512, 1024, 2048)
-    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops)
+    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
     m, n, k = shape
     a = device_randn(m, k * 2, dtype=torch.float16)[:, :k]
@@ -104,10 +113,13 @@ def test_gemm_dynamic_strides_input_and_output(dynamic_dims: bool, buffer_ops: b
 
 @param_bool("dynamic_dims", "dyn")
 @param_bool("buffer_ops", "bufops")
+@param_bool("use_waveasm", "waveasm")
 @require_cdna_2_or_3_or_4
-def test_gemm_dynamic_strides_offset(dynamic_dims: bool, buffer_ops: bool):
+def test_gemm_dynamic_strides_offset(
+    dynamic_dims: bool, buffer_ops: bool, use_waveasm: bool
+):
     shape = (4096, 2048, 4096)
-    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops)
+    gemm, options = _compile_gemm(shape, dynamic_dims, buffer_ops, use_waveasm)
 
     m, n, k = shape
     offset_m, offset_k = 4, 8
