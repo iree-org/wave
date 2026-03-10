@@ -3137,11 +3137,6 @@ def test_streamk_gemm(
     mfma_variant: MMAType,
     threads_per_wave: int,
 ):
-    # Known regression: streamK writes can fault or produce incorrect results
-    # for these larger shapes on this branch.
-    if shape in [(2048, 2048, 2048), (1536, 3072, 19776)]:
-        pytest.xfail("Known streamK regression on this branch for shape1/shape2")
-
     m, n, k = shape
     block_m, block_n, block_k = 128, 256, 64
 
@@ -3220,10 +3215,6 @@ def test_hybrid_streamk_gemm(
     threads_per_wave: int,
     streamk_tiles: int,
 ):
-    # Known bad streamK combinations on this branch.
-    if shape in [(2048, 2048, 2048), (1536, 3072, 19776)]:
-        pytest.xfail("Known hybrid streamK regression on this branch for shape1/shape2")
-
     m, n, k = shape
     block_m, block_n, block_k = 128, 256, 64
 
