@@ -303,9 +303,16 @@ def WAVEASMArithLegalization : Pass<"waveasm-arith-legalization"> {
     - VALU ops can read at most one SGPR per instruction.
     - If both operands are SGPRs, one is moved to VGPR via v_mov_b32.
 
-    Type legalization (i64 narrowing):
-    - Wide (size>1) operands are truncated to their low sub-register.
-    - TODO: Full i64 carry-chain expansion.
+    i64 legalization (split into i32 halves):
+    - add: carry chain (s_add_u32 + s_addc_u32 / v_add_co_u32 + v_addc_co_u32).
+    - mul: schoolbook decomposition (lo*lo, hi*lo, lo*hi).
+    - cmp eq/ne: XOR each half, OR, compare to zero.
+    - cmp ordered: hi/lo decomposition with signed hi / unsigned lo.
+    - select: split both operands, v_cndmask_b32 each half, merge.
+    - sext/zext: extend to {lo, sign/zero} pair.
+    - trunc: extract lo half.
+
+    Reports errors on unsupported widths (anything other than i32/i64).
   }];
 
   let statistics = [

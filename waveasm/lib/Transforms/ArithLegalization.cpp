@@ -241,49 +241,187 @@ static void legalizeMulI64(Value lhs, Value rhs, Arith_MulOp op,
   op.replaceAllUsesWith(result);
 }
 
-/// i64 compare (eq/ne only).
-/// Strategy: XOR each half, OR the differences, compare combined to zero.
+/// Emit a VCC-setting compare and return a VCC placeholder.
+static Value emitVCmp(CmpPredicate pred, Value lhs, Value rhs,
+                      OpBuilder &builder, Location loc) {
+  switch (pred) {
+  case CmpPredicate::eq:
+    V_CMP_EQ_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::ne:
+    V_CMP_NE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::slt:
+    V_CMP_LT_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::sle:
+    V_CMP_LE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::sgt:
+    V_CMP_GT_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::sge:
+    V_CMP_GE_I32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::ult:
+    V_CMP_LT_U32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::ule:
+    V_CMP_LE_U32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::ugt:
+    V_CMP_GT_U32::create(builder, loc, lhs, rhs);
+    break;
+  case CmpPredicate::uge:
+    V_CMP_GE_U32::create(builder, loc, lhs, rhs);
+    break;
+  }
+  auto ty = ImmType::get(builder.getContext(), 1);
+  return ConstantOp::create(builder, loc, ty, 1);
+}
+
+/// Emit an SCC-setting compare and return the sreg result.
+static Value emitSCmp(CmpPredicate pred, Value lhs, Value rhs,
+                      OpBuilder &builder, Location loc) {
+  auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+  switch (pred) {
+  case CmpPredicate::eq:
+    return S_CMP_EQ_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::ne:
+    return S_CMP_NE_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::slt:
+    return S_CMP_LT_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::sle:
+    return S_CMP_LE_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::sgt:
+    return S_CMP_GT_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::sge:
+    return S_CMP_GE_I32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::ult:
+    return S_CMP_LT_U32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::ule:
+    return S_CMP_LE_U32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::ugt:
+    return S_CMP_GT_U32::create(builder, loc, sregTy, lhs, rhs);
+  case CmpPredicate::uge:
+    return S_CMP_GE_U32::create(builder, loc, sregTy, lhs, rhs);
+  }
+  llvm_unreachable("unhandled CmpPredicate");
+}
+
+/// Get hi/lo predicates for ordered i64 comparison.
+/// Hi uses the strict less/greater variant with same signedness.
+/// Lo always uses unsigned (lo halves have no sign meaning).
+static std::pair<CmpPredicate, CmpPredicate>
+getOrderedI64Preds(CmpPredicate pred) {
+  switch (pred) {
+  case CmpPredicate::slt:
+    return {CmpPredicate::slt, CmpPredicate::ult};
+  case CmpPredicate::sle:
+    return {CmpPredicate::slt, CmpPredicate::ule};
+  case CmpPredicate::sgt:
+    return {CmpPredicate::sgt, CmpPredicate::ugt};
+  case CmpPredicate::sge:
+    return {CmpPredicate::sgt, CmpPredicate::uge};
+  case CmpPredicate::ult:
+    return {CmpPredicate::ult, CmpPredicate::ult};
+  case CmpPredicate::ule:
+    return {CmpPredicate::ult, CmpPredicate::ule};
+  case CmpPredicate::ugt:
+    return {CmpPredicate::ugt, CmpPredicate::ugt};
+  case CmpPredicate::uge:
+    return {CmpPredicate::ugt, CmpPredicate::uge};
+  default:
+    llvm_unreachable("not an ordered predicate");
+  }
+}
+
+/// i64 compare: eq/ne via XOR+OR, ordered via hi/lo decomposition.
+///
+/// Ordered strategy: result = hiPred(hi_a, hi_b) ||
+///                            (hi_a == hi_b && loPred(lo_a, lo_b))
+/// Hi comparison uses same signedness as original predicate (strict variant).
+/// Lo comparison always uses unsigned (lo halves have no sign meaning).
 static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
                                     Arith_CmpOp op, OpBuilder &builder) {
-  if (pred != CmpPredicate::eq && pred != CmpPredicate::ne) {
-    op.emitError("ordered i64 comparisons not yet supported (only eq/ne)");
-    return failure();
-  }
-
   Location loc = op.getLoc();
   auto [lhsLo, lhsHi] = splitI64(lhs, builder, loc);
   auto [rhsLo, rhsHi] = splitI64(rhs, builder, loc);
+
+  bool isEqNe = pred == CmpPredicate::eq || pred == CmpPredicate::ne;
 
   if (anyVGPR({lhs, rhs})) {
     lhsLo = sgprToVgpr(lhsLo, builder, loc);
     lhsHi = sgprToVgpr(lhsHi, builder, loc);
     auto vregTy = VRegType::get(builder.getContext());
-    Value xorLo = V_XOR_B32::create(builder, loc, vregTy, lhsLo, rhsLo);
-    Value xorHi = V_XOR_B32::create(builder, loc, vregTy, lhsHi, rhsHi);
-    Value combined = V_OR_B32::create(builder, loc, vregTy, xorLo, xorHi);
-    auto immTy = ImmType::get(builder.getContext(), 0);
-    Value zero = ConstantOp::create(builder, loc, immTy, 0);
-    if (pred == CmpPredicate::eq)
-      V_CMP_EQ_I32::create(builder, loc, combined, zero);
-    else
-      V_CMP_NE_I32::create(builder, loc, combined, zero);
-    // VCC-setting compare: placeholder for downstream v_cndmask_b32.
+
+    if (isEqNe) {
+      // eq/ne: XOR each half, OR, compare to zero.
+      Value xorLo = V_XOR_B32::create(builder, loc, vregTy, lhsLo, rhsLo);
+      Value xorHi = V_XOR_B32::create(builder, loc, vregTy, lhsHi, rhsHi);
+      Value combined = V_OR_B32::create(builder, loc, vregTy, xorLo, xorHi);
+      auto zeroTy = ImmType::get(builder.getContext(), 0);
+      Value zero = ConstantOp::create(builder, loc, zeroTy, 0);
+      if (pred == CmpPredicate::eq)
+        V_CMP_EQ_I32::create(builder, loc, combined, zero);
+      else
+        V_CMP_NE_I32::create(builder, loc, combined, zero);
+    } else {
+      // Ordered: materialize hi/lo results, select based on hi equality.
+      auto [hiPred, loPred] = getOrderedI64Preds(pred);
+      auto zeroTy = ImmType::get(builder.getContext(), 0);
+      Value zero = ConstantOp::create(builder, loc, zeroTy, 0);
+      auto oneTy = ImmType::get(builder.getContext(), 1);
+      Value one = ConstantOp::create(builder, loc, oneTy, 1);
+
+      // Materialize hi comparison to vreg.
+      Value hiVcc = emitVCmp(hiPred, lhsHi, rhsHi, builder, loc);
+      Value hiRes =
+          V_CNDMASK_B32::create(builder, loc, vregTy, zero, one, hiVcc);
+
+      // Materialize lo comparison to vreg.
+      Value loVcc = emitVCmp(loPred, lhsLo, rhsLo, builder, loc);
+      Value loRes =
+          V_CNDMASK_B32::create(builder, loc, vregTy, zero, one, loVcc);
+
+      // Select: if hi equal, use lo result; else use hi result.
+      Value eqVcc = emitVCmp(CmpPredicate::eq, lhsHi, rhsHi, builder, loc);
+      Value finalBool =
+          V_CNDMASK_B32::create(builder, loc, vregTy, hiRes, loRes, eqVcc);
+
+      // Set VCC from the boolean result for downstream v_cndmask_b32.
+      V_CMP_NE_I32::create(builder, loc, finalBool, zero);
+    }
+
     auto placeholderTy = ImmType::get(builder.getContext(), 1);
     Value placeholder = ConstantOp::create(builder, loc, placeholderTy, 1);
     op.replaceAllUsesWith(placeholder.getDefiningOp()->getResult(0));
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
-    Value xorLo = S_XOR_B32::create(builder, loc, sregTy, lhsLo, rhsLo);
-    Value xorHi = S_XOR_B32::create(builder, loc, sregTy, lhsHi, rhsHi);
-    Value combined = S_OR_B32::create(builder, loc, sregTy, xorLo, xorHi);
-    auto immTy = ImmType::get(builder.getContext(), 0);
-    Value zero = ConstantOp::create(builder, loc, immTy, 0);
-    Value result;
-    if (pred == CmpPredicate::eq)
-      result = S_CMP_EQ_I32::create(builder, loc, sregTy, combined, zero);
-    else
-      result = S_CMP_NE_I32::create(builder, loc, sregTy, combined, zero);
-    op.replaceAllUsesWith(result);
+
+    if (isEqNe) {
+      // eq/ne: XOR each half, OR, compare to zero.
+      Value xorLo = S_XOR_B32::create(builder, loc, sregTy, lhsLo, rhsLo);
+      Value xorHi = S_XOR_B32::create(builder, loc, sregTy, lhsHi, rhsHi);
+      Value combined = S_OR_B32::create(builder, loc, sregTy, xorLo, xorHi);
+      auto immTy = ImmType::get(builder.getContext(), 0);
+      Value zero = ConstantOp::create(builder, loc, immTy, 0);
+      Value result;
+      if (pred == CmpPredicate::eq)
+        result = S_CMP_EQ_I32::create(builder, loc, sregTy, combined, zero);
+      else
+        result = S_CMP_NE_I32::create(builder, loc, sregTy, combined, zero);
+      op.replaceAllUsesWith(result);
+    } else {
+      // Ordered: result = hiPred(hi) | (hiEq(hi) & loPred(lo)).
+      auto [hiPred, loPred] = getOrderedI64Preds(pred);
+      Value hiCmp = emitSCmp(hiPred, lhsHi, rhsHi, builder, loc);
+      Value hiEq = emitSCmp(CmpPredicate::eq, lhsHi, rhsHi, builder, loc);
+      Value loCmp = emitSCmp(loPred, lhsLo, rhsLo, builder, loc);
+      Value eqAndLo = S_AND_B32::create(builder, loc, sregTy, hiEq, loCmp);
+      Value result = S_OR_B32::create(builder, loc, sregTy, hiCmp, eqAndLo);
+      op.replaceAllUsesWith(result);
+    }
   }
   op.erase();
   return success();
