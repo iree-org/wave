@@ -758,8 +758,7 @@ private:
       -1; // Will be computed lazily, starts after user+system SGPRs
   int64_t nextSwizzleSRDIndex =
       -1; // Will be computed in emitSRDPrologue(), after all regular SRDs
-  int64_t totalLDSSize = 0;   // Total LDS allocation size in bytes
-  size_t totalKernelArgs = 0; // Total kernel args (set for mixed ptr/scalar)
+  int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
   // Running byte offset for typed LDS allocations (pattern b in
   // handleMemRefAlloc). Reset implicitly: a fresh TranslationContext is
   // created per gpu.func in translateModule / createProgramFromFunc.

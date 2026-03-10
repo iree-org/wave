@@ -632,10 +632,10 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
         ctx.queueSRDSetup(arg, argIdx, /*bufferSize=*/0x7FFFFFFC);
       } else {
         scalarArgs.push_back(arg);
+        ctx.queueScalarArgLoad(arg, arg.getArgNumber());
       }
     }
 
-    ctx.setTotalKernelArgs(func.getNumArguments());
     ctx.emitSRDPrologue();
 
     // Map scalar (non-pointer) args to their preloaded SGPR positions.
