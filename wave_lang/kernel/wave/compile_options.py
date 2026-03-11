@@ -1,14 +1,11 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
 from ..lang.kernel_buffer import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo, CoalescingType
-
-if TYPE_CHECKING:
-    from .constraints import MMAType
 
 
 def _get_location_capture_config():
@@ -44,7 +41,7 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
-    backend: str = "llvm"  # "llvm" or "asm"
+    backend: str = "llvm"  # "llvm" or "asm" (C++ WaveASM)
     device: str = "hip"
     target: str = "gfx942"
     codeobj: str = "5"  # Code object version ("4" or "5")
@@ -135,7 +132,3 @@ class WaveCompileOptions:
     compile_to_asm: bool = (
         False  # Compile to AMDGCN assembly (for lit tests, no clang++)
     )
-    use_wave_asm_backend: bool = (
-        False  # Use WaveASM (waveasm-translate) instead of Python backend
-    )
-    mma_type: Optional["MMAType"] = None  # MMA type for ASM backend dispatch

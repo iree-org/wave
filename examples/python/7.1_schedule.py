@@ -316,7 +316,6 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
     )
     options.backend = "asm"
     options.wave_runtime = True
-    options.use_wave_asm_backend = True
     options.dump_intermediates = "build/intermediates"
     schedule = get_mxfp4_asymmetric_schedule()
     options.print_ir_after = "all" if is_debug else []
@@ -337,7 +336,6 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     options.backend = "asm"
     options.use_buffer_ops = False
     options.wave_runtime = True
-    options.use_wave_asm_backend = True
     options.dump_intermediates = "build/intermediates"
     schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
     options.print_ir_after = "all" if is_debug else []

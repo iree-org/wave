@@ -14,7 +14,7 @@ This module provides utilities to:
 4. Execute and validate against PyTorch
 
 Usage:
-    from waveasm_e2e import WaveASMCompiler, compile_and_run
+    from wave_lang.kernel.wave.waveasm_e2e import WaveASMCompiler
 
     # Capture MLIR from wave kernel
     mlir_text = capture_wave_mlir(options, kernel_func)
@@ -37,7 +37,11 @@ from typing import Dict, Optional, List, Tuple
 
 import torch
 
-from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+from wave_lang.kernel.wave.utils.mlir_analysis import (
+    extract_func_from_stream_mlir,
+    walk_ops_recursively,
+    should_skip_function,
+)
 from wave_lang.kernel.wave.utils.run_utils import get_dynamic_stride_args
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 
@@ -56,7 +60,7 @@ class CompilationResult:
         """Extract kernel function name from generated assembly."""
         import re
 
-        # Look for .globl directive which marks the kernel entry point
+        # Look for .globl directive which marks the kernel entry point.
         match = re.search(r"\.globl\s+(\w+)", self.asm_text)
         if match:
             return match.group(1)
@@ -66,7 +70,7 @@ class CompilationResult:
         """Extract LDS (shared memory) size from kernel descriptor."""
         import re
 
-        # Look for .amdhsa_group_segment_fixed_size directive
+        # Look for .amdhsa_group_segment_fixed_size directive.
         match = re.search(r"\.amdhsa_group_segment_fixed_size\s+(\d+)", self.asm_text)
         if match:
             return int(match.group(1))
@@ -76,11 +80,11 @@ class CompilationResult:
         """Extract max flat workgroup size from YAML metadata."""
         import re
 
-        # Look for .max_flat_workgroup_size in YAML metadata
+        # Look for .max_flat_workgroup_size in YAML metadata.
         match = re.search(r"\.max_flat_workgroup_size:\s+(\d+)", self.asm_text)
         if match:
             return int(match.group(1))
-        return 64  # Default to 1 wave
+        return 64  # Default to 1 wave.
 
 
 def get_waveasm_translate_path() -> Path:
@@ -179,18 +183,18 @@ class WaveASMCompiler:
         Compile MLIR to AMDGCN assembly using C++ waveasm-translate.
 
         Args:
-            mlir_text: MLIR module text
-            workgroup_size: Optional workgroup size tuple (x, y, z)
-            ticketed_waitcnt: Enable ticket-based waitcnt/barrier insertion
+            mlir_text: MLIR module text.
+            workgroup_size: Optional workgroup size tuple (x, y, z).
+            ticketed_waitcnt: Enable ticket-based waitcnt/barrier insertion.
 
         Returns:
-            Tuple of (success, asm_text_or_error, stderr)
+            Tuple of (success, asm_text_or_error, stderr).
         """
         temp_dir = self._get_temp_dir()
         mlir_file = temp_dir / "input.mlir"
         asm_file = temp_dir / "output.s"
 
-        # Write MLIR to temp file
+        # Write MLIR to temp file.
         mlir_file.write_text(mlir_text)
 
         # Run waveasm-translate with full pipeline.
@@ -215,7 +219,7 @@ class WaveASMCompiler:
             "--emit-assembly",
         ]
 
-        # Add workgroup size if specified
+        # Add workgroup size if specified.
         if workgroup_size:
             cmd.extend(
                 [
@@ -238,10 +242,10 @@ class WaveASMCompiler:
             if result.returncode != 0:
                 return False, result.stderr, result.stderr
 
-            # The output is printed to stdout
+            # The output is printed to stdout.
             asm_text = result.stdout
 
-            # Also save to file
+            # Also save to file.
             asm_file.write_text(asm_text)
 
             return True, asm_text, result.stderr
@@ -258,10 +262,10 @@ class WaveASMCompiler:
         obj_file = temp_dir / "kernel.o"
         hsaco_file = temp_dir / "kernel.hsaco"
 
-        # Write assembly to file
+        # Write assembly to file.
         asm_file.write_text(asm_text)
 
-        # Step 1: Assemble to object file
+        # Step 1: Assemble to object file.
         compile_cmd = [
             self.clang,
             "-x",
@@ -288,7 +292,7 @@ class WaveASMCompiler:
             if result.returncode != 0:
                 return Failure(f"Assembly failed: {result.stderr}")
 
-            # Step 2: Link to HSACO
+            # Step 2: Link to HSACO.
             link_cmd = [
                 self.clang,
                 "-target",
@@ -326,13 +330,13 @@ class WaveASMCompiler:
         Full compilation pipeline: MLIR -> ASM -> Binary.
 
         Args:
-            mlir_text: MLIR module text
-            workgroup_size: Optional workgroup size tuple (x, y, z)
+            mlir_text: MLIR module text.
+            workgroup_size: Optional workgroup size tuple (x, y, z).
 
         Returns:
-            CompilationResult with all intermediate results
+            CompilationResult with all intermediate results.
         """
-        # Step 1: MLIR -> ASM
+        # Step 1: MLIR -> ASM.
         success, asm_or_error, stderr = self.compile_mlir_to_asm(
             mlir_text, workgroup_size
         )
@@ -348,7 +352,7 @@ class WaveASMCompiler:
 
         asm_text = asm_or_error
 
-        # Step 2: ASM -> Binary
+        # Step 2: ASM -> Binary.
         asm_result = self.assemble_to_binary(asm_text)
 
         if not asm_result:
@@ -398,39 +402,37 @@ def capture_wave_mlir(options, kernel_func) -> str:
     then extracts the func.func from the stream.executable wrapper.
 
     Args:
-        options: WaveCompileOptions
-        kernel_func: Decorated wave kernel function
+        options: WaveCompileOptions.
+        kernel_func: Decorated wave kernel function.
 
     Returns:
-        MLIR module text with just the kernel func.func
+        MLIR module text with just the kernel func.func.
     """
     from wave_lang.kernel._support.indexing import IndexingContext
     from wave_lang.kernel.wave.compile import (
         _trace_launchable_and_get_kernel_signature,
     )
 
-    # Must run within IndexingContext like wave_compile does
+    # Must run within IndexingContext like wave_compile does.
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
 
-        # Initialize kernel constraints (same as wave_compile)
+        # Initialize kernel constraints (same as wave_compile).
         kernel_func.initialize_wave_constraints()
         kernel_func.initialize_symbolic_constraints()
         kernel_func.initialize_workgroup_constraints()
 
-        # Trace and get MLIR
+        # Trace and get MLIR.
         result = _trace_launchable_and_get_kernel_signature(kernel_func, options)
-        # Result is a tuple: (mb, trace, exe, kernel_sig, entrypoint_name, options, ...)
         mb = result[0]
 
-        # Get full MLIR text
+        # Get full MLIR text.
         full_mlir_text = mb.module_op.get_asm(
             enable_debug_info=False,
             use_local_scope=options.use_local_scope,
         )
 
-    # Extract just the func.func from stream.executable wrapper
-    # This avoids duplicate symbol issues and stream dialect parsing problems
+    # Extract just the func.func from stream.executable wrapper.
     mlir_text = extract_func_from_stream_mlir(full_mlir_text)
 
     return mlir_text
@@ -446,39 +448,36 @@ def capture_wave_kernel_info(
     Capture MLIR and kernel launch info from Wave compilation.
 
     This extracts all information needed for kernel launch by using
-    options.kernel_launch_info which is populated by _trace_launchable_and_get_kernel_signature.
+    options.kernel_launch_info which is populated by
+    _trace_launchable_and_get_kernel_signature.
 
     Args:
-        options: WaveCompileOptions
-        kernel_func: Decorated wave kernel function
-        schedule: Optional WaveSchedule to apply during compilation
+        options: WaveCompileOptions.
+        kernel_func: Decorated wave kernel function.
+        schedule: Optional WaveSchedule to apply during compilation.
         dynamic_values: Optional dict mapping dynamic symbols to their concrete
             values. Used for grid computation when symbols are not in
             options.subs (i.e. truly dynamic shapes).
 
     Returns:
-        CapturedKernelInfo with all launch information
+        CapturedKernelInfo with all launch information.
     """
     from wave_lang.kernel._support.indexing import IndexingContext
     from wave_lang.kernel.wave.compile import (
         _trace_launchable_and_get_kernel_signature,
     )
     from wave_lang.support.ir_imports import Context, Module, func_d
-    from wave_lang.kernel.wave.asm.mlir_analysis import (
-        walk_ops_recursively,
-        should_skip_function,
-    )
 
-    # Must run within IndexingContext like wave_compile does
+    # Must run within IndexingContext like wave_compile does.
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
 
-        # Initialize kernel constraints (same as wave_compile)
+        # Initialize kernel constraints (same as wave_compile).
         kernel_func.initialize_wave_constraints()
         kernel_func.initialize_symbolic_constraints()
         kernel_func.initialize_workgroup_constraints()
 
-        # Trace and get MLIR - this populates options.kernel_launch_info
+        # Trace and get MLIR - this populates options.kernel_launch_info.
         result = _trace_launchable_and_get_kernel_signature(
             kernel_func, options, schedule=schedule
         )
@@ -499,13 +498,13 @@ def capture_wave_kernel_info(
         if options.canonicalize:
             canonicalize_module(mb.module_op)
 
-        # Get full MLIR text (Python bindings can parse stream dialect)
+        # Get full MLIR text (Python bindings can parse stream dialect).
         full_mlir_text = mb.module_op.get_asm(
             enable_debug_info=False,
             use_local_scope=options.use_local_scope,
         )
 
-        # Get launch info directly from options - populated by _trace_launchable
+        # Get launch info directly from options - populated by _trace_launchable.
         launch_info = options.kernel_launch_info
         blocks = launch_info.blocks if launch_info.blocks else [64, 1, 1]
         lds_size = launch_info.shared_memory_bytes
@@ -541,7 +540,7 @@ def capture_wave_kernel_info(
         grid = launch_info.grid(grid_values)
         grid = tuple(int(x) for x in grid)
 
-    # Extract func.func from stream wrapper for C++ backend
+    # Extract func.func from stream wrapper for C++ backend.
     extracted_funcs = []
 
     with Context() as ctx:
@@ -552,18 +551,18 @@ def capture_wave_kernel_info(
             if not isinstance(fn, func_d.FuncOp):
                 continue
 
-            # Skip non-kernel functions
+            # Skip non-kernel functions.
             if should_skip_function(fn):
                 continue
 
-            # Extract the function in generic form for C++ backend
+            # Extract the function in generic form for C++ backend.
             extracted_funcs.append(fn.get_asm(print_generic_op_form=True))
-            break  # Found the kernel
+            break  # Found the kernel.
 
     if not extracted_funcs:
         raise ValueError("No kernel function found in MLIR")
 
-    # Wrap extracted function in a module for C++ backend
+    # Wrap extracted function in a module for C++ backend.
     mlir_text = "module {\n" + "\n".join(extracted_funcs) + "\n}\n"
 
     info = CapturedKernelInfo(
@@ -574,9 +573,7 @@ def capture_wave_kernel_info(
         lds_size=lds_size,
     )
 
-    # Debug output
-    import os
-
+    # Debug output.
     if os.environ.get("WAVEASM_DEBUG"):
         print(f"\n=== Captured Kernel Info ===")
         print(f"  kernel_name: {info.kernel_name}")
@@ -586,41 +583,6 @@ def capture_wave_kernel_info(
         print(f"============================\n")
 
     return info
-
-
-def compare_with_python_backend(
-    mlir_text: str,
-    target: str = "gfx942",
-    codeobj: str = "5",
-) -> Tuple[str, str]:
-    """
-    Compare C++ and Python backend outputs for the same MLIR.
-
-    Args:
-        mlir_text: MLIR module text
-        target: Target architecture
-        codeobj: Code object version
-
-    Returns:
-        Tuple of (cpp_asm, python_asm)
-    """
-    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
-
-    # C++ backend
-    cpp_compiler = WaveASMCompiler(target=target, codeobj=codeobj)
-    cpp_success, cpp_asm, _ = cpp_compiler.compile_mlir_to_asm(mlir_text)
-
-    if not cpp_success:
-        cpp_asm = f"C++ compilation failed: {cpp_asm}"
-
-    # Python backend
-    try:
-        python_compiler = KernelModuleCompiler(targetid=target, codeobj=codeobj)
-        python_asm = python_compiler.compile_mlir_string(mlir_text)
-    except Exception as e:
-        python_asm = f"Python compilation failed: {e}"
-
-    return cpp_asm, python_asm
 
 
 def run_with_wave_runtime(
@@ -637,53 +599,53 @@ def run_with_wave_runtime(
     Execute a compiled GPU binary using wave_runtime.
 
     Args:
-        binary_path: Path to .hsaco file
-        inputs: List of input tensors
-        outputs: List of output tensors
-        grid: Grid dimensions (x, y, z)
-        block: Block dimensions (x, y, z)
-        shared_memory_bytes: Shared memory size
-        func_name: Function name in the binary (default: "isolated_benchmark")
+        binary_path: Path to .hsaco file.
+        inputs: List of input tensors.
+        outputs: List of output tensors.
+        grid: Grid dimensions (x, y, z).
+        block: Block dimensions (x, y, z).
+        shared_memory_bytes: Shared memory size.
+        func_name: Function name in the binary (default: "isolated_benchmark").
         dynamic_dims: Optional list of concrete values for dynamic dimension
             symbols, passed as additional kernel arguments.
     """
     import wave_runtime
 
-    # Initialize HIP functions
+    # Initialize HIP functions.
     wave_runtime.load_hip_functions()
 
-    # Load GPU function from binary
+    # Load GPU function from binary.
     gpu_binary, gpu_func = wave_runtime.load_binary(str(binary_path), func_name)
 
-    # Create launch info (using positional args - the API expects 12 int args)
+    # Create launch info (using positional args - the API expects 12 int args).
     stream = torch.cuda.current_stream().cuda_stream
     kernel_launch_info = wave_runtime.KernelLaunchInfo(
-        stream,  # arg0: stream
-        gpu_func,  # arg1: gpu_func
-        shared_memory_bytes,  # arg2: shared_memory_bytes
-        grid[0],  # arg3: grid_dim_x
-        grid[1],  # arg4: grid_dim_y
-        grid[2],  # arg5: grid_dim_z
-        block[0],  # arg6: block_dim_x
-        block[1],  # arg7: block_dim_y
-        block[2],  # arg8: block_dim_z
-        1,  # arg9: cluster_dim_x
-        1,  # arg10: cluster_dim_y
-        1,  # arg11: cluster_dim_z
+        stream,  # arg0: stream.
+        gpu_func,  # arg1: gpu_func.
+        shared_memory_bytes,  # arg2: shared_memory_bytes.
+        grid[0],  # arg3: grid_dim_x.
+        grid[1],  # arg4: grid_dim_y.
+        grid[2],  # arg5: grid_dim_z.
+        block[0],  # arg6: block_dim_x.
+        block[1],  # arg7: block_dim_y.
+        block[2],  # arg8: block_dim_z.
+        1,  # arg9: cluster_dim_x.
+        1,  # arg10: cluster_dim_y.
+        1,  # arg11: cluster_dim_z.
     )
 
-    # Prepare kernel arguments
+    # Prepare kernel arguments.
     all_tensors = inputs + outputs
     kern_args = [tensor.data_ptr() for tensor in all_tensors]
     kernel_args = wave_runtime.Int64Vector(kern_args)
 
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims or [])
 
-    # Prepare dynamic stride arguments
+    # Prepare dynamic stride arguments.
     stride_args = get_dynamic_stride_args(all_tensors)
 
-    # Launch
+    # Launch.
     wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, [], stride_args)
 
-    # Sync
+    # Sync.
     torch.cuda.synchronize()
