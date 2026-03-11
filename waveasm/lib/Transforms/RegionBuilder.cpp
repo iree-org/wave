@@ -91,13 +91,22 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
     return nullptr;
   }
 
-  // Convert lower bound to sreg if it's an immediate (loop counter needs sreg
-  // type)
+  // The loop induction variable must be an SGPR (loop increment and comparison
+  // use scalar ALU: s_add_u32, s_cmp_lt_u32).  Convert from immediate or VGPR
+  // as needed.
   Value lowerBoundValue = *lowerBound;
   if (isa<ImmType>(lowerBoundValue.getType())) {
     auto sregType = ctx.createSRegType();
     lowerBoundValue =
         S_MOV_B32::create(builder, loc, sregType, lowerBoundValue);
+  } else if (isVGPRType(lowerBoundValue.getType())) {
+    // SAFETY: v_readfirstlane_b32 reads only lane 0. This is correct because
+    // scf.for loop bounds must be uniform across all lanes in a wavefront
+    // (the loop branch is scalar). If a divergent value reached here, only
+    // lane 0's value would be used, silently producing incorrect results.
+    auto sregType = ctx.createSRegType();
+    lowerBoundValue =
+        V_READFIRSTLANE_B32::create(builder, loc, sregType, lowerBoundValue);
   }
   initArgs.push_back(lowerBoundValue);
 

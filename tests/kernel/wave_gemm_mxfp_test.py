@@ -36,6 +36,7 @@ from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_schedule,
     get_mxfp4_dbuf_pingpong_schedule,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled,
+    get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds,
     get_mxfp4_asymmetric_schedule,
 )
 from wave_lang.kernel.wave.utils.mxfp_utils import (
@@ -996,7 +997,7 @@ _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS = {
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
 @pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
-def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
+def testScaledGemmMXFP48WavePingpongPreshuffleScales(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
@@ -1051,18 +1052,15 @@ def testScaledGemmMXFP4PreshuffleMacrotiles8WavePingpong(
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
 @pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
-def testScaledGemmMXFP4PreshuffleScalesAndBMacrotiles8WavePingpong(
+def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndB(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
     dynamic: bool,
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
-    (A&B scales preshuffled and B preshuffled in K-pack order).
+    B is prefetched through VGPRs.
     """
-    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
-        pytest.skip("Dynamic mode is only covered for selected block shapes.")
-
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
         block_shape,
@@ -1078,6 +1076,66 @@ def testScaledGemmMXFP4PreshuffleScalesAndBMacrotiles8WavePingpong(
         for sym in options.dynamic_symbols:
             del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled(use_stagger=True, shape=shape)
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
+    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 1024, 8192)],
+)
+@pytest.mark.parametrize("block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+@pytest.mark.parametrize("dynamic", [False, True], ids=["static", "dynamic"])
+def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    mfma_variant: ScaledMMAType,
+    dynamic: bool,
+):
+    """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
+    B is prefteched through LDS.
+    """
+    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
+        pytest.skip("Dynamic mode is only covered for selected block shapes.")
+
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
+        shape,
+        block_shape,
+        wave_shape=(4, 2),
+        mfma_variant=mfma_variant,
+        b_address_space=SHARED_ADDRESS_SPACE,
+    )
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = False
+    options.linearize_shared_access = True
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+
+    schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
+        use_stagger=True, shape=shape
+    )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 

@@ -5,30 +5,11 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """
-Comprehensive end-to-end tests for WaveASM backends.
-
-This test suite mirrors the tests in tests/kernel/asm_backend_test.py,
-and supports both C++ and Python ASM backends.
-
-Tests included:
-1. test_copy_kernel_cpp_backend - Simple copy kernel
-2. test_mma_kernel_cpp_backend - Single-tile MMA
-3. test_mma_multi_workgroup_single_wave_cpp_backend - Multi-workgroup MMA
-4. test_mma_multi_wave_cpp_backend - Multi-wave MMA
-5. test_gemm_cpp_backend - Full GEMM with K-loop
-6. test_mxfp4_scaled_gemm_cpp_backend - MXFP4 scaled GEMM (gfx950+ only)
-7. test_dbuf_4wave_mxfp4_gemm_cpp_backend - Double-buffered MXFP4 GEMM, 4 waves (gfx950+)
-8. test_dbuf_8wave_mxfp4_gemm_cpp_backend - Double-buffered MXFP4 GEMM, 8 waves (gfx950+)
+Comprehensive end-to-end tests for WaveASM C++ backend.
 
 Run with:
-    # Run all e2e tests with C++ backend (default, requires GPU)
+    # Run all e2e tests (requires GPU)
     pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e
-
-    # Run with Python backend
-    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --backend=python
-
-    # Run with both backends and compare
-    pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --backend=both
 
     # Dump assembly files to /tmp for debugging
     pytest tests/kernel/wave/asm/test_waveasm_e2e.py -v --run-e2e --dump-asm
@@ -45,16 +26,14 @@ Environment variables:
 
 import os
 import re
-import warnings
 
 import pytest
 
 from tests.kernel.common.utils import param_bool, require_cdna4
-from wave_lang.kernel.wave.asm.waveasm_e2e import (
+from wave_lang.kernel.wave.utils.run_utils import get_default_arch
+from waveasm.waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_kernel_info,
-    capture_wave_mlir,
-    compare_with_python_backend,
     run_with_wave_runtime,
 )
 
@@ -67,47 +46,9 @@ pytestmark = [pytest.mark.require_waveasm, pytest.mark.require_e2e, require_cdna
 # =============================================================================
 
 
-def get_target_arch() -> str:
-    """Get target architecture from environment or detect from GPU."""
-    if "WAVE_DEFAULT_ARCH" in os.environ:
-        arch = os.environ["WAVE_DEFAULT_ARCH"]
-        return arch.split(":")[0]  # Strip feature flags
-
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            props = torch.cuda.get_device_properties(0)
-            if hasattr(props, "gcnArchName"):
-                return props.gcnArchName.split(":")[0]
-    except Exception:
-        pass
-
-    return "gfx942"
-
-
 def is_cdna4() -> bool:
     """Check if running on CDNA4 (gfx95*)."""
-    return "gfx95" in get_target_arch()
-
-
-def skip_if_no_gpu():
-    """Skip test if no GPU is available."""
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            pytest.skip("No GPU available")
-    except ImportError:
-        pytest.skip("PyTorch not available")
-
-
-def skip_if_no_wave_lang():
-    """Skip test if wave_lang is not available."""
-    import importlib.util
-
-    if importlib.util.find_spec("wave_lang") is None:
-        pytest.skip("wave_lang not available")
+    return "gfx95" in get_default_arch()
 
 
 # =============================================================================
@@ -119,7 +60,7 @@ def skip_if_no_wave_lang():
 def compiler():
     """Create compiler and cleanup after test."""
     c = WaveASMCompiler(
-        target=get_target_arch(),
+        target=get_default_arch(),
         keep_temp_files=bool(os.environ.get("KEEP_TEMP_FILES")),
     )
     yield c
@@ -137,8 +78,6 @@ def test_copy_kernel_cpp_backend(shape, compiler):
 
     Mirrors: test_copy_kernel_asm_backend from asm_backend_test.py
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -230,19 +169,14 @@ def test_copy_kernel_cpp_backend(shape, compiler):
 
 def _mma_type_params():
     """Return MMA type parameters with appropriate skip marks."""
-    try:
-        import wave_lang.kernel.wave as tkw
+    import wave_lang.kernel.wave as tkw
 
-        params = [
-            pytest.param(tkw.MMAType.F32_16x16x16_F16, 16, 4, id="16x16x16"),
-        ]
-        if is_cdna4():
-            params.append(
-                pytest.param(tkw.MMAType.F32_16x16x32_F16, 32, 8, id="16x16x32")
-            )
-        return params
-    except ImportError:
-        return [pytest.param(None, 16, 4, id="16x16x16")]
+    params = [
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, 16, 4, id="16x16x16"),
+    ]
+    if is_cdna4():
+        params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, 32, 8, id="16x16x32"))
+    return params
 
 
 @pytest.mark.parametrize("mma_type,k_size,load_elems", _mma_type_params())
@@ -251,8 +185,6 @@ def test_mma_kernel_cpp_backend(mma_type, k_size, load_elems, compiler):
 
     Mirrors: test_mma_kernel_asm_backend from asm_backend_test.py
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -374,8 +306,6 @@ def test_mma_multi_workgroup_single_wave_cpp_backend(shape, compiler):
 
     Mirrors: test_mma_multi_workgroup_single_wave_asm_backend from asm_backend_test.py
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -519,8 +449,6 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
 
     Mirrors: test_mma_multi_wave_asm_backend from asm_backend_test.py
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -550,12 +478,6 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
     assert BLOCK_M % WAVE_M == 0
     assert BLOCK_N % WAVE_N == 0
     assert WAVE_M == 16 and WAVE_N == 16
-
-    # Calculate waves per workgroup
-    waves_per_wg_m = BLOCK_M // WAVE_M
-    waves_per_wg_n = BLOCK_N // WAVE_N
-    waves_per_wg = waves_per_wg_m * waves_per_wg_n
-    threads_per_block = waves_per_wg * wave_size
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -641,17 +563,14 @@ def test_mma_multi_wave_cpp_backend(shape, config, compiler):
 
 def _gemm_mma_type_params():
     """Return MMA type parameters for GEMM tests."""
-    try:
-        import wave_lang.kernel.wave as tkw
+    import wave_lang.kernel.wave as tkw
 
-        params = [
-            pytest.param(tkw.MMAType.F32_16x16x16_F16, id="16x16x16"),
-        ]
-        if is_cdna4():
-            params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, id="16x16x32"))
+    params = [
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, id="16x16x16"),
+    ]
+    if is_cdna4():
+        params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, id="16x16x32"))
         return params
-    except ImportError:
-        return [pytest.param(None, id="16x16x16")]
 
 
 def _global_to_shared_params():
@@ -694,17 +613,12 @@ def _global_to_shared_params():
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
 @pytest.mark.parametrize("mma_type", _gemm_mma_type_params())
 def test_gemm_cpp_backend(
-    shape, block_k, config, use_global_to_shared, mma_type, compiler, backend, dump_asm
+    shape, block_k, config, use_global_to_shared, mma_type, compiler, dump_asm
 ):
-    """End-to-end test for GEMM with K-loop using C++ or Python ASM backend.
+    """End-to-end test for GEMM with K-loop using C++ ASM backend.
 
-    Mirrors: test_gemm_asm_backend from asm_backend_test.py
-
-    Use --backend=cpp (default), --backend=python, or --backend=both
     Use --dump-asm to dump assembly files to /tmp
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -716,7 +630,6 @@ def test_gemm_cpp_backend(
         GLOBAL_ADDRESS_SPACE,
         SHARED_ADDRESS_SPACE,
     )
-    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
@@ -740,12 +653,6 @@ def test_gemm_cpp_backend(
     # For F32_16x16x32_F16, bump BLOCK_K to at least 32
     if mma_type == tkw.MMAType.F32_16x16x32_F16 and block_k < 32:
         block_k = 32
-
-    # Calculate waves per workgroup
-    waves_per_wg_m = block_m // WAVE_M
-    waves_per_wg_n = block_n // WAVE_N
-    waves_per_wg = waves_per_wg_m * waves_per_wg_n
-    threads_per_block = waves_per_wg * wave_size
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
@@ -808,60 +715,23 @@ def test_gemm_cpp_backend(
     mma_str = "16x16x32" if mma_type == tkw.MMAType.F32_16x16x32_F16 else "16x16x16"
     test_id = f"gemm_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{mma_str}_{g2s_str}"
 
-    # Compile with C++ backend if requested
-    cpp_result = None
-    cpp_asm = None
-    if backend in ("cpp", "both"):
-        cpp_result = compiler.compile_full(
-            kernel_info.mlir_text, kernel_info.workgroup_size
-        )
-        if not cpp_result.success:
-            pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
-        cpp_asm = cpp_result.asm_text
-
-    # Compile with Python backend if requested
-    python_asm = None
-    python_binary_path = None
-    if backend in ("python", "both"):
-        try:
-            python_compiler = KernelModuleCompiler(
-                targetid=get_target_arch(), codeobj="5"
-            )
-            python_asm = python_compiler.compile_mlir_string(kernel_info.mlir_text)
-            # Also assemble to binary for execution using the same assembler as C++ backend
-            if backend == "python":
-                asm_result = compiler.assemble_to_binary(python_asm)
-                if not asm_result:
-                    pytest.fail(f"Python ASM->Binary failed: {asm_result.error}")
-                python_binary_path = asm_result.value
-        except Exception as e:
-            if backend == "python":
-                pytest.fail(f"Python compilation failed: {e}")
-            else:
-                # Log warning if Python backend fails in "both" mode
-                warnings.warn(f"Python backend compilation failed: {e}")
+    # Compile with C++ backend
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
 
     # Dump assemblies if requested
     if dump_asm:
         with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
             f.write(kernel_info.mlir_text)
-        if cpp_asm:
+        if cpp_result.asm_text:
             with open(f"/tmp/{test_id}_cpp.s", "w") as f:
-                f.write(cpp_asm)
-        if python_asm:
-            with open(f"/tmp/{test_id}_python.s", "w") as f:
-                f.write(python_asm)
+                f.write(cpp_result.asm_text)
 
-    # Determine which binary to execute
-    if backend == "python":
-        if python_binary_path is None:
-            pytest.fail("Python backend did not produce a binary")
-        binary_path = python_binary_path
-        kernel_name = kernel_info.kernel_name
-    else:
-        # Use C++ backend (for both "cpp" and "both" modes)
-        binary_path = cpp_result.binary_path
-        kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
 
     # Use Wave compiler's launch info (blocks, lds_size) which is authoritative
     block = kernel_info.workgroup_size
@@ -911,7 +781,7 @@ module attributes {transform.with_named_sequence} {
 )
 @pytest.mark.parametrize("use_global_to_shared", [True])  # Only test with g2s=True
 def test_gemm_cpp_backend_with_k_unroll(
-    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+    shape, block_k, config, use_global_to_shared, compiler, dump_asm
 ):
     """End-to-end test for GEMM with K-loop UNROLLING using C++ backend.
 
@@ -921,8 +791,6 @@ def test_gemm_cpp_backend_with_k_unroll(
     The postprocess unrolls the scf.for loop by factor of 2, which for
     K=128, BLOCK_K=64 results in full unrolling (0 scf.for loops remaining).
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -956,10 +824,6 @@ def test_gemm_cpp_backend_with_k_unroll(
 
     # Use MMA type that works with our test configuration
     mma_type = tkw.MMAType.F32_16x16x32_F16
-
-    # Calculate waves per workgroup
-    waves_per_wg_m = block_m // WAVE_M
-    waves_per_wg_n = block_n // WAVE_N
 
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M_SYM, 0),
@@ -1039,6 +903,8 @@ def test_gemm_cpp_backend_with_k_unroll(
 
     # Dump assembly if requested
     if dump_asm and cpp_result.asm_text:
+        from pathlib import Path
+
         asm_file = Path("/tmp") / f"{test_id}_cpp.s"
         asm_file.write_text(cpp_result.asm_text)
         mlir_file = Path("/tmp") / f"{test_id}.mlir"
@@ -1081,9 +947,7 @@ def test_gemm_cpp_backend_with_k_unroll(
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
-def test_mxfp4_scaled_gemm_cpp_backend(
-    shape, use_global_to_shared, compiler, backend, dump_asm
-):
+def test_mxfp4_scaled_gemm_cpp_backend(shape, use_global_to_shared, compiler, dump_asm):
     """End-to-end test for MXFP4 (4-bit float) scaled GEMM with numerical validation.
 
     Uses generate_gemm_afp4wfp4_inputs for properly packed MXFP4 inputs
@@ -1101,9 +965,6 @@ def test_mxfp4_scaled_gemm_cpp_backend(
     if not is_cdna4():
         pytest.skip("MXFP4 scaled MFMA only supported on gfx950+ (CDNA4/MI350X)")
 
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
-
     import torch
 
     import wave_lang.kernel.lang as tkl
@@ -1112,7 +973,6 @@ def test_mxfp4_scaled_gemm_cpp_backend(
         GLOBAL_ADDRESS_SPACE,
         SHARED_ADDRESS_SPACE,
     )
-    from wave_lang.kernel.wave.asm.kernel_module_compiler import KernelModuleCompiler
     from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import ScaledMMAType
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
@@ -1211,72 +1071,28 @@ def test_mxfp4_scaled_gemm_cpp_backend(
     g2s_str = "g2s" if use_global_to_shared else "no_g2s"
     test_id = f"mxfp4_gemm_{m}x{n}x{k}_{g2s_str}"
 
-    # Compile with C++ backend if requested
-    cpp_result = None
-    cpp_asm = None
-    if backend in ("cpp", "both"):
-        cpp_result = compiler.compile_full(
-            kernel_info.mlir_text, kernel_info.workgroup_size
-        )
-        if not cpp_result.success:
-            pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
-        cpp_asm = cpp_result.asm_text
+    # Compile with C++ backend
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
 
-        # Verify assembly contains scaled MFMA instruction
-        assert (
-            "v_mfma_scale_f32_16x16x128_f8f6f4" in cpp_asm
-        ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
-
-    # Compile with Python backend if requested
-    python_asm = None
-    python_binary_path = None
-    if backend in ("python", "both"):
-        try:
-            python_compiler = KernelModuleCompiler(
-                targetid=get_target_arch(), codeobj="5"
-            )
-            python_asm = python_compiler.compile_mlir_string(kernel_info.mlir_text)
-
-            # Verify assembly contains scaled MFMA instruction
-            assert (
-                "v_mfma_scale_f32_16x16x128_f8f6f4" in python_asm
-            ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
-
-            # Also assemble to binary for execution
-            if backend == "python":
-                asm_result = compiler.assemble_to_binary(python_asm)
-                if not asm_result:
-                    pytest.fail(f"Python ASM->Binary failed: {asm_result.error}")
-                python_binary_path = asm_result.value
-        except Exception as e:
-            if backend == "python":
-                pytest.fail(f"Python compilation failed: {e}")
-            else:
-                import warnings
-
-                warnings.warn(f"Python backend compilation failed: {e}")
+    # Verify assembly contains scaled MFMA instruction
+    assert (
+        "v_mfma_scale_f32_16x16x128_f8f6f4" in cpp_result.asm_text
+    ), "Expected v_mfma_scale_f32_16x16x128_f8f6f4 instruction in assembly"
 
     # Dump assemblies if requested
     if dump_asm:
         with open(f"/tmp/{test_id}_mlir.txt", "w") as f:
             f.write(kernel_info.mlir_text)
-        if cpp_asm:
+        if cpp_result.asm_text:
             with open(f"/tmp/{test_id}_cpp.s", "w") as f:
-                f.write(cpp_asm)
-        if python_asm:
-            with open(f"/tmp/{test_id}_python.s", "w") as f:
-                f.write(python_asm)
+                f.write(cpp_result.asm_text)
 
-    # Determine which binary to execute
-    if backend == "python":
-        if python_binary_path is None:
-            pytest.fail("Python backend did not produce a binary")
-        binary_path = python_binary_path
-        kernel_name = kernel_info.kernel_name
-    else:
-        # Use C++ backend (for both "cpp" and "both" modes)
-        binary_path = cpp_result.binary_path
-        kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
+    binary_path = cpp_result.binary_path
+    kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
 
     # Use Wave compiler's launch info
     block = kernel_info.workgroup_size
@@ -1303,7 +1119,7 @@ def test_mxfp4_scaled_gemm_cpp_backend(
         torch_out_cpu,
         c_cpu,
         check_dtype=False,
-        msg=f"MXFP4 GEMM {m}x{n}x{k} ({g2s_str}, {backend}) failed numerical validation",
+        msg=f"MXFP4 GEMM {m}x{n}x{k} ({g2s_str}) failed numerical validation",
     )
 
 
@@ -1318,12 +1134,12 @@ def _dbuf_mxfp4_helper(
     num_waves,
     use_stagger,
     compiler,
-    backend,
     dump_asm,
     dynamic_dims=False,
     use_buffer_ops=True,
     use_schedule=True,
     output_dtype="f32",
+    wave_shape=None,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1339,9 +1155,6 @@ def _dbuf_mxfp4_helper(
     """
     if not is_cdna4():
         pytest.skip("MXFP4 double-buffered GEMM only supported on gfx950+ (CDNA4)")
-
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     import wave_lang.kernel.lang as tkl
@@ -1376,7 +1189,7 @@ def _dbuf_mxfp4_helper(
         gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
             shape,
             block,
-            wave_shape=(1, 4),
+            wave_shape=wave_shape,
             reorder_workgroups=not dynamic_dims,
             output_dtype=tkl_dtype,
         )
@@ -1488,6 +1301,7 @@ def _dbuf_mxfp4_helper(
     # For preshuffle B: transform all inputs to match kernel expectations.
     # a_scale_preshuffle=True (default) means a_scales must also be shuffled.
     if num_waves <= 4:
+        ws = wave_shape or (1, 4)
         x_scales = e8m0_shuffle(x_scales).contiguous()
         w_input = b_preshuffle(w.T.contiguous()).contiguous()
         w_scales_input = e8m0_shuffle(w_scales).contiguous()
@@ -1513,7 +1327,7 @@ def _dbuf_mxfp4_helper(
         c_cpu,
         check_dtype=False,
         msg=f"MXFP4 double-buffered {waves_str} GEMM {m}x{n}x{k} "
-        f"({stagger_str}, {backend}) failed numerical validation",
+        f"({stagger_str}) failed numerical validation",
     )
 
 
@@ -1521,33 +1335,60 @@ def _dbuf_mxfp4_helper(
 @param_bool("use_buffer_ops", "bufops")
 @param_bool("use_schedule", "sched")
 @pytest.mark.parametrize("output_dtype", ["f32", "bf16"])
+@pytest.mark.parametrize(
+    "shape,block,wave_shape",
+    [
+        pytest.param((1024, 1024, 8192), (128, 256, 256), (1, 4), id="128x256x256"),
+        pytest.param((1024, 1024, 8192), (128, 32, 256), (2, 2), id="128x32x256"),
+        pytest.param((896, 960, 8192), (224, 160, 256), (1, 4), id="224x160x256"),
+        pytest.param((1024, 768, 8192), (256, 192, 256), (1, 4), id="256x192x256"),
+        pytest.param((1024, 960, 8192), (256, 160, 256), (1, 4), id="256x160x256"),
+        pytest.param((1024, 896, 8192), (256, 224, 256), (2, 2), id="256x224x256"),
+    ],
+)
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
+    shape,
+    block,
+    wave_shape,
     dynamic_dims,
     use_buffer_ops,
     use_schedule,
     output_dtype,
     compiler,
-    backend,
     dump_asm,
 ):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
     Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4),
-    preshuffle B, and block=(128,256,256) matching 7.1_schedule.py.
+    preshuffle B, and various block configurations.
     When use_schedule=False, disables manual scheduling entirely.
     """
+    block_id = f"{block[0]}x{block[1]}x{block[2]}"
+
+    # Skip blocks that cause fatal GPU memory faults (kills pytest process).
+    if block_id in ("224x160x256", "256x160x256"):
+        pytest.skip("C++ ASM backend generates OOB memory access for this block shape")
+
+    # VGPR overflow: scheduled pipeline exceeds 256 VGPR hardware limit.
+    if block_id in ("256x192x256", "256x224x256") and use_schedule:
+        pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
+
+    # Dynamic dims + schedule on (2,2) wave shape: numerical mismatch.
+    if block_id == "128x32x256" and dynamic_dims and use_schedule:
+        pytest.xfail("Numerical mismatch with dynamic dims on (2,2) wave shape")
+
     _dbuf_mxfp4_helper(
-        shape=(1024, 1024, 8192),
-        block=(128, 256, 256),
+        shape=shape,
+        block=block,
         num_waves=4,
         use_stagger=False,
         compiler=compiler,
-        backend=backend,
         dump_asm=dump_asm,
         dynamic_dims=dynamic_dims,
         use_buffer_ops=use_buffer_ops,
         use_schedule=use_schedule,
         output_dtype=output_dtype,
+        wave_shape=wave_shape,
     )
 
 
@@ -1556,7 +1397,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     "256 VGPR hardware limit. Running this test causes a fatal "
     "HSA_STATUS_ERROR_INVALID_ISA abort that kills the entire test process.",
 )
-def test_dbuf_8wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
+def test_dbuf_8wave_mxfp4_gemm_cpp_backend(compiler, dump_asm):
     """End-to-end test for double-buffered MXFP4 GEMM with 8 waves.
 
     Mirrors: test_dbuf_8wave_mxfp_gemm from examples/python/7.1_schedule.py
@@ -1572,7 +1413,6 @@ def test_dbuf_8wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
         num_waves=8,
         use_stagger=True,
         compiler=compiler,
-        backend=backend,
         dump_asm=dump_asm,
     )
 
@@ -1616,7 +1456,6 @@ def test_gemm_pipelined_cpp_backend(
     use_global_to_shared,
     use_buffer_ops,
     compiler,
-    backend,
     dump_asm,
 ):
     """End-to-end test for GEMM with PREFETCH pipelining using C++ ASM backend.
@@ -1632,8 +1471,6 @@ def test_gemm_pipelined_cpp_backend(
 
     This overlaps global memory loads with compute to hide latency.
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -1790,93 +1627,3 @@ def test_gemm_pipelined_cpp_backend(
     # Validate: C = A @ B^T
     expected = torch.matmul(a.float(), b.float().T)
     assert_close(c, expected, atol=1e-4, rtol=1e-4)
-
-
-# =============================================================================
-# Test: Compare C++ vs Python Backend
-# =============================================================================
-
-
-@pytest.mark.parametrize("shape", [(16, 16)])
-def test_compare_backends_copy_kernel(shape, compiler):
-    """Compare C++ and Python backend assembly output for copy kernel."""
-    skip_if_no_wave_lang()
-
-    import wave_lang.kernel.lang as tkl
-    import wave_lang.kernel.wave as tkw
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
-    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-
-    M = tkl.sym.M
-    N = tkl.sym.N
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    constraints = [
-        tkw.HardwareConstraint(
-            threads_per_wave=64,
-            vector_shapes={M: 16, N: 16},
-        ),
-        tkw.WorkgroupConstraint(M, 16, 0),
-        tkw.WorkgroupConstraint(N, 16, 1),
-        tkw.WaveConstraint(M, 16),
-        tkw.WaveConstraint(N, 16),
-    ]
-
-    @tkw.wave(constraints)
-    def copy_kernel(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-    ):
-        res = tkw.read(a)
-        tkw.write(res, b)
-
-    options = WaveCompileOptions(
-        subs={
-            M: shape[0],
-            N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-    )
-    options = set_default_run_config(options)
-
-    # Capture MLIR
-    mlir_text = capture_wave_mlir(options, copy_kernel)
-
-    # Compare backends
-    cpp_asm, python_asm = compare_with_python_backend(
-        mlir_text, target=get_target_arch()
-    )
-
-    # Basic sanity checks
-    assert "failed" not in cpp_asm.lower() or "failed" not in python_asm.lower()
-
-    # Count key instructions
-    def count_instructions(asm):
-        if "failed" in asm.lower():
-            return {}
-        lines = asm.split("\n")
-        return {
-            "buffer_load": sum(1 for l in lines if "buffer_load" in l),
-            "buffer_store": sum(1 for l in lines if "buffer_store" in l),
-            "s_waitcnt": sum(1 for l in lines if "s_waitcnt" in l),
-        }
-
-    cpp_stats = count_instructions(cpp_asm)
-    python_stats = count_instructions(python_asm)
-
-    # Both should have similar instruction counts
-    if cpp_stats and python_stats:
-        # Allow some variance but both should have the same load/store counts
-        assert cpp_stats["buffer_load"] > 0 or python_stats["buffer_load"] > 0
-
-
-# =============================================================================
-# Main
-# =============================================================================
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

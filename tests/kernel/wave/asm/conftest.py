@@ -17,13 +17,6 @@ import pytest
 def pytest_addoption(parser):
     """Add WaveASM-specific command line options."""
     parser.addoption(
-        "--backend",
-        action="store",
-        default="cpp",
-        choices=["cpp", "python", "both"],
-        help="WaveASM backend to use: cpp (default), python, or both (compare)",
-    )
-    parser.addoption(
         "--dump-asm",
         action="store_true",
         default=False,
@@ -44,12 +37,6 @@ def pytest_configure(config):
     """
     if os.environ.get("WAVE_STRICT_FORMATTER") is None:
         os.environ["WAVE_STRICT_FORMATTER"] = "1"
-
-
-@pytest.fixture
-def backend(request):
-    """Get the selected backend from command line."""
-    return request.config.getoption("--backend")
 
 
 @pytest.fixture

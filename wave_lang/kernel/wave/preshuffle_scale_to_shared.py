@@ -62,10 +62,11 @@ from .utils.symbol_utils import subs_idxc
 logger = get_logger("wave.preshuffle_scale_to_shared")
 
 
-def _is_preshuffle_mapping(mapping) -> bool:
-    """Check if a mapping is a preshuffle-style mapping:
-    output is identity (logical coords pass through) but input is non-identity
-    (physical coords are shuffled)."""
+def _is_scale_preshuffle_mapping(mapping) -> bool:
+    """Check if a mapping is the *scale* preshuffle mapping.
+    - output is identity, input is non-identity (preshuffle shape),
+    - has a strict floor(flat / D) + Mod(flat, D) decomposition (unique to scale preshuffle).
+    """
     if mapping is None:
         return False
     if len(mapping.output_mapping) != 2:
@@ -74,12 +75,38 @@ def _is_preshuffle_mapping(mapping) -> bool:
         return False
     if not (mapping.is_output_identity() and not mapping.is_input_identity()):
         return False
-    # Preshuffle input expressions always contain floor and Mod from the
-    # e8m0 shuffle formula.
-    input_atoms = set()
-    for expr in mapping.input_mapping.values():
-        input_atoms.update(type(a) for a in sympy.preorder_traversal(expr))
-    return sympy.floor in input_atoms and sympy.Mod in input_atoms
+
+    def _extract_floor_div(expr):
+        """Return (numerator, denominator) for floor(numerator/denominator)."""
+        if expr.func is not sympy.floor or len(expr.args) != 1:
+            return None
+        num, den = sympy.fraction(sympy.together(expr.args[0]))
+        return num, den
+
+    def _is_floor_mod_pair(mod_expr, floor_expr):
+        """Check Mod(flat, D) paired with floor(flat / D)."""
+        if mod_expr.func is not sympy.Mod or len(mod_expr.args) != 2:
+            return False
+        floor_parts = _extract_floor_div(floor_expr)
+        if floor_parts is None:
+            return False
+        floor_num, floor_den = floor_parts
+        mod_num, mod_den = mod_expr.args
+        return (
+            sympy.simplify(mod_num - floor_num) == 0
+            and sympy.simplify(mod_den - floor_den) == 0
+        )
+
+    exprs = list(mapping.input_mapping.values())
+    if len(exprs) != 2:
+        return False
+
+    # Distinguish scale preshuffle from packed-B preshuffle.
+    # Scale preshuffle has exactly one floor(flat / D) and one Mod(flat, D)
+    # over the same (flat, D). Packed-B preshuffle does not.
+    return _is_floor_mod_pair(exprs[0], exprs[1]) or _is_floor_mod_pair(
+        exprs[1], exprs[0]
+    )
 
 
 def _create_wide_read_1d(
@@ -180,7 +207,7 @@ def preshuffle_scale_to_shared(trace: CapturedTrace, constraints: list[Constrain
             continue
         if subs_idxc(input_read.memory_type.address_space) != GLOBAL_ADDRESS_SPACE:
             continue
-        if not _is_preshuffle_mapping(input_read.mapping):
+        if not _is_scale_preshuffle_mapping(input_read.mapping):
             continue
         if input_read.mapping_dynamic_vals:
             continue

@@ -1596,9 +1596,8 @@ from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm, get_tagged_mx
 from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.mxfp_utils import generate_gemm_afp4wfp4_inputs, b_preshuffle, e8m0_shuffle
-from compare_backends import get_default_arch
-from test_asm_backend_e2e import capture_wave_kernel_info
-from waveasm_e2e import WaveASMCompiler, run_with_wave_runtime
+from wave_lang.kernel.wave.utils.run_utils import get_default_arch
+from wave_lang.kernel.wave.waveasm_e2e import WaveASMCompiler, capture_wave_kernel_info, run_with_wave_runtime
 
 M, N, K = {M}, {N}, {K}
 shape = (M, N, K)
@@ -2109,10 +2108,8 @@ def main():
             e8m0_shuffle,
         )
 
-        sys.path.insert(0, "wave_lang/kernel/wave/asm/scripts")
-        from compare_backends import get_default_arch
-
-        from wave_lang.kernel.wave.asm.waveasm_e2e import (
+        from wave_lang.kernel.wave.utils.run_utils import get_default_arch
+        from waveasm.waveasm_e2e import (
             WaveASMCompiler,
             capture_wave_kernel_info,
             run_with_wave_runtime,

@@ -42,7 +42,7 @@ from wave_lang.kernel.wave.perf.benchmark_asm_backend import (
     create_compile_options,
     create_gemm_schedule,
 )
-from wave_lang.kernel.wave.asm.utils import extract_func_from_stream_mlir
+from wave_lang.kernel.wave.utils.mlir_analysis import extract_func_from_stream_mlir
 
 # Shared parity analysis from the unified benchmark script
 try:
@@ -101,7 +101,7 @@ def get_waveasm_translate_path() -> Path:
 
 def get_clang_path() -> str:
     """Get path to clang++ for assembly compilation."""
-    from wave_lang.kernel.wave.asm.waveasm_e2e import get_clang_path as _get
+    from waveasm.waveasm_e2e import get_clang_path as _get
 
     return _get()
 

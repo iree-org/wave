@@ -778,8 +778,6 @@ def compile_launchable_to_mlir(
     workgroup_size = launchable.hardware_constraints[0].threads_per_block
     subgroup_size = launchable.hardware_constraints[0].threads_per_wave
 
-    # Set MMA type for ASM backend dispatch
-    options.mma_type = launchable.hardware_constraints[0].mma_type
     # Setup LLVM func compilation configs.
     llvm_func_config = {}
     if options.denorm_fp_math_f32:
@@ -1137,7 +1135,11 @@ def wave_compile(
             use_local_scope=options.use_local_scope,
         )
 
-        if options.print_mlir and not options.use_wave_asm_backend:
+        if (
+            options.print_mlir
+            and options.backend != "asm"
+            and not options.compile_to_asm
+        ):
             if options.print_mlir_file:
                 write_file(options.print_mlir_file, "w", asm)
             else:
@@ -1233,32 +1235,20 @@ def wave_compile(
 
 
 def _generate_asm_code(mb, options):
-    """Generate AMDGCN assembly from MLIR module."""
+    """Generate AMDGCN assembly from MLIR module via C++ WaveASM backend."""
+    import os
+    import subprocess
+    import tempfile
+    from wave_lang.support.ir_imports import Context, Module, func_d
+    from wave_lang.support.detect_waveasm import get_waveasm_translate
+    from .utils.mlir_analysis import walk_ops_recursively, should_skip_function
+
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
         != LocationCaptureLevel.NONE
         and not options.drop_debug_info_before_mlir,
         use_local_scope=options.use_local_scope,
     )
-
-    if options.use_wave_asm_backend:
-        return _generate_asm_code_waveasm(mlir_asm, options)
-
-    from .asm.kernel_module_compiler import KernelModuleCompiler
-
-    return KernelModuleCompiler(
-        targetid=options.target, codeobj=options.codeobj, mma_type=options.mma_type
-    ).compile_mlir_string(mlir_asm)
-
-
-def _generate_asm_code_waveasm(mlir_asm, options):
-    """Generate AMDGCN assembly via the WaveASM (waveasm-translate) backend."""
-    import os
-    import subprocess
-    import tempfile
-    from wave_lang.support.ir_imports import Context, Module, func_d
-    from wave_lang.support.detect_waveasm import get_waveasm_translate
-    from .asm.mlir_analysis import walk_ops_recursively, should_skip_function
 
     # WaveASM expects a bare func.func (no stream wrapper), so extract
     # the kernel function and wrap it in a plain module.
@@ -1402,7 +1392,7 @@ def _compile_asm_to_binary(asm_code, options):
 
 def validate_options(options: WaveCompileOptions):
     if options.wave_runtime and options.run_bench:
-        raise ValueError("Banchmarking is not supported in wave_runtime yet")
+        raise ValueError("Benchmarking is not supported in wave_runtime yet")
 
     if options.backend not in ["llvm", "asm"]:
         raise ValueError(
