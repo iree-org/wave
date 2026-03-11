@@ -1,4 +1,4 @@
-// RUN: waveasm-translate %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate %s | FileCheck %s
 //
 // Test: scf.if where the then branch yields a computed VGPR value and the
 // else branch yields a constant (which translates to an immediate).
