@@ -386,6 +386,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     a_scale_preshuffle: bool = True,
     reorder_workgroups=True,
     group_size_n=32,
+    output_dtype=tkl.f32,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
@@ -518,7 +519,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -539,6 +540,8 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
             )
             return acc
 
+        if output_dtype == tkl.bf16:
+            repeat = tkw.cast(repeat, tkl.bf16)
         tkw.write(repeat, c)
 
     hyperparams = {

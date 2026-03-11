@@ -10,8 +10,8 @@
 // CHECK: waveasm.s_load_dword
 // CHECK: waveasm.s_load_dword
 
-// Test 2: SRD buffer size is max (0xFFFFFFFF) for dynamic memrefs
-// CHECK: 0xFFFFFFFF
+// Test 2: SRD buffer size is 0x7FFFFFFE (sentinel-safe max) for dynamic memrefs
+// CHECK: 0x7FFFFFFE
 
 // Test 3: scalar args moved to VGPRs after SRD setup
 // CHECK: v_mov_b32 v2

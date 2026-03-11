@@ -148,7 +148,8 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
 
   int64_t userSgprCount = 2;
   if (isGfx950) {
-    userSgprCount = 2 + numArgs * 2;
+    // Hardware limits user SGPRs to 16 on gfx950.
+    userSgprCount = std::min(int64_t(16), 2 + numArgs * 2);
   }
 
   int64_t wgIdXIndex = userSgprCount;
@@ -191,6 +192,18 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
                   std::to_string(ldsBlocks * 128));
   lines.push_back("  .amdhsa_private_segment_fixed_size 0");
 
+  // Kernarg size must account for all args the runtime packs: buffer ptrs +
+  // dynamic dims + stride args. Use 2x base to safely accommodate strides.
+  {
+    int64_t numArgsForSize = 2;
+    if (auto numArgsAttr =
+            program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
+      numArgsForSize = numArgsAttr.getInt();
+    }
+    int64_t kernargSize = numArgsForSize * 8 * 2;
+    lines.push_back("  .amdhsa_kernarg_size " + std::to_string(kernargSize));
+  }
+
   auto targetAttr = program.getTarget();
   auto targetKind = targetAttr.getTargetKind();
   int64_t preloadLength = program.getKernargPreloadLength();
@@ -202,7 +215,9 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
             program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
       numArgs = numArgsAttr.getInt();
     }
-    preloadLength = numArgs * 2;
+    // Hardware limits user SGPRs to 16 on gfx950 (2 for kernarg ptr + 14 max
+    // preloaded). Overflow args are loaded via explicit s_load in the prologue.
+    preloadLength = std::min(int64_t(14), numArgs * 2);
   }
 
   int64_t userSgprCount = 2;
@@ -315,7 +330,10 @@ MetadataEmitter::emitMetadataYAML(int64_t peakVGPRs, int64_t peakSGPRs,
       numArgs = kernargPreload / 2;
     }
   }
-  int64_t kernargSize = numArgs * 8;
+  // The runtime packs: buffer_ptrs (8B each) + dynamic_dims (8B each) +
+  // stride_args (8B each). Strides are appended by the runtime for each 2D+
+  // tensor binding. Use 2x the base size to safely accommodate strides.
+  int64_t kernargSize = numArgs * 8 * 2;
   lines.push_back("    .args:");
   for (int64_t i = 0; i < numArgs; ++i) {
     lines.push_back("      - .name:       arg" + std::to_string(i) + "_ptr");

@@ -325,6 +325,151 @@ jobs:
           cmake --build . --target check-water
 
 
+  check_water_changes:
+    name: Check for water/ changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} -- water/)
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  coverage_water:
+    name: "CDNA4 :: Water Code Coverage"
+    runs-on: linux-mi35x-1gpu-ossci-iree-org
+    timeout-minutes: 60
+    needs: [build_llvm_linux, check_water_changes]
+    if: needs.check_water_changes.outputs.changed == 'true'
+    permissions:
+      pull-requests: write
+    env:
+      LLVM_DIR: ${{ github.workspace }}/llvm-mlir/_mlir_install
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld llvm libclang-rt-dev
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          pip-install: -r water/requirements-dev.txt
+
+      - name: Setup Cache Vars
+        run: |
+          echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
+
+      - name: Cache LLVM-MLIR
+        id: cache-llvm-mlir
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: llvm-mlir/_mlir_install/**
+          key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
+
+      - name: Build water with coverage
+        run: |
+          export EXTERNAL_LIT=${GITHUB_WORKSPACE}/water/scripts/runlit.py
+          mkdir -p cmake_build
+          cd cmake_build
+          export CC=clang
+          export CXX=clang++
+          cmake ${GITHUB_WORKSPACE}/water                                      \
+            -GNinja                                                            \
+            -DCMAKE_BUILD_TYPE=Release                                         \
+            -DLLVM_DIR=${LLVM_DIR}/lib/cmake/llvm                              \
+            -DMLIR_DIR=${LLVM_DIR}/lib/cmake/mlir                              \
+            -DBUILD_SHARED_LIBS=OFF                                            \
+            -DLLVM_EXTERNAL_LIT=${EXTERNAL_LIT}                                \
+            -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
+            -DWATER_ENABLE_PYTHON=ON                                           \
+            -DWATER_ENABLE_COVERAGE=ON
+          cmake --build .
+
+      - name: Run tests with coverage
+        run: |
+          cd cmake_build
+          mkdir -p coverage
+          export LLVM_PROFILE_FILE="$PWD/coverage/default-%p-%m.profraw"
+          cmake --build . --target check-water
+
+      - name: Process coverage data
+        run: |
+          cd cmake_build
+          llvm-profdata merge -sparse coverage/*.profraw -o coverage.profdata
+          llvm-cov report ./bin/water-opt                                      \
+            -show-region-summary=false                                         \
+            -instr-profile=coverage.profdata                                   \
+            -sources ${GITHUB_WORKSPACE}/water/lib                             \
+                     ${GITHUB_WORKSPACE}/water/include                         \
+            > coverage-summary.txt
+          llvm-cov show ./bin/water-opt                                        \
+            -instr-profile=coverage.profdata                                   \
+            -sources ${GITHUB_WORKSPACE}/water/lib                             \
+                     ${GITHUB_WORKSPACE}/water/include                         \
+            --format=html -output-dir=coverage-html
+          cat coverage-summary.txt
+
+      - name: Upload coverage HTML report
+        id: upload-coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: water-coverage-html
+          path: cmake_build/coverage-html
+
+      - name: Post coverage comment on PR
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ARTIFACT_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-coverage.outputs.artifact-id }}
+        run: |
+          cd cmake_build
+          {
+            echo '<!-- water-coverage -->'
+            echo '## Water Code Coverage'
+            echo ''
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+            echo ''
+            echo "[Download full HTML report]($ARTIFACT_URL)"
+          } > comment-body.txt
+
+          API_URL="https://api.github.com/repos/${{ github.repository }}"
+          AUTH_HEADER="Authorization: token $GITHUB_TOKEN"
+
+          EXISTING=$(curl -s -H "$AUTH_HEADER" \
+            "$API_URL/issues/${{ github.event.number }}/comments" | \
+            jq '.[] | select(.body | contains("<!-- water-coverage -->")) | .id' | head -1)
+
+          PAYLOAD=$(jq -Rs '{body: .}' comment-body.txt)
+
+          if [ -n "$EXISTING" ]; then
+            curl -s -X PATCH -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$API_URL/issues/comments/$EXISTING"
+          else
+            curl -s -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$API_URL/issues/${{ github.event.number }}/comments"
+          fi
+
+
   test_linux_waveasm:
     name: "${{ matrix.name }} :: SHARED_LIBS ${{ matrix.shared_libs }} :: Run waveasm tests"
     strategy:

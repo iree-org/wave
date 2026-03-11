@@ -62,11 +62,14 @@ int64_t getElementBytes(Type type) {
 //===----------------------------------------------------------------------===//
 
 int64_t computeBufferSizeFromMemRef(MemRefType memrefType) {
-  // Always use max SRD num_records. All bounds checking is handled in
-  // software (arith.select sentinel addresses, exec masking, or static
-  // guarantees), so hardware bounds checking via SRD is not needed.
+  // Use (1 << 31) - 2 = 0x7FFFFFFE as num_records. The Wave Python frontend
+  // emits OOB sentinel index values at (valid_bytes + elem_bytes) / elem_bytes
+  // which lands at byte offset 0x7FFFFFFF. With num_records = 0x7FFFFFFE the
+  // sentinel is one byte past the SRD range, so hardware returns 0 for OOB
+  // lanes. Using 0xFFFFFFFF would make the sentinel "in bounds" and cause a
+  // real access to unmapped memory, triggering HSA page faults.
   (void)memrefType;
-  return 0xFFFFFFFF;
+  return 0x7FFFFFFE;
 }
 
 //===----------------------------------------------------------------------===//

@@ -180,13 +180,13 @@ def test_preshuffle_scale_merge_block_k_256():
     # CHECK-LABEL: test_preshuffle_scale_merge_block_k_256
 
     # Each scale tensor produces 2 merged vector<4xi8> loads from global.
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
 
     # No unmerged scalar scale loads from global should remain.
-    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<1xi8>
 
     # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
     # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands.  Check %REG[1] as a simple check that we are doing a non-zero index

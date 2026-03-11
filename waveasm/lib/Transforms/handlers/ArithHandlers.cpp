@@ -531,14 +531,20 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
   if (numElems > 1) {
     ctx.getMapper().mapValue(truncOp.getResult(), *src);
   } else {
+    Value srcVal = *src;
+    // VALU conversion instructions cannot read from AGPR.
+    if (isAGPRType(srcVal.getType())) {
+      auto vregTmp = ctx.createVRegType();
+      srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
+    }
     auto vregType = ctx.createVRegType();
     Value result;
     if (srcElemType.isF32() && dstElemType.isBF16()) {
-      result = V_CVT_BF16_F32::create(builder, loc, vregType, *src);
+      result = V_CVT_BF16_F32::create(builder, loc, vregType, srcVal);
     } else if (srcElemType.isF32() && dstElemType.isF16()) {
-      result = V_CVT_F16_F32::create(builder, loc, vregType, *src);
+      result = V_CVT_F16_F32::create(builder, loc, vregType, srcVal);
     } else {
-      result = V_MOV_B32::create(builder, loc, vregType, *src);
+      result = V_MOV_B32::create(builder, loc, vregType, srcVal);
     }
     ctx.getMapper().mapValue(truncOp.getResult(), result);
   }
@@ -558,15 +564,22 @@ LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx) {
   Type srcElemType = getElementTypeOrSelf(extOp.getIn().getType());
   Type dstElemType = getElementTypeOrSelf(extOp.getResult().getType());
 
+  Value srcVal = *src;
+  // VALU conversion instructions cannot read from AGPR.
+  if (isAGPRType(srcVal.getType())) {
+    auto vregTmp = ctx.createVRegType();
+    srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
+  }
+
   auto vregType = ctx.createVRegType();
   Value result;
 
   if (srcElemType.isBF16() && dstElemType.isF32()) {
-    result = V_CVT_F32_BF16::create(builder, loc, vregType, *src);
+    result = V_CVT_F32_BF16::create(builder, loc, vregType, srcVal);
   } else if (srcElemType.isF16() && dstElemType.isF32()) {
-    result = V_CVT_F32_F16::create(builder, loc, vregType, *src);
+    result = V_CVT_F32_F16::create(builder, loc, vregType, srcVal);
   } else {
-    result = V_MOV_B32::create(builder, loc, vregType, *src);
+    result = V_MOV_B32::create(builder, loc, vregType, srcVal);
   }
 
   ctx.getMapper().mapValue(extOp.getResult(), result);
