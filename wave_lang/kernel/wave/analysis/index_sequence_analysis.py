@@ -699,14 +699,18 @@ def populate_read_write_source_indices(
     be propagated to the rest of the graph.
     """
     index: dict[IndexSymbol, IndexSequence] = {}
+    elements_per_thread_set = False
     for dim in node.indexing_dims:
-        elements_per_thread = (
-            1
-            if not is_contiguous_dim(
+        # Set elements per thread for the first contiguous dimension.
+        elements_per_thread = 1
+        if (
+            is_contiguous_dim(
                 dim, node.indexing_dims, hardware_constraint.vector_shapes
             )
-            else node.elements_per_thread
-        )
+            and not elements_per_thread_set
+        ):
+            elements_per_thread = node.elements_per_thread
+            elements_per_thread_set = True
 
         wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
 
