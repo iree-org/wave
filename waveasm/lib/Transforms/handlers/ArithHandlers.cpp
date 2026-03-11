@@ -244,8 +244,7 @@ LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
       return success();
     }
     if (modulus >= 2) {
-      Value q =
-          emitConstantUnsignedFloordiv(*lhs, modulus, builder, loc, ctx);
+      Value q = emitConstantUnsignedFloordiv(*lhs, modulus, builder, loc, ctx);
       auto dImm = ctx.createImmType(modulus);
       auto dConst = ConstantOp::create(builder, loc, dImm, modulus);
       Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, dConst);

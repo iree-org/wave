@@ -42,8 +42,8 @@ namespace waveasm {
 //   1. Float rcp seed  →  Newton-Raphson refinement  →  exact reciprocal
 //   2. q = mulhi(x, recip)
 //   3. Two remainder-based correction steps
-Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
-                           Location loc, TranslationContext &ctx) {
+Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
+                           TranslationContext &ctx) {
   auto vregType = ctx.createVRegType();
   auto zeroImm = ctx.createImmType(0);
   auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
@@ -79,16 +79,16 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
   // First correction: if rem >= d then q++, rem -= d
   Value remMinusD = V_SUBREV_U32::create(builder, loc, vregType, d, rem);
   V_CMP_GE_U32::create(builder, loc, rem, d);
-  Value inc1 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
-                                     oneVgpr, zeroConst);
+  Value inc1 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst, oneVgpr,
+                                     zeroConst);
   q = V_ADD_U32::create(builder, loc, vregType, q, inc1);
-  rem = V_CNDMASK_B32::create(builder, loc, vregType, rem, remMinusD,
-                               zeroConst);
+  rem =
+      V_CNDMASK_B32::create(builder, loc, vregType, rem, remMinusD, zeroConst);
 
   // Second correction: if rem >= d then q++
   V_CMP_GE_U32::create(builder, loc, rem, d);
-  Value inc2 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
-                                     oneVgpr, zeroConst);
+  Value inc2 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst, oneVgpr,
+                                     zeroConst);
   q = V_ADD_U32::create(builder, loc, vregType, q, inc2);
 
   return q;
@@ -151,9 +151,8 @@ static UnsignedMagic computeMagicUnsigned(uint32_t d) {
   return {static_cast<uint32_t>(q2 + 1), p - 32, needsAdd};
 }
 
-Value emitConstantUnsignedFloordiv(Value x, int64_t divisor,
-                                   OpBuilder &builder, Location loc,
-                                   TranslationContext &ctx) {
+Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
+                                   Location loc, TranslationContext &ctx) {
   assert(divisor >= 2 && "divisor must be >= 2");
 
   auto vregType = ctx.createVRegType();
@@ -170,7 +169,8 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor,
 
   Value q = V_MUL_HI_U32::create(builder, loc, vregType, x, magicConst);
 
-  // Emit a right shift by `amount` bits, or return `val` unchanged if amount==0.
+  // Emit a right shift by `amount` bits, or return `val` unchanged if
+  // amount==0.
   auto emitShiftRight = [&](Value val, int64_t amount) -> Value {
     if (amount == 0)
       return val;
@@ -627,8 +627,7 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
 
           // Non-power-of-2 constant: x mod d = x - floordiv(x, d) * d
           if (val >= 2) {
-            Value q =
-                emitConstantUnsignedFloordiv(lhs, val, builder, loc, ctx);
+            Value q = emitConstantUnsignedFloordiv(lhs, val, builder, loc, ctx);
             auto dImm = ctx.createImmType(val);
             auto dConst = ConstantOp::create(builder, loc, dImm, val);
             Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, dConst);
