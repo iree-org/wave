@@ -1323,6 +1323,7 @@ def _dbuf_mxfp4_helper(
     dynamic_dims=False,
     use_buffer_ops=True,
     use_schedule=True,
+    output_dtype="f32",
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1332,6 +1333,9 @@ def _dbuf_mxfp4_helper(
 
     This exercises the C++ ASM backend on MLIR produced by the full
     Wave scheduling pipeline (MANUAL schedule + wave_schedule clusters).
+
+    Args:
+        output_dtype: Output element type, one of "f32" or "bf16".
     """
     if not is_cdna4():
         pytest.skip("MXFP4 double-buffered GEMM only supported on gfx950+ (CDNA4)")
@@ -1340,6 +1344,7 @@ def _dbuf_mxfp4_helper(
     skip_if_no_wave_lang()
 
     import torch
+    import wave_lang.kernel.lang as tkl
 
     from wave_lang.kernel.wave.templates import (
         get_tagged_mxfp4_gemm,
@@ -1358,6 +1363,12 @@ def _dbuf_mxfp4_helper(
         e8m0_shuffle,
     )
 
+    dtype_map = {
+        "f32": (tkl.f32, torch.float32),
+        "bf16": (tkl.bf16, torch.bfloat16),
+    }
+    tkl_dtype, torch_dtype = dtype_map[output_dtype]
+
     # Get tagged kernel + options (same as 7.1_schedule.py)
     # Use preshuffle B + asymmetric schedule with wave_shape=(1,4) for 4-wave,
     # standard double-buffer with wave_shape=(4,2) for 8-wave.
@@ -1367,6 +1378,7 @@ def _dbuf_mxfp4_helper(
             block,
             wave_shape=(1, 4),
             reorder_workgroups=not dynamic_dims,
+            output_dtype=tkl_dtype,
         )
         if use_schedule:
             schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
@@ -1378,6 +1390,7 @@ def _dbuf_mxfp4_helper(
             shape,
             block,
             wave_shape=(4, 2),
+            output_dtype=tkl_dtype,
         )
         if use_schedule:
             schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
@@ -1391,8 +1404,6 @@ def _dbuf_mxfp4_helper(
     options.compile_to_mlir = False
     options.use_buffer_ops = use_buffer_ops
     options = set_default_run_config(options)
-
-    import wave_lang.kernel.lang as tkl
 
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1418,7 +1429,7 @@ def _dbuf_mxfp4_helper(
 
     x, w = x.cuda(), w.cuda()
     x_scales, w_scales = x_scales.cuda(), w_scales.cuda()
-    c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
+    c = torch.zeros(shape[0], shape[1], dtype=torch_dtype).cuda()
 
     # Capture MLIR with schedule applied
     kernel_info = capture_wave_kernel_info(
@@ -1509,8 +1520,15 @@ def _dbuf_mxfp4_helper(
 @param_bool("dynamic_dims", "dyn")
 @param_bool("use_buffer_ops", "bufops")
 @param_bool("use_schedule", "sched")
+@pytest.mark.parametrize("output_dtype", ["f32", "bf16"])
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
-    dynamic_dims, use_buffer_ops, use_schedule, compiler, backend, dump_asm
+    dynamic_dims,
+    use_buffer_ops,
+    use_schedule,
+    output_dtype,
+    compiler,
+    backend,
+    dump_asm,
 ):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
@@ -1529,6 +1547,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         dynamic_dims=dynamic_dims,
         use_buffer_ops=use_buffer_ops,
         use_schedule=use_schedule,
+        output_dtype=output_dtype,
     )
 
 

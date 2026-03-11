@@ -1285,6 +1285,14 @@ convertF32ToBF16ForStore(Value srcData, int64_t numElems,
                          Location loc) {
   Type srcType = srcData.getType();
 
+  // VALU conversion instructions cannot read from AGPR. Move to VGPR first.
+  if (isAGPRType(srcType)) {
+    int64_t size = getRegSize(srcType);
+    auto vregType = ctx.createVRegType(size, size > 1 ? size : 1);
+    srcData = V_ACCVGPR_READ_B32::create(builder, loc, vregType, srcData);
+    srcType = srcData.getType();
+  }
+
   auto extractF32Elem = [&](int64_t i) -> Value {
     if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
       int64_t baseIdx = pvreg.getIndex() + i;
