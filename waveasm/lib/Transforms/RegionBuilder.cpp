@@ -120,6 +120,9 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
     isMemrefIterArg.push_back(isLDSMemref);
 
     if (isLDSMemref) {
+      // Memref iter_arg: resolve its LDS base offset and carry it as an SGPR.
+      // This implements the ping-pong double-buffering pattern where each
+      // iteration swaps which LDS buffer is "current" vs "next".
       Value offsetSgpr = resolveLDSOffset(arg, ctx, builder, loc);
       if (!offsetSgpr) {
         forOp.emitError("LDS memref iter_arg has no tracked base offset");
@@ -185,6 +188,9 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
       // waveasm block arg. If a remapping step is inserted between
       // RegionBuilder and the handlers, this association will break.
       if (iterIdx < isMemrefIterArg.size() && isMemrefIterArg[iterIdx]) {
+        // The block argument itself IS the LDS offset (as an SGPR).
+        // Set it as the LDS base offset for the original memref SSA value
+        // so that operations inside the loop body can find it.
         ctx.setLDSBaseOffset(origArg, blockArg);
       }
       iterIdx++;
@@ -237,6 +243,10 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
     yieldIdx++;
 
     if (isMemref) {
+      // For memref yield values, resolve the LDS base offset of the yielded
+      // memref. This is the key to the double-buffer swap: the yield swaps
+      // which memref is passed to which iter_arg position, so the SGPR
+      // carrying the LDS offset also swaps.
       Value offsetSgpr = resolveLDSOffset(result, ctx, builder, loc);
       if (!offsetSgpr) {
         yieldOp.emitError("yielded LDS memref has no tracked base offset");

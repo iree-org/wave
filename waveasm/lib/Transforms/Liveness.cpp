@@ -19,6 +19,63 @@ using namespace mlir;
 namespace waveasm {
 
 //===----------------------------------------------------------------------===//
+// Iter-arg classification helpers
+//===----------------------------------------------------------------------===//
+
+/// Return true when iterArg at position i is a block_arg of bodyBlock at a
+/// different position (the LDS double-buffer ping-pong swap pattern).
+static bool isSwapPatternIterArg(Value iterArg, Block &bodyBlock, unsigned i) {
+  if (auto ba = dyn_cast<BlockArgument>(iterArg))
+    if (ba.getOwner() == &bodyBlock && ba.getArgNumber() != i)
+      return true;
+  return false;
+}
+
+/// Detect a write-after-read (WAR) hazard between a buffer_load iter_arg
+/// and the block_arg it feeds back into.
+///
+/// In pipelined schedules, next-iteration loads can be interleaved with
+/// MFMAs that still consume the current iteration's block_arg.  If the
+/// allocator ties them to the same register, the MFMA silently reads the
+/// new load value instead of the old one.
+///
+/// For single-element loads (buffer_load_ubyte/sbyte/ushort/sshort), the
+/// block_arg is consumed indirectly through vector.bitcast / vector.extract
+/// that share the same physical register.  The direct use-point check
+/// misses these transitive uses, so we unconditionally flag them.
+static bool hasBufferLoadWARHazard(Value iterArg, Value blockArg,
+                                   const LivenessInfo &info) {
+  if (isa<BlockArgument>(iterArg))
+    return false;
+  auto *defOp = iterArg.getDefiningOp();
+  if (!defOp)
+    return false;
+  auto opName = defOp->getName().getStringRef();
+  if (!opName.contains("buffer_load") || opName.contains("_lds"))
+    return false;
+
+  // Single-element loads: unconditionally untie (transitive uses hidden).
+  if (opName.contains("_ubyte") || opName.contains("_sbyte") ||
+      opName.contains("_ushort") || opName.contains("_sshort")) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  WAR hazard (single-element load): " << opName << "\n");
+    return true;
+  }
+
+  // Multi-register loads: check for def/use overlap.
+  auto iterDefIt = info.defPoints.find(iterArg);
+  auto baUseIt = info.usePoints.find(blockArg);
+  if (iterDefIt != info.defPoints.end() && baUseIt != info.usePoints.end()) {
+    int64_t loadDef = iterDefIt->second;
+    for (int64_t usePoint : baUseIt->second) {
+      if (usePoint >= loadDef)
+        return true;
+    }
+  }
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
 // Region Utilities
 //===----------------------------------------------------------------------===//
 
@@ -496,36 +553,13 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
 
       // Condition iter_arg -> block arg.
-      // Skip when swap pattern or WAR hazard (see tiedPairs section).
+      // Skip swap patterns and WAR hazards so the allocator keeps them
+      // in separate registers (see hasBufferLoadWARHazard).
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        bool isSwap = false;
-        if (auto ba = dyn_cast<BlockArgument>(iterArg)) {
-          if (ba.getOwner() == &bodyBlock && ba.getArgNumber() != i)
-            isSwap = true;
-        }
-        bool hasWAR = false;
-        if (!isSwap && !isa<BlockArgument>(iterArg)) {
-          if (auto *defOp = iterArg.getDefiningOp()) {
-            auto opName = defOp->getName().getStringRef();
-            if (opName.contains("buffer_load") &&
-                !opName.contains("_lds")) {
-              auto iterDefIt = info.defPoints.find(iterArg);
-              auto baUseIt = info.usePoints.find(blockArg);
-              if (iterDefIt != info.defPoints.end() &&
-                  baUseIt != info.usePoints.end()) {
-                int64_t loadDef = iterDefIt->second;
-                for (int64_t usePoint : baUseIt->second) {
-                  if (usePoint >= loadDef) {
-                    hasWAR = true;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        }
-        if (!isSwap && !hasWAR && info.ranges.contains(iterArg))
+        bool skip = isSwapPatternIterArg(iterArg, bodyBlock, i) ||
+                    hasBufferLoadWARHazard(iterArg, blockArg, info);
+        if (!skip && info.ranges.contains(iterArg))
           members.push_back(iterArg);
       }
 
@@ -575,55 +609,9 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
-        bool isSwapPattern = false;
-        if (auto ba = dyn_cast<BlockArgument>(iterArg)) {
-          if (ba.getOwner() == &bodyBlock && ba.getArgNumber() != i)
-            isSwapPattern = true;
-        }
-        // Also skip the tie when the iter_arg's live range overlaps
-        // with the block_arg's live range.  When the schedule
-        // interleaves new-value loads with old-value consumers (e.g.
-        // B-matrix loads interleaved with MFMAs that still read the
-        // old iter_arg data), tying would assign them the same
-        // physical register, creating a WAR hazard: the load
-        // overwrites the register before the last MFMA reads it.
-        // Also skip when the iter_arg is a global buffer load whose result
-        // is interleaved with MFMAs that still consume the old block_arg.
-        // Tying would assign them the same physical register, creating a
-        // WAR hazard: the load overwrites the register before the last
-        // MFMA reads it.  Only buffer loads (BUFFER_LOAD_DWORD*) and
-        // ds_read (DS_READ_B*) suffer from this — MFMA accumulators are
-        // fine because the MFMA instruction latches inputs atomically.
-        // Untie when the iter_arg is a global buffer load whose
-        // definition overlaps with active uses of the block_arg.
-        // In pipelined schedules, next-iteration B-data loads can be
-        // interleaved with MFMAs that still need the current iteration's
-        // B-data.  Hardware data dependencies cause the MFMA to stall
-        // until the buffer_load completes, so tying would force the MFMA
-        // to consume the NEW data instead of the OLD iter_arg value.
-        bool hasWARHazard = false;
-        if (!isSwapPattern && !isa<BlockArgument>(iterArg)) {
-          if (auto *defOp = iterArg.getDefiningOp()) {
-            auto opName = defOp->getName().getStringRef();
-            if (opName.contains("buffer_load") &&
-                !opName.contains("_lds")) {
-              auto iterDefIt = info.defPoints.find(iterArg);
-              auto baUseIt = info.usePoints.find(blockArg);
-              if (iterDefIt != info.defPoints.end() &&
-                  baUseIt != info.usePoints.end()) {
-                int64_t loadDef = iterDefIt->second;
-                for (int64_t usePoint : baUseIt->second) {
-                  if (usePoint >= loadDef) {
-                    hasWARHazard = true;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        }
-        if (!isSwapPattern && !hasWARHazard &&
-            info.ranges.contains(iterArg) &&
+        bool skip = isSwapPatternIterArg(iterArg, bodyBlock, i) ||
+                    hasBufferLoadWARHazard(iterArg, blockArg, info);
+        if (!skip && info.ranges.contains(iterArg) &&
             !tc.tiedPairs.contains(iterArg))
           tc.tiedPairs[iterArg] = blockArg;
       }

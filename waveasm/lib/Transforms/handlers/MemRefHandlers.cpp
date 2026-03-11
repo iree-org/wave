@@ -312,7 +312,7 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
 /// The offset is needed by eliminate_epilogue's _compute_valid_bytes to clamp
 /// the SRD NUM_RECORDS field so OOB loads in extended iterations return zero.
 LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
-                                                  TranslationContext &ctx) {
+                                                 TranslationContext &ctx) {
   auto metaOp = cast<memref::ExtractStridedMetadataOp>(op);
   Value source = metaOp.getSource();
 

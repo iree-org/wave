@@ -353,9 +353,8 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
 /// Static constants emit s_mov_b32; dynamic values (e.g. from arith.select
 /// for the branchless g2s guard) go through v_readfirstlane_b32 + s_add_u32
 /// (non-Pure to avoid DCE). Falls back to hardware maximum if absent.
-static void emitSrdNumRecords(OpBuilder &builder, Location loc,
-                              int64_t srdBase, Operation *op,
-                              TranslationContext &ctx) {
+static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
+                              Operation *op, TranslationContext &ctx) {
   auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
   Value validBytesVal = castOp.getValidBytes();
 
@@ -371,8 +370,7 @@ static void emitSrdNumRecords(OpBuilder &builder, Location loc,
     auto mapped = ctx.getMapper().getMapped(validBytesVal);
     if (mapped) {
       Value src = *mapped;
-      auto dstType =
-          PSRegType::get(builder.getContext(), srdBase + 2, 1);
+      auto dstType = PSRegType::get(builder.getContext(), srdBase + 2, 1);
       if (isVGPRType(src.getType())) {
         V_READFIRSTLANE_B32::create(builder, loc, dstType, src);
       } else {
@@ -460,8 +458,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   if (hasCacheSwizzle) {
     bool hasGatherUser = false;
     for (auto &use : op->getResult(0).getUses()) {
-      if (use.getOwner()->getName().getStringRef() ==
-          "amdgpu.gather_to_lds") {
+      if (use.getOwner()->getName().getStringRef() == "amdgpu.gather_to_lds") {
         hasGatherUser = true;
         break;
       }
@@ -576,10 +573,10 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     RawOp::create(builder, loc, mov2);
   }
 
-  uint64_t word3 = (hasCacheSwizzle && !suppressWord3Swizzle) ? 0x27000 : 0x20000;
-  std::string mov3 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x" +
-      llvm::utohexstr(word3);
+  uint64_t word3 =
+      (hasCacheSwizzle && !suppressWord3Swizzle) ? 0x27000 : 0x20000;
+  std::string mov3 = "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x" +
+                     llvm::utohexstr(word3);
   RawOp::create(builder, loc, mov3);
 
   auto srdType = ctx.createSRegType(4, 4);
@@ -714,6 +711,7 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
         ldsBaseOffsetConst = immType.getValue();
         hasLdsBaseOffset = true;
       } else {
+        // Dynamic offset: SGPR-carried from a memref iter_arg (pipelined loop)
         hasLdsDynamicBaseOffset = true;
         ldsDynamicBaseOffset = *baseOffset;
       }

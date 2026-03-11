@@ -447,7 +447,6 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
     return op->emitError("operands not mapped");
   }
 
-
   // Restore the materialized boolean VGPR (0/1) back into VCC
   Value zeroConst = createImmConst(0, builder, loc, ctx);
   V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);

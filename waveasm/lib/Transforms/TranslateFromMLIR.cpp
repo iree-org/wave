@@ -1833,7 +1833,7 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx);
 LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
-                                                  TranslationContext &ctx);
+                                                 TranslationContext &ctx);
 
 // From SCFHandlers.cpp
 LogicalResult handleSCFFor(Operation *op, TranslationContext &ctx);

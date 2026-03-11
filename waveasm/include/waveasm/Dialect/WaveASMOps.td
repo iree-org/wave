@@ -454,6 +454,9 @@ def WaveASM_V_SIN_F32 : VALUUnaryOp<"v_sin_f32">;
 def WaveASM_V_COS_F32 : VALUUnaryOp<"v_cos_f32">;
 
 // Lane operations (VGPR -> SGPR)
+// Not Pure: emitSrdNumRecords uses this op to write a dynamic validBytes
+// into a precolored SRD register without capturing the SSA result.  With
+// Pure, DCE would eliminate it and silently break the SRD.
 def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", []> {
   let summary = "Read first lane of VGPR to SGPR";
   let description = [{

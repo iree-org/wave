@@ -1141,6 +1141,7 @@ def _dbuf_mxfp4_helper(
     output_dtype="f32",
     wave_shape=None,
     reorder_workgroups=None,
+    eliminate_epilogue=False,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1197,8 +1198,11 @@ def _dbuf_mxfp4_helper(
             reorder_workgroups=reorder_workgroups,
             output_dtype=tkl_dtype,
         )
+        options.eliminate_epilogue = eliminate_epilogue
         if use_schedule:
-            schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+            schedule = get_mxfp4_asymmetric_schedule(
+                eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+            )
         else:
             schedule = None
             options.schedule = SchedulingType.NONE
@@ -1338,6 +1342,7 @@ def _dbuf_mxfp4_helper(
 @param_bool("dynamic_dims", "dyn")
 @param_bool("use_buffer_ops", "bufops")
 @param_bool("use_schedule", "sched")
+@pytest.mark.parametrize("eliminate_epilogue", [True, False], ids=["ee", "no_ee"])
 @pytest.mark.parametrize("output_dtype", ["f32", "bf16"])
 @pytest.mark.parametrize(
     "shape,block,wave_shape",
@@ -1357,6 +1362,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     dynamic_dims,
     use_buffer_ops,
     use_schedule,
+    eliminate_epilogue,
     output_dtype,
     compiler,
     dump_asm,
@@ -1366,6 +1372,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4),
     preshuffle B, and various block configurations.
     When use_schedule=False, disables manual scheduling entirely.
+    Tests both eliminate_epilogue=True and False paths.
     """
     block_id = f"{block[0]}x{block[1]}x{block[2]}"
 
@@ -1373,13 +1380,34 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     if block_id in ("224x160x256", "256x160x256"):
         pytest.skip("C++ ASM backend generates OOB memory access for this block shape")
 
-    # VGPR overflow: scheduled pipeline exceeds 256 VGPR hardware limit.
-    if block_id in ("256x192x256", "256x224x256") and use_schedule:
+    # VGPR overflow: 256x224x256 scheduled pipeline exceeds 256 VGPR limit.
+    if block_id == "256x224x256" and use_schedule:
         pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
 
-    # Dynamic dims + schedule on (2,2) wave shape: numerical mismatch.
-    if block_id == "128x32x256" and dynamic_dims and use_schedule:
-        pytest.xfail("Numerical mismatch with dynamic dims on (2,2) wave shape")
+    # VGPR overflow for 256x192x256: ee=True reduces register pressure
+    # enough to pass with static dims; ee=False and dynamic dims still overflow.
+    if block_id == "256x192x256" and use_schedule:
+        if not eliminate_epilogue:
+            pytest.xfail(
+                "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
+                "(ee=False); ee=True resolves this for 256x192x256"
+            )
+        elif dynamic_dims:
+            pytest.xfail(
+                "C++ ASM backend exceeds VGPR limit with ee=True + dynamic "
+                "dims for 256x192x256"
+            )
+
+    # (2,2) wave shape + schedule: numerical mismatch (with or without
+    # dynamic dims when ee=False; dynamic-dims-only when ee=True).
+    if block_id == "128x32x256" and use_schedule:
+        if not eliminate_epilogue:
+            pytest.xfail(
+                "Numerical mismatch on (2,2) wave shape with scheduled "
+                "pipeline (ee=False)"
+            )
+        elif dynamic_dims:
+            pytest.xfail("Numerical mismatch with dynamic dims on (2,2) wave shape")
 
     _dbuf_mxfp4_helper(
         shape=shape,
@@ -1393,6 +1421,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         use_schedule=use_schedule,
         output_dtype=output_dtype,
         wave_shape=wave_shape,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
 

@@ -327,10 +327,34 @@ private:
         }
       }
 
-      // Record pre-coercion physical register indices of condOp iter_args.
-      // The AssemblyEmitter needs these to emit back-edge copies/swaps for
-      // LDS double-buffering where iter_args intentionally map to different
-      // physical registers than block args.
+      // --- Back-edge register bookkeeping for pipelined loops ---
+      //
+      // Problem: In pipelined (double-buffered) loops, the liveness pass
+      // may "untie" an iter_arg from its block_arg so they get different
+      // physical registers.  This happens in two cases:
+      //
+      //   (a) Swap pattern – the iter_arg at position i is block_arg[j]
+      //       (j != i), implementing LDS double-buffer ping-pong.
+      //
+      //   (b) WAR hazard – a buffer_load iter_arg is interleaved with
+      //       MFMAs that still consume the old block_arg value.  Tying
+      //       them would make the MFMA read the new load instead of the
+      //       old value.
+      //
+      // After register allocation the LoopLikeOpInterface verifier
+      // requires init/blockArg/iterArg types to be compatible.  Blindly
+      // coercing iter_arg types to match block_arg types would silently
+      // overwrite the physical register the allocator chose, breaking
+      // case (b).
+      //
+      // Solution (two steps):
+      //   1. Snapshot each iter_arg's physical register index into the
+      //      "_iterArgPhysRegs" attribute *before* any coercion.
+      //   2. Coerce only when it's safe: skip swap-pattern block args
+      //      and WAR-hazard-separated registers.
+      //
+      // The AssemblyEmitter reads "_iterArgPhysRegs" to emit the correct
+      // back-edge copies/swaps at the loop latch.
       SmallVector<int64_t> origPhysRegs;
       for (unsigned i = 0; i < condOp.getIterArgs().size(); ++i) {
         Type ty = condOp.getIterArgs()[i].getType();
@@ -341,48 +365,32 @@ private:
           idx = pvreg.getIndex();
         origPhysRegs.push_back(idx);
       }
-      condOp->setAttr("_iterArgPhysRegs",
-                       DenseI64ArrayAttr::get(loopOp->getContext(),
-                                              origPhysRegs));
+      condOp->setAttr(
+          "_iterArgPhysRegs",
+          DenseI64ArrayAttr::get(loopOp->getContext(), origPhysRegs));
 
-      // Coerce types so the LoopLikeOpInterface verifier is satisfied.
-      // For each position i:
-      //   - init[i], blockArg[i], and condOp.iterArg[i] must be compatible.
-      // After register allocation, block args have their allocated psreg
-      // type.  condOp.iterArgs that are swap-pattern block args (a block
-      // arg at position j != i) already carry their own psreg type and
-      // must NOT be coerced (coercing them would change the block arg's
-      // type at position j).  The verifier uses typesCompatible() which
-      // accepts psreg types with different indices (same-class, same-size).
+      // Step 2: Coerce types for LoopLikeOpInterface verifier.
       for (unsigned i = 0; i < bodyBlock.getNumArguments(); ++i) {
         Type blockArgType = bodyBlock.getArgument(i).getType();
 
         if (i < condOp.getIterArgs().size()) {
           Value iterArg = condOp.getIterArgs()[i];
           if (iterArg.getType() != blockArgType) {
-            // Don't coerce block args of this loop — they carry their own
-            // allocated type and typesCompatible handles the mismatch.
+            // Case (a): swap-pattern — iter_arg IS a block_arg of this
+            // loop at a different position.  Leave as-is.
             if (auto ba = dyn_cast<BlockArgument>(iterArg);
                 ba && ba.getOwner() == &bodyBlock) {
-              // Swap-pattern: leave as-is
             } else {
-              // Don't coerce iter_args that were intentionally allocated to
-              // a different physical register (e.g., WAR-hazard untied
-              // buffer_loads). Coercing would change the instruction's
-              // output register, destroying the register separation that
-              // prevents the WAR hazard.  The AssemblyEmitter uses
-              // _iterArgPhysRegs to emit explicit back-edge copies.
+              // Case (b): check for WAR-hazard separation.
               int64_t iterPhys = origPhysRegs[i];
-              auto [blockPhys, _] =
-                  std::pair<int64_t, bool>{-1, false};
+              int64_t blockPhys = -1;
               if (auto pvreg = dyn_cast<PVRegType>(blockArgType))
                 blockPhys = pvreg.getIndex();
               else if (auto psreg = dyn_cast<PSRegType>(blockArgType))
                 blockPhys = psreg.getIndex();
 
               if (iterPhys >= 0 && blockPhys >= 0 && iterPhys != blockPhys) {
-                // Intentionally different registers — leave as-is so the
-                // buffer_load writes to its own allocated register.
+                // Deliberately different registers — do not coerce.
               } else {
                 iterArg.setType(blockArgType);
               }

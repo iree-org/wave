@@ -30,6 +30,12 @@ def parse_args():
         default=None,
         help="Block size of the test, e.g. 256,256,256",
     )
+    parser.add_argument(
+        "--eliminate_epilogue",
+        type=lambda v: v.lower() in ("true", "1", "yes"),
+        default=None,
+        help="Enable epilogue elimination (true/false)",
+    )
 
     args = parser.parse_args()
 
@@ -50,7 +56,15 @@ def list_tests(module_globals):
         print(f"  {test}")
 
 
-def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block=None):
+def run_test(
+    test_name,
+    module_globals,
+    debug=False,
+    repeat=1,
+    shape=None,
+    block=None,
+    eliminate_epilogue=None,
+):
     """Run a test function multiple times."""
     if test_name not in module_globals:
         print(f"Error: Test '{test_name}' not found")
@@ -62,6 +76,8 @@ def run_test(test_name, module_globals, debug=False, repeat=1, shape=None, block
         kwargs["shape"] = shape
     if block is not None:
         kwargs["block"] = block
+    if eliminate_epilogue is not None:
+        kwargs["eliminate_epilogue"] = eliminate_epilogue
 
     for i in range(repeat):
         try:
