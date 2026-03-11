@@ -18,8 +18,8 @@ add_mlir_dialect_library(MLIRWaterTestDialect
   EXCLUDE_FROM_LIBMLIR
 
   DEPENDS
-  MLIRWaterTestDialectIncGen
   MLIRTestNormalFormAttrIncGen
+  MLIRWaterTestDialectIncGen
 
   LINK_LIBS PUBLIC
   MLIRArithDialect

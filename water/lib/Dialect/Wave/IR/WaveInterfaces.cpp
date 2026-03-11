@@ -99,34 +99,57 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
     }
   }
 
-  // For ops with the index attribute, verify that each index expression has at
-  // most one dimension whose step evaluates to a static value different from 1
-  // (with hyperparameters substituted). Structural checks stay in op verifiers.
+  // For ops with the index attribute, verify that (1) each index expression has
+  // at most one dimension whose step evaluates to a static value different from
+  // 1 (with hyperparameters substituted), and (2) when step or stride can be
+  // evaluated to a concrete value, that value is strictly positive. Be
+  // defensive because we may not have verified anything but the basic
+  // well-formedness yet, e.g., the op verifier checking for single-result
+  // affine expressions in mappings did not run yet.
   wave::WaveHyperparameterAttr hyperparams = wave::getHyperparameters(op);
   for (DictionaryAttr dictAttr : dicts) {
     int nonUnitCount = 0;
     for (const NamedAttribute &named : dictAttr) {
       auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(named.getValue());
-      if (!mapping || !mapping.getStep())
+      if (!mapping)
         continue;
 
-      std::optional<SmallVector<int64_t>> stepValues =
-          wave::evaluateMapWithHyperparams(mapping.getStep(),
-                                           mapping.getSymbols(), hyperparams);
-      if (!stepValues || stepValues->size() != 1)
-        continue;
+      if (AffineMap stepMap = mapping.getStep()) {
+        std::optional<SmallVector<int64_t>> stepValues =
+            wave::evaluateMapWithHyperparams(stepMap, mapping.getSymbols(),
+                                             hyperparams);
+        if (stepValues && stepValues->size() == 1) {
+          int64_t step = (*stepValues)[0];
+          if (step != ShapedType::kDynamic && step <= 0) {
+            return op->emitOpError()
+                   << "step in index expression must be strictly positive, got "
+                   << step << " for dimension " << named.getName();
+          }
+          if (step != 1 && step != ShapedType::kDynamic && ++nonUnitCount > 1) {
+            InFlightDiagnostic diag =
+                op->emitOpError()
+                << "'" << WaveDialect::kIndexWaveExprListAttrName
+                << "' has more than one entry with non-unit step";
+            diag.attachNote()
+                << "second non-unit step dimension: " << named.getName();
+            return failure();
+          }
+        }
+      }
 
-      int64_t step = (*stepValues)[0];
-      if (step == 1 || step == ShapedType::kDynamic)
-        continue;
-
-      if (++nonUnitCount > 1) {
-        InFlightDiagnostic diag =
-            op->emitOpError() << "'" << WaveDialect::kIndexWaveExprListAttrName
-                              << "' has more than one entry with non-unit step";
-        diag.attachNote() << "second non-unit step dimension: "
-                          << named.getName();
-        return failure();
+      if (AffineMap strideMap = mapping.getStride()) {
+        std::optional<SmallVector<int64_t>> strideValues =
+            wave::evaluateMapWithHyperparams(strideMap, mapping.getSymbols(),
+                                             hyperparams);
+        if (strideValues && strideValues->size() == 1) {
+          int64_t stride = (*strideValues)[0];
+          if (stride != ShapedType::kDynamic && stride <= 0) {
+            return op->emitOpError()
+                   << "stride in index expression must be strictly positive, "
+                      "got "
+                   << stride << " for dimension " << named.getName();
+          }
+        }
       }
     }
   }

@@ -33,7 +33,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 import torch
 
@@ -210,11 +210,6 @@ class WaveASMCompiler:
             "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",  # Register allocation.
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",  # Insert waits.
             f"--waveasm-hazard-mitigation=target={self.target}",  # Handle hazards.
             "--emit-assembly",
@@ -441,7 +436,12 @@ def capture_wave_mlir(options, kernel_func) -> str:
     return mlir_text
 
 
-def capture_wave_kernel_info(options, kernel_func, schedule=None) -> CapturedKernelInfo:
+def capture_wave_kernel_info(
+    options,
+    kernel_func,
+    schedule=None,
+    dynamic_values: Optional[Dict] = None,
+) -> CapturedKernelInfo:
     """
     Capture MLIR and kernel launch info from Wave compilation.
 
@@ -452,6 +452,9 @@ def capture_wave_kernel_info(options, kernel_func, schedule=None) -> CapturedKer
         options: WaveCompileOptions
         kernel_func: Decorated wave kernel function
         schedule: Optional WaveSchedule to apply during compilation
+        dynamic_values: Optional dict mapping dynamic symbols to their concrete
+            values. Used for grid computation when symbols are not in
+            options.subs (i.e. truly dynamic shapes).
 
     Returns:
         CapturedKernelInfo with all launch information
@@ -522,13 +525,19 @@ def capture_wave_kernel_info(options, kernel_func, schedule=None) -> CapturedKer
         dynamic_syms = list(getattr(options, "dynamic_symbols", None) or [])
         grid_symbols = list(kernel_func.bound_scalar_symbols.keys()) + dynamic_syms
         grid_values = []
+        dv = dynamic_values or {}
         for sym in grid_symbols:
-            if sym not in options.subs:
+            if sym in options.subs:
+                grid_values.append(options.subs[sym])
+            elif sym in dv:
+                grid_values.append(dv[sym])
+            else:
                 raise ValueError(
-                    f"Grid symbol {sym} not found in options.subs. "
-                    f"Available: {list(options.subs.keys())}"
+                    f"Grid symbol {sym} not found in options.subs or "
+                    f"dynamic_values. "
+                    f"Available subs: {list(options.subs.keys())}, "
+                    f"dynamic_values: {list(dv.keys())}"
                 )
-            grid_values.append(options.subs[sym])
         grid = launch_info.grid(grid_values)
         grid = tuple(int(x) for x in grid)
 
@@ -622,6 +631,7 @@ def run_with_wave_runtime(
     block: Tuple[int, int, int],
     shared_memory_bytes: int = 0,
     func_name: str = "isolated_benchmark",
+    dynamic_dims: Optional[List[int]] = None,
 ):
     """
     Execute a compiled GPU binary using wave_runtime.
@@ -634,6 +644,8 @@ def run_with_wave_runtime(
         block: Block dimensions (x, y, z)
         shared_memory_bytes: Shared memory size
         func_name: Function name in the binary (default: "isolated_benchmark")
+        dynamic_dims: Optional list of concrete values for dynamic dimension
+            symbols, passed as additional kernel arguments.
     """
     import wave_runtime
 
@@ -665,11 +677,13 @@ def run_with_wave_runtime(
     kern_args = [tensor.data_ptr() for tensor in all_tensors]
     kernel_args = wave_runtime.Int64Vector(kern_args)
 
+    dyn_dims = wave_runtime.Int64Vector(dynamic_dims or [])
+
     # Prepare dynamic stride arguments
     stride_args = get_dynamic_stride_args(all_tensors)
 
     # Launch
-    wave_runtime.launch(kernel_launch_info, kernel_args, [], [], stride_args)
+    wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, [], stride_args)
 
     # Sync
     torch.cuda.synchronize()

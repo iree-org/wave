@@ -2826,7 +2826,6 @@ class SetSymbol(CustomOp):
         return True
 
 
-@define_py_op(operator.getitem)
 @define_op("get_result")
 @dataclass
 class GetResult(CustomOp):
@@ -2886,6 +2885,23 @@ class GetResult(CustomOp):
         allocate = get_custom(iterate.init_args[self.res_idx])
         assert isinstance(allocate, Allocate)
         return allocate.distributed_shape
+
+
+# Override fx.Proxy.__getitem__ to route through the OpDispatcher so that
+# kernel tracing produces GetResult nodes directly (via handle_getitem
+# registered in wave.py) and schedule tracing produces schedule GetItem
+# nodes. We do this manually rather than using @define_py_op to avoid
+# creating a dynamic subclass that differs in type but not in semantics.
+#
+# NOTE: This unconditionally requires an active OpDispatcher.  If FX tracing
+# is ever used outside of a Wave kernel/schedule context (e.g. by third-party
+# code that also patches fx.Proxy), this override will need a fallback to the
+# original fx.Proxy.__getitem__.
+def _proxy_getitem_override(*args, **kwargs):
+    return OpDispatcher.current().handle_getitem(*args, **kwargs)
+
+
+fx.Proxy.__getitem__ = _proxy_getitem_override
 
 
 @define_op("extract")

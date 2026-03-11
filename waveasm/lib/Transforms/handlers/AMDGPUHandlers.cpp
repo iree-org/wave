@@ -362,6 +362,25 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     return success();
   }
 
+  // Check if the source (or its memref.cast source) has a pending SRD base
+  // adjustment from a linearized reinterpret_cast (use_buffer_ops path).
+  // If so, pass through and propagate the adjustment -- the C++ backend's
+  // prologue SRDs and per-workgroup adjustment handle addressing correctly.
+  Value src = op->getOperand(0);
+  auto *adj = ctx.getPendingSRDBaseAdjust(src);
+  if (!adj) {
+    if (auto castOp = src.getDefiningOp<memref::CastOp>())
+      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
+  }
+  if (adj) {
+    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+    ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
+                                adj->srcSrdBase, adj->elementBytes);
+    return success();
+  }
+
+  // No pending adjustment -- construct cache-swizzle SRD (used by
+  // gather_to_lds and other paths that need explicit buffer descriptors).
   bool hasCacheSwizzle = false;
   int64_t swizzleStride = 0;
   if (op->getNumOperands() >= 3) {
@@ -416,8 +435,10 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
                     std::to_string(newSrdBase + 1) + ", 0x40400000";
   RawOp::create(builder, loc, or1);
 
+  // Use 0xFFFFFFFF for num_records to prevent OOB faults from dynamic
+  // bounds-check sentinel addresses (0x7FFFFFFF) used in gather_to_lds.
   std::string mov2 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0x7ffffffd";
+      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0xFFFFFFFF";
   RawOp::create(builder, loc, mov2);
 
   std::string mov3 =
@@ -1046,8 +1067,8 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
         "unsupported atomic_rmw kind; only addf/addi supported");
   }
 
-  auto [voffset, instOffset] =
-      computeVOffsetFromIndices(memrefType, atomicOp.getIndices(), ctx, loc);
+  auto [voffset, instOffset] = computeVOffsetFromIndices(
+      memrefType, atomicOp.getIndices(), ctx, loc, atomicOp.getMemref());
   Value srd = lookupSRD(atomicOp.getMemref(), ctx, loc);
 
   if (elementType.isBF16()) {

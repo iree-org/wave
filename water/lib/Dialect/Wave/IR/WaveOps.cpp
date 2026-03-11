@@ -1025,18 +1025,32 @@ static void mixInThreadIndependentConstraints(
       std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
                      wave::WaveSymbolAttr>,
       "expected a range of WaveSymbolAttr");
-  for (wave::WaveSymbolAttr symbol : indexingSymbols) {
-    auto it = symbolConstraints.find(symbol);
-    if (it == symbolConstraints.end())
-      continue;
 
+  auto zero = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                             getAffineConstantExpr(0, where->getContext()));
+  auto one = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
+                            getAffineConstantExpr(1, where->getContext()));
+  for (wave::WaveSymbolAttr symbol : indexingSymbols) {
     auto mappingIt = llvm::find_if(symbolMappings, [&](NamedAttribute attr) {
       return attr.getName() == symbol.getName();
     });
-    wave::WaveIndexMappingAttr mapping =
-        mappingIt != symbolMappings.end()
-            ? llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue())
-            : nullptr;
+    wave::WaveIndexMappingAttr mapping = [&]() {
+      if (mappingIt != symbolMappings.end())
+        return llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
+
+      // If no other mapping is present, default to (start=0, step=1, stride=1),
+      // assuming this will be replicated enough times by the expansion pass.
+      // Constraints may be applied below to amend this mapping.
+      auto mapping = wave::WaveIndexMappingAttr::get(
+          where->getContext(), /*symbols=*/{}, zero, one, one);
+      symbolMappings.emplace_back(symbol.getName(), mapping);
+      return mapping;
+    }();
+
+    auto it = symbolConstraints.find(symbol);
+    if (it == symbolConstraints.end()) {
+      continue;
+    }
 
     // There is interaction between constraints of different kinds for the same
     // symbol, find them all upfront.
@@ -1092,25 +1106,6 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
-// Append index mappings with offset=0, size=1 and stride=1 to the
-// `symbolMappings` list for each entry in `indexingSymbols`.
-static void
-appendDefaultIndexMapping(MLIRContext *context,
-                          llvm::SmallVectorImpl<NamedAttribute> &symbolMappings,
-                          ArrayRef<wave::WaveSymbolAttr> indexingSymbols) {
-
-  auto zero = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
-                             getAffineConstantExpr(0, context));
-  auto one = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
-                            getAffineConstantExpr(1, context));
-
-  for (wave::WaveSymbolAttr symbol : indexingSymbols) {
-    symbolMappings.emplace_back(
-        symbol.getName(),
-        wave::WaveIndexMappingAttr::get(context, {}, zero, one, one));
-  }
-}
-
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1131,10 +1126,6 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   std::optional<wave::WaveMmaKind> mmaKind = getKind();
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
-  // Batch symbols are initialized to index expressions (0, 1, 1). Handle them
-  // first to be somewhat consistent with the order of dimensions.
-  appendDefaultIndexMapping(getContext(), symbolMappings,
-                            indexingSymbols.drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
@@ -1171,14 +1162,10 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
 
-  // Add batch dimensions first to be somewhat consistent with the order of
-  // dimensions. Note that we reserve space for 1 more since the list will
-  // initially contain m,n,k along with batch dimensions until we drop either m
-  // or n for each operand.
+  // Reserve space for 1 more since the list will initially contain m,n,k along
+  // with batch dimensions until we drop either m or n for each operand.
   llvm::SmallVector<NamedAttribute> operandSymbolMappings;
   operandSymbolMappings.reserve(lhsType.getShape().size() + 1);
-  appendDefaultIndexMapping(getContext(), operandSymbolMappings,
-                            lhsType.getShape().drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
@@ -1188,8 +1175,6 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   llvm::SmallVector<NamedAttribute> accumulatorSymbolMappings;
   accumulatorSymbolMappings.reserve(resultType.getShape().size());
-  appendDefaultIndexMapping(getContext(), accumulatorSymbolMappings,
-                            resultType.getShape().drop_back(2));
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,

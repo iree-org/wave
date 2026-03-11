@@ -26,12 +26,39 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
+#include "llvm/Support/Debug.h"
 
 #include <functional>
+
+#define DEBUG_TYPE "waveasm-affine-handlers"
 
 using namespace mlir;
 
 namespace waveasm {
+
+// Returns floordiv(x, d) = floor(cvt_f32(x) * rcp(cvt_f32(d))) with
+// off-by-one correction. Valid for x, d < 2^23 (float precision limit).
+static Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
+                                  Location loc, TranslationContext &ctx) {
+  auto vregType = ctx.createVRegType();
+  Value xf = V_CVT_F32_U32::create(builder, loc, vregType, x);
+  Value df = V_CVT_F32_U32::create(builder, loc, vregType, d);
+  Value rcpD = V_RCP_F32::create(builder, loc, vregType, df);
+  Value qf = V_MUL_F32::create(builder, loc, vregType, xf, rcpD);
+  Value qfFloor = V_FLOOR_F32::create(builder, loc, vregType, qf);
+  Value q = V_CVT_U32_F32::create(builder, loc, vregType, qfFloor);
+  Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, d);
+  Value rem = V_SUB_U32::create(builder, loc, vregType, x, qd);
+  V_CMP_GE_U32::create(builder, loc, rem, d);
+  auto oneImm = ctx.createImmType(1);
+  auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
+  Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
+  auto zeroImm = ctx.createImmType(0);
+  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+  Value inc = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst, oneVgpr,
+                                    zeroConst);
+  return V_ADD_U32::create(builder, loc, vregType, q, inc);
+}
 
 /// Handle affine.apply - compile affine expression to arithmetic instructions
 LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
@@ -146,11 +173,13 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
       if (dimExpr.getPosition() < applyOp.getOperands().size()) {
         Value operand = applyOp.getOperands()[dimExpr.getPosition()];
         if (auto mapped = ctx.getMapper().getMapped(operand)) {
-          // Use tracked bit range if available
           BitRange range = ctx.getBitRange(*mapped);
           return ExprResult(*mapped, range);
         }
       }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "WARNING: affine dim d" << dimExpr.getPosition()
+                 << " not mapped, falling back to baseValue\n");
       return ExprResult(baseValue, ctx.getBitRange(baseValue));
     }
 
@@ -164,6 +193,9 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
           return ExprResult(*mapped, range);
         }
       }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "WARNING: affine symbol s" << symExpr.getPosition()
+                 << " (idx=" << symIdx << ") not mapped, falling back\n");
       return ExprResult(baseValue, ctx.getBitRange(baseValue));
     }
 
@@ -379,26 +411,23 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
                 ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
             Value shiftResult =
                 V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, lhs);
-            // Shift the bit range right by shiftAmount
             BitRange resultRange = lhsRange.shiftRight(shiftAmount);
             ctx.setBitRange(shiftResult, resultRange);
             return ExprResult(shiftResult, resultRange);
           }
         }
-        // General floordiv - needs more complex handling
-        return ExprResult(lhs, BitRange()); // Conservative
+        // Symbolic divisor fallback: floordiv(x, d) via float reciprocal
+        // with off-by-one correction.
+        {
+          Value qFixed = emitUnsignedFloordiv(lhs, rhs, builder, loc, ctx);
+          return ExprResult(qFixed, BitRange());
+        }
       }
 
       case AffineExprKind::CeilDiv: {
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
           int64_t divisor = constRhs.getValue();
 
-          // Optimization: ceildiv(x, 2^k) = (x + 2^k - 1) >> k.
-          // Only valid for non-negative x because V_LSHRREV_B32 is a logical
-          // (unsigned) right shift. Negative values would produce a large
-          // positive result instead of the correct negative ceiling.
-          // Affine expressions in this context originate from index
-          // computations which are non-negative by construction.
           if (isPowerOf2(divisor)) {
             int64_t shiftAmount = log2(divisor);
             int64_t bias = divisor - 1;
@@ -418,7 +447,17 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
             return ExprResult(shiftResult, resultRange);
           }
         }
-        return ExprResult(lhs, BitRange());
+        // Symbolic divisor fallback: ceildiv(x, d) = floordiv(x + d - 1, d)
+        {
+          auto oneImm = ctx.createImmType(1);
+          auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
+          Value dMinus1 =
+              V_SUB_U32::create(builder, loc, vregType, rhs, oneConst);
+          Value biased =
+              V_ADD_U32::create(builder, loc, vregType, lhs, dMinus1);
+          Value qFixed = emitUnsignedFloordiv(biased, rhs, builder, loc, ctx);
+          return ExprResult(qFixed, BitRange());
+        }
       }
 
       case AffineExprKind::Mod: {
@@ -430,14 +469,18 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
             auto maskConst = ConstantOp::create(builder, loc, maskVal, val - 1);
             Value andResult =
                 V_AND_B32::create(builder, loc, vregType, lhs, maskConst);
-            // Result uses bits 0..(log2(val)-1)
             BitRange resultRange = BitRange(0, log2(val) - 1);
             ctx.setBitRange(andResult, resultRange);
             return ExprResult(andResult, resultRange);
           }
         }
-        // General mod - needs more complex handling
-        return ExprResult(lhs, BitRange()); // Conservative
+        // Symbolic divisor fallback: x mod d = x - floordiv(x, d) * d
+        {
+          Value q = emitUnsignedFloordiv(lhs, rhs, builder, loc, ctx);
+          Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, rhs);
+          Value rem = V_SUB_U32::create(builder, loc, vregType, lhs, qd);
+          return ExprResult(rem, BitRange());
+        }
       }
 
       default:
@@ -446,7 +489,10 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
       }
     }
 
-    return ExprResult(baseValue, BitRange()); // Fallback
+    LLVM_DEBUG(llvm::dbgs() << "WARNING: unhandled affine expression kind "
+                            << static_cast<int>(e.getKind())
+                            << ", falling back to baseValue\n");
+    return ExprResult(baseValue, BitRange());
   };
 
   ExprResult result = compileExpr(exprToCompile);

@@ -869,9 +869,13 @@ def _handle_reduction_op(
 
     converted_attrs = _convert_supported_attrs(op, ignore_attrs={"scope", "axis"})
 
+    # The MLIR op always has a variadic input list, but pre-expansion
+    # the FX graph uses a single node. Unwrap to match.
+    arg = input_nodes[0] if len(input_nodes) == 1 else input_nodes
+
     reduce_op = reduce_cls.create(
         parse_ctx.graph,
-        arg=input_nodes,
+        arg=arg,
         init=init_node,
         dim=dim,
         block=is_block,
@@ -1083,7 +1087,10 @@ def _reconstruct_expr_lambda(
     `lt`).  This ensures the reconstructed lambda produces the same sympy
     expression as the original.
     """
-    sympy_results: list[sympy.Expr | int] = expr_list_attr_to_exprs(expr_attr)
+    sympy_results: list[sympy.Basic] = [
+        r if isinstance(r, sympy.Basic) else sympy.Integer(r)
+        for r in expr_list_attr_to_exprs(expr_attr)
+    ]
 
     combinator_fn = None
     if combinator_attr is not None:
@@ -1096,9 +1103,7 @@ def _reconstruct_expr_lambda(
 
     def expr_lambda(*args):
         subs_map = {operand_syms[i]: args[i] for i in range(len(args))}
-        results = [
-            r.subs(subs_map) if isinstance(r, sympy.Basic) else r for r in sympy_results
-        ]
+        results = [r.subs(subs_map) for r in sympy_results]
         if combinator_fn is not None:
             return combinator_fn(*results)
         assert len(results) == 1, (
@@ -1272,39 +1277,41 @@ def _create_get_result_nodes(
     iterate's output tuple.  The index is used as-is: `Iterate.index`
     delegates to `MMA.acc_index` which already specialises MMA_ACC and
     drops the reduction dimension before the emitters serialise it.
-
-    # TODO: revisit when converting partially-compiled traces where
-    # index analysis has not yet run.
     """
-    with parse_ctx.graph.inserting_after(iterate_node):
-        for idx, result in enumerate(results):
+    # inserting_after pins the insertion point, so each new node would land
+    # at the same spot and reverse the order. Advance the cursor after each
+    # insertion to preserve the original result ordering.
+    cursor = iterate_node
+    for idx, result in enumerate(results):
+        with parse_ctx.graph.inserting_after(cursor):
             get_result_op = GetResult.create(
                 parse_ctx.graph,
                 value=iterate_node,
                 res_idx=idx,
                 type=result_types[idx],
             )
+        cursor = get_result_op.fx_node
 
-            # Prefer the explicit iterate index from MLIR (present after index
-            # propagation). Fall back to the output value's index for early
-            # pipeline stages where index_sequence_analysis hasn't run yet.
-            result_index = None
-            if iter_index is not None:
-                result_index = (
-                    iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
-                )
-            # idx can exceed output_values when the iterate body yields
-            # more results than the original output list (e.g. after
-            # variadic reduction expansion adds extra carry values).
-            elif idx < len(output_values) and isinstance(output_values[idx], fx.Node):
-                result_index = getattr(
-                    output_values[idx], AttrNames.INDEX.fx_property, None
-                )
+        # Prefer the explicit iterate index from MLIR (present after index
+        # propagation). Fall back to the output value's index for early
+        # pipeline stages where index_sequence_analysis hasn't run yet.
+        result_index = None
+        if iter_index is not None:
+            result_index = (
+                iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
+            )
+        # idx can exceed output_values when the iterate body yields
+        # more results than the original output list (e.g. after
+        # variadic reduction expansion adds extra carry values).
+        elif idx < len(output_values) and isinstance(output_values[idx], fx.Node):
+            result_index = getattr(
+                output_values[idx], AttrNames.INDEX.fx_property, None
+            )
 
-            if isinstance(result_index, dict):
-                get_result_op.fx_node.index = result_index
+        if isinstance(result_index, dict):
+            get_result_op.fx_node.index = result_index
 
-            parse_ctx.add_mapping(result, get_result_op.fx_node)
+        parse_ctx.add_mapping(result, get_result_op.fx_node)
 
 
 def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:

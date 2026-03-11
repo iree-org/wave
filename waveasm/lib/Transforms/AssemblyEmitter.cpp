@@ -471,6 +471,18 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return result;
       })
 
+      .Case<S_AND_SAVEEXEC_B64>(
+          [&](S_AND_SAVEEXEC_B64 saveOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(saveOp.getDst());
+            return "  s_and_saveexec_b64 " + dst + ", vcc";
+          })
+
+      .Case<S_MOV_B64_EXEC>(
+          [&](S_MOV_B64_EXEC restoreOp) -> std::optional<std::string> {
+            std::string src = resolveValue(restoreOp.getSrc());
+            return "  s_mov_b64 exec, " + src;
+          })
+
       .Case<S_BRANCH>([&](S_BRANCH branchOp) {
         return std::string("  s_branch ") +
                branchOp.getTarget().getRootReference().str();

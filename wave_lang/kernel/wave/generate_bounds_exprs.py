@@ -9,7 +9,7 @@ import torch.fx as fx
 
 from ..ops.wave_ops import Read, Write
 from .assumptions import get_divisibility_subs
-from .constraints import Constraint, DistributionConstraint
+from .constraints import Constraint, DistributionConstraint, ReorderingConstraint
 from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
@@ -57,7 +57,11 @@ def is_divisible(
     return simplify(diff) == 0
 
 
-def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
+def generate_bounds_exprs(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    reordering_constraints: list[ReorderingConstraint] = None,
+):
     """
     This pass generates bounds expressions for read and write ops.
 
@@ -65,6 +69,11 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
     """
     hardware_constraint = get_hardware_constraint(constraints)
     fwd, _ = get_divisibility_subs(constraints)
+
+    wg_subs = {}
+    if reordering_constraints:
+        for c in reordering_constraints:
+            wg_subs[c.wg_dim] = c.reordered_equation
 
     def is_read_write(node: fx.Node):
         return isinstance(get_custom(node), (Read, Write))
@@ -113,5 +122,15 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
 
         if not bounds:
             continue
+
+        if wg_subs:
+            bounds = {
+                k: (
+                    v.subs(wg_subs, simultaneous=True)
+                    if isinstance(v, sympy.Expr)
+                    else v
+                )
+                for k, v in bounds.items()
+            }
 
         node.update_arg("bounds", bounds)

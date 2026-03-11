@@ -48,7 +48,7 @@ import warnings
 
 import pytest
 
-from tests.kernel.common.utils import require_cdna4
+from tests.kernel.common.utils import param_bool, require_cdna4
 from wave_lang.kernel.wave.asm.waveasm_e2e import (
     WaveASMCompiler,
     capture_wave_kernel_info,
@@ -1319,6 +1319,8 @@ def _dbuf_mxfp4_helper(
     compiler,
     backend,
     dump_asm,
+    dynamic_dims=False,
+    use_buffer_ops=True,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1349,6 +1351,8 @@ def _dbuf_mxfp4_helper(
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         generate_gemm_afp4wfp4_inputs,
         torchScaledGemmMXFP4,
+        b_preshuffle,
+        e8m0_shuffle,
     )
 
     # Get tagged kernel + options (same as 7.1_schedule.py)
@@ -1359,8 +1363,9 @@ def _dbuf_mxfp4_helper(
             shape,
             block,
             wave_shape=(1, 4),
+            reorder_workgroups=not dynamic_dims,
         )
-        schedule = get_mxfp4_asymmetric_schedule()
+        schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
     else:
         gemm, options = get_tagged_mxfp4_gemm(
             shape,
@@ -1373,7 +1378,23 @@ def _dbuf_mxfp4_helper(
     options.backend = "asm"
     options.wave_runtime = True
     options.compile_to_mlir = False
+    options.use_buffer_ops = use_buffer_ops
     options = set_default_run_config(options)
+
+    import wave_lang.kernel.lang as tkl
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    m, n, k = shape
+
+    dynamic_symbols = []
+    dynamic_values = {}
+    if dynamic_dims:
+        dynamic_symbols = [M, N]
+        dynamic_values = {M: m, N: n}
+        del options.subs[M]
+        del options.subs[N]
+        options.dynamic_symbols = dynamic_symbols
 
     # Generate MXFP4 inputs and reference output
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
@@ -1384,7 +1405,9 @@ def _dbuf_mxfp4_helper(
     c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
 
     # Capture MLIR with schedule applied
-    kernel_info = capture_wave_kernel_info(options, gemm, schedule=schedule)
+    kernel_info = capture_wave_kernel_info(
+        options, gemm, schedule=schedule, dynamic_values=dynamic_values
+    )
 
     # Verify MLIR contains scaled_mfma operation
     assert (
@@ -1424,8 +1447,10 @@ def _dbuf_mxfp4_helper(
 
     # Execute on GPU
     # Kernel signature: (a, a_scale, b, b_scale, c)
-    # For preshuffle B: transform B data and B scales to preshuffled layout
+    # For preshuffle B: transform all inputs to match kernel expectations.
+    # a_scale_preshuffle=True (default) means a_scales must also be shuffled.
     if num_waves <= 4:
+        x_scales = e8m0_shuffle(x_scales).contiguous()
         w_input = b_preshuffle(w.T.contiguous()).contiguous()
         w_scales_input = e8m0_shuffle(w_scales).contiguous()
     else:
@@ -1439,6 +1464,7 @@ def _dbuf_mxfp4_helper(
         block=block_size,
         shared_memory_bytes=lds_size,
         func_name=kernel_name,
+        dynamic_dims=[dynamic_values[s] for s in dynamic_symbols],
     )
 
     # Numerical correctness validation (same tolerance as existing MXFP4 test)
@@ -1453,25 +1479,26 @@ def _dbuf_mxfp4_helper(
     )
 
 
-@pytest.mark.xfail(
-    reason="Asymmetric schedule with wave_shape=(1,4) requires ~323 VGPRs, "
-    "exceeding the 256 hardware encoding limit. Needs LDS scale layout "
-    "fix or spilling to resolve.",
-)
-def test_dbuf_4wave_mxfp4_gemm_cpp_backend(compiler, backend, dump_asm):
+@param_bool("dynamic_dims", "dyn")
+@param_bool("use_buffer_ops", "bufops")
+def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
+    dynamic_dims, use_buffer_ops, compiler, backend, dump_asm
+):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
-    Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4) and
-    B direct from global (no LDS).
+    Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4),
+    preshuffle B, and block=(128,256,256) matching 7.1_schedule.py.
     """
     _dbuf_mxfp4_helper(
         shape=(1024, 1024, 8192),
-        block=(256, 256, 256),
+        block=(128, 256, 256),
         num_waves=4,
         use_stagger=False,
         compiler=compiler,
         backend=backend,
         dump_asm=dump_asm,
+        dynamic_dims=dynamic_dims,
+        use_buffer_ops=use_buffer_ops,
     )
 
 
@@ -1532,8 +1559,16 @@ def _pipelined_g2s_params():
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _pipelined_g2s_params())
+@pytest.mark.parametrize("use_buffer_ops", [False, True])
 def test_gemm_pipelined_cpp_backend(
-    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm
+    shape,
+    block_k,
+    config,
+    use_global_to_shared,
+    use_buffer_ops,
+    compiler,
+    backend,
+    dump_asm,
 ):
     """End-to-end test for GEMM with PREFETCH pipelining using C++ ASM backend.
 
@@ -1657,6 +1692,7 @@ def test_gemm_pipelined_cpp_backend(
         wave_runtime=True,
         compile_to_mlir=False,
         use_global_to_shared=use_global_to_shared,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
 
@@ -1665,7 +1701,8 @@ def test_gemm_pipelined_cpp_backend(
 
     # Test ID for file naming
     g2s_str = "g2s" if use_global_to_shared else "no_g2s"
-    test_id = f"gemm_pipelined_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}"
+    buf_str = "bufops" if use_buffer_ops else "flat"
+    test_id = f"gemm_pipelined_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}_{buf_str}"
 
     # Compile with C++ backend
     cpp_result = compiler.compile_full(

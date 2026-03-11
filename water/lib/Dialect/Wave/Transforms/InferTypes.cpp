@@ -818,14 +818,10 @@ public:
               wave::evaluateMapWithHyperparams(step, symbols, init.hyperparams);
           if (!stepValues)
             continue;
-          // TODO(#1012): turn this into an assertion when the verifier is
-          // implemented.
+
           int64_t stepValue = (*stepValues)[0];
-          if (stepValue <= 0) {
-            op->emitError() << "expected positive step in index expressions "
-                               "(missing verifier)";
-            return WalkResult::interrupt();
-          }
+          assert(stepValue > 0 &&
+                 "expected positive step in index expressions");
 
           // Elements per thread may be 1 if _all_ dimensions have a unit step,
           // otherwise it should be the one non-unit step.

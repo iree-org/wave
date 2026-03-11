@@ -475,15 +475,10 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 def apply_water_middle_end_passes(mlir_text: str) -> str:
     """Apply Water middle-end pipeline using subprocess water-opt.
 
-    This function applies the following passes:
-    - water-wave-detect-normal-forms
-    - (nested in normalform.module)
-      - water-wave-propagate-elements-per-thread
-      - water-wave-resolve-distributed-allocations
-      - water-wave-detect-normal-forms
-      - lower-wave-to-mlir
-    - canonicalize
-    - cse
+    Uses the named ``water-middle-end-lowering`` pipeline registered in
+    water-opt which detects normal forms, propagates elements-per-thread,
+    resolves distributed allocations, lowers Wave to upstream MLIR, then
+    runs canonicalize and CSE.
 
     Args:
         mlir_text: Input Wave dialect MLIR as string
@@ -496,31 +491,12 @@ def apply_water_middle_end_passes(mlir_text: str) -> str:
     """
     binary = get_water_opt()
 
-    # Define the pass pipeline for Wave lowering
-    # Note: water-wave-detect-normal-forms wraps contents in normalform.module,
-    # so subsequent passes that operate on normalform::ModuleOp must be nested together
-    # in the same normalform.module() pass manager to avoid duplicate normal form attributes.
-    pass_pipeline = (
-        "--pass-pipeline=builtin.module("
-        "water-wave-detect-normal-forms,"
-        "normalform.module("
-        "water-wave-propagate-elements-per-thread,"
-        "water-wave-resolve-distributed-allocations,"
-        "water-wave-detect-normal-forms,"
-        "lower-wave-to-mlir"
-        "),"
-        "lower-normalform-module,"
-        "canonicalize,"
-        "cse"
-        ")"
-    )
-
     try:
         result = subprocess.check_output(
             [
                 binary,
                 "--allow-unregistered-dialect",
-                pass_pipeline,
+                "--water-middle-end-lowering",
             ],
             input=mlir_text,
             text=True,

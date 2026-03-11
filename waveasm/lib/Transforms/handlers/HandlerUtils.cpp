@@ -62,16 +62,11 @@ int64_t getElementBytes(Type type) {
 //===----------------------------------------------------------------------===//
 
 int64_t computeBufferSizeFromMemRef(MemRefType memrefType) {
-  int64_t numElements = 1;
-  for (int64_t dim : memrefType.getShape()) {
-    if (dim == ShapedType::kDynamic)
-      dim = 1; // Conservative estimate for dynamic dims
-    numElements *= dim;
-  }
-  int64_t elementBytes = memrefType.getElementTypeBitWidth() / 8;
-  if (elementBytes == 0)
-    elementBytes = 1; // Minimum 1 byte
-  return numElements * elementBytes;
+  // Always use max SRD num_records. All bounds checking is handled in
+  // software (arith.select sentinel addresses, exec masking, or static
+  // guarantees), so hardware bounds checking via SRD is not needed.
+  (void)memrefType;
+  return 0xFFFFFFFF;
 }
 
 //===----------------------------------------------------------------------===//

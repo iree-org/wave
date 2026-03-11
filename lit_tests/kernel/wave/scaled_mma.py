@@ -352,10 +352,11 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK-COUNT-4:    vector.load {{.*}} : memref<16384x8192xi8, strided<[8192, 1]>>, vector<16xi8>
     # CHECK-COUNT-1:    vector.load {{.*}} : memref<16384x512xi8, strided<[512, 1]>>, vector<4xi8>
     # CHECK:            amdgpu.lds_barrier
-    # CHECK-COUNT-16:   vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:    vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16:   vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:    vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-8:    vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NOT:        vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
     # CHECK-COUNT-8:    vector.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK-COUNT-8:    vector.bitcast {{.*}} : vector<1xi8> to vector<1xf8E8M0FNU>
     # CHECK-COUNT-16:   vector.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>

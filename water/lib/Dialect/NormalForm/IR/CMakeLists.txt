@@ -1,7 +1,7 @@
 add_mlir_dialect_library(MLIRNormalFormDialect
   NormalFormDialect.cpp
-  NormalFormOps.cpp
   NormalFormInterfaces.cpp
+  NormalFormOps.cpp
 
   DEPENDS
   MLIRNormalFormIncGen

@@ -8,15 +8,15 @@
 # These files implement operation handlers organized by source MLIR dialect.
 
 set(HANDLERS_SRCS
-  HandlerUtils.cpp
-  GPUHandlers.cpp
-  ArithHandlers.cpp
-  MathHandlers.cpp
   AffineHandlers.cpp
-  VectorHandlers.cpp
-  SCFHandlers.cpp
-  MemRefHandlers.cpp
   AMDGPUHandlers.cpp
+  ArithHandlers.cpp
+  GPUHandlers.cpp
+  HandlerUtils.cpp
+  MathHandlers.cpp
+  MemRefHandlers.cpp
+  SCFHandlers.cpp
+  VectorHandlers.cpp
 )
 
 # Export handler sources to parent scope for inclusion in the main library

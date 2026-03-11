@@ -341,8 +341,17 @@ public:
     int64_t srdBaseIndex; // SGPR index for SRD (e.g., 8 for s[8:11])
   };
 
+  /// Information about a pending scalar kernel argument load (index, i32, etc.)
+  struct PendingScalarArg {
+    mlir::Value blockArg; // The MLIR block argument
+    int64_t argIndex;     // Position in function signature
+  };
+
   /// Queue an SRD setup for a binding
   void queueSRDSetup(mlir::Value memref, int64_t argIndex, int64_t bufferSize);
+
+  /// Queue a scalar argument load from the kernarg buffer
+  void queueScalarArgLoad(mlir::Value blockArg, int64_t argIndex);
 
   /// Emit all pending SRD setup instructions (called at start of kernel body)
   void emitSRDPrologue();
@@ -374,13 +383,14 @@ public:
     return (maxSrdEnd + 3) & ~3;
   }
 
-  /// Get next available swizzle SRD index (for cache swizzle SRDs)
-  /// These are allocated after all regular SRDs, computed in emitSRDPrologue()
+  /// Get next available swizzle SRD index (for cache swizzle SRDs and
+  /// per-workgroup SRD base adjustments).
+  /// These are allocated after all regular SRDs, computed in emitSRDPrologue().
+  /// Each allocation reserves 5 SGPRs: s[N..N+3] for the SRD quad plus
+  /// s[N+4] as a temporary for the multiply low-half result.
   int64_t getNextSwizzleSRDIndex() {
-    // If nextSwizzleSRDIndex hasn't been computed yet (emitSRDPrologue not
-    // called), compute it from pendingSRDs.
     if (nextSwizzleSRDIndex < 0) {
-      int64_t maxSrdEnd = 24; // Minimum fallback
+      int64_t maxSrdEnd = 24;
       for (const auto &pending : pendingSRDs) {
         int64_t srdEnd = pending.srdBaseIndex + 4;
         maxSrdEnd = std::max(maxSrdEnd, srdEnd);
@@ -388,15 +398,19 @@ public:
       nextSwizzleSRDIndex = (maxSrdEnd + 3) & ~3; // Align to 4
     }
     int64_t idx = nextSwizzleSRDIndex;
-    nextSwizzleSRDIndex += 4; // Each SRD uses 4 consecutive SGPRs
+    // 4 SRD SGPRs + 1 temp for byteOffLo, padded to next 4-aligned index
+    // (SRD buffer descriptors require 4-SGPR alignment on AMDGCN).
+    nextSwizzleSRDIndex = (idx + 5 + 3) & ~3;
     return idx;
   }
 
   /// Update buffer size for a pending SRD (called when we see reinterpret_cast)
   void updateSRDBufferSize(mlir::Value memref, int64_t bufferSize);
 
-  /// Get the number of kernel arguments (based on pending SRD count)
-  size_t getNumKernelArgs() const { return pendingSRDs.size(); }
+  /// Get the number of kernel arguments (bindings + scalar args)
+  size_t getNumKernelArgs() const {
+    return pendingSRDs.size() + pendingScalarArgs.size();
+  }
 
   //===--------------------------------------------------------------------===//
   // Split Vector Result Tracking
@@ -511,6 +525,30 @@ public:
     return ldsBaseOffsetMap.contains(memref);
   }
 
+  //===--------------------------------------------------------------------===//
+  // Dynamic Stride Tracking (for memref.reinterpret_cast with runtime strides)
+  //===--------------------------------------------------------------------===//
+
+  /// Store a dynamic (runtime) stride value for a memref dimension.
+  /// \p strideValue is the mapped WaveASM SSA value holding the element stride.
+  void setDynamicStride(mlir::Value memref, unsigned dim,
+                        mlir::Value strideValue) {
+    dynamicStrideMap[memref][dim] = strideValue;
+  }
+
+  /// Get the dynamic stride value for a memref dimension.
+  /// Returns nullopt if the stride is static.
+  std::optional<mlir::Value> getDynamicStride(mlir::Value memref,
+                                              unsigned dim) const {
+    auto it = dynamicStrideMap.find(memref);
+    if (it == dynamicStrideMap.end())
+      return std::nullopt;
+    auto dimIt = it->second.find(dim);
+    if (dimIt == it->second.end())
+      return std::nullopt;
+    return dimIt->second;
+  }
+
   /// Track a pending per-workgroup SRD base adjustment for a linearized memref
   struct PendingSRDBaseAdjust {
     mlir::Value elementOffset;
@@ -535,6 +573,19 @@ public:
   /// Clear a pending SRD base adjustment after it has been applied
   void clearPendingSRDBaseAdjust(mlir::Value memref) {
     pendingSRDBaseAdjustMap.erase(memref);
+  }
+
+  /// Default max buffer size (~2 GiB, dword-aligned) used when no matching
+  /// SRD is found.  Disables hardware OOB checking but keeps valid alignment.
+  static constexpr int64_t kDefaultMaxBufferSize = 0x7FFFFFFC;
+
+  /// Look up buffer size for an SRD by its SGPR base index
+  int64_t getBufferSizeForSRD(int64_t srdBase) const {
+    for (const auto &pending : pendingSRDs) {
+      if (pending.srdBaseIndex == srdBase)
+        return pending.bufferSize;
+    }
+    return kDefaultMaxBufferSize;
   }
 
   //===--------------------------------------------------------------------===//
@@ -674,6 +725,9 @@ private:
 
   llvm::DenseMap<mlir::Value, PendingSRDBaseAdjust> pendingSRDBaseAdjustMap;
   llvm::SmallVector<PendingSRD, 4> pendingSRDs;
+  llvm::SmallVector<PendingScalarArg, 2> pendingScalarArgs;
+  llvm::DenseMap<mlir::Value, llvm::DenseMap<unsigned, mlir::Value>>
+      dynamicStrideMap;
   llvm::StringMap<mlir::Value> exprCache;
   int64_t nextSRDIndex =
       -1; // Will be computed lazily, starts after user+system SGPRs
@@ -723,7 +777,18 @@ struct VOffsetResult {
 VOffsetResult computeVOffsetFromIndices(mlir::MemRefType memrefType,
                                         mlir::ValueRange indices,
                                         TranslationContext &ctx,
-                                        mlir::Location loc);
+                                        mlir::Location loc,
+                                        mlir::Value base = nullptr);
+
+/// Emit inline SRD base adjustment for per-workgroup buffer addressing.
+/// Allocates a new SRD (5 SGPRs: base pair, hi/lo temporaries, offset temp),
+/// copies the source SRD base, multiplies the element offset by elementBytes,
+/// adds the byte offset into the base, and fills num_records + stride.
+/// Returns a precolored SGPR quad representing the adjusted SRD.
+mlir::Value
+emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
+                      mlir::Value memref, TranslationContext &ctx,
+                      mlir::Location loc);
 
 mlir::Value lookupSRD(mlir::Value memref, TranslationContext &ctx,
                       mlir::Location loc);

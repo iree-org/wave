@@ -73,6 +73,7 @@ from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
 from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
+from .scheduling.loop_reconstruction import guard_g2s_with_bounds_check
 from .scheduling.schedule import schedule_graph
 from .scheduling.schedule_enums import SchedulingType
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
@@ -554,6 +555,10 @@ def build_graph_passes(
             )
         )
 
+    graph_passes.append(
+        partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
+    )
+
     if options.optimization_level:
         graph_passes += [
             partial(
@@ -582,7 +587,12 @@ def build_graph_passes(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
-        partial(generate_bounds_exprs, trace, launchable.constraints),
+        partial(
+            generate_bounds_exprs,
+            trace,
+            launchable.constraints,
+            launchable.reordering_constraints,
+        ),
         partial(
             merge_contiguous_reads,
             trace,
@@ -1302,11 +1312,6 @@ def _generate_asm_code_waveasm(mlir_asm, options):
             "--waveasm-scoped-cse",
             "--waveasm-loop-address-promotion",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            # Regalloc replaces virtual types with physical types that differ
-            # in register index but match in class/size.  LoopLikeOpInterface
-            # verification rejects these; disable until upstream adds
-            # areTypesCompatible to LoopLikeOpInterface.
-            "--disable-pass-verifier",
             "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",

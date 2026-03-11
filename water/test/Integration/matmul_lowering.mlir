@@ -1,4 +1,4 @@
-// RUN: water-opt %s --pass-pipeline="builtin.module(water-wave-detect-normal-forms,normalform.module(water-wave-propagate-elements-per-thread,water-wave-resolve-distributed-allocations,water-wave-detect-normal-forms,lower-wave-to-mlir),lower-normalform-module,canonicalize,cse)" | FileCheck %s
+// RUN: water-opt %s --water-middle-end-lowering | FileCheck %s
 
 // This test is a LIT counterpart to $WAVE_DIR/tests/kernel/wave/water_e2e_test.py
 // with the `minimize_shared_allocs` option off and was obtained by printing
