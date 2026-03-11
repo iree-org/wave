@@ -100,6 +100,10 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
     lowerBoundValue =
         S_MOV_B32::create(builder, loc, sregType, lowerBoundValue);
   } else if (isVGPRType(lowerBoundValue.getType())) {
+    // SAFETY: v_readfirstlane_b32 reads only lane 0. This is correct because
+    // scf.for loop bounds must be uniform across all lanes in a wavefront
+    // (the loop branch is scalar). If a divergent value reached here, only
+    // lane 0's value would be used, silently producing incorrect results.
     auto sregType = ctx.createSRegType();
     lowerBoundValue =
         V_READFIRSTLANE_B32::create(builder, loc, sregType, lowerBoundValue);
