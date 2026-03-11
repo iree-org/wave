@@ -133,10 +133,23 @@ private:
     // generates v_mov_b32 v15, <literal> before such instructions.
     reservedVGPRs.insert(15);
 
-    // Note: ABI SGPRs (kernarg ptr, preload regs, workgroup IDs, SRDs) are
+    // ABI SGPRs (kernarg ptr, preload regs, workgroup IDs, SRDs) are
     // reserved via PrecoloredSRegOp ops emitted during translation. The
     // collection loop below picks those up and adds their indices to
     // reservedSGPRs automatically -- no manual reservation needed here.
+    //
+    // Scalar kernel arg SGPRs (loaded via RawOp s_load_dword) may have had
+    // their PrecoloredSRegOps DCE'd by canonicalize. Reserve them explicitly.
+    if (auto baseAttr =
+            program->getAttrOfType<IntegerAttr>("scalar_sgpr_base")) {
+      int64_t base = baseAttr.getInt();
+      int64_t count = 0;
+      if (auto countAttr =
+              program->getAttrOfType<IntegerAttr>("scalar_sgpr_count"))
+        count = countAttr.getInt();
+      for (int64_t i = 0; i < count; ++i)
+        reservedSGPRs.insert(base + i);
+    }
 
     bool collectFailed = false;
     program.walk([&](Operation *op) {
