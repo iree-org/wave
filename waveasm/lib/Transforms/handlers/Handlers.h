@@ -211,6 +211,8 @@ mlir::LogicalResult handleMemRefStore(mlir::Operation *op,
                                       TranslationContext &ctx);
 mlir::LogicalResult handleMemRefCast(mlir::Operation *op,
                                      TranslationContext &ctx);
+mlir::LogicalResult handleMemRefExtractStridedMetadata(mlir::Operation *op,
+                                                       TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // SCF Dialect Handlers
@@ -236,6 +238,12 @@ int64_t computeBufferSizeFromMemRef(mlir::MemRefType memrefType);
 
 /// Check if value is power of 2
 bool isPowerOf2(int64_t val);
+
+/// Barrett-reduction-based unsigned integer floor division.
+/// Exact for all uint32 values (unlike float-rcp which fails for x >= 2^23).
+mlir::Value emitUnsignedFloordiv(mlir::Value x, mlir::Value d,
+                                 mlir::OpBuilder &builder, mlir::Location loc,
+                                 TranslationContext &ctx);
 
 /// Get log2 of power of 2
 int64_t log2(int64_t val);

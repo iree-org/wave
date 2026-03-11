@@ -210,10 +210,10 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // General case: non-power-of-2 division requires complex reciprocal sequence
-  // Emit an error rather than silently producing incorrect code
-  return op->emitError("unsigned integer division by non-power-of-2 is not "
-                       "yet implemented; divisor must be a power of 2");
+  // General case: Barrett reduction for non-power-of-2 divisors
+  auto result = emitUnsignedFloordiv(*lhs, *rhs, builder, loc, ctx);
+  ctx.getMapper().mapValue(divOp.getResult(), result);
+  return success();
 }
 
 LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
@@ -239,10 +239,13 @@ LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
     }
   }
 
-  // General case: non-power-of-2 modulo requires division
-  // Emit an error rather than silently producing incorrect code
-  return op->emitError("unsigned integer remainder by non-power-of-2 is not "
-                       "yet implemented; modulus must be a power of 2");
+  // General case: Barrett reduction for non-power-of-2 moduli
+  // rem = x - floordiv(x, d) * d
+  Value q = emitUnsignedFloordiv(*lhs, *rhs, builder, loc, ctx);
+  Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, *rhs);
+  auto result = V_SUB_U32::create(builder, loc, vregType, *lhs, qd);
+  ctx.getMapper().mapValue(remOp.getResult(), result);
+  return success();
 }
 
 LogicalResult handleArithDivF(Operation *op, TranslationContext &ctx) {

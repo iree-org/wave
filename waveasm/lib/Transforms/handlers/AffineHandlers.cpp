@@ -36,28 +36,60 @@ using namespace mlir;
 
 namespace waveasm {
 
-// Returns floordiv(x, d) = floor(cvt_f32(x) * rcp(cvt_f32(d))) with
-// off-by-one correction. Valid for x, d < 2^23 (float precision limit).
-static Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
-                                  Location loc, TranslationContext &ctx) {
+// 32-bit unsigned Barrett reduction: floordiv(x, d) exact for all uint32.
+// Matches LLVM's __udivsi3 lowering:
+//   1. Float rcp seed  →  Newton-Raphson refinement  →  exact reciprocal
+//   2. q = mulhi(x, recip)
+//   3. Two remainder-based correction steps
+Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
+                           Location loc, TranslationContext &ctx) {
   auto vregType = ctx.createVRegType();
-  Value xf = V_CVT_F32_U32::create(builder, loc, vregType, x);
+  auto zeroImm = ctx.createImmType(0);
+  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+
+  // --- Step 1: float reciprocal seed ---
   Value df = V_CVT_F32_U32::create(builder, loc, vregType, d);
-  Value rcpD = V_RCP_F32::create(builder, loc, vregType, df);
-  Value qf = V_MUL_F32::create(builder, loc, vregType, xf, rcpD);
-  Value qfFloor = V_FLOOR_F32::create(builder, loc, vregType, qf);
-  Value q = V_CVT_U32_F32::create(builder, loc, vregType, qfFloor);
+  Value rcp = V_RCP_F32::create(builder, loc, vregType, df);
+  auto scaleImm = ctx.createImmType(bitCast<int32_t>(0x4f7ffffeu));
+  auto scaleConst =
+      ConstantOp::create(builder, loc, scaleImm, bitCast<int32_t>(0x4f7ffffeu));
+  Value rcpScaled = V_MUL_F32::create(builder, loc, vregType, scaleConst, rcp);
+  Value recip = V_CVT_U32_F32::create(builder, loc, vregType, rcpScaled);
+
+  // --- Step 2: Newton-Raphson refinement (1 iteration) ---
+  Value negD = V_SUB_U32::create(builder, loc, vregType, zeroConst, d);
+  Value e = V_MUL_LO_U32::create(builder, loc, vregType, negD, recip);
+  Value err = V_MUL_HI_U32::create(builder, loc, vregType, recip, e);
+  recip = V_ADD_U32::create(builder, loc, vregType, recip, err);
+
+  // --- Step 3: quotient ---
+  Value q = V_MUL_HI_U32::create(builder, loc, vregType, x, recip);
+
+  // --- Step 4: remainder + two correction steps ---
   Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, d);
   Value rem = V_SUB_U32::create(builder, loc, vregType, x, qd);
-  V_CMP_GE_U32::create(builder, loc, rem, d);
+
   auto oneImm = ctx.createImmType(1);
   auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
   Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
-  auto zeroImm = ctx.createImmType(0);
-  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-  Value inc = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst, oneVgpr,
-                                    zeroConst);
-  return V_ADD_U32::create(builder, loc, vregType, q, inc);
+
+  // First correction: if rem >= d then q++, rem -= d
+  Value remMinusD = V_SUBREV_U32::create(builder, loc, vregType, d, rem);
+  V_CMP_GE_U32::create(builder, loc, rem, d);
+  Value inc1 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
+                                     oneVgpr, zeroConst);
+  q = V_ADD_U32::create(builder, loc, vregType, q, inc1);
+  rem = V_CNDMASK_B32::create(builder, loc, vregType, rem, remMinusD,
+                               zeroConst);
+
+  // Second correction: if rem >= d then q++
+  Value remMinusD2 = V_SUBREV_U32::create(builder, loc, vregType, d, rem);
+  V_CMP_GE_U32::create(builder, loc, rem, d);
+  Value inc2 = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
+                                     oneVgpr, zeroConst);
+  q = V_ADD_U32::create(builder, loc, vregType, q, inc2);
+
+  return q;
 }
 
 /// Handle affine.apply - compile affine expression to arithmetic instructions
