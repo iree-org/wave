@@ -325,12 +325,31 @@ jobs:
           cmake --build . --target check-water
 
 
+  check_water_changes:
+    name: Check for water/ changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} -- water/)
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   coverage_water:
     name: "CDNA4 :: Water Code Coverage"
     runs-on: linux-mi35x-1gpu-ossci-iree-org
     timeout-minutes: 60
-    needs: build_llvm_linux
-    if: github.event_name == 'pull_request'
+    needs: [build_llvm_linux, check_water_changes]
+    if: needs.check_water_changes.outputs.changed == 'true'
     permissions:
       pull-requests: write
     env:
