@@ -2109,7 +2109,7 @@ def main():
         )
 
         from wave_lang.kernel.wave.utils.run_utils import get_default_arch
-        from wave_lang.kernel.wave.waveasm_e2e import (
+        from waveasm.waveasm_e2e import (
             WaveASMCompiler,
             capture_wave_kernel_info,
             run_with_wave_runtime,
