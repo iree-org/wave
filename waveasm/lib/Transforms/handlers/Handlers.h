@@ -245,6 +245,13 @@ mlir::Value emitUnsignedFloordiv(mlir::Value x, mlir::Value d,
                                  mlir::OpBuilder &builder, mlir::Location loc,
                                  TranslationContext &ctx);
 
+/// Magic-number unsigned floor division by a known constant divisor (>= 2).
+/// Uses Hacker's Delight algorithm: 2-5 VALU instructions, no VCC corrections.
+mlir::Value emitConstantUnsignedFloordiv(mlir::Value x, int64_t divisor,
+                                         mlir::OpBuilder &builder,
+                                         mlir::Location loc,
+                                         TranslationContext &ctx);
+
 /// Get log2 of power of 2
 int64_t log2(int64_t val);
 

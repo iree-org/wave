@@ -196,7 +196,7 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
     return failure();
   }
 
-  // Check if RHS is a power of 2 constant - use shift instead
+  // Check if RHS is a constant
   if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
     int64_t divisor = constOp.getValue();
     if (isPowerOf2(divisor)) {
@@ -208,9 +208,15 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
       ctx.getMapper().mapValue(divOp.getResult(), result);
       return success();
     }
+    if (divisor >= 2) {
+      auto result =
+          emitConstantUnsignedFloordiv(*lhs, divisor, builder, loc, ctx);
+      ctx.getMapper().mapValue(divOp.getResult(), result);
+      return success();
+    }
   }
 
-  // General case: Barrett reduction for non-power-of-2 divisors
+  // General case: Barrett reduction for symbolic divisors
   auto result = emitUnsignedFloordiv(*lhs, *rhs, builder, loc, ctx);
   ctx.getMapper().mapValue(divOp.getResult(), result);
   return success();
@@ -227,7 +233,7 @@ LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
     return failure();
   }
 
-  // Check if RHS is a power of 2 constant - use AND instead
+  // Check if RHS is a constant
   if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
     int64_t modulus = constOp.getValue();
     if (isPowerOf2(modulus)) {
@@ -237,9 +243,19 @@ LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
       ctx.getMapper().mapValue(remOp.getResult(), result);
       return success();
     }
+    if (modulus >= 2) {
+      Value q =
+          emitConstantUnsignedFloordiv(*lhs, modulus, builder, loc, ctx);
+      auto dImm = ctx.createImmType(modulus);
+      auto dConst = ConstantOp::create(builder, loc, dImm, modulus);
+      Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, dConst);
+      auto result = V_SUB_U32::create(builder, loc, vregType, *lhs, qd);
+      ctx.getMapper().mapValue(remOp.getResult(), result);
+      return success();
+    }
   }
 
-  // General case: Barrett reduction for non-power-of-2 moduli
+  // General case: Barrett reduction for symbolic divisors
   // rem = x - floordiv(x, d) * d
   Value q = emitUnsignedFloordiv(*lhs, *rhs, builder, loc, ctx);
   Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, *rhs);
