@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-test-wave-infer-index-exprs --split-input-file --verify-diagnostics
+// RUN: water-opt %s --water-test-wave-infer-index-exprs --split-input-file --verify-diagnostics | FileCheck %s
 
 //
 // This file contains tests for index expression dataflow analyses that require
@@ -582,7 +582,7 @@ normalform.module [#wave.normal_form<full_types>] {
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: {M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
+    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [{
        M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0, 1, 1)>
     }, {
@@ -609,7 +609,7 @@ normalform.module [#wave.normal_form<full_types>] {
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: {M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)>
+    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [{
        M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0 + 2, 1, 1)>
     }, {
@@ -636,7 +636,7 @@ normalform.module [#wave.normal_form<full_types>] {
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: {M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
+    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [{
        M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
     }, {
@@ -698,7 +698,7 @@ normalform.module [#wave.normal_form<full_types>] {
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
       // CHECK: wave.add
       // CHECK-SAME: index
-      // CHECK-SAME: M : <[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      // CHECK-SAME: M : <[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)
       %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
         M = #wave.index_mapping<[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
       }, {
