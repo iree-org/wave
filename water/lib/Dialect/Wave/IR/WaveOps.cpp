@@ -2211,6 +2211,8 @@ getVectorStrides(wave::WaveTensorType tensorType,
     return failure();
   int64_t rank = tensorType.getRank();
   SmallVector<int64_t> strides(rank);
+  if (rank == 0)
+    return strides;
   strides[rank - 1] = 1;
   for (int64_t i = rank - 2; i >= 0; --i) {
     Attribute vectorShape =

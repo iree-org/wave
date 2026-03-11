@@ -872,7 +872,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // Higher priority lattice on the other operand. Selected without causing a conflict.
     // CHECK: wave.add
-    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
     %sum = wave.add %a_reg, %b {wave_test.override_operand_index = [
       unit,
       [3, {
@@ -925,13 +925,13 @@ normalform.module [#wave.normal_form<full_types>] {
     ]
   } {
     // CHECK: wave.read
-    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %a_reg = wave.read %a : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // The override has low priority, it only matters at initialization and is
     // then itself overridden by the higher-priority lattice in backpropagation.
     // CHECK: wave.add
-    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %sum1 = wave.add %a_reg, %b {wave_test.override_operand_index = [
       unit,
       [0, {
@@ -940,11 +940,11 @@ normalform.module [#wave.normal_form<full_types>] {
     ]} : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // CHECK: wave.add
-    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %sum2 = wave.add %sum1, %a_reg : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // CHECK: wave.write
-    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     wave.write %sum2, %output {wave_test.override_operand_index = [
       unit,
       [3, {
@@ -985,11 +985,59 @@ normalform.module [#wave.normal_form<full_types>] {
     } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
     // CHECK: wave.read
     // CHECK: index
-    // CHECK: M : [] -> (42, <NULL>, <NULL>)
+    // CHECK: M : <[] -> (42, <NULL>, <NULL>)>
     %c_reg = wave.read %c {wave_test.override_result_index = [[1, {
       M = #wave.index_mapping<[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
     }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     wave.write %c_reg, %b : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+    return
+  }
+}
+
+// -----
+
+// Test that priority is propagated when index expressions are
+// equal. Both read and add using its result are initialized
+// to the same value, read with priority 0 and add with prioity 3.
+// Check that this value overrides the one the write is initialized
+// with give its priority is only 1.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @propagate_priority_equal_values
+  func.func @propagate_priority_equal_values(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>,
+    %output: !wave.tensor<[@M] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Read result is at the lowest priority.
+    %a_reg = wave.read %a {wave_test.override_result_index = [[0, {
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+
+    // Same value expression but at higher priority.
+    // CHECK: wave.add
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    %sum = wave.add %a_reg, %b {wave_test.override_operand_index = [
+      unit,
+      [3, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }]
+    ]} : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+
+    // Write's own initialization has priority 1 (kWritePriority), but the sum's
+    // lattice has priority 3, so it dominates and the write retains T0 * 10.
+    // CHECK: wave.write
+    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    wave.write %a_reg, %output {wave_test.override_operand_index = [
+      unit, [1, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+      }]
+    ]} : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
+
     return
   }
 }

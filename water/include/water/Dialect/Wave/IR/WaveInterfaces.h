@@ -599,9 +599,12 @@ public:
   // specified or not, or null if the lattice instance is a top or a bottom.
   mlir::DictionaryAttr getConcreteValue() const;
 
-  // Return the priority of this lattice instance or -1 if it is not a concrete
-  // value.
-  int32_t getPriority() const { return getConcreteValue() ? priority : -1; }
+  // Return the priority of this lattice instance containing a concrete value,
+  // assert otherwise.
+  int32_t getPriority() const {
+    assert(getConcreteValue() && "no priority for lattice top/bottom");
+    return priority;
+  }
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();

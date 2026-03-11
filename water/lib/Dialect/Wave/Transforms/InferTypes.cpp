@@ -33,7 +33,6 @@ using namespace mlir;
 
 #define DEBUG_TYPE "wave-infer-types"
 
-using namespace mlir;
 using wave::ElementsPerThreadLatticeValue;
 using wave::IndexExprsLatticeStorage;
 
@@ -2017,8 +2016,11 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             }
           }
         }
-        iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                       ArrayAttr::get(iface->getContext(), indexExprs));
+        // Only set the index expressions if there were no failures.
+        if (!hadFailures) {
+          iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                         ArrayAttr::get(iface->getContext(), indexExprs));
+        }
 
         return WalkResult::advance();
       });

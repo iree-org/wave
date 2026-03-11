@@ -376,7 +376,7 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
                         else seq.stride
                     ),
                 )
-                for dim, seq in node.index.items()
+                for dim, seq in seqs.items()
             }
 
         node_index = ensure_symbols_positive(node.index)

@@ -805,7 +805,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
-  return value == other.value;
+  return value == other.value && priority == other.priority;
 }
 
 bool wave::IndexExprsLatticeStorage::operator!=(
@@ -1209,7 +1209,7 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
     llvm::ArrayRef<Attribute> ignoredRhsSymbols) {
-  if (lhs.value == rhs.value)
+  if (lhs == rhs)
     return lhs;
 
   // Top is saturating.

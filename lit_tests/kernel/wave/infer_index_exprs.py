@@ -9,7 +9,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave as tkw
+import wave_lang.kernel.wave as wave
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
@@ -26,21 +26,21 @@ def _get_matrix_add_kernel():
     dtype = tkl.f16
 
     constraints = [
-        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 4, N: 1}),
-        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 4, N: 1}),
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
     ]
 
-    @tkw.wave(constraints)
+    @wave.wave(constraints)
     def matrix_add(
         a: tkl.Memory[M, N, ADDRESS_SPACE, dtype],
         b: tkl.Memory[M, N, ADDRESS_SPACE, dtype],
         c: tkl.Memory[M, N, ADDRESS_SPACE, dtype],
     ):
-        a_reg = tkw.read(a)
-        b_reg = tkw.read(b)
+        a_reg = wave.read(a)
+        b_reg = wave.read(b)
         c_reg = a_reg + b_reg
-        tkw.write(c_reg, c)
+        wave.write(c_reg, c)
 
     hyperparams = {
         M: 128,
@@ -64,16 +64,16 @@ def _get_mma_chain_kernel():
     dtype = tkl.f16
 
     constraints = [
-        tkw.HardwareConstraint(
+        wave.HardwareConstraint(
             threads_per_wave=64,
             mma_type=MMAType.F32_16x16x16_F16,
             waves_per_block=(1, 2, 2),
         ),
-        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
     ]
 
-    @tkw.wave(constraints)
+    @wave.wave(constraints)
     def mma_chain(
         a: tkl.Memory[M, K, GLOBAL_ADDRESS_SPACE, dtype],
         b: tkl.Memory[N, K, GLOBAL_ADDRESS_SPACE, dtype],
@@ -81,17 +81,17 @@ def _get_mma_chain_kernel():
         d: tkl.Memory[P, N, GLOBAL_ADDRESS_SPACE, dtype],
         storage: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, dtype],
     ):
-        a_read = tkw.read(a)
-        b_read = tkw.read(b)
+        a_read = wave.read(a)
+        b_read = wave.read(b)
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
-        mma1 = tkw.mma(a_read, b_read, c_reg)
-        mma1_casted = tkw.cast(mma1, tkl.f16)
-        tkw.write(mma1_casted, storage)
-        reloaded = tkw.read(storage)
-        d_read = tkw.read(d)
+        mma1 = wave.mma(a_read, b_read, c_reg)
+        mma1_casted = wave.cast(mma1, tkl.f16)
+        wave.write(mma1_casted, storage)
+        reloaded = wave.read(storage)
+        d_read = wave.read(d)
         c_reg2 = tkl.Register[M, P, tkl.f32](0.0)
-        mma2 = tkw.mma(reloaded, d_read, c_reg2)
-        tkw.write(mma2, c)
+        mma2 = wave.mma(reloaded, d_read, c_reg2)
+        wave.write(mma2, c)
 
     hyperparams = {
         M: 128,

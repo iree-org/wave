@@ -1209,3 +1209,84 @@ normalform.module [#wave.normal_form<full_types>] {
     return
   }
 }
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @batched_mma_with_reads_and_write
+  func.func @batched_mma_with_reads_and_write(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                                              %b: !wave.tensor<[@B, @N, @K] of f16>,
+                                              %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [1, 2, 2]>
+  ]} {
+    // CHECK: wave.read
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    %a_read = wave.read %a
+      : (!wave.tensor<[@B, @M, @K] of f16>) -> !wave.tensor<[@B, @M, @K] of f16, <register>>
+    // CHECK: wave.read
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %b_read = wave.read %b
+      : (!wave.tensor<[@B, @N, @K] of f16>) -> !wave.tensor<[@B, @N, @K] of f16, <register>>
+    %cst = arith.constant 0.0 : f32
+    // CHECK: wave.register
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %c_reg = wave.register %cst
+      : !wave.tensor<[@B, @M, @N] of f32, <register>>
+    // CHECK: wave.mma
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK: }, {
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma = wave.mma %a_read, %b_read, %c_reg {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@B, @M, @K] of f16, <register>>, !wave.tensor<[@B, @N, @K] of f16, <register>>, !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
+    // The write should get its index expressions from the MMA result via backward propagation.
+    // CHECK: wave.write
+    // CHECK-DAG: B : <[] -> (0, 1, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    wave.write %mma, %c : !wave.tensor<[@B, @M, @N] of f32, <register>>, !wave.tensor<[@B, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+// Make sure we write index expr initialization doesn't crash
+// on rank-0 tensors.
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @write_rank0_tensor
+  func.func @write_rank0_tensor(
+    %src: !wave.tensor<[] of f32>,
+    %dst: !wave.tensor<[] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                vector_shapes = {M = 4 : i64}>
+    ]
+  } {
+    // CHECK: wave.write
+    wave.write %src, %dst : !wave.tensor<[] of f32>, !wave.tensor<[] of f32>
+    return
+  }
+}
