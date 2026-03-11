@@ -364,8 +364,11 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
 
   // Check if the source (or its memref.cast source) has a pending SRD base
   // adjustment from a linearized reinterpret_cast (use_buffer_ops path).
-  // If so, pass through and propagate the adjustment -- the C++ backend's
-  // prologue SRDs and per-workgroup adjustment handle addressing correctly.
+  // Emit the SRD adjustment eagerly here rather than deferring to the first
+  // load, because the fat_raw_buffer_cast is typically outside any scf.for
+  // loop while the loads are inside. Deferring to load-time would place
+  // the SRD init RawOps inside the loop body where they get lost during
+  // loop lowering.
   Value src = op->getOperand(0);
   auto *adj = ctx.getPendingSRDBaseAdjust(src);
   if (!adj) {
@@ -373,9 +376,8 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
       adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
   }
   if (adj) {
-    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
-    ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
-                                adj->srcSrdBase, adj->elementBytes);
+    Value srd = emitSRDBaseAdjustment(*adj, op->getResult(0), ctx, loc);
+    ctx.getMapper().mapValue(op->getResult(0), srd);
     return success();
   }
 
@@ -384,9 +386,13 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   bool hasCacheSwizzle = false;
   int64_t swizzleStride = 0;
   if (op->getNumOperands() >= 3) {
+    // Enable cache swizzle whenever the stride operand exists, even if
+    // the value is dynamic (not a compile-time constant). The SRD
+    // encoding (0x40400000 in word 1, 0x27000 in word 3) is constant
+    // regardless of the actual stride value.
+    hasCacheSwizzle = true;
     if (auto swizzleVal = getArithConstantValue(op->getOperand(2))) {
       swizzleStride = *swizzleVal;
-      hasCacheSwizzle = (swizzleStride > 0);
     }
   }
 
@@ -435,10 +441,11 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
                     std::to_string(newSrdBase + 1) + ", 0x40400000";
   RawOp::create(builder, loc, or1);
 
-  // Use 0xFFFFFFFF for num_records to prevent OOB faults from dynamic
-  // bounds-check sentinel addresses (0x7FFFFFFF) used in gather_to_lds.
+  // Use 0x7FFFFFFE for num_records to match the Wave frontend's OOB sentinel
+  // scheme. The sentinel byte offset is 0x7FFFFFFF, so num_records must be
+  // <= 0x7FFFFFFE for hardware to clamp OOB accesses to 0.
   std::string mov2 =
-      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0xFFFFFFFF";
+      "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", 0x7FFFFFFE";
   RawOp::create(builder, loc, mov2);
 
   std::string mov3 =

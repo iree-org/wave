@@ -44,6 +44,7 @@ Environment variables:
 """
 
 import os
+import re
 import warnings
 
 import pytest
@@ -1321,6 +1322,7 @@ def _dbuf_mxfp4_helper(
     dump_asm,
     dynamic_dims=False,
     use_buffer_ops=True,
+    use_schedule=True,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1347,6 +1349,7 @@ def _dbuf_mxfp4_helper(
         get_mxfp4_dbuf_schedule,
         get_mxfp4_asymmetric_schedule,
     )
+    from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         generate_gemm_afp4wfp4_inputs,
@@ -1365,14 +1368,22 @@ def _dbuf_mxfp4_helper(
             wave_shape=(1, 4),
             reorder_workgroups=not dynamic_dims,
         )
-        schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+        if use_schedule:
+            schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+        else:
+            schedule = None
+            options.schedule = SchedulingType.NONE
     else:
         gemm, options = get_tagged_mxfp4_gemm(
             shape,
             block,
             wave_shape=(4, 2),
         )
-        schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
+        if use_schedule:
+            schedule = get_mxfp4_dbuf_schedule(use_stagger=use_stagger)
+        else:
+            schedule = None
+            options.schedule = SchedulingType.NONE
 
     # Override to ASM backend for C++ compilation path
     options.backend = "asm"
@@ -1385,6 +1396,7 @@ def _dbuf_mxfp4_helper(
 
     M = tkl.sym.M
     N = tkl.sym.N
+    K = tkl.sym.K
     m, n, k = shape
 
     dynamic_symbols = []
@@ -1394,6 +1406,10 @@ def _dbuf_mxfp4_helper(
         dynamic_values = {M: m, N: n}
         del options.subs[M]
         del options.subs[N]
+        if not use_schedule:
+            dynamic_symbols.append(K)
+            dynamic_values[K] = k
+            del options.subs[K]
         options.dynamic_symbols = dynamic_symbols
 
     # Generate MXFP4 inputs and reference output
@@ -1413,6 +1429,17 @@ def _dbuf_mxfp4_helper(
     assert (
         "amdgpu.scaled_mfma" in kernel_info.mlir_text
     ), "Expected amdgpu.scaled_mfma operation in MLIR"
+    if dynamic_dims:
+        if use_schedule:
+            expected_idx = r"function_type = \([^)]*index, index\) -> \(\)"
+            expected_msg = "M and N"
+        else:
+            expected_idx = r"function_type = \([^)]*index, index, index\) -> \(\)"
+            expected_msg = "M, N, and K"
+        assert re.search(expected_idx, kernel_info.mlir_text), (
+            f"Expected dynamic-dims MLIR signature to carry trailing dynamic "
+            f"{expected_msg} index arguments, got:\n{kernel_info.mlir_text[:400]}"
+        )
 
     waves_str = f"{num_waves}wave"
     stagger_str = "stagger" if use_stagger else "no_stagger"
@@ -1481,13 +1508,15 @@ def _dbuf_mxfp4_helper(
 
 @param_bool("dynamic_dims", "dyn")
 @param_bool("use_buffer_ops", "bufops")
+@param_bool("use_schedule", "sched")
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
-    dynamic_dims, use_buffer_ops, compiler, backend, dump_asm
+    dynamic_dims, use_buffer_ops, use_schedule, compiler, backend, dump_asm
 ):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
     Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4),
     preshuffle B, and block=(128,256,256) matching 7.1_schedule.py.
+    When use_schedule=False, disables manual scheduling entirely.
     """
     _dbuf_mxfp4_helper(
         shape=(1024, 1024, 8192),
@@ -1499,6 +1528,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         dump_asm=dump_asm,
         dynamic_dims=dynamic_dims,
         use_buffer_ops=use_buffer_ops,
+        use_schedule=use_schedule,
     )
 
 

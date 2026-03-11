@@ -575,9 +575,9 @@ public:
     pendingSRDBaseAdjustMap.erase(memref);
   }
 
-  /// Default max buffer size (~2 GiB, dword-aligned) used when no matching
-  /// SRD is found.  Disables hardware OOB checking but keeps valid alignment.
-  static constexpr int64_t kDefaultMaxBufferSize = 0x7FFFFFFC;
+  /// Default max buffer size: sentinel-safe limit ensuring the OOB sentinel
+  /// at byte offset 0x7FFFFFFF falls outside the SRD range.
+  static constexpr int64_t kDefaultMaxBufferSize = 0x7FFFFFFE;
 
   /// Look up buffer size for an SRD by its SGPR base index
   int64_t getBufferSizeForSRD(int64_t srdBase) const {
@@ -629,8 +629,8 @@ public:
     int64_t count = 2;
     // On gfx950+ with kernarg preloading, add preloaded args
     if (llvm::isa<GFX950TargetAttr>(target)) {
-      // Each kernel arg pointer uses 2 SGPRs
-      count += getNumKernelArgs() * 2;
+      // Each kernel arg uses 2 SGPRs, capped at 14 (hardware max 16 total).
+      count += std::min(size_t(14), getNumKernelArgs() * 2);
     }
     return count;
   }

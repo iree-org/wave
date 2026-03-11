@@ -42,7 +42,7 @@ namespace waveasm {
 // Named constants for SRD descriptor fields and limits.
 // kDefaultMaxBufferSize lives in TranslationContext (header).
 static constexpr int64_t kSRDStrideSwizzle = 0x20000;
-static constexpr int64_t kMaxNumRecords32 = 0xFFFFFFFF;
+static constexpr int64_t kMaxNumRecords32 = 0x7FFFFFFE;
 
 //===----------------------------------------------------------------------===//
 // TranslationContext Implementation
@@ -165,8 +165,7 @@ void TranslationContext::emitSRDPrologue() {
   // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
   int64_t userSgprCount = 2; // kernarg ptr
   if (isGFX95) {
-    userSgprCount +=
-        getNumKernelArgs() * 2; // preloaded args (bindings + scalars)
+    userSgprCount += std::min(int64_t(14), (int64_t)getNumKernelArgs() * 2);
   }
   int64_t systemSgprCount = 3; // workgroup_id_x, y, z
   int64_t srdStartIndex =
@@ -179,10 +178,16 @@ void TranslationContext::emitSRDPrologue() {
     srdIndexMap[pendingSRDs[i].memref] = newSrdBase;
   }
 
-  // Update nextSwizzleSRDIndex to start after all regular SRDs.
-  // This ensures cache-swizzle SRDs don't overlap with regular arg SRDs.
+  // Update nextSwizzleSRDIndex to start after all regular SRDs AND any
+  // overflow scalar arg slots (for args that exceed the 16-SGPR preload limit).
   int64_t afterLastSrd = srdStartIndex + pendingSRDs.size() * 4;
-  nextSwizzleSRDIndex = (afterLastSrd + 3) & ~3; // Align to 4
+  int64_t numOverflowScalars = 0;
+  for (const auto &pending : pendingScalarArgs) {
+    if (2 + pending.argIndex * 2 >= 16)
+      ++numOverflowScalars;
+  }
+  int64_t afterOverflow = afterLastSrd + numOverflowScalars * 2;
+  nextSwizzleSRDIndex = (afterOverflow + 3) & ~3; // Align to 4
 
   // Emit comment for prologue
   CommentOp::create(builder, loc, "SRD setup prologue");
@@ -199,9 +204,14 @@ void TranslationContext::emitSRDPrologue() {
   if (isGFX95) {
     // On gfx95*, the prologue loads kernarg data into preload locations
     // s[2:3], s[4:5], etc. Reserve those pairs so regalloc doesn't use them.
+    // Hardware limits user SGPRs to 16 (s[0:15]), so only reserve preload
+    // slots for args that fit within the limit. Overflow args are loaded
+    // via explicit s_load from the kernarg buffer at runtime.
     llvm::DenseSet<int64_t> reservedPreloadBases;
     for (const auto &pending : pendingSRDs) {
       int64_t preloadBase = 2 + pending.argIndex * 2;
+      if (preloadBase >= 16)
+        continue;
       if (reservedPreloadBases.insert(preloadBase).second) {
         auto preloadType = createSRegType(2, 2);
         PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
@@ -210,6 +220,8 @@ void TranslationContext::emitSRDPrologue() {
     }
     for (const auto &pending : pendingScalarArgs) {
       int64_t preloadBase = 2 + pending.argIndex * 2;
+      if (preloadBase >= 16)
+        continue;
       if (reservedPreloadBases.insert(preloadBase).second) {
         auto preloadType = createSRegType(2, 2);
         PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
@@ -230,6 +242,8 @@ void TranslationContext::emitSRDPrologue() {
 
     for (const auto &pending : pendingSRDs) {
       int64_t loadBase = 2 + pending.argIndex * 2;
+      if (loadBase >= 16)
+        continue; // Overflow arg: loaded via s_load_dword path below.
       int64_t kernargOffset = pending.argIndex * 8;
 
       auto loadDstType = createSRegType(2, loadBase);
@@ -240,9 +254,15 @@ void TranslationContext::emitSRDPrologue() {
                              offsetConst);
     }
 
-    // Also load scalar kernel arguments (index types) from kernarg buffer
+    // Also load scalar kernel arguments (index types) from kernarg buffer.
+    // Scalar args that still fit in the preload SGPR window can be loaded
+    // before the aligned main entry.
+    int64_t overflowSgprBase =
+        (srdStartIndex + (int64_t)pendingSRDs.size() * 4 + 3) & ~3;
     for (const auto &pending : pendingScalarArgs) {
       int64_t loadBase = 2 + pending.argIndex * 2;
+      if (loadBase >= 16)
+        continue;
       int64_t kernargOffset = pending.argIndex * 8;
 
       auto loadDstType = createSRegType(2, loadBase);
@@ -253,13 +273,10 @@ void TranslationContext::emitSRDPrologue() {
                              offsetConst);
     }
 
-    // Step 2: Wait for all scalar loads to complete
-    auto i32Type = builder.getI32Type();
-    auto lgkmcntAttr = IntegerAttr::get(i32Type, 0);
-    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr,
-                      /*expcnt=*/IntegerAttr{});
-
-    // Step 2.5: Branch to aligned entry point (gfx95* requirement)
+    // Step 2: Branch to aligned entry point (gfx95* requirement).
+    // Keep any high-SGPR overflow loads after the aligned entry; LLVM does the
+    // same, and loading them before the branch leaves the overflow arg stale
+    // on gfx95 hardware.
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
     std::string kernelName = program.getSymName().str();
     std::string mainLabel = ".L_" + kernelName + "_main";
@@ -268,7 +285,38 @@ void TranslationContext::emitSRDPrologue() {
     RawOp::create(builder, loc, ".p2align 8");
     RawOp::create(builder, loc, mainLabel + ":");
 
-    // Step 3: Copy from preload locations to SRD positions and fill
+    // Step 3: Load scalar overflow args after the aligned entry point.
+    // Reserve overflow SGPR slots so the register allocator avoids them.
+    for (int64_t i = 0; i < numOverflowScalars; ++i) {
+      int64_t base = overflowSgprBase + i * 2;
+      auto ovfType = createSRegType(2, 2);
+      PrecoloredSRegOp::create(builder, loc, ovfType, base, /*size=*/2);
+    }
+
+    int64_t overflowIdx = 0;
+    for (const auto &pending : pendingScalarArgs) {
+      int64_t preloadBase = 2 + pending.argIndex * 2;
+      if (preloadBase < 16)
+        continue;
+      int64_t loadBase = overflowSgprBase + overflowIdx * 2;
+      overflowIdx++;
+      int64_t kernargOffset = pending.argIndex * 8;
+
+      auto loadDstType = createSRegType(2, loadBase);
+      auto offsetImm = builder.getType<ImmType>(kernargOffset);
+      auto offsetConst =
+          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
+      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
+                             offsetConst);
+    }
+
+    // Step 4: Wait for all scalar loads to complete.
+    auto i32Type = builder.getI32Type();
+    auto lgkmcntAttr = IntegerAttr::get(i32Type, 0);
+    S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr,
+                      /*expcnt=*/IntegerAttr{});
+
+    // Step 5: Copy from preload locations to SRD positions and fill
     // size/stride. Must use RawOp: S_MOV_B64/S_MOV_B32 are Pure (SALUUnaryOp)
     // and write to physical registers with no SSA consumer, so CSE/DCE
     // eliminates them.
@@ -301,14 +349,23 @@ void TranslationContext::emitSRDPrologue() {
 
     // Move scalar args from preload SGPRs to VGPRs.
     // Lower 32 bits of the preload pair hold the value (little-endian).
+    // Overflow args were loaded into overflowSgprBase positions above.
+    int64_t ovfIdx = 0;
     for (const auto &pending : pendingScalarArgs) {
       int64_t preloadBase = 2 + pending.argIndex * 2;
+      int64_t sgprSrc;
+      if (preloadBase >= 16) {
+        sgprSrc = overflowSgprBase + ovfIdx * 2;
+        ovfIdx++;
+      } else {
+        sgprSrc = preloadBase;
+      }
       auto vregType = createVRegType();
       auto vreg =
           PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
       RawOp::create(builder, loc,
                     "v_mov_b32 v" + std::to_string(pending.argIndex) + ", s" +
-                        std::to_string(preloadBase));
+                        std::to_string(sgprSrc));
       mapper.mapValue(pending.blockArg, vreg);
     }
   } else {
