@@ -62,14 +62,33 @@ int64_t getElementBytes(Type type) {
 //===----------------------------------------------------------------------===//
 
 int64_t computeBufferSizeFromMemRef(MemRefType memrefType) {
-  // Use (1 << 31) - 2 = 0x7FFFFFFE as num_records. The Wave Python frontend
-  // emits OOB sentinel index values at (valid_bytes + elem_bytes) / elem_bytes
-  // which lands at byte offset 0x7FFFFFFF. With num_records = 0x7FFFFFFE the
-  // sentinel is one byte past the SRD range, so hardware returns 0 for OOB
-  // lanes. Using 0xFFFFFFFF would make the sentinel "in bounds" and cause a
-  // real access to unmapped memory, triggering HSA page faults.
-  (void)memrefType;
-  return 0x7FFFFFFE;
+  // Compute the maximum byte offset reachable via this memref's layout.
+  // For a memref with strides [s0, s1, …, 1] and dims [d0, d1, …, dN]:
+  //   max_offset = (d0-1)*s0 + (d1-1)*s1 + … + (dN-1)*1 + 1  (in elements)
+  //   num_records = max_offset * elemBytes
+  // If any dimension or stride is dynamic, fall back to a large bound.
+  int64_t elemBytes = getElementBytes(memrefType.getElementType());
+
+  SmallVector<int64_t, 4> strides;
+  int64_t offset;
+  if (succeeded(memrefType.getStridesAndOffset(strides, offset)) &&
+      memrefType.hasStaticShape()) {
+    bool allStaticStrides = llvm::all_of(
+        strides, [](int64_t s) { return s != ShapedType::kDynamic; });
+    if (allStaticStrides) {
+      int64_t maxOffset = 0;
+      auto shape = memrefType.getShape();
+      for (size_t i = 0; i < shape.size(); ++i) {
+        if (shape[i] > 1)
+          maxOffset += (shape[i] - 1) * std::abs(strides[i]);
+      }
+      return (maxOffset + 1) * elemBytes;
+    }
+  }
+  // Dynamic dims or dynamic strides — use a large-but-bounded value so that
+  // hardware OOB checking catches wild offsets (e.g., negative wraparound)
+  // and returns zero rather than faulting on unmapped memory.
+  return 0x20000000;
 }
 
 //===----------------------------------------------------------------------===//
