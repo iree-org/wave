@@ -13,7 +13,7 @@ detection used by compile.py and waveasm_e2e.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Tuple
 
 from wave_lang.support.ir_imports import Operation, func_d, gpu_d, OpAttributeMap
 
