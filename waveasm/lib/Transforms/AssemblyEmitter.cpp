@@ -1082,6 +1082,8 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   });
   peakVGPRs = std::max(peakVGPRs, int64_t(1));
   peakSGPRs = std::max(peakSGPRs, int64_t(2));
+  if (auto minSgprs = program->getAttrOfType<IntegerAttr>("min_sgprs"))
+    peakSGPRs = std::max(peakSGPRs, minSgprs.getInt());
 
   for (Operation &op : program.getBodyBlock()) {
     if (auto labelOp = dyn_cast<LabelOp>(op)) {

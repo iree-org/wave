@@ -9,6 +9,9 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "waveasm-region-builder"
 
 using namespace mlir;
 using namespace waveasm;
@@ -232,8 +235,12 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (failed(translateOp(&op))) {
-      forOp.emitError("failed to translate loop body operation");
-      return nullptr;
+      // Non-critical failures (e.g. mask computation on vector<Nxindex>) leave
+      // results unmapped.  Downstream consumers that need them (maskedload)
+      // handle the absence gracefully.  Only abort if the yield operands end
+      // up unmapped (checked below).
+      LLVM_DEBUG(llvm::dbgs()
+                 << "loop body: skipping untranslated op: " << op << "\n");
     }
   }
 
