@@ -1234,10 +1234,9 @@ def _dbuf_mxfp4_helper(
         dynamic_values = {M: m, N: n}
         del options.subs[M]
         del options.subs[N]
-        if not use_schedule:
-            dynamic_symbols.append(K)
-            dynamic_values[K] = k
-            del options.subs[K]
+        dynamic_symbols.append(K)
+        dynamic_values[K] = k
+        del options.subs[K]
         options.dynamic_symbols = dynamic_symbols
 
     # Generate MXFP4 inputs and reference output
