@@ -188,7 +188,6 @@ LogicalResult handleArithMulF(Operation *op, TranslationContext &ctx) {
 LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
-  auto vregType = ctx.createVRegType();
 
   auto divOp = cast<arith::DivUIOp>(op);
   std::optional<Value> lhs, rhs;
@@ -200,6 +199,7 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
   if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
     int64_t divisor = constOp.getValue();
     if (isPowerOf2(divisor)) {
+      auto vregType = ctx.createVRegType();
       int64_t shiftAmt = log2(divisor);
       auto immShift = ctx.createImmType(shiftAmt);
       auto shiftConst = ConstantOp::create(builder, loc, immShift, shiftAmt);

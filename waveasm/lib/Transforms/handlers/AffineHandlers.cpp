@@ -49,11 +49,13 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder,
   auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
 
   // --- Step 1: float reciprocal seed ---
+  // Scale factor 0x4f7ffffe = 2^32 * (1 - 2^-24), converts rcp to a ~32-bit
+  // fixed-point reciprocal estimate.
   Value df = V_CVT_F32_U32::create(builder, loc, vregType, d);
   Value rcp = V_RCP_F32::create(builder, loc, vregType, df);
-  auto scaleImm = ctx.createImmType(bitCast<int32_t>(0x4f7ffffeu));
-  auto scaleConst =
-      ConstantOp::create(builder, loc, scaleImm, bitCast<int32_t>(0x4f7ffffeu));
+  const int32_t kScale = bitCast<int32_t>(0x4f7ffffeu);
+  auto scaleImm = ctx.createImmType(kScale);
+  auto scaleConst = ConstantOp::create(builder, loc, scaleImm, kScale);
   Value rcpScaled = V_MUL_F32::create(builder, loc, vregType, scaleConst, rcp);
   Value recip = V_CVT_U32_F32::create(builder, loc, vregType, rcpScaled);
 
@@ -162,11 +164,20 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor,
                           << ", shift=" << mag.shift
                           << ", needsAdd=" << mag.needsAdd << "\n");
 
-  auto magicImm = ctx.createImmType(static_cast<int64_t>(mag.magic));
-  Value magicConst = ConstantOp::create(builder, loc, magicImm,
-                                        static_cast<int64_t>(mag.magic));
+  int64_t magicVal = static_cast<int64_t>(mag.magic);
+  auto magicImm = ctx.createImmType(magicVal);
+  Value magicConst = ConstantOp::create(builder, loc, magicImm, magicVal);
 
   Value q = V_MUL_HI_U32::create(builder, loc, vregType, x, magicConst);
+
+  // Emit a right shift by `amount` bits, or return `val` unchanged if amount==0.
+  auto emitShiftRight = [&](Value val, int64_t amount) -> Value {
+    if (amount == 0)
+      return val;
+    auto shiftImm = ctx.createImmType(amount);
+    auto shiftConst = ConstantOp::create(builder, loc, shiftImm, amount);
+    return V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, val);
+  };
 
   if (mag.needsAdd) {
     // result = (q + ((x - q) >> 1)) >> (shift - 1)
@@ -176,22 +187,10 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor,
     Value halfDiff =
         V_LSHRREV_B32::create(builder, loc, vregType, oneConst, xSubQ);
     Value sum = V_ADD_U32::create(builder, loc, vregType, q, halfDiff);
-    if (mag.shift > 1) {
-      int64_t finalShift = mag.shift - 1;
-      auto shiftImm = ctx.createImmType(finalShift);
-      auto shiftConst = ConstantOp::create(builder, loc, shiftImm, finalShift);
-      return V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, sum);
-    }
-    return sum;
+    return emitShiftRight(sum, mag.shift - 1);
   }
 
-  if (mag.shift == 0)
-    return q;
-
-  auto shiftImm = ctx.createImmType(static_cast<int64_t>(mag.shift));
-  auto shiftConst = ConstantOp::create(builder, loc, shiftImm,
-                                       static_cast<int64_t>(mag.shift));
-  return V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, q);
+  return emitShiftRight(q, mag.shift);
 }
 
 /// Handle affine.apply - compile affine expression to arithmetic instructions
