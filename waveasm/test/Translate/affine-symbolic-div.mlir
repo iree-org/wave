@@ -1,8 +1,8 @@
 // RUN: waveasm-translate %s 2>&1 | FileCheck %s
 //
 // Test: affine.apply with symbolic (runtime) divisors for floordiv, ceildiv,
-// and mod. These use float-reciprocal-based division with off-by-one
-// correction, unlike the constant-divisor path that uses shifts.
+// and mod. These use Barrett reduction (float-rcp seed + Newton-Raphson
+// refinement + v_mul_hi_u32 quotient + two correction steps).
 
 module {
 func.func @symbolic_div(
@@ -15,34 +15,47 @@ func.func @symbolic_div(
 
   // CHECK-LABEL: waveasm.program @symbolic_div
 
-  // --- Test 1: floordiv with symbolic divisor ---
-  // Expect: cvt_f32_u32, rcp_f32, mul_f32, floor_f32, cvt_u32_f32,
-  //         then correction: mul_lo, sub, cmp_ge, cndmask, add
+  // --- Test 1: floordiv with symbolic divisor (Barrett reduction) ---
+  // Seed: cvt_f32 -> rcp -> mul(0x4f7ffffe) -> cvt_u32
+  // Newton-Raphson: sub(0,d) -> mul_lo -> mul_hi -> add
+  // Quotient: mul_hi(x, recip)
+  // Correction: mul_lo, sub, subrev, cmp_ge, cndmask, add, cndmask, cmp_ge, cndmask, add
   // CHECK: waveasm.v_cvt_f32_u32
   // CHECK: waveasm.v_rcp_f32
   // CHECK: waveasm.v_mul_f32
-  // CHECK: waveasm.v_floor_f32
   // CHECK: waveasm.v_cvt_u32_f32
+  // CHECK: waveasm.v_sub_u32
+  // CHECK: waveasm.v_mul_lo_u32
+  // CHECK: waveasm.v_mul_hi_u32
+  // CHECK: waveasm.v_add_u32
+  // CHECK: waveasm.v_mul_hi_u32
   // CHECK: waveasm.v_mul_lo_u32
   // CHECK: waveasm.v_sub_u32
+  // CHECK: waveasm.v_subrev_u32
+  // CHECK: waveasm.v_cmp_ge_u32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_add_u32
+  // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_cmp_ge_u32
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_add_u32
   %fdiv = affine.apply affine_map<()[s0, s1] -> (s0 floordiv s1)>()[%tid, %D]
 
   // --- Test 2: ceildiv with symbolic divisor ---
-  // Expect: bias = D - 1, then floordiv(tid + bias, D)
+  // Expect: bias = D - 1, then Barrett floordiv(tid + bias, D)
   // CHECK: waveasm.v_sub_u32
   // CHECK: waveasm.v_add_u32
   // CHECK: waveasm.v_cvt_f32_u32
   // CHECK: waveasm.v_rcp_f32
+  // CHECK: waveasm.v_mul_hi_u32
   // CHECK: waveasm.v_cndmask_b32
   %cdiv = affine.apply affine_map<()[s0, s1] -> (s0 ceildiv s1)>()[%tid, %D]
 
   // --- Test 3: mod with symbolic divisor ---
-  // Expect: floordiv(tid, D), then tid - q*D
+  // Expect: Barrett floordiv(tid, D), then tid - q*D
   // CHECK: waveasm.v_cvt_f32_u32
   // CHECK: waveasm.v_rcp_f32
+  // CHECK: waveasm.v_mul_hi_u32
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_mul_lo_u32
   // CHECK: waveasm.v_sub_u32
