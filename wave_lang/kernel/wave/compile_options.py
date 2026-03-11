@@ -115,7 +115,7 @@ class WaveCompileOptions:
     # Enable dynamic strides through Wave runtime and LLVM backend
     @property
     def dynamic_strides(self) -> bool:
-        return self.wave_runtime and self.backend == "llvm"
+        return self.wave_runtime
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False

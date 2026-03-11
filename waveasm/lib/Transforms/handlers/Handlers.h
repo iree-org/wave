@@ -211,6 +211,8 @@ mlir::LogicalResult handleMemRefStore(mlir::Operation *op,
                                       TranslationContext &ctx);
 mlir::LogicalResult handleMemRefCast(mlir::Operation *op,
                                      TranslationContext &ctx);
+mlir::LogicalResult handleMemRefExtractStridedMetadata(mlir::Operation *op,
+                                                       TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // SCF Dialect Handlers

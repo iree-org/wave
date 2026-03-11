@@ -16,6 +16,7 @@
 //   - memref.load - emit ds_read or buffer_load
 //   - memref.store - emit ds_write or buffer_store
 //   - memref.cast - pass through source mapping
+//   - memref.extract_strided_metadata - expose base, offset, sizes, strides
 //
 //===----------------------------------------------------------------------===//
 
@@ -333,6 +334,75 @@ LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx) {
 
   if (auto ldsOffset = ctx.getLDSBaseOffset(castOp.getSource())) {
     ctx.setLDSBaseOffset(castOp.getResult(), *ldsOffset);
+  }
+
+  return success();
+}
+
+/// Handle memref.extract_strided_metadata - expose the base buffer, offset,
+/// sizes, and strides of a strided memref as individual SSA values.
+///
+/// Results: (base_buffer, offset, sizes..., strides...)
+///
+/// For the waveasm backend, the critical results are the dynamic strides
+/// (tracked via setDynamicStride on the source reinterpret_cast). We map
+/// each result to the appropriate value so that downstream arithmetic
+/// (arith.muli with the stride, etc.) can resolve its operands.
+LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
+                                                 TranslationContext &ctx) {
+  auto metadataOp = cast<memref::ExtractStridedMetadataOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  Value source = metadataOp.getSource();
+  auto sourceType = cast<MemRefType>(source.getType());
+
+  // Result #0: base_buffer — map to the same underlying buffer as the source.
+  if (auto src = ctx.getMapper().getMapped(source)) {
+    ctx.getMapper().mapValue(metadataOp.getBaseBuffer(), *src);
+  }
+
+  // Get static strides and offset from the source memref type.
+  SmallVector<int64_t, 4> staticStrides;
+  int64_t staticOffset;
+  bool hasStridesAndOffset =
+      succeeded(sourceType.getStridesAndOffset(staticStrides, staticOffset));
+
+  // Result #1: offset — map to constant or dynamic offset value.
+  if (hasStridesAndOffset && staticOffset != ShapedType::kDynamic) {
+    auto immType = ctx.createImmType(staticOffset);
+    auto offsetVal = ConstantOp::create(builder, loc, immType, staticOffset);
+    ctx.getMapper().mapValue(metadataOp.getOffset(), offsetVal);
+  }
+
+  // Results #2..#(2+rank-1): sizes — map static sizes to constants,
+  // dynamic sizes to their mapped source values.
+  auto sizes = metadataOp.getSizes();
+  auto shape = sourceType.getShape();
+  for (unsigned i = 0; i < sizes.size(); ++i) {
+    if (i < shape.size() && shape[i] != ShapedType::kDynamic) {
+      auto immType = ctx.createImmType(shape[i]);
+      auto sizeVal = ConstantOp::create(builder, loc, immType, shape[i]);
+      ctx.getMapper().mapValue(sizes[i], sizeVal);
+    }
+  }
+
+  // Results #(2+rank)..#(2+2*rank-1): strides — the critical part.
+  // For dynamic strides, retrieve the value already tracked by
+  // handleMemRefReinterpretCast via getDynamicStride.
+  // For static strides, create immediate constants.
+  auto strides = metadataOp.getStrides();
+  for (unsigned i = 0; i < strides.size(); ++i) {
+    if (hasStridesAndOffset && i < staticStrides.size()) {
+      if (staticStrides[i] != ShapedType::kDynamic) {
+        auto immType = ctx.createImmType(staticStrides[i]);
+        auto strideVal =
+            ConstantOp::create(builder, loc, immType, staticStrides[i]);
+        ctx.getMapper().mapValue(strides[i], strideVal);
+      } else if (auto dynStride = ctx.getDynamicStride(source, i)) {
+        ctx.getMapper().mapValue(strides[i], *dynStride);
+      }
+    }
   }
 
   return success();
