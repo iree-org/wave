@@ -736,6 +736,7 @@ def _create_vec_read_write(
 
         # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
         selected_index = arith_d.select(mask, offsets_vec, oob_index)
+        elems = list()
 
         for i in range(elements_per_thread):
             # mask is not same for all elements, need to unroll
