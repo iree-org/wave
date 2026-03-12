@@ -809,11 +809,11 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
-        use_extra_barrier = True
+        use_extra_barrier = False
         # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
         cluster_0_ops = [
             tkw.SchedulingBarrier([]),
-            tkw.MemoryCounterWait(load=0),
+            # tkw.MemoryCounterWait(load=0),
             tkw.WorkgroupBarrier(),
         ]
         if use_extra_barrier:
@@ -864,6 +864,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                     loop_bitcast_a_1,
                     loop_bitcast_b_1,
                     tkw.SchedulingBarrier([]),
+                    tkw.MemoryCounterWait(load=0),
                     tkw.WorkgroupBarrier(),
                     tkw.SchedulingBarrier([]),
                 ],
@@ -885,6 +886,8 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
 
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
+
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
 
         # Apply wave staggering for better overlap
         if use_stagger:
