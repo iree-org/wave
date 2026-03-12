@@ -9,6 +9,7 @@
 //
 // This pass handles hardware-specific hazards that require NOP insertion:
 // - VALU → v_readfirstlane hazard (gfx940+)
+// - Trans → non-Trans VALU forwarding hazard (gfx940+)
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMAttrs.h"
@@ -75,6 +76,13 @@ bool isVALUOp(Operation *op) {
 
 /// Check if an operation is v_readfirstlane
 bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
+
+/// Check if an operation is a transcendental instruction (uses the Trans
+/// pipeline which has different latency characteristics from the main VALU).
+bool isTransOp(Operation *op) {
+  return isa<V_RCP_F32, V_RCP_F64, V_RSQ_F32, V_RSQ_F64, V_SQRT_F32, V_SQRT_F64,
+             V_EXP_F32, V_LOG_F32, V_SIN_F32, V_COS_F32>(op);
+}
 
 /// Get the set of VGPRs written by an operation
 llvm::DenseSet<Value> getVGPRDefs(Operation *op) {
@@ -186,12 +194,25 @@ private:
           insertionPoints.push_back(next);
         }
       }
+
+      // Check for Trans -> non-Trans VALU forwarding hazard (gfx940+).
+      // Transcendental instructions (v_rcp_f32, v_rsq_f32, etc.) have a
+      // one-cycle forwarding hazard when a non-Trans VALU immediately
+      // consumes the result. Insert s_nop 0 to cover the required wait
+      // state. See LLVM GCNHazardRecognizer::checkVALUHazards,
+      // TransDefWaitstates = 1.
+      if (isTransOp(current) && isVALUOp(next)) {
+        auto defs = getVGPRDefs(current);
+        auto uses = getVGPRUses(next);
+        if (hasIntersection(defs, uses)) {
+          insertionPoints.push_back(next);
+        }
+      }
     }
 
     // Insert s_nop instructions
     for (Operation *insertBefore : insertionPoints) {
       OpBuilder builder(insertBefore);
-      // Insert s_nop 0 (no extra wait states beyond the instruction itself)
       S_NOP::create(builder, insertBefore->getLoc(),
                     builder.getI32IntegerAttr(0));
       numNopsInserted++;

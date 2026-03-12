@@ -639,7 +639,7 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   auto hiType = PSRegType::get(mlirCtx, N + 2, 1);
   auto loType = PSRegType::get(mlirCtx, N + 4, 1);
   auto byteOffHi =
-      S_MUL_HI_U32::create(builder, loc, hiType, offsetVal, elemSizeImm);
+      S_MUL_HI_I32::create(builder, loc, hiType, offsetVal, elemSizeImm);
   auto byteOffLo =
       S_MUL_I32::create(builder, loc, loType, offsetVal, elemSizeImm);
 
