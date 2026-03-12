@@ -151,10 +151,15 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
 
 /// Resolve an LLVM SSA value to its WaveASM counterpart via the mapper
 /// or return the value itself if unmapped.
-static Value resolve(Value v, TranslationContext &ctx) {
+/// Look up the WaveASM value that an LLVM value was translated to.
+/// Returns failure if the value was never mapped -- silently returning
+/// the original (soon-to-be-erased) LLVM value is a use-after-free bug.
+static FailureOr<Value> resolve(Value v, TranslationContext &ctx) {
   if (auto mapped = ctx.getMapper().getMapped(v))
     return *mapped;
-  return v;
+  // Block arguments (func params) are mapped during prologue setup.
+  // If we get here, an LLVM op was skipped or handled incorrectly.
+  return failure();
 }
 
 /// Truncate an i64 WaveASM value to i32 via an arith.trunc pseudo-op.
@@ -187,7 +192,9 @@ static LogicalResult handlePoison(LLVM::PoisonOp op, LLVMTranslationState &st) {
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
 
-  // Poison is undefined -- materialize as zero.
+  // Poison is undefined -- materialize as zero.  Must be mapped because
+  // downstream ops (e.g. GEP, add) may reference the poison result via
+  // resolve(), which now requires every LLVM value to have a mapping.
   // TODO: Assumes b32. A legalization pass should ensure all poison values
   // are i32/f32 before this point.
   auto immTy = ctx.createImmType(0);
@@ -281,35 +288,17 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
 }
 
 // Emit arith pseudo-ops for i32/i64 casts -- legalization pass handles width.
-static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
+/// Translate an LLVM cast op to a WaveASM arithmetic pseudo-op.
+template <typename LLVMOp, typename WaveASMOp>
+static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  Value src = resolve(op.getOperand(), ctx);
-  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
-                                         : (Type)ctx.createSRegType();
-  auto pseudo = ArithSExtOp::create(builder, op.getLoc(), resTy, src);
-  ctx.getMapper().mapValue(op.getResult(), pseudo);
-  return success();
-}
-
-static LogicalResult handleZext(LLVM::ZExtOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  Value src = resolve(op.getOperand(), ctx);
-  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
-                                         : (Type)ctx.createSRegType();
-  auto pseudo = ArithZExtOp::create(builder, op.getLoc(), resTy, src);
-  ctx.getMapper().mapValue(op.getResult(), pseudo);
-  return success();
-}
-
-static LogicalResult handleTrunc(LLVM::TruncOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  Value src = resolve(op.getOperand(), ctx);
-  Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
-                                         : (Type)ctx.createSRegType();
-  auto pseudo = ArithTruncOp::create(builder, op.getLoc(), resTy, src);
+  FailureOr<Value> src = resolve(op.getOperand(), ctx);
+  if (failed(src))
+    return op->emitOpError("unmapped operand in cast");
+  Type resTy = isVGPRType(src->getType()) ? (Type)ctx.createVRegType()
+                                          : (Type)ctx.createSRegType();
+  Value pseudo = WaveASMOp::create(builder, op.getLoc(), resTy, *src);
   ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
@@ -345,11 +334,13 @@ static CmpPredicate mapLLVMPredicate(LLVM::ICmpPredicate pred) {
 static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  Value lhs = resolve(op.getLhs(), ctx);
-  Value rhs = resolve(op.getRhs(), ctx);
-  auto resTy = inferResultType({lhs, rhs}, ctx);
+  FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
+  FailureOr<Value> rhs = resolve(op.getRhs(), ctx);
+  if (failed(lhs) || failed(rhs))
+    return op->emitOpError("unmapped operand in icmp");
+  Type resTy = inferResultType({*lhs, *rhs}, ctx);
   auto pred = mapLLVMPredicate(op.getPredicate());
-  auto cmp = ArithCmpOp::create(builder, op.getLoc(), resTy, pred, lhs, rhs);
+  Value cmp = ArithCmpOp::create(builder, op.getLoc(), resTy, pred, *lhs, *rhs);
   ctx.getMapper().mapValue(op.getResult(), cmp);
   return success();
 }
@@ -357,40 +348,33 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
 static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  Value cond = resolve(op.getCondition(), ctx);
-  Value trueVal = resolve(op.getTrueValue(), ctx);
-  Value falseVal = resolve(op.getFalseValue(), ctx);
-  auto resTy = inferResultType({trueVal, falseVal}, ctx);
+  FailureOr<Value> cond = resolve(op.getCondition(), ctx);
+  FailureOr<Value> trueVal = resolve(op.getTrueValue(), ctx);
+  FailureOr<Value> falseVal = resolve(op.getFalseValue(), ctx);
+  if (failed(cond) || failed(trueVal) || failed(falseVal))
+    return op->emitOpError("unmapped operand in select");
+  Type resTy = inferResultType({*trueVal, *falseVal}, ctx);
   // ODS declaration order: (falseVal, trueVal, condition).
-  auto sel = ArithSelectOp::create(builder, op.getLoc(), resTy, falseVal,
-                                   trueVal, cond);
+  Value sel = ArithSelectOp::create(builder, op.getLoc(), resTy, *falseVal,
+                                    *trueVal, *cond);
   ctx.getMapper().mapValue(op.getResult(), sel);
   return success();
 }
 
+// Translate an LLVM binary op to a WaveASM arithmetic pseudo-op.
 // TODO: Assumes i32. A legalization pass should ensure all integer
 // arithmetic is on i32 values before this point.
-static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
+template <typename LLVMOp, typename WaveASMOp>
+static LogicalResult handleBinaryOp(LLVMOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
-  Value lhs = resolve(op.getLhs(), ctx);
-  Value rhs = resolve(op.getRhs(), ctx);
-  auto resTy = inferResultType({lhs, rhs}, ctx);
-  auto add = ArithAddOp::create(builder, op.getLoc(), resTy, lhs, rhs);
-  ctx.getMapper().mapValue(op.getResult(), add);
-  return success();
-}
-
-// TODO: Assumes i32. A legalization pass should ensure all integer
-// arithmetic is on i32 values before this point.
-static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  Value lhs = resolve(op.getLhs(), ctx);
-  Value rhs = resolve(op.getRhs(), ctx);
-  auto resTy = inferResultType({lhs, rhs}, ctx);
-  auto mul = ArithMulOp::create(builder, op.getLoc(), resTy, lhs, rhs);
-  ctx.getMapper().mapValue(op.getResult(), mul);
+  FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
+  FailureOr<Value> rhs = resolve(op.getRhs(), ctx);
+  if (failed(lhs) || failed(rhs))
+    return op->emitOpError("unmapped operand in binary op");
+  Type resTy = inferResultType({*lhs, *rhs}, ctx);
+  Value result = WaveASMOp::create(builder, op.getLoc(), resTy, *lhs, *rhs);
+  ctx.getMapper().mapValue(op.getResult(), result);
   return success();
 }
 
@@ -453,7 +437,10 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   if (!idx)
     return op->emitOpError("GEP with constant index attr not yet supported");
 
-  Value newOffset = resolve(idx, ctx);
+  FailureOr<Value> resolved = resolve(idx, ctx);
+  if (failed(resolved))
+    return op->emitOpError("unmapped GEP index");
+  Value newOffset = *resolved;
 
   // Buffer voffsets are 32-bit. Truncate i64 GEP indices.
   newOffset = truncToI32(newOffset, idx.getType(), builder, loc, ctx);
@@ -575,23 +562,25 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
   if (!ptr)
     return op->emitOpError("store address not from a tracked GEP");
 
-  Value data = resolve(op.getValue(), ctx);
+  FailureOr<Value> data = resolve(op.getValue(), ctx);
+  if (failed(data))
+    return op->emitOpError("unmapped store value");
   int64_t numBytes = getBufferAccessBytes(op.getValue().getType());
 
   if (numBytes == 2)
-    BUFFER_STORE_SHORT::create(builder, loc, data, ptr->srd, ptr->voffset,
+    BUFFER_STORE_SHORT::create(builder, loc, *data, ptr->srd, ptr->voffset,
                                /*instOffset=*/0);
   else if (numBytes == 4)
-    BUFFER_STORE_DWORD::create(builder, loc, data, ptr->srd, ptr->voffset,
+    BUFFER_STORE_DWORD::create(builder, loc, *data, ptr->srd, ptr->voffset,
                                /*instOffset=*/0);
   else if (numBytes == 8)
-    BUFFER_STORE_DWORDX2::create(builder, loc, data, ptr->srd, ptr->voffset,
+    BUFFER_STORE_DWORDX2::create(builder, loc, *data, ptr->srd, ptr->voffset,
                                  /*instOffset=*/0);
   else if (numBytes == 12)
-    BUFFER_STORE_DWORDX3::create(builder, loc, data, ptr->srd, ptr->voffset,
+    BUFFER_STORE_DWORDX3::create(builder, loc, *data, ptr->srd, ptr->voffset,
                                  /*instOffset=*/0);
   else if (numBytes == 16)
-    BUFFER_STORE_DWORDX4::create(builder, loc, data, ptr->srd, ptr->voffset,
+    BUFFER_STORE_DWORDX4::create(builder, loc, *data, ptr->srd, ptr->voffset,
                                  /*instOffset=*/0);
   else
     return op->emitOpError("unsupported store size: ") << numBytes << " bytes";
@@ -611,13 +600,23 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
       .Case([&](ROCDL::BlockIdXOp o) { return handleWorkgroupId(o, st, 0); })
       .Case([&](ROCDL::BlockIdYOp o) { return handleWorkgroupId(o, st, 1); })
       .Case([&](ROCDL::BlockIdZOp o) { return handleWorkgroupId(o, st, 2); })
-      .Case([&](LLVM::SExtOp o) { return handleSext(o, st); })
-      .Case([&](LLVM::ZExtOp o) { return handleZext(o, st); })
-      .Case([&](LLVM::TruncOp o) { return handleTrunc(o, st); })
+      .Case([&](LLVM::SExtOp o) {
+        return handleCastOp<LLVM::SExtOp, ArithSExtOp>(o, st);
+      })
+      .Case([&](LLVM::ZExtOp o) {
+        return handleCastOp<LLVM::ZExtOp, ArithZExtOp>(o, st);
+      })
+      .Case([&](LLVM::TruncOp o) {
+        return handleCastOp<LLVM::TruncOp, ArithTruncOp>(o, st);
+      })
       .Case([&](LLVM::ICmpOp o) { return handleICmp(o, st); })
       .Case([&](LLVM::SelectOp o) { return handleSelect(o, st); })
-      .Case([&](LLVM::MulOp o) { return handleMul(o, st); })
-      .Case([&](LLVM::AddOp o) { return handleAdd(o, st); })
+      .Case([&](LLVM::MulOp o) {
+        return handleBinaryOp<LLVM::MulOp, ArithMulOp>(o, st);
+      })
+      .Case([&](LLVM::AddOp o) {
+        return handleBinaryOp<LLVM::AddOp, ArithAddOp>(o, st);
+      })
       .Case([&](ROCDL::MakeBufferRsrcOp o) {
         return handleMakeBufferRsrc(o, st);
       })
