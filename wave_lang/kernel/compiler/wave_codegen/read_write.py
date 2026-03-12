@@ -835,12 +835,12 @@ def _try_iv_split_offset(
         e = safe_subs(expr, {iv_sym: iv_as_j})
         if use_subs_idxc:
             e = subs_idxc(e)
-        e = sympy.simplify(e)
+        e = simplify(e)
         lin_sym += e * ps
-    lin_sym = sympy.simplify(lin_sym)
+    lin_sym = simplify(lin_sym)
 
     coeff = lin_sym.coeff(_j)
-    remainder = sympy.simplify(lin_sym - coeff * _j)
+    remainder = simplify(lin_sym - coeff * _j)
     if not coeff.is_Integer or coeff == 0 or _j in remainder.free_symbols:
         return None
     k_stride_per_iv, rem = divmod(int(coeff), step_int)
