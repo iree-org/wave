@@ -162,8 +162,6 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
   return program;
 }
 
-/// Resolve an LLVM SSA value to its WaveASM counterpart via the mapper
-/// or return the value itself if unmapped.
 /// Look up the WaveASM value that an LLVM value was translated to.
 /// Returns failure if the value was never mapped -- silently returning
 /// the original (soon-to-be-erased) LLVM value is a use-after-free bug.
@@ -208,14 +206,31 @@ static LogicalResult handlePoison(LLVM::PoisonOp op, LLVMTranslationState &st) {
   // Poison is undefined -- materialize as zero.  Must be mapped because
   // downstream ops (e.g. GEP, add) may reference the poison result via
   // resolve(), which now requires every LLVM value to have a mapping.
-  // TODO: Assumes b32. A legalization pass should ensure all poison values
-  // are i32/f32 before this point.
+  auto intType = dyn_cast<IntegerType>(op.getResult().getType());
+  if (!intType)
+    return op->emitOpError("expected integer poison");
+
   auto immTy = ctx.createImmType(0);
-  auto imm = ConstantOp::create(builder, loc, immTy, int64_t{0});
+  auto zeroImm = ConstantOp::create(builder, loc, immTy, int64_t{0});
   auto vregTy = ctx.createVRegType();
-  auto mov = V_MOV_B32::create(builder, loc, vregTy, imm);
-  ctx.getMapper().mapValue(op.getResult(), mov);
-  return success();
+
+  if (intType.getWidth() <= 32) {
+    Value mov = V_MOV_B32::create(builder, loc, vregTy, zeroImm);
+    ctx.getMapper().mapValue(op.getResult(), mov);
+    return success();
+  }
+
+  if (intType.getWidth() <= 64) {
+    Value loMov = V_MOV_B32::create(builder, loc, vregTy, zeroImm);
+    Value hiMov = V_MOV_B32::create(builder, loc, vregTy, zeroImm);
+    auto wideTy = ctx.createVRegType(2, 2);
+    Value packed =
+        PackOp::create(builder, loc, wideTy, ValueRange{loMov, hiMov});
+    ctx.getMapper().mapValue(op.getResult(), packed);
+    return success();
+  }
+
+  return op->emitOpError("unsupported poison width (expected i32 or i64)");
 }
 
 static LogicalResult handleConstant(LLVM::ConstantOp op,
@@ -374,9 +389,8 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   return success();
 }
 
-// Translate an LLVM binary op to a WaveASM arithmetic pseudo-op.
-// TODO: Assumes i32. A legalization pass should ensure all integer
-// arithmetic is on i32 values before this point.
+/// Translate an LLVM binary op to a WaveASM arithmetic pseudo-op.
+/// Width validation is deferred to ArithLegalization.
 template <typename LLVMOp, typename WaveASMOp>
 static LogicalResult handleBinaryOp(LLVMOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
