@@ -42,13 +42,16 @@ func.func @symbolic_div(
   %fdiv = affine.apply affine_map<()[s0, s1] -> (s0 floordiv s1)>()[%tid, %D]
 
   // --- Test 2: ceildiv with symbolic divisor ---
-  // Expect: bias = D - 1, then Barrett floordiv(tid + bias, D)
-  // CHECK: waveasm.v_sub_u32
-  // CHECK: waveasm.v_add_u32
+  // Overflow-safe: Barrett floordiv(tid, D), then q + (rem != 0 ? 1 : 0)
   // CHECK: waveasm.v_cvt_f32_u32
   // CHECK: waveasm.v_rcp_f32
   // CHECK: waveasm.v_mul_hi_u32
   // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_mul_lo_u32
+  // CHECK: waveasm.v_sub_u32
+  // CHECK: waveasm.v_cmp_ne_u32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_add_u32
   %cdiv = affine.apply affine_map<()[s0, s1] -> (s0 ceildiv s1)>()[%tid, %D]
 
   // --- Test 3: mod with symbolic divisor ---

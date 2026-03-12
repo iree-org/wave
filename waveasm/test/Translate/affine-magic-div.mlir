@@ -37,9 +37,15 @@ func.func @magic_div(%binding: !stream.binding) {
   %mod5 = affine.apply affine_map<()[s0] -> (s0 mod 5)>()[%tid]
 
   // --- Test 4: ceildiv by constant 6 ---
-  // ceildiv(x, 6) = floordiv(x + 5, 6)
-  // CHECK: waveasm.v_add_u32
+  // ceildiv(x, 6) = floordiv(x, 6) + (x mod 6 != 0 ? 1 : 0)
+  // Overflow-safe: avoids (x + 5) wrapping modulo 2^32.
   // CHECK: waveasm.v_mul_hi_u32
+  // CHECK: waveasm.v_lshrrev_b32
+  // CHECK: waveasm.v_mul_lo_u32
+  // CHECK: waveasm.v_sub_u32
+  // CHECK: waveasm.v_cmp_ne_u32
+  // CHECK: waveasm.v_cndmask_b32
+  // CHECK: waveasm.v_add_u32
   %cdiv6 = affine.apply affine_map<()[s0] -> (s0 ceildiv 6)>()[%tid]
 
   // --- Test 5: floordiv by constant 2 (power of 2, should use shift) ---
