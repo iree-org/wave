@@ -1317,9 +1317,7 @@ def _generate_asm_code(mb, options):
                 + extra_passes
                 + tail_passes
             )
-            return subprocess.run(
-                full_cmd, capture_output=True, text=True, timeout=60
-            )
+            return subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
 
         import re
 
@@ -1329,18 +1327,8 @@ def _generate_asm_code(mb, options):
         if result.returncode == 0:
             m = re.search(r"\.vgpr_count:\s*(\d+)", result.stdout)
             if m and int(m.group(1)) > HW_VGPR_LIMIT:
-                import sys
-
-                sys.stderr.write(
-                    f"[waveasm] VGPR overflow ({m.group(1)} > {HW_VGPR_LIMIT}),"
-                    " retrying without loop-address-promotion\n"
-                )
                 result = _run_translate([])
 
-        if result.stderr:
-            import sys
-
-            sys.stderr.write(result.stderr)
         if result.returncode != 0:
             raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
         asm_text = result.stdout
