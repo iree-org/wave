@@ -64,17 +64,17 @@ struct WAVEASMGPUModuleToBinaryPass
 
     WalkResult walkResult =
         rootOp->walk<WalkOrder::PreOrder>([&](waveasm::ProgramOp program) {
+          size_t posBefore = asmText.size();
           if (failed(waveasm::writeAssembly(program, mapping, asmStream)))
             return WalkResult::interrupt();
+          if (asmText.size() == posBefore) {
+            program->emitError("assembly emission produced no output");
+            return WalkResult::interrupt();
+          }
           return WalkResult::advance();
         });
     if (walkResult.wasInterrupted())
       return signalPassFailure();
-
-    if (asmText.empty()) {
-      rootOp->emitError("no assembly generated");
-      return signalPassFailure();
-    }
 
     // Step 2: Assemble + link to HSACO.
     ROCDL::SerializeGPUModuleBase::init();
