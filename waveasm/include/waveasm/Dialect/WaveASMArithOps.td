@@ -35,14 +35,14 @@ class ArithPseudoOp<string mnemonic, list<Trait> traits = []>
 // Binary Arithmetic
 //===----------------------------------------------------------------------===//
 
-def WaveASM_Arith_AddOp : ArithPseudoOp<"add", [Commutative]> {
+def WaveASM_ArithAddOp : ArithPseudoOp<"add", [Commutative]> {
   let summary = "Generic integer add (legalized to s_add_u32 or v_add_u32)";
   let arguments = (ins WaveASM_AnyOperand:$lhs, WaveASM_AnyOperand:$rhs);
   let results = (outs WaveASM_AnyReg:$dst);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
-def WaveASM_Arith_MulOp : ArithPseudoOp<"mul", [Commutative]> {
+def WaveASM_ArithMulOp : ArithPseudoOp<"mul", [Commutative]> {
   let summary = "Generic integer multiply (legalized to s_mul_i32 or v_mul_lo_u32)";
   let arguments = (ins WaveASM_AnyOperand:$lhs, WaveASM_AnyOperand:$rhs);
   let results = (outs WaveASM_AnyReg:$dst);
@@ -53,7 +53,7 @@ def WaveASM_Arith_MulOp : ArithPseudoOp<"mul", [Commutative]> {
 // Comparison
 //===----------------------------------------------------------------------===//
 
-def WaveASM_Arith_CmpOp : ArithPseudoOp<"cmp", []> {
+def WaveASM_ArithCmpOp : ArithPseudoOp<"cmp", []> {
   let summary = "Generic integer compare (legalized to s_cmp_* or v_cmp_*)";
   let description = [{
     Compares two integer operands using the given predicate. Produces a
@@ -73,7 +73,7 @@ def WaveASM_Arith_CmpOp : ArithPseudoOp<"cmp", []> {
 // Select
 //===----------------------------------------------------------------------===//
 
-def WaveASM_Arith_SelectOp : ArithPseudoOp<"select"> {
+def WaveASM_ArithSelectOp : ArithPseudoOp<"select"> {
   let summary = "Generic conditional select (legalized to v_cndmask_b32 or s_cselect_b32)";
   let description = [{
     Selects between two values based on a condition. The condition is
@@ -94,7 +94,7 @@ def WaveASM_Arith_SelectOp : ArithPseudoOp<"select"> {
 // Type Conversion
 //===----------------------------------------------------------------------===//
 
-def WaveASM_Arith_TruncOp : ArithPseudoOp<"trunc"> {
+def WaveASM_ArithTruncOp : ArithPseudoOp<"trunc"> {
   let summary = "Generic integer truncation (e.g., i64 -> i32)";
   let description = [{
     Truncates a wide integer to a narrower width by extracting the low
@@ -105,7 +105,7 @@ def WaveASM_Arith_TruncOp : ArithPseudoOp<"trunc"> {
   let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def WaveASM_Arith_SExtOp : ArithPseudoOp<"sext"> {
+def WaveASM_ArithSExtOp : ArithPseudoOp<"sext"> {
   let summary = "Generic sign extension (e.g., i32 -> i64)";
   let description = [{
     Sign-extends a narrow integer to a wider width. For i32->i64, the
@@ -116,7 +116,7 @@ def WaveASM_Arith_SExtOp : ArithPseudoOp<"sext"> {
   let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def WaveASM_Arith_ZExtOp : ArithPseudoOp<"zext"> {
+def WaveASM_ArithZExtOp : ArithPseudoOp<"zext"> {
   let summary = "Generic zero extension (e.g., i32 -> i64)";
   let description = [{
     Zero-extends a narrow integer to a wider width. For i32->i64, the
