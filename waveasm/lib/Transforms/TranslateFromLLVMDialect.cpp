@@ -157,8 +157,7 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
 
   program->setAttr(WaveASMDialect::getKernelNameAttrName(),
                    builder.getStringAttr(func.getName()));
-  if (program.getBody().empty())
-    program.getBody().emplaceBlock();
+  assert(!program.getBody().empty() && "ProgramOp builder must create a block");
   return program;
 }
 
