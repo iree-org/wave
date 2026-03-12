@@ -97,7 +97,15 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
     return lines;
   }
 
-  // VOP3+ instructions need literal materialization into scratch VGPR
+  // Carry ops have dedicated handlers in generateOp that emit VCC
+  // operands and materialize literals as needed.
+  if (isa<V_ADD_CO_U32, V_SUB_CO_U32, V_ADDC_CO_U32, V_SUBB_CO_U32>(op)) {
+    if (auto line = generateOp(op))
+      lines.push_back(*line);
+    return lines;
+  }
+
+  // VOP3+ instructions need literal materialization into scratch VGPR.
   if (needsLiteralMaterialization(mnemonic)) {
     emitMaterializedLiteral(lines, op, mnemonic, literalOperandIdx,
                             literalValue);
