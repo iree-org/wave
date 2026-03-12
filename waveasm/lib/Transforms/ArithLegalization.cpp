@@ -357,15 +357,24 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
 
     if (isEqNe) {
       // eq/ne: XOR each half, OR, compare to zero.
+      // Materialize to vreg so VCC can be re-established by the consumer.
       Value xorLo = V_XOR_B32::create(builder, loc, vregTy, lhsLo, rhsLo);
       Value xorHi = V_XOR_B32::create(builder, loc, vregTy, lhsHi, rhsHi);
       Value combined = V_OR_B32::create(builder, loc, vregTy, xorLo, xorHi);
       auto zeroTy = ImmType::get(builder.getContext(), 0);
       Value zero = ConstantOp::create(builder, loc, zeroTy, 0);
+      auto oneTy = ImmType::get(builder.getContext(), 1);
+      Value one = ConstantOp::create(builder, loc, oneTy, 1);
       if (pred == CmpPredicate::eq)
         V_CMP_EQ_I32::create(builder, loc, combined, zero);
       else
         V_CMP_NE_I32::create(builder, loc, combined, zero);
+      auto vccPlaceholder = ConstantOp::create(builder, loc, oneTy, 1);
+      Value boolResult = V_CNDMASK_B32::create(builder, loc, vregTy, zero, one,
+                                               vccPlaceholder);
+      op.replaceAllUsesWith(boolResult);
+      op.erase();
+      return success();
     } else {
       // Ordered: materialize hi/lo results, select based on hi equality.
       auto [hiPred, loPred] = getOrderedI64Preds(pred);
@@ -389,8 +398,12 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
       Value finalBool =
           V_CNDMASK_B32::create(builder, loc, vregTy, hiRes, loRes, eqVcc);
 
-      // Set VCC from the boolean result for downstream v_cndmask_b32.
-      V_CMP_NE_I32::create(builder, loc, finalBool, zero);
+      // Return the materialized boolean vreg so the consumer (select) can
+      // re-establish VCC right before its v_cndmask_b32.  Setting VCC here
+      // is unsafe because intervening i64 ops (v_add_co_u32) may clobber it.
+      op.replaceAllUsesWith(finalBool);
+      op.erase();
+      return success();
     }
 
     auto placeholderTy = ImmType::get(builder.getContext(), 1);
@@ -427,6 +440,19 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
   return success();
 }
 
+/// If the condition is a materialized boolean VGPR (from an i64 compare),
+/// re-establish VCC right before the v_cndmask_b32 that consumes it.
+/// Returns a VCC placeholder suitable for v_cndmask_b32's condition operand.
+static Value ensureVCC(Value cond, OpBuilder &builder, Location loc) {
+  if (isVGPRType(cond.getType())) {
+    auto zeroTy = ImmType::get(builder.getContext(), 0);
+    Value zero = ConstantOp::create(builder, loc, zeroTy, 0);
+    V_CMP_NE_I32::create(builder, loc, cond, zero);
+  }
+  auto placeholderTy = ImmType::get(builder.getContext(), 1);
+  return ConstantOp::create(builder, loc, placeholderTy, 1);
+}
+
 /// i64 select: split both operands, select each half, merge.
 static void legalizeSelectI64(Value trueVal, Value falseVal, Value cond,
                               Arith_SelectOp op, OpBuilder &builder) {
@@ -440,10 +466,11 @@ static void legalizeSelectI64(Value trueVal, Value falseVal, Value cond,
   falseHi = sgprToVgpr(falseHi, builder, loc);
   trueHi = sgprToVgpr(trueHi, builder, loc);
 
+  Value vccCond = ensureVCC(cond, builder, loc);
   Value selLo =
-      V_CNDMASK_B32::create(builder, loc, vregTy, falseLo, trueLo, cond);
+      V_CNDMASK_B32::create(builder, loc, vregTy, falseLo, trueLo, vccCond);
   Value selHi =
-      V_CNDMASK_B32::create(builder, loc, vregTy, falseHi, trueHi, cond);
+      V_CNDMASK_B32::create(builder, loc, vregTy, falseHi, trueHi, vccCond);
   Value result = mergeI64(selLo, selHi, builder, loc);
   op.replaceAllUsesWith(result);
 }
@@ -588,8 +615,9 @@ static LogicalResult legalizeSelect(Arith_SelectOp op, OpBuilder &builder) {
     auto vregTy = VRegType::get(builder.getContext());
     falseVal = sgprToVgpr(falseVal, builder, loc);
     trueVal = sgprToVgpr(trueVal, builder, loc);
+    Value vccCond = ensureVCC(cond, builder, loc);
     auto sel =
-        V_CNDMASK_B32::create(builder, loc, vregTy, falseVal, trueVal, cond);
+        V_CNDMASK_B32::create(builder, loc, vregTy, falseVal, trueVal, vccCond);
     op.replaceAllUsesWith(sel.getResult());
   }
   op.erase();
