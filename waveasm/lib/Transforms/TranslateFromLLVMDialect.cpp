@@ -95,19 +95,28 @@ private:
 //===----------------------------------------------------------------------===//
 
 /// Extract workgroup size from llvm.func attributes.
-static std::tuple<int64_t, int64_t, int64_t>
+/// Returns failure if both gpu.known_block_size and
+/// rocdl.reqd_work_group_size are present and disagree.
+static FailureOr<std::tuple<int64_t, int64_t, int64_t>>
 getWorkgroupSize(LLVM::LLVMFuncOp func) {
-  for (StringRef attrName :
-       {"gpu.known_block_size", "rocdl.reqd_work_group_size"}) {
-    if (auto attr = func->getAttrOfType<DenseI32ArrayAttr>(attrName)) {
-      auto vals = attr.asArrayRef();
-      int64_t x = vals.size() > 0 ? vals[0] : 64;
-      int64_t y = vals.size() > 1 ? vals[1] : 1;
-      int64_t z = vals.size() > 2 ? vals[2] : 1;
-      return {x, y, z};
-    }
-  }
-  return {64, 1, 1};
+  auto gpuAttr = func->getAttrOfType<DenseI32ArrayAttr>("gpu.known_block_size");
+  auto rocdlAttr =
+      func->getAttrOfType<DenseI32ArrayAttr>("rocdl.reqd_work_group_size");
+
+  if (gpuAttr && rocdlAttr && gpuAttr.asArrayRef() != rocdlAttr.asArrayRef())
+    return func->emitOpError("contradicting workgroup size attributes: "
+                             "gpu.known_block_size and "
+                             "rocdl.reqd_work_group_size disagree");
+
+  DenseI32ArrayAttr attr = gpuAttr ? gpuAttr : rocdlAttr;
+  if (!attr)
+    return std::tuple<int64_t, int64_t, int64_t>{64, 1, 1};
+
+  auto vals = attr.asArrayRef();
+  int64_t x = vals.size() > 0 ? vals[0] : 64;
+  int64_t y = vals.size() > 1 ? vals[1] : 1;
+  int64_t z = vals.size() > 2 ? vals[2] : 1;
+  return std::tuple<int64_t, int64_t, int64_t>{x, y, z};
 }
 
 /// Create a waveasm.program from an llvm.func kernel.
@@ -126,7 +135,11 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
                                     /*wg_id_y=*/std::nullopt,
                                     /*wg_id_z=*/std::nullopt);
 
-  auto [wgX, wgY, wgZ] = getWorkgroupSize(func);
+  FailureOr<std::tuple<int64_t, int64_t, int64_t>> wgSize =
+      getWorkgroupSize(func);
+  if (failed(wgSize))
+    return {};
+  auto [wgX, wgY, wgZ] = *wgSize;
   std::array<Attribute, 3> sizes = {builder.getI64IntegerAttr(wgX),
                                     builder.getI64IntegerAttr(wgY),
                                     builder.getI64IntegerAttr(wgZ)};
@@ -651,7 +664,9 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
     OpBuilder builder(rootOp->getContext());
     builder.setInsertionPointAfter(func);
 
-    auto program = createProgramFromLLVMFunc(func, builder, targetId);
+    ProgramOp program = createProgramFromLLVMFunc(func, builder, targetId);
+    if (!program)
+      return failure();
     builder.setInsertionPointToStart(&program.getBodyBlock());
     TranslationContext ctx(builder, program, target);
     LLVMTranslationState st(ctx);
