@@ -34,10 +34,8 @@ namespace waveasm {
 static Value materializeVCCToBoolVGPR(OpBuilder &builder, Location loc,
                                       TranslationContext &ctx) {
   auto vregType = ctx.createVRegType();
-  auto immZero = ctx.createImmType(0);
-  auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
-  auto immOne = ctx.createImmType(1);
-  auto oneConst = ConstantOp::create(builder, loc, immOne, 1);
+  Value zeroConst = createImmConst(0, builder, loc, ctx);
+  Value oneConst = createImmConst(1, builder, loc, ctx);
   Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
   Value boolVgpr = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
                                          oneVgpr, zeroConst);
@@ -201,8 +199,7 @@ LogicalResult handleArithDivUI(Operation *op, TranslationContext &ctx) {
     if (isPowerOf2(divisor)) {
       auto vregType = ctx.createVRegType();
       int64_t shiftAmt = log2(divisor);
-      auto immShift = ctx.createImmType(shiftAmt);
-      auto shiftConst = ConstantOp::create(builder, loc, immShift, shiftAmt);
+      Value shiftConst = createImmConst(shiftAmt, builder, loc, ctx);
       auto result =
           V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, *lhs);
       ctx.getMapper().mapValue(divOp.getResult(), result);
@@ -237,16 +234,14 @@ LogicalResult handleArithRemUI(Operation *op, TranslationContext &ctx) {
   if (auto constOp = rhs->getDefiningOp<ConstantOp>()) {
     int64_t modulus = constOp.getValue();
     if (isPowerOf2(modulus)) {
-      auto immMask = ctx.createImmType(modulus - 1);
-      auto maskConst = ConstantOp::create(builder, loc, immMask, modulus - 1);
+      Value maskConst = createImmConst(modulus - 1, builder, loc, ctx);
       auto result = V_AND_B32::create(builder, loc, vregType, *lhs, maskConst);
       ctx.getMapper().mapValue(remOp.getResult(), result);
       return success();
     }
     if (modulus >= 2) {
       Value q = emitConstantUnsignedFloordiv(*lhs, modulus, builder, loc, ctx);
-      auto dImm = ctx.createImmType(modulus);
-      auto dConst = ConstantOp::create(builder, loc, dImm, modulus);
+      Value dConst = createImmConst(modulus, builder, loc, ctx);
       Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, dConst);
       auto result = V_SUB_U32::create(builder, loc, vregType, *lhs, qd);
       ctx.getMapper().mapValue(remOp.getResult(), result);
@@ -453,8 +448,7 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
   }
 
   // Restore the materialized boolean VGPR (0/1) back into VCC
-  auto immZero = ctx.createImmType(0);
-  auto zeroConst = ConstantOp::create(builder, loc, immZero, 0);
+  Value zeroConst = createImmConst(0, builder, loc, ctx);
   V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);
 
   auto result =
@@ -475,8 +469,7 @@ LogicalResult handleArithNegF(Operation *op, TranslationContext &ctx) {
   }
 
   // XOR with sign bit to negate
-  auto immSignBit = ctx.createImmType(0x80000000);
-  auto signBit = ConstantOp::create(builder, loc, immSignBit, 0x80000000);
+  Value signBit = createImmConst(0x80000000, builder, loc, ctx);
   auto neg = V_XOR_B32::create(builder, loc, vregType, *src, signBit);
   ctx.getMapper().mapValue(negOp.getResult(), neg);
   return success();

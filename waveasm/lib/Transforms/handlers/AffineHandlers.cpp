@@ -27,6 +27,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DivisionByConstantInfo.h"
 
 #include <cassert>
 #include <functional>
@@ -45,8 +46,7 @@ namespace waveasm {
 Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
                            TranslationContext &ctx) {
   auto vregType = ctx.createVRegType();
-  auto zeroImm = ctx.createImmType(0);
-  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+  Value zeroConst = createImmConst(0, builder, loc, ctx);
 
   // --- Step 1: float reciprocal seed ---
   // Scale factor 0x4f7ffffe = 2^32 * (1 - 2^-24), converts rcp to a ~32-bit
@@ -54,8 +54,7 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
   Value df = V_CVT_F32_U32::create(builder, loc, vregType, d);
   Value rcp = V_RCP_F32::create(builder, loc, vregType, df);
   const int32_t kScale = bitCast<int32_t>(0x4f7ffffeu);
-  auto scaleImm = ctx.createImmType(kScale);
-  auto scaleConst = ConstantOp::create(builder, loc, scaleImm, kScale);
+  Value scaleConst = createImmConst(kScale, builder, loc, ctx);
   Value rcpScaled = V_MUL_F32::create(builder, loc, vregType, scaleConst, rcp);
   Value recip = V_CVT_U32_F32::create(builder, loc, vregType, rcpScaled);
 
@@ -72,8 +71,7 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
   Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, d);
   Value rem = V_SUB_U32::create(builder, loc, vregType, x, qd);
 
-  auto oneImm = ctx.createImmType(1);
-  auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
+  Value oneConst = createImmConst(1, builder, loc, ctx);
   Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
 
   // First correction: if rem >= d then q++, rem -= d
@@ -95,7 +93,7 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
 }
 
 //===----------------------------------------------------------------------===//
-// Magic number division by constant (Hacker's Delight, section 10-9)
+// Magic number division by constant (via LLVM's UnsignedDivisionByConstantInfo)
 //===----------------------------------------------------------------------===//
 //
 // For a constant divisor d >= 2, computes magic multiplier m and post-shift s:
@@ -105,92 +103,64 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
 // the general Barrett reduction.
 //===----------------------------------------------------------------------===//
 
-struct UnsignedMagic {
-  uint32_t magic;
-  unsigned shift;
-  bool needsAdd;
-};
-
-static UnsignedMagic computeMagicUnsigned(uint32_t d) {
-  assert(d >= 2 && "divisor must be >= 2");
-
-  uint32_t p;
-  uint64_t nc, delta, q1, r1, q2, r2;
-  bool needsAdd = false;
-
-  nc = UINT64_C(0xFFFFFFFF) - (UINT64_C(0xFFFFFFFF) % d);
-  p = 31;
-  q1 = UINT64_C(0x80000000) / nc;
-  r1 = UINT64_C(0x80000000) - q1 * nc;
-  q2 = UINT64_C(0x7FFFFFFF) / d;
-  r2 = UINT64_C(0x7FFFFFFF) - q2 * d;
-
-  do {
-    p++;
-    if (r1 >= nc - r1) {
-      q1 = 2 * q1 + 1;
-      r1 = 2 * r1 - nc;
-    } else {
-      q1 = 2 * q1;
-      r1 = 2 * r1;
-    }
-    if (r2 + 1 >= d - r2) {
-      if (q2 >= UINT64_C(0x7FFFFFFF))
-        needsAdd = true;
-      q2 = 2 * q2 + 1;
-      r2 = 2 * r2 + 1 - d;
-    } else {
-      if (q2 >= UINT64_C(0x80000000))
-        needsAdd = true;
-      q2 = 2 * q2;
-      r2 = 2 * r2 + 1;
-    }
-    delta = d - 1 - r2;
-  } while (p < 64 && (q1 < delta || (q1 == delta && r1 == 0)));
-
-  return {static_cast<uint32_t>(q2 + 1), p - 32, needsAdd};
-}
-
 Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
                                    Location loc, TranslationContext &ctx) {
   assert(divisor >= 2 && "divisor must be >= 2");
 
   auto vregType = ctx.createVRegType();
-  UnsignedMagic mag = computeMagicUnsigned(static_cast<uint32_t>(divisor));
+  llvm::APInt divisorAPInt(32, static_cast<uint64_t>(divisor));
+  auto mag = llvm::UnsignedDivisionByConstantInfo::get(
+      divisorAPInt, /*LeadingZeros=*/0,
+      /*AllowEvenDivisorOptimization=*/false);
 
-  LLVM_DEBUG(llvm::dbgs() << "Magic number for divisor " << divisor
-                          << ": magic=0x" << llvm::utohexstr(mag.magic)
-                          << ", shift=" << mag.shift
-                          << ", needsAdd=" << mag.needsAdd << "\n");
+  LLVM_DEBUG(llvm::dbgs()
+             << "Magic number for divisor " << divisor << ": magic=0x"
+             << llvm::utohexstr(mag.Magic.getZExtValue())
+             << ", postShift=" << mag.PostShift << ", isAdd=" << mag.IsAdd
+             << "\n");
 
-  int64_t magicVal = static_cast<int64_t>(mag.magic);
-  auto magicImm = ctx.createImmType(magicVal);
-  Value magicConst = ConstantOp::create(builder, loc, magicImm, magicVal);
+  int64_t magicVal = static_cast<int64_t>(mag.Magic.getZExtValue());
+  Value magicConst = createImmConst(magicVal, builder, loc, ctx);
 
   Value q = V_MUL_HI_U32::create(builder, loc, vregType, x, magicConst);
 
-  // Emit a right shift by `amount` bits, or return `val` unchanged if
-  // amount==0.
-  auto emitShiftRight = [&](Value val, int64_t amount) -> Value {
+  auto emitShiftRight = [&](Value val, unsigned amount) -> Value {
     if (amount == 0)
       return val;
-    auto shiftImm = ctx.createImmType(amount);
-    auto shiftConst = ConstantOp::create(builder, loc, shiftImm, amount);
+    Value shiftConst =
+        createImmConst(static_cast<int64_t>(amount), builder, loc, ctx);
     return V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, val);
   };
 
-  if (mag.needsAdd) {
-    // result = (q + ((x - q) >> 1)) >> (shift - 1)
+  if (mag.IsAdd) {
+    // result = (q + ((x - q) >> 1)) >> (PostShift - 1)
     Value xSubQ = V_SUB_U32::create(builder, loc, vregType, x, q);
-    auto oneImm = ctx.createImmType(1);
-    auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
+    Value oneConst = createImmConst(1, builder, loc, ctx);
     Value halfDiff =
         V_LSHRREV_B32::create(builder, loc, vregType, oneConst, xSubQ);
     Value sum = V_ADD_U32::create(builder, loc, vregType, q, halfDiff);
-    return emitShiftRight(sum, mag.shift - 1);
+    return emitShiftRight(sum, mag.PostShift - 1);
   }
 
-  return emitShiftRight(q, mag.shift);
+  return emitShiftRight(q, mag.PostShift);
+}
+
+/// Computes ceildiv(x, d) = floordiv(x, d) + (x mod d != 0 ? 1 : 0)
+/// given the floordiv quotient q and the divisor d as Values.
+/// Avoids the (x + d - 1) overflow that the naive identity has.
+static Value emitCeilFromFloorQuotient(Value q, Value x, Value d,
+                                       OpBuilder &builder, Location loc,
+                                       TranslationContext &ctx) {
+  auto vregType = ctx.createVRegType();
+  Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, d);
+  Value rem = V_SUB_U32::create(builder, loc, vregType, x, qd);
+  Value zeroConst = createImmConst(0, builder, loc, ctx);
+  V_CMP_NE_U32::create(builder, loc, rem, zeroConst);
+  Value oneConst = createImmConst(1, builder, loc, ctx);
+  Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
+  Value inc = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst, oneVgpr,
+                                    zeroConst);
+  return V_ADD_U32::create(builder, loc, vregType, q, inc);
 }
 
 /// Handle affine.apply - compile affine expression to arithmetic instructions
@@ -564,50 +534,48 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
       }
 
       case AffineExprKind::CeilDiv: {
+        // ceildiv(x, d) = floordiv(x, d) + (x mod d != 0 ? 1 : 0)
+        // This avoids the (x + d - 1) overflow that wraps modulo 2^32.
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
           int64_t divisor = constRhs.getValue();
 
           if (isPowerOf2(divisor)) {
             int64_t shiftAmount = log2(divisor);
-            int64_t bias = divisor - 1;
-            auto biasImm = ctx.createImmType(bias);
-            auto biasConst = ConstantOp::create(builder, loc, biasImm, bias);
-            Value biased =
-                V_ADD_U32::create(builder, loc, vregType, biasConst, lhs);
-            auto shiftAmt = ctx.createImmType(shiftAmount);
-            auto shiftConst =
-                ConstantOp::create(builder, loc, shiftAmt, shiftAmount);
-            Value shiftResult = V_LSHRREV_B32::create(builder, loc, vregType,
-                                                      shiftConst, biased);
-            BitRange resultRange =
-                lhsRange.extendForAdd(BitRange::fromConstant(bias))
-                    .shiftRight(shiftAmount);
-            ctx.setBitRange(shiftResult, resultRange);
-            return ExprResult(shiftResult, resultRange);
+            Value shiftConst =
+                createImmConst(shiftAmount, builder, loc, ctx);
+            Value q = V_LSHRREV_B32::create(builder, loc, vregType,
+                                            shiftConst, lhs);
+            int64_t mask = divisor - 1;
+            Value maskConst = createImmConst(mask, builder, loc, ctx);
+            Value rem =
+                V_AND_B32::create(builder, loc, vregType, maskConst, lhs);
+            Value zeroConst = createImmConst(0, builder, loc, ctx);
+            V_CMP_NE_U32::create(builder, loc, rem, zeroConst);
+            Value oneConst = createImmConst(1, builder, loc, ctx);
+            Value oneVgpr =
+                V_MOV_B32::create(builder, loc, vregType, oneConst);
+            Value inc = V_CNDMASK_B32::create(builder, loc, vregType,
+                                              zeroConst, oneVgpr, zeroConst);
+            Value result =
+                V_ADD_U32::create(builder, loc, vregType, q, inc);
+            return ExprResult(result, BitRange());
           }
 
-          // Non-power-of-2 constant: ceildiv(x, d) = floordiv(x + d - 1, d)
           if (divisor >= 2) {
-            int64_t bias = divisor - 1;
-            auto biasImm = ctx.createImmType(bias);
-            auto biasConst = ConstantOp::create(builder, loc, biasImm, bias);
-            Value biased =
-                V_ADD_U32::create(builder, loc, vregType, biasConst, lhs);
-            Value q = emitConstantUnsignedFloordiv(biased, divisor, builder,
-                                                   loc, ctx);
-            return ExprResult(q, BitRange());
+            Value q =
+                emitConstantUnsignedFloordiv(lhs, divisor, builder, loc, ctx);
+            Value dConst = createImmConst(divisor, builder, loc, ctx);
+            Value result = emitCeilFromFloorQuotient(q, lhs, dConst, builder,
+                                                    loc, ctx);
+            return ExprResult(result, BitRange());
           }
         }
-        // Symbolic divisor fallback: ceildiv(x, d) = floordiv(x + d - 1, d)
+        // Symbolic divisor fallback
         {
-          auto oneImm = ctx.createImmType(1);
-          auto oneConst = ConstantOp::create(builder, loc, oneImm, 1);
-          Value dMinus1 =
-              V_SUB_U32::create(builder, loc, vregType, rhs, oneConst);
-          Value biased =
-              V_ADD_U32::create(builder, loc, vregType, lhs, dMinus1);
-          Value qFixed = emitUnsignedFloordiv(biased, rhs, builder, loc, ctx);
-          return ExprResult(qFixed, BitRange());
+          Value q = emitUnsignedFloordiv(lhs, rhs, builder, loc, ctx);
+          Value result =
+              emitCeilFromFloorQuotient(q, lhs, rhs, builder, loc, ctx);
+          return ExprResult(result, BitRange());
         }
       }
 
@@ -616,8 +584,7 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
         if (auto constRhs = dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
           int64_t val = constRhs.getValue();
           if (isPowerOf2(val)) {
-            auto maskVal = ctx.createImmType(val - 1);
-            auto maskConst = ConstantOp::create(builder, loc, maskVal, val - 1);
+            Value maskConst = createImmConst(val - 1, builder, loc, ctx);
             Value andResult =
                 V_AND_B32::create(builder, loc, vregType, lhs, maskConst);
             BitRange resultRange = BitRange(0, log2(val) - 1);
@@ -628,8 +595,7 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
           // Non-power-of-2 constant: x mod d = x - floordiv(x, d) * d
           if (val >= 2) {
             Value q = emitConstantUnsignedFloordiv(lhs, val, builder, loc, ctx);
-            auto dImm = ctx.createImmType(val);
-            auto dConst = ConstantOp::create(builder, loc, dImm, val);
+            Value dConst = createImmConst(val, builder, loc, ctx);
             Value qd = V_MUL_LO_U32::create(builder, loc, vregType, q, dConst);
             Value rem = V_SUB_U32::create(builder, loc, vregType, lhs, qd);
             return ExprResult(rem, BitRange());

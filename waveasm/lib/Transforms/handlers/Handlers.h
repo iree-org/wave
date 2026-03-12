@@ -246,7 +246,7 @@ mlir::Value emitUnsignedFloordiv(mlir::Value x, mlir::Value d,
                                  TranslationContext &ctx);
 
 /// Magic-number unsigned floor division by a known constant divisor (>= 2).
-/// Uses Hacker's Delight algorithm: 2-5 VALU instructions, no VCC corrections.
+/// Uses llvm::UnsignedDivisionByConstantInfo: 2-5 VALU instructions.
 mlir::Value emitConstantUnsignedFloordiv(mlir::Value x, int64_t divisor,
                                          mlir::OpBuilder &builder,
                                          mlir::Location loc,
@@ -254,6 +254,14 @@ mlir::Value emitConstantUnsignedFloordiv(mlir::Value x, int64_t divisor,
 
 /// Get log2 of power of 2
 int64_t log2(int64_t val);
+
+/// Create an immediate constant Value (combines createImmType + ConstantOp).
+inline mlir::Value createImmConst(int64_t val, mlir::OpBuilder &builder,
+                                  mlir::Location loc,
+                                  TranslationContext &ctx) {
+  auto immType = ctx.createImmType(val);
+  return ConstantOp::create(builder, loc, immType, val);
+}
 
 /// Extract constant value from a Value if it is a constant
 std::optional<int64_t> getArithConstantValue(mlir::Value val);
