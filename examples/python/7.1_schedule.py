@@ -424,7 +424,9 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     eliminate_epilogue=False,
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K."""
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4), reorder_workgroups=False)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, block, wave_shape=(1, 4), reorder_workgroups=False
+    )
     # Make M, N, K dynamic so the compiler does not specialize on problem size.
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
     for sym in dynamic_symbols:
@@ -444,7 +446,9 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
-    print("MXFP GEMM preshuffle-B 4-wave dynamic M, N, K (WaveASM backend) test passed!")
+    print(
+        "MXFP GEMM preshuffle-B 4-wave dynamic M, N, K (WaveASM backend) test passed!"
+    )
 
 
 if __name__ == "__main__":

@@ -226,9 +226,11 @@ def _can_skip_pipeline_guard(
     if not fwd:
         return False
 
-    max_iv_fwd = max_induction_variable.subs(fwd) if isinstance(
-        max_induction_variable, sympy.Basic
-    ) else max_induction_variable
+    max_iv_fwd = (
+        max_induction_variable.subs(fwd)
+        if isinstance(max_induction_variable, sympy.Basic)
+        else max_induction_variable
+    )
     if not isinstance(max_iv_fwd, sympy.Symbol):
         return False
 
