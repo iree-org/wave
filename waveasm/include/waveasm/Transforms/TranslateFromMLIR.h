@@ -554,11 +554,18 @@ public:
     mlir::Value elementOffset;
     int64_t srcSrdBase;
     int64_t elementBytes;
+    // When non-null, use this value as NUM_RECORDS instead of
+    // computeBufferSizeFromMemRef.  Set by handleFatRawBufferCast when
+    // the MLIR specifies a tighter validBytes (e.g. for epilogue
+    // elimination OOB protection on direct buffer loads).
+    mlir::Value numRecordsOverride;
   };
 
   void setPendingSRDBaseAdjust(mlir::Value memref, mlir::Value elemOffset,
-                               int64_t srcSrdBase, int64_t elementBytes) {
-    pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes};
+                               int64_t srcSrdBase, int64_t elementBytes,
+                               mlir::Value numRecordsOverride = {}) {
+    pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes,
+                                       numRecordsOverride};
   }
 
   /// Get a pending SRD base adjustment (returns nullptr if none)

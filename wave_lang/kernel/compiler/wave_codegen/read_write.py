@@ -1025,6 +1025,24 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
                     lin_src, _ = _linearize_memref(
                         kb_src, zero_indices, zero_indices, strides_vals
                     )
+                    # With epilogue elimination the loop runs extra iterations
+                    # whose offsets can exceed the actual buffer.  Wrap the
+                    # linearised memref in a fat_raw_buffer_cast so that the
+                    # SRD's NUM_RECORDS = real buffer size and OOB loads safely
+                    # return zero instead of faulting.
+                    if buffer_ops_enabled and emitter.options.eliminate_epilogue:
+                        valid_bytes = _compute_valid_bytes(
+                            lin_src,
+                            element_type,
+                            input_shape,
+                            emitter,
+                        )
+                        lin_src = _cast_buffer_and_encode_stride(
+                            lin_src,
+                            strides_vals,
+                            element_type,
+                            valid_bytes,
+                        )
                 result = vector_d.load(vector_type, lin_src, [total_offset])
                 emitter.bind_node_proxy(node, IRProxyValue(result))
                 return

@@ -481,15 +481,40 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
 
   // For direct-load-only SRDs (no gather_to_lds consumers), pass through
   // and let the downstream handler construct the SRD with proper base
-  // adjustment.  The MLIR computes reduced validBytes assuming
-  // resetOffset is applied to the SRD base, but we don't implement
-  // resetOffset here — the downstream handler (vector.load /
-  // reinterpret_cast) does the base adjustment instead.
+  // adjustment.  The source SRD carries a tight NUM_RECORDS from
+  // computeBufferSizeFromMemRef, so OOB prefetches in epilogue-eliminated
+  // loop iterations silently return zero.
+  //
+  // When hasNonMaxValidBytes and no pending base adjustment, the MLIR
+  // specifies a tighter bound (e.g. the real buffer size for epilogue
+  // elimination).  Overwrite the source SRD's NUM_RECORDS in place so
+  // that downstream vector.loads get hardware OOB protection without
+  // allocating a new SRD (which would risk SGPR overflow).
   if (suppressWord3Swizzle) {
+    if (hasNonMaxValidBytes && !adj) {
+      int64_t srdBase = -1;
+      if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType()))
+        srdBase = psreg.getIndex();
+      else if (auto defOp = srcMapped->getDefiningOp())
+        if (defOp->getName().getStringRef() == "waveasm.precolored.sreg")
+          if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index"))
+            srdBase = indexAttr.getInt();
+      if (srdBase >= 0)
+        emitSrdNumRecords(builder, loc, srdBase, op, ctx);
+    }
     ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
     if (adj) {
+      // When hasNonMaxValidBytes, propagate the validBytes so that
+      // emitSRDBaseAdjustment sets a tight NUM_RECORDS instead of
+      // the default 0x7FFFFFFE.
+      Value numRecordsOverride;
+      if (hasNonMaxValidBytes && validBytesVal) {
+        if (auto mapped = ctx.getMapper().getMapped(validBytesVal))
+          numRecordsOverride = *mapped;
+      }
       ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
-                                  adj->srcSrdBase, adj->elementBytes);
+                                  adj->srcSrdBase, adj->elementBytes,
+                                  numRecordsOverride);
     }
     return success();
   }
@@ -568,8 +593,8 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     // (0x7FFFFFFF) remain OOB.  On GFX9, OOB buffer loads silently return
     // zero -- they do NOT fault.  Using 0xFFFFFFFF would make sentinel
     // offsets in-bounds, causing the hardware to access unmapped memory.
-    std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) +
-                       ", s" + std::to_string(srcSrdBase + 2);
+    std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", s" +
+                       std::to_string(srcSrdBase + 2);
     RawOp::create(builder, loc, mov2);
   }
 

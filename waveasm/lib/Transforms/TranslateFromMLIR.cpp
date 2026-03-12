@@ -653,12 +653,27 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   S_ADD_U32::create(builder, loc, base0Type, sccType, base0, byteOffLo);
   S_ADDC_U32::create(builder, loc, base1Type, sccType, base1, byteOffHi);
 
-  // Set num_records and stride using buffer size from the source SRD.
-  int64_t bufferSize = ctx.getBufferSizeForSRD(adj.srcSrdBase);
-  int64_t clampedSize = std::min(bufferSize, kMaxNumRecords32);
-  std::string movSize = "s_mov_b32 s" + std::to_string(N + 2) + ", 0x" +
-                        llvm::utohexstr(clampedSize);
-  RawOp::create(builder, loc, movSize);
+  // Set num_records: prefer the override from fat_raw_buffer_cast's
+  // validBytes (gives tight OOB protection for epilogue elimination),
+  // falling back to the source SRD's buffer size.
+  if (adj.numRecordsOverride) {
+    auto numRecType = PSRegType::get(mlirCtx, N + 2, 1);
+    Value nrVal = adj.numRecordsOverride;
+    if (isVGPRType(nrVal.getType())) {
+      V_READFIRSTLANE_B32::create(builder, loc, numRecType, nrVal);
+    } else {
+      auto sccType = ctx.createSRegType();
+      auto zeroImm = ctx.createImmType(0);
+      auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+      S_ADD_U32::create(builder, loc, numRecType, sccType, nrVal, zeroConst);
+    }
+  } else {
+    int64_t bufferSize = ctx.getBufferSizeForSRD(adj.srcSrdBase);
+    int64_t clampedSize = std::min(bufferSize, kMaxNumRecords32);
+    std::string movSize = "s_mov_b32 s" + std::to_string(N + 2) + ", 0x" +
+                          llvm::utohexstr(clampedSize);
+    RawOp::create(builder, loc, movSize);
+  }
   std::string movStride = "s_mov_b32 s" + std::to_string(N + 3) + ", 0x" +
                           llvm::utohexstr(kSRDStrideSwizzle);
   RawOp::create(builder, loc, movStride);
