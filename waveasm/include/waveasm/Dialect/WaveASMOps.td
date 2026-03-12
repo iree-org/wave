@@ -293,7 +293,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
             workgroup_size,
             lds_size,
             $_builder.getI64IntegerAttr(kernarg_preload_length));
-      // Ensure the body region has a block (region is created by generated builder)
+      // Ensure the body region has a block (region is created by generated builder).
       if ($_state.regions.back()->empty())
         $_state.regions.back()->emplaceBlock();
     }]>
@@ -377,38 +377,40 @@ def WaveASM_ConstantOp : WAVEASMOp<"constant", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def WaveASM_PackOp : WAVEASMOp<"pack", [Pure]> {
-  let summary = "Pack scalar VGPRs into a vector";
+  let summary = "Pack multiple registers into a wider register";
   let description = [{
-    Packs multiple scalar VGPRs into a vector VGPR.
+    Packs multiple registers into a wider register of the same register
+    file. Elements are packed lo-to-hi. Supports VGPRs, AGPRs, and SGPRs.
 
     Example:
     ```mlir
     %vec = waveasm.pack %v0, %v1, %v2, %v3 : (!waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<4>
+    %pair = waveasm.pack %s0, %s1 : (!waveasm.sreg, !waveasm.sreg) -> !waveasm.sreg<2, 2>
     ```
   }];
 
-  let arguments = (ins Variadic<WaveASM_AnyVGPR>:$elements);
-  let results = (outs WaveASM_AnyVGPR:$result);
+  let arguments = (ins Variadic<WaveASM_AnyReg>:$elements);
+  let results = (outs WaveASM_AnyReg:$result);
   let assemblyFormat = "$elements attr-dict `:` functional-type($elements, $result)";
 }
 
 def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
-  let summary = "Extract element(s) from a vector register (VGPR or AGPR)";
+  let summary = "Extract sub-register(s) from a wider register";
   let description = [{
-    Extracts element(s) from a vector register at a given offset.
-    Supports both VGPR and AGPR sources. When the source is an AGPR,
-    the result is also an AGPR - this preserves AGPR type information
-    so that downstream store handlers can insert v_accvgpr_read_b32.
+    Extracts element(s) from a wider register at a given offset.
+    Supports VGPRs, AGPRs, and SGPRs. The result register file must
+    match the source (VGPR->VGPR, AGPR->AGPR, SGPR->SGPR).
 
     Example:
     ```mlir
     %v0 = waveasm.extract %vec[0] : !waveasm.vreg<4> -> !waveasm.vreg
     %a0 = waveasm.extract %avec[0] : !waveasm.areg<4> -> !waveasm.areg
+    %lo = waveasm.extract %pair[0] : !waveasm.sreg<2, 2> -> !waveasm.sreg
     ```
   }];
 
-  let arguments = (ins WaveASM_AnyVecReg:$vector, I64Attr:$index);
-  let results = (outs WaveASM_AnyVecReg:$result);
+  let arguments = (ins WaveASM_AnyReg:$vector, I64Attr:$index);
+  let results = (outs WaveASM_AnyReg:$result);
   let assemblyFormat = "$vector `[` $index `]` attr-dict `:` type($vector) `->` type($result)";
   let hasVerifier = 1;
 }
@@ -422,7 +424,7 @@ def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
 // This enables AGPR zero-init for MFMA accumulator loop init args on gfx950,
 // eliminating 128 VGPRs of accumulator zero-init pressure.
 def WaveASM_V_MOV_B32 : WAVEASMOp<"v_mov_b32", [Pure, WaveASM_ArithmeticOp]> {
-  let arguments = (ins WaveASM_VRegOrImm:$src);
+  let arguments = (ins WaveASM_VALUSrc:$src);
   let results = (outs WaveASM_AnyVecReg:$dst);
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst)";
 }
@@ -593,14 +595,32 @@ def WaveASM_V_LSHL_OR_B32 : VALUTernaryOp<"v_lshl_or_b32">;
 // Fused shift-add operation: dst = (src << shift) + addend
 def WaveASM_V_LSHL_ADD_U32 : VALUTernaryOp<"v_lshl_add_u32">;
 
-// Conditional mask and lane operations
-// V_CNDMASK_B32 implicitly reads VCC, so it must NOT have Pure or
-// ArithmeticOp traits (which would make CSE treat two instances with
-// identical explicit operands as equivalent even when VCC differs).
+// Conditional mask and lane operations.
+//
+// V_CNDMASK_B32 selects per-lane between src0 and src1 based on VCC.
+// The hardware instruction reads VCC implicitly (VOP2 encoding), so
+// the assembly emitter drops the vcc_dep operand and always emits
+// "vcc" as the condition source.
+//
+// vcc_dep exists solely to create a def-use edge to the preceding
+// v_cmp that wrote VCC.  Without it, no SSA dependency prevents
+// reordering v_cndmask before the comparison.
+//
+// Must NOT carry Pure or ArithmeticOp -- CSE would merge two
+// v_cndmask ops that share explicit operands but read different VCC
+// values from different comparisons.
 def WaveASM_V_CNDMASK_B32 : WAVEASMOp<"v_cndmask_b32", []> {
-  let arguments = (ins WaveASM_VALUSrc:$src0, WaveASM_VALUSrc:$src1, WaveASM_VALUSrc:$src2);
+  let summary = "Conditional select per lane via implicit VCC read.";
+  let arguments = (ins
+    WaveASM_VALUSrc:$src0,
+    WaveASM_VALUSrc:$src1,
+    WaveASM_VALUSrc:$vcc_dep
+  );
   let results = (outs WaveASM_AnyVGPR:$dst);
-  let assemblyFormat = "$src0 `,` $src1 `,` $src2 attr-dict `:` type($src0) `,` type($src1) `,` type($src2) `->` type($dst)";
+  let assemblyFormat = [{
+    $src0 `,` $src1 `,` $vcc_dep attr-dict `:`
+    type($src0) `,` type($src1) `,` type($vcc_dep) `->` type($dst)
+  }];
 }
 
 // Lane read operations (VGPR -> SGPR)
