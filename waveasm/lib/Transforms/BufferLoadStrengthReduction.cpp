@@ -1,0 +1,634 @@
+// Copyright 2026 The Wave Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+//===----------------------------------------------------------------------===//
+// Buffer Load Strength Reduction Pass
+//
+// Replaces per-iteration buffer_load voffset recomputation with precomputed
+// voffsets and SGPR soffset bumping. For each buffer_load in a loop whose
+// voffset depends on the induction variable:
+//
+//   1. Symbolically compute the constant stride per candidate by
+//      differentiating the address chain w.r.t. the induction variable.
+//   2. Group candidates by (SRD, stride); each group shares one soffset.
+//   3. Precompute each voffset at iv=initial_value (loop-invariant).
+//   4. Carry one soffset per group as SGPR iter_arg (starts at 0).
+//   5. Each iteration: soffset += stride (one s_add_u32 per group).
+//   6. Set each buffer_load's soffset to the group's soffset.
+//
+// This eliminates ALL VALU address computation from the loop body.
+//
+// Why buffer-load-specific and not a general loop strength reduction:
+//
+// Buffer instructions have effective_address = SRD_base + voffset + soffset,
+// where soffset is an SGPR-only scalar offset added at zero VALU cost by the
+// hardware. The voffset captures the thread-specific part (loop-invariant),
+// and soffset captures the iteration-dependent part (uniform across threads,
+// lives in SGPR). This lets us go from N VALU/iter → 1 SALU/SRD-group/iter.
+//
+// A general strength reduction would produce v_add(base, accumulated_stride)
+// — still 1 VALU per iteration — which a subsequent buffer-load peephole
+// could split into voffset/soffset. But the only consumers of IV-dependent
+// address chains in GEMM loops are buffer_loads and LDS ops (handled by
+// LoopAddressPromotion with a different strategy: rotating precomputed VGPRs).
+// Splitting into two passes adds an abstraction boundary for one consumer.
+// If non-buffer IV-dependent VALU chains appear later, factor out the stride
+// computation (symbolic differentiation of address chain) as shared utility.
+//===----------------------------------------------------------------------===//
+
+#include "waveasm/Dialect/WaveASMDialect.h"
+#include "waveasm/Dialect/WaveASMInterfaces.h"
+#include "waveasm/Dialect/WaveASMOps.h"
+#include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/Passes.h"
+#include "waveasm/Transforms/Utils.h"
+
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "waveasm-buffer-load-strength-reduction"
+
+using namespace mlir;
+using namespace waveasm;
+
+namespace waveasm {
+#define GEN_PASS_DEF_WAVEASMBUFFERLOADSTRENGTHREDUCTION
+#include "waveasm/Transforms/Passes.h.inc"
+} // namespace waveasm
+
+namespace {
+
+static bool isAddressVALU(Operation *op) {
+  return isa<V_LSHLREV_B32, V_LSHL_OR_B32, V_LSHL_ADD_U32, V_ADD_U32, V_SUB_U32,
+             V_AND_B32, V_OR_B32, V_LSHRREV_B32, V_MUL_LO_U32, V_MOV_B32,
+             V_XOR_B32, V_BFE_U32>(op);
+}
+
+static bool isBufferLoad(Operation *op) {
+  return isa<BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX3,
+             BUFFER_LOAD_DWORDX4, BUFFER_LOAD_UBYTE, BUFFER_LOAD_USHORT>(op);
+}
+
+static bool isBufferLoadLDS(Operation *op) {
+  return isa<BUFFER_LOAD_DWORD_LDS, BUFFER_LOAD_DWORDX4_LDS>(op);
+}
+
+// Get voffset from load operation using interface.
+static Value getVoffset(Operation *op) {
+  if (auto vmemLoad = dyn_cast<VMEMLoadOpInterface>(op))
+    return vmemLoad.getVoffset();
+  if (auto ldsLoad = dyn_cast<VMEMToLDSLoadOpInterface>(op))
+    return ldsLoad.getVoffset();
+  return nullptr;
+}
+
+// Get SRD/saddr from load operation using interface.
+static Value getSrd(Operation *op) {
+  if (auto vmemLoad = dyn_cast<VMEMLoadOpInterface>(op))
+    return vmemLoad.getSaddr();
+  if (auto ldsLoad = dyn_cast<VMEMToLDSLoadOpInterface>(op))
+    return ldsLoad.getSrd();
+  return nullptr;
+}
+
+// Get voffset operand index for setOperand.
+static unsigned getVoffsetIdx(Operation *op) {
+  return isBufferLoadLDS(op) ? 0 : 1;
+}
+
+static bool isDefinedInLoop(Value val, Region *loopRegion) {
+  if (auto *defOp = val.getDefiningOp())
+    return defOp->getParentRegion() == loopRegion;
+  if (auto ba = dyn_cast<BlockArgument>(val))
+    return ba.getOwner()->getParent() == loopRegion;
+  return false;
+}
+
+static void collectVoffsetDeps(Value voffset, Region *loopRegion,
+                               llvm::SetVector<Operation *> &deps) {
+  SmallVector<Value> worklist;
+  worklist.push_back(voffset);
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    auto *defOp = v.getDefiningOp();
+    if (!defOp)
+      continue;
+    if (defOp->getParentRegion() != loopRegion)
+      continue;
+    if (!deps.insert(defOp))
+      continue;
+    for (Value operand : defOp->getOperands())
+      worklist.push_back(operand);
+  }
+}
+
+static std::optional<int64_t> findIVStep(ConditionOp condOp, Block &body) {
+  ValueRange condArgs = condOp.getIterArgs();
+  if (condArgs.empty())
+    return std::nullopt;
+  Value nextIV = condArgs[0];
+  auto addOp = nextIV.getDefiningOp<S_ADD_U32>();
+  if (!addOp)
+    return std::nullopt;
+  Value iv = body.getArgument(0);
+  auto tryExtract = [&](Value maybeSrc,
+                        Value maybeConst) -> std::optional<int64_t> {
+    if (maybeSrc != iv)
+      return std::nullopt;
+    return getConstantValue(maybeConst);
+  };
+  if (auto step = tryExtract(addOp.getSrc0(), addOp.getSrc1()))
+    return step;
+  if (auto step = tryExtract(addOp.getSrc1(), addOp.getSrc0()))
+    return step;
+  return std::nullopt;
+}
+
+static bool dependsOnIV(const llvm::SetVector<Operation *> &deps, Value iv) {
+  for (Operation *op : deps)
+    for (Value operand : op->getOperands())
+      if (operand == iv)
+        return true;
+  return false;
+}
+
+static Value cloneChainBeforeLoop(const llvm::SetVector<Operation *> &deps,
+                                  Value targetVoffset, Value ivValue,
+                                  LoopOp loopOp, Block &body,
+                                  OpBuilder &builder) {
+  IRMapping mapping;
+  ValueRange initArgs = loopOp.getInitArgs();
+  for (unsigned i : llvm::seq(body.getNumArguments()))
+    mapping.map(body.getArgument(i), initArgs[i]);
+  mapping.map(body.getArgument(0), ivValue);
+  for (Operation &op : body)
+    if (deps.contains(&op))
+      builder.clone(op, mapping);
+  return mapping.lookupOrDefault(targetVoffset);
+}
+
+// Symbolically compute the stride of the voffset chain w.r.t. the IV.
+// Returns the constant stride if determinable, nullopt otherwise.
+// Works by computing the "derivative" of each op: IV -> ivStep,
+// loop-invariant -> 0, add(a,b) -> da+db, lshl(a,c) -> da<<c, etc.
+// The deps SetVector is in reverse topological order (DFS from voffset),
+// so we iterate in reverse to process inputs before outputs.
+//
+// Because the result must be a compile-time integer, non-uniform strides
+// are automatically rejected. E.g. v_mul_lo_u32(tid, iv) would need
+// getConstantValue(tid) to succeed, which it cannot for a VGPR — so
+// the candidate is skipped. No runtime readfirstlane needed.
+static std::optional<int64_t>
+computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
+                    Value iv, int64_t ivStep) {
+  // Maps each Value to its per-IV-step delta (symbolic derivative).
+  // Populated in topological order; absent entries are loop-invariant
+  // (delta=0).
+  llvm::DenseMap<Value, int64_t> delta;
+  delta[iv] = ivStep;
+
+  // Values not in the map are loop-invariant (delta=0): defined outside the
+  // loop (constants, precolored VGPRs like tid) or non-IV block args
+  // (accumulators). Delta=0 means "does not change across iterations", NOT
+  // "has value 0" — so tid correctly gets delta=0 even though its per-thread
+  // value is nonzero. For linear ops (add, sub, shift) the tid contribution
+  // cancels in the derivative; for mul, we require getConstantValue on the
+  // loop-invariant operand, which rejects VGPRs like tid.
+  auto getDelta = [&](Value v) -> int64_t {
+    auto it = delta.find(v);
+    return it != delta.end() ? it->second : 0;
+  };
+
+  for (Operation *op : llvm::reverse(deps)) {
+
+    if (isa<ConstantOp>(op)) {
+      for (Value r : op->getResults())
+        delta[r] = 0;
+      continue;
+    }
+
+    if (auto movOp = dyn_cast<V_MOV_B32>(op)) {
+      for (Value r : op->getResults())
+        delta[r] = getDelta(movOp.getSrc());
+      continue;
+    }
+
+    // Validate shift amount is in [0, 31] (32-bit GPU ops) to avoid UB.
+    auto validShift = [](std::optional<int64_t> amt) -> std::optional<int64_t> {
+      if (!amt || *amt < 0 || *amt > 31)
+        return std::nullopt;
+      return amt;
+    };
+
+    if (auto lshlAddOp = dyn_cast<V_LSHL_ADD_U32>(op)) {
+      // v_lshl_add_u32(a, b, c) = (a << b) + c.
+      // For lshl_add: treat as add(lshl(a, b), c) — but b must be constant
+      // and IV-independent for the shift to be linear.
+      int64_t dSrc = getDelta(lshlAddOp.getSrc0());
+      int64_t dShift = getDelta(lshlAddOp.getSrc1());
+      int64_t dAdd = getDelta(lshlAddOp.getSrc2());
+      if (dShift != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(lshlAddOp.getSrc1()));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = (dSrc << *shiftAmt) + dAdd;
+      continue;
+    }
+
+    if (auto addOp = dyn_cast<V_ADD_U32>(op)) {
+      // v_add_u32(a, b) = a + b.
+      int64_t d = getDelta(addOp.getSrc0()) + getDelta(addOp.getSrc1());
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+
+    if (auto subOp = dyn_cast<V_SUB_U32>(op)) {
+      int64_t d = getDelta(subOp.getSrc0()) - getDelta(subOp.getSrc1());
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+
+    if (auto lshlrevOp = dyn_cast<V_LSHLREV_B32>(op)) {
+      // lshlrev(amt, src) = src << amt.
+      int64_t dAmt = getDelta(lshlrevOp.getSrc0());
+      int64_t dSrc = getDelta(lshlrevOp.getSrc1());
+      if (dAmt != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(lshlrevOp.getSrc0()));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dSrc << *shiftAmt;
+      continue;
+    }
+
+    if (auto lshlOrOp = dyn_cast<V_LSHL_OR_B32>(op)) {
+      // lshl_or(src, amt, or_val) = (src << amt) | or_val.
+      // In address computation, OR always has disjoint bits (packed fields),
+      // so delta = (dSrc << amt) + dOr — same as lshl_add.
+      int64_t dSrc = getDelta(lshlOrOp.getSrc0());
+      int64_t dShift = getDelta(lshlOrOp.getSrc1());
+      int64_t dOr = getDelta(lshlOrOp.getSrc2());
+      if (dShift != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(lshlOrOp.getSrc1()));
+      if (!shiftAmt)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = (dSrc << *shiftAmt) + dOr;
+      continue;
+    }
+
+    if (auto mulOp = dyn_cast<V_MUL_LO_U32>(op)) {
+      // Linear only if exactly one operand depends on IV.
+      int64_t d0 = getDelta(mulOp.getSrc0());
+      int64_t d1 = getDelta(mulOp.getSrc1());
+      if (d0 != 0 && d1 != 0)
+        return std::nullopt;
+      if (d0 == 0 && d1 == 0) {
+        for (Value r : op->getResults())
+          delta[r] = 0;
+        continue;
+      }
+      // One is IV-dependent, the other must be a known constant.
+      Value constOperand = d0 == 0 ? mulOp.getSrc0() : mulOp.getSrc1();
+      int64_t dVar = d0 != 0 ? d0 : d1;
+      auto constVal = getConstantValue(constOperand);
+      if (!constVal)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dVar * *constVal;
+      continue;
+    }
+
+    if (auto lshrrevOp = dyn_cast<V_LSHRREV_B32>(op)) {
+      // lshrrev(amt, src) = src >> amt.
+      // Safe when delta(src) is exactly divisible by 2^amt — no bits lost.
+      // Example: address chain does lshl 7 then lshr 8 with IV step 2:
+      //   delta(src) = 2*128 = 256, shift = 8, 256 % 256 == 0 → delta = 1.
+      int64_t dAmt = getDelta(lshrrevOp.getSrc0());
+      int64_t dSrc = getDelta(lshrrevOp.getSrc1());
+      if (dAmt != 0)
+        return std::nullopt;
+      auto shiftAmt = validShift(getConstantValue(lshrrevOp.getSrc0()));
+      if (!shiftAmt)
+        return std::nullopt;
+      int64_t divisor = int64_t(1) << *shiftAmt;
+      if (dSrc % divisor != 0)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dSrc / divisor;
+      continue;
+    }
+
+    // Bitwise ops (AND, OR, XOR, BFE): nonlinear if IV-dependent.
+    bool hasIVDep = false;
+    for (Value operand : op->getOperands())
+      if (getDelta(operand) != 0)
+        hasIVDep = true;
+    if (hasIVDep)
+      return std::nullopt;
+    for (Value r : op->getResults())
+      delta[r] = 0;
+  }
+
+  auto found = delta.find(voffset);
+  return found != delta.end() ? std::optional<int64_t>(found->second)
+                              : std::nullopt;
+}
+
+struct BufferLoadInfo {
+  Operation *loadOp;
+  Value voffset;
+  Value srd;
+  llvm::SetVector<Operation *> deps;
+};
+
+static void applyStrengthReduction(LoopOp loopOp) {
+  Block &body = loopOp.getBodyBlock();
+  auto condOp = dyn_cast<ConditionOp>(body.getTerminator());
+  if (!condOp)
+    return;
+
+  unsigned numArgs = body.getNumArguments();
+  ValueRange condIterArgs = condOp.getIterArgs();
+  if (numArgs == 0 || condIterArgs.size() != numArgs)
+    return;
+
+  auto ivStep = findIVStep(condOp, body);
+  if (!ivStep)
+    return;
+
+  Region *loopRegion = &loopOp.getBodyRegion();
+  Value iv = body.getArgument(0);
+
+  SmallVector<BufferLoadInfo> candidates;
+  llvm::SetVector<Operation *> allDeps;
+
+  for (Operation &op : body) {
+    if (!isBufferLoad(&op) && !isBufferLoadLDS(&op))
+      continue;
+    if (op.getNumOperands() < 3)
+      continue;
+
+    Value voffset = getVoffset(&op);
+    Value srd = getSrd(&op);
+    if (!voffset || !srd)
+      continue;
+
+    if (!isDefinedInLoop(voffset, loopRegion))
+      continue;
+
+    llvm::SetVector<Operation *> deps;
+    collectVoffsetDeps(voffset, loopRegion, deps);
+
+    if (!dependsOnIV(deps, iv))
+      continue;
+
+    bool allPure = true;
+    for (Operation *dep : deps) {
+      if (!isAddressVALU(dep) && !isa<ConstantOp>(dep)) {
+        allPure = false;
+        break;
+      }
+    }
+    if (!allPure)
+      continue;
+
+    allDeps.insert(deps.begin(), deps.end());
+
+    BufferLoadInfo info;
+    info.loadOp = &op;
+    info.voffset = voffset;
+    info.srd = srd;
+    info.deps = std::move(deps);
+    candidates.push_back(std::move(info));
+  }
+
+  if (candidates.empty())
+    return;
+
+  LDBG() << "found " << candidates.size() << " buffer_loads to optimize";
+
+  OpBuilder builder(loopOp);
+  auto loc = loopOp.getLoc();
+  ValueRange initArgs = loopOp.getInitArgs();
+  Value ivInit = initArgs[0];
+  auto sregType = builder.getType<SRegType>();
+
+  // Compute static stride for each candidate by symbolically differentiating
+  // the address chain w.r.t. IV. Drop candidates with non-constant strides
+  // (the voffset delta may be non-uniform across iterations).
+  SmallVector<int64_t> candidateStrides;
+  {
+    SmallVector<BufferLoadInfo> filtered;
+    for (auto &info : candidates) {
+      auto stride = computeStaticStride(info.deps, info.voffset, iv, *ivStep);
+      // Reject stride == 0: the voffset chain depends on the IV (checked
+      // earlier by dependsOnIV), but the symbolic derivative collapsed to
+      // zero — typically because two IV-dependent sub-expressions cancel
+      // in the delta while the actual values still vary per iteration
+      // (e.g. via right-shift truncation / staircase patterns). Hoisting
+      // the voffset and bumping soffset by 0 would freeze the address.
+      if (stride && *stride != 0) {
+        candidateStrides.push_back(*stride);
+        filtered.push_back(std::move(info));
+      } else {
+        LDBG() << "skipping candidate: cannot determine constant stride";
+      }
+    }
+    candidates = std::move(filtered);
+  }
+
+  if (candidates.empty())
+    return;
+
+  // Group by (SRD, stride). Loads sharing the same SRD and same constant
+  // stride share one soffset iter_arg; different strides get separate ones.
+  struct SRDGroup {
+    Value srd;
+    int64_t stride;
+  };
+  SmallVector<SRDGroup> groups;
+  SmallVector<unsigned> candidateGroupIdx;
+
+  for (auto [i, info] : llvm::enumerate(candidates)) {
+    std::optional<unsigned> matchIdx;
+    for (auto [g, group] : llvm::enumerate(groups)) {
+      if (group.srd == info.srd && group.stride == candidateStrides[i]) {
+        matchIdx = g;
+        break;
+      }
+    }
+    if (matchIdx) {
+      candidateGroupIdx.push_back(*matchIdx);
+    } else {
+      candidateGroupIdx.push_back(groups.size());
+      groups.push_back({info.srd, candidateStrides[i]});
+    }
+  }
+
+  // Precompute all initial voffsets (at iv=initial_value, soffset=0).
+  SmallVector<Value> initialVoffsets;
+  for (auto &info : candidates) {
+    Value voff = cloneChainBeforeLoop(info.deps, info.voffset, ivInit, loopOp,
+                                      body, builder);
+    initialVoffsets.push_back(voff);
+  }
+
+  // Build expanded init args: old args + soffset per SRD group (starts at 0).
+  SmallVector<Value> expandedInit(initArgs.begin(), initArgs.end());
+  unsigned soffsetArgBase = expandedInit.size();
+  auto zeroImm = builder.getType<ImmType>(0);
+  auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
+  auto zeroSoff = S_MOV_B32::create(builder, loc, sregType, zeroConst);
+  expandedInit.append(groups.size(), zeroSoff);
+
+  // Build new loop.
+  auto newLoop = LoopOp::create(builder, loc, expandedInit);
+  Block &newBody = newLoop.getBodyBlock();
+
+  // Map old block args to new block args.
+  IRMapping mapping;
+  for (unsigned i : llvm::seq(numArgs))
+    mapping.map(body.getArgument(i), newBody.getArgument(i));
+
+  // Clone loop body, tracking Operation* mapping for result-less ops.
+  OpBuilder bodyBuilder = OpBuilder::atBlockBegin(&newBody);
+  DenseMap<Operation *, Operation *> opMapping;
+  for (Operation &op : body) {
+    if (isa<ConditionOp>(&op))
+      continue;
+    Operation *cloned = bodyBuilder.clone(op, mapping);
+    opMapping[&op] = cloned;
+  }
+
+  // Patch buffer_loads: set voffset to precomputed value, soffset to iter_arg.
+  for (auto [i, info] : llvm::enumerate(candidates)) {
+    Operation *clonedLoad = opMapping.lookup(info.loadOp);
+    assert(clonedLoad && "cloned load not found in op mapping");
+
+    // Replace voffset with precomputed initial value.
+    clonedLoad->setOperand(getVoffsetIdx(clonedLoad), initialVoffsets[i]);
+
+    // Replace soffset (always operand 2) with the group's soffset iter_arg.
+    unsigned groupIdx = candidateGroupIdx[i];
+    Value soffsetArg = newBody.getArgument(soffsetArgBase + groupIdx);
+    clonedLoad->setOperand(2, soffsetArg);
+  }
+
+  // Compute next soffsets BEFORE the condition (s_add_u32 clobbers SCC,
+  // and s_cmp -> s_cbranch must have no SCC-clobbering ops between them).
+  // Find the cloned s_cmp/s_add for IV (the ops that produce the condition)
+  // and insert soffset updates before them.
+  // NOTE: s_add_u32 wraps at 2^32. For typical GEMM loops (stride < 2^20,
+  // iterations < 2^12), soffset stays well within 32 bits. If the product
+  // stride*iterations overflows 2^32, the buffer address will be wrong.
+  Value newCond = mapping.lookup(condOp.getCondition());
+
+  // Insert soffset updates before the s_cmp that produces the condition.
+  Operation *condProducer = newCond.getDefiningOp();
+  if (condProducer) {
+    OpBuilder preCondBuilder(condProducer);
+    SmallVector<Value> nextSoffs;
+    for (auto [g, group] : llvm::enumerate(groups)) {
+      Value currentSoff = newBody.getArgument(soffsetArgBase + g);
+      auto strideImm = preCondBuilder.getType<ImmType>(group.stride);
+      Value strideConst =
+          ConstantOp::create(preCondBuilder, loc, strideImm, group.stride);
+      Value nextSoff = S_ADD_U32::create(preCondBuilder, loc, sregType,
+                                         sregType, currentSoff, strideConst)
+                           .getDst();
+      nextSoffs.push_back(nextSoff);
+    }
+
+    SmallVector<Value> newCondIterArgs;
+    for (Value v : condIterArgs)
+      newCondIterArgs.push_back(mapping.lookup(v));
+    for (Value s : nextSoffs)
+      newCondIterArgs.push_back(s);
+
+    ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
+  } else {
+    // Fallback: no condition producer found, just append.
+    SmallVector<Value> newCondIterArgs;
+    for (Value v : condIterArgs)
+      newCondIterArgs.push_back(mapping.lookup(v));
+    for (auto [g, group] : llvm::enumerate(groups)) {
+      Value currentSoff = newBody.getArgument(soffsetArgBase + g);
+      auto strideImm = bodyBuilder.getType<ImmType>(group.stride);
+      Value strideConst =
+          ConstantOp::create(bodyBuilder, loc, strideImm, group.stride);
+      Value nextSoff = S_ADD_U32::create(bodyBuilder, loc, sregType, sregType,
+                                         currentSoff, strideConst)
+                           .getDst();
+      newCondIterArgs.push_back(nextSoff);
+    }
+    ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
+  }
+
+  // Replace old loop results.
+  for (unsigned i : llvm::seq(numArgs))
+    loopOp.getResult(i).replaceAllUsesWith(newLoop.getResult(i));
+
+  // Verify no cross-references.
+  bool hasCrossRefs = false;
+  for (Operation &op : body) {
+    if (isa<ConditionOp>(&op))
+      continue;
+    for (Value result : op.getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        if (use.getOwner()->getParentRegion() != &loopOp.getBodyRegion()) {
+          hasCrossRefs = true;
+          break;
+        }
+      }
+      if (hasCrossRefs)
+        break;
+    }
+    if (hasCrossRefs)
+      break;
+  }
+
+  if (hasCrossRefs) {
+    LDBG() << "cross-references detected, reverting";
+    for (unsigned i : llvm::seq(numArgs))
+      newLoop.getResult(i).replaceAllUsesWith(loopOp.getResult(i));
+    newLoop.erase();
+    return;
+  }
+
+  loopOp.erase();
+}
+
+struct BufferLoadStrengthReductionPass
+    : public waveasm::impl::WAVEASMBufferLoadStrengthReductionBase<
+          BufferLoadStrengthReductionPass> {
+  using WAVEASMBufferLoadStrengthReductionBase::
+      WAVEASMBufferLoadStrengthReductionBase;
+
+  void runOnOperation() override {
+    Operation *module = getOperation();
+    SmallVector<LoopOp> loops;
+    module->walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
+    for (auto loopOp : loops)
+      applyStrengthReduction(loopOp);
+  }
+};
+
+} // namespace

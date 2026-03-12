@@ -45,11 +45,11 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
   });
 }
 
-std::optional<uint64_t>
+std::optional<int64_t>
 wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                                  DictionaryAttr indexDict,
                                  wave::WaveHyperparameterAttr hyper) {
-  uint64_t bestIdx = static_cast<uint64_t>(-1);
+  int64_t bestIdx = -1;
   std::optional<int64_t> bestSize; // largest constant size seen so far
   for (auto [i, size] :
        llvm::enumerate(getUncollapsedVectorShape(shape, indexDict, hyper))) {
@@ -60,7 +60,7 @@ wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
       bestIdx = i;
     }
   }
-  assert(bestIdx != static_cast<uint64_t>(-1));
+  assert(bestIdx != -1);
   return bestIdx;
 }
 
@@ -103,7 +103,9 @@ wave::evaluateMapWithHyperparams(AffineMap map, ArrayRef<Attribute> symbols,
     if (!symbol)
       return std::nullopt;
 
-    std::optional<int64_t> value = hyperparams.getSymbolValue(symbol.getName());
+    std::optional<int64_t> value =
+        hyperparams ? hyperparams.getSymbolValue(symbol.getName())
+                    : std::nullopt;
     if (!value)
       return std::nullopt;
     symReplacements.push_back(getAffineConstantExpr(*value, map.getContext()));

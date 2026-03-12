@@ -192,4 +192,4 @@ def test_igemm():
     #      CHECK: %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}], %{{.*}}, %{{.*}} : memref<2x64x64x640xf16
 
     # Unrolled result store
-    #      CHECK-COUNT-32: vector.maskedstore %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}], %{{.*}}, %{{.*}} : memref<2x62x62x640xf32
+    #      CHECK-COUNT-32: vector.maskedstore {{.*}} : memref<{{.*}}xf32{{.*}}>

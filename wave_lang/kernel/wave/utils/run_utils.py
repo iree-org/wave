@@ -44,6 +44,21 @@ def get_benchmark_flags(options: WaveCompileOptions):
     return benchmark_flags
 
 
+def get_dynamic_stride_args(tensor_args: list[torch.Tensor]):
+    """
+    Get the dynamic stride arguments for the given tensors.
+    Only the leading dimensions are included.
+    """
+    import wave_runtime
+
+    stride_values = []
+    for arg_tensor in tensor_args:
+        rank = arg_tensor.dim()
+        if rank > 1:
+            stride_values.extend(arg_tensor.stride()[: rank - 1])
+    return wave_runtime.Int64Vector(stride_values)
+
+
 def invoke_with_wave_runtime(
     options: WaveCompileOptions,
     kernel_inputs: list[torch.Tensor],
@@ -87,17 +102,24 @@ def invoke_with_wave_runtime(
         options.kernel_launch_info.cluster_dims[2],
     )
 
-    # Ensure that the tensors are contiguous.
+    # Force contiguous tensor layouts when dynamic strides are not enabled.
     kern_args = []
     for arg_tensor in chain(kernel_inputs, kernel_outputs):
-        if not arg_tensor.is_contiguous():
+        if not arg_tensor.is_contiguous() and not options.dynamic_strides:
             arg_tensor = arg_tensor.contiguous()
         kern_args.append(arg_tensor.data_ptr())
 
     kernel_args = wave_runtime.Int64Vector(kern_args)
     dyn_dims = wave_runtime.Int64Vector(dynamic_dims[len(bound_scalar_symbols) :])
+
+    # Pass leading strides only (innermost dim is always unit stride).
+    if options.dynamic_strides:
+        strides = get_dynamic_stride_args(kernel_inputs + kernel_outputs)
+    else:
+        strides = wave_runtime.Int64Vector([])
+
     # Launch the kernel.
-    wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, scalar_args)
+    wave_runtime.launch(kernel_launch_info, kernel_args, dyn_dims, scalar_args, strides)
 
 
 def get_default_arch() -> str:

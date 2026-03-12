@@ -24,6 +24,7 @@ Python bindings (nanobind):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Union
 
 
@@ -70,6 +71,12 @@ class MLIRDiagnostic:
 def error_diagnostics(diags: list[MLIRDiagnostic]) -> list[MLIRDiagnostic]:
     """Filter a list of diagnostics to errors only."""
     return [d for d in diags if "error" in d.severity.lower()]
+
+
+class WaterDiagTestingMode(Enum):
+    NO = "no"
+    DIRECT = "direct"
+    VERIFIER = "verifier"
 
 
 @dataclass

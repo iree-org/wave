@@ -26,11 +26,18 @@ using EmitErrorFn = llvm::function_ref<mlir::InFlightDiagnostic()>;
 
 class WaveTensorType;
 
+/// Get the hyperparameters from an ancestor operation.
+/// Returns nullptr if no hyperparameters are found.
+WaveHyperparameterAttr getHyperparameters(mlir::Operation *op);
+
 //-----------------------------------------------------------------------------
 // HasWaveIndexMapping trait
 //-----------------------------------------------------------------------------
 
-// Common verifier for the optional 'index' attribute used by Wave ops.
+// Common verifier for the optional 'index' attribute used by Wave ops. When
+// the operation implements WaveInferIndexExprsOpInterface and the attribute is
+// present, also checks that the attribute length matches the number of values
+// from getIndexExprValuesAndDescriptions.
 mlir::LogicalResult verifyWaveIndexMappings(mlir::Operation *op);
 
 // Trait that checks the 'index' attribute using verifyWaveIndexMappings.
@@ -71,12 +78,16 @@ llvm::FailureOr<mlir::ChangeResult>
 propagateShapeInformation(wave::WaveTensorType from, wave::WaveTensorType &to,
                           llvm::StringRef fromName, llvm::StringRef toName,
                           llvm::raw_ostream &errs);
+llvm::FailureOr<mlir::ChangeResult>
+propagateShapeInformation(llvm::ArrayRef<wave::WaveSymbolAttr> from,
+                          wave::WaveTensorType &to, llvm::StringRef fromName,
+                          llvm::StringRef toName, llvm::raw_ostream &errs);
 
 // Propagate shape information from `source` to `target` and drop the `n`
 // `source` dims. Expects both to be fully-specified tensor types. If
 // propagation discovers a type conflict, prints the error message to the
-// `errs` stream and returns failure. Otherwise returns a tag indicating whether
-// the target type changed.
+// `errs` stream and returns failure. Otherwise returns a tag indicating
+// whether the target type changed.
 llvm::FailureOr<mlir::ChangeResult> propagateShapeDropTrailingDims(
     wave::WaveTensorType source, wave::WaveTensorType &target,
     llvm::StringRef sourceName, llvm::StringRef targetName, unsigned n,
@@ -169,7 +180,8 @@ public:
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
-    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    // Use the first input for type propagation.
+    unsigned inputOperandNum = concrete.getInputs().getBeginOperandIndex();
     return detail::propagateReductionTypesForward(
         axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
@@ -181,15 +193,17 @@ public:
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     unsigned initOperandNum = concrete.getInitMutable().getOperandNumber();
-    unsigned inputOperandNum = concrete.getInputMutable().getOperandNumber();
+    // Use the first input for type propagation.
+    unsigned inputOperandNum = concrete.getInputs().getBeginOperandIndex();
     return detail::propagateReductionTypesBackward(
         axis, initOperandNum, inputOperandNum, operandTypes, resultTypes, errs);
   }
 
   llvm::LogicalResult finalizeTypeInference() {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    if (detail::isReductionTypeInferenceComplete(
-            concrete.getInput(), concrete.getInit(), concrete.getResult()))
+    if (detail::isReductionTypeInferenceComplete(concrete.getInputs().front(),
+                                                 concrete.getInit(),
+                                                 concrete.getResult()))
       concrete.removeAxisAttr();
     return llvm::success();
   }
@@ -229,7 +243,8 @@ llvm::LogicalResult verifyElementTypesMatch(std::optional<mlir::Location> loc,
                                             mlir::Type rhs);
 
 // Verify if two Wave tensor or vector types are compatible:
-//   - their element types are equal;
+//   - their element types are equal unless `includeElementalType` is false;
+//   - their address spaces are equal unless `includeAddressSpace` is false;
 //   - tensor symbolic shapes are either equal or at least one of them is
 //     underspecified;
 //   - tensor address spaces are either equal or at least one of them is
@@ -238,6 +253,7 @@ llvm::LogicalResult verifyElementTypesMatch(std::optional<mlir::Location> loc,
 // location is provided.
 llvm::LogicalResult verifyTypesCompatible(
     mlir::Type lhs, mlir::Type rhs, bool includeAddressSpace,
+    bool includeElementalType,
     std::optional<mlir::Location> errorLocation = std::nullopt,
     llvm::StringRef lhsName = "", llvm::StringRef rhsName = "");
 
@@ -262,9 +278,8 @@ verifyTypesMatchingDimensions(std::optional<mlir::Location> loc,
 // Verification logic for the compatible-operands traits. Succeeds if all wave
 // tensor-typed operands and results have compatible shapes and, if the
 // corresponding flag is set, compatible address spaces.
-llvm::LogicalResult
-verifyCompatibleOperandsAndResultsOpTrait(mlir::Operation *op,
-                                          bool includeAddressSpace);
+llvm::LogicalResult verifyCompatibleOperandsAndResultsOpTrait(
+    mlir::Operation *op, bool includeAddressSpace, bool includeElementalType);
 }; // namespace detail
 
 template <typename OpTy>
@@ -274,7 +289,7 @@ class CompatibleOperandsAndResultsOpTrait
 public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(
-        op, /*includeAddressSpace=*/true);
+        op, /*includeAddressSpace=*/true, /*includeElementalType=*/true);
   }
 };
 
@@ -285,7 +300,18 @@ class CompatibleOperandsAndResultsIgnoreSpaceOpTrait
 public:
   static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
     return detail::verifyCompatibleOperandsAndResultsOpTrait(
-        op, /*includeAddressSpace=*/false);
+        op, /*includeAddressSpace=*/false, /*includeElementalType=*/true);
+  }
+};
+
+template <typename OpTy>
+class CompatibleOperandsAndResultsShapeOpTrait
+    : public mlir::OpTrait::TraitBase<
+          OpTy, CompatibleOperandsAndResultsShapeOpTrait> {
+public:
+  static llvm::LogicalResult verifyTrait(mlir::Operation *op) {
+    return detail::verifyCompatibleOperandsAndResultsOpTrait(
+        op, /*includeAddressSpace=*/true, /*includeElementalType=*/false);
   }
 };
 
@@ -392,6 +418,7 @@ private:
 // Shared for elements per thread analyses, visible to every call but immutable.
 struct ElementsPerThreadInit {
   wave::WaveSymbolAttr threadXDimension;
+  wave::WaveHyperparameterAttr hyperparams;
 };
 
 namespace detail {
@@ -635,12 +662,6 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
 
-// Set the index attribute as an array of index expressions, one for each of the
-// results.
-llvm::LogicalResult identitySetIndexFromLattices(
-    mlir::Operation *op, llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs);
-
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an
 // error and return failure.
@@ -649,6 +670,13 @@ checkAndAppendIndexExpr(mlir::Location loc,
                         const IndexExprsLatticeStorage &expr,
                         const llvm::Twine &description,
                         llvm::SmallVectorImpl<mlir::Attribute> &indexExprs);
+
+static inline std::function<void(llvm::raw_ostream &, unsigned)>
+defaultGetIndexExprValuesAndDescriptions(
+    mlir::Operation *op, llvm::SmallVectorImpl<mlir::Value> &values) {
+  llvm::append_range(values, op->getResults());
+  return [](llvm::raw_ostream &os, unsigned i) { os << "result #" << i; };
+}
 } // namespace detail
 
 // Trait implementing the methods of the WaveInferIndexExprsOpInterface with
@@ -675,13 +703,6 @@ public:
     return wave::detail::identityIndexExprsPropagate(
         resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
         "result", "operand", emitError);
-  }
-
-  llvm::LogicalResult
-  setIndexFromLattices(llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-                       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-    return detail::identitySetIndexFromLattices(this->getOperation(),
-                                                operandExprs, resultExprs);
   }
 };
 
@@ -718,16 +739,24 @@ llvm::LogicalResult verifyReductionOperation(mlir::Operation *op,
 template <typename OpTy>
 static inline WaveSymbolAttr getReducedSymbol(OpTy op) {
   return wave::detail::getReducedSymbol(op, op.getAxisAttr(),
-                                        op.getInput().getType());
+                                        op.getInputs().front().getType());
 }
 
-// Common verification logic for reduction operations. We expect the input type
-// to have one more dimension that precisely matches the reduction axis.
+// Common verification logic for reduction operations. All inputs must have the
+// same type; we verify against the first input.
 template <typename OpTy>
 static inline llvm::LogicalResult verifyReductionOperation(OpTy op) {
+  if (op.getInputs().empty())
+    return op.emitOpError("expected at least one input");
+  mlir::Type firstInputType = op.getInputs().front().getType();
+  for (mlir::Value input : op.getInputs().drop_front()) {
+    if (input.getType() != firstInputType)
+      return op.emitOpError() << "all inputs must have the same type, but got "
+                              << firstInputType << " and " << input.getType();
+  }
   return wave::detail::verifyReductionOperation(
-      op, op.getInput().getType(), op.getInit().getType(),
-      op.getResult().getType(), op.getAxisAttr());
+      op, firstInputType, op.getInit().getType(), op.getResult().getType(),
+      op.getAxisAttr());
 }
 } // namespace detail
 

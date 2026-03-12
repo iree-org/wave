@@ -4,10 +4,13 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from sympy import Eq
+from wave_lang.kernel.wave.assumptions import Assumption
 from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_broadcasted_scale_gemm_mxfp4,
 )
@@ -93,18 +96,17 @@ def test_scaled_gemm_mxfp4():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp4
-    # CHECK-DAG:    #map = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map1 = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map2 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map3 = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map4 = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map5 = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map6 = affine_map<()[s0, s1] -> (s0 * 64 + ((s1 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map7 = affine_map<()[s0, s1] -> (s1 * 4 + (s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map8 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:    #map9 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:    #map10 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:    #map11 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -192,20 +194,18 @@ def test_scaled_gemm_mxfp8():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp8
-    # CHECK-DAG:    #map = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map1 = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
-    # CHECK-DAG:    #map2 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map3 = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16 + 64)>
-    # CHECK-DAG:    #map4 = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map5 = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map6 = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #map7 = affine_map<()[s0, s1] -> (s0 * 128 + ((s1 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #map8 = affine_map<()[s0, s1] -> (s0 * 128 + ((s1 mod 64) floordiv 16) * 16 + 64)>
-    # CHECK-DAG:    #map9 = affine_map<()[s0, s1] -> (s1 * 4 + (s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #map10 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:    #map11 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:    #map12 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:    #map13 = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 32 - (s0 floordiv 16) * 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16 + 64)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -313,10 +313,10 @@ def packed_mxfp4_test():
     # CHECK-LABEL:    gemm_mxfp4_prefetch
 
     # Prologue Global Read
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
 
     # Prologue Local Write
     # CHECK-COUNT-4:  vector.store {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
@@ -328,22 +328,22 @@ def packed_mxfp4_test():
     # CHECK:          scf.for
 
     # Steady State global_load_rhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_rhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<1024x32xi8, strided<[32, 1]>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_lhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_rhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<1024x512xi8, strided<[512, 1]>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_lhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
@@ -357,9 +357,9 @@ def packed_mxfp4_test():
     # CHECK:          }
 
     # Epilogue Local Read
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16: vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-8:  vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Epilogue MFMA
@@ -467,8 +467,8 @@ def packed_mxfp4_global_to_lds_test():
     # CHECK:            rocdl.s.waitcnt
     # CHECK:            amdgpu.lds_barrier
 
-    # Steady state local loads
-    # CHECK-COUNT-48:   vector.load{{.*}} memref<{{.*}}, #gpu.address_space<workgroup>>
+    # Steady state local loads (8+4 scale loads as vector<8xi8> + 16+8 data loads as vector<16xi8>)
+    # CHECK-COUNT-36:   vector.load{{.*}} memref<{{.*}}, #gpu.address_space<workgroup>>
 
     # Steady State global load to lds
     # CHECK-COUNT-34:   amdgpu.gather_to_lds
@@ -579,14 +579,14 @@ def batched_prefetch_mxfp4_test():
     # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
 
     # Prologue Global Read
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C512_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C32_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<{{.*}}>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<{{.*}}>, vector<4xi8>
 
     # Prologue Linearize shared memory + Local Write
     # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [34816], strides: [1] : memref<1x256x136xi8, #gpu.address_space<workgroup>> to memref<34816xi8, #gpu.address_space<workgroup>>
@@ -602,22 +602,22 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          scf.for
 
     # Steady State global_load_rhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_rhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<{{.*}}>, vector<4xi8>
     # Steady State local_load_lhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_rhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<{{.*}}>, vector<16xi8>
     # Steady State local_load_lhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
@@ -633,9 +633,9 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          }
 
     # Epilogue Local Read
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-16: vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK-COUNT-8:  vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Epilogue MFMA
@@ -732,12 +732,12 @@ def test_unaligned_scaled_gemm_mxfp4():
     # CHECK-DAG:    %[[SCALED_LOGITS_BOUND:.+]] = arith.constant dense<96> : vector<16xindex>
     # CHECK:        scf.for %{{.*}} = %[[C0]] to %[[C2]] step %[[C1]]
     # CHECK:          %[[SCALED_LOGITS_MASK:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_LOGITS_BOUND]] : vector<16xindex>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1]>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<{{.*}}>, vector<16xi1>, vector<16xi8> into vector<16xi8>
     # CHECK:          %[[SCALED_SCALES_MASK_VAL:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_SCALES_BOUND]] : index
     # CHECK:          %[[SCALED_SCALES_MASK:.+]] = vector.broadcast %[[SCALED_SCALES_MASK_VAL]] : i1 to vector<1xi1>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1]>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1]>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
-    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1]>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<{{.*}}>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<{{.*}}>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<{{.*}}>, vector<1xi1>, vector<1xi8> into vector<1xi8>
     # CHECK:          amdgpu.scaled_mfma
     # CHECK:          scf.yield
     # CHECK:         }
@@ -854,24 +854,22 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:        %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
     # CHECK-DAG:        %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] overflow<nsw> : index
-    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
-    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<2147483646xi8, strided<[1]>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
+    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<2147483646xi8, strided<[1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[CAST]] validBytes(%[[C2147483646_I64]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index
     # CHECK:            %[[BROADCAST1:.*]] = vector.broadcast %[[CMP1]] : i1 to vector<16xi1>
-    # CHECK:            %[[MUL2:.*]] = arith.muli %[[AFFINE_APPLY3]], %[[C8192]] overflow<nsw> : index
-    # CHECK:            %[[ADD1:.*]] = arith.addi  %[[MUL1]], %[[MUL2]] overflow<nsw> : index
     # CHECK:            %[[AFFINE_APPLY4:.*]] = affine.apply #[[MAP17]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
-    # CHECK:            scf.for %{{.*}}
-    # CHECK:                %[[ADD2:.*]] = arith.addi %[[ADD1]], %{{.*}} overflow<nsw> : index
-    # CHECK:                %[[IDX_CAST1:.*]] = arith.index_cast %[[ADD2]] : index to i32
-    # CHECK:                %[[BROADCAST2:.*]] = vector.broadcast %[[IDX_CAST1]] : i32 to vector<16xi32>
-    # CHECK:                %[[ADD3:.*]] = arith.addi %[[BROADCAST2]], %[[CST1]] : vector<16xi32>
-    # CHECK:                %[[IDX_CAST4:.*]] = arith.index_cast %[[ADD3]] : vector<16xi32> to vector<16xindex>
-    # CHECK:                %[[SELECT2:.*]] = arith.select %[[BROADCAST1]], %[[IDX_CAST4]], %[[CST2]] : vector<16xi1>, vector<16xindex>
-    # CHECK:                %[[EXTRACT2:.*]] = vector.extract %[[SELECT2]][0] : index from vector<16xindex>
-    # CHECK:                %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[EXTRACT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK:            %[[MUL2:.*]] = arith.muli %[[AFFINE_APPLY4]], %[[C8192]] overflow<nsw> : index
+    # CHECK:            %[[ADD1:.*]] = arith.addi %[[MUL2]], %[[AFFINE_APPLY1]] overflow<nsw> : index
+    # CHECK:            %[[IDX_CAST1:.*]] = arith.index_cast %[[ADD1]] : index to i32
+    # CHECK:            %[[BROADCAST2:.*]] = vector.broadcast %[[IDX_CAST1]] : i32 to vector<16xi32>
+    # CHECK:            %[[ADD3:.*]] = arith.addi %[[BROADCAST2]], %[[CST1]] : vector<16xi32>
+    # CHECK:            %[[IDX_CAST4:.*]] = arith.index_cast %[[ADD3]] : vector<16xi32> to vector<16xindex>
+    # CHECK:            %[[SELECT2:.*]] = arith.select %[[BROADCAST1]], %[[IDX_CAST4]], %[[CST2]] : vector<16xi1>, vector<16xindex>
+    # CHECK:            %[[EXTRACT2:.*]] = vector.extract %[[SELECT2]][0] : index from vector<16xindex>
+    # CHECK:            %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[EXTRACT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
 
 
 @run_test
@@ -902,3 +900,151 @@ def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
     # CHECK:            %[[LHS_SCALE_BITCAST:.+]] = vector.bitcast %[[LHS_SCALE]] : vector<1xi8> to vector<1xf8E8M0FNU>
     # CHECK:            %[[LHS_SCALE_EXTRACT:.+]] = vector.extract %[[LHS_SCALE_BITCAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
     # CHECK-COUNT-2:    amdgpu.scaled_mfma 16x16x128 (%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+
+
+@run_test
+def test_dynamic_scaled_gemm_mxfp4():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    # Divisibility assumptions matching block sizes.
+    constraints += [Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [Assumption(Eq(N % BLOCK_N, 0))]
+    constraints += [Assumption(Eq(K % BLOCK_K, 0))]
+
+    @tkw.wave(constraints)
+    def scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 128,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.NONE,
+        device="hip",
+        target="gfx950",
+        compile_to_mlir=True,
+        dynamic_symbols=[M, N, K],
+    )
+
+    scaled_gemm = wave_compile(options, scaled_gemm)
+    print(scaled_gemm.asm)
+
+    # CHECK-LABEL: test_dynamic_scaled_gemm_mxfp4
+
+    # Verify floordiv expressions for K/2 and K/32 buffer dimensions.
+    # CHECK-DAG:    affine_map<()[s0] -> (s0 floordiv 2)>
+    # CHECK-DAG:    affine_map<()[s0] -> (s0 floordiv 32)>
+
+    # Dynamic index arguments for M, N, K.
+    # CHECK:        func.func @scaled_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index, %arg7: index)
+
+    # Core loop and scaled MFMA still present.
+    # CHECK:          scf.for
+    # CHECK:            amdgpu.scaled_mfma
+
+    # Divisibility assumptions eliminate all masking — no masked loads/stores.
+    # CHECK-NOT:      vector.maskedload
+    # CHECK-NOT:      vector.maskedstore
+
+    # Unmasked vector stores for output.
+    # CHECK:          vector.store
+    # CHECK:          return
+
+
+@run_test
+def test_dynamic_preshuffle_b_scale_coalescing():
+    """Verify B-scale reads coalesce into clean vector<16xi8> with dynamic dims.
+
+    Uses the preshuffle-B MXFP4 template with dynamic M, N, K and small
+    block sizes.  The K % 256 divisibility assumption lets the coalescer
+    apply divisibility substitutions during numeric probing, so the 2D
+    decomposition (row = offset floordiv K/2, col = offset mod K/2) gives
+    consistent per-dim diffs across probe sets.  Without this fix, probes
+    like K=137 make K/2=68, causing inconsistent row/col diffs and
+    fragmenting 16-byte scale reads into {2, 16, 8, 4} loads glued by
+    vector.from_elements.
+    """
+    shape = (256, 256, 256)
+    block = (128, 128, 256)
+    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block,
+        wave_shape=(2, 2),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        reorder_workgroups=False,
+    )
+    dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+    for sym in dynamic_symbols:
+        del options.subs[sym]
+    options.dynamic_symbols = dynamic_symbols
+    options.schedule = SchedulingType.NONE
+    options.use_buffer_ops = True
+    options.compile_to_mlir = True
+    options.device = "hip"
+    options.target = "gfx950"
+    result = wave_compile(options, kernel)
+    print(result.asm)
+
+    # CHECK-LABEL: test_dynamic_preshuffle_b_scale_coalescing
+
+    # Dynamic index arguments for M, N, K.
+    # CHECK: func.func @gemm(%arg0: {{.*}}, %arg1: {{.*}}, %arg2: {{.*}}, %arg3: {{.*}}, %arg4: {{.*}}, %arg5: index, %arg6: index, %arg7: index)
+
+    # Buffer ops: fat_raw_buffer_cast for global buffers.
+    # CHECK: amdgpu.fat_raw_buffer_cast
+
+    # B-scale reads are clean vector<16xi8> from fat_raw_buffer — no
+    # fragmentation into mixed-width loads glued by from_elements.
+    # A-scale reads are vector<4xi8>.
+    # CHECK: scf.for
+    # CHECK-COUNT-8: vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK-COUNT-2: vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK: amdgpu.scaled_mfma
+
+    # No byte-level loads or reassembly — coalescing succeeded.
+    # CHECK-NOT: vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<1xi8>
+    # CHECK-NOT: vector.from_elements

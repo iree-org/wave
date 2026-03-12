@@ -5,10 +5,16 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
+import sympy
 import torch.fx as fx
+from wave_lang.kernel._support.dtype import DataType
 from wave_lang.kernel.wave.utils.graph_utils import (
     is_barrier_between,
     is_barrier_between_same_graph,
+    _check_nodes_equivalent,
+    _sympy_equiv,
+    _check_callable_equivalent,
+    _truncate_float_to_dtype,
 )
 from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
@@ -20,7 +26,6 @@ from wave_lang.kernel.ops.wave_ops import (
 )
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel._support.indexing import IndexSymbol
-from wave_lang.kernel._support.dtype import DataType
 
 
 def create_simple_graph():
@@ -305,6 +310,138 @@ class TestIsBarrierBetweenNestedGraphs:
         result = is_barrier_between(node_sibling1, node_sibling2)
         assert result is not None
         assert result == barrier_main
+
+
+class TestOutputComparison:
+    """Tests for Output node equivalence checking."""
+
+    def test_different_return_value_count(self):
+        """Outputs returning different numbers of values are not equivalent."""
+        graph_a = fx.Graph()
+        val_a1 = add_test_node(graph_a, "x")
+        val_a2 = add_test_node(graph_a, "y")
+        out_a = Output(return_vals=([val_a1, val_a2],))
+        out_a.add_to_graph(graph_a)
+
+        graph_b = fx.Graph()
+        val_b = add_test_node(graph_b, "x")
+        out_b = Output(return_vals=([val_b],))
+        out_b.add_to_graph(graph_b)
+
+        node_map = {val_a1: val_b}
+        result = _check_nodes_equivalent(
+            get_custom(out_a.fx_node),
+            get_custom(out_b.fx_node),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert not result
+
+    def test_different_return_value(self):
+        """Outputs returning different nodes are not equivalent."""
+        graph_a = fx.Graph()
+        val_a1 = add_test_node(graph_a, "x")
+        val_a2 = add_test_node(graph_a, "y")
+        out_a = Output(return_vals=([val_a1],))
+        out_a.add_to_graph(graph_a)
+
+        graph_b = fx.Graph()
+        val_b1 = add_test_node(graph_b, "x")
+        val_b2 = add_test_node(graph_b, "y")
+        out_b = Output(return_vals=([val_b2],))
+        out_b.add_to_graph(graph_b)
+
+        node_map = {val_a1: val_b1, val_a2: val_b2}
+        result = _check_nodes_equivalent(
+            get_custom(out_a.fx_node),
+            get_custom(out_b.fx_node),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert not result
+
+    def test_single_vs_list_wrapped_return(self):
+        """Single-return and list-wrapped single-return are equivalent."""
+        graph_a = fx.Graph()
+        val_a = add_test_node(graph_a, "x")
+        out_node_a = graph_a.create_node("output", target="output", args=([val_a],))
+
+        graph_b = fx.Graph()
+        val_b = add_test_node(graph_b, "x")
+        out_node_b = graph_b.create_node("output", target="output", args=(val_b,))
+
+        node_map = {val_a: val_b}
+        result = _check_nodes_equivalent(
+            get_custom(out_node_a),
+            get_custom(out_node_b),
+            None,
+            None,
+            None,
+            node_map,
+        )
+        assert result
+
+
+class TestCheckCallableEquivalent:
+    """Tests for _check_callable_equivalent."""
+
+    def test_identical_lambdas(self):
+        f = lambda x: x + 1
+        assert _check_callable_equivalent(f, f)
+
+    def test_equivalent_lambdas(self):
+        f = lambda x: x + x
+        g = lambda x: 2 * x
+        assert _check_callable_equivalent(f, g)
+
+    def test_inequivalent_lambdas(self):
+        f = lambda x: x + 1
+        g = lambda x: x + 2
+        assert not _check_callable_equivalent(f, g)
+
+    def test_arity_mismatch(self):
+        f = lambda x: x
+        g = lambda x, y: x + y
+        result = _check_callable_equivalent(f, g)
+        assert not result
+        assert "arity" in result.error
+
+    def test_relational_lambdas_equal(self):
+        K = sympy.Symbol("K")
+        f = lambda x: x < K
+        g = lambda x: x < K
+        assert _check_callable_equivalent(f, g)
+
+    def test_relational_lambdas_unequal(self):
+        K = sympy.Symbol("K")
+        f = lambda x: x < K
+        g = lambda x: x > K
+        assert not _check_callable_equivalent(f, g)
+
+    def test_multi_arg_equivalent(self):
+        f = lambda x, y: x + y
+        g = lambda a, b: a + b
+        assert _check_callable_equivalent(f, g)
+
+    def test_tuple_result_equivalent(self):
+        f = lambda x: (x, x + 1)
+        g = lambda x: (x, x + 1)
+        assert _check_callable_equivalent(f, g)
+
+    def test_tuple_result_inequivalent(self):
+        f = lambda x: (x, x + 1)
+        g = lambda x: (x, x + 2)
+        assert not _check_callable_equivalent(f, g)
+
+    def test_tuple_vs_scalar_mismatch(self):
+        f = lambda x: (x, x)
+        g = lambda x: x
+        result = _check_callable_equivalent(f, g)
+        assert not result
 
 
 if __name__ == "__main__":

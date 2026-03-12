@@ -27,20 +27,25 @@ from wave_lang.kernel.wave.constraints import (
     Constraint,
     HardwareConstraint,
     MMAType,
+    TilingConstraint,
 )
 from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
-    emit_wave_dialect,
     format_diagnostics,
-    mlir_to_fx,
+    PersistentEmitter,
 )
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_vanilla_attention_kernel,
+)
 from wave_lang.kernel.wave.utils.classes import Failure, Result, Success
 from wave_lang.kernel.wave.utils.general_utils import run_test
 from wave_lang.kernel.wave.utils.graph_utils import (
     assert_traces_equivalent,
     assert_constraints_equivalent,
     compare_hardware_constraints_for_mlir_roundtrip,
+    compare_tiling_constraints_for_mlir_roundtrip,
 )
 
 
@@ -48,17 +53,20 @@ def _try_roundtrip(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
+    emitter: PersistentEmitter,
 ) -> Result[None]:
     """Attempt an MLIR roundtrip on the current trace state."""
     try:
         # Emit FX -> Water MLIR.
-        mlir_text, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+        mlir_text, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, constraints, options
+        )
         errors = error_diagnostics(diagnostics)
         if errors:
             return Failure(f"emit:\n{format_diagnostics(errors, use_color=False)}")
 
         # Import Water MLIR -> FX.
-        fx_trace, fx_constraints, fx_options, fx_diags = mlir_to_fx(mlir_text)
+        fx_trace, fx_constraints, fx_options, fx_diags = emitter.mlir_to_fx(mlir_text)
         errors = error_diagnostics(fx_diags)
         if errors:
             return Failure(f"import:\n{format_diagnostics(errors, use_color=False)}")
@@ -72,6 +80,7 @@ def _try_roundtrip(
             fx_constraints,
             custom_comparators={
                 HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip,
+                TilingConstraint: compare_tiling_constraints_for_mlir_roundtrip,
             },
         )
 
@@ -92,7 +101,7 @@ def _run_progressive_roundtrip(
     passes (stale xfail entries).
     """
     # Replicate the setup that wave_compile performs before running passes.
-    with IndexingContext() as idxc:
+    with IndexingContext() as idxc, PersistentEmitter() as emitter:
         idxc.set_subs(options.subs)
         launchable.initialize_wave_constraints()
         launchable.initialize_symbolic_constraints()
@@ -129,7 +138,9 @@ def _run_progressive_roundtrip(
             # serializes to MLIR text and compares it against a fresh import.
             p()
 
-            result = _try_roundtrip(trace, launchable.constraints, options)
+            result = _try_roundtrip(
+                trace, launchable.constraints, options, emitter=emitter
+            )
 
             if result and not expected_fail:
                 ok_count += 1
@@ -184,21 +195,39 @@ def gemm_progressive_roundtrip():
     )
 
     # Passes whose MLIR roundtrip is known to fail for this kernel.
-    # As the emitters improve, passes should be REMOVED from this set so
-    # the test locks in the progress.
+    # Currently, we expect all passes to pass the roundtrip for this kernel.
+    expected_failures = frozenset()
+
+    # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
+    _run_progressive_roundtrip(gemm, options, expected_failures)
+
+
+# CHECK-LABEL: attention_progressive_roundtrip
+@run_test
+def attention_progressive_roundtrip():
+    """Test MLIR roundtrip at each stage of the attention compilation pipeline."""
+    attention, hyperparams, _ = get_vanilla_attention_kernel(
+        AttentionShape(
+            num_query_heads=8,
+            num_kv_heads=2,
+            query_seq_len=256,
+            head_size_kv=64,
+            head_size=64,
+            kv_seq_len=256,
+        ),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+        False,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+    )
+
+    # Passes whose MLIR roundtrip is known to fail for the attention kernel.
+    # See: https://github.com/iree-org/wave/issues/1019
     expected_failures = frozenset(
         {
-            "debug_log_hoist",
-            "initialize_iter_args",
-            "create_induction_vars",
-            "initialize_reductions",
-            "finalize_indices",
-            "substitute_vector_shapes",
-            "add_get_results",
-            "infer_types",
-            "construct_index_mapping",
-            "debug_log_write_replace",
-            "promote_placeholders",
             "set_node_indices",
             "reorder_workgroups",
             "expand_graph",
@@ -206,11 +235,39 @@ def gemm_progressive_roundtrip():
             "remove_chained_getresult",
             "decompose_vmma_ops",
             "decompose_dot_mma",
+            "hoist_loop_invariant_ops",
+            "tensor_load_to_shared",
+            "multicast",
+            "fuse_tensor_loads",
+            "in_thread_transpose",
+            "global_to_shared_gathers",
+            "minimize_global_loads",
+            "preshuffle_scale_to_shared",
+            "specialize_kernel",
+            "gather_to_shared",
+            "gather_to_shared_swizzling",
+            "mark_hardware_transpose_candidates",
+            "apply_shared_memory_indexing_corrections",
+            "partition_ops_with_gpr_offsets",
+            "partition_strided_operators",
+            "remove_chained_extractslice",
+            "decompose_reduce_ops",
+            "decompose_scan_ops",
+            "decompose_topk_ops",
+            "schedule_graph",
+            "schedule_reordering",
+            "minimize_shared_allocs",
+            "add_shared_memory_barriers",
+            "add_cluster_barriers",
+            "compute_shared_memory_usage",
+            "partition_gather_like_ops",
             "generate_bounds_exprs",
-            "location_check_pass",
+            "guard_g2s_with_bounds_check",
             "merge_contiguous_reads",
+            "location_check_pass",
+            "simplify_indices",
         }
     )
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
-    _run_progressive_roundtrip(gemm, options, expected_failures)
+    _run_progressive_roundtrip(attention, options, expected_failures)

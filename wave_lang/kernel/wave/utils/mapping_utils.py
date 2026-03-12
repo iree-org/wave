@@ -11,7 +11,8 @@ import torch.fx as fx
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
 from .general_utils import infer_dim, get_fastest_index
-from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, subs_idxc
+from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, simplify, subs_idxc
+from ....support.indexing import piecewise_aware_subs
 from ...compiler.utils import strides_from_symbolic_shape
 
 K = TypeVar("K")  # Key type
@@ -41,141 +42,6 @@ def get_dict_with_updated_key(
             new_dict[key] = value
 
     return new_dict
-
-
-def _simplify_sympy_expr(expr: IndexExpr) -> IndexExpr:
-    """Apply custom sympy simplifications"""
-
-    def check_mul(mul):
-        ret = None
-        for arg in mul.args:
-            if arg.is_number:
-                if arg < 0:
-                    return None
-
-                if ret is not None:
-                    return None
-
-                ret = arg
-                continue
-
-            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
-                return None
-
-            if not arg.is_nonnegative:
-                return None
-
-        return ret
-
-    def transform_mod(expr):
-        """Move constant outside of Mod expr
-
-        Example:
-        (floor(a) * 4 + 3) % 16 -> (floor(a) * 4) % 16 + 3
-        """
-        if not isinstance(expr, sympy.Mod):
-            return None
-
-        p, q = expr.args
-        if not q.is_number or q < 0:
-            return None
-
-        if not isinstance(p, sympy.Add):
-            return None
-
-        c = None
-        terms = []
-        mult = None
-        for arg in p.args:
-            if arg.is_number:
-                if c is not None:
-                    return None
-
-                c = arg
-                continue
-
-            if not isinstance(arg, sympy.Mul):
-                return None
-
-            m = check_mul(arg)
-            if (m is None) or (q % m != 0):
-                return None
-
-            mult = m if (mult is None) or (m < mult) else mult
-            terms.append(arg)
-
-        if c >= mult:
-            return None
-
-        return (sum(terms) % q) + c
-
-    def check_mul_rational(mul):
-        ret = None
-        for arg in mul.args:
-            if isinstance(arg, sympy.Rational):
-                if ret is not None:
-                    return None
-
-                if arg.p < 0 or arg.q < 0:
-                    return None
-
-                ret = arg
-                continue
-
-            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
-                return None
-
-            if not arg.is_nonnegative:
-                return None
-
-        return ret
-
-    def transform_floor(expr):
-        """Simplify rational addition inside floor expr
-
-        Example:
-        floor(floor(a)/3 + 1/6) -> floor(floor(a)/3)
-        """
-        if not isinstance(expr, sympy.floor):
-            return None
-
-        expr = expr.args[0]
-        if not isinstance(expr, sympy.Add):
-            return None
-
-        c = None
-        for arg in expr.args:
-            if isinstance(arg, sympy.Rational):
-                if c is not None:
-                    return None
-
-                c = arg
-
-        if c is None:
-            return None
-
-        terms = []
-        for arg in expr.args:
-            if isinstance(arg, sympy.Rational):
-                continue
-
-            if not isinstance(arg, sympy.Mul):
-                return None
-
-            r = check_mul_rational(arg)
-            if r is None or r.p != 1:
-                return None
-
-            if r <= c:
-                return None
-
-            terms.append(arg)
-
-        return sympy.floor(sum(terms))
-
-    expr = expr.replace(lambda e: transform_mod(e) is not None, transform_mod)
-    expr = expr.replace(lambda e: transform_floor(e) is not None, transform_floor)
-    return sympy.simplify(expr)
 
 
 def approximate_difference(
@@ -267,10 +133,10 @@ def check_is_mapping_contiguous(
     index_mapping = tuple(subs_idxc(i) for i in index_mapping)
     iters = mapping.iters
 
-    subs = [(sym, sym + int(i == len(iters) - 1)) for i, sym in enumerate(iters)]
+    subs = {sym: sym + int(i == len(iters) - 1) for i, sym in enumerate(iters)}
     diff = [
         approximate_difference(
-            index_mapping[i].subs(subs) - index_mapping[i],
+            piecewise_aware_subs(index_mapping[i], subs) - index_mapping[i],
             list(iters.keys())[-1:],
             elements_per_thread,
         )
@@ -312,9 +178,76 @@ def check_is_mapping_contiguous(
         offset = _compute_offset(
             [new_index[infer_dim(d)] for d in symbolic_shape], strides
         )
-        if (offset - prev_offset) != 1:
-            return False
 
+        # When the sympy expressions are complex, we fallback to the aligned-base check.
+        # Because sympy evaluates to a value, we cannot use the difference check. Hence, the check fails.
+        if (offset - prev_offset) != 1:
+            return _check_contiguous_with_aligned_base(
+                mapping,
+                symbolic_shape,
+                array_shape,
+                index,
+                elements_per_thread,
+                is_read,
+            )
+
+        prev_offset = offset
+
+    return True
+
+
+def _check_contiguous_with_aligned_base(
+    mapping: IndexMapping,
+    symbolic_shape: tuple[IndexExpr, ...],
+    array_shape: tuple[IndexExpr, ...],
+    index: dict[IndexExpr, IndexSequence],
+    elements_per_thread: int | IndexExpr,
+    is_read: bool,
+) -> bool:
+    """Aligned-base contiguity check for complex floor/Mod mappings.
+
+    Thread indices in the fastest dimension are distributed in chunks of
+    elements_per_thread, so the base is always a multiple of that value.
+    Encoding this alignment (base = _aligned * elements_per_thread) lets
+    sympy resolve sub-expressions such as Mod(16*k + i, 16) -> i and
+    floor(k/2 + i/32) → floor(k/2) that the generic check cannot simplify.
+    It is independent of the tensor shape and depends on the thread distributuion.
+    """
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+    _aligned = sympy.Symbol("_aligned", integer=True, nonnegative=True)
+
+    idxc = IndexingContext.current()
+    strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
+
+    def _make_aligned_index(offset_val: int) -> dict[IndexExpr, IndexSequence]:
+        idx = deepcopy(index)
+        idx[fastest_dim].start = _aligned * elements_per_thread + offset_val
+        return idx
+
+    new_index = transform_index_on_mapping(
+        mapping,
+        symbolic_shape,
+        _make_aligned_index(0),
+        is_read=is_read,
+    )
+    prev_offset = _compute_offset(
+        [new_index[infer_dim(d)] for d in symbolic_shape],
+        strides,
+    )
+    for i in range(1, elements_per_thread):
+        new_index = transform_index_on_mapping(
+            mapping,
+            symbolic_shape,
+            _make_aligned_index(i),
+            is_read=is_read,
+        )
+        offset = _compute_offset(
+            [new_index[infer_dim(d)] for d in symbolic_shape],
+            strides,
+        )
+        diff_expr = simplify(offset - prev_offset)
+        if diff_expr != 1:
+            return False
         prev_offset = offset
 
     return True
@@ -334,13 +267,15 @@ def transform_index_on_mapping(
         index_mapping = mapping.map_output_indices(symbolic_shape)
 
     idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+    index_mapping = tuple(piecewise_aware_subs(i, idxc.subs) for i in index_mapping)
     iters = mapping.iters
-    subs = [
-        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
-    ] + list(idxc.subs.items())
+    subs = dict(
+        list(zip(iters.keys(), (expr.start for expr in index.values())))
+        + list(idxc.subs.items())
+    )
     transformed_index = {
-        key: m.subs(subs) for key, m in zip(symbolic_shape, index_mapping)
+        key: piecewise_aware_subs(m, subs)
+        for key, m in zip(symbolic_shape, index_mapping)
     }
 
     return transformed_index

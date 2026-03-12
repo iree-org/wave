@@ -7,12 +7,17 @@ from __future__ import annotations
 
 from enum import Enum
 import itertools
+import sympy
 import sys
-from typing import Sequence
+from typing import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import dill
+from wave_lang.kernel.wave.mlir_converter import dill_util
+from wave_lang.kernel.wave.mlir_converter.protocol import (
+    recv_message,
+    send_message,
+)
 
 if __name__ == "__main__":
     # Add parent directory to sys.path to enable relative imports when running standalone.
@@ -30,19 +35,42 @@ try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects import wave, arith, amdgpu, func
     from water_mlir.water_mlir.dialects.wave import (
+        AddOp,
         AllocateOp,
-        ReadOp,
-        WriteOp,
-        MmaOp,
-        RegisterOp,
+        ApplyExprOp,
+        BroadcastOp,
+        CastOp,
+        DivOp,
+        Exp2Op,
+        ExtractOp,
         ExtractSliceOp,
         IterateOp,
-        YieldOp,
+        MaxElementOp,
+        MaxOp,
+        MinOp,
+        MmaOp,
+        MulOp,
+        PermuteOp,
+        ReadOp,
+        ReciprocalOp,
+        RegisterOp,
+        ReshapeOp,
+        SelectOp,
+        SelfIndexOp,
+        ShuffleOp,
+        SubOp,
+        SumOp,
         WaveAddressSpaceAttr,
+        WaveApplyExprCombinatorAttr,
+        WaveExprListAttr,
         WaveMmaKindAttr,
-        WaveReadWriteBoundsAttr,
+        WaveReductionScope,
+        WaveShuffleModeAttr,
+        WaveSymbolMappingAttr,
         WaveWorkgroupDimAttr,
         WaveTensorType,
+        WriteOp,
+        YieldOp,
         iterate_make_isolated,
     )
 
@@ -66,34 +94,55 @@ from wave_lang.kernel.wave.constraints import (
     DeviceConstraint,
     HardwareConstraint,
 )
-from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic
+from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic, WaterError
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import FxEmitterResponse
 from wave_lang.kernel.wave.mlir_converter.water_emitter import serialize_location
 from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 from wave_lang.support.indexing import index_symbol, IndexSequence
 from wave_lang.kernel._support.indexing import IndexExpr, IndexSymbol, safe_subs
-from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel.lang.wave_types import IndexMapping, Memory, Register
 from wave_lang.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
     SHARED_ADDRESS_SPACE,
 )
 from wave_lang.kernel.ops.wave_ops import (
+    Add,
     Allocate,
-    Read,
-    Write,
-    MMA,
-    MMABase,
-    NewRegister,
+    ApplyExpr,
+    Broadcast,
+    CastOp as Cast,
+    Exp2,
+    Extract,
     ExtractSlice,
+    GetResult,
     Iterate,
     IterArg,
-    Placeholder,
+    Max,
+    Maximum,
+    Minimum,
+    MMA,
+    MMABase,
+    Mul,
+    NewRegister,
     Output,
-    GetResult,
+    Permute,
+    Placeholder,
+    Read,
+    Reciprocal,
+    Reshape,
+    SelectOp as Select,
+    SelfIndex,
     SharedMemoryBarrier,
+    ShuffleOp as Shuffle,
+    Sub,
+    Sum,
+    Truediv,
+    Write,
     get_custom,
 )
+from wave_lang.kernel.wave.utils.classes import ShuffleMode
 from attr_type_converter import (
+    OPERAND_SYMBOL_NAME_WAVE_PREFIX,
     convert_index_mapping_array_to_sympy,
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
@@ -123,13 +172,22 @@ class AttrNames(Enum):
 
     INDEX = ("index", "index")
     BOUNDS = ("bounds", "bounds")
+    COMBINATOR = ("combinator", "combinator")
+    DIM = ("dim", "dim")
     ELEMENTS_PER_THREAD = ("elements_per_thread", "elements_per_thread")
+    EXPR = ("expr", "expr")
     KIND = ("kind", "mma_type")
+    LOGICAL_SLICE = ("logical_slice", "logical_slice")
+    NUM_SLICES = ("num_slices", "num_slices")
     WATER_INTERNAL_ID = ("_water_internal.id", "_water_id")
     OFFSET = ("offset", "offset")
+    POSITION = ("position", "position")
+    SCOPE = ("scope", "scope")
     SIZE = ("size", "size")
     STRIDE = ("stride", "stride")
+    MAPPING = ("mapping", "mapping")
     ORDERED_SYMS = ("ordered_syms", "ordered_syms")
+    TARGET_VECTOR_SHAPE = ("target_vector_shape", "target_vector_shape")
     VALUE = ("value", "value")
 
     @property
@@ -200,7 +258,7 @@ def _convert_mma_kind(attr: WaveMmaKindAttr) -> MMAType | ScaledMMAType:
 
 
 def _convert_read_write_bounds(
-    attr: WaveReadWriteBoundsAttr,
+    attr: WaveSymbolMappingAttr,
 ) -> dict[IndexSymbol, IndexExpr]:
     """
     Converts Wave read/write bounds attribute into a dictionary mapping dimensions to expressions.
@@ -208,12 +266,62 @@ def _convert_read_write_bounds(
     Bounds specify the iteration space for memory operations (read/write) along each dimension.
     """
     bounds: dict[IndexSymbol, IndexExpr] = {}
-    for named in attr.mapping:
-        key = named.name
-        value = named.attr
+    for key, value in attr:
         exprs = expr_list_attr_to_exprs(value)
-        bounds[index_symbol(key)] = exprs[0]
+        bounds[index_symbol(key.name)] = exprs[0]
     return bounds
+
+
+def _convert_mapping_attr(
+    mapping_attr: WaveExprListAttr,
+    memory_type: WaveTensorType,
+    value_type: WaveTensorType,
+    *,
+    is_read: bool,
+) -> IndexMapping | None:
+    """Reconstruct an IndexMapping from a Water MLIR permutation map attribute.
+
+    The water emitter stores the mapping as a permutation affine map
+    (memory dims -> value dims). This inverts the process: extracts the
+    permutation, then rebuilds input/output mappings using dimension symbols
+    from the memory and value types.
+
+    For reads, input_mapping describes memory dims; for writes, output_mapping
+    describes memory dims (matching the convention in water_emitter.py).
+
+    Note: dynamic_val_mappings are not represented in the MLIR attribute and
+    are not reconstructed here. Roundtripping mappings with dynamic values
+    is not currently supported.
+    """
+    affine_map = mapping_attr.map
+    if affine_map is None:
+        return None
+    n = affine_map.n_dims
+
+    inverse_perm = []
+    for i in range(n):
+        expr = affine_map.results[i]
+        assert isinstance(
+            expr, ir.AffineDimExpr
+        ), f"Expected permutation map with AffineDimExpr results, got {type(expr)}"
+        inverse_perm.append(ir.AffineDimExpr(expr).position)
+
+    perm = [0] * n
+    for i, j in enumerate(inverse_perm):
+        perm[j] = i
+
+    memory_dims = [index_symbol(symbol_attr_to_name(s)) for s in memory_type.shape]
+    value_dims = [index_symbol(symbol_attr_to_name(s)) for s in value_type.shape]
+
+    sym_to_iter = {memory_dims[i]: IndexMapping.iterator(perm[i]) for i in range(n)}
+
+    memory_mapping = {dim: sym_to_iter[dim] for dim in memory_dims}
+    value_mapping = {dim: sym_to_iter[dim] for dim in value_dims}
+
+    if is_read:
+        return IndexMapping(n, memory_mapping, value_mapping)
+    else:
+        return IndexMapping(n, value_mapping, memory_mapping)
 
 
 def _convert_supported_attrs(
@@ -517,7 +625,7 @@ class _OpParseContext:
         return self.value_map[value]
 
     def add_mapping(self, mlir_value: ir.Value, fx_node: fx.Node | int | float) -> None:
-        """Add MLIR value → FX node mapping."""
+        """Add MLIR value -> FX node mapping."""
         assert (
             mlir_value not in self.value_map
         ), f"Duplicate mapping for MLIR value: {mlir_value}"
@@ -547,6 +655,26 @@ def _handle_register_op(op: RegisterOp, parse_ctx: _OpParseContext) -> None:
     )
     _apply_mlir_attrs_to_fx_node(register_op.fx_node, converted_attrs)
     parse_ctx.add_mapping(op.result, register_op.fx_node)
+
+
+def _handle_broadcast_op(op: BroadcastOp, parse_ctx: _OpParseContext) -> None:
+    """Handle wave.broadcast operation."""
+    source_node = parse_ctx.resolve_operand(op.source)
+    result_type = op.result.type
+    target_shape = tuple(
+        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+    )
+    dtype = mlir_element_type_to_dtype(result_type.element_type)
+    converted_attrs = _convert_supported_attrs(op)
+
+    broadcast_op = Broadcast.create(
+        parse_ctx.graph,
+        arg=source_node,
+        target_shape=target_shape,
+        type=Register[(*target_shape, dtype)],
+    )
+    _apply_mlir_attrs_to_fx_node(broadcast_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, broadcast_op.fx_node)
 
 
 def _handle_lds_barrier_op(op: amdgpu.LDSBarrierOp, parse_ctx: _OpParseContext) -> None:
@@ -614,8 +742,17 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
     memory_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name},
+        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name, AttrNames.MAPPING.mlir_name},
     )
+
+    mapping = None
+    if AttrNames.MAPPING.mlir_name in op.attributes:
+        mapping = _convert_mapping_attr(
+            op.attributes[AttrNames.MAPPING.mlir_name],
+            op.memory.type,
+            op.result.type,
+            is_read=True,
+        )
 
     read_op = Read.create(
         parse_ctx.graph,
@@ -623,6 +760,7 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
         elements_per_thread=converted_attrs.pop(
             AttrNames.ELEMENTS_PER_THREAD.mlir_name, None
         ),
+        mapping=mapping,
         bounds=converted_attrs.pop(AttrNames.BOUNDS.mlir_name, None),
         type=_convert_wave_tensor_type(op.result.type, parse_ctx),
     )
@@ -636,8 +774,17 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
     mem_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name},
+        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name, AttrNames.MAPPING.mlir_name},
     )
+
+    mapping = None
+    if AttrNames.MAPPING.mlir_name in op.attributes:
+        mapping = _convert_mapping_attr(
+            op.attributes[AttrNames.MAPPING.mlir_name],
+            op.memory.type,
+            op.value_to_store.type,
+            is_read=False,
+        )
 
     write_op = Write.create(
         parse_ctx.graph,
@@ -646,9 +793,15 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
         elements_per_thread=converted_attrs.pop(
             AttrNames.ELEMENTS_PER_THREAD.mlir_name, None
         ),
+        mapping=mapping,
         bounds=converted_attrs.pop(AttrNames.BOUNDS.mlir_name, None),
         type=get_custom(mem_node).type,
     )
+    if mapping is not None:
+        # type was set from memory shape (e.g. [N,K,M]). infer_type corrects
+        # it to the mapping's input shape (the value-to-store/register shape,
+        # e.g. [M,N,K]).
+        write_op.infer_type()
     _apply_mlir_attrs_to_fx_node(write_op.fx_node, converted_attrs)
     # No mapping added because write produces no SSA results.
 
@@ -659,10 +812,7 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     rhs_node = parse_ctx.resolve_operand(op.rhs)
     acc_node = parse_ctx.resolve_operand(op.accumulator)
     converted_attrs = _convert_supported_attrs(op)
-    mma_type = (
-        converted_attrs.pop(AttrNames.KIND.mlir_name, None)
-        or parse_ctx.default_mma_type
-    )
+    mma_type = converted_attrs.pop(AttrNames.KIND.mlir_name, None)
 
     mma_op = MMA.create(
         parse_ctx.graph,
@@ -686,6 +836,388 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     mma_op.fx_node.reduction_dim = reduction_dim.pop()
 
     parse_ctx.add_mapping(op.result, mma_op.fx_node)
+
+
+def _handle_reduction_op(
+    op: SumOp | MaxElementOp,
+    reduce_cls: type[Sum | Max],
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.sum / wave.max_element operations."""
+    input_nodes = [parse_ctx.resolve_operand(v) for v in op.inputs]
+    init_node = parse_ctx.resolve_operand(op.init)
+    is_block = op.scope.value == WaveReductionScope.Block
+
+    axis_attr = op.axis
+    if axis_attr is not None:
+        dim = index_symbol(symbol_attr_to_name(axis_attr))
+    else:
+        # Infer the reduction dimension from the shape difference between
+        # input and result (the verifier guarantees fully-specified types
+        # when axis is absent).
+        input_shape = set(
+            index_symbol(symbol_attr_to_name(s)) for s in op.inputs[0].type.shape
+        )
+        result_shape = set(
+            index_symbol(symbol_attr_to_name(s)) for s in op.result.type.shape
+        )
+        reduced_dims = input_shape - result_shape
+        assert (
+            len(reduced_dims) == 1
+        ), f"Expected exactly one reduced dimension, got {reduced_dims}"
+        dim = reduced_dims.pop()
+
+    converted_attrs = _convert_supported_attrs(op, ignore_attrs={"scope", "axis"})
+
+    # The MLIR op always has a variadic input list, but pre-expansion
+    # the FX graph uses a single node. Unwrap to match.
+    arg = input_nodes[0] if len(input_nodes) == 1 else input_nodes
+
+    reduce_op = reduce_cls.create(
+        parse_ctx.graph,
+        arg=arg,
+        init=init_node,
+        dim=dim,
+        block=is_block,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(reduce_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, reduce_op.fx_node)
+
+
+def _handle_binary_op(
+    op: AddOp | SubOp | MulOp | DivOp | MaxOp | MinOp,
+    fx_cls: type[Add | Sub | Mul | Truediv | Maximum | Minimum],
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle binary arithmetic operations (wave.add, wave.sub, etc.).
+
+    All Wave binary ops share the same structure: `lhs`, `rhs` operands
+    and a single `result`.
+    """
+    lhs_node = parse_ctx.resolve_operand(op.lhs)
+    rhs_node = parse_ctx.resolve_operand(op.rhs)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = fx_cls.create(
+        parse_ctx.graph,
+        lhs=lhs_node,
+        rhs=rhs_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_select_op(
+    op: SelectOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.select operation."""
+    cond_node = parse_ctx.resolve_operand(op.condition)
+    lhs_node = parse_ctx.resolve_operand(op.lhs)
+    rhs_node = parse_ctx.resolve_operand(op.rhs)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = Select.create(
+        parse_ctx.graph,
+        cond=cond_node,
+        if_true=lhs_node,
+        if_false=rhs_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_unary_op(
+    op: Exp2Op | ReciprocalOp,
+    fx_cls: type[Exp2 | Reciprocal],
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle unary arithmetic operations (wave.exp2, wave.reciprocal)."""
+    arg_node = parse_ctx.resolve_operand(op.argument)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = fx_cls.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_cast_op(
+    op: CastOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.cast operation."""
+    arg_node = parse_ctx.resolve_operand(op.value_to_cast)
+    target_dtype = mlir_element_type_to_dtype(op.result.type.element_type)
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = Cast.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        dtype=target_dtype,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_permute_op(
+    op: PermuteOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.permute operation."""
+    value_node = parse_ctx.resolve_operand(op.value)
+    result_type = op.result.type
+    target_shape = tuple(
+        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+    )
+    converted_attrs = _convert_supported_attrs(op)
+
+    fx_op = Permute.create(
+        parse_ctx.graph,
+        arg=value_node,
+        target_shape=target_shape,
+        type=_convert_wave_tensor_type(result_type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+_WAVE_SHUFFLE_MODE_TO_FX: dict[wave.WaveShuffleMode, ShuffleMode] = {
+    wave.WaveShuffleMode.XOR: ShuffleMode.XOR,
+    wave.WaveShuffleMode.DOWN: ShuffleMode.DOWN,
+    wave.WaveShuffleMode.UP: ShuffleMode.UP,
+    wave.WaveShuffleMode.IDX: ShuffleMode.IDX,
+}
+
+
+def _handle_shuffle_op(
+    op: ShuffleOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.shuffle operation."""
+    arg_node = parse_ctx.resolve_operand(op.value)
+    offset = op.offset.value
+    width = op.width.value
+    mode_attr = WaveShuffleModeAttr(op.mode)
+    mode = _WAVE_SHUFFLE_MODE_TO_FX[mode_attr.value]
+    converted_attrs = _convert_supported_attrs(
+        op, ignore_attrs={"offset", "width", "mode"}
+    )
+
+    fx_op = Shuffle.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        offset=offset,
+        width=width,
+        mode=mode,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_self_index_op(
+    op: SelfIndexOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.self_index operation."""
+    dim = index_symbol(symbol_attr_to_name(op.dim))
+    result_type = op.result.type
+    target_dtype = mlir_element_type_to_dtype(result_type.element_type)
+
+    ept = op.elements_per_thread.value if op.elements_per_thread is not None else None
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.DIM.mlir_name,
+            AttrNames.ELEMENTS_PER_THREAD.mlir_name,
+        },
+    )
+
+    fx_op = SelfIndex.create(
+        parse_ctx.graph,
+        dim=dim,
+        dtype=target_dtype,
+        elements_per_thread=ept,
+        type=_convert_wave_tensor_type(result_type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _combinator_to_sympy_fn(
+    combinator: wave.WaveApplyExprCombinator,
+) -> Callable[..., sympy.Basic]:
+    """Map a WaveApplyExprCombinator enum value to a sympy constructor."""
+    _MAP = {
+        wave.WaveApplyExprCombinator.Greater: sympy.StrictGreaterThan,
+        wave.WaveApplyExprCombinator.Less: sympy.StrictLessThan,
+        wave.WaveApplyExprCombinator.Equal: sympy.Eq,
+        wave.WaveApplyExprCombinator.NotEqual: sympy.Ne,
+        wave.WaveApplyExprCombinator.GreaterOrEqual: sympy.GreaterThan,
+        wave.WaveApplyExprCombinator.LessOrEqual: sympy.LessThan,
+        wave.WaveApplyExprCombinator.Maximum: sympy.Max,
+        wave.WaveApplyExprCombinator.Minimum: sympy.Min,
+    }
+    fn = _MAP.get(combinator)
+    if fn is None:
+        raise ValueError(f"Unsupported combinator: {combinator}")
+    return fn
+
+
+def _reconstruct_expr_lambda(
+    expr_attr: WaveExprListAttr,
+    num_operands: int,
+    combinator_attr: WaveApplyExprCombinatorAttr | None,
+) -> Callable[..., sympy.Basic]:
+    """Reconstruct a sympy expression lambda from a WaveExprListAttr.
+
+    The returned lambda takes `num_operands` positional arguments corresponding to
+    the operand placeholders (APPLY_EXPR_ARG_0, ...) in the affine expression.
+
+    When a combinator is present, the affine map results are combined using the
+    corresponding sympy relational or aggregation function (e.g. `<` for
+    `lt`).  This ensures the reconstructed lambda produces the same sympy
+    expression as the original.
+    """
+    sympy_results: list[sympy.Basic] = [
+        r if isinstance(r, sympy.Basic) else sympy.Integer(r)
+        for r in expr_list_attr_to_exprs(expr_attr)
+    ]
+
+    combinator_fn = None
+    if combinator_attr is not None:
+        combinator_fn = _combinator_to_sympy_fn(combinator_attr.value)
+
+    operand_syms = [
+        index_symbol(OPERAND_SYMBOL_NAME_WAVE_PREFIX + str(i))
+        for i in range(num_operands)
+    ]
+
+    def expr_lambda(*args):
+        subs_map = {operand_syms[i]: args[i] for i in range(len(args))}
+        results = [r.subs(subs_map) for r in sympy_results]
+        if combinator_fn is not None:
+            return combinator_fn(*results)
+        assert len(results) == 1, (
+            f"Multiple expression results ({len(results)}) require a "
+            f"combinator attribute to reduce them to a single value"
+        )
+        return results[0]
+
+    return expr_lambda
+
+
+def _handle_apply_expr_op(
+    op: ApplyExprOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.apply_expr operation.
+
+    Reconstructs the `expr` lambda from the MLIR `WaveExprListAttr` and
+    `combinator` attribute.  In MLIR, non-affine expressions (comparisons,
+    min/max) are split into an affine map over the sub-expressions plus a
+    combinator enum that says how to combine them (e.g. `lt` for `<`).
+    `_reconstruct_expr_lambda` folds both back into a single sympy
+    expression so the round-tripped lambda is semantically identical to the
+    original. The combinator is not stored on the FX node because the
+    emitter re-derives it from the sympy expression structure.
+    """
+    arg_nodes = [parse_ctx.resolve_operand(v) for v in op.arguments]
+
+    combinator_attr = None
+    if op.combinator is not None:
+        combinator_attr = WaveApplyExprCombinatorAttr(op.combinator)
+    expr_lambda = _reconstruct_expr_lambda(
+        op.expr,
+        num_operands=len(arg_nodes),
+        combinator_attr=combinator_attr,
+    )
+
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.EXPR.mlir_name,
+            AttrNames.COMBINATOR.mlir_name,
+        },
+    )
+
+    fx_op = ApplyExpr.create(
+        parse_ctx.graph,
+        register_=arg_nodes if len(arg_nodes) > 1 else arg_nodes[0],
+        expr=expr_lambda,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_extract_op(
+    op: ExtractOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.extract operation."""
+    source_node = parse_ctx.resolve_operand(op.source)
+    # Keep as a list: despite the scalar type annotation on Extract,
+    # offset is used as a sequence throughout the codebase (e.g.
+    # len(node.offset) in wave_ops.py and water_emitter.py).
+    offset = expr_list_attr_to_exprs(op.position)
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={AttrNames.POSITION.mlir_name},
+    )
+
+    fx_op = Extract.create(
+        parse_ctx.graph,
+        register_=source_node,
+        offset=offset,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_reshape_op(
+    op: ReshapeOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.reshape operation."""
+    source_nodes = [parse_ctx.resolve_operand(v) for v in op.source]
+
+    target_vector_shape = {}
+    for named_attr in op.target_vector_shape:
+        sym = index_symbol(named_attr.name)
+        target_vector_shape[sym] = int(named_attr.attr.value)
+
+    logical_slice = op.logical_slice.value if op.logical_slice is not None else 0
+    num_slices = op.num_slices.value if op.num_slices is not None else 1
+
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.TARGET_VECTOR_SHAPE.mlir_name,
+            AttrNames.LOGICAL_SLICE.mlir_name,
+            AttrNames.NUM_SLICES.mlir_name,
+        },
+    )
+
+    fx_op = Reshape.create(
+        parse_ctx.graph,
+        args=source_nodes if len(source_nodes) > 1 else source_nodes[0],
+        target_vector_shape=target_vector_shape,
+        logical_slice=logical_slice,
+        num_slices=num_slices,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
 
 
 def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> None:
@@ -745,36 +1277,41 @@ def _create_get_result_nodes(
     iterate's output tuple.  The index is used as-is: `Iterate.index`
     delegates to `MMA.acc_index` which already specialises MMA_ACC and
     drops the reduction dimension before the emitters serialise it.
-
-    # TODO: revisit when converting partially-compiled traces where
-    # index analysis has not yet run.
     """
-    with parse_ctx.graph.inserting_after(iterate_node):
-        for idx, result in enumerate(results):
+    # inserting_after pins the insertion point, so each new node would land
+    # at the same spot and reverse the order. Advance the cursor after each
+    # insertion to preserve the original result ordering.
+    cursor = iterate_node
+    for idx, result in enumerate(results):
+        with parse_ctx.graph.inserting_after(cursor):
             get_result_op = GetResult.create(
                 parse_ctx.graph,
                 value=iterate_node,
                 res_idx=idx,
                 type=result_types[idx],
             )
+        cursor = get_result_op.fx_node
 
-            # Prefer the explicit iterate index from MLIR (present after index
-            # propagation). Fall back to the output value's index for early
-            # pipeline stages where index_sequence_analysis hasn't run yet.
-            result_index = None
-            if iter_index is not None:
-                result_index = (
-                    iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
-                )
-            elif isinstance(output_values[idx], fx.Node):
-                result_index = getattr(
-                    output_values[idx], AttrNames.INDEX.fx_property, None
-                )
+        # Prefer the explicit iterate index from MLIR (present after index
+        # propagation). Fall back to the output value's index for early
+        # pipeline stages where index_sequence_analysis hasn't run yet.
+        result_index = None
+        if iter_index is not None:
+            result_index = (
+                iter_index[idx] if isinstance(iter_index, Sequence) else iter_index
+            )
+        # idx can exceed output_values when the iterate body yields
+        # more results than the original output list (e.g. after
+        # variadic reduction expansion adds extra carry values).
+        elif idx < len(output_values) and isinstance(output_values[idx], fx.Node):
+            result_index = getattr(
+                output_values[idx], AttrNames.INDEX.fx_property, None
+            )
 
-            if isinstance(result_index, dict):
-                get_result_op.fx_node.index = result_index
+        if isinstance(result_index, dict):
+            get_result_op.fx_node.index = result_index
 
-            parse_ctx.add_mapping(result, get_result_op.fx_node)
+        parse_ctx.add_mapping(result, get_result_op.fx_node)
 
 
 def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
@@ -811,8 +1348,8 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     iter_count = len(init_args)
 
     # Create a local scope for the iterate body.
-    # - IterArg block arguments → new IterArg placeholder nodes in subgraph
-    # - Capture block arguments → mapped directly to outer values (no placeholders)
+    # - IterArg block arguments -> new IterArg placeholder nodes in subgraph
+    # - Capture block arguments -> mapped directly to outer values (no placeholders)
     local_map: dict[ir.Value, fx.Node | int | float] = {}
 
     # Map iter args to new placeholder nodes in the subgraph
@@ -919,12 +1456,50 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_register_op(op, parse_ctx)
             case AllocateOp():
                 _handle_allocate_op(op, parse_ctx)
+            case BroadcastOp():
+                _handle_broadcast_op(op, parse_ctx)
             case ReadOp():
                 _handle_read_op(op, parse_ctx)
             case WriteOp():
                 _handle_write_op(op, parse_ctx)
             case MmaOp():
                 _handle_mma_op(op, parse_ctx)
+            case SumOp():
+                _handle_reduction_op(op, Sum, parse_ctx)
+            case MaxElementOp():
+                _handle_reduction_op(op, Max, parse_ctx)
+            case AddOp():
+                _handle_binary_op(op, Add, parse_ctx)
+            case SubOp():
+                _handle_binary_op(op, Sub, parse_ctx)
+            case MulOp():
+                _handle_binary_op(op, Mul, parse_ctx)
+            case DivOp():
+                _handle_binary_op(op, Truediv, parse_ctx)
+            case MaxOp():
+                _handle_binary_op(op, Maximum, parse_ctx)
+            case MinOp():
+                _handle_binary_op(op, Minimum, parse_ctx)
+            case SelectOp():
+                _handle_select_op(op, parse_ctx)
+            case Exp2Op():
+                _handle_unary_op(op, Exp2, parse_ctx)
+            case ReciprocalOp():
+                _handle_unary_op(op, Reciprocal, parse_ctx)
+            case CastOp():
+                _handle_cast_op(op, parse_ctx)
+            case PermuteOp():
+                _handle_permute_op(op, parse_ctx)
+            case SelfIndexOp():
+                _handle_self_index_op(op, parse_ctx)
+            case ApplyExprOp():
+                _handle_apply_expr_op(op, parse_ctx)
+            case ExtractOp():
+                _handle_extract_op(op, parse_ctx)
+            case ReshapeOp():
+                _handle_reshape_op(op, parse_ctx)
+            case ShuffleOp():
+                _handle_shuffle_op(op, parse_ctx)
             case ExtractSliceOp():
                 _handle_extract_slice_op(op, parse_ctx)
             case IterateOp():
@@ -1043,20 +1618,8 @@ def convert_mlir_to_trace(
         return trace, constraints, options, diagnostics
 
 
-if __name__ == "__main__":
-    try:
-        request = dill.loads(sys.stdin.buffer.read())
-    except Exception as e:
-        sys.stderr.write(f"FATAL: failed to unpickle input: {e}\n")
-        sys.exit(1)
-
-    mlir_text = request.get("mlir") if isinstance(request, dict) else None
-    if not isinstance(mlir_text, str):
-        sys.stderr.write(
-            f"FATAL: expected 'mlir' string in request, got: {type(mlir_text)}\n"
-        )
-        sys.exit(1)
-
+def _process_single_request(mlir_text: str) -> bytes:
+    """Process one MLIR-to-FX request and return dill-serialized response bytes."""
     response = FxEmitterResponse()
     try:
         trace, constraints, options, diagnostics = convert_mlir_to_trace(mlir_text)
@@ -1069,14 +1632,61 @@ if __name__ == "__main__":
             options=options,
             diagnostics=diagnostics,
         )
-        sys.stdout.buffer.write(dill.dumps(response))
-        sys.stdout.flush()
-        sys.exit(0)
     except Exception as e:
-        response.diagnostics.append(MLIRDiagnostic(message=str(e), severity="ERROR"))
+        response.diagnostics.append(WaterError(message=str(e)))
+    return dill_util.dumps(response)
+
+
+def _server_mode() -> None:
+    """Run as a persistent server, reading length-prefixed requests from stdin.
+
+    Instead of spawning a fresh process per request, the parent keeps this
+    process alive and sends multiple requests over the same stdin/stdout pipes.
+
+    Each request payload is a dill-serialized dict with an `"mlir"` key.
+    Each response payload is a dill-serialized `FxEmitterResponse`.
+
+    The loop exits when stdin is closed (EOF on the length header), i.e.
+    when the parent closes its end of the pipe.
+    """
+
+    while True:
         try:
-            sys.stdout.buffer.write(dill.dumps(response))
-            sys.stdout.flush()
-        finally:
-            sys.stderr.write(f"FATAL: fx_emitter failed: {e}\n")
-            sys.exit(1)
+            raw_request = recv_message(sys.stdin.buffer)
+        except EOFError:
+            break  # Parent closed stdin, clean shutdown.
+        except ConnectionError as e:
+            # The parent likely crashed mid-write. The response pipe is
+            # broken so we can't send a diagnostic back, stderr is
+            # best-effort.
+            print(f"WARNING: {e}", file=sys.stderr)
+            break
+
+        try:
+            request = dill_util.loads(raw_request)
+        except Exception as e:
+            response = FxEmitterResponse()
+            response.diagnostics.append(
+                WaterError(message=f"Failed to unpickle request: {e}")
+            )
+            send_message(sys.stdout.buffer, dill_util.dumps(response))
+            continue
+
+        mlir_text = request.get("mlir") if isinstance(request, dict) else None
+        if not isinstance(mlir_text, str):
+            response = FxEmitterResponse()
+            response.diagnostics.append(
+                WaterError(
+                    message=f"Expected 'mlir' string in request, got: {type(mlir_text)}"
+                )
+            )
+            send_message(sys.stdout.buffer, dill_util.dumps(response))
+            continue
+
+        response_data = _process_single_request(mlir_text)
+
+        send_message(sys.stdout.buffer, response_data)
+
+
+if __name__ == "__main__":
+    _server_mode()

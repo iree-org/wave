@@ -4,6 +4,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import math
+
 import torch
 from typing import Sequence, Optional
 
@@ -127,6 +129,118 @@ def get_gemm_kernel(
         del hyperparams[K]
 
     return gemm, hyperparams, dynamic_symbols
+
+
+def get_splitk_gemm_kernel(
+    shape: tuple[int, int, int],
+    num_splits: int,
+    mfma_variant: MMAType,
+    dtype: torch.dtype = torch.float16,
+    threads_per_wave: int = 64,
+    block_shape: Optional[tuple[int, int, int]] = None,
+    waves_per_block: Optional[tuple[int, int]] = None,
+):
+    """
+    Creates a split-K GEMM kernel that parallelizes the reduction (K) dimension
+    by splitting it across multiple workgroups. Each workgroup computes a partial
+    GEMM over its K-chunk and uses atomic_add to accumulate into the output.
+
+    The caller must zero-initialize the output tensor C before launch.
+
+    Args:
+        shape: (M, N, K) problem dimensions.
+        num_splits: Number of splits along the K dimension.
+        mfma_variant: MMA instruction type.
+        dtype: Input data type.
+        threads_per_wave: Threads per wave (64 for CDNA, 32 for RDNA4).
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        waves_per_block: (waves_M, waves_N) waves per workgroup.
+    """
+    if not block_shape:
+        block_shape = (64, 64, 32)
+
+    if not waves_per_block:
+        waves_per_block = (2, 2)
+
+    m, n, k = shape
+
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Split dimension
+    S = tkl.sym.S
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    BLOCK_S = tkl.sym.BLOCK_S
+    # Symbolic expressions for K split offset/length
+    K_SPLIT_OFF = tkl.sym.K_SPLIT_OFF
+    K_SPLIT_LEN = tkl.sym.K_SPLIT_LEN
+    # Address space
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    wave_dtype = torch_dtype_to_wave(dtype)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WorkgroupConstraint(S, BLOCK_S, 2),
+        tkw.TilingConstraint(
+            K,
+            BLOCK_K,
+            iters=sympy.ceiling(K_SPLIT_LEN / BLOCK_K),
+            start=K_SPLIT_OFF,
+        ),
+        tkw.WaveConstraint(M, sympy.floor(BLOCK_M / waves_per_block[0])),
+        tkw.WaveConstraint(N, sympy.floor(BLOCK_N / waves_per_block[1])),
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            vector_shapes={S: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def splitk_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, wave_dtype],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, wave_dtype],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.atomic_add(repeat, c)
+
+    k_per_split = math.ceil(k / num_splits)
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        BLOCK_S: 1,
+        M: m,
+        N: n,
+        K: k,
+        S: num_splits,
+        K_SPLIT_OFF: WORKGROUP_2 * k_per_split,
+        K_SPLIT_LEN: sympy.Min(K, (WORKGROUP_2 + 1) * k_per_split) - K_SPLIT_OFF,
+    }
+    # Simplify symbolic expressions by substituting concrete values.
+    for key, value in hyperparams.items():
+        if isinstance(value, sympy.Expr):
+            hyperparams[key] = value.subs(hyperparams)
+
+    hyperparams.update(get_default_scheduling_params())
+
+    return splitk_gemm, hyperparams
 
 
 def get_gemm_kernel_transpose_a_b(

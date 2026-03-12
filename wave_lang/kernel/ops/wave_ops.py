@@ -496,6 +496,21 @@ def define_op(op_name: str) -> Callable[[T], T]:
     return decorator
 
 
+def _register_dynamic_subclass(subclass: type, op_name: str, parent_cls: type) -> None:
+    """Set identity attributes and register a dynamically-created subclass.
+
+    Sets `__name__`, `__qualname__`, and `__module__` so that the class
+    can be found by module-level lookup and serialized/deserialized correctly
+    by `dill`.  Without `__qualname__`, `dill` treats the class as a
+    local/nested definition and fails to reconstruct it across processes.
+    """
+    pascal_name = op_name.replace("_", " ").title().replace(" ", "")
+    subclass.__name__ = pascal_name
+    subclass.__qualname__ = pascal_name
+    subclass.__module__ = parent_cls.__module__
+    setattr(sys.modules[subclass.__module__], pascal_name, subclass)
+
+
 def define_py_op(py_op: Callable) -> Callable[[T], T]:
     """
     Register python internal operators as custom ops.
@@ -512,10 +527,7 @@ def define_py_op(py_op: Callable) -> Callable[[T], T]:
             pass
 
         NewSubclass.tkw_op_name = op_name
-        NewSubclass.__name__ = f"{op_name.capitalize()}"
-        NewSubclass.__module__ = cls.__module__
-        current_module = sys.modules[cls.__module__]
-        setattr(current_module, NewSubclass.__name__, NewSubclass)
+        _register_dynamic_subclass(NewSubclass, op_name, cls)
 
         original_handler = None
         # Some py operator has trailing "_", which needs to be removed
@@ -569,11 +581,7 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
             pass
 
         NewSubclass.tkw_op_name = op_name
-        pascal_op_name = op_name.replace("_", " ").title().replace(" ", "")
-        NewSubclass.__name__ = f"{pascal_op_name}"
-        NewSubclass.__module__ = cls.__module__
-        current_module = sys.modules[NewSubclass.__module__]
-        setattr(current_module, NewSubclass.__name__, NewSubclass)
+        _register_dynamic_subclass(NewSubclass, op_name, cls)
         if cls.__name__ == NewSubclass.__name__:
             raise ValueError(
                 f'Subclass cannot have same name as base interface class{cls.__name__}. Did you mean to use"define_op" instead.'
@@ -591,6 +599,7 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
             return handler(*args, **kwargs)
 
         new_function.__name__ = op_name
+        current_module = sys.modules[cls.__module__]
         setattr(current_module, op_name, new_function)
         NewSubclass._tracing_function = new_function
         return cls
@@ -661,7 +670,7 @@ class CustomOp(ABC):
     """
     Base class for all custom fx nodes.
 
-    Fields with ``compare=False`` are infrastructure or scheduling artifacts
+    Fields with `compare=False` are infrastructure or scheduling artifacts
     and do not participate in semantic equality used for trace equivalence.
     """
 
@@ -1416,7 +1425,7 @@ class Output(CustomOp):
     traced function.
     """
 
-    return_vals: Sequence[Any]
+    return_vals: Sequence[Any] = field(compare=False)
     tkw_op_name: str = field(default="output", init=False)
 
     @classmethod
@@ -1441,6 +1450,14 @@ class Output(CustomOp):
         if loc is not None:
             self.fx_node.location = loc
         return self.fx_node
+
+    @property
+    def yielded_values(self) -> list[Any]:
+        """Yielded values as a list."""
+        inner = self.return_vals[0]
+        if not isinstance(inner, Sequence):
+            return [inner]
+        return list(inner)
 
     @property
     def has_side_effects(self) -> bool:
@@ -1775,6 +1792,10 @@ class AtomicOp(BinaryOpBase):
     @property
     def memory_type(self) -> "Memory":
         return get_custom(self.rhs).type
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("atomic_add")
@@ -2360,7 +2381,7 @@ class NestedRegionOp(CustomOp):
 
         output = get_custom(graph.output_node())
         assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
+        return output.yielded_values
 
     def infer_type(self, *args):
         if self.init_args is not None:
@@ -2460,16 +2481,7 @@ class Conditional(NestedRegionOp):
             subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
             return_node = get_custom(subgraph.output_node())
             assert isinstance(return_node, Output)
-            # return_vals is the output node's args tuple.
-            # return_vals[0] is either a single fx.Node (one return value) or
-            # a tuple of fx.Nodes (multiple return values)
-            return_vals = return_node.return_vals[0]
-            assert isinstance(
-                return_vals, (fx.Node, tuple)
-            ), f"Expected fx.Node or tuple of fx.Nodes, got {type(return_vals)}"
-            if not isinstance(return_vals, Sequence):
-                return_vals = [return_vals]
-            for return_val in return_vals:
+            for return_val in return_node.yielded_values:
                 return_dims = get_custom(return_val).indexing_dims
                 expand_dims.append(return_dims)
             if len(expand_dims) == 1:
@@ -2498,10 +2510,7 @@ class Iterate(NestedRegionOp):
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         return_node = get_custom(subgraph.output_node())
         assert isinstance(return_node, Output)
-        return_vals = return_node.return_vals[0]
-        if not isinstance(return_vals, Sequence):
-            return_vals = [return_vals]
-        for return_val in return_vals:
+        for return_val in return_node.yielded_values:
             return_dims = get_custom(return_val).indexing_dims
             reduced_dims = [dims for dims in return_dims if dims != self.axis]
             expand_dims.append(reduced_dims)
@@ -2521,11 +2530,8 @@ class Iterate(NestedRegionOp):
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         output = get_custom(subgraph.output_node())
         assert isinstance(output, Output)
-        return_vals = output.return_vals[0]
-        if not isinstance(return_vals, Sequence):
-            return_vals = [return_vals]
         result = []
-        for val in return_vals:
+        for val in output.yielded_values:
             custom_val = get_custom(val)
             if isinstance(custom_val, (MMA, ScaledMMA)):
                 idx = getattr(custom_val, "acc_index", None)
@@ -2703,7 +2709,7 @@ class DebugLog(CustomOp):
     The nested dictionaries have a `value` field with the log tensor, and other keys (eg. `symbolic_shape`).
 
     IE the debug_logs dictionary will look like:
-    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}``
+    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}`
 
     Note that the logs collected in the `debug_logs` field, or handled by `printer` or `handler` represent a global view of the log after all writes, not limited to any one wave or loop iteration.
 
@@ -2820,7 +2826,6 @@ class SetSymbol(CustomOp):
         return True
 
 
-@define_py_op(operator.getitem)
 @define_op("get_result")
 @dataclass
 class GetResult(CustomOp):
@@ -2880,6 +2885,23 @@ class GetResult(CustomOp):
         allocate = get_custom(iterate.init_args[self.res_idx])
         assert isinstance(allocate, Allocate)
         return allocate.distributed_shape
+
+
+# Override fx.Proxy.__getitem__ to route through the OpDispatcher so that
+# kernel tracing produces GetResult nodes directly (via handle_getitem
+# registered in wave.py) and schedule tracing produces schedule GetItem
+# nodes. We do this manually rather than using @define_py_op to avoid
+# creating a dynamic subclass that differs in type but not in semantics.
+#
+# NOTE: This unconditionally requires an active OpDispatcher.  If FX tracing
+# is ever used outside of a Wave kernel/schedule context (e.g. by third-party
+# code that also patches fx.Proxy), this override will need a fallback to the
+# original fx.Proxy.__getitem__.
+def _proxy_getitem_override(*args, **kwargs):
+    return OpDispatcher.current().handle_getitem(*args, **kwargs)
+
+
+fx.Proxy.__getitem__ = _proxy_getitem_override
 
 
 @define_op("extract")

@@ -145,17 +145,17 @@ def test_gather_to_shared_wave_tile_aligned_coalescing():
     print(gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared_wave_tile_aligned_coalescing
-    # CHECK-DAG:      #[[MAP1:.+]] = affine_map<()[s0, s1] -> (s0 * 16 + s1 * 2 - (s1 floordiv 8) * 16)>
+    # CHECK-DAG:      #[[MAP1:.+]] = affine_map<()[s0] -> (s0 * 2 - (s0 floordiv 8) * 16)>
     # CHECK-DAG:      #[[MAP2:.+]] = affine_map<()[s0, s1, s2] -> (s1 * 16 + s2 * 32 + (s0 floordiv 64) * 8 + (s0 mod 64) floordiv 8 - ((s1 * 16 + (s0 floordiv 64) * 8 + (s0 mod 64) floordiv 8) floordiv 32) * 32)>
     # CHECK:          func.func @gemm
-    # CHECK:            %[[BLOCK_ID_Y:.+]] = gpu.block_id  y
     # CHECK:            %[[TIDX:.+]] = gpu.thread_id  x
     # CHECK:            %[[TIDY:.+]] = gpu.thread_id  y
-    # CHECK:            %[[WAVE_ALIGNED_OFFSET:.+]] = affine.apply #[[MAP2]]()[%[[TIDX]], %[[TIDY]], %[[BLOCK_ID_Y]]]
+    # CHECK:            affine.apply #[[MAP2]]()[%[[TIDX]], %[[TIDY]], %{{.*}}]
+    # CHECK:            %[[TH_OFFSET:.+]] = affine.apply #[[MAP1]]()[%[[TIDX]]]
     # CHECK:            scf.for %[[IND_VAR:.+]] = %c0
     # CHECK:              amdgpu.lds_barrier
-    # CHECK:              %[[UPDATE_OFFSET:.+]] = affine.apply #[[MAP1]]()[%[[IND_VAR]], %[[TIDX]]]
-    # CHECK:              %[[LHS:.+]] = arith.addi %{{.*}}, %[[UPDATE_OFFSET]]
+    # CHECK:              %[[K_STRIDE:.+]] = arith.muli %[[IND_VAR]], %{{.*}}
+    # CHECK:              %[[LHS:.+]] = arith.addi %{{.*}}, %[[K_STRIDE]]
 
 
 @run_test

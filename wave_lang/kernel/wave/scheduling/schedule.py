@@ -214,12 +214,14 @@ def build_guarded_pipeline_with_remainder(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
+    eliminate_epilogue: bool = False,
 ):
     """
     Build conditional + pipelined loop + remainder loop for dynamic shapes.
 
     Structure:
-        if (max_induction_variable >= num_stages):
+        if (max_induction_variable >= num_stages + unroll_factor - 1):
             pipelined_result = pipelined_loop_with_prologue_epilogue()
         else:
             pipelined_result = init_values
@@ -232,16 +234,24 @@ def build_guarded_pipeline_with_remainder(
     original_init_args = reduction.init_args
     main_graph = reduction.graph
 
-    # Create condition: max_induction_variable >= num_stages
+    if unroll_factor < 1:
+        raise ValueError(f"Expected unroll_factor >= 1, got {unroll_factor}")
+
+    from math import lcm
+
+    rounding_stride = lcm(num_stages, unroll_factor)
+
+    # Need at least rounding_stride iterations so the rounded-down
+    # pipelined_iterations is non-zero.
     with main_graph.inserting_before(reduction.fx_node):
-        num_stages_scalar = get_graph_node(
-            NewScalar(num_stages, tkl.i32), main_graph, reduction.location
+        min_iters_scalar = get_graph_node(
+            NewScalar(rounding_stride, tkl.i32), main_graph, reduction.location
         )
         num_iters_scalar = get_graph_node(
             NewScalar(max_induction_variable, tkl.i32), main_graph, reduction.location
         )
         condition = get_graph_node(
-            Ge(num_iters_scalar, num_stages_scalar), main_graph, reduction.location
+            Ge(num_iters_scalar, min_iters_scalar), main_graph, reduction.location
         )
 
     # Prepare conditional subgraph
@@ -257,14 +267,35 @@ def build_guarded_pipeline_with_remainder(
         )
     )
 
-    # Compute the number of iterations the pipelined loop should process:
-    # This ensures the pipelined loop only processes complete pipeline stages
-    if isinstance(max_induction_variable, (int, float)):
-        pipelined_iterations = (int(max_induction_variable) // num_stages) * num_stages
-    else:
-        pipelined_iterations = (max_induction_variable // num_stages) * num_stages
+    # Round pipelined_iterations to a multiple of lcm(num_stages, unroll_factor).
+    # This ensures complete pipeline stages (multiple of num_stages) and that
+    # the kernel count (pipelined_iterations - (num_stages - 1)) is divisible
+    # by unroll_factor, preventing the unrolled scf.for from executing extra
+    # iterations that read invalid pipeline state.
+    from math import lcm
 
-    conditional_body_graph, _ = graph_copy(reduction_graph)
+    rounding_stride = lcm(num_stages, unroll_factor)
+    if isinstance(max_induction_variable, (int, float)):
+        pipelined_iterations = (
+            int(max_induction_variable) // rounding_stride
+        ) * rounding_stride
+    else:
+        pipelined_iterations = (
+            max_induction_variable // rounding_stride
+        ) * rounding_stride
+
+    # When the pipeline guard is false (max_iv < rounding_stride),
+    # the conditional returns init values and the remainder loop must start
+    # from 0 rather than pipelined_iterations.
+    remainder_start = sympy.Piecewise(
+        (
+            pipelined_iterations,
+            sympy.Ge(max_induction_variable, rounding_stride),
+        ),
+        (0, True),
+    )
+
+    conditional_body_graph, body_old_to_new = graph_copy(reduction_graph)
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
     placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
 
@@ -312,15 +343,27 @@ def build_guarded_pipeline_with_remainder(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
+    # node_mapping keys are from the copied body graph. Translate them back
+    # to the original reduction_graph nodes so that
+    # _update_kernel_node_mapping can match tracked lists by identity.
+    new_to_old = {v: k for k, v in body_old_to_new.items()}
+    node_mapping = {new_to_old.get(k, k): v for k, v in node_mapping.items()}
+
     # Set the count for the pipelined loop
-    # With step > 1 (e.g., from unrolling), we need to reduce the count by more
-    # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
-    # data for the "next" iteration (offset by step), so we need to ensure
-    # that stays within bounds.
     step = get_custom(pipelined_node).step
-    get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1) * step
+    if eliminate_epilogue:
+        get_custom(pipelined_node).count = pipelined_iterations
+    else:
+        # With step > 1 (e.g., from unrolling), we need to reduce the count by more
+        # to prevent out-of-bounds access. The last kernel iteration's stage 0 loads
+        # data for the "next" iteration (offset by step), so we need to ensure
+        # that stays within bounds.
+        get_custom(pipelined_node).count = (
+            pipelined_iterations - (num_stages - 1) * step
+        )
 
     # Verify we have the right number of results
     assert len(final_results) == len(
@@ -370,11 +413,11 @@ def build_guarded_pipeline_with_remainder(
     main_graph.subgraphs[remainder_subgraph_name] = remainder_graph
     trace.region_graph.subgraphs[remainder_subgraph_name] = remainder_graph
 
-    # Create a scalar node for the starting iteration (where pipelined loop ended)
-    # This will be pipelined_iterations
+    # Create a scalar node for the starting iteration.
+    # When the pipeline ran, this is pipelined_iterations; otherwise 0.
     with main_graph.inserting_before(reduction.fx_node):
         start_iter = get_graph_node(
-            NewScalar(pipelined_iterations, tkl.index), main_graph, reduction.location
+            NewScalar(remainder_start, tkl.index), main_graph, reduction.location
         )
 
         remainder_reduction = Iterate(
@@ -414,12 +457,14 @@ def construct_pipelined_loop_adaptive(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
+    eliminate_epilogue: bool = False,
 ):
     """
     Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
 
     Structure:
-        if (num_iterations >= num_stages):
+        if (num_iterations >= num_stages + unroll_factor - 1):
             prologue
             pipelined_loop
             epilogue
@@ -427,6 +472,12 @@ def construct_pipelined_loop_adaptive(
         else:
             return (0, init_values...)
         remainder_loop(start=iterations_done, end=total_iterations)
+
+    When eliminate_epilogue=True, the epilogue is not generated and the loop
+    runs for the full trip count. Out-of-bounds loads in the extra iterations
+    must return zero (guaranteed by buffer_load on GFX950). This trades wasted
+    prefetch work in the last (num_stages-1) iterations for eliminating all
+    epilogue code (MFMAs, loads, bitcasts).
     """
     # Check if we have a dynamic shape (max_induction_variable is symbolic)
     is_dynamic = not (
@@ -450,12 +501,16 @@ def construct_pipelined_loop_adaptive(
             visualize,
             use_scheduling_barriers,
             multi_buffer_count,
+            eliminate_epilogue=eliminate_epilogue,
         )
         if new_reduction:
             step = get_custom(new_reduction).step
-            get_custom(new_reduction).count = (
-                max_induction_variable - (num_stages - 1) * step
-            )
+            if eliminate_epilogue:
+                get_custom(new_reduction).count = max_induction_variable
+            else:
+                get_custom(new_reduction).count = (
+                    max_induction_variable - (num_stages - 1) * step
+                )
         return new_reduction, node_mapping
 
     # For dynamic shapes, emit conditional + pipelined loop + remainder loop
@@ -471,6 +526,8 @@ def construct_pipelined_loop_adaptive(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
 
@@ -485,6 +542,8 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
+    unroll_factor: int = 1,
+    eliminate_epilogue: bool = False,
 ) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
@@ -519,6 +578,8 @@ def apply_pipelined_schedule(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
+        unroll_factor,
+        eliminate_epilogue=eliminate_epilogue,
     )
 
 

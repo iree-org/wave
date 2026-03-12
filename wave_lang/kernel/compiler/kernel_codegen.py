@@ -47,7 +47,14 @@ from ..lang.kernel_buffer import (
     is_kernel_buffer_meta_derived,
 )
 from ..lang.wave_types import Memory, SymbolBind
-from ..ops.wave_ops import NestedRegionOp, Placeholder, Read, Write, get_custom
+from ..ops.wave_ops import (
+    AtomicOp,
+    NestedRegionOp,
+    Placeholder,
+    Read,
+    Write,
+    get_custom,
+)
 from .base import (
     CodegenError,
 )
@@ -55,6 +62,20 @@ from .builder import (
     ModuleBuilder,
 )
 from .utils import strides_from_symbolic_shape
+
+
+def get_dynamic_stride_arg_count(
+    dynamic_strides: bool, buffer_bindings: list["BindingDesc"]
+) -> int:
+    """
+    Number of stride arguments when using dynamic strides (leading dims only; innermost is unit stride).
+    Returns 0 when dynamic_strides is False.
+    """
+    if not dynamic_strides:
+        return 0
+    return sum(
+        max(0, len(b.kernel_buffer_type.symbolic_shape) - 1) for b in buffer_bindings
+    )
 
 
 def create_argument_locations(bindings: list["BindingDesc"]) -> list[Location]:
@@ -411,7 +432,10 @@ class KernelSignature:
             if len(node.users) == 0:
                 return False
             return any(
-                [isinstance(get_custom(x), Write) for x in get_users_recursive(node)]
+                [
+                    isinstance(get_custom(x), (Write, AtomicOp))
+                    for x in get_users_recursive(node)
+                ]
             )
 
         for node in placeholder_nodes:

@@ -61,9 +61,14 @@ def safe_subs(
     """
     Substitute input using provided `subs` list if input is sympy object.
     Otherwise return input unchanged.
+
+    Uses Piecewise-aware substitution to avoid sympy's expensive recursive
+    boolean simplification on Piecewise nodes.
     """
-    if isinstance(input, (sympy.Basic, IndexSequence)):
-        return input.subs(subs, simultaneous=simultaneous)  # type: ignore
+    if isinstance(input, IndexSequence):
+        return input.subs(subs, simultaneous=simultaneous)
+    if isinstance(input, sympy.Basic):
+        return piecewise_aware_subs(input, subs, simultaneous=simultaneous)
 
     return input
 

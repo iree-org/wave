@@ -3,6 +3,8 @@ alwaysApply: true
 ---
 
 Prefer LLVM data structures to STL ones, you can find the definitions of these in the llvm-project (cmake dependency) path llvm/include/ADT and llvm/include/Support. There is also documentation available for them in llvm/docs/ProgrammersManual.rst.
+Binaries built by cmake are located under water/build/bin.
+If not found, FileCheck is usually located in llvm-project (cmake dependency) path build/bin/FileCheck.
 Only use `auto` if the right-hand side of the statement is a cast a constructor or a static get function, or for iterator types; spell out the full type otherwise.
 Never use an integer literal in SmallVector template parameters.
 Always pass instances of Attribute, Type, Value and derived classes by value, they are designed to be copied cheaply.

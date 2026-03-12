@@ -14,6 +14,7 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
+    get_splitk_gemm_kernel,
     get_streamk_gemm_kernel,
 )
 
@@ -110,11 +111,11 @@ def test_gemm():
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -282,14 +283,92 @@ def test_reordered_gemm():
     # CHECK-DAG:        #[[MAP_IDX_N:.+]] = affine_map<()[s0, s1, s2, s3] -> (s1 * 32 + s2 * 64 + s0 floordiv 4 - ((s1 * 32 + s0 floordiv 4) floordiv 64) * 64 + ((s2 + s3 * 8) floordiv 32) * 256 - (s2 floordiv 4) * 256)>
     # CHECK-DAG:        %[[IDX_M_READ:.+]] = affine.apply #[[MAP_IDX_M]]()[%thread_id_x, %thread_id_y, %block_id_y, %block_id_x]
     # CHECK-DAG:        %[[IDX_N_READ:.+]] = affine.apply #[[MAP_IDX_N]]()[%thread_id_x, %thread_id_y, %block_id_x, %block_id_y]
-    # CHECK-DAG:        vector.load {{.*}}[%[[IDX_M_READ]], {{.*}}]
-    # CHECK-DAG:        vector.load {{.*}}[%[[IDX_N_READ]], {{.*}}]
-    # CHECK-DAG:        #[[MAP_IDX_M_WRITE:.+]] = affine_map<()[s0, s1, s2] -> ((((s0 * 8 + s1) mod 32) floordiv 4) * 64 + (s2 floordiv 64) * 32 + ((s2 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #[[MAP_IDX_N_WRITE:.+]] = affine_map<()[s0, s1, s2, s3] -> (s0 + s1 * 64 + s3 * 32 - (s0 floordiv 16) * 16 + ((s1 + s2 * 8) floordiv 32) * 256 - (s1 floordiv 4) * 256)>
+    # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
+    # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            amdgpu.mfma
-    # CHECK:            %[[IDX_M_WRITE:.+]] = affine.apply #[[MAP_IDX_M_WRITE]]()[%block_id_y, %block_id_x, %thread_id_x]
-    # CHECK:            %[[IDX_N_WRITE:.+]] = affine.apply #[[MAP_IDX_N_WRITE]]()[%thread_id_x, %block_id_x, %block_id_y, %thread_id_y]
-    # CHECK:            vector.store {{.*}}[%[[IDX_M_WRITE]], %[[IDX_N_WRITE]]]
+    # CHECK:            vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
+
+
+@run_test
+def test_reordered_gemm_dynamic():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    wg0, wg1 = WORKGROUP_0, WORKGROUP_1
+    num_wg_0 = ceiling(M / BLOCK_M)
+
+    flat_wg_index = wg1 * num_wg_0 + wg0
+    num_wg_group = GROUP_SIZE_N * num_wg_0
+    group_id = flat_wg_index // num_wg_group
+    first_wg_id_1 = group_id * GROUP_SIZE_N
+    new_wg0 = (flat_wg_index % num_wg_group) // GROUP_SIZE_N
+    new_wg1 = first_wg_id_1 + (flat_wg_index % num_wg_group) % GROUP_SIZE_N
+
+    constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
+    constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            GROUP_SIZE_N: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        dynamic_symbols=(M, N, K),
+        compile_to_mlir=True,
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # With dynamic shapes + workgroup reordering, _split_index must allow
+    # dynamic symbols (M, N, K) in the thread-independent part so the wg
+    # offset is computed via reinterpret_cast rather than folded into the
+    # store index.  The key check is that the output reinterpret_cast keeps
+    # 2D shape [%arg3, %arg4] (not linearized 1D) and stores use separate
+    # row/col indices via affine.apply maps that reference both block_ids
+    # and the dynamic M symbol (ceildiv 64).
+
+    # CHECK-LABEL:    test_reordered_gemm_dynamic
+    # CHECK-DAG:        #[[STORE_ROW:.+]] = affine_map<()[s0, s1, s2, s3] -> {{.*}}s0 ceildiv 64{{.*}}>
+    # CHECK-DAG:        #[[STORE_COL:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> {{.*}}s3 ceildiv 64{{.*}}>
+    # CHECK:          func.func @gemm
+    # CHECK-SAME:       %arg3: index, %arg4: index, %arg5: index
+    # CHECK:            %[[C_REINTERPRET:.+]] = memref.reinterpret_cast {{.*}} to offset: [0], sizes: [%arg3, %arg4], strides: [%arg4, 1] : memref<f32> to memref<?x?xf32, strided<[?, 1]>>
+    # CHECK:            amdgpu.mfma
+    # CHECK:            %[[STORE_ROW_IDX:.+]] = affine.apply #[[STORE_ROW]]()[%arg3, %block_id_y, %block_id_x, %thread_id_x]
+    # CHECK:            %[[STORE_COL_IDX:.+]] = affine.apply #[[STORE_COL]]()[%thread_id_x, %block_id_x, %block_id_y, %arg3, %thread_id_y]
+    # CHECK:            vector.maskedstore %[[C_REINTERPRET]][%[[STORE_ROW_IDX]], %[[STORE_COL_IDX]]], {{.*}} : memref<?x?xf32, strided<[?, 1]>>
 
 
 @run_test
@@ -347,7 +426,6 @@ def test_gemm_small_tile_size():
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[A:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [64, 64], strides: [64, 1] : memref<f16> to memref<64x64xf16, strided<[64, 1]>>
     # CHECK-DAG:        %[[B:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [128, 64], strides: [64, 1] : memref<f16> to memref<128x64xf16, strided<[64, 1]>>
-    # CHECK-DAG:        %[[C:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [64, 128], strides: [128, 1] : memref<f32> to memref<64x128xf32, strided<[128, 1]>>
     # CHECK:            %[[ALLOC:.*]] = memref.alloc()
     # CHECK:            %[[VIEW0:.*]] = memref.view %[[ALLOC]]
     # CHECK:            %[[VIEW1:.*]] = memref.view %[[ALLOC]]
@@ -362,7 +440,7 @@ def test_gemm_small_tile_size():
     # CHECK:              vector.maskedload %[[VIEW0]]
     # CHECK:              vector.maskedload %[[VIEW1]]
     # CHECK:              amdgpu.mfma
-    # CHECK-COUNT-4:    vector.maskedstore %[[C]]
+    # CHECK-COUNT-4:    vector.maskedstore
 
 
 @run_test
@@ -486,11 +564,11 @@ def test_cdna2_int_gemm():
     # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C768:.+]] = arith.constant 768 : index
     # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0> : vector<4xi32>
-    # CHECK-DAG:        %[[GLOBAL_0:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [64, 64], strides: [64, 1] : memref<i8> to memref<64x64xi8, strided<[64, 1]>>
-    # CHECK-DAG:        %[[GLOBAL_1:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [128, 64], strides: [64, 1] : memref<i8> to memref<128x64xi8, strided<[64, 1]>>
     # CHECK:            %[[BASE_ALLOC:.+]] = memref.alloc() : memref<1536xi8, #gpu.address_space<workgroup>>
     # CHECK:            %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]]
     # CHECK:            %[[ALLOC_1:.+]] = memref.view %[[BASE_ALLOC]][%[[C768]]]
+    # CHECK:            %[[GLOBAL_0:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<i8> to memref<{{.*}}>
+    # CHECK:            %[[GLOBAL_1:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<i8> to memref<{{.*}}>
     # CHECK:            scf.for %[[IVAR:.+]] = %[[C0]] to %[[C4]] step %[[C1]] iter_args(%[[ACC:.+]] = %[[CST]]) -> (vector<4xi32>) {
     # CHECK:                %[[REG_0:.+]] = vector.load %[[GLOBAL_0]]
     # CHECK:                vector.store %[[REG_0]], %[[ALLOC_1]]
@@ -560,11 +638,11 @@ def test_cdna3_int_gemm():
     # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C1280:.+]] = arith.constant 1280 : index
     # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0> : vector<4xi32>
-    # CHECK-DAG:        %[[GLOBAL_0:.+]] = memref.reinterpret_cast %0 to offset: [0], sizes: [64, 64], strides: [64, 1] : memref<i8> to memref<64x64xi8, strided<[64, 1]>>
-    # CHECK-DAG:        %[[GLOBAL_1:.+]] = memref.reinterpret_cast %1 to offset: [0], sizes: [128, 64], strides: [64, 1] : memref<i8> to memref<128x64xi8, strided<[64, 1]>>
     # CHECK:            %[[BASE_ALLOC:.+]] = memref.alloc() : memref<2560xi8, #gpu.address_space<workgroup>>
     # CHECK:            %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]]
     # CHECK:            %[[ALLOC_1:.+]] = memref.view %[[BASE_ALLOC]][%[[C1280]]]
+    # CHECK:            %[[GLOBAL_0:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<i8> to memref<{{.*}}>
+    # CHECK:            %[[GLOBAL_1:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<i8> to memref<{{.*}}>
     # CHECK:            scf.for %[[IVAR:.+]] = %[[C0]] to %[[C2]] step %[[C1]] iter_args(%[[ACC:.+]] = %[[CST]]) -> (vector<4xi32>) {
     # CHECK:                %[[REG_0:.+]] = vector.load %[[GLOBAL_0]]
     # CHECK:                vector.store %[[REG_0]], %[[ALLOC_1]]
@@ -647,7 +725,6 @@ def test_packed_gemm():
     # %[[IV_K:.+]] = affine.apply #[[MAP_IV_K]]()[%[[IV]], %[[TID_X]]]
 
     # CHECK-LABEL:    test_packed_gemm
-    # CHECK-DAG:      #[[MAP_IV_K:.+]] = affine_map<()[s0, s1] -> (s0 * 8 + ((s1 mod 64) floordiv 16) * 2)>
     # CHECK:          func.func @packed_gemm
     # CHECK-DAG:        %[[C1:.+]] = arith.constant 1 : index
     # CHECK-DAG:        %[[C4:.+]] = arith.constant 4 : index
@@ -657,11 +734,10 @@ def test_packed_gemm():
     # CHECK:            %[[RHS_SHARED:.+]] = memref.view %[[ALLOC]][%c0][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x10xi32, #gpu.address_space<workgroup>>
     # CHECK:            %[[LHS_SHARED:.+]] = memref.view %[[ALLOC]][%c1280][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x10xi32, #gpu.address_space<workgroup>>
     # CHECK:            scf.for %[[IV:.+]] = %[[C0]] to %[[C4]] step %[[C1]]
-    # CHECK:              %[[IV_K:.+]] = affine.apply #[[MAP_IV_K]]()[%[[IV]], %[[TID_X]]]
-    # CHECK:              %[[LHS_REG:.+]] = vector.load %{{.*}}[%{{.*}}, %[[IV_K]]] : memref<64x32xi32, strided<[32, 1]>>, vector<2xi32>
+    # CHECK:              %[[LHS_REG:.+]] = vector.load {{.*}} : memref<{{.*}}>, vector<2xi32>
     # CHECK:              amdgpu.lds_barrier
     # CHECK:              vector.store %[[LHS_REG]], %[[LHS_SHARED]]
-    # CHECK:              %[[RHS_REG:.+]] = vector.load  %{{.*}}[%{{.*}}, %[[IV_K]]] : memref<128x32xi32, strided<[32, 1]>>, vector<2xi32>
+    # CHECK:              %[[RHS_REG:.+]] = vector.load {{.*}} : memref<{{.*}}>, vector<2xi32>
     # CHECK:              vector.store %[[RHS_REG]], %[[RHS_SHARED]]
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load {{.*}} : {{.*}}, vector<2xi32>
@@ -731,11 +807,11 @@ def test_batched_gemm():
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 + s1 * 32 + s2 * 16 - (s0 floordiv 16) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 1)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 2)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32 + (s1 floordiv 64) * 16 + ((s1 mod 64) floordiv 16) * 4 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:          func.func @batched_gemm
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
@@ -1263,11 +1339,11 @@ def test_gemm_prefetch():
     # CHECK:          scf.for
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # Steady State Local Read
-    # CHECK-COUNT-4:    vector.load %[[ALLOC_0]]
-    # CHECK-COUNT-4:    vector.load %[[ALLOC_1]]
+    # CHECK-COUNT-4:    vector.load %[[VIEW_0]]
+    # CHECK-COUNT-4:    vector.load %[[VIEW_1]]
 
     # Steady State Global Read
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK-COUNT-2:    rocdl.sched.group.barrier
 
     # Compute
@@ -1280,8 +1356,8 @@ def test_gemm_prefetch():
     # CHECK:          scf.yield
 
     # Prologue
-    # CHECK-COUNT-4:  vector.load %[[ALLOC_0]]
-    # CHECK-COUNT-4:  vector.load %[[ALLOC_1]]
+    # CHECK-COUNT-4:  vector.load %[[VIEW_0]]
+    # CHECK-COUNT-4:  vector.load %[[VIEW_1]]
     # CHECK-COUNT-8:  amdgpu.mfma
 
 
@@ -1658,7 +1734,7 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
@@ -1669,7 +1745,7 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
-    # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<{{.*}}>, vector<8xf16>
     # CHECK:            rocdl.s.barrier
     # CHECK:            rocdl.sched.barrier
 
@@ -2216,12 +2292,12 @@ def test_broadcast_batched_gemm_with_vmma():
     # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION:.+]]} {
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[WG_ID2:.*]] = gpu.block_id z
-    # CHECK:            %[[LHS_GLOBAL:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1, 64, 64], strides: [4096, 64, 1] : memref<f16> to memref<1x64x64xf16, strided<[4096, 64, 1]>>
-    # CHECK:            %[[RHS_GLOBAL:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [6, 128, 64], strides: [8192, 64, 1] : memref<f16> to memref<6x128x64xf16, strided<[8192, 64, 1]>>
     # CHECK:            %[[HKV_IDX:.+]] = affine.apply #[[MAP]]()[%[[WG_ID2]]]
+    # CHECK:            %[[GLOBAL_LHS:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<f16> to memref<{{.*}}>
+    # CHECK:            %[[GLOBAL_RHS:.+]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [{{.*}}], strides: [{{.*}}] : memref<f16> to memref<{{.*}}>
     # CHECK:            scf.for
-    # CHECK:             %[[LHS_READ:.+]] = vector.load %[[LHS_GLOBAL]][%[[HKV_IDX]], %{{.+}}, {{.+}}] : {{.*}}, vector<8xf16>
-    # CHECK:             %[[RHS_READ:.+]] = vector.load %[[RHS_GLOBAL]][%[[WG_ID2]], %{{.+}}, {{.+}}] : {{.*}}, vector<8xf16>
+    # CHECK:             %[[LHS_READ:.+]] = vector.load %[[GLOBAL_LHS]]
+    # CHECK:             %[[RHS_READ:.+]] = vector.load %[[GLOBAL_RHS]]
     # CHECK-COUNT-2:     vector.extract_strided_slice
     # CHECK-COUNT-1:     amdgpu.mfma
     # CHECK-COUNT-2:     vector.extract_strided_slice
@@ -2287,11 +2363,8 @@ def test_batched_gemm_with_permute():
     # Verify that the batch dimension `B = WG` is in it's correct location after
     # the permtue, ie: `[M, B, N]` instead of `[B, M, N]`.
     # CHECK-LABEL:    func.func @batched_gemm_with_permute
-    # CHECK: %[[WG:.*]] = gpu.block_id z
-    # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
-    # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
-    # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
-    # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
+    # CHECK: gpu.block_id z
+    # CHECK-COUNT-4: vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
 
 @run_test
@@ -2387,20 +2460,17 @@ def test_explicit_shared_gemm():
     # CHECK-LABEL:    test_explicit_shared_gemm
     # CHECK:          func.func @gemm
     # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
-    # CHECK-DAG:        %[[GLOBAL_A:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [64, 64], strides: [64, 1] : memref<f16> to memref<64x64xf16{{.*}}>
-    # CHECK-DAG:        %[[GLOBAL_B:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [128, 64], strides: [64, 1] : memref<f16> to memref<128x64xf16{{.*}}>
-    # CHECK-DAG:        %[[GLOBAL_C:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [64, 128], strides: [128, 1] : memref<f32> to memref<64x128xf32{{.*}}>
     # Verify explicit shared memory allocations (two separate allocs)
     # CHECK:            %[[ALLOC_A:.+]] = memref.alloc() : memref<{{.*}}xf16, #gpu.address_space<workgroup>>
     # CHECK:            %[[ALLOC_B:.+]] = memref.alloc() : memref<{{.*}}xf16, #gpu.address_space<workgroup>>
     # CHECK:            scf.for
     # Verify load from global memory (A)
-    # CHECK:              vector.load %[[GLOBAL_A]]
+    # CHECK:              vector.load {{.*}} : memref<{{.*}}>, vector<{{.*}}>
     # Verify barrier before shared memory writes
     # CHECK:              amdgpu.lds_barrier
     # Verify write to shared memory
     # CHECK:              vector.store %{{.*}}, %[[ALLOC_A]]
-    # CHECK:              vector.load %[[GLOBAL_B]]
+    # CHECK:              vector.load {{.*}} : memref<{{.*}}>, vector<{{.*}}>
     # CHECK:              vector.store %{{.*}}, %[[ALLOC_B]]
     # Verify barrier before shared memory reads
     # CHECK:              amdgpu.lds_barrier
@@ -2409,8 +2479,8 @@ def test_explicit_shared_gemm():
     # CHECK:              vector.load %[[ALLOC_B]]
     # Verify MMA operation
     # CHECK:              amdgpu.mfma
-    # Verify write to global memory (outside loop)
-    # CHECK:            vector.store %{{.*}}, %[[GLOBAL_C]]
+    # Verify write to global memory (outside loop, linearized)
+    # CHECK:            vector.store {{.*}} : memref<{{.*}}xf32{{.*}}>, vector<1xf32>
 
 
 @run_test
@@ -2492,3 +2562,28 @@ def test_streamk_gemm():
     # CHECK:           llvm.store volatile %{{.+}}, %{{.+}} : vector<1xf32>, !llvm.ptr
 
     # CHECK:           llvm.load volatile %{{.+}} : !llvm.ptr -> vector<1xf32>
+
+
+@run_test
+def test_splitk_gemm():
+    splitk_gemm, hyperparams = get_splitk_gemm_kernel(
+        shape=(256, 256, 256),
+        num_splits=4,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        block_shape=(64, 64, 32),
+        waves_per_block=(2, 2),
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    splitk_gemm = wave_compile(options, splitk_gemm)
+    print(splitk_gemm.asm)
+
+    # CHECK-LABEL:    test_splitk_gemm
+    # CHECK:          func.func @splitk_gemm
+    # CHECK:            scf.for
+    # CHECK:              amdgpu.mfma
+    # CHECK:            memref.atomic_rmw addf

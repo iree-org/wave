@@ -2,6 +2,7 @@
 # RUN: python %s | FileCheck %s
 
 
+import atexit
 import sympy
 from typing import Any
 
@@ -15,8 +16,8 @@ from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
-    emit_wave_dialect,
     format_diagnostics,
+    PersistentEmitter,
 )
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
@@ -24,6 +25,9 @@ from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
 )
+
+emitter = PersistentEmitter()
+atexit.register(emitter.close)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -98,7 +102,7 @@ def mlir_converter_location():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False))
@@ -110,9 +114,9 @@ def mlir_converter_location():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_location
-    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":47
+    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":51
     # CHECK: module
-    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":47{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":47{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":47
+    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":51{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":51{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":51
 
     # CHECK: wave.read
     # CHECK-SAME: loc(#loc1)
@@ -131,10 +135,10 @@ def mlir_converter_location():
     # CHECK: loc(#loc)
     # CHECK: loc(#loc)
 
-    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":58
-    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":59
-    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":62
-    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":65
+    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":62
+    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":63
+    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":66
+    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":69
 
 
 @run_test
@@ -213,7 +217,7 @@ def mlir_converter_location_iterate():
     constraints = matmul.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False))
@@ -225,13 +229,12 @@ def mlir_converter_location_iterate():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_location_iterate
-    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":166
-    # CHECK: #loc5 = loc("{{.*}}mlir_converter_debug_locations.py":183
+    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":170
     # CHECK: module
     # CHECK: func.func @kernel
 
     # CHECK: wave.iterate
-    # CHECK: %arg3: !wave.tensor<[@M, @N] of f32, <register>> loc("{{.*}}mlir_converter_debug_locations.py":183
+    # CHECK: %arg3: !wave.tensor<[@M, @N] of f32, <register>> loc("{{.*}}mlir_converter_debug_locations.py":176
 
     # CHECK:        wave.read
     # CHECK-SAME:   loc(#loc3)
@@ -265,8 +268,8 @@ def mlir_converter_location_iterate():
 
     # CHECK: (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> loc(#loc4)
 
-    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":181
-    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":172
-    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":179
-    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":176
-    # CHECK: #loc6 = loc("{{.*}}mlir_converter_debug_locations.py":187
+    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":185
+    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":183
+    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":180
+    # CHECK: #loc5 = loc("{{.*}}mlir_converter_debug_locations.py":187
+    # CHECK: #loc6 = loc("{{.*}}mlir_converter_debug_locations.py":191

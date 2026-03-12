@@ -39,6 +39,114 @@ func.func @propagate_register_write(%mem: !wave.tensor<[@M] of f16, <global>>) a
 
 // -----
 
+// Register per thread is the non-unit second element of the index map,
+// propagate that in absence of explicit elements_per_thread.
+//
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @propagate_register_write_index_expr
+func.func @propagate_register_write_index_expr(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
+  wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+func.func @propagate_register_write_index_expr_conflict(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  %cst = arith.constant 0.0 : f16
+  %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4)}}
+  wave.write %reg, %mem { elements_per_thread = 8 }
+     : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+  return
+}
+}
+
+// -----
+
+// Check the error message during initialization from index expressions. In MMAs, unlike many other ops,
+// we have index expressions associated with operands and not only results. This means that the
+// initialization process may have assigned an EPT value to an operand when initializing dataflow for
+// its defining operation, making it the only scenario in which the conflict error may be seen
+// during initialization and not at some later point.
+normalform.module [#wave.normal_form<full_types>] {
+func.func @mma_operands_from_reads(
+    %mem_a: !wave.tensor<[@M, @K] of f16, <global>>,
+    %mem_b: !wave.tensor<[@N, @K] of f16, <global>>,
+    %mem_c: !wave.tensor<[@M, @N] of f32, <global>>,
+    %out: !wave.tensor<[@M, @N] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, K = 32}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+
+  %a = wave.read %mem_a { elements_per_thread = 8 } : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
+  %b = wave.read %mem_b { elements_per_thread = 8 } : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
+  %c = wave.read %mem_c { elements_per_thread = 8 } : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  // expected-error @below {{failed to propagate elements per thread forward during initialization: mismatch between index expression (1) and rhs #0 (8)}}
+  %result = wave.mma %a, %b, %c index [
+    {M : <[] -> (<NULL>, 8, <NULL>)>, K : <[] -> (<NULL>, 1, <NULL>)>},
+    {K : <[] -> (<NULL>, 1, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
+    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
+    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>}
+  ] {kind =  #wave.mma_kind<f32_16x16x16_f16> } : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  wave.write %result, %out { elements_per_thread = 8 } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+  return
+}
+}
+
+// -----
+
+// Null hyperparameters: step uses a symbol so it cannot be evaluated; pass must
+// not crash and should report that EPT could not be identified.
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @null_hyperparams_symbol_step(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{couldn't identify elements per thread for result #0}}
+    %reg = wave.register %cst index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+    wave.write %reg, %mem index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}]
+      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Null hyperparameters but constant step: step has no symbols so it is
+// evaluated without hyperparams and EPT is inferred.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @null_hyperparams_constant_step
+  func.func @null_hyperparams_constant_step(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<4xf16>
+    %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+    // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
+    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
+// Index missing dimension N for result type [M, N]; pass must report missing dimensions.
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @index_missing_dimension(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
+    %cst = arith.constant 0.0 : f16
+    // expected-error @below {{expected index to contain entries for all result #0 dimensions}}
+    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>
+    wave.write %reg, %mem { elements_per_thread = 4 } : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
+    return
+  }
+}
+
+// -----
+
 // CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
 // CHECK-LABEL: @propagate_backward_from_write
@@ -78,6 +186,28 @@ func.func @propagate_forward_from_read(%mem: !wave.tensor<[@M] of f16, <global>>
   %sum = wave.add %reg, %reg2 : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
   // CHECK: wave.mul {{.*}} : (vector<4xf16>, vector<4xf16>) -> vector<4xf16>
   %mul = wave.mul %sum, %reg2 : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.exp2 {{.*}} : (vector<4xf16>) -> vector<4xf16>
+  %exp = wave.exp2 %mul : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  return
+}
+}
+
+// -----
+
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @propagate_via_identity_rhs
+func.func @propagate_via_identity_rhs(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []}  {
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f16, <global>>) -> vector<4xf16>
+  %reg = wave.read %mem { elements_per_thread = 4 } : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+  %cst2 = arith.constant 42.0 : f16
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg2 = wave.register %cst2 : !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.add {{.*}} : (vector<4xf16>, vector<4xf16>) -> vector<4xf16>
+  %sum = wave.add %reg2, %reg : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+  // CHECK: wave.mul {{.*}} : (vector<4xf16>, vector<4xf16>) -> vector<4xf16>
+  %mul = wave.mul %reg2, %sum : (!wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
   // CHECK: wave.exp2 {{.*}} : (vector<4xf16>) -> vector<4xf16>
   %exp = wave.exp2 %mul : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
 
@@ -147,15 +277,23 @@ func.func @unsupported_op() attributes {wave.hyperparameters = #wave.hyperparame
 }
 }
 
-
 // -----
 
-// CHECK: normalform.module [#wave.normal_form<memory_only_types>]
-normalform.module [] {
-  func.func @test_no_existing_normal_form_attr(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+// CHECK: normalform.module [#wave.normal_form<full_types,memory_only_types>]
+normalform.module [#wave.normal_form<full_types>] {
+  func.func @test_normal_form_conditions(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
     %0 = arith.constant 0.0 : f32
     %reg = wave.register %0 : !wave.tensor<[@M] of f32, <register>>
     wave.write %reg, %mem { elements_per_thread = 8 } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+    return
+  }
+}
+
+// -----
+
+// expected-error @below {{pass expects the root operation or its ancestor to guarantee the full_types normal form}}
+normalform.module [] {
+  func.func @normal_form_missing() {
     return
   }
 }
@@ -222,19 +360,25 @@ func.func @read_register_propagation(%mem: !wave.tensor<[@M] of f16, <shared>>) 
 
 // -----
 
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @mma_compute_lhs_from_rhs
 func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
   // LHS without elements_per_thread - will be computed from RHS + MMA constraints.
   %lhs_init = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<8xf16>
   %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
 
   // RHS properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@N, @K] of f16, <global>>) -> vector<8xf16>
   %rhs = wave.read %mem1 {elements_per_thread = 8} : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
 
   // ACC properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
   %acc = wave.read %mem2 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
   // LHS elements_per_thread computed via MMA backward propagation.
+  // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
   %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
@@ -242,19 +386,25 @@ func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global
 
 // -----
 
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @mma_compute_rhs_from_lhs
 func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
   // LHS properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K] of f16, <global>>) -> vector<8xf16>
   %lhs = wave.read %mem1 {elements_per_thread = 8} : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
 
   // RHS without elements_per_thread - will be computed from LHS + MMA constraints.
   %rhs_init = arith.constant 0.0 : f16
+  // CHECK: wave.register {{.*}} : vector<8xf16>
   %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
 
   // ACC properly initialized through read operation.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
   %acc = wave.read %mem2 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
   // RHS elements_per_thread computed via MMA backward propagation.
+  // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
   %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
@@ -263,19 +413,25 @@ func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global
 // -----
 
 // Test MMA can compute both LHS and RHS when both are uninitialized
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @mma_compute_both_lhs_rhs
   func.func @mma_compute_both_lhs_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@N, @K] of f16, <global>>, %mem3: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
     // Both LHS and RHS without elements_per_thread - can compute from MMA formulas.
     %lhs_init = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<8xf16>
     %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
     %rhs_init = arith.constant 0.0 : f16
+    // CHECK: wave.register {{.*}} : vector<8xf16>
     %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
 
     // ACC properly initialized through read operation.
+    // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<8xf32>
     %acc = wave.read %mem3 {elements_per_thread = 8} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // With proper MMA formulas, we can now compute both LHS and RHS from constraints,
     // so this should succeed instead of failing.
+    // CHECK: wave.mma {{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
     %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     return
   }
@@ -298,6 +454,25 @@ normalform.module [#wave.normal_form<full_types>] {
 
     // expected-error @below {{failed to propagate elements per thread backward: mismatch between computed from MMA kind (8) and LHS operand #0 (4)}}
     %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: func.func @batched_mma
+  func.func @batched_mma(%mem1: !wave.tensor<[@B, @M, @K] of f16, <global>>, %mem2: !wave.tensor<[@B, @N, @K] of f16, <global>>, %mem3: !wave.tensor<[@B, @M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{B = 2, M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {B = 1, M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+    %lhs_init = arith.constant 0.0 : f16
+    %lhs = wave.register %lhs_init : !wave.tensor<[@B, @M, @K] of f16, <register>>
+    %rhs_init = arith.constant 0.0 : f16
+    %rhs = wave.register %rhs_init : !wave.tensor<[@B, @N, @K] of f16, <register>>
+
+    %acc = wave.read %mem3 {elements_per_thread = 8} : (!wave.tensor<[@B, @M, @N] of f32, <global>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
+
+    // CHECK: wave.mma
+    // CHECK-SAME: (vector<8xf16>, vector<8xf16>, vector<8xf32>) -> vector<8xf32>
+    %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@B, @M, @K] of f16, <register>>, !wave.tensor<[@B, @N, @K] of f16, <register>>, !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
     return
   }
 }
@@ -452,18 +627,14 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-// Test broadcast propagates EPT forward (identity case - no thread X broadcast).
+// Test broadcast doesn't propagate EPT.
 normalform.module [#wave.normal_form<full_types>] {
-  // CHECK-LABEL: @broadcast_propagation_forward_identity
-  // expected-warning @+1 {{unused hyperparameter: N}}
-  func.func @broadcast_propagation_forward_identity(%mem: !wave.tensor<[@M] of f32, <global>>)
+  func.func @broadcast_no_propagation(%mem: !wave.tensor<[@M] of f32, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
 
-    // CHECK: wave.read {{.*}} -> vector<8xf32>
     %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
 
-    // Broadcast along @N (not thread X) - identity propagation, EPT stays 8.
-    // CHECK: wave.broadcast {{.*}} : (vector<8xf32>) -> vector<8xf32>
+    // expected-error @below {{couldn't identify elements per thread for result #0}}
     %bcast = wave.broadcast %reg : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     return
@@ -472,51 +643,104 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-// Test broadcast propagates EPT backward (identity case - no thread X broadcast).
+// Reshape forward propagation: single operand, num_slices=2 -> result EPT = operand EPT / 2.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
-  // CHECK-LABEL: @broadcast_propagation_backward_identity
-  func.func @broadcast_propagation_backward_identity(
-      %mem: !wave.tensor<[@M] of f32, <global>>,
-      %result_mem: !wave.tensor<[@M, @N] of f32, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>, wave.constraints = []} {
+// CHECK-LABEL: @reshape_forward_single_operand_num_slices
+func.func @reshape_forward_single_operand_num_slices(
+    %mem: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
 
-    %c0 = arith.constant 0.0 : f32
-    // CHECK: wave.register {{.*}} : vector<4xf32>
-    %reg = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+  // Read 8 elements per thread.
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f32, <global>>) -> vector<8xf32>
+  %reg = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
 
-    // Broadcast along @N (not thread X) - identity propagation, EPT from write propagates back.
-    // CHECK: wave.broadcast {{.*}} : (vector<4xf32>) -> vector<4xf32>
-    %bcast = wave.broadcast %reg : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  // Reshape with num_slices=2: result EPT = 8 / 2 = 4.
+  // CHECK: wave.reshape {{.*}} : vector<8xf32> to vector<4xf32>
+  %reshaped = wave.reshape %reg {target_vector_shape = {M = 4}, num_slices = 2}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
 
-    // CHECK: wave.write {{.*}} : vector<4xf32>
-    wave.write %bcast, %result_mem {elements_per_thread = 4} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
-    return
-  }
+  return
+}
 }
 
 // -----
 
-// Test broadcast along thread X dimension - EPT comes from downstream write.
+// Reshape backward propagation: write fixes result EPT, operand gets result EPT * num_slices.
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 normalform.module [#wave.normal_form<full_types>] {
-  // CHECK-LABEL: @broadcast_along_thread_x
-  func.func @broadcast_along_thread_x(
-      %mem: !wave.tensor<[@N] of f32, <global>>,
-      %result_mem: !wave.tensor<[@M, @N] of f32, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, BLOCK_M = 16}>,
-                wave.constraints = [#wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>]} {
+// CHECK-LABEL: @reshape_backward_single_result_num_slices
+func.func @reshape_backward_single_result_num_slices(
+    %mem: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
 
-    // Source doesn't have thread X dimension - must specify EPT explicitly since
-    // broadcast along thread X doesn't propagate EPT.
-    // CHECK: wave.read {{.*}} -> vector<1xf32>
-    %reg = wave.read %mem {elements_per_thread = 1} : (!wave.tensor<[@N] of f32, <global>>) -> !wave.tensor<[@N] of f32, <register>>
+  %c0 = arith.constant 0.0 : f32
+  // Register gets EPT from backward: write 4, reshape * 2 -> operand 8.
+  // CHECK: wave.register {{.*}} : vector<8xf32>
+  %reg = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
 
-    // Broadcasting along @M (thread X) - EPT comes from the write, not the source.
-    // CHECK: wave.broadcast {{.*}} : (vector<1xf32>) -> vector<4xf32>
-    %bcast = wave.broadcast %reg : (!wave.tensor<[@N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  // Reshape num_slices=2: result has 4, so operand gets 4 * 2 = 8.
+  // CHECK: wave.reshape {{.*}} : vector<8xf32> to vector<4xf32>
+  %reshaped = wave.reshape %reg {target_vector_shape = {M = 4}, num_slices = 2}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
 
-    // Write specifies EPT=4, which propagates back to broadcast result.
-    // CHECK: wave.write {{.*}} : vector<4xf32>
-    wave.write %bcast, %result_mem {elements_per_thread = 4} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
-    return
-  }
+  // CHECK: wave.write {{.*}} : vector<4xf32>, !wave.tensor<[@M] of f32, <global>>
+  wave.write %reshaped, %out_mem {elements_per_thread = 4}
+    : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+  return
+}
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_forward_multiple_operands
+func.func @reshape_forward_multiple_operands(
+    %mem1: !wave.tensor<[@M] of f32, <global>>,
+    %mem2: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  %reg1 = wave.read %mem1 {elements_per_thread = 4} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+  %reg2 = wave.read %mem2 {elements_per_thread = 4} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+
+  // CHECK: wave.reshape {{.*}} : vector<4xf32> to vector<8xf32>
+  %reshaped = wave.reshape %reg1, %reg2 {target_vector_shape = {M = 8}}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  return
+}
+}
+
+// -----
+// Backward propagation: write fixes result EPT, reshape with two operands, each operand gets result EPT / 2
+
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @reshape_backward_multiple_operands
+func.func @reshape_backward_multiple_operands(
+    %mem1: !wave.tensor<[@M] of f32, <global>>,
+    %mem2: !wave.tensor<[@M] of f32, <global>>,
+    %out_mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>, wave.constraints = []} {
+
+  %c0 = arith.constant 0.0 : f32
+  // Both registers should get 4 elements per thread from backward: write 8, reshape 2 operands -> 8 / 2 = 4.
+  // CHECK: wave.register {{.*}} : vector<4xf32>
+  %reg1 = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+  // CHECK: wave.register {{.*}} : vector<4xf32>
+  %reg2 = wave.register %c0 : !wave.tensor<[@M] of f32, <register>>
+
+  // Reshape with two operands: each operand gets result EPT / 2.
+  // CHECK: wave.reshape {{.*}} : vector<4xf32> to vector<8xf32>
+  %reshaped = wave.reshape %reg1, %reg2 {target_vector_shape = {M = 8}}
+    : !wave.tensor<[@M] of f32, <register>> to !wave.tensor<[@M] of f32, <register>>
+
+  // CHECK: wave.write {{.*}} : vector<8xf32>, !wave.tensor<[@M] of f32, <global>>
+  wave.write %reshaped, %out_mem {elements_per_thread = 8}
+    : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+
+  return
+}
 }

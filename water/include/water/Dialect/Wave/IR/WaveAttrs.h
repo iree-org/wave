@@ -37,6 +37,23 @@ template <typename... InputTypes>
 bool allExprSymbolsOfType(WaveExprListAttr expr) {
   return llvm::all_of(expr.getSymbols(), llvm::IsaPred<InputTypes...>);
 }
+
+/// Check that all values in the symbol mapping are of the types provided as
+/// template arguments. Does NOT emit diagnostics.
+template <typename... ValueTypes>
+bool areAllSymbolMappingValuesAllowed(WaveSymbolMappingAttr mapping) {
+  return llvm::all_of(mapping.getValues(), llvm::IsaPred<ValueTypes...>);
+}
+
+/// Check that all expression lists used as values of the mapping have exactly
+/// `n` results. Does NOT emit diagnostics. Intended ONLY for use in a trait.
+static inline bool
+areAllSymbolMappingValuesNResultExprLists(WaveSymbolMappingAttr mapping,
+                                          unsigned n) {
+  return llvm::all_of(mapping.getValues(), [&](mlir::Attribute attr) {
+    return llvm::cast<WaveExprListAttr>(attr).getMap().getNumResults() == n;
+  });
+}
 } // namespace detail
 
 /// Verify that all provided ExprAttr attributes have the same rank. Returns

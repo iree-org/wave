@@ -14,6 +14,13 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+try:
+    from wave_lang.support.detect_waveasm import is_waveasm_available
+
+    _waveasm_available = is_waveasm_available()
+except Exception:
+    _waveasm_available = False
+
 
 @pytest.fixture(scope="function", autouse=True)
 def seed_torch():
@@ -120,6 +127,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "require_gpus: test requires specified number of GPUs"
     )
+    config.addinivalue_line(
+        "markers",
+        "require_waveasm: requires waveasm-translate binary (C++ MLIR backend)",
+    )
 
 
 def _get_worker_id(config):
@@ -210,6 +221,9 @@ def pytest_collection_modifyitems(config, items):
 
         if _has_marker(item, "require_e2e") and not run_e2e:
             item.add_marker(pytest.mark.skip("e2e tests are disabled"))
+
+        if _has_marker(item, "require_waveasm") and not _waveasm_available:
+            item.add_marker(pytest.mark.skip("waveasm-translate binary not available"))
 
         if _has_marker(item, "expensive_test") and not run_expensive:
             item.add_marker(pytest.mark.skip("expensive tests are disabled"))

@@ -5,7 +5,9 @@
 
 from copy import deepcopy
 from functools import lru_cache
-from typing import Optional
+import math
+import operator as op
+from typing import Callable, Optional
 
 import sympy
 
@@ -19,6 +21,41 @@ from ..._support.indexing import (
     subs_idxc,  # noqa
     is_literal,  # noqa
 )
+
+
+# Candidate values for numeric probing.  Straddle power-of-2 boundaries
+# (e.g. 31/32/33) to catch floor/Mod discontinuities that would expose
+# non-constant expressions.
+_PROBE_POOL = (
+    # fmt: off
+    0,   1,   2,   3,   4,   5,              # small values
+    7,   8,   9,  13,  15,  16,  17,         # near 8/16 boundaries
+   23,  24,  25,  31,  32,  33,  37,         # near 32 boundary
+   47,  48,  63,  64,  65,  96,  97,         # near 64 boundary
+  127, 128, 129, 191, 255, 256, 257,         # near 128/256 boundaries
+  383, 511, 512, 513, 767, 1023, 1024, 1025,
+    # near 512/1024 boundaries
+    # fmt: on
+)
+
+# Co-prime strides used to generate linearly independent probe combinations
+# from _PROBE_POOL, reducing the chance of accidental collisions.
+_STRIDES = (1, 3, 7, 11, 13, 17, 19, 23)
+
+# Sentinel values that indicate a probe produced an undefined result.
+_BAD_ATOMS = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
+
+# Mapping from sympy function names to Python callables, used by
+# sympy.lambdify to numerically evaluate expressions with floor/Mod/etc.
+_LAMBDIFY_MODULES = {
+    "Mod": op.mod,
+    "floor": math.floor,
+    "ceiling": math.ceil,
+    "xor": op.xor,
+    "Min": min,
+    "Max": max,
+    "Abs": abs,
+}
 
 
 ####################################################################
@@ -72,22 +109,149 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
     return None
 
 
-@lru_cache(maxsize=1024)
-def simplify(expr: sympy.Expr) -> sympy.Expr:
-    """Simplify a sympy expression using interval arithmetic and sympy.simplify.
+def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
+    """Apply custom algebraic simplifications that sympy misses.
 
-    Extends sympy.simplify with bounds-based reasoning that can resolve
+    Two rewrites that sympy.simplify does not perform:
+
+    ``transform_mod``: pull a small constant addend out of Mod when every
+    other term is a multiple of the modulus divisor.
+    ``(floor(a)*4 + 3) % 16  ->  (floor(a)*4) % 16 + 3``
+
+    ``transform_floor``: drop a small rational addend inside floor when
+    it is strictly smaller than the denominator of the other term.
+    ``floor(floor(a)/3 + 1/6)  ->  floor(floor(a)/3)``
+    """
+
+    def _check_mul_integer(mul):
+        """Return the single positive numeric factor in *mul*, or None."""
+        ret = None
+        for arg in mul.args:
+            if arg.is_number:
+                if arg < 0:
+                    return None
+                if ret is not None:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def _check_mul_rational(mul):
+        """Return the single positive Rational factor in *mul*, or None."""
+        ret = None
+        for arg in mul.args:
+            if isinstance(arg, sympy.Rational):
+                if ret is not None:
+                    return None
+                if arg.p < 0 or arg.q < 0:
+                    return None
+                ret = arg
+                continue
+            if not (isinstance(arg, (sympy.floor, sympy.Mod)) or arg.is_integer):
+                return None
+            if not arg.is_nonnegative:
+                return None
+        return ret
+
+    def transform_mod(expr):
+        if not isinstance(expr, sympy.Mod):
+            return None
+        p, q = expr.args
+        if not q.is_number or q < 0:
+            return None
+        if not isinstance(p, sympy.Add):
+            return None
+        c = None
+        terms = []
+        mult = None
+        for arg in p.args:
+            if arg.is_number:
+                if c is not None:
+                    return None
+                c = arg
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            m = _check_mul_integer(arg)
+            if (m is None) or (q % m != 0):
+                return None
+            mult = m if (mult is None) or (m < mult) else mult
+            terms.append(arg)
+        if c is None or mult is None or c >= mult:
+            return None
+        return (sum(terms) % q) + c
+
+    def transform_floor(expr):
+        if not isinstance(expr, sympy.floor):
+            return None
+        inner = expr.args[0]
+        if not isinstance(inner, sympy.Add):
+            return None
+        c = None
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                if c is not None:
+                    return None
+                c = arg
+        if c is None:
+            return None
+        terms = []
+        for arg in inner.args:
+            if isinstance(arg, sympy.Rational):
+                continue
+            if not isinstance(arg, sympy.Mul):
+                return None
+            r = _check_mul_rational(arg)
+            if r is None or r.p != 1:
+                return None
+            if r <= c:
+                return None
+            terms.append(arg)
+        return sympy.floor(sum(terms))
+
+    expr = expr.replace(lambda e: transform_mod(e) is not None, transform_mod)
+    expr = expr.replace(lambda e: transform_floor(e) is not None, transform_floor)
+    return expr
+
+
+_simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
+
+
+def simplify(expr: sympy.Expr) -> sympy.Expr:
+    """Simplify a sympy expression using interval arithmetic and cancel.
+
+    Extends sympy.cancel with bounds-based reasoning that can resolve
     floor/Mod sub-expressions (e.g. floor(Mod(x,16)/16) -> 0) that standard
-    sympy cannot handle.  Iterates to a fixed point.
+    sympy cannot handle, plus custom algebraic rewrites for Mod/floor
+    patterns.  Iterates to a fixed point.
+
+    Uses sympy.cancel instead of sympy.simplify because simplify tries 20+
+    strategies (trigsimp, combsimp, hyperexpand, ...) that are irrelevant for
+    integer floor/Mod arithmetic and can take 0.5s+ per expression.
+
+    The cache maps both ``src -> dst`` and ``dst -> dst`` so that calling
+    simplify on an already-simplified expression is a cache hit.
     """
     if not isinstance(expr, sympy.Basic):
         return expr
+    if expr in _simplify_cache:
+        return _simplify_cache[expr]
+    orig = expr
+    # Cheap flatten before the heavier fixed-point loop.
+    expr = sympy.expand(expr)
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
-        new_expr = sympy.simplify(new_expr)
+        new_expr = _custom_simplify_once(new_expr)
+        new_expr = sympy.cancel(new_expr)
         if new_expr == expr:
             break
         expr = new_expr
+    _simplify_cache[orig] = expr
+    _simplify_cache[expr] = expr
     return expr
 
 
@@ -126,9 +290,6 @@ def _bounds_simplify_once(expr: sympy.Expr) -> sympy.Expr:
         ):
             return sympy.Integer(int(sympy.floor(bounds[0])))
     return expr
-
-
-####################################################################
 
 
 def get_min_expr(
@@ -201,3 +362,142 @@ def strip_out_of_scope_induction_symbols(
             seq.size = safe_subs(seq.size, zero_subs)
             seq.stride = safe_subs(seq.stride, zero_subs)
     return cleaned
+
+
+def _compile_evaluator(expr):
+    """Compile a sympy expression into a fast Python callable.
+
+    Returns (free_symbols_tuple, callable) or ((), None) if the expression
+    has no free symbols.  The callable maps integer arguments to an integer
+    result using pure Python arithmetic (operator.mod, math.floor).
+    """
+    free = tuple(sorted(expr.free_symbols, key=lambda s: s.name))
+    if not free:
+        return free, None
+    f = sympy.lambdify(free, expr, modules=[_LAMBDIFY_MODULES])
+    return free, f
+
+
+def get_start_expr(value):
+    """Return the scalar start expression for an index or IndexSequence."""
+    return value.start if isinstance(value, IndexSequence) else value
+
+
+def eval_expr(expr: sympy.Expr | int | float, probe_map: dict) -> int:
+    """Evaluate a sympy expression with concrete symbol values."""
+    if isinstance(expr, (int, float)):
+        return int(expr)
+    return int(expr.xreplace(probe_map))
+
+
+def expr_is_zero_under_probes(
+    expr: sympy.Expr | int,
+    probe_generators: tuple[Callable[[int], int], ...] | list[Callable[[int], int]],
+    divisibility_fwd=None,
+) -> bool:
+    """Check whether an expression evaluates to zero on all provided probes."""
+    expr = subs_idxc(expr)
+    if divisibility_fwd:
+        expr = safe_subs(expr, divisibility_fwd)
+    free_list = sorted(getattr(expr, "free_symbols", ()), key=str)
+    for gen in probe_generators:
+        probe = {s: gen(i) for i, s in enumerate(free_list)}
+        try:
+            if eval_expr(expr, probe) != 0:
+                return False
+        except (TypeError, ValueError, ZeroDivisionError):
+            return False
+    return True
+
+
+# TODO: Presburger arithmetic (MLIR's IntegerRelation) for a formal proof.
+# correct by construction but much heavier
+@lru_cache(maxsize=4096)
+def _numeric_eval_constant(expr, num_samples: int = 48):
+    """Check if a symbolic expression is a constant via numeric probing.
+
+    Uses lambdify to compile the expression into fast Python arithmetic,
+    then probes with diverse integer values to check constancy.
+    Returns that integer when consistent, ``None`` otherwise.
+
+    This is useful as a fallback when ``sympy.simplify`` is too slow or
+    unable to reduce complex floor/Mod expressions (e.g. preshuffle
+    index formulas).
+
+    Not a formal proof (but rational design choice) a non-constant expression that
+    coincidentally returns the same value for all probes would be a false positive.
+    For the domain this compiler operates in (thread IDs 0-63, tile sizes that are
+    powers of 2 up to 1024, workgroup sizes up to 1024)
+
+    The probe pool straddles powers-of-2 boundaries (15/16/17,
+    63/64/65, 127/128/129, 255/256/257, 511/512/513, 1023/1024/1025)
+    to catch floor/Mod discontinuities at common tile sizes up to 1024.
+
+    Results are cached via ``@lru_cache`` (sympy expressions are immutable).
+    """
+    try:
+        free, evaluator = _compile_evaluator(expr)
+    except Exception:
+        free, evaluator = (), None
+
+    if not free:
+        if isinstance(expr, int):
+            return expr
+        if expr.has(*_BAD_ATOMS):
+            return None
+        if expr.is_integer is not True:
+            return None
+        try:
+            return int(expr)
+        except (TypeError, ValueError):
+            return None
+
+    n_probes = len(_PROBE_POOL)
+    n_strides = len(_STRIDES)
+    strides = [_STRIDES[i % n_strides] for i in range(len(free))]
+
+    first_val = None
+    for trial in range(num_samples):
+        args = [
+            _PROBE_POOL[(trial * strides[i] + i) % n_probes] for i in range(len(free))
+        ]
+
+        if evaluator is not None:
+            try:
+                result = evaluator(*args)
+            except (ZeroDivisionError, ValueError, OverflowError, TypeError):
+                return None
+            except NameError:
+                evaluator = None
+
+            if isinstance(result, bool):
+                return None
+            if isinstance(result, float):
+                if not result.is_integer():
+                    return None
+                val = int(result)
+            elif isinstance(result, int):
+                val = result
+            else:
+                evaluator = None
+
+        if evaluator is None:
+            subs = dict(zip(free, args))
+            result = expr.subs(subs)
+            if result.free_symbols:
+                return None
+            if result.has(*_BAD_ATOMS):
+                return None
+            if result.is_integer is not True:
+                return None
+            try:
+                val = int(result)
+            except (TypeError, ValueError):
+                return None
+
+        if first_val is None:
+            first_val = val
+        elif val != first_val:
+            return None
+
+    return first_val

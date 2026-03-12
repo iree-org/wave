@@ -95,6 +95,39 @@ def e8m0_to_f32(x: Tensor) -> Tensor:
     return x_f32
 
 
+def b_preshuffle(b: Tensor) -> Tensor:
+    """Preshuffle packed MXFP4 B weights for direct global reads.
+
+    Reorders each 16-row x 32-byte tile from [n, k_sub, k_elem] to
+    [k_sub, n, k_elem] so a contiguous 256-byte read fetches one K-chunk
+    for all 16 N-rows.
+
+    Input:  [N, K/2] uint8 packed FP4 weights.
+    Output: same shape/dtype, rearranged for PRESHUFFLEB.
+    """
+    N, K_packed = b.shape
+    b_5d = b.view(N // 16, 16, K_packed // 32, 2, 16)
+    return b_5d.permute(0, 2, 3, 1, 4).contiguous().view(N, K_packed)
+
+
+def e8m0_shuffle(scale: Tensor) -> Tensor:
+    """Shuffle e8m0 scale tensor for hardware preshuffle layout.
+
+    Transforms a [m, n] scale matrix via:
+      view(m//32, 2, 16, n//8, 2, 4) -> permute(0,3,5,2,4,1) -> view(m, n)
+
+    See: rocm-libraries PreSwizzle.hpp
+    """
+    m, n = scale.shape
+    sm = (m + 255) // 256 * 256
+    sn = (n + 7) // 8 * 8
+    padded = torch.zeros(sm, sn, dtype=scale.dtype, device=scale.device)
+    padded[:m, :n] = scale
+    padded = padded.view(sm // 32, 2, 16, sn // 8, 2, 4)
+    padded = padded.permute(0, 3, 5, 2, 4, 1).contiguous()
+    return padded.view(sm, sn)[:m, :n].contiguous()
+
+
 def torchScaledGemmMXFP4(
     x: Tensor, w: Tensor, x_scales: Tensor, w_scales: Tensor
 ) -> Tensor:

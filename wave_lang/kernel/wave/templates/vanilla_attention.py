@@ -113,8 +113,8 @@ def get_vanilla_attention_kernel(
         init_max = tkl.Register[B, M, tkl.f32](-1e6)
         sliding_window = tkl.Register[M, K2, tkl.i64](sliding_window_size)
         qk_scaling = tkl.Register[B, M, K2, tkl.f32](scale)
-        ZEROF = tkl.Register[M, K2, tkl.f32](0.0)
-        MIN_INF = tkl.Register[M, K2, tkl.f32](-1e6)
+        ZEROF = tkl.Register[B, M, K2, tkl.f32](0.0)
+        MIN_INF = tkl.Register[B, M, K2, tkl.f32](-1e6)
 
         # This microkernel encodes the fact that if the reduction
         # dimension were tiled, then we would need to materialize a loop.
@@ -131,7 +131,7 @@ def get_vanilla_attention_kernel(
             x_j = tkw.permute(inner_acc, target_shape=[B, M, K2])
             k2_index = tkw.self_index(K2, tkl.i64)
             mask = tkw.apply_expr(k2_index, lambda x: x < K2)
-            mask = tkw.broadcast(mask, target_shape=[M, K2])
+            mask = tkw.broadcast(mask, target_shape=[B, M, K2])
             if is_causal:
                 # Indices i and j broadcasted along K2 with a twist:
                 # here we use *static* information that is *implicitly* encoded
@@ -139,7 +139,7 @@ def get_vanilla_attention_kernel(
                 # specified we know that the shape [M] will eventually resolve
                 # to [1] and can thus be "cast + broadcast" to [K2].
                 m_index = tkw.self_index(M, tkl.i64)
-                m_index = tkw.broadcast(m_index, target_shape=[M, K2])
+                m_index = tkw.broadcast(m_index, target_shape=[B, M, K2])
                 mask = (m_index >= k2_index) & mask
                 if sliding_window_size > 0:
                     mask = (m_index - k2_index <= sliding_window) & mask

@@ -42,6 +42,7 @@ from .analysis.partition_strided_operators import (
     partition_gather_like_ops,
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
+    simplify_indices,
 )
 from .barriers import add_shared_memory_barriers
 from .cluster_barriers import add_cluster_barriers
@@ -68,9 +69,11 @@ from .in_thread_transpose import in_thread_transpose
 from .location_check_pass import location_check_pass
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
+from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
 from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
+from .scheduling.loop_reconstruction import guard_g2s_with_bounds_check
 from .scheduling.schedule import schedule_graph
 from .scheduling.schedule_enums import SchedulingType
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
@@ -79,6 +82,7 @@ from .tensor_load_to_shared import tensor_load_to_shared
 from .type_inference import infer_types
 from .wave_schedule import WaveSchedule
 from .workgroup_reordering import reorder_workgroups
+from .opsel_scaled_mfma import apply_opsel_scaled_mfma
 
 # Utilities.
 from .utils.compile_utils import canonicalize_module, apply_transform, compile_to_vmfb
@@ -251,8 +255,13 @@ class WaveKernel:
         def get_dynamic_dimension_actual(sym):
             if sym in debug_extra_dimensions:
                 return debug_extra_dimensions[sym]
-            arg_idx, dim = self.symbols_args_map[sym]
-            return args[arg_idx].shape[dim]
+            if sym in self.symbols_args_map:
+                arg_idx, dim = self.symbols_args_map[sym]
+                return args[arg_idx].shape[dim]
+            _, a_idx, d_idx, inv = host_codegen._find_symbol_in_compound_dim(
+                sym, self.symbols_args_map
+            )
+            return int(args[a_idx].shape[d_idx] * inv)
 
         # If there are debug_log uses with extra iteration dimensions, we need
         # to collect their sizes so that we can allocate the appropriate Torch
@@ -485,10 +494,14 @@ def build_graph_passes(
             partial(in_thread_transpose, trace, launchable.constraints, options),
             partial(global_to_shared_gathers, trace, launchable.constraints),
             partial(minimize_global_loads, trace, launchable.constraints),
+            partial(preshuffle_scale_to_shared, trace, launchable.constraints),
             # Wave specialization
             partial(specialize_kernel, trace, launchable.constraints, options),
             partial(gather_to_shared, trace, launchable.constraints, options),
             partial(gather_to_shared_swizzling, trace, launchable.constraints, options),
+        ]
+    if options.optimization_level and options.enable_mark_hardware_transpose_candidates:
+        graph_passes += [
             partial(
                 mark_hardware_transpose_candidates,
                 trace,
@@ -542,6 +555,10 @@ def build_graph_passes(
             )
         )
 
+    graph_passes.append(
+        partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
+    )
+
     if options.optimization_level:
         graph_passes += [
             partial(
@@ -566,10 +583,16 @@ def build_graph_passes(
         ),
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
+        partial(simplify_indices, trace, launchable.constraints),
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
-        partial(generate_bounds_exprs, trace, launchable.constraints),
+        partial(
+            generate_bounds_exprs,
+            trace,
+            launchable.constraints,
+            launchable.reordering_constraints,
+        ),
         partial(
             merge_contiguous_reads,
             trace,
@@ -755,8 +778,6 @@ def compile_launchable_to_mlir(
     workgroup_size = launchable.hardware_constraints[0].threads_per_block
     subgroup_size = launchable.hardware_constraints[0].threads_per_wave
 
-    # Set MMA type for ASM backend dispatch
-    options.mma_type = launchable.hardware_constraints[0].mma_type
     # Setup LLVM func compilation configs.
     llvm_func_config = {}
     if options.denorm_fp_math_f32:
@@ -765,6 +786,7 @@ def compile_launchable_to_mlir(
     if options.waves_per_eu:
         llvm_func_config["amdgpu-waves-per-eu"] = options.waves_per_eu
 
+    # Dynamic strides are only supported with the LLVM/Wave runtime path, not ASM backend.
     dispatch_entrypoint = exe.define_entrypoint(
         entrypoint_name,
         kernel_sig,
@@ -774,6 +796,7 @@ def compile_launchable_to_mlir(
         options.dynamic_symbols,
         llvm_func_config,
         trace.location,
+        options.dynamic_strides,
     )
 
     # Only emit MLIR if we don't have a module yet.
@@ -814,6 +837,15 @@ def compile_launchable_to_mlir(
     if options.postprocess:
         apply_transform(mb.module_op, options.postprocess, options.subs)
 
+    if options.canonicalize:
+        canonicalize_module(mb.module_op)
+
+    # Replace scalar extract+bitcast scale chains on scaled_mfma ops
+    # with vector-level bitcast and opsel byte selection.
+    # Without the opsel pass, the b_scale loads regressed to
+    # buffer_load_ubyte (16 of them), and the scale values passed
+    # to v_mfma_scale are loaded as individual bytes rather than dwords.
+    apply_opsel_scaled_mfma(mb.module_op)
     if options.canonicalize:
         canonicalize_module(mb.module_op)
 
@@ -912,8 +944,10 @@ def _trace_launchable_and_get_kernel_signature(
     grid_symbols = list(launchable.bound_scalar_symbols.keys()) + list(
         options.dynamic_symbols
     )
+    # Explicit modules list prevents sympy from auto-importing scipy,
+    # which pollutes sys.modules and breaks dill serialization later.
     options.kernel_launch_info.grid = sympy.lambdify(
-        [grid_symbols], launchable.grid_type.dims
+        [grid_symbols], launchable.grid_type.dims, modules=["math"]
     )
     options.kernel_launch_info.grid_str = lambdastr(
         [grid_symbols], launchable.grid_type.dims
@@ -1091,6 +1125,7 @@ def wave_compile(
                 async_dispatch=is_async,
                 device_layout=device_layout,
                 device_constraints=kernel.device_constraints,
+                dynamic_strides=options.dynamic_strides,
             )
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
@@ -1100,7 +1135,11 @@ def wave_compile(
             use_local_scope=options.use_local_scope,
         )
 
-        if options.print_mlir:
+        if (
+            options.print_mlir
+            and options.backend != "asm"
+            and not options.compile_to_asm
+        ):
             if options.print_mlir_file:
                 write_file(options.print_mlir_file, "w", asm)
             else:
@@ -1196,8 +1235,14 @@ def wave_compile(
 
 
 def _generate_asm_code(mb, options):
-    """Generate AMDGCN assembly from MLIR module."""
-    # Convert module_op to MLIR string
+    """Generate AMDGCN assembly from MLIR module via C++ WaveASM backend."""
+    import os
+    import subprocess
+    import tempfile
+    from wave_lang.support.ir_imports import Context, Module, func_d
+    from wave_lang.support.detect_waveasm import get_waveasm_translate
+    from .utils.mlir_analysis import walk_ops_recursively, should_skip_function
+
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
         != LocationCaptureLevel.NONE
@@ -1205,34 +1250,105 @@ def _generate_asm_code(mb, options):
         use_local_scope=options.use_local_scope,
     )
 
-    # Canonical MLIR->ASM entry point (single-path kernel IR backend).
-    from .asm.kernel_module_compiler import KernelModuleCompiler
+    # WaveASM expects a bare func.func (no stream wrapper), so extract
+    # the kernel function and wrap it in a plain module.
+    kernel_name = None
+    with Context() as ctx:
+        ctx.allow_unregistered_dialects = True
+        module = Module.parse(mlir_asm)
+        for fn in walk_ops_recursively(module.operation):
+            if not isinstance(fn, func_d.FuncOp):
+                continue
+            if should_skip_function(fn):
+                continue
+            kernel_name = fn.sym_name.value
+            kernel_mlir = (
+                "module {\n" + fn.get_asm(print_generic_op_form=True) + "\n}\n"
+            )
+            kernel_mlir_pretty = "module {\n" + fn.get_asm() + "\n}\n"
+            break
+        else:
+            raise ValueError("No kernel function found in MLIR for WaveASM backend")
 
-    return KernelModuleCompiler(
-        targetid=options.target, codeobj=options.codeobj, mma_type=options.mma_type
-    ).compile_mlir_string(mlir_asm)
+    if options.print_mlir:
+        if options.print_mlir_file:
+            write_file(options.print_mlir_file, "w", kernel_mlir_pretty)
+        else:
+            print(kernel_mlir_pretty)
+
+    wg = tuple(options.kernel_launch_info.blocks)
+    waveasm_translate = get_waveasm_translate()
+
+    # Write MLIR to temp file and invoke waveasm-translate.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".mlir", delete=False
+    ) as mlir_file:
+        mlir_file.write(kernel_mlir)
+        mlir_path = mlir_file.name
+
+    try:
+        cmd = [
+            waveasm_translate,
+            f"--target={options.target}",
+            "--mlir-cse",
+            "--waveasm-scoped-cse",
+            "--waveasm-peephole",
+            "--waveasm-scale-pack-elimination",
+            "--loop-invariant-code-motion",
+            "--waveasm-m0-redundancy-elim",
+            "--waveasm-buffer-load-strength-reduction",
+            "--waveasm-memory-offset-opt",
+            "--canonicalize",
+            "--waveasm-scoped-cse",
+            "--waveasm-loop-address-promotion",
+            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+            "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
+            f"--waveasm-hazard-mitigation=target={options.target}",
+            "--emit-assembly",
+            f"--workgroup-size-x={wg[0]}",
+            f"--workgroup-size-y={wg[1]}",
+            f"--workgroup-size-z={wg[2]}",
+            mlir_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
+        asm_text = result.stdout
+    finally:
+        os.unlink(mlir_path)
+
+    if options.dump_intermediates:
+        asm_path = os.path.join(options.dump_intermediates, f"{kernel_name}.rocmasm")
+        os.makedirs(options.dump_intermediates, exist_ok=True)
+        with open(asm_path, "w") as f:
+            f.write(asm_text)
+
+    return asm_text
 
 
 def _compile_asm_to_binary(asm_code, options):
-    """Compile AMDGCN assembly to binary using amdclang++."""
+    """Compile AMDGCN assembly to binary using clang++."""
     import tempfile
     import os
     import subprocess
+    from wave_lang.support.detect_waveasm import get_clang
 
-    # Create temporary file for assembly output
+    clang = get_clang()
+
+    # Create temporary file for assembly output.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".s", delete=False) as asm_file:
         asm_file.write(asm_code)
         asm_output = asm_file.name
 
     try:
-        # Generate code object using amdclang++
+        # Generate code object using clang++.
         kernel_name = options.func_name
         obj_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.o")
         hsaco_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.hsaco")
 
-        # Step 1: Compile assembly to object file
+        # Step 1: Compile assembly to object file.
         compile_cmd = [
-            "amdclang++",
+            clang,
             "-x",
             "assembler",
             "-target",
@@ -1250,9 +1366,9 @@ def _compile_asm_to_binary(asm_code, options):
         if result.returncode != 0:
             raise RuntimeError(f"Assembly compilation failed: {result.stderr}")
 
-        # Step 2: Link object file to hsaco file
+        # Step 2: Link object file to hsaco file.
         link_cmd = [
-            "amdclang++",
+            clang,
             "-target",
             "amdgcn-amd-amdhsa",
             "-Xlinker",
@@ -1276,7 +1392,7 @@ def _compile_asm_to_binary(asm_code, options):
 
 def validate_options(options: WaveCompileOptions):
     if options.wave_runtime and options.run_bench:
-        raise ValueError("Banchmarking is not supported in wave_runtime yet")
+        raise ValueError("Benchmarking is not supported in wave_runtime yet")
 
     if options.backend not in ["llvm", "asm"]:
         raise ValueError(

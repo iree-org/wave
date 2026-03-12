@@ -9,6 +9,7 @@ Both kernels are verified against a PyTorch reference implementation.
 """
 
 import torch
+import argparse
 
 import wave_lang.kernel.wave as tkw
 import wave_lang.kernel.lang as tkl
@@ -159,8 +160,8 @@ def get_vanilla_kernel():
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, BLOCK_M / 2),
-        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.WaveConstraint(M, BLOCK_M / 1),
+        tkw.WaveConstraint(N, BLOCK_N / 4),
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=ScaledMMAType.F32_16x16x128_F8F6F4,
@@ -172,7 +173,7 @@ def get_vanilla_kernel():
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
         a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -212,8 +213,8 @@ def get_preshuffle_kernel():
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, BLOCK_M / 2),
-        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.WaveConstraint(M, BLOCK_M / 1),
+        tkw.WaveConstraint(N, BLOCK_N / 4),
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=ScaledMMAType.F32_16x16x128_F8F6F4,
@@ -294,11 +295,14 @@ def get_preshuffle_kernel():
         },
     )
 
-    # TODO: preshuffle merge doesn't work with shared address space yet.
+    # TODO: The read side matches aiter. The only difference is on the write side for a_scale
+    #     (how data gets into LDS). Wave uses 8 byte loads + 8 byte stores, while AITER
+    #     uses 2 DMA dword loads.
+    # The analysis report covers what's needed to close that gap.
     @tkw.wave(constraints)
     def mxfp4_gemm_preshuffle(
         a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
@@ -327,8 +331,8 @@ def get_preshuffle_kernel():
 
 def run_all_tests():
     """Run both vanilla and pre-shuffled tests and compare results."""
-    m, n, k = 512, 512, 2048
-    block_m, block_n, block_k = 128, 128, 256
+    m, n, k = 1024, 1024, 8192  # 2048, 57344, 16384 #512, 512, 2048
+    block_m, block_n, block_k = 256, 256, 256
 
     print("=" * 70)
     print("MXFP4 GEMM COMPREHENSIVE TEST SUITE")
@@ -371,6 +375,7 @@ def run_all_tests():
         subs=hyperparams,
         canonicalize=True,
         use_global_to_shared=True,
+        use_buffer_ops=True,
     )
     options = set_default_run_config(options)
 
@@ -481,5 +486,266 @@ def run_all_tests():
         print(f"Mean difference: {mean_diff}")
 
 
+def run_benchmark(
+    kernel_type="vanilla",
+    m=2048,
+    n=57344,
+    k=16384,
+    block_m=256,
+    block_n=256,
+    block_k=256,
+    warmup_iters=50,
+    bench_iters=100,
+):
+    """
+    Benchmark a single kernel configuration.
+
+    Args:
+        kernel_type: Either "vanilla" or "preshuffle"
+        m, n, k: Problem dimensions
+        block_m, block_n, block_k: Block dimensions
+        warmup_iters: Number of warmup iterations
+        bench_iters: Number of benchmark iterations
+
+    Returns:
+        Dictionary containing benchmark results
+    """
+    print("=" * 70)
+    print(f"BENCHMARKING: {kernel_type.upper()} MXFP4 GEMM")
+    print("=" * 70)
+    print(f"Problem size: M={m}, N={n}, K={k}")
+    print(f"Block sizes: BLOCK_M={block_m}, BLOCK_N={block_n}, BLOCK_K={block_k}")
+    print(f"Warmup iterations: {warmup_iters}")
+    print(f"Benchmark iterations: {bench_iters}")
+
+    # Define symbolic dimensions
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Get the appropriate kernel
+    if kernel_type == "vanilla":
+        kernel = get_vanilla_kernel()
+    elif kernel_type == "preshuffle":
+        kernel = get_preshuffle_kernel()
+    else:
+        raise ValueError(f"Unknown kernel_type: {kernel_type}")
+
+    # Set up hyperparameters
+    k_scale_shuffled = (((k // 32) + 7) // 8) * 8
+    K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        K_SCALE_SHUFFLED: k_scale_shuffled,
+    }
+
+    dump_dir = f"tmp_files/mxfp4_preshuffle_scale_{kernel_type}_{m}x{n}x{k}/"
+
+    # Compile kernel
+    print("\nCompiling kernel...")
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        use_global_to_shared=True,
+        use_buffer_ops=True,
+        dump_intermediates=dump_dir,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, kernel)
+
+    # Generate test data
+    print("Generating test data...")
+    x, w, x_scales, w_scales = generate_mxfp4_inputs(
+        (m, n, k), device=torch.device("cpu")
+    )
+
+    # Shuffle scales if needed
+    if kernel_type == "preshuffle":
+        x_scales = e8m0_shuffle(x_scales)
+        w_scales = e8m0_shuffle(w_scales)
+
+    # Move data to GPU
+    x_gpu = x.cuda()
+    w_gpu = w.cuda()
+    x_scales_gpu = x_scales.cuda()
+    w_scales_gpu = w_scales.cuda()
+    c_gpu = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    # Warmup
+    print(f"\nWarming up ({warmup_iters} iterations)...")
+    for _ in range(warmup_iters):
+        compiled_kernel(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_gpu)
+    torch.cuda.synchronize()
+
+    # Benchmark
+    print(f"Benchmarking ({bench_iters} iterations)...")
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+
+    start_event.record()
+    for _ in range(bench_iters):
+        compiled_kernel(x_gpu, x_scales_gpu, w_gpu, w_scales_gpu, c_gpu)
+    end_event.record()
+    torch.cuda.synchronize()
+
+    # Calculate metrics
+    elapsed_ms = start_event.elapsed_time(end_event)
+    avg_time_ms = elapsed_ms / bench_iters
+    flops = 2 * m * n * k  # GEMM FLOPs
+    tflops = (flops / (avg_time_ms * 1e-3)) / 1e12
+
+    results = {
+        "kernel_type": kernel_type,
+        "m": m,
+        "n": n,
+        "k": k,
+        "block_m": block_m,
+        "block_n": block_n,
+        "block_k": block_k,
+        "avg_time_ms": avg_time_ms,
+        "total_time_ms": elapsed_ms,
+        "tflops": tflops,
+        "warmup_iters": warmup_iters,
+        "bench_iters": bench_iters,
+    }
+
+    # Print results (same format as 7.3)
+    print(f"  Problem size: M={m}, N={n}, K={k}")
+    print(f"  Avg time:     {avg_time_ms:.3f} ms  ({bench_iters} iters)")
+    print(f"  TFLOP/s:      {tflops:.2f}")
+    print(f"  Dump dir:     {dump_dir}")
+
+    # Quick NaN check
+    result_cpu = c_gpu.cpu()
+    nan_mask = torch.isnan(result_cpu)
+    nan_count = nan_mask.sum().item()
+    print(
+        f"  NaN count:    {nan_count}/{result_cpu.numel()} ({100*nan_count/result_cpu.numel():.1f}%)"
+    )
+    if nan_count > 0:
+        nan_rows = torch.where(nan_mask.any(dim=1))[0]
+        nan_cols = torch.where(nan_mask.any(dim=0))[0]
+        print(f"  NaN rows:     {nan_rows.tolist()[:20]}")
+        print(f"  NaN cols:     {nan_cols.tolist()[:20]}")
+    valid = result_cpu[~nan_mask]
+    if valid.numel() > 0:
+        print(f"  Valid range:  [{valid.min():.4f}, {valid.max():.4f}]")
+
+    return results
+
+
+def run_all_benchmarks():
+    """Run benchmarks for both vanilla and preshuffle kernels and compare."""
+    # Default configuration
+    m, n, k = 512, 512, 2048
+    block_m, block_n, block_k = 256, 256, 256
+    warmup_iters = 10
+    bench_iters = 100
+
+    vanilla_results = run_benchmark(
+        kernel_type="vanilla",
+        m=m,
+        n=n,
+        k=k,
+        block_m=block_m,
+        block_n=block_n,
+        block_k=block_k,
+        warmup_iters=warmup_iters,
+        bench_iters=bench_iters,
+    )
+
+    print("\n\n")
+
+    preshuffle_results = run_benchmark(
+        kernel_type="preshuffle",
+        m=m,
+        n=n,
+        k=k,
+        block_m=block_m,
+        block_n=block_n,
+        block_k=block_k,
+        warmup_iters=warmup_iters,
+        bench_iters=bench_iters,
+    )
+
+    # Comparison
+    print("\n\n")
+    print("=" * 70)
+    print("COMPARISON: Vanilla vs Pre-Shuffled")
+    print("=" * 70)
+    print(
+        f"Vanilla avg time:      {vanilla_results['avg_time_ms']:.4f} ms ({vanilla_results['tflops']:.2f} TFLOPS)"
+    )
+    print(
+        f"Pre-shuffle avg time:  {preshuffle_results['avg_time_ms']:.4f} ms ({preshuffle_results['tflops']:.2f} TFLOPS)"
+    )
+
+    speedup = vanilla_results["avg_time_ms"] / preshuffle_results["avg_time_ms"]
+    if speedup > 1.0:
+        print(
+            f"\nPre-shuffle is {speedup:.2f}x FASTER than vanilla ({(speedup-1)*100:.1f}% improvement)"
+        )
+    elif speedup < 1.0:
+        print(
+            f"\nPre-shuffle is {1/speedup:.2f}x SLOWER than vanilla ({(1-speedup)*100:.1f}% regression)"
+        )
+    else:
+        print("\n= Performance is identical")
+    print("=" * 70)
+
+    return vanilla_results, preshuffle_results
+
+
 if __name__ == "__main__":
-    run_all_tests()
+    parser = argparse.ArgumentParser(
+        description="MXFP4 GEMM: Preshuffle Scale Benchmark"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="preshuffle",
+        choices=["test", "bench", "vanilla", "preshuffle"],
+        help="Mode: test (correctness), bench (both), vanilla, preshuffle (default)",
+    )
+    parser.add_argument("--M", type=int, default=2048, help="M dimension")
+    parser.add_argument("--N", type=int, default=57344, help="N dimension")
+    parser.add_argument("--K", type=int, default=16384, help="K dimension")
+    parser.add_argument("--block_m", type=int, default=256, help="Block M dimension")
+    parser.add_argument("--block_n", type=int, default=256, help="Block N dimension")
+    parser.add_argument("--block_k", type=int, default=256, help="Block K dimension")
+    parser.add_argument(
+        "--warmup", type=int, default=50, help="Number of warmup iterations"
+    )
+    parser.add_argument(
+        "--iters", type=int, default=100, help="Number of benchmark iterations"
+    )
+
+    args = parser.parse_args()
+
+    if args.mode == "test":
+        run_all_tests()
+    elif args.mode == "bench":
+        run_all_benchmarks()
+    else:
+        run_benchmark(
+            kernel_type=args.mode,
+            m=args.M,
+            n=args.N,
+            k=args.K,
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            warmup_iters=args.warmup,
+            bench_iters=args.iters,
+        )

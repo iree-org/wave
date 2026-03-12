@@ -130,5 +130,46 @@ module attributes {wave_test.symbol = #wave.symbol<"_A">}
 
 // -----
 
+// expected-error @below {{dimension name 'A' is used more than once}}
+func.func private @duplicate_dim_name() attributes { wave.test_index = #wave.expr_list<[](A, A) -> (A)>}
+
+// -----
+
+// expected-error @below {{dimension name 'A' is already used as a symbol name}}
+func.func private @duplicate_dim_sym_name() attributes { wave_test.index = #wave.expr_list<[#wave.symbol<"A">](A) -> (A)>}
+
+// -----
+
+// expected-error @below {{dimension name '_A' is reserved for internal use}}
+func.func private @reserved_dim_name() attributes { wave_test.index = #wave.expr_list<[](_A) -> (_A)>}
+
+// -----
+
+// Using the reserved name that iter<"K"> expands to.
+// expected-error @below {{dimension name '_Iter_K' is reserved for internal use}}
+func.func private @reserved_dim_name2() attributes { wave_test.index = #wave.expr_list<[#wave.iter<"K">](_Iter_K) -> (_Iter_K)>}
+
+
+// -----
+
 // expected-error @below {{duplicate symbol #wave.symbol<"A"> in shape}}
 "wave_test.create_tensor"() {fully_specified = true, shape = [@A, @B, @A]} : () -> ()
+
+// -----
+
+// Duplicate key is rejected at attribute parse/verify time.
+// expected-error @below {{duplicate key: #wave.symbol<"M">}}
+#dup_key = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, @M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
+func.func private @duplicate_key() attributes {test.map = #dup_key}
+
+// -----
+
+// expected-error @below {{attribute 'index_mapping' failed to satisfy constraint: symbol mapping with WaveIndexMappingAttr values}}
+water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"A">] -> (A, A + 1, A + 2)>>}
+
+// -----
+
+// expected-error @below {{failed to satisfy constraint: symbol mapping with 3-result expr list values}}
+water_test.wave_symbol_mapping {three_results_mapping = #wave.symbol_mapping<
+  @M = #wave.expr_list<[#wave.symbol<"A">] -> (A)>
+>}

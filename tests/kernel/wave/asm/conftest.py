@@ -6,11 +6,22 @@
 """
 pytest configuration for ASM backend tests.
 
-This conftest enables stricter validation during testing to catch issues early.
+This conftest enables stricter validation during testing to catch issues early
+and provides CLI options / fixtures for WaveASM e2e tests.
 """
 
 import os
 import pytest
+
+
+def pytest_addoption(parser):
+    """Add WaveASM-specific command line options."""
+    parser.addoption(
+        "--dump-asm",
+        action="store_true",
+        default=False,
+        help="Dump assembly files to /tmp for debugging",
+    )
 
 
 def pytest_configure(config):
@@ -26,3 +37,9 @@ def pytest_configure(config):
     """
     if os.environ.get("WAVE_STRICT_FORMATTER") is None:
         os.environ["WAVE_STRICT_FORMATTER"] = "1"
+
+
+@pytest.fixture
+def dump_asm(request):
+    """Get the dump-asm flag from command line."""
+    return request.config.getoption("--dump-asm")

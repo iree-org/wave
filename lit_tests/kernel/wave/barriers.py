@@ -116,10 +116,10 @@ def test_read_write_equal_sizes():
         tweak_index(graph)
         add_shared_memory_barriers(trace)
         print_trace(trace, False)
-    # CHECK: %allocate
-    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-    # CHECK-NEXT: %a
+    # CHECK: %a
     # CHECK-NEXT: %c
+    # CHECK-NEXT: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %read_M:0_N:0
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:1
@@ -240,12 +240,12 @@ def test_gemm():
     # CHECK-NEXT: return None
 
     # iterate subgraph:
-    # CHECK: %b
-    # CHECK: %a
-    # CHECK-NEXT: %acc_M:0_N:0_K:0
+    # CHECK: %acc_M:0_N:0_K:0
     # CHECK-NEXT: %acc_M:0_N:1_K:0
     # CHECK-NEXT: %acc_M:1_N:0_K:0
     # CHECK-NEXT: %acc_M:1_N:1_K:0
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_M:0_N:0_K:0
     # CHECK-NEXT: %read_M:0_N:0_K:1
     # CHECK-NEXT: %read_M:1_N:0_K:0

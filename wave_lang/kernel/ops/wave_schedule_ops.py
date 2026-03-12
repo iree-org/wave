@@ -183,7 +183,11 @@ def reorder_graph(loop: Any, clusters: Any): ...
 
 
 @define_schedule_op
-def pipeline(iterate: Sequence[fx.Node]): ...
+def pipeline(
+    iterate: Sequence[fx.Node],
+    eliminate_epilogue: bool = False,
+    multi_buffer_count: Optional[int] = None,
+): ...
 
 
 @define_schedule_op
@@ -200,6 +204,7 @@ def interleave_ops(
     interleaved_ops: Any,
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
+    start_after_groups: list[list[int]] | None = None,
 ): ...
 
 
@@ -259,6 +264,7 @@ def interleave_operations(
     interleaved_ops: list | list[list],
     intervals: int | list[int] = 1,
     start_offsets: int | list[int] | None = None,
+    start_after_groups: list[list[int]] | None = None,
 ) -> list:
     """Interleave operations with flexible per-group patterns."""
     # Normalize inputs to lists
@@ -271,19 +277,25 @@ def interleave_operations(
         start_offsets = [0] * len(interleaved_ops)
     elif isinstance(start_offsets, int):
         start_offsets = [start_offsets] * len(interleaved_ops)
+    if start_after_groups is None:
+        start_after_groups = [[] for _ in interleaved_ops]
     # Track counters for each group
     counters = [0] * len(interleaved_ops)
     result = []
     for i, base_op in enumerate(base_ops):
         result.append(base_op)
         # Check each group for insertion
-        for group_idx, (ops, interval, offset) in enumerate(
-            zip(interleaved_ops, intervals, start_offsets)
+        for group_idx, (ops, interval, offset, depends_on) in enumerate(
+            zip(interleaved_ops, intervals, start_offsets, start_after_groups)
         ):
-            # Check if we should insert from this group
+            # All dependent groups must be fully exhausted first
+            deps_satisfied = all(
+                counters[dep] >= len(interleaved_ops[dep]) for dep in depends_on
+            )
             if (
-                i >= offset
-                and (i - offset + 1) % interval == 0
+                deps_satisfied
+                and i >= offset
+                and (i - offset) % interval == 0
                 and counters[group_idx] < len(ops)
             ):
                 result.append(ops[counters[group_idx]])
@@ -593,53 +605,126 @@ class ReorderGraph(CustomScheduleOp):
         clusters: Any,
     ):
         from ..wave.schedule_reordering import reorder_graph as reorder_graph_impl
+        from ..wave.scheduling.loop_reconstruction import PipelineStage
 
         # Get the iterate node from the reference (PipelineStageRef or list)
         loop_result = get_nodes_from_ref(loop)
         assert loop_result is not None, "Loop must have a result"
         assert len(loop_result) > 0, "Loop must have at least one element"
 
-        # Get the iterate's subgraph (this will be the KERNEL stage after pipelining)
         iterate_node = loop_result[0]
         custom_iterate = get_custom(iterate_node)
-        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
 
         # Extract cluster nodes from proxies
         cluster_nodes = []
-
         assert isinstance(clusters, (list, tuple)), "Clusters must be a list or tuple"
         for item in clusters:
             cluster_nodes.extend(extract_nodes(item))
 
         logger.info(f"Reordering with {len(cluster_nodes)} cluster items")
 
-        # Apply the reordering to the subgraph
+        # Determine target graph based on pipeline stage
+        is_parent_graph_stage = isinstance(loop, PipelineStageRef) and loop.stage in (
+            PipelineStage.EPILOGUE,
+            PipelineStage.PROLOGUE,
+        )
+
+        if is_parent_graph_stage:
+            return cls._reorder_parent_graph(kernel_trace, loop.stage, cluster_nodes)
+        else:
+            return cls._reorder_subgraph(
+                kernel_trace, custom_iterate, cluster_nodes, reorder_graph_impl
+            )
+
+    @classmethod
+    def _reorder_subgraph(
+        cls, kernel_trace, custom_iterate, cluster_nodes, reorder_graph_impl
+    ):
+        """Reorder a named subgraph (KERNEL). Creates a new graph and replaces the old one."""
+        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
         reordered_subgraph = reorder_graph_impl(subgraph, cluster_nodes)
 
         if reordered_subgraph is None:
             logger.warning("Failed to reorder graph, skipping reordering")
             return None
 
-        # Replace the old subgraph with the reordered one
         reordered_subgraph.parent_op = subgraph.parent_op
         original_subgraph_name = custom_iterate.subgraph_name
         reordered_subgraph_name = f"reordered_{original_subgraph_name}"
 
-        # Add the new subgraph and update references
+        # The iterate's owning graph holds the subgraph registration.
+        # For static shapes this is the root graph; for dynamic shapes
+        # it may be a conditional subgraph.
+        parent_graph = custom_iterate.graph
+
         kernel_trace.add_subgraph(reordered_subgraph_name, reordered_subgraph)
-        kernel_trace.get_root_graph().subgraphs[
-            reordered_subgraph_name
-        ] = reordered_subgraph
+        parent_graph.subgraphs[reordered_subgraph_name] = reordered_subgraph
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
 
-        # Remove the old subgraph
         del kernel_trace.region_graph.subgraphs[original_subgraph_name]
-        del kernel_trace.get_root_graph().subgraphs[original_subgraph_name]
+        del parent_graph.subgraphs[original_subgraph_name]
 
         logger.info(
             f"Successfully reordered graph: {original_subgraph_name} -> {reordered_subgraph_name}"
         )
+        return None
 
+    @classmethod
+    def _reorder_parent_graph(cls, kernel_trace, stage, cluster_nodes):
+        """Reorder EPILOGUE or PROLOGUE nodes in-place within the root graph.
+
+        Unlike KERNEL reordering (which replaces the entire subgraph), this
+        operates in-place to avoid invalidating node references held by
+        PipelineStageRef and subsequent schedule ops.
+        """
+        from ..wave.utils.general_utils import topological_sort_with_dependencies
+
+        root_graph = kernel_trace.get_root_graph()
+        node_list = list(root_graph.nodes)
+
+        prune_duplicates = lambda x: list(dict.fromkeys(x))
+        unique_cluster_nodes = prune_duplicates(cluster_nodes)
+
+        if not unique_cluster_nodes:
+            logger.warning(f"No cluster nodes for {stage.name}, skipping reordering")
+            return None
+
+        ordered_cluster = sorted(unique_cluster_nodes)
+        earliest_cluster_node = ordered_cluster[0]
+        latest_cluster_node = ordered_cluster[-1]
+
+        pre_cluster_nodes = [x for x in node_list if x < earliest_cluster_node]
+        post_cluster_nodes = [x for x in node_list if x > latest_cluster_node]
+        exhaustive_cluster_nodes = [
+            x
+            for x in node_list
+            if x >= earliest_cluster_node and x <= latest_cluster_node
+        ]
+
+        reordered_nodes = topological_sort_with_dependencies(
+            unique_cluster_nodes, exhaustive_cluster_nodes, pre_cluster_nodes
+        )
+
+        total = len(pre_cluster_nodes) + len(reordered_nodes) + len(post_cluster_nodes)
+        if len(node_list) != total:
+            logger.warning(
+                f"Failed to reorder {stage.name}: node count mismatch "
+                f"({len(node_list)} vs {total})"
+            )
+            return None
+
+        # Move the cluster-region nodes in-place to match the desired order.
+        # pre_cluster_nodes and post_cluster_nodes stay where they are.
+        anchor = pre_cluster_nodes[-1] if pre_cluster_nodes else None
+        for node in reordered_nodes:
+            if anchor is not None:
+                anchor.append(node)
+            anchor = node
+
+        logger.info(
+            f"Successfully reordered {stage.name} in-place "
+            f"({len(reordered_nodes)} nodes)"
+        )
         return None
 
 
@@ -723,10 +808,15 @@ class PipelinedLoop:
         iterate: Sequence[fx.Node],
         kernel_trace: "CapturedTrace",
         constraints: list[Constraint],
+        eliminate_epilogue: bool = False,
+        multi_buffer_count: Optional[int] = None,
     ):
         self.iterate = iterate
         self.kernel_trace = kernel_trace
         self.constraints = constraints
+        self.eliminate_epilogue = eliminate_epilogue
+        self.multi_buffer_count = multi_buffer_count
+        self.unroll_factor = 1
 
         # Access options from the current ScheduleContext
         from .._support.tracing import ScheduleContext
@@ -791,7 +881,9 @@ class PipelinedLoop:
             initiation_interval=self.initiation_interval,
             scheduling_type=SchedulingType.MANUAL,
             visualize=False,
-            multi_buffer_count=None,
+            multi_buffer_count=self.multi_buffer_count,
+            unroll_factor=self.unroll_factor,
+            eliminate_epilogue=self.eliminate_epilogue,
         )
 
         # Store the pipelined iterate node and node mapping, then create proxies for the stages
@@ -854,7 +946,11 @@ class PipelinedLoop:
 
     @property
     def EPILOGUE(self):
-        """Get a reference to the EPILOGUE stage (nodes after pipelined iterate)."""
+        """Get a reference to the EPILOGUE stage (nodes after pipelined iterate).
+        Returns None when eliminate_epilogue=True (epilogue was not generated).
+        """
+        if self.eliminate_epilogue:
+            return None
         return self._EPILOGUE
 
     def _update_kernel_node_mapping(self):
@@ -1027,8 +1123,16 @@ class Pipeline(CustomScheduleOp):
         kernel_trace,
         constraints: list[Constraint],
         iterate: Sequence[fx.Node],
+        eliminate_epilogue: bool = False,
+        multi_buffer_count: Optional[int] = None,
     ):
-        real_pipelined_loop = PipelinedLoop(iterate, kernel_trace, constraints)
+        real_pipelined_loop = PipelinedLoop(
+            iterate,
+            kernel_trace,
+            constraints,
+            eliminate_epilogue=eliminate_epilogue,
+            multi_buffer_count=multi_buffer_count,
+        )
 
         # Return the real object directly (no proxy needed)
         return real_pipelined_loop

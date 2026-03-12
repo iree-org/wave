@@ -39,6 +39,7 @@
 #include "water/Dialect/NormalForm/Transforms/Passes.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
+#include "water/Pipelines.h"
 #include "water/Tools/water-opt/WaterOptMain.h"
 #include "water/Transforms/Passes.h"
 
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
   water::registerPasses();
   water::test::registerAllPasses();
   wave::registerPasses();
+  water::registerWaterPipelines();
 
   DialectRegistry registry;
   registry.insert<

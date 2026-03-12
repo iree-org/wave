@@ -10,6 +10,7 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -23,7 +24,7 @@ namespace wave {
 /// vectorized. In case of a tie, take the dimension that is farther in the
 /// index dictionary, which is secretly a list. Return failure when the index
 /// sequence step cannot be evaluated statically.
-std::optional<uint64_t>
+std::optional<int64_t>
 getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                            mlir::DictionaryAttr indexDict,
                            wave::WaveHyperparameterAttr hyper);
@@ -63,6 +64,23 @@ llvm::LogicalResult computeWavesPerBlockFromConstraints(
     wave::WaveHyperparameterAttr hyperparams,
     llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
 
+/// Permute the shape according to the mapping.
+void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
+                  mlir::AffineMap map, bool inverse,
+                  llvm::SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape);
+
 } // namespace wave
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+llvm::FailureOr<mlir::ChangeResult> static inline
+operator|(llvm::FailureOr<mlir::ChangeResult> lhs,
+          FailureOr<mlir::ChangeResult> rhs) {
+  if (llvm::failed(lhs) || llvm::failed(rhs))
+    return llvm::failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
 
 #endif // WATER_DIALECT_WAVE_IR_WAVEUTILS_H

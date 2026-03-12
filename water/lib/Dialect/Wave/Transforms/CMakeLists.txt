@@ -1,5 +1,6 @@
 add_mlir_dialect_library(MLIRWaveTransforms
   DetectNormalForms.cpp
+  ExpandVariadicReductions.cpp
   InferTypes.cpp
   LoweringPatterns.cpp
   LowerReadWriteOps.cpp
@@ -21,12 +22,12 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRMathDialect
+  MLIRMemRefDialect
   MLIRNormalFormDialect
   MLIRPass
   MLIRSCFDialect
   MLIRTransforms
   MLIRVectorDialect
-  MLIRMathDialect
-  MLIRMemRefDialect
   MLIRWaveDialect
 )

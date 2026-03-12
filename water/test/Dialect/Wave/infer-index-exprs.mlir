@@ -86,6 +86,91 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
+// Batched (3D) MMA: batch dimension B is leading; M, N, K indexing is as in 2D.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @batched_mma
+  func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                         %b: !wave.tensor<[@B, @N, @K] of f16>,
+                         %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // LHS
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK: }, {
+    // RHS
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Accumulator
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Result
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+// Make sure the tiling constraints apply to batch dimensions. Note that there
+// are tests below for propagation across `wave.iterate`, here it is not the
+// point.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @batched_mma_in_a_loop
+  func.func @batched_mma_in_a_loop(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                                   %b: !wave.tensor<[@B, @N, @K] of f16>,
+                                   %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>,
+    #wave.tiling_constraint<dim = <"B">, tile_size = <[#wave.symbol<"BLOCK_B">] -> (BLOCK_B)>>
+  ], wave.hyperparameters = #wave.hyperparameters<{BLOCK_B = 2 : i64, B = 10, M = 16, N = 16, K = 16}>} {
+    // CHECK: wave.mma
+    // LHS
+    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK: }, {
+    // RHS
+    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Accumulator
+    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Result
+    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }
+    wave.iterate @B {
+    ^bb0:
+      wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+        : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+      wave.yield
+    } : () -> ()
+    return
+  }
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @simple_mma_with_reads_and_write
   func.func @simple_mma_with_reads_and_write(%a: !wave.tensor<[@M, @K] of f16>,
@@ -287,6 +372,40 @@ normalform.module [#wave.normal_form<full_types>] {
     // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+// Check that an unmapped dimension gets the default (0, 1, 1) index expression.
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK: @mma_32x32x8_f16_3d
+  func.func @mma_32x32x8_f16_3d(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                                %b: !wave.tensor<[@B, @N, @K] of f16>,
+                                %c: !wave.tensor<[@B, @M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
+      : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
     return
   }
 }
@@ -762,6 +881,39 @@ normalform.module [#wave.normal_form<full_types>] {
     %add = wave.add %broadcasted, %broadcasted2
       : (!wave.tensor<[@M, @N, @P] of f32, <register>>, !wave.tensor<[@M, @N, @P] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
+    return
+  }
+}
+
+// -----
+
+// Backward propagation from the MMA should give the register only M's index
+// expr, not N (the broadcast dimension).
+normalform.module [#wave.normal_form<full_types>] {
+  // CHECK-LABEL: @broadcast_mma_back_to_register
+  func.func @broadcast_mma_back_to_register(
+      %a: !wave.tensor<[@M, @K] of f16>,
+      %b: !wave.tensor<[@N, @K] of f16>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // Register has shape [M] only. Broadcast to [M, N] to use as MMA accumulator.
+    %cst = arith.constant 0.0 : f32
+    // CHECK: wave.register
+    // Backward propagation from MMA: register gets M index expr only (not N).
+    // CHECK:     M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-NOT: N :
+    %reg = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
+
+    // CHECK: wave.broadcast
+    %acc = wave.broadcast %reg
+      : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // Broadcast result is the accumulator operand; index exprs propagate back
+    // through it to the register.
+    %mma = wave.mma %a, %b, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     return
   }
 }

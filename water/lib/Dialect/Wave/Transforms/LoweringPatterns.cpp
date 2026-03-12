@@ -531,7 +531,6 @@ public:
     AffineMap map = exprListAttr.getMap();
     ArrayRef<Attribute> symbols = exprListAttr.getSymbols();
     SmallVector<Value> operands = adaptor.getOperands();
-    assert(map.getNumResults() == 1 && "expected a single result expression");
 
     const auto *typeConverter =
         static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
@@ -540,15 +539,93 @@ public:
     if (!convertedType)
       return rewriter.notifyMatchFailure(op, "failed to convert result type");
 
-    AffineExprExpander expander(rewriter, op.getLoc(), convertedType, symbols,
-                                operands, typeConverter->getHyperparameters(),
-                                arith::IntegerOverflowFlags::nsw |
-                                    arith::IntegerOverflowFlags::nuw);
-    Value result = expander.visit(map.getResults()[0]);
-    if (!result)
-      return rewriter.notifyMatchFailure(op,
-                                         "failed to expand affine expression");
+    SmallVector<Value> results;
+    for (AffineExpr expr : map.getResults()) {
+      AffineExprExpander expander(rewriter, op.getLoc(), convertedType, symbols,
+                                  operands, typeConverter->getHyperparameters(),
+                                  arith::IntegerOverflowFlags::nsw |
+                                      arith::IntegerOverflowFlags::nuw);
+      results.push_back(expander.visit(expr));
+      assert(results.back() && "failed to expand affine expression");
+    }
+
+    if (!op.getCombinator().has_value()) {
+      assert(results.size() == 1 &&
+             "expected a single result in absence of a combinator");
+      rewriter.replaceOp(op, results[0]);
+      return success();
+    }
+
+    wave::WaveApplyExprCombinator combinator = *op.getCombinator();
+    if (llvm::is_contained({wave::WaveApplyExprCombinator::Maximum,
+                            wave::WaveApplyExprCombinator::Minimum},
+                           combinator)) {
+      assert(results.size() >= 1 &&
+             "expected at least one result for min/max combinator");
+      Value running = results[0];
+      for (size_t i = 1, e = results.size(); i < e; ++i) {
+        if (combinator == wave::WaveApplyExprCombinator::Maximum) {
+          running = arith::MaxSIOp::create(rewriter, op.getLoc(), running,
+                                           results[i]);
+        } else {
+          running = arith::MinSIOp::create(rewriter, op.getLoc(), running,
+                                           results[i]);
+        }
+      }
+      rewriter.replaceOp(op, running);
+      return success();
+    }
+
+    assert(results.size() == 2 &&
+           "expected exactly two results for comparison combinator");
+    arith::CmpIPredicate predicate = [&] {
+      switch (combinator) {
+      case wave::WaveApplyExprCombinator::Greater:
+        return arith::CmpIPredicate::sgt;
+      case wave::WaveApplyExprCombinator::Less:
+        return arith::CmpIPredicate::slt;
+      case wave::WaveApplyExprCombinator::Equal:
+        return arith::CmpIPredicate::eq;
+      case wave::WaveApplyExprCombinator::NotEqual:
+        return arith::CmpIPredicate::ne;
+      case wave::WaveApplyExprCombinator::GreaterOrEqual:
+        return arith::CmpIPredicate::sge;
+      case wave::WaveApplyExprCombinator::LessOrEqual:
+        return arith::CmpIPredicate::sle;
+      default:
+        llvm_unreachable("unsupported comparison combinator");
+      }
+    }();
+    Value result = arith::CmpIOp::create(rewriter, op.getLoc(), predicate,
+                                         results[0], results[1]);
+    Type elementType = wave::getElementType(convertedType);
+    if (!elementType.isInteger(1)) {
+      result =
+          arith::ExtUIOp::create(rewriter, op.getLoc(), convertedType, result);
+    }
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+class BroadcastOpLoweringPattern
+    : public OpConversionPattern<wave::BroadcastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::BroadcastOp op, wave::BroadcastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Broadcast operates on registers, those should have been converted to
+    // vectors now.
+    auto sourceType = cast<VectorType>(adaptor.getSource().getType());
+    auto targetType = cast<VectorType>(op.getResult().getType());
+    if (sourceType == targetType) {
+      rewriter.replaceOp(op, adaptor.getSource());
+      return success();
+    }
+    auto vectorBroadcast = vector::BroadcastOp::create(
+        rewriter, op.getLoc(), targetType, adaptor.getSource());
+    rewriter.replaceOp(op, vectorBroadcast);
     return success();
   }
 };
@@ -1053,6 +1130,93 @@ public:
   }
 };
 
+class ReshapeOpLoweringPattern : public OpConversionPattern<wave::ReshapeOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ReshapeOp op, wave::ReshapeOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::all_of(adaptor.getSource().getType(), [](Type type) {
+          return type.isSignlessIntOrIndexOrFloat() || isa<VectorType>(type);
+        })) {
+      return rewriter.notifyMatchFailure(
+          op, "expected all source operands to be vectors or scalars");
+    }
+
+    if (adaptor.getSource().size() != 1) {
+      // The verifier checks that all operand types match.
+      Type operandType = adaptor.getSource()[0].getType();
+      bool operandTypeIsScalar = operandType.isIntOrIndexOrFloat();
+      VectorType operandVectorType = dyn_cast<VectorType>(operandType);
+      if (operandTypeIsScalar ||
+          (operandVectorType && operandVectorType.getNumElements() == 1)) {
+        SmallVector<Value> individualValues;
+        for (Value source : adaptor.getSource()) {
+          if (operandTypeIsScalar) {
+            individualValues.push_back(source);
+          } else {
+            individualValues.push_back(
+                vector::ExtractOp::create(rewriter, op.getLoc(), source, 0));
+          }
+        }
+        Value full = vector::FromElementsOp::create(
+            rewriter, op.getLoc(), op.getResult().getType(), individualValues);
+        rewriter.replaceOp(op, full);
+        return success();
+      }
+
+      auto convertedType = cast<VectorType>(
+          getTypeConverter()->convertType(op.getResult().getType()));
+      auto zeros = [&] {
+        if (auto intType =
+                dyn_cast<IntegerType>(convertedType.getElementType())) {
+          return SplatElementsAttr::get(convertedType,
+                                        APInt(intType.getWidth(), 0));
+        } else if (auto floatType =
+                       dyn_cast<FloatType>(convertedType.getElementType())) {
+          return SplatElementsAttr::get(
+              convertedType, APFloat(floatType.getFloatSemantics(), 0));
+        } else {
+          llvm_unreachable("unsupported element type");
+        }
+      }();
+      // TODO: consider using `vector.shuffle` for concatenation. For now being
+      // consistent with pywave.
+      Value concatenated =
+          arith::ConstantOp::create(rewriter, op.getLoc(), zeros);
+      for (auto [i, source] : llvm::enumerate(adaptor.getSource())) {
+        concatenated = vector::InsertStridedSliceOp::create(
+            rewriter, op.getLoc(), source, concatenated,
+            /*offsets=*/i * operandVectorType.getNumElements(), /*strides=*/1);
+      }
+      rewriter.replaceOp(op, concatenated);
+      return success();
+    }
+
+    // Split case: extract a slice from a single operand.
+    auto targetType = cast<VectorType>(
+        getTypeConverter()->convertType(op.getResult().getType()));
+    assert(static_cast<uint64_t>(targetType.getNumElements()) ==
+               static_cast<uint64_t>(
+                   cast<VectorType>(adaptor.getSource()[0].getType())
+                       .getNumElements()) /
+                   op.getNumSlices() &&
+           "vector size mismatch");
+    if ((cast<VectorType>(adaptor.getSource()[0].getType()).getNumElements() %
+         op.getNumSlices()) != 0) {
+      return rewriter.notifyMatchFailure(op,
+                                         "imperfectly divisible vector size");
+    }
+    Value extracted = vector::ExtractStridedSliceOp::create(
+        rewriter, op.getLoc(), adaptor.getSource()[0],
+        /*offsets=*/op.getLogicalSlice() * targetType.getNumElements(),
+        /*sizes=*/targetType.getNumElements(), /*strides=*/1);
+    rewriter.replaceOp(op, extracted);
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
@@ -1060,12 +1224,14 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
   patterns.add<
       // clang-format off
       ApplyExprOpLoweringPattern,
+      BroadcastOpLoweringPattern,
       CastOpLoweringPattern,
       ExtractOpLoweringPattern,
       ExtractSliceOpLoweringPattern,
       IterateOpLoweringPattern,
       PermuteOpLoweringPattern,
       RegisterOpLoweringPattern,
+      ReshapeOpLoweringPattern,
       SelectOpLoweringPattern,
       SelfIndexOpLoweringPattern,
       ShuffleOpLoweringPattern
@@ -1197,9 +1363,16 @@ public:
                   "unsupported reduction kind");
     // Expect PropagateElementsPerThread pass to have run, converting
     // WaveTensorType results to VectorType.
+
+    // Variadic reductions must be expanded to single-input form by the
+    // water-wave-expand-variadic-reductions pass before lowering.
+    if (adaptor.getInputs().size() != 1)
+      return op.emitOpError("expected single input, run "
+                            "--water-wave-expand-variadic-reductions first");
+
     Location loc = op.getLoc();
 
-    Value input = adaptor.getInput();
+    Value input = adaptor.getInputs().front();
     Value init = adaptor.getInit();
     bool isBlockReduction = op.getScope() == wave::WaveReductionScope::Block;
 

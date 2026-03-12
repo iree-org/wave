@@ -13,6 +13,12 @@ if(HAS_WNO_MACRO_REDEFINED)
   add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-macro-redefined>")
 endif()
 
+option(WATER_ENABLE_COVERAGE "Build with Clang source-based code coverage" OFF)
+if(WATER_ENABLE_COVERAGE)
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+  add_link_options(-fprofile-instr-generate)
+endif()
+
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   find_package(MLIR REQUIRED CONFIG)
 

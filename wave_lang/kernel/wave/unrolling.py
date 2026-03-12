@@ -7,6 +7,7 @@
 from sympy import Integer
 from torch import fx
 
+from wave_lang.kernel._support.indexing import is_literal
 from wave_lang.kernel._support.tracing import CapturedTrace
 
 from ..ops.wave_ops import (
@@ -28,7 +29,7 @@ def remap_iter_args(
     Add a mapping of iter_args to the output return values in order to keep track
     of how uses need to be updated for unrolled iterations.
     """
-    for iter_arg, return_val in zip(iter_args, output.return_vals[0]):
+    for iter_arg, return_val in zip(iter_args, output.yielded_values):
         value_use_map[iter_arg] = return_val
 
 
@@ -70,10 +71,13 @@ def unroll(
         assert isinstance(
             iterate.count, int | Integer
         ), "Iteration count must be a statically determinable integer"
-    if iterate.count / unroll_factor < 1:
-        raise ValueError("Unroll factor is too large for the iteration count.")
-    if iterate.count % unroll_factor != 0:
-        raise ValueError("Unroll factor must divide the iteration count evenly.")
+
+    count = iterate.count
+    if is_literal(count):
+        if count / unroll_factor < 1:
+            raise ValueError("Unroll factor is too large for the iteration count.")
+        if count % unroll_factor != 0:
+            raise ValueError("Unroll factor must divide the iteration count evenly.")
     if iterate.condition is not None:
         raise ValueError("Unrolling is not supported for iterates with conditions.")
 

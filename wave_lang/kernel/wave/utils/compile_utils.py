@@ -45,10 +45,10 @@ def compile_to_vmfb(
     ]
 
     # TODO: More targets/backends support.
-    if options.device == "hip":
-        flags.append(f"--iree-hip-target={options.target}")
+    if options.device == "hip" or options.device == "rocm":
+        flags.append(f"--iree-rocm-target={options.target}")
         if not options.drop_debug_info_before_mlir:
-            flags.append("--iree-hip-emit-debug-info")
+            flags.append("--iree-rocm-emit-debug-info")
 
     if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
@@ -57,7 +57,7 @@ def compile_to_vmfb(
         # scalarize_packed_math decomposes packed math into scalar math
         # so we need to disable SLP vectorization to prevent recombinining it
         # back on LLVM level.
-        flags.append("--iree-hip-llvm-slp-vec=false")
+        flags.append("--iree-rocm-llvm-slp-vec=false")
 
     if options.iree_preprocessing_pass_pipeline:
         flags.append(

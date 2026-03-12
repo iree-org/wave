@@ -1,14 +1,11 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
 from ..lang.kernel_buffer import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo, CoalescingType
-
-if TYPE_CHECKING:
-    from .constraints import MMAType
 
 
 def _get_location_capture_config():
@@ -44,7 +41,7 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
-    backend: str = "llvm"  # "llvm" or "asm"
+    backend: str = "llvm"  # "llvm" or "asm" (C++ WaveASM)
     device: str = "hip"
     target: str = "gfx942"
     codeobj: str = "5"  # Code object version ("4" or "5")
@@ -95,6 +92,7 @@ class WaveCompileOptions:
     scalarize_packed_math: bool = False
     coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
     enable_swizzle: bool = True
+    enable_mark_hardware_transpose_candidates: bool = True
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True
@@ -103,12 +101,18 @@ class WaveCompileOptions:
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
     specialize: bool = False
+    eliminate_epilogue: bool = False
 
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop
     # 0 - signal and wait on same iteration
     # 1 - one iteration apart, 2 - two, etc
     cluster_barrier_delay: Optional[int] = None
+
+    # Enable dynamic strides through Wave runtime and LLVM backend
+    @property
+    def dynamic_strides(self) -> bool:
+        return self.wave_runtime and self.backend == "llvm"
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False
@@ -126,6 +130,5 @@ class WaveCompileOptions:
 
     # === ASM backend options ===
     compile_to_asm: bool = (
-        False  # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+        False  # Compile to AMDGCN assembly (for lit tests, no clang++)
     )
-    mma_type: Optional["MMAType"] = None  # MMA type for ASM backend dispatch

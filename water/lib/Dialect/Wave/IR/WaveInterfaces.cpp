@@ -24,6 +24,19 @@
 using namespace mlir;
 
 //-----------------------------------------------------------------------------
+// getHyperparameters
+//-----------------------------------------------------------------------------
+
+wave::WaveHyperparameterAttr wave::getHyperparameters(Operation *op) {
+  for (Operation *current = op; current; current = current->getParentOp()) {
+    if (auto hyperparams = current->getAttrOfType<WaveHyperparameterAttr>(
+            WaveDialect::kHyperparameterAttrName))
+      return hyperparams;
+  }
+  return nullptr;
+}
+
+//-----------------------------------------------------------------------------
 // Index attribute verification
 //-----------------------------------------------------------------------------
 
@@ -37,6 +50,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
+
   SmallVector<DictionaryAttr> dicts;
   dicts.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
@@ -82,6 +96,85 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                  << " which is not defined by any parent op";
         }
       }
+    }
+  }
+
+  // For ops with the index attribute, verify that (1) each index expression has
+  // at most one dimension whose step evaluates to a static value different from
+  // 1 (with hyperparameters substituted), and (2) when step or stride can be
+  // evaluated to a concrete value, that value is strictly positive. Be
+  // defensive because we may not have verified anything but the basic
+  // well-formedness yet, e.g., the op verifier checking for single-result
+  // affine expressions in mappings did not run yet.
+  wave::WaveHyperparameterAttr hyperparams = wave::getHyperparameters(op);
+  for (DictionaryAttr dictAttr : dicts) {
+    int nonUnitCount = 0;
+    for (const NamedAttribute &named : dictAttr) {
+      auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(named.getValue());
+      if (!mapping)
+        continue;
+
+      if (AffineMap stepMap = mapping.getStep()) {
+        std::optional<SmallVector<int64_t>> stepValues =
+            wave::evaluateMapWithHyperparams(stepMap, mapping.getSymbols(),
+                                             hyperparams);
+        if (stepValues && stepValues->size() == 1) {
+          int64_t step = (*stepValues)[0];
+          if (step != ShapedType::kDynamic && step <= 0) {
+            return op->emitOpError()
+                   << "step in index expression must be strictly positive, got "
+                   << step << " for dimension " << named.getName();
+          }
+          if (step != 1 && step != ShapedType::kDynamic && ++nonUnitCount > 1) {
+            InFlightDiagnostic diag =
+                op->emitOpError()
+                << "'" << WaveDialect::kIndexWaveExprListAttrName
+                << "' has more than one entry with non-unit step";
+            diag.attachNote()
+                << "second non-unit step dimension: " << named.getName();
+            return failure();
+          }
+        }
+      }
+
+      if (AffineMap strideMap = mapping.getStride()) {
+        std::optional<SmallVector<int64_t>> strideValues =
+            wave::evaluateMapWithHyperparams(strideMap, mapping.getSymbols(),
+                                             hyperparams);
+        if (strideValues && strideValues->size() == 1) {
+          int64_t stride = (*strideValues)[0];
+          if (stride != ShapedType::kDynamic && stride <= 0) {
+            return op->emitOpError()
+                   << "stride in index expression must be strictly positive, "
+                      "got "
+                   << stride << " for dimension " << named.getName();
+          }
+        }
+      }
+    }
+  }
+
+  // When the operation implements WaveInferIndexExprsOpInterface, the index
+  // attribute length must match the number of values from
+  // getIndexExprValuesAndDescriptions. Otherwise, default to the number of op
+  // results.
+
+  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+    llvm::SmallVector<Value> values;
+    iface.getIndexExprValuesAndDescriptions(values);
+    if (values.size() != arr.size()) {
+      return op->emitError()
+             << WaveDialect::kIndexWaveExprListAttrName << " attribute length ("
+             << arr.size() << ") does not match the number of index expression "
+             << "values (" << values.size() << ")";
+    }
+  } else {
+    SmallVector<Value> values;
+    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
+    if (values.size() != arr.size()) {
+      return op->emitError() << "index attribute length (" << arr.size()
+                             << ") does not match the number of op results ("
+                             << values.size() << ")";
     }
   }
   return success();
@@ -208,6 +301,18 @@ llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
   return ChangeResult::Change;
 }
 
+FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
+    ArrayRef<wave::WaveSymbolAttr> from, wave::WaveTensorType &to,
+    llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  llvm::FailureOr<ChangeResult> res =
+      ::checkPropagateShapeConflict(from, to, fromName, toName, errs);
+  if (failed(res) || *res == ChangeResult::NoChange)
+    return res;
+
+  to = to.copyShapeFrom(from);
+  return ChangeResult::Change;
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     llvm::ArrayRef<wave::WaveTensorType> from,
     llvm::MutableArrayRef<wave::WaveTensorType> to, llvm::StringRef fromName,
@@ -241,17 +346,6 @@ llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
   }
   return changeResult;
 }
-
-namespace llvm {
-// Combine two potentially failing ChangeResults: if any of them failed, the
-// result of the combination is also failure.
-static FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
-                                         FailureOr<ChangeResult> rhs) {
-  if (failed(lhs) || failed(rhs))
-    return failure();
-  return *lhs | *rhs;
-}
-} // namespace llvm
 
 // Propagate type information from the reduction input type by removing the
 // reduction axis from it to the given type. Report errors to `errs` using
@@ -469,8 +563,21 @@ llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
   assert(!from.empty());
   assert(!to.empty());
+  auto source = ElementsPerThreadLatticeValue::bottom();
+  unsigned sourcePos = 0;
+  for (auto &&[i, fromValue] : llvm::enumerate(from)) {
+    if (fromValue.isBottom())
+      continue;
+    source = fromValue;
+    sourcePos = i;
+    break;
+  }
+  if (source.isBottom())
+    return ChangeResult::NoChange;
+
   return checkAndPropagateElementsPerThreadFromConstant(
-      from[0], from, to, (fromName + " #0").str(), fromName, toName, errs);
+      source, from, to, (fromName + " #" + llvm::Twine(sourcePos)).str(),
+      fromName, toName, errs);
 }
 
 wave::ElementsPerThreadLatticeValue wave::ElementsPerThreadLatticeValue::join(
@@ -585,7 +692,7 @@ llvm::LogicalResult wave::detail::verifyTensorShapesCompatible(
 }
 
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
-    Type lhs, Type rhs, bool includeAddressSpace,
+    Type lhs, Type rhs, bool includeAddressSpace, bool includeElementalType,
     std::optional<Location> errorLocation, llvm::StringRef lhsName,
     llvm::StringRef rhsName) {
   // Fast and cheap path.
@@ -597,9 +704,11 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
            "expected names when location is provided");
   }
 
-  if (failed(
-          verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
-    return failure();
+  if (includeElementalType) {
+    if (failed(
+            verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
+      return failure();
+  }
 
   auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
   auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
@@ -626,7 +735,7 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
 
 static llvm::LogicalResult
 verifyTypeRange(Location loc, TypeRange range, Type referenceType,
-                bool includeAddressSpace,
+                bool includeAddressSpace, bool includeElementalType,
                 llvm::StringRef rangeDescriptionPrefix,
                 llvm::StringRef referenceDescription) {
   llvm::SmallString<16> rangeDescription(rangeDescriptionPrefix);
@@ -636,8 +745,8 @@ verifyTypeRange(Location loc, TypeRange range, Type referenceType,
     os << i;
 
     if (failed(wave::detail::verifyTypesCompatible(
-            type, referenceType, includeAddressSpace, loc, os.str(),
-            referenceDescription))) {
+            type, referenceType, includeAddressSpace, includeElementalType, loc,
+            os.str(), referenceDescription))) {
       return llvm::failure();
     }
   }
@@ -645,7 +754,7 @@ verifyTypeRange(Location loc, TypeRange range, Type referenceType,
 }
 
 llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
-    Operation *op, bool includeAddressSpace) {
+    Operation *op, bool includeAddressSpace, bool includeElementalType) {
   const llvm::StringLiteral kOperandNamePrefix = "operand #";
   const llvm::StringLiteral kResultNamePrefix = "result #";
   std::string referenceDescription;
@@ -674,11 +783,13 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 
   if (llvm::failed(verifyTypeRange(op->getLoc(), op->getOperandTypes(),
                                    referenceType, includeAddressSpace,
-                                   kOperandNamePrefix, os.str())))
+                                   includeElementalType, kOperandNamePrefix,
+                                   os.str())))
     return llvm::failure();
 
   return verifyTypeRange(op->getLoc(), op->getResultTypes(), referenceType,
-                         includeAddressSpace, kResultNamePrefix, os.str());
+                         includeAddressSpace, includeElementalType,
+                         kResultNamePrefix, os.str());
 }
 
 //-----------------------------------------------------------------------------
@@ -1332,25 +1443,6 @@ llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
   return llvm::success();
 }
 
-llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
-    Operation *op,
-    [[maybe_unused]] llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<Attribute> indexExprs;
-  indexExprs.reserve(resultExprs.size());
-  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
-    if (!llvm::isa<wave::WaveTensorType>(op->getResult(i).getType()))
-      continue;
-    if (failed(checkAndAppendIndexExpr(op->getLoc(), resultExprs[i],
-                                       "result #" + llvm::Twine(i),
-                                       indexExprs)))
-      return llvm::failure();
-  }
-  op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-              ArrayAttr::get(op->getContext(), indexExprs));
-  return llvm::success();
-}
-
 // ----------------------------------------------------------------------------
 // Reduction operation traits
 // ----------------------------------------------------------------------------
@@ -1379,7 +1471,7 @@ LogicalResult wave::detail::verifyReductionOperation(Operation *op,
   }
   if (failed(wave::detail::verifyTypesCompatible(
           initTypeBase, resultTypeBase, /*includeAddressSpace=*/true,
-          op->getLoc(), "init", "result"))) {
+          /*includeElementalType=*/true, op->getLoc(), "init", "result"))) {
     return failure();
   }
 

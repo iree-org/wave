@@ -31,7 +31,7 @@ by BLOCK_M/WAVE_M along M and BLOCK_N/WAVE_N along N.
 
 C++ Backend Requirements:
   - waveasm-translate executable (set WAVEASM_TRANSLATE env var or build wave-asm)
-  - amdclang++ from ROCm installation
+  - clang++ (built from LLVM or in PATH)
   - wave_runtime Python module
 """
 
@@ -57,6 +57,7 @@ from wave_lang.kernel.lang.global_symbols import (
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.run_utils import (
+    get_dynamic_stride_args,
     set_default_run_config,
     get_default_arch,
 )
@@ -475,8 +476,9 @@ class CppBackendKernel:
                 c.data_ptr(),
             ]
         )
+        stride_args = get_dynamic_stride_args([a, b, c])
 
-        wave_runtime.launch(kernel_launch_info, kernel_args, [], [])
+        wave_runtime.launch(kernel_launch_info, kernel_args, [], [], stride_args)
 
 
 def compile_and_run_cpp_backend(
@@ -498,7 +500,7 @@ def compile_and_run_cpp_backend(
     Returns:
         CppBackendKernel: A callable that can be invoked for repeated execution.
     """
-    from wave_lang.kernel.wave.asm.wave_asm.test.e2e.waveasm_e2e import (
+    from waveasm.waveasm_e2e import (
         WaveASMCompiler,
         capture_wave_kernel_info,
     )

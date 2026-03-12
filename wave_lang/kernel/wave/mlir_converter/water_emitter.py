@@ -7,8 +7,6 @@ mlir operations of wave and other dialects.
 """
 
 from __future__ import annotations
-import argparse
-import dill
 import sys
 import torch.fx as fx
 from pathlib import Path
@@ -36,8 +34,6 @@ from attr_type_converter import (
     symbol_name_to_attribute,
 )
 
-from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
-
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
@@ -48,11 +44,14 @@ from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     LocationFrame,
     MLIRDiagnostic,
     NameLocation,
+    WaterDiagTestingMode,
     WaterError,
 )
+from wave_lang.kernel.wave.mlir_converter import dill_util
 from wave_lang.support.location_config import LocationCaptureLevel
-from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel.lang.wave_types import Memory, Register, IndexMapping
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
+from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.utils.symbol_utils import (
@@ -63,6 +62,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import (
 from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     ApplyExpr,
+    BinaryOpBase,
     Extract,
     ExtractSlice,
     get_custom,
@@ -75,8 +75,11 @@ from wave_lang.kernel.ops.wave_ops import (
     Output,
     Placeholder,
     Placeholder,
-    SelectOp,
+    Read,
+    ReduceOp as Reduce,
+    Reshape,
     SelfIndex,
+    SelectOp as Select,
     SharedMemoryBarrier,
     ShuffleOp as Shuffle,
     Write,
@@ -107,9 +110,11 @@ try:
         ApplyExprOp,
         SubOp,
         AllocateOp,
+        BroadcastOp,
         CastOp,
         DivOp,
         ReciprocalOp,
+        ReshapeOp,
         Exp2Op,
         ExtractOp,
         ExtractSliceOp,
@@ -121,6 +126,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        SelectOp,
         SelfIndexOp,
         ShuffleOp,
         SumOp,
@@ -143,6 +149,7 @@ try:
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
+        convert_sympy_to_affine_map_and_combinator,
     )
     from water_mlir.water_mlir.dialects import arith, func, wave, amdgpu
     from water_mlir.water_mlir.dialects.transform import interpreter
@@ -150,21 +157,24 @@ except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
 
+
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
     "apply_expr": ApplyExprOp,
+    "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
     "cast": CastOp,
     "extract": ExtractOp,
     "extract_slice": ExtractSliceOp,
-    "max": MaxOp,
-    "min": MinOp,
+    "maximum": MaxOp,
+    "minimum": MinOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
     "reciprocal": ReciprocalOp,
+    "reshape": ReshapeOp,
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
@@ -173,7 +183,7 @@ WAVE_OP_CONSTRUCTORS = {
     "output": YieldOp,
     "write": WriteOp,
     "permute": PermuteOp,
-    "max_element": MaxElementOp,
+    "max": MaxElementOp,
     "sum": SumOp,
     "select": SelectOp,
     "self_index": SelfIndexOp,
@@ -189,6 +199,8 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
+    # 'bool' is an alias for 'i1'.
+    "bool": lambda: ir.IntegerType.get_signless(1),
     "i8": lambda: ir.IntegerType.get_signless(8),
     "i16": lambda: ir.IntegerType.get_signless(16),
     "i32": lambda: ir.IntegerType.get_signless(32),
@@ -284,51 +296,6 @@ def _type_to_wave_mlir(
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
 
 
-def _parse_input() -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, str]:
-    """Parses and returns the pickled trace, options, and pipeline from stdin.
-
-    The input is expected to be a dill-serialized dict with keys:
-    - "trace": CapturedTrace object
-    - "constraints": list[Constraint]
-    - "options": WaveCompileOptions
-    - "pipeline": A string containing the transform dialect pass pipeline
-
-    Restores supplemental fx.Node fields (e.g., .type) from node.meta.
-    """
-    try:
-        unpickled = dill.loads(sys.stdin.buffer.read())
-    except Exception as e:
-        raise SystemExit(f"FATAL: failed to unpickle: {e}")
-    trace = unpickled.get("trace") if isinstance(unpickled, dict) else None
-    constraints = unpickled.get("constraints") if isinstance(unpickled, dict) else None
-    options = unpickled.get("options") if isinstance(unpickled, dict) else None
-    pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
-
-    if not isinstance(trace, CapturedTrace):
-        raise SystemExit(
-            f"FATAL: unpickled object is not CapturedTrace (got {type(trace)})"
-        )
-
-    if not isinstance(constraints, list) or not all(
-        isinstance(c, Constraint) for c in constraints
-    ):
-        raise SystemExit(
-            f"FATAL: unpickled object is not list of Constraints (got {type(constraints)})"
-        )
-
-    if not isinstance(options, WaveCompileOptions):
-        raise SystemExit(
-            f"FATAL: unpickled object is not WaveCompileOptions (got {type(options)})"
-        )
-
-    if not isinstance(pipeline, str):
-        raise SystemExit(f"FATAL: unpickled object is not str (got {type(pipeline)})")
-
-    # Restore supplemental node fields captured in the meta field
-    trace.restore_node_state()
-    return trace, constraints, options, pipeline
-
-
 def _convert_sympy_expr_to_affine_map(
     expr: sympy.Expr | int, symbol_mapping: dict[sympy.Symbol, sympy.Symbol]
 ) -> ir.AffineMap:
@@ -393,7 +360,7 @@ def _attach_attributes(
 
         if isinstance(node, MMA):
             # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
-            # match MmaOp::setIndexFromLattices which serialises
+            # match MmaOp::getIndexExprValuesAndDescriptions which serializes
             # operandExprs + resultExprs.  The Python-side index sequence
             # analysis only tracks 3 (lhs, rhs, acc), so we emit acc_index
             # twice: once for the accumulator operand and once for the
@@ -437,7 +404,7 @@ def _attach_attributes(
                 symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
-        op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
+        op.attributes["bounds"] = wave.WaveSymbolMappingAttr.get(bounds)
 
     if water_id := getattr(node.fx_node, "_water_id", None):
         op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)
@@ -481,6 +448,65 @@ def _convert_to_wave_expr_list_tuple(
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
 
 
+def _convert_vector_shapes(
+    shapes: dict[IndexSymbol, int | IndexExpr], subs: dict[IndexExpr, Any] = {}
+) -> ir.DictAttr:
+    """Converts a dictionary of index symbols mapped to integers to a dictionary attribute."""
+    resolved = _resolve_vector_shapes_for_attr(shapes, subs)
+    i64 = ir.IntegerType.get_signless(64)
+    dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
+    return ir.DictAttr.get(dict)
+
+
+def _convert_index_mapping_to_water(
+    mapping: IndexMapping, memory_shape: Sequence[IndexExpr] | None, *, is_read: bool
+) -> ir.Attribute:
+    """Converts an IndexMapping to a water attribute assuming it is used for the specified shape.
+
+    Currently only supports permutation mappings. The `is_read` flag indicates
+    whether to use the input mapping (True) or output mapping (False). This is
+    due to excessively expressive design choice in pywave: the unused mapping
+    isn't actually needed beyond IndexMapping construction.
+    """
+    if memory_shape is None:
+        raise RuntimeError(
+            "Memory type shape is required for index mapping conversion."
+        )
+
+    filtered_shape: list[IndexSymbol] = []
+    for dim in memory_shape:
+        if not isinstance(dim, IndexSymbol):
+            raise NotImplementedError(
+                f"Only single-symbol shapes are currently supported, got {dim}"
+            )
+        filtered_shape.append(dim)
+    iterators: tuple[IndexExpr, ...] = (
+        # TODO: the function expects a `tuple` but doesn't actually need that, any iterable would do.
+        mapping.map_input_indices(tuple(filtered_shape))
+        if is_read
+        else mapping.map_output_indices(tuple(filtered_shape))
+    )
+
+    # Consecutive iterators are assigned to the value (non-memory)
+    # shape, and their order may be different in the memory shape.
+    # The mapping is therefore (d0, d1, d2, ...) -> (iterator positions)
+    # inverted because, in water, the mapping goes the from memory shape
+    # to the value shape.
+    #
+    # Construct a list of iterators in order and look up for
+    # position in that list to find numeric permutation indices
+    # without parsing symbol names to extract the iterator position.
+    # If we had a proper data structure instead of blindly relying
+    # on sympy symbols everywhere, this would have been an easy to
+    # access property...
+    ordered_iterators = [IndexMapping.iterator(i) for i in range(len(iterators))]
+    permutation = [ordered_iterators.index(iter) for iter in iterators]
+    inverse_permutation = [permutation.index(i) for i in range(len(permutation))]
+    return wave.WaveExprListAttr.get(
+        [], ir.AffineMap.get_permutation(inverse_permutation)
+    )
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -502,11 +528,21 @@ def _emit_ops_from_graph(
                 if fx_node not in implicit_captures:
                     continue
 
+                captured_fx_node = implicit_captures[fx_node]
                 assert (
-                    implicit_captures[fx_node] in value_map
+                    captured_fx_node in value_map
                 ), f"{node} implicitly captures a value that was not translated."
 
-                value_map[fx_node] = value_map[implicit_captures[fx_node]]
+                # Body nodes downstream of implicit captures need typed inputs
+                # to infer their own types. Before infer_types runs, the type
+                # of the placeholders is unset - propagate from the
+                # already-typed captured node.
+                if node.type is None:
+                    captured_type = get_custom(captured_fx_node).type
+                    if captured_type is not None:
+                        node.type = captured_type
+
+                value_map[fx_node] = value_map[captured_fx_node]
                 continue
 
             # No MLIR ops are emitted for output nodes.
@@ -521,6 +557,10 @@ def _emit_ops_from_graph(
                 Raises a RuntimeError if the value is not found and allow_missing is False.
                 """
                 if (mlir_args := value_map.get(node)) is not None:
+                    if len(mlir_args) == 0:
+                        if allow_missing:
+                            return None
+                        raise RuntimeError(f"Empty mapping for node {node}")
                     assert len(mlir_args) == 1, "A single-result node is expected."
                     return mlir_args[0]
                 if allow_missing:
@@ -534,10 +574,21 @@ def _emit_ops_from_graph(
                 """
                 mlir_operands = []
                 for arg in fx_node.args:
-                    if (
-                        mlir_arg := get_single_mapped_value(arg, allow_missing=True)
-                    ) is not None:
-                        mlir_operands.append(mlir_arg)
+                    args = (
+                        arg
+                        if isinstance(arg, Sequence) and not isinstance(arg, str)
+                        else [arg]
+                    )
+                    mlir_operands.extend(
+                        mlir_arg
+                        for subarg in args
+                        if (
+                            mlir_arg := get_single_mapped_value(
+                                subarg, allow_missing=True
+                            )
+                        )
+                        is not None
+                    )
                 return mlir_operands
 
             if isinstance(node, GetResult):
@@ -598,11 +649,33 @@ def _emit_ops_from_graph(
                 # (e.g. operations like Write, which do not have results
                 # and thus don't take `result_type` as argument)
                 op_builder = WAVE_OP_CONSTRUCTORS[node.tkw_op_name]
-                # TODO: Add special handling for Iterate node
                 if isinstance(node, Write):
                     mlir_op = op_builder(
                         get_single_mapped_value(node.register_),
                         get_single_mapped_value(node.memory),
+                        mapping=(
+                            _convert_index_mapping_to_water(
+                                node.mapping,
+                                node.memory_type.symbolic_shape,
+                                is_read=False,
+                            )
+                            if node.mapping
+                            else None
+                        ),
+                    )
+                elif isinstance(node, Read):
+                    mlir_op = op_builder(
+                        result_type,
+                        get_single_mapped_value(node.memory),
+                        mapping=(
+                            _convert_index_mapping_to_water(
+                                node.mapping,
+                                node.memory_type.symbolic_shape,
+                                is_read=True,
+                            )
+                            if node.mapping
+                            else None
+                        ),
                     )
                 elif isinstance(node, NewRegister):
                     dtype = getattr(node, "dtype", None)
@@ -619,31 +692,41 @@ def _emit_ops_from_graph(
                         get_single_mapped_value(arg) for arg in node.init_args
                     ]
 
+                    # Derive result types from init_args rather than from
+                    # the body outputs.  init_args reside in the enclosing
+                    # graph whose nodes have already been emitted, so their
+                    # types are always available.  Body outputs may reference
+                    # nodes whose types are not yet set (e.g. reductions in
+                    # attention's online-softmax loop).
                     result_types = []
                     result_locs = []
-                    outputs = node.outputs()
-                    if not isinstance(outputs, Sequence):
-                        outputs = [outputs]
-                    for fx_output in outputs:
-                        output = get_custom(fx_output)
-                        output.infer_type()
-                        result_types.append(_type_to_wave_mlir(ctx, output.type))
+                    for init_arg in node.init_args:
+                        init_custom = get_custom(init_arg)
+                        result_types.append(_type_to_wave_mlir(ctx, init_custom.type))
                         result_locs.append(
-                            output.location.to_water()
-                            if output.location
+                            init_custom.location.to_water()
+                            if init_custom.location
                             else ir.Location.current
                         )
+                    outputs = node.outputs()
 
                     mlir_op = op_builder(result_types, axis, carried_values, [])
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
 
-                    for idx, iter_arg in enumerate(node.iter_args()):
-                        iter_arg.iter_idx = idx
+                    # Collect IterArgs in graph order and assign
+                    # iter_idx before any call that sorts by it.
+                    # node.iter_args() sorts by iter_idx which may
+                    # still be None before initialize_iter_args runs.
+                    subgraph = trace.get_subgraph(node.subgraph_name)
+                    iter_arg_nodes = [
+                        n for n in subgraph.nodes if isinstance(get_custom(n), IterArg)
+                    ]
+                    for idx, ia_node in enumerate(iter_arg_nodes):
+                        get_custom(ia_node).iter_idx = idx
 
-                    # add mapping for iter args
-                    for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
+                    for wave_arg, mlir_arg in zip(iter_arg_nodes, body.arguments):
                         value_map[wave_arg] = (mlir_arg,)
 
                     # Emit subgraph of the iterate node
@@ -669,6 +752,37 @@ def _emit_ops_from_graph(
                     )
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
+                    )
+                elif isinstance(node, Reduce):
+                    args = node.arg if isinstance(node.arg, Sequence) else [node.arg]
+                    inputs = [get_single_mapped_value(a) for a in args]
+                    init = get_single_mapped_value(node.init)
+                    # The axis attribute is only emitted when the input type
+                    # is not fully specified (uses 'any' shapes). For
+                    # fully-specified types, the reduction dimension is
+                    # inferred from the shape difference between input and
+                    # result, and emitting axis would be rejected by the
+                    # verifier.
+                    input_type = inputs[0].type
+                    fully_specified = (
+                        isinstance(input_type, WaveTensorType)
+                        and input_type.fully_specified
+                    )
+                    axis = (
+                        symbol_name_to_attribute(node.dim.name)
+                        if node.dim is not None and not fully_specified
+                        else None
+                    )
+                    mlir_op = op_builder(
+                        result_type,
+                        inputs,
+                        init,
+                        scope=wave.WaveReductionScopeAttr.get(
+                            wave.WaveReductionScope.Block
+                            if node.block
+                            else wave.WaveReductionScope.Warp
+                        ),
+                        axis=axis,
                     )
                 elif isinstance(node, Allocate):
                     # Get parent value from value_map if it exists.
@@ -759,8 +873,8 @@ def _emit_ops_from_graph(
                         sympy_expr.free_symbols, key=lambda s: s.name
                     )
                     symbol_mapping = preprocess_symbols(ordered_symbols)
-                    affine_map = _convert_sympy_expr_to_affine_map(
-                        sympy_expr, symbol_mapping
+                    affine_map, combinator = convert_sympy_to_affine_map_and_combinator(
+                        sympy_expr, [symbol.name for symbol in symbol_mapping.keys()]
                     )
                     symbol_attrs = [
                         (
@@ -772,14 +886,75 @@ def _emit_ops_from_graph(
                     ]
                     expr_attr = WaveExprListAttr.get(symbol_attrs, affine_map)
                     operands = [get_single_mapped_value(arg) for arg in reg]
-                    mlir_op = op_builder(result_type, operands, expr_attr)
+                    # TODO: need to add automatic constructor of WaveApplyExprCombinatorAttr
+                    # from enum.
+                    mlir_op = op_builder(
+                        result_type,
+                        operands,
+                        expr_attr,
+                        combinator=(
+                            wave.WaveApplyExprCombinatorAttr.get(combinator)
+                            if combinator is not None
+                            else None
+                        ),
+                    )
+                elif isinstance(node, Reshape):
+                    # FIXME(#873): temporary fix to work around a malformed op.
+                    if isinstance(node.target_vector_shape, int):
+                        target_vector_shape = {
+                            node.type.symbolic_shape[-1]: node.target_vector_shape
+                        }
+                    else:
+                        target_vector_shape = node.target_vector_shape
+                    mlir_op = op_builder(
+                        result_type,
+                        source=create_mlir_operands(),
+                        target_vector_shape=_convert_vector_shapes(target_vector_shape),
+                        logical_slice=node.logical_slice,
+                        num_slices=node.num_slices,
+                    )
+                elif isinstance(node, (BinaryOpBase, Select)):
+                    # BinaryOpBase and SelectOp allow implicit broadcasting
+                    # on the Python side (e.g. a rank-2 reduction result
+                    # used with a rank-3 tensor), but the MLIR verifier
+                    # requires matching operand ranks. Insert explicit
+                    # broadcasts for any operand whose shape differs from
+                    # the result. The broadcast target keeps each operand's own
+                    # element type so that e.g. a SelectOp condition (i1) is
+                    # broadcast to the result shape without being cast to the
+                    # result element type (e.g. f32).
+                    #
+                    # We intentionally limit this to ops with known
+                    # broadcasting semantics rather than applying it
+                    # generically, because many ops (read, mma, ...)
+                    # have operands that are intentionally shaped
+                    # differently from the result.
+                    operands = create_mlir_operands()
+                    result_shape = result_type.shape
+                    operands = [
+                        (
+                            BroadcastOp(
+                                WaveTensorType.get(
+                                    result_shape,
+                                    result_type.fully_specified,
+                                    v.type.element_type,
+                                    result_type.address_space,
+                                ),
+                                v,
+                            ).results[0]
+                            if v.type.shape != result_shape
+                            else v
+                        )
+                        for v in operands
+                    ]
+                    mlir_op = op_builder(result_type, *operands)
                 else:
                     try:
                         mlir_op = op_builder(result_type, *create_mlir_operands())
-                    except Exception:
+                    except Exception as e:
                         raise RuntimeError(
                             f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
-                        )
+                        ) from e
 
             if mlir_op is None:
                 raise NotImplementedError(
@@ -829,10 +1004,7 @@ def _emit_wave_constraints(
 
         shape_dict = None
         if constraint.vector_shapes:
-            resolved = _resolve_vector_shapes_for_attr(constraint.vector_shapes, subs)
-            i64 = ir.IntegerType.get_signless(64)
-            dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
-            shape_dict = ir.DictAttr.get(dict)
+            shape_dict = _convert_vector_shapes(constraint.vector_shapes, subs)
 
         attr = HardwareConstraintAttr.get(
             threads_per_wave=constraint.threads_per_wave,
@@ -927,22 +1099,36 @@ def serialize_location(loc: ir.Location) -> list[LocationFrame]:
     return _collect_frames(loc)
 
 
-def _flush_output(
-    module_str: str,
-    diagnostics: list[MLIRDiagnostic | WaterError],
-    inferred_attributes: dict[str, dict[str, Any]] | None = None,
-) -> None:
-    output = dill.dumps(
-        {
-            "diagnostics": diagnostics,
-            "module": module_str.encode("utf-8"),
-            "inferred_attributes": (
-                inferred_attributes if inferred_attributes is not None else {}
-            ),
-        }
-    )
-    sys.stdout.buffer.write(output)
-    sys.stdout.flush()
+def diagnostic_from_mlir_error(e: ir.MLIRError) -> list[MLIRDiagnostic]:
+    """Convert an MLIR exception into a list of Wave-compatible diagnostics.
+
+    Each note is added as a separate diagnostic. If it has the same location as
+    the previous diagnostic, the location is omitted.
+    """
+    diagnostics = []
+    for d in e.error_diagnostics:
+        diagnostics.append(
+            MLIRDiagnostic(
+                message=d.message,
+                severity=d.severity.name,
+                location=serialize_location(d.location),
+            )
+        )
+        previous_location = d.location
+        for n in d.notes:
+            diagnostics.append(
+                MLIRDiagnostic(
+                    message=n.message,
+                    severity=n.severity.name,
+                    location=(
+                        serialize_location(n.location)
+                        if n.location != previous_location
+                        else []
+                    ),
+                )
+            )
+            previous_location = n.location
+    return diagnostics
 
 
 def _create_kernel_module(
@@ -950,7 +1136,8 @@ def _create_kernel_module(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    test_diagnostics: bool = False,
+    *,
+    test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
 ) -> tuple[ir.Module | None, list[MLIRDiagnostic | WaterError], set[str] | None]:
     """Creates an MLIR module containing the kernel function from the captured trace.
 
@@ -974,7 +1161,7 @@ def _create_kernel_module(
         try:
             module = ir.Module.parse(options.override_mlir, context=ctx)
         except ir.MLIRError as e:
-            diagnostics.append(WaterError(message=e.message))
+            diagnostics.extend(diagnostic_from_mlir_error(e))
             return None, diagnostics, known_ids
         else:
             return module, diagnostics, known_ids
@@ -985,9 +1172,30 @@ def _create_kernel_module(
 
     module = ir.Module.create()
 
-    if test_diagnostics:
-        loc = ir.Location.current
+    if test_diagnostics == WaterDiagTestingMode.DIRECT:
+        # A suitable location is the first non-placeholder op (placeholders use
+        # "name" locations that are near-useless).
+        candidates = trace.walk(
+            lambda n: not isinstance(get_custom(n), Placeholder)
+            and get_custom(n).location
+        )
+        loc = candidates[0].location.to_water() if candidates else ir.Location.current
         loc.emit_error("test error")
+        return module, None, None
+
+    # Having a duplicate function name in the module is very likely to remain a
+    # verifier error for the observable future. If that is not the case,
+    # programmatically construct other IR that causes verification failure so we
+    # can exercise the diagnostic reporting mechanism.
+    if test_diagnostics == WaterDiagTestingMode.VERIFIER:
+        with ir.InsertionPoint(module.body):
+            func.FuncOp(
+                "repeated_name", ir.FunctionType.get([], []), visibility="private"
+            )
+            func.FuncOp(
+                "repeated_name", ir.FunctionType.get([], []), visibility="private"
+            )
+        return module, None, None
 
     # Collect placeholders from graph
     placeholders = [n for n in trace.walk() if getattr(n, "op", "") == "placeholder"]
@@ -1010,9 +1218,13 @@ def _create_kernel_module(
         if issubclass(t, Memory) and t.address_space in options.subs:
             # Create a new type with resolved address space
             resolved_address_space = options.subs[t.address_space]
-            if resolved_address_space != GLOBAL_ADDRESS_SPACE:
+            if resolved_address_space not in (
+                GLOBAL_ADDRESS_SPACE,
+                SHARED_ADDRESS_SPACE,
+            ):
                 raise RuntimeError(
-                    f"Unexpected address space in hyperparameters: {t.address_space} -> {resolved_address_space}"
+                    f"Unexpected address space in hyperparameters: "
+                    f"{t.address_space} -> {resolved_address_space}"
                 )
             t = Memory[t.symbolic_shape, resolved_address_space, t.dtype]
         arg_types.append(_type_to_wave_mlir(ctx, t))
@@ -1022,9 +1234,11 @@ def _create_kernel_module(
     func_type = ir.FunctionType.get(arg_types, [])
     with ir.InsertionPoint(module.body):
         func_op = func.FuncOp("kernel", func_type)
-        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
-        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
-        # print([(str(k), v) for k, v in options.subs.items()])
+        # Validate that all non-int mappings are address spaces (either
+        # SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE). These mappings can be
+        # dropped safely because the information has been encoded in either
+        # `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the
+        # kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
         for k, v in options.subs.items():
             if not isinstance(v, int):
                 if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
@@ -1102,14 +1316,17 @@ _INTERNAL_WATER_ID_ATTR_NAME = "_water_internal.id"
 _INTERNAL_RESULT_WATER_IRS_ATTR_NAME = "_water_internal.result_ids"
 
 
-def _emit_from_captured_trace(
+def _build_response(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
     pipeline: str = "",
-    test_diagnostics=False,
-) -> int:
+    test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
+) -> bytes:
+    """Core conversion logic that returns the dill-serialized response bytes.
 
+    Shared between single-shot mode and server mode.
+    """
     diagnostics: list[MLIRDiagnostic | WaterError] = []
 
     def diagnostics_handler(d):
@@ -1139,28 +1356,30 @@ def _emit_from_captured_trace(
         wave.register_passes()
 
         module, creation_diagnostics, known_ids = _create_kernel_module(
-            ctx, trace, constraints, options, test_diagnostics
+            ctx, trace, constraints, options, test_diagnostics=test_diagnostics
         )
-        diagnostics += creation_diagnostics
+        if creation_diagnostics:
+            diagnostics.extend(creation_diagnostics)
         if module is None:
-            _flush_output("", diagnostics, None)
-            return 0
+            return _serialize_response("", diagnostics, None)
 
-        # Verify the module before transforming or printing.
+        # Verify the module before transforming or printing. Note that the call
+        # to explicit `verify` registers its own diagnostic handler and raises
+        # an exception instead of going through the handler we registered.
+        # Therefore we need to manually unpack the exception into `diagnostics`.
         try:
             module.operation.verify()
         except ir.MLIRError as e:
-            diagnostics.append(WaterError(message=e.message))
+            diagnostics.extend(diagnostic_from_mlir_error(e))
             # Print in generic form if verification fails, this form should be
             # robust to that.
-            _flush_output(
+            return _serialize_response(
                 module.operation.get_asm(
                     enable_debug_info=enable_debug_info, print_generic_op_form=True
                 ),
                 diagnostics,
                 None,
             )
-            return 0
 
         if options.print_mlir_before_water:
             print(module.operation.get_asm(), file=sys.stderr)
@@ -1177,7 +1396,8 @@ def _emit_from_captured_trace(
                 # Require the first op to be a named sequence.
                 if entry_op.operation.name != "transform.named_sequence":
                     raise RuntimeError(
-                        f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
+                        f'Expected first op to be "transform.named_sequence", '
+                        f'got "{entry_op.operation.name}"'
                     )
                 interpreter.apply_named_sequence(
                     module,
@@ -1253,24 +1473,92 @@ def _emit_from_captured_trace(
                     raise RuntimeError(f"Index not inferred for water id {water_id}.")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-        _flush_output(module_str, diagnostics, inferred_attributes)
-    return 0
+        return _serialize_response(module_str, diagnostics, inferred_attributes)
+
+
+def _serialize_response(
+    module_str: str,
+    diagnostics: list[MLIRDiagnostic | WaterError],
+    inferred_attributes: dict[str, dict[str, Any]] | None = None,
+) -> bytes:
+    return dill_util.dumps(
+        {
+            "diagnostics": diagnostics,
+            "module": module_str.encode("utf-8"),
+            "inferred_attributes": (
+                inferred_attributes if inferred_attributes is not None else {}
+            ),
+        }
+    )
+
+
+def _server_mode() -> None:
+    """Run as a persistent server, reading length-prefixed requests from stdin.
+
+    Instead of spawning a fresh process per request (which costs ~2 s in
+    module imports each time), the parent keeps this process alive and
+    sends multiple requests over the same stdin/stdout pipes.
+
+    Each request payload is a dill-serialized dict with the same keys as
+    in single-shot mode (trace, constraints, options, pipeline, ...).
+    Each response payload is a dill-serialized dict with keys
+    `diagnostics`, `module`, and `inferred_attributes`.
+
+    The loop exits when stdin is closed (EOF on the length header), i.e.
+    when the parent closes its end of the pipe.
+    """
+    from wave_lang.kernel.wave.mlir_converter.protocol import (
+        recv_message,
+        send_message,
+    )
+
+    while True:
+        try:
+            raw_request = recv_message(sys.stdin.buffer)
+        except EOFError:
+            break  # Parent closed stdin, clean shutdown.
+        except ConnectionError as e:
+            # The parent likely crashed mid-write. The response pipe is
+            # broken so we can't send a diagnostic back, stderr is
+            # best-effort.
+            print(f"WARNING: {e}", file=sys.stderr)
+            break
+
+        try:
+            request = dill_util.loads(raw_request)
+        except Exception as e:
+            response_data = _serialize_response(
+                "", [WaterError(message=f"Failed to unpickle request: {e}")], None
+            )
+            send_message(sys.stdout.buffer, response_data)
+            continue
+
+        trace = request.get("trace")
+        constraints = request.get("constraints", [])
+        options = request.get("options", WaveCompileOptions())
+        pipeline = request.get("pipeline", "")
+        test_diags = request.get("test_diagnostic_emission", WaterDiagTestingMode.NO)
+
+        if not isinstance(trace, CapturedTrace):
+            response_data = _serialize_response(
+                "",
+                [WaterError(message=f"Expected CapturedTrace, got {type(trace)}")],
+                None,
+            )
+            send_message(sys.stdout.buffer, response_data)
+            continue
+
+        trace.restore_node_state()
+
+        try:
+            response_data = _build_response(
+                trace, constraints, options, pipeline, test_diags
+            )
+        except Exception as e:
+            response_data = _serialize_response("", [WaterError(message=str(e))], None)
+
+        send_message(sys.stdout.buffer, response_data)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Water dialect emitter")
-
-    parser.add_argument(
-        "--test-diagnostic-emission",
-        action="store_true",
-        help="Test diagnostic serialization and deserialization through stdin and stdout",
-    )
-
-    args = parser.parse_args()
-
-    trace, constraints, options, pass_pipeline = _parse_input()
-    sys.exit(
-        _emit_from_captured_trace(
-            trace, constraints, options, pass_pipeline, args.test_diagnostic_emission
-        )
-    )
+    _server_mode()

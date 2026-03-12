@@ -7,6 +7,7 @@ from ...ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
     CustomOp,
+    ExtractSlice,
     Read,
     Write,
     GatherToLDS,
@@ -172,8 +173,14 @@ class GemmScheduler(BaseScheduler):
         global_loads = dict()
         for local_write in local_writes:
             custom = get_custom(local_write)
-            if isinstance(get_custom(custom.register_), Read):
-                global_loads[custom.register_] = None
+
+            # Walk past any ExtractSlice chain to find the underlying Read.
+            # Write -> ExtractSlice -> ... -> Read: walk past slices.
+            producer = get_custom(custom.register_)
+            while isinstance(producer, ExtractSlice):
+                producer = get_custom(producer.register_)
+            if isinstance(producer, Read):
+                global_loads[producer.fx_node] = None
         return global_loads.keys()
 
     def annotate_op_with_gemm_operation_type(self, nodes, gemm_operation_type):

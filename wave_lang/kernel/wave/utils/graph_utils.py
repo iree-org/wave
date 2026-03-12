@@ -3,7 +3,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import inspect
+import types
 from dataclasses import fields as dataclass_fields, is_dataclass
+
+import numpy as np
 from typing import (
     Callable,
     Optional,
@@ -24,10 +28,11 @@ from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
 from ...lang.wave_types import Memory, Register
-from ..constraints import HardwareConstraint
+from ..constraints import HardwareConstraint, TilingConstraint
 from ...ops.wave_ops import (
     MMA,
     Allocate,
+    Broadcast,
     Conditional,
     CustomOp,
     ExtractSlice,
@@ -137,6 +142,27 @@ def DCE(trace: CapturedTrace) -> None:
             get_custom(node).erase()
 
 
+_DTYPE_NAME_TO_NUMPY = {
+    "f16": np.float16,
+    "f32": np.float32,
+    "f64": np.float64,
+}
+
+
+def _truncate_float_to_dtype(value: float, dtype: DataType) -> float:
+    """Cast a Python float to the precision of `dtype` and back.
+
+    MLIR stores scalar constants (e.g. `arith.constant`) at the target
+    element type's precision, so a Python f64 value roundtripped through
+    e.g. f16 will come back truncated. Casting both sides to the target
+    dtype before comparison makes the check exact.
+    """
+    np_dtype = _DTYPE_NAME_TO_NUMPY.get(str(dtype))
+    if np_dtype is None:
+        return value
+    return float(np_dtype(value))
+
+
 def _expr_symbols(expr: IndexSequence | sympy.Basic | int) -> set[str]:
     """Collect free-symbol names from index expressions."""
     if isinstance(expr, IndexSequence):
@@ -208,6 +234,95 @@ def _check_index_mapping_equivalent(
     return Success()
 
 
+def _resolve_node(node: fx.Node, node_map: dict[fx.Node, fx.Node]) -> fx.Node | None:
+    """Look up the mapped counterpart of `node`.
+
+    Tries a direct lookup first.  If that fails, sees through wrapper
+    ops (GetResult, Broadcast) that are structurally transparent for
+    comparison purposes and retries with the underlying value.
+    """
+    mapped = node_map.get(node)
+    if mapped is None and isinstance(get_custom(node), GetResult):
+        mapped = node_map.get(get_custom(node).value)
+    if mapped is None and isinstance(get_custom(node), Broadcast):
+        mapped = node_map.get(get_custom(node).arg)
+    return mapped
+
+
+def _nodes_match(expected: fx.Node, actual: fx.Node) -> bool:
+    """Check whether `actual` is structurally equivalent to `expected`.
+
+    Returns True when `actual` is `expected` directly, or when `actual`
+    is a wrapper (GetResult or Broadcast) whose underlying source is `expected`.
+    """
+    if actual is expected:
+        return True
+    if isinstance(get_custom(actual), GetResult):
+        return get_custom(actual).value is expected
+    if isinstance(get_custom(actual), Broadcast):
+        return get_custom(actual).arg is expected
+    return False
+
+
+def _sympy_equiv(a: sympy.Basic, b: sympy.Basic) -> bool:
+    """Check symbolic equivalence of two sympy expressions.
+
+    For numeric/algebraic expressions this checks `simplify(a - b) == 0`.
+    For relational expressions (e.g. `x < 5`), both sides must use the
+    same comparison operator and their canonical `lhs - rhs` forms must
+    be algebraically equivalent.
+    """
+    if a == b:
+        return True
+    if isinstance(a, sympy.Rel) and type(a) is type(b):
+        return sympy.simplify((a.lhs - a.rhs) - (b.lhs - b.rhs)) == 0
+    try:
+        return sympy.simplify(a - b) == 0
+    except TypeError:
+        return False
+
+
+SympyCallable: TypeAlias = Callable[..., sympy.Basic | tuple[sympy.Basic, ...]]
+
+
+def _check_callable_equivalent(lhs: SympyCallable, rhs: SympyCallable) -> Result:
+    """Compare two sympy-valued callables for symbolic equivalence.
+
+    Evaluates both callables with fresh `sympy.Symbol` inputs and checks
+    that the resulting expressions are equivalent via `_sympy_equiv`.
+    This covers the `expr` field of `ApplyExpr` nodes, whose lambdas
+    are reconstructed during MLIR import and differ by object identity.
+    """
+    lhs_params = inspect.signature(lhs).parameters
+    rhs_params = inspect.signature(rhs).parameters
+    if len(lhs_params) != len(rhs_params):
+        return Failure(
+            f"callable arity mismatch: {len(lhs_params)} vs {len(rhs_params)}"
+        )
+
+    # Plain Symbols (no assumptions) to avoid spurious simplifications:
+    # index_symbol() adds nonnegative=True which could make unequal
+    # expressions simplify to zero (e.g. abs(x) - x with nonneg x).
+    test_syms = [sympy.Symbol(f"_cmp_{i}") for i in range(len(lhs_params))]
+    lhs_result = lhs(*test_syms)
+    rhs_result = rhs(*test_syms)
+
+    lhs_elems = (
+        list(lhs_result) if isinstance(lhs_result, (list, tuple)) else [lhs_result]
+    )
+    rhs_elems = (
+        list(rhs_result) if isinstance(rhs_result, (list, tuple)) else [rhs_result]
+    )
+    if len(lhs_elems) != len(rhs_elems):
+        return Failure(
+            f"callable result count mismatch: {len(lhs_elems)} vs {len(rhs_elems)}"
+        )
+    for i, (l, r) in enumerate(zip(lhs_elems, rhs_elems)):
+        if not _sympy_equiv(l, r):
+            return Failure(f"callable result[{i}] mismatch: {l} vs {r}")
+    return Success()
+
+
 def _check_payloads_equivalent(
     lhs: Payload,
     rhs: Payload,
@@ -219,14 +334,12 @@ def _check_payloads_equivalent(
     if isinstance(lhs, fx.Node) or isinstance(rhs, fx.Node):
         if not (isinstance(lhs, fx.Node) and isinstance(rhs, fx.Node)):
             return Failure(f"node vs non-node: {type(lhs)} vs {type(rhs)}")
-        expected = node_map.get(lhs)
+        expected = _resolve_node(lhs, node_map)
         if expected is None:
             return Failure("node mapping not provided")
-        return (
-            Success()
-            if expected is rhs
-            else Failure(f"node mapping mismatch: {lhs} vs {rhs}")
-        )
+        if not _nodes_match(expected, rhs):
+            return Failure(f"node mapping mismatch: {lhs} vs {rhs}")
+        return Success()
 
     # Dict comparison
     if isinstance(lhs, dict) and isinstance(rhs, dict):
@@ -273,6 +386,14 @@ def _check_payloads_equivalent(
         if not (isinstance(lhs, DataType) and isinstance(rhs, DataType)):
             return Failure(f"dtype vs non-dtype: {type(lhs)} vs {type(rhs)}")
         return Success() if lhs == rhs else Failure(f"dtype mismatch: {lhs} vs {rhs}")
+
+    # Callable comparison: two lambdas/functions are considered equivalent when
+    # they accept the same number of arguments and produce symbolically identical
+    # results for fresh symbolic inputs. This covers the `expr` field of
+    # ApplyExpr nodes, whose lambdas are reconstructed during MLIR import.
+    # Only match actual function objects, not classes or other callables.
+    if isinstance(lhs, types.FunctionType) and isinstance(rhs, types.FunctionType):
+        return _check_callable_equivalent(lhs, rhs)
 
     # Fallback to default equality, e.g. lhs == rhs == None
     return Success() if lhs == rhs else Failure(f"value mismatch: {lhs} vs {rhs}")
@@ -385,6 +506,17 @@ def _check_nodes_equivalent(
             lhs_val = getattr(lhs_custom, f.name, None)
             rhs_val = getattr(rhs_custom, f.name, None)
 
+            # MLIR stores scalar constants at the target element type
+            # precision (e.g. f16/f32), truncating the Python f64 value.
+            # Always cast both sides to the node's dtype before comparing
+            # so the comparison is dtype-aware even when values happen to
+            # match at f64 precision.
+            if isinstance(lhs_val, float) and isinstance(rhs_val, float):
+                node_dtype = getattr(lhs_custom, "dtype", None)
+                if node_dtype is not None:
+                    lhs_val = _truncate_float_to_dtype(lhs_val, node_dtype)
+                    rhs_val = _truncate_float_to_dtype(rhs_val, node_dtype)
+
             if not (
                 check_result := _check_payloads_equivalent(
                     lhs_val, rhs_val, subs, node_map
@@ -393,6 +525,16 @@ def _check_nodes_equivalent(
                 return Failure(
                     f"field '{f.name}' mismatch: {check_result.error}",
                 )
+
+    if isinstance(lhs_custom, Output):
+        # Special handling because the above will not iterate through
+        # the property `yielded_values`.
+        if not (
+            check_result := _check_payloads_equivalent(
+                lhs_custom.yielded_values, rhs_custom.yielded_values, subs, node_map
+            )
+        ):
+            return Failure(f"yielded_values mismatch: {check_result.error}")
 
     # Check dynamically-set index attribute.
     # Directional: reference absent is OK (index may not yet be set in early
@@ -601,7 +743,12 @@ def _compare_node_lists(
     subs: Optional[dict[IndexSymbol, int]],
     node_map: dict[fx.Node, fx.Node],
 ) -> Result:
-    """Compare two node lists positionally using _check_nodes_equivalent."""
+    """Compare two node lists positionally using _check_nodes_equivalent.
+
+    Transparent wrapper ops (GetResult, Broadcast) are expected to have
+    been filtered by the caller; this function does a straight positional
+    comparison of whatever it receives.
+    """
     if len(lhs_nodes) != len(rhs_nodes):
         return Failure(
             f"node count mismatch: {len(lhs_nodes)} vs {len(rhs_nodes)}",
@@ -638,6 +785,13 @@ def _check_graphs_equivalent(
 
     After placeholders are resolved, non-placeholder nodes are compared
     positionally via `_compare_node_lists`.
+
+    Transparent wrapper ops (GetResult, Broadcast) may appear
+    asymmetrically between the two sides.  They are filtered from the
+    node lists before comparison, and `_nodes_match` /
+    `_resolve_node` see through them when resolving operand
+    references.  Filtering rather than trace mutation avoids interfering
+    with subsequent compilation passes and their roundtrips.
     """
     lhs = (
         lhs_trace.get_root_graph()
@@ -652,6 +806,21 @@ def _check_graphs_equivalent(
 
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
+
+    # Filter transparent wrapper ops that may appear asymmetrically.
+    #
+    # GetResult: filtered from rhs when the lhs is pre-canonical
+    # (add_get_results has not yet run; the MLIR importer always produces
+    # GetResult wrappers).
+    lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
+    lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
+    if lhs_has_iterate and not lhs_has_getresult:
+        rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), GetResult)]
+
+    # Broadcast: always filtered from both sides; either trace may
+    # contain explicit broadcasts at different positions.
+    lhs_nodes = [n for n in lhs_nodes if not isinstance(get_custom(n), Broadcast)]
+    rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), Broadcast)]
 
     if lhs_graph_name is not None:
         # Subgraph: reconcile lifted placeholders, then compare non-lifted.
@@ -787,6 +956,33 @@ def compare_hardware_constraints_for_mlir_roundtrip(
     return True
 
 
+def compare_tiling_constraints_for_mlir_roundtrip(
+    source: TilingConstraint, roundtripped: TilingConstraint
+) -> bool:
+    """Directional comparison for TilingConstraint during MLIR roundtrip.
+
+    Before `create_induction_vars`, the fields `induction_var` and `iters`
+    are `None` in the source trace. The MLIR importer always reconstructs
+    them from the iterate operation, so the roundtripped constraint may
+    have values that the source doesn't yet. This comparator accepts
+    `None` on the source side for these fields even when they are set on
+    the roundtripped side.
+    """
+    if source.dim != roundtripped.dim:
+        return False
+    if source.tile_size != roundtripped.tile_size:
+        return False
+    # These fields are populated by `create_induction_vars`, a
+    # accept None on the source side
+    if source.induction_var is not None and (
+        source.induction_var != roundtripped.induction_var
+    ):
+        return False
+    if source.iters is not None and source.iters != roundtripped.iters:
+        return False
+    return True
+
+
 def move_node_after(src_node: fx.Node, anchor: fx.Node):
     """
     Moves src_node into a location after a given anchor node.
@@ -901,23 +1097,20 @@ def get_users(
                         break
             continue
         if isinstance(custom, Output):
-            # Map output to get result
-            return_vals = custom.return_vals[0]
+            return_vals = custom.yielded_values
             parent_region = custom.graph.parent_op
-            if not isinstance(return_vals, (list, tuple)):
-                if parent_region.users:
-                    users.append(next(iter(parent_region.users)))
-            else:
-                # Handles case where DCE eliminate unused GetResult.
-                get_results = {
-                    get_custom(x).res_idx: x
-                    for x in parent_region.users
-                    if isinstance(get_custom(x), GetResult)
-                }
+            get_results = {
+                get_custom(x).res_idx: x
+                for x in parent_region.users
+                if isinstance(get_custom(x), GetResult)
+            }
+            if get_results:
                 output_idx = return_vals.index(node)
                 # Sometime IterArg only used within the tkw.Reduction region
                 if output_idx in get_results:
                     users.append(get_results[output_idx])
+            elif parent_region.users:
+                users.append(next(iter(parent_region.users)))
             continue
         if isinstance(custom, Conditional):
             region = custom
@@ -1035,37 +1228,29 @@ def get_inputs(
             # Map get result to output
             iteration_subgraph = region.get_root_graph().subgraphs[region.subgraph_name]
             if len(region.init_args) == 1:
-                outputs = region.outputs(iteration_subgraph)
-                if isinstance(outputs, Sequence):
-                    inputs += outputs
-                else:
-                    inputs.append(outputs)
+                inputs += region.outputs(iteration_subgraph)
             else:
                 inputs.append(region.outputs(iteration_subgraph)[custom.res_idx])
         elif isinstance(parent_op, Conditional):
             region = parent_op
-            # Map get result to output
             conditional_subgraph = region.get_root_graph().subgraphs[
                 region.subgraph_name
             ]
             outputs = region.outputs(conditional_subgraph)
-            if isinstance(outputs, Sequence):
-                if len(outputs) == 1:
-                    inputs.append(outputs[0])
-                else:
-                    inputs.append(outputs[custom.res_idx])
+            if len(outputs) == 1:
+                inputs.append(outputs[0])
             else:
-                inputs.append(outputs)
+                inputs.append(outputs[custom.res_idx])
         else:
             raise ValueError(
                 f"GetResult must be using an Iterate or Conditional, but\n{custom}\nis using\n{parent_op}"
             )
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        inputs.append(custom.outputs(iteration_subgraph))
+        inputs.extend(custom.outputs(iteration_subgraph))
     elif isinstance(custom, Conditional):
         conditional_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        inputs.append(custom.outputs(conditional_subgraph))
+        inputs.extend(custom.outputs(conditional_subgraph))
     else:
         # Default handling for other ops.
         for input in node.all_input_nodes:

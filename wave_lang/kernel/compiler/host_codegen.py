@@ -1,5 +1,7 @@
 from typing import Optional
 
+import sympy
+
 from wave_lang.support.ir_imports import (
     ArrayAttr,
     Block,
@@ -33,6 +35,7 @@ from .kernel_codegen import (
     BindingDesc,
     KernelSignature,
     create_argument_locations,
+    get_dynamic_stride_arg_count,
 )
 from ..wave.constraints import DeviceConstraint
 from .host_utils import HostSignature, split_input_tensors, merge_output_slices
@@ -58,7 +61,46 @@ def memref_to_tensor(memrefs: list[IrType], use_views: bool = False):
     return tensors
 
 
+def _is_dynamic_dim(dim, dynamic_symbols_set: set[IndexSymbol]) -> bool:
+    """Check if a dimension is dynamic, either directly or via free symbols."""
+    if dim in dynamic_symbols_set:
+        return True
+    if hasattr(dim, "free_symbols") and dim.free_symbols & dynamic_symbols_set:
+        return True
+    return False
+
+
+def _find_symbol_in_compound_dim(
+    symbol: IndexSymbol,
+    arg_dim_mapping: dict[IndexSymbol, tuple[int, int]],
+) -> tuple[sympy.Expr, int, int, int]:
+    """Find a buffer dim containing `symbol` and return the inverse coefficient.
+
+    Returns (dim_expr, arg_idx, dim_idx, inv) where *inv* is the positive
+    integer multiplier needed to recover the base symbol from the buffer
+    dimension value (i.e. ``dim_value * inv == symbol_value``).
+    """
+    for dim_expr, (a_idx, d_idx) in arg_dim_mapping.items():
+        if not hasattr(dim_expr, "free_symbols"):
+            continue
+        if symbol not in dim_expr.free_symbols:
+            continue
+        coeff = dim_expr.coeff(symbol)
+        if coeff == 0:
+            continue
+        inv = sympy.Integer(1) / coeff
+        if not (inv.is_integer and inv > 0):
+            raise ValueError(
+                f"Cannot infer {symbol} from dim expression "
+                f"{dim_expr}: inverse coefficient {inv} is not "
+                f"a positive integer"
+            )
+        return dim_expr, a_idx, d_idx, int(inv)
+    raise KeyError(f"Dynamic symbol {symbol} not found in any buffer dimension")
+
+
 def get_dynamic_dims(bindings: list[BindingDesc], dynamic_symbols: list[IndexSymbol]):
+    dynamic_symbols_set = set(dynamic_symbols)
     dynamic_dims: list[IndexSymbol] = []
     for b in bindings:
         node_type = b.reference[1].type
@@ -66,7 +108,7 @@ def get_dynamic_dims(bindings: list[BindingDesc], dynamic_symbols: list[IndexSym
             if all(node_type.physical_layout.shape):
                 continue
         for dim in b.kernel_buffer_type.symbolic_shape:
-            if dim in dynamic_symbols:
+            if _is_dynamic_dim(dim, dynamic_symbols_set):
                 dynamic_dims.append(dim)
     return dynamic_dims
 
@@ -94,6 +136,7 @@ def isolated_test_call(
     async_dispatch: bool = False,
     device_layout: Optional[Grid] = None,
     device_constraints: Optional[list[DeviceConstraint]] = None,
+    dynamic_strides: bool = False,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
 
@@ -118,6 +161,12 @@ def isolated_test_call(
 
                 arg_dim_mapping[dim_symbol] = (arg_idx, dim_idx)
 
+        stride_arg_count = get_dynamic_stride_arg_count(
+            dynamic_strides, host_sig.buffer_bindings
+        )
+        if stride_arg_count > 0:
+            input_tensors += [IndexType.get()] * stride_arg_count
+
         if async_dispatch:
             fence_type = IrType.parse("!hal.fence")
             input_tensors += [fence_type] * 2
@@ -134,6 +183,8 @@ def isolated_test_call(
             sig.kernel_buffer_bindings + scalar_bindings
         )
 
+        if stride_arg_count > 0:
+            arg_locs += [Location.unknown()] * stride_arg_count
         if async_dispatch:
             arg_locs += [Location.unknown()] * 2
 
@@ -143,7 +194,7 @@ def isolated_test_call(
         dynamic_offset = scalars_offset + scalars_count
 
         with InsertionPoint(entry_block):
-            arguments = entry_block.arguments
+            arguments = list(entry_block.arguments)
             if async_dispatch:
                 in_fence = arguments[-2]
                 out_fence = arguments[-1]
@@ -178,9 +229,52 @@ def isolated_test_call(
             # Get the dynamic symbols values from the buffer dimensions.
             dynamic_argument_map: dict[IndexSymbol, Value] = {}
             for symbol in dynamic_symbols:
-                arg_idx, dim_idx = arg_dim_mapping[symbol]
-                idx = arith_d.constant(IndexType.get(), dim_idx)
-                dynamic_argument_map[symbol] = tensor_d.dim(arguments[arg_idx], idx)
+                if symbol in arg_dim_mapping:
+                    arg_idx, dim_idx = arg_dim_mapping[symbol]
+                    idx = arith_d.constant(IndexType.get(), dim_idx)
+                    dynamic_argument_map[symbol] = tensor_d.dim(arguments[arg_idx], idx)
+                else:
+                    _, a_idx, d_idx, inv = _find_symbol_in_compound_dim(
+                        symbol, arg_dim_mapping
+                    )
+                    idx = arith_d.constant(IndexType.get(), d_idx)
+                    dim_val = tensor_d.dim(arguments[a_idx], idx)
+                    if inv != 1:
+                        scale = arith_d.constant(IndexType.get(), inv)
+                        dim_val = arith_d.muli(dim_val, scale)
+                    dynamic_argument_map[symbol] = dim_val
+
+            # Populate runtime values for compound dim expressions
+            # (e.g. K/2, K/32) that appear in buffer shapes.
+            for dim in set(argument_dims + result_dims):
+                if dim in dynamic_argument_map:
+                    continue
+                if not hasattr(dim, "free_symbols"):
+                    continue
+                known = dim.free_symbols & set(dynamic_argument_map.keys())
+                if len(known) != 1:
+                    continue
+                sym = known.pop()
+                coeff = dim.coeff(sym)
+                if coeff == 0:
+                    continue
+                sym_val = dynamic_argument_map[sym]
+                p, q = sympy.Rational(coeff).p, sympy.Rational(coeff).q
+                if p != 1:
+                    mul_c = arith_d.constant(IndexType.get(), int(p))
+                    sym_val = arith_d.muli(sym_val, mul_c)
+                if q != 1:
+                    div_c = arith_d.constant(IndexType.get(), int(q))
+                    sym_val = arith_d.divsi(sym_val, div_c)
+                dynamic_argument_map[dim] = sym_val
+
+            # Create workload base: dynamic dims, then scalars, then strides.
+            dynamic_args = [dynamic_argument_map[dim] for dim in dynamic_symbols]
+            if stride_arg_count > 0:
+                stride_args = [to_index(v) for v in arguments[-stride_arg_count:]]
+            else:
+                stride_args = []
+            workload_base = dynamic_args + scalars_args + stride_args
 
             assert isinstance(entry_block, Block)
             # Create a flow.dispatch op to the kernel
@@ -237,8 +331,7 @@ def isolated_test_call(
 
                     out = flow_d.DispatchOp(
                         output_slices,
-                        [dynamic_argument_map[dim] for dim in dynamic_symbols]
-                        + scalars_args,
+                        workload_base,
                         entrypoints,
                         block_argument_list,
                         [dynamic_argument_map[dim] for dim in argument_dims],
@@ -264,10 +357,10 @@ def isolated_test_call(
                 # with the provided host signature arguments.
                 out = flow_d.DispatchOp(
                     memref_to_tensor(output_types),
-                    [dynamic_argument_map[dim] for dim in dynamic_symbols]
-                    + scalars_args,
+                    workload_base,
                     entrypoints,
-                    list(arguments) + list(dynamic_argument_map.values()),
+                    list(arguments)
+                    + [dynamic_argument_map[s] for s in dynamic_symbols],
                     [dynamic_argument_map[dim] for dim in argument_dims],
                     [dynamic_argument_map[dim] for dim in result_dims],
                     tied_operands=tied_operands,

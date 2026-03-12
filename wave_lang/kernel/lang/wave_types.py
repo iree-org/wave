@@ -302,6 +302,18 @@ class IndexMapping:
     def is_identity(self) -> bool:
         return self.is_input_identity() and self.is_output_identity()
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IndexMapping):
+            return False
+        return (
+            self.input_mapping == other.input_mapping
+            and self.output_mapping == other.output_mapping
+            and self.dynamic_val_mappings == other.dynamic_val_mappings
+        )
+
+    # Make object hashable for use in sets and dicts.
+    __hash__ = object.__hash__
+
     def __repr__(self) -> str:
         return (
             f"IndexMapping(iters={self.iters}, input_mapping={self.input_mapping}), "

@@ -8,7 +8,8 @@ import sympy
 import torch.fx as fx
 
 from ..ops.wave_ops import Read, Write
-from .constraints import Constraint, DistributionConstraint
+from .assumptions import get_divisibility_subs
+from .constraints import Constraint, DistributionConstraint, ReorderingConstraint
 from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
@@ -16,7 +17,13 @@ from .utils.general_utils import (
     remove_global_indexing,
 )
 from .utils.graph_utils import get_custom, propagate_loop_carried_vars
-from .utils.symbol_utils import IndexExpr, IndexSymbol, safe_subs, subs_idxc
+from .utils.symbol_utils import (
+    IndexExpr,
+    IndexSymbol,
+    safe_subs,
+    simplify,
+    subs_idxc,
+)
 from .wave import CapturedTrace
 
 
@@ -32,13 +39,41 @@ def _get_max_tile_size(
     return ret
 
 
-def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
+def is_divisible(
+    dim: IndexSymbol,
+    tile_size: IndexExpr,
+    fwd: list[tuple[sympy.Symbol, sympy.Expr]],
+) -> bool:
+    """Check if dim is provably divisible by tile_size given divisibility subs.
+
+    Substitutes divisibility assumptions (e.g. K -> 256*K_div_256) and checks
+    whether ceiling(dim / tile_size) * tile_size simplifies to dim.
+    """
+    if not fwd:
+        return False
+    tile = subs_idxc(tile_size)
+    work = sympy.ceiling(dim / tile) * tile
+    diff = safe_subs(work - dim, fwd)
+    return simplify(diff) == 0
+
+
+def generate_bounds_exprs(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    reordering_constraints: list[ReorderingConstraint] = None,
+):
     """
     This pass generates bounds expressions for read and write ops.
 
     Bounds are used during MLIR lowering to handle partial access.
     """
     hardware_constraint = get_hardware_constraint(constraints)
+    fwd, _ = get_divisibility_subs(constraints)
+
+    wg_subs = {}
+    if reordering_constraints:
+        for c in reordering_constraints:
+            wg_subs[c.wg_dim] = c.reordered_equation
 
     def is_read_write(node: fx.Node):
         return isinstance(get_custom(node), (Read, Write))
@@ -54,6 +89,16 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
         bounds = find_index_bounds(
             constraints, node.index, vector_shapes, node.type.symbolic_shape
         )
+        # Remove bounds where divisibility assumptions prove alignment.
+        if bounds and fwd:
+            for c in constraints:
+                if (
+                    isinstance(c, DistributionConstraint)
+                    and c.dim in bounds
+                    and is_divisible(c.dim, c.tile_size, fwd)
+                ):
+                    del bounds[c.dim]
+            bounds = bounds or None
         if is_shared_mem and bounds:
             bounds = remove_global_indexing(bounds, constraints)
             # Masking against global bounds was already handled when reading from
@@ -77,5 +122,15 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
 
         if not bounds:
             continue
+
+        if wg_subs:
+            bounds = {
+                k: (
+                    v.subs(wg_subs, simultaneous=True)
+                    if isinstance(v, sympy.Expr)
+                    else v
+                )
+                for k, v in bounds.items()
+            }
 
         node.update_arg("bounds", bounds)

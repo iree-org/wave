@@ -6,6 +6,7 @@
 
 import math
 
+import torch.fx as fx
 from wave_lang.support.logging import get_logger
 
 from .._support.tracing import CapturedTrace
@@ -81,7 +82,9 @@ def apply_promotion_pattern(
             get_custom(memory).type.address_space != allocate_node.address_space
         ):
             # Moves memory to top of graph after allocate to avoid non-dominating operands.
-            move_node_after(custom_node.memory, allocate_node.fx_node)
+            # Skip if the memory already precedes the allocate (e.g. top-of-graph placeholders).
+            if custom_node.memory > allocate_node.fx_node:
+                move_node_after(custom_node.memory, allocate_node.fx_node)
             # We move CustomOp/Read up to the last write_to_shared_mem S.T
             # all reads from shared mem happens only after all read from globals
             # and write to shared mem happen. Which will minimize lds_barrier count.
@@ -166,6 +169,17 @@ def fix_manual_allocate_dependencies(trace: CapturedTrace):
                 logger.debug(f"Set write dependency for {node} to {writes_before}")
 
 
+def _last_placeholder_or_root(graph: fx.Graph) -> fx.Node:
+    """Return the last placeholder of the placeholder block at the top of the graph."""
+    last = graph._root
+    for node in graph.nodes:
+        if isinstance(get_custom(node), Placeholder):
+            last = node
+        else:
+            break
+    return last
+
+
 def promote_node(
     node: Read | Write,
     last_write_to_shared: fx.Node,
@@ -186,7 +200,7 @@ def promote_node(
     # If the read is a gather, then we should use the memory type instead of the
     # type, when determining the shape of the promoted memory.
     symbolic_shape = node.type.symbolic_shape
-    with node.graph.inserting_after(node.graph._root):
+    with node.graph.inserting_after(_last_placeholder_or_root(node.graph)):
         constrained_shape = get_constrained_shape(symbolic_shape, constraints)
         # If the read/write operation already has a set distributed shape at the kernel
         # we use that for allocation. Otherwise deduce the shape from constraints.

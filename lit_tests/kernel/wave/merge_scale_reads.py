@@ -13,6 +13,10 @@ should combine the expanded scalar reads into wider vector loads:
 
 The shuffle layout requires K/32 >= 64 (i.e. K >= 2048) for the groups to
 land contiguously in the row-major [M, K/32] scale tensor.
+
+Also verifies that the opsel_scaled_mfma pass enables byte selection in
+amdgpu.scaled_mfma, replacing scalar scale operands with vector operands
+and scalesIdxA/scalesIdxB attributes for efficient hardware extraction.
 """
 
 import wave_lang.kernel.lang as tkl
@@ -20,6 +24,8 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import ScaledMMAType
+from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
+from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
@@ -174,10 +180,60 @@ def test_preshuffle_scale_merge_block_k_256():
     # CHECK-LABEL: test_preshuffle_scale_merge_block_k_256
 
     # Each scale tensor produces 2 merged vector<4xi8> loads from global.
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<4xi8>
 
     # No unmerged scalar scale loads from global should remain.
-    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<1xi8>
+
+    # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
+    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands.  Check %REG[1] as a simple check that we are doing a non-zero index
+    # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[1] * %{{.*}}) * (%{{.*}}[1] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+
+    # Verify that we're not using scalar scale extracts (the old pattern)
+    # If opsel is working, we should NOT see vector.extract before scaled_mfma
+    # CHECK-NOT: vector.extract %{{.*}}[0] : f8E8M0FNU
+
+
+@run_test
+def test_preshuffle_b_opsel():
+    """Verify opsel pass on B scales from the preshuffle_b template kernel.
+
+    Uses get_tagged_mxfp4_gemm_preshuffle_b (B and B_scale read directly
+    from global with preshuffle mappings).  With BLOCK_K=256, B scale loads
+    are merged into vector<4xi8>.  The opsel pass should convert them to
+    vector<4xf8E8M0FNU> used directly in amdgpu.scaled_mfma with indexed
+    byte selection, eliminating all extract_strided_slice and scalar
+    vector.extract ops on f8E8M0FNU.
+    """
+    shape = (1024, 1024, 8192)
+    block = (256, 256, 256)
+    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, block, wave_shape=(1, 4)
+    )
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.compile_to_mlir = True
+    options.device = "hip"
+    options.target = "gfx950"
+    schedule = get_mxfp4_asymmetric_schedule()
+    result = wave_compile(options, kernel, schedule)
+    print(result.asm)
+
+    # CHECK-LABEL: test_preshuffle_b_opsel
+
+    # B scale (3rd type) should be vector<4xf8E8M0FNU> from the opsel pass.
+    # A scale remains scalar because A goes through LDS (not direct global loads).
+    # Type signature: A_scale, A_src, B_scale, B_src, acc
+
+    # No scaled_mfma before the first match should have scalar B scale.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,
+
+    # At least one scaled_mfma has the correct vector<4xf8E8M0FNU> B scale.
+    # CHECK: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+
+    # No remaining scaled_mfma should have scalar B scale either.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,

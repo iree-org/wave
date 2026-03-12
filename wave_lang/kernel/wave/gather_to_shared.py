@@ -235,10 +235,14 @@ def get_gather_to_shared_config(
     # We need to adjust the number of loads and elements per thread if the
     # deduced GatherToLDS width is not equal to the original vector width.
     if vector_width > load_width:
-        ratio = vector_width // load_width
-        logger.info(f"ratio={ratio}")
-        expected_number_of_loads *= ratio
-        elements_per_thread //= ratio
+        elements_per_thread = load_width // bitwidth
+        expected_number_of_loads = ceildiv(
+            total_number_of_elements, elements_per_thread * total_number_of_threads
+        )
+        logger.info(
+            f"adjusted elements_per_thread={elements_per_thread}, "
+            f"expected_number_of_loads={expected_number_of_loads}"
+        )
     else:
         ratio = load_width // vector_width
         logger.info(f"ratio={1/ratio}")
@@ -510,6 +514,14 @@ def gather_to_shared(
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
         logger.info(f"processing read={read}, write={write}")
+
+        # Without this flag, gather_to_shared would subsequently try to process
+        #   these same reads — it would attempt to convert them into GatherToLDS
+        #   ops with its own layout logic, which would conflict with the preshuffle layout already set up.
+        #   This would either break the preshuffle LDS layout or cause a compilation error.
+        if read.fx_node.meta.get("skip_gather_to_shared", False):
+            logger.info("skipping read flagged by preshuffle_scale_to_shared")
+            continue
 
         if not read.has_identity_mapping() and is_gather(read):
             logger.info("non-identity read mapping and gather is not supported yet")

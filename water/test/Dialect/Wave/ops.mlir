@@ -14,6 +14,16 @@ func.func @mma(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave.tensor<[@C, @B] 
   return %0 : !wave.tensor<[@A, @C] of f32>
 }
 
+// CHECK-LABEL: @batched_mma
+func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
+                       %b: !wave.tensor<[@B, @N, @K] of f16>,
+                       %c: !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>  {
+  // CHECK: wave.mma
+  %0 = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+    : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+  return %0 : !wave.tensor<[@B, @M, @N] of f32>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
@@ -21,19 +31,47 @@ func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor
   return %0 : !wave.tensor<[@A, @B] of f16>
 }
 
+// CHECK-LABEL: @reshape
+func.func @reshape(%tensor: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@B, @A] of f32> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %tensor  {target_vector_shape = {A = 4, B = 2}}  : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@B, @A] of f32>
+  return %0 : !wave.tensor<[@B, @A] of f32>
+}
+
+// CHECK-LABEL: @reshape_3d
+func.func @reshape_3d(%tensor: !wave.tensor<[@A, @B, @C] of f16>) -> !wave.tensor<[@C, @A, @B] of f16> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %tensor {target_vector_shape = {C = 4, A = 2, B = 2}} : !wave.tensor<[@A, @B, @C] of f16> to !wave.tensor<[@C, @A, @B] of f16>
+  return %0 : !wave.tensor<[@C, @A, @B] of f16>
+}
+
+// CHECK-LABEL: @reshape_multiple_vectors
+func.func @reshape_multiple_vectors(%vec1: vector<4xf32>, %vec2: vector<4xf32>) -> vector<8xf32> {
+  // CHECK: wave.reshape
+  %0 = wave.reshape %vec1, %vec2 {target_vector_shape = {}} : vector<4xf32> to vector<8xf32>
+  return %0 : vector<8xf32>
+}
+
 // CHECK-LABEL: @extract_static
-func.func @extract_static(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+func.func @extract_static(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32> {
   // CHECK: wave.extract
-  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return %0 : !wave.tensor<[@A] of f32>
 }
 
 // CHECK-LABEL: @extract_dynamic
-func.func @extract_dynamic(%source: !wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32> {
+func.func @extract_dynamic(%source: !wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32> {
   // CHECK: wave.extract
   // CHECK-SAME: #wave.index_symbol<T0>
-  %0 = wave.extract %source[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of f32>
+  %0 = wave.extract %source[#wave.expr_list<[#wave.index_symbol<T0>] -> (T0 mod 4)>] : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return %0 : !wave.tensor<[@A] of f32>
+}
+
+// CHECK-LABEL: extract_0d
+func.func @extract_0d(%arg0: !wave.tensor<[@X] of f32>) {
+  // CHECK: wave.extract
+  %0 = wave.extract %arg0[<[] -> (0)>] : (!wave.tensor<[@X] of f32>) -> !wave.tensor<[] of f32>
+  return
 }
 
 // CHECK-LABEL: @unary
@@ -367,8 +405,16 @@ attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N 
 
 // CHECK-LABEL: @write_with_bounds
 func.func @write_with_bounds(%memo: !wave.tensor<[@M] of f32>, %val: !wave.tensor<[@M] of f32, <register>>) {
-  // CHECK:       wave.read_write_bounds
-  wave.write %val, %memo { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
+  // CHECK:       wave.symbol_mapping
+  wave.write %val, %memo { bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
+  return
+}
+
+// Sparse bounds: only M needs masking.
+// CHECK-LABEL: @write_with_sparse_bounds
+func.func @write_with_sparse_bounds(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
+  // CHECK:       wave.symbol_mapping
+  wave.write %val, %mem { bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
   return
 }
 
@@ -644,6 +690,25 @@ func.func @underspecified_reduction(%input: !wave.tensor<any of f32>, %init: !wa
 
 // -----
 
+// Variadic reductions: multiple inputs are accepted.
+// CHECK-LABEL: @variadic_sum
+func.func @variadic_sum(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @M] of f32>, %c: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.sum %{{.*}}, %{{.*}}, %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.sum %a, %b, %c init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
+// CHECK-LABEL: @variadic_max_element
+func.func @variadic_max_element(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
+  // CHECK: wave.max_element %{{.*}}, %{{.*}} init(%{{.*}}) <warp>
+  %result = wave.max_element %a, %b init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  return %result : !wave.tensor<[@N] of f32>
+}
+
+// -----
+
 // CHECK-LABEL: @broadcast_1d_to_2d
 func.func @broadcast_1d_to_2d(%arg0: !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> {
   // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
@@ -671,10 +736,10 @@ func.func @broadcast_multiple_dims(%arg0: !wave.tensor<[@M] of f16, <register>>)
 
 // -----
 
-// CHECK-LABEL: @broadcast_explicit_dims
-func.func @broadcast_explicit_dims(%arg0: !wave.tensor<any of f32>) {
-  // CHECK: wave.broadcast %{{.*}} dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
-  wave.broadcast %arg0 dims [@K] : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+// CHECK-LABEL: @broadcast_underspecified_operand
+func.func @broadcast_underspecified_operand(%arg0: !wave.tensor<any of f32>) {
+  // CHECK: wave.broadcast %{{.*}} : (!wave.tensor<any of f32>) -> !wave.tensor<[@K] of f32>
+  wave.broadcast %arg0 : (!wave.tensor<any of f32>) -> !wave.tensor<[@K] of f32>
   return
 }
 
