@@ -71,21 +71,18 @@ public:
 
   /// Map GEP result -> decomposed (SRD, voffset).
   void mapGEP(Value gep, BufferPtrInfo info) { gepMap[gep] = info; }
-  const BufferPtrInfo *lookupGEP(Value gep) const {
+  std::optional<BufferPtrInfo> lookupGEP(Value gep) const {
     auto it = gepMap.find(gep);
     if (it != gepMap.end())
-      return &it->second;
-    return nullptr;
+      return it->second;
+    return std::nullopt;
   }
 
   /// Track base-pointer byte offset from bare-pointer GEPs.
   /// These offsets accumulate and get added to voffset when the pointer
   /// is used via make.buffer.rsrc + buffer GEP.
   void setBaseOffset(Value ptr, Value offset) { baseOffsets[ptr] = offset; }
-  Value lookupBaseOffset(Value ptr) const {
-    auto it = baseOffsets.find(ptr);
-    return it != baseOffsets.end() ? it->second : Value{};
-  }
+  Value lookupBaseOffset(Value ptr) const { return baseOffsets.lookup(ptr); }
 
 private:
   DenseMap<Value, Value> rsrcToSRD;
@@ -474,8 +471,7 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
 
   if (addrSpace == 0) {
     // Forward mapper entry so make.buffer.rsrc can find the SRD.
-    std::optional<Value> mapped = ctx.getMapper().getMapped(base);
-    if (mapped)
+    if (auto mapped = ctx.getMapper().getMapped(base))
       ctx.getMapper().mapValue(op.getResult(), *mapped);
 
     // Accumulate base offset.
@@ -502,7 +498,7 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     return success();
   }
 
-  auto *baseGEP = st.lookupGEP(base);
+  std::optional<BufferPtrInfo> baseGEP = st.lookupGEP(base);
   if (!baseGEP)
     return op->emitOpError("GEP base is not a tracked buffer resource");
 
@@ -529,7 +525,7 @@ static LogicalResult handleLoad(LLVM::LoadOp op, LLVMTranslationState &st) {
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
 
-  auto *ptr = st.lookupGEP(op.getAddr());
+  std::optional<BufferPtrInfo> ptr = st.lookupGEP(op.getAddr());
   if (!ptr)
     return op->emitOpError("load address not from a tracked GEP");
 
@@ -575,7 +571,7 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
 
-  auto *ptr = st.lookupGEP(op.getAddr());
+  std::optional<BufferPtrInfo> ptr = st.lookupGEP(op.getAddr());
   if (!ptr)
     return op->emitOpError("store address not from a tracked GEP");
 
