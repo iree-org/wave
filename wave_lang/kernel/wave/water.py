@@ -16,6 +16,7 @@ from typing import Any, Sequence
 
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.detect_water import get_water_mlir_pkg_path, get_water_opt
+from wave_lang.support.detect_waveasm import get_waveasm_translate
 from wave_lang.support.ir_imports import (
     Attribute,
     BlockArgument,
@@ -373,11 +374,11 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
 def water_waveasm_lowering_pipeline(
     module: Module, options: WaveCompileOptions
 ) -> Module:
-    """Lower via water-opt → waveasm-translate → water-opt.
+    """Lower via water-opt -> waveasm-translate -> water-opt.
 
     Step 1 (water-opt): lower to LLVM dialect on both host and device sides.
-    Step 2 (waveasm-translate): LLVM → WaveASM → regalloc → HSACO → gpu.binary.
-    Step 3 (water-opt): host runtime wrapping (gpu.binary → runtime calls).
+    Step 2 (waveasm-translate): LLVM -> WaveASM -> regalloc -> HSACO -> gpu.binary.
+    Step 3 (water-opt): host runtime wrapping (gpu.binary -> runtime calls).
     """
     water_opt = get_water_opt()
     mlir_asm = module.operation.get_asm()
@@ -447,8 +448,7 @@ def water_waveasm_lowering_pipeline(
         with module.context:
             return Module.parse(lowered_mlir)
 
-    # Step 2: waveasm-translate — LLVM → WaveASM → regalloc → gpu.binary.
-    from wave_lang.support.detect_waveasm import get_waveasm_translate
+    # Step 2: waveasm-translate -- LLVM -> WaveASM -> regalloc -> gpu.binary.
 
     waveasm_translate = get_waveasm_translate()
     waveasm_args = [
@@ -471,7 +471,7 @@ def water_waveasm_lowering_pipeline(
 
     if options.print_mlir:
         print("=== After waveasm-translate ===")
-        print(binary_mlir[:500], "..." if len(binary_mlir) > 500 else "")
+        print(binary_mlir[:500] + ("..." if len(binary_mlir) > 500 else ""))
 
     # Step 3: water-opt host runtime wrapping.
     host_pipeline = [

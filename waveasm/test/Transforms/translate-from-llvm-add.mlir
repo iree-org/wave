@@ -1,5 +1,5 @@
 // RUN: waveasm-translate %s --waveasm-translate-from-llvm | FileCheck %s
-// Verify llvm.add is translated to arith.add pseudo-op.
+// Verify llvm.add is translated to waveasm.arith.add pseudo-op.
 
 // CHECK: waveasm.program @test__waveasm
 // CHECK: waveasm.arith.add
