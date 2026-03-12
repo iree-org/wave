@@ -37,10 +37,8 @@ using namespace waveasm;
 /// Returns 0 for unsupported types.
 static int64_t getRegWidth(Value v) {
   return TypeSwitch<Type, int64_t>(v.getType())
-      .Case<SRegType>([](SRegType t) { return t.getSize(); })
-      .Case<VRegType>([](VRegType t) { return t.getSize(); })
-      .Case<PSRegType>([](PSRegType t) { return t.getSize(); })
-      .Case<PVRegType>([](PVRegType t) { return t.getSize(); })
+      .Case<SRegType, VRegType, PSRegType, PVRegType>(
+          [](auto t) { return t.getSize(); })
       .Case<ImmType>([](ImmType) { return int64_t(1); })
       .Default([](Type) { return int64_t(0); });
 }
@@ -124,7 +122,7 @@ static Value sgprToVgpr(Value v, OpBuilder &builder, Location loc) {
 // i32 legalization
 //===----------------------------------------------------------------------===//
 
-static void legalizeAddI32(Value lhs, Value rhs, Arith_AddOp op,
+static void legalizeAddI32(Value lhs, Value rhs, ArithAddOp op,
                            OpBuilder &builder) {
   Location loc = op.getLoc();
   Value result;
@@ -134,13 +132,12 @@ static void legalizeAddI32(Value lhs, Value rhs, Arith_AddOp op,
     result = V_ADD_U32::create(builder, loc, vregTy, lhs, rhs);
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
-    result =
-        S_ADD_U32::create(builder, loc, sregTy, sregTy, lhs, rhs)->getResult(0);
+    result = S_ADD_U32::create(builder, loc, sregTy, sregTy, lhs, rhs).getDst();
   }
   op.replaceAllUsesWith(result);
 }
 
-static void legalizeMulI32(Value lhs, Value rhs, Arith_MulOp op,
+static void legalizeMulI32(Value lhs, Value rhs, ArithMulOp op,
                            OpBuilder &builder) {
   Location loc = op.getLoc();
   Value result;
@@ -163,7 +160,7 @@ static void legalizeMulI32(Value lhs, Value rhs, Arith_MulOp op,
 /// v_add_co_u32 + v_addc_co_u32 (VALU).
 /// NOTE: The carry between the two ops is implicit (SCC/VCC). They must
 /// remain adjacent -- do not schedule or insert ops between them.
-static void legalizeAddI64(Value lhs, Value rhs, Arith_AddOp op,
+static void legalizeAddI64(Value lhs, Value rhs, ArithAddOp op,
                            OpBuilder &builder) {
   Location loc = op.getLoc();
   auto [lhsLo, lhsHi] = splitI64(lhs, builder, loc);
@@ -178,19 +175,19 @@ static void legalizeAddI64(Value lhs, Value rhs, Arith_AddOp op,
     // v_add_co_u32: lo + lo, carry out to VCC.
     auto addLo =
         V_ADD_CO_U32::create(builder, loc, vregTy, sregTy, lhsLo, rhsLo);
-    loResult = addLo->getResult(0);
+    loResult = addLo.getDst();
     // v_addc_co_u32: hi + hi + carry in from VCC.
     auto addHi =
         V_ADDC_CO_U32::create(builder, loc, vregTy, sregTy, lhsHi, rhsHi);
-    hiResult = addHi->getResult(0);
+    hiResult = addHi.getDst();
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
     // s_add_u32: lo + lo, carry out to SCC.
     auto addLo = S_ADD_U32::create(builder, loc, sregTy, sregTy, lhsLo, rhsLo);
-    loResult = addLo->getResult(0);
+    loResult = addLo.getDst();
     // s_addc_u32: hi + hi + carry in from SCC.
     auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sregTy, lhsHi, rhsHi);
-    hiResult = addHi->getResult(0);
+    hiResult = addHi.getDst();
   }
 
   Value result = mergeI64(loResult, hiResult, builder, loc);
@@ -200,7 +197,7 @@ static void legalizeAddI64(Value lhs, Value rhs, Arith_AddOp op,
 /// i64 multiply via schoolbook decomposition:
 ///   result_lo = mul_lo(a_lo, b_lo)
 ///   result_hi = mul_hi(a_lo, b_lo) + mul_lo(a_lo, b_hi) + mul_lo(a_hi, b_lo)
-static void legalizeMulI64(Value lhs, Value rhs, Arith_MulOp op,
+static void legalizeMulI64(Value lhs, Value rhs, ArithMulOp op,
                            OpBuilder &builder) {
   Location loc = op.getLoc();
   auto [aLo, aHi] = splitI64(lhs, builder, loc);
@@ -232,9 +229,9 @@ static void legalizeMulI64(Value lhs, Value rhs, Arith_MulOp op,
     // Accumulate (carry discarded -- computing mod 2^64).
     Value hiTemp =
         S_ADD_U32::create(builder, loc, sregTy, sregTy, hiPartial, cross1)
-            ->getResult(0);
+            .getDst();
     hiResult = S_ADD_U32::create(builder, loc, sregTy, sregTy, hiTemp, cross2)
-                   ->getResult(0);
+                   .getDst();
   }
 
   Value result = mergeI64(loResult, hiResult, builder, loc);
@@ -343,7 +340,7 @@ getOrderedI64Preds(CmpPredicate pred) {
 /// Hi comparison uses same signedness as original predicate (strict variant).
 /// Lo comparison always uses unsigned (lo halves have no sign meaning).
 static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
-                                    Arith_CmpOp op, OpBuilder &builder) {
+                                    ArithCmpOp op, OpBuilder &builder) {
   Location loc = op.getLoc();
   auto [lhsLo, lhsHi] = splitI64(lhs, builder, loc);
   auto [rhsLo, rhsHi] = splitI64(rhs, builder, loc);
@@ -405,10 +402,6 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
       op.erase();
       return success();
     }
-
-    auto placeholderTy = ImmType::get(builder.getContext(), 1);
-    Value placeholder = ConstantOp::create(builder, loc, placeholderTy, 1);
-    op.replaceAllUsesWith(placeholder.getDefiningOp()->getResult(0));
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
 
@@ -455,7 +448,7 @@ static Value ensureVCC(Value cond, OpBuilder &builder, Location loc) {
 
 /// i64 select: split both operands, select each half, merge.
 static void legalizeSelectI64(Value trueVal, Value falseVal, Value cond,
-                              Arith_SelectOp op, OpBuilder &builder) {
+                              ArithSelectOp op, OpBuilder &builder) {
   Location loc = op.getLoc();
   auto [trueLo, trueHi] = splitI64(trueVal, builder, loc);
   auto [falseLo, falseHi] = splitI64(falseVal, builder, loc);
@@ -479,7 +472,7 @@ static void legalizeSelectI64(Value trueVal, Value falseVal, Value cond,
 // Dispatch functions (i32 vs i64)
 //===----------------------------------------------------------------------===//
 
-static LogicalResult legalizeAdd(Arith_AddOp op, OpBuilder &builder) {
+static LogicalResult legalizeAdd(ArithAddOp op, OpBuilder &builder) {
   int64_t width = getRegWidth(op.getLhs());
   if (failed(checkWidth(op, width)))
     return failure();
@@ -491,7 +484,7 @@ static LogicalResult legalizeAdd(Arith_AddOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeMul(Arith_MulOp op, OpBuilder &builder) {
+static LogicalResult legalizeMul(ArithMulOp op, OpBuilder &builder) {
   int64_t width = getRegWidth(op.getLhs());
   if (failed(checkWidth(op, width)))
     return failure();
@@ -503,7 +496,7 @@ static LogicalResult legalizeMul(Arith_MulOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeCmp(Arith_CmpOp op, OpBuilder &builder) {
+static LogicalResult legalizeCmp(ArithCmpOp op, OpBuilder &builder) {
   Location loc = op.getLoc();
   int64_t width = getRegWidth(op.getLhs());
   if (failed(checkWidth(op, width)))
@@ -600,7 +593,7 @@ static LogicalResult legalizeCmp(Arith_CmpOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeSelect(Arith_SelectOp op, OpBuilder &builder) {
+static LogicalResult legalizeSelect(ArithSelectOp op, OpBuilder &builder) {
   Location loc = op.getLoc();
   Value falseVal = op.getFalseVal();
   Value trueVal = op.getTrueVal();
@@ -624,7 +617,7 @@ static LogicalResult legalizeSelect(Arith_SelectOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeTrunc(Arith_TruncOp op, OpBuilder &builder) {
+static LogicalResult legalizeTrunc(ArithTruncOp op, OpBuilder &builder) {
   Value src = op.getSrc();
   int64_t width = getRegWidth(src);
   if (width < 2) {
@@ -653,7 +646,7 @@ static LogicalResult legalizeTrunc(Arith_TruncOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeSExt(Arith_SExtOp op, OpBuilder &builder) {
+static LogicalResult legalizeSExt(ArithSExtOp op, OpBuilder &builder) {
   Value src = op.getSrc();
   int64_t srcWidth = getRegWidth(src);
   if (srcWidth != 1) {
@@ -683,7 +676,7 @@ static LogicalResult legalizeSExt(Arith_SExtOp op, OpBuilder &builder) {
   return success();
 }
 
-static LogicalResult legalizeZExt(Arith_ZExtOp op, OpBuilder &builder) {
+static LogicalResult legalizeZExt(ArithZExtOp op, OpBuilder &builder) {
   Value src = op.getSrc();
   int64_t srcWidth = getRegWidth(src);
   if (srcWidth != 1) {
@@ -722,33 +715,29 @@ struct ArithLegalizationPass
     : waveasm::impl::WAVEASMArithLegalizationBase<ArithLegalizationPass> {
 
   void runOnOperation() override {
-    // Collect pseudo-ops first to avoid invalidating the walk iterator.
-    SmallVector<Operation *> toLegalize;
-    getOperation()->walk([&](Operation *op) {
-      if (isa<Arith_AddOp, Arith_MulOp, Arith_CmpOp, Arith_SelectOp,
-              Arith_TruncOp, Arith_SExtOp, Arith_ZExtOp>(op))
-        toLegalize.push_back(op);
-    });
+    // Post-order walk is safe for in-place erasure of the current op.
+    WalkResult walkResult = getOperation()->walk([&](Operation *op) {
+      if (!isa<ArithAddOp, ArithMulOp, ArithCmpOp, ArithSelectOp, ArithTruncOp,
+               ArithSExtOp, ArithZExtOp>(op))
+        return WalkResult::advance();
 
-    bool failed = false;
-    for (auto *op : toLegalize) {
       OpBuilder builder(op);
       LogicalResult result =
           TypeSwitch<Operation *, LogicalResult>(op)
-              .Case([&](Arith_AddOp o) { return legalizeAdd(o, builder); })
-              .Case([&](Arith_MulOp o) { return legalizeMul(o, builder); })
-              .Case([&](Arith_CmpOp o) { return legalizeCmp(o, builder); })
-              .Case(
-                  [&](Arith_SelectOp o) { return legalizeSelect(o, builder); })
-              .Case([&](Arith_TruncOp o) { return legalizeTrunc(o, builder); })
-              .Case([&](Arith_SExtOp o) { return legalizeSExt(o, builder); })
-              .Case([&](Arith_ZExtOp o) { return legalizeZExt(o, builder); })
+              .Case([&](ArithAddOp o) { return legalizeAdd(o, builder); })
+              .Case([&](ArithMulOp o) { return legalizeMul(o, builder); })
+              .Case([&](ArithCmpOp o) { return legalizeCmp(o, builder); })
+              .Case([&](ArithSelectOp o) { return legalizeSelect(o, builder); })
+              .Case([&](ArithTruncOp o) { return legalizeTrunc(o, builder); })
+              .Case([&](ArithSExtOp o) { return legalizeSExt(o, builder); })
+              .Case([&](ArithZExtOp o) { return legalizeZExt(o, builder); })
               .Default([](Operation *) { return success(); });
       if (mlir::failed(result))
-        failed = true;
-    }
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
 
-    if (failed)
+    if (walkResult.wasInterrupted())
       return signalPassFailure();
   }
 };

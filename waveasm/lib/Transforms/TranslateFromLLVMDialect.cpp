@@ -169,7 +169,7 @@ static Value truncToI32(Value v, Type llvmType, OpBuilder &builder,
     return v;
   Type resTy = isVGPRType(v.getType()) ? (Type)ctx.createVRegType()
                                        : (Type)ctx.createSRegType();
-  return Arith_TruncOp::create(builder, loc, resTy, v);
+  return ArithTruncOp::create(builder, loc, resTy, v);
 }
 
 /// Infer the pseudo-op result type from operand types.
@@ -290,7 +290,7 @@ static LogicalResult handleSext(LLVM::SExtOp op, LLVMTranslationState &st) {
   Value src = resolve(op.getOperand(), ctx);
   Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
                                          : (Type)ctx.createSRegType();
-  auto pseudo = Arith_SExtOp::create(builder, op.getLoc(), resTy, src);
+  auto pseudo = ArithSExtOp::create(builder, op.getLoc(), resTy, src);
   ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
@@ -301,7 +301,7 @@ static LogicalResult handleZext(LLVM::ZExtOp op, LLVMTranslationState &st) {
   Value src = resolve(op.getOperand(), ctx);
   Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
                                          : (Type)ctx.createSRegType();
-  auto pseudo = Arith_ZExtOp::create(builder, op.getLoc(), resTy, src);
+  auto pseudo = ArithZExtOp::create(builder, op.getLoc(), resTy, src);
   ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
@@ -312,7 +312,7 @@ static LogicalResult handleTrunc(LLVM::TruncOp op, LLVMTranslationState &st) {
   Value src = resolve(op.getOperand(), ctx);
   Type resTy = isVGPRType(src.getType()) ? (Type)ctx.createVRegType()
                                          : (Type)ctx.createSRegType();
-  auto pseudo = Arith_TruncOp::create(builder, op.getLoc(), resTy, src);
+  auto pseudo = ArithTruncOp::create(builder, op.getLoc(), resTy, src);
   ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
 }
@@ -352,7 +352,7 @@ static LogicalResult handleICmp(LLVM::ICmpOp op, LLVMTranslationState &st) {
   Value rhs = resolve(op.getRhs(), ctx);
   auto resTy = inferResultType({lhs, rhs}, ctx);
   auto pred = mapLLVMPredicate(op.getPredicate());
-  auto cmp = Arith_CmpOp::create(builder, op.getLoc(), resTy, pred, lhs, rhs);
+  auto cmp = ArithCmpOp::create(builder, op.getLoc(), resTy, pred, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), cmp);
   return success();
 }
@@ -365,8 +365,8 @@ static LogicalResult handleSelect(LLVM::SelectOp op, LLVMTranslationState &st) {
   Value falseVal = resolve(op.getFalseValue(), ctx);
   auto resTy = inferResultType({trueVal, falseVal}, ctx);
   // ODS declaration order: (falseVal, trueVal, condition).
-  auto sel = Arith_SelectOp::create(builder, op.getLoc(), resTy, falseVal,
-                                    trueVal, cond);
+  auto sel = ArithSelectOp::create(builder, op.getLoc(), resTy, falseVal,
+                                   trueVal, cond);
   ctx.getMapper().mapValue(op.getResult(), sel);
   return success();
 }
@@ -379,7 +379,7 @@ static LogicalResult handleAdd(LLVM::AddOp op, LLVMTranslationState &st) {
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
   auto resTy = inferResultType({lhs, rhs}, ctx);
-  auto add = Arith_AddOp::create(builder, op.getLoc(), resTy, lhs, rhs);
+  auto add = ArithAddOp::create(builder, op.getLoc(), resTy, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), add);
   return success();
 }
@@ -392,7 +392,7 @@ static LogicalResult handleMul(LLVM::MulOp op, LLVMTranslationState &st) {
   Value lhs = resolve(op.getLhs(), ctx);
   Value rhs = resolve(op.getRhs(), ctx);
   auto resTy = inferResultType({lhs, rhs}, ctx);
-  auto mul = Arith_MulOp::create(builder, op.getLoc(), resTy, lhs, rhs);
+  auto mul = ArithMulOp::create(builder, op.getLoc(), resTy, lhs, rhs);
   ctx.getMapper().mapValue(op.getResult(), mul);
   return success();
 }
