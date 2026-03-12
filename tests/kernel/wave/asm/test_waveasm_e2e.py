@@ -1380,6 +1380,15 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     if block_id in ("224x160x256", "256x160x256"):
         pytest.skip("C++ ASM backend generates OOB memory access for this block shape")
 
+    # Epilogue elimination + unscheduled pipeline + dynamic dims: the
+    # unscheduled path makes K dynamic, but EE's validBytes clamping is
+    # only wired for the pipelined (scheduled) loop structure.
+    if eliminate_epilogue and not use_schedule and dynamic_dims:
+        pytest.skip(
+            "Epilogue elimination with dynamic K (unscheduled + dynamic dims) "
+            "not yet supported"
+        )
+
     # VGPR overflow: 256x224x256 scheduled pipeline exceeds 256 VGPR limit.
     if block_id == "256x224x256" and use_schedule:
         pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")

@@ -400,8 +400,24 @@ private:
 
         if (i < loopOp.getInitArgs().size()) {
           Value initArg = loopOp.getInitArgs()[i];
-          if (initArg.getType() != blockArgType)
-            initArg.setType(blockArgType);
+          if (initArg.getType() != blockArgType) {
+            // When the allocator assigned init arg and block arg to different
+            // physical registers (because the init arg has post-loop uses),
+            // skip coercion. Overwriting the init arg's type would corrupt the
+            // post-loop value by making it reference the block arg's register,
+            // which the loop body mutates. The assembly emitter inserts a copy
+            // from the init arg register to the block arg register before the
+            // loop entry.
+            int64_t initPhys = mapping.getPhysReg(initArg);
+            int64_t blockPhys = -1;
+            if (auto pvreg = dyn_cast<PVRegType>(blockArgType))
+              blockPhys = pvreg.getIndex();
+            else if (auto psreg = dyn_cast<PSRegType>(blockArgType))
+              blockPhys = psreg.getIndex();
+
+            if (initPhys < 0 || blockPhys < 0 || initPhys == blockPhys)
+              initArg.setType(blockArgType);
+          }
         }
       }
 
