@@ -570,7 +570,7 @@ def _gemm_mma_type_params():
     ]
     if is_cdna4():
         params.append(pytest.param(tkw.MMAType.F32_16x16x32_F16, id="16x16x32"))
-        return params
+    return params
 
 
 def _global_to_shared_params():
