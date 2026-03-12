@@ -834,6 +834,11 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     print(batched_gemm.asm)
 
     # This test checks the boundary condition for unaligned shapes.
+    # When all lanes share the same mask (splatted_mask), the codegen uses
+    # a scalar arith.select between the computed offset and the OOB sentinel
+    # instead of building vector<16xi32> iota indices, broadcasting, and
+    # extracting element 0. This avoids N-wide vector temporaries that
+    # would each consume N VGPRs during their live range.
 
     # CHECK-LABEL:  test_mxfp4_scaled_mma_unaligned_16x16x128
     # CHECK-DAG:    #[[MAP2:.*]] = affine_map<()[s0] -> (s0 * 16 - (s0 floordiv 8) * 128)>
@@ -841,10 +846,9 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:    #[[MAP6:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 256 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 192) floordiv 256) * 256 + 192)>
     # CHECK-DAG:    #[[MAP17:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 192) floordiv 256) * 256 + 192)>
     # CHECK:        func.func @batched_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index) attributes {translation_info = #translation} {
-    # CHECK-DAG:        %[[CST1:.*]] = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : vector<16xi32>
-    # CHECK-DAG:        %[[CST2:.*]] = arith.constant dense<2147483647> : vector<16xindex>
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C8192:.*]] = arith.constant 8192 : index
+    # CHECK-DAG:        %[[C2147483647:.*]] = arith.constant 2147483647 : index
     # CHECK-DAG:        %[[C2147483646_I64:.*]] = arith.constant 2147483646 : i64
     # CHECK-DAG:        %[[C_NEG_8192_I14:.*]] = arith.constant -8192 : i14
     # CHECK-DAG:        %[[BLOCK_ID_X:.*]] = gpu.block_id  x
@@ -859,17 +863,11 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[CAST]] validBytes(%[[C2147483646_I64]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index
-    # CHECK:            %[[BROADCAST1:.*]] = vector.broadcast %[[CMP1]] : i1 to vector<16xi1>
     # CHECK:            %[[AFFINE_APPLY4:.*]] = affine.apply #[[MAP17]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
     # CHECK:            %[[MUL2:.*]] = arith.muli %[[AFFINE_APPLY4]], %[[C8192]] overflow<nsw> : index
     # CHECK:            %[[ADD1:.*]] = arith.addi %[[MUL2]], %[[AFFINE_APPLY1]] overflow<nsw> : index
-    # CHECK:            %[[IDX_CAST1:.*]] = arith.index_cast %[[ADD1]] : index to i32
-    # CHECK:            %[[BROADCAST2:.*]] = vector.broadcast %[[IDX_CAST1]] : i32 to vector<16xi32>
-    # CHECK:            %[[ADD3:.*]] = arith.addi %[[BROADCAST2]], %[[CST1]] : vector<16xi32>
-    # CHECK:            %[[IDX_CAST4:.*]] = arith.index_cast %[[ADD3]] : vector<16xi32> to vector<16xindex>
-    # CHECK:            %[[SELECT2:.*]] = arith.select %[[BROADCAST1]], %[[IDX_CAST4]], %[[CST2]] : vector<16xi1>, vector<16xindex>
-    # CHECK:            %[[EXTRACT2:.*]] = vector.extract %[[SELECT2]][0] : index from vector<16xindex>
-    # CHECK:            %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[EXTRACT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK:            %[[SELECT2:.*]] = arith.select %[[CMP1]], %[[ADD1]], %[[C2147483647]] : index
+    # CHECK:            %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[SELECT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
 
 
 @run_test

@@ -905,7 +905,9 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         return prefix + formatter.format("v_add_u32", operands);
       })
 
-      // V_CNDMASK_B32: VOP2 form uses implicit VCC — drop the 3rd source.
+      // V_CNDMASK_B32: VOP2 requires src1 to be a VGPR. When either source
+      // is a non-VGPR (inline constant, SGPR), emit explicit vcc to force
+      // VOP3 encoding.
       .Case<V_CNDMASK_B32>(
           [&](V_CNDMASK_B32 cndOp) -> std::optional<std::string> {
             std::string dst = resolveValue(cndOp.getDst());
@@ -915,8 +917,17 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 mat0.prefix.empty() ? kScratchVGPR : kScratchVGPR + 1;
             auto mat1 = materializeLiteralOperand(cndOp.getSrc1(), nextScratch);
             std::string prefix = mat0.prefix + mat1.prefix;
+            // After materialization, non-inline literals are in scratch VGPRs
+            // (prefix non-empty). Inline constants and SGPRs pass through
+            // unchanged and need VOP3 encoding.
+            bool src0IsVGPR =
+                !mat0.prefix.empty() || isVGPRType(cndOp.getSrc0().getType());
+            bool src1IsVGPR =
+                !mat1.prefix.empty() || isVGPRType(cndOp.getSrc1().getType());
             llvm::SmallVector<std::string> operands = {dst, mat0.operandStr,
                                                        mat1.operandStr};
+            if (!src0IsVGPR || !src1IsVGPR)
+              operands.push_back("vcc");
             return prefix + formatter.format("v_cndmask_b32", operands);
           })
 
@@ -930,20 +941,41 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format("v_cvt_pk_bf16_f32", operands);
           })
 
+      // Carry ops: on GFX9, carry-out is implicit VCC.
+      // v_add_co_u32:  dst, vcc, src0, src1
+      // v_addc_co_u32: dst, vcc, src0, src1, vcc  (carry-in).
+      .Case<V_ADD_CO_U32, V_SUB_CO_U32, V_ADDC_CO_U32, V_SUBB_CO_U32>(
+          [&](auto carryOp) -> std::optional<std::string> {
+            auto mat0 =
+                materializeLiteralOperand(carryOp.getSrc0(), kScratchVGPR);
+            int nextScratch =
+                mat0.prefix.empty() ? kScratchVGPR : kScratchVGPR + 1;
+            auto mat1 =
+                materializeLiteralOperand(carryOp.getSrc1(), nextScratch);
+            std::string prefix = mat0.prefix + mat1.prefix;
+            llvm::SmallVector<std::string> operands = {
+                resolveValue(carryOp.getDst()), "vcc", mat0.operandStr,
+                mat1.operandStr};
+            bool hasCarryIn =
+                isa<V_ADDC_CO_U32, V_SUBB_CO_U32>(carryOp.getOperation());
+            if (hasCarryIn)
+              operands.push_back("vcc");
+            return prefix + formatter.format(carryOp->getName().stripDialect(),
+                                             operands);
+          })
+
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
         llvm::StringRef opName = defaultOp->getName().getStringRef();
         llvm::StringRef mnemonic = opName;
-        if (opName.starts_with("waveasm.")) {
+        if (opName.starts_with("waveasm."))
           mnemonic = opName.drop_front(8);
-        }
 
         if (mnemonic.starts_with("v_cmp_")) {
           std::string mnem64 = (mnemonic + "_e64").str();
           llvm::SmallVector<std::string> operands;
           operands.push_back("vcc");
-          for (Value operand : defaultOp->getOperands()) {
+          for (Value operand : defaultOp->getOperands())
             operands.push_back(resolveValue(operand));
-          }
           return formatter.format(mnem64, operands);
         }
 
