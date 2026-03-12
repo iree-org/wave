@@ -49,7 +49,7 @@ func.func @mma_1d(%lhs: !wave.tensor<[@A] of f16>, %rhs: !wave.tensor<[@B] of f1
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @mma_3d_mismatch(%a: !wave.tensor<[@M, @K, @B] of f16>,
                              %b: !wave.tensor<[@N, @K, @B] of f16>,
                              %c: !wave.tensor<[@M, @N, @B] of f32>) {
@@ -515,7 +515,7 @@ module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42, C = 43
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_key_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128}>}  {
     // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
@@ -538,7 +538,7 @@ func.func @read_element_type_mismatch(%mem: memref<64x64xf16, #gpu.address_space
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_value_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 256}>}  {
     // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
@@ -553,7 +553,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_length_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>) {
     // expected-error @below {{index attribute length (0) does not match the number of index expression values (1)}}
     %0 = wave.read %mem index [] : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
@@ -563,7 +563,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @read_index_multiple_dicts(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
     // expected-error @below {{index attribute length (2) does not match the number of index expression values (1)}}
@@ -575,7 +575,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @elements_per_thread_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}

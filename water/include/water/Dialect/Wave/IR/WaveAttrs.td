@@ -108,42 +108,18 @@ def WaveMmaKindAttr : EnumAttr<WaveDialect, WaveMmaKindEnum, "mma_kind"> {
 // Normal form enum and attribute
 //-----------------------------------------------------------------------------
 
-def NORMAL_FORM_FUNC_BOUNDARY : I32BitEnumAttrCaseBit<
-    "FunctionBoundarySpecified", 0, "full_func_boundary">;
-def NORMAL_FORM_OP_TYPES : I32BitEnumAttrCaseBit<
-    "OpTypesSpecified",          1, "full_op_types">;
-def NORMAL_FORM_INDEX_EXPRS : I32BitEnumAttrCaseBit<
-    "IndexExprsSpecified",       2, "index_exprs">;
-def NORMAL_FORM_MEMORY_ONLY_TYPES : I32BitEnumAttrCaseBit<
-    "MemoryOnlyTypes",           3, "memory_only_types">;
-def NORMAL_FORM_RESOLVED_ALLOCATIONS : I32BitEnumAttrCaseBit<
-    "ResolvedAllocations",       4, "resolved_allocations">;
-def NORMAL_FORM_ORDERED_SYMS : I32BitEnumAttrCaseBit<
-    "OrderedSymsSpecified",      5, "ordered_syms">;
-
-def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
-    "AllTypesSpecified", [
-        NORMAL_FORM_FUNC_BOUNDARY, NORMAL_FORM_OP_TYPES
-    ], "full_types">;
-
 // When anything changes below, also update the C and Python API.
-def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
-  I32BitEnumAttrCaseNone<"None", "none">,
-  // Bits.
-  NORMAL_FORM_FUNC_BOUNDARY,
-  NORMAL_FORM_OP_TYPES,
-  NORMAL_FORM_INDEX_EXPRS,
-  NORMAL_FORM_MEMORY_ONLY_TYPES,
-  NORMAL_FORM_RESOLVED_ALLOCATIONS,
-  NORMAL_FORM_ORDERED_SYMS,
-
-  // Group aliases.
-  NORMAL_FORM_FULL_TYPES
+def WaveNormalFormEnum
+    : I32EnumAttr<"WaveNormalForm", "", [
+  I32EnumAttrCase<"FunctionBoundarySpecified", 0, "full_func_boundary">,
+  I32EnumAttrCase<"OpTypesSpecified",          1, "full_op_types">,
+  I32EnumAttrCase<"IndexExprsSpecified",       2, "index_exprs">,
+  I32EnumAttrCase<"MemoryOnlyTypes",           3, "memory_only_types">,
+  I32EnumAttrCase<"ResolvedAllocations",       4, "resolved_allocations">,
+  I32EnumAttrCase<"OrderedSymsSpecified",      5, "ordered_syms">,
 ]> {
   let cppNamespace = "::wave";
-  let separator = ",";
   let genSpecializedAttr = 0;
-  let printBitEnumPrimaryGroups = 1;
 }
 
 def WaveNormalFormAttr
@@ -151,11 +127,6 @@ def WaveNormalFormAttr
       DeclareAttrInterfaceMethods<NormalFormAttrInterface, ["verifyOperation"]>
     ]> {
   let assemblyFormat = "`<` $value `>`";
-  let extraClassDeclaration = [{
-    static unsigned getLastSetBit() {
-      return ::llvm::bit_width_constexpr<unsigned>(}] # !cast<BitEnumBase>(WaveNormalFormEnum).validBits # [{) - 1;
-    }
-  }];
 }
 
 //-----------------------------------------------------------------------------

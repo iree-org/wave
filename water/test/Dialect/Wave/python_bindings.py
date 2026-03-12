@@ -418,15 +418,14 @@ with ir.Context() as ctx:
     # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
     print(tiling_constr.tile_size)
 
-    # CHECK: #wave.normal_form<none>
-    normal_form_attr = wave.WaveNormalFormAttr.get(wave.WaveNormalForm.None_)
+    # CHECK: #wave.normal_form<full_func_boundary>
+    normal_form_attr = wave.WaveNormalFormAttr.get(
+        wave.WaveNormalForm.FunctionBoundarySpecified
+    )
     print(normal_form_attr)
 
-    # CHECK: WaveNormalForm.None_
+    # CHECK: WaveNormalForm.FunctionBoundarySpecified
     print(normal_form_attr.value)
-
-    # CHECK: #wave.normal_form<full_func_boundary>
-    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.FunctionBoundarySpecified))
 
     # CHECK: #wave.normal_form<full_op_types>
     print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OpTypesSpecified))
@@ -437,8 +436,11 @@ with ir.Context() as ctx:
     # CHECK: #wave.normal_form<memory_only_types>
     print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.MemoryOnlyTypes))
 
-    # CHECK: #wave.normal_form<full_types>
-    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.AllTypesSpecified))
+    # CHECK: #wave.normal_form<resolved_allocations>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.ResolvedAllocations))
+
+    # CHECK: #wave.normal_form<ordered_syms>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OrderedSymsSpecified))
 
     try:
         wave.WaveNormalFormAttr.get(100)

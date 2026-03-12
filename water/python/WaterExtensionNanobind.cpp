@@ -1053,13 +1053,13 @@ NB_MODULE(_waterDialects, m) {
       .value("GPR_NUMBER", WaveIndexSymbol_GPR_NUMBER);
 
   nb::enum_<WaveNormalForm>(d, "WaveNormalForm")
-      .value("None_", WaveNormalFormNone)
       .value("FunctionBoundarySpecified",
              WaveNormalFormFunctionBoundarySpecified)
       .value("OpTypesSpecified", WaveNormalFormOpTypesSpecified)
       .value("IndexExprsSpecified", WaveNormalFormIndexExprsSpecified)
       .value("MemoryOnlyTypes", WaveNormalFormMemoryOnlyTypes)
-      .value("AllTypesSpecified", WaveNormalFormAllTypesSPecified);
+      .value("ResolvedAllocations", WaveNormalFormResolvedAllocations)
+      .value("OrderedSymsSpecified", WaveNormalFormOrderedSymsSpecified);
 
   nb::enum_<WaveWorkgroupDim>(d, "WaveWorkgroupDim")
       .value("X", WaveWorkgroupDimX)

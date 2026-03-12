@@ -33,13 +33,17 @@ namespace wave {
 /// Collect all Wave dialect normal forms that can be inferred.
 static SmallVector<normalform::NormalFormAttrInterface>
 collectWaveNormalForms(MLIRContext *ctx) {
+  constexpr WaveNormalForm allForms[] = {
+      WaveNormalForm::FunctionBoundarySpecified,
+      WaveNormalForm::OpTypesSpecified,
+      WaveNormalForm::IndexExprsSpecified,
+      WaveNormalForm::MemoryOnlyTypes,
+      WaveNormalForm::ResolvedAllocations,
+      WaveNormalForm::OrderedSymsSpecified,
+  };
   SmallVector<normalform::NormalFormAttrInterface> normalForms;
-  for (unsigned bit = 0, lastBit = WaveNormalFormAttr::getLastSetBit();
-       bit <= lastBit; ++bit) {
-    WaveNormalForm form =
-        static_cast<WaveNormalForm>(static_cast<uint32_t>(1) << bit);
+  for (WaveNormalForm form : allForms)
     normalForms.push_back(WaveNormalFormAttr::get(ctx, form));
-  }
   return normalForms;
 }
 

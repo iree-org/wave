@@ -378,14 +378,12 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveMmaKindAttrGetTypeID();
 
 /// Normal forms, this must remain consistent with WaveAttrs.td.
 enum WaveNormalForm {
-  WaveNormalFormNone = 0,
-  WaveNormalFormFunctionBoundarySpecified = 1,
-  WaveNormalFormOpTypesSpecified = 2,
-  WaveNormalFormIndexExprsSpecified = 4,
-  WaveNormalFormMemoryOnlyTypes = 8,
-
-  WaveNormalFormAllTypesSPecified =
-      WaveNormalFormFunctionBoundarySpecified | WaveNormalFormOpTypesSpecified
+  WaveNormalFormFunctionBoundarySpecified = 0,
+  WaveNormalFormOpTypesSpecified = 1,
+  WaveNormalFormIndexExprsSpecified = 2,
+  WaveNormalFormMemoryOnlyTypes = 3,
+  WaveNormalFormResolvedAllocations = 4,
+  WaveNormalFormOrderedSymsSpecified = 5,
 };
 
 /// Checks whether the given MLIR attribute is a WaveNormalFormAttr.

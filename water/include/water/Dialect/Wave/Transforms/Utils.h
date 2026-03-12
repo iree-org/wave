@@ -8,6 +8,7 @@
 #define WATER_DIALECT_WAVE_TRANSFORMS_UTILS_H
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace wave {
 
@@ -22,11 +23,11 @@ llvm::LogicalResult collectWaveConstraints(
 // normal form every time a verifier runs on the operation, including by default
 // after every pass.
 //
-// By default, preserves existing normal forms and adds the new form. Set
-// preserve=false to replace all existing forms with the provided form.
-llvm::LogicalResult setNormalFormPassPostcondition(wave::WaveNormalForm form,
-                                                   mlir::Operation *root,
-                                                   bool preserve = true);
+// By default, preserves existing normal forms and adds the new ones. Set
+// preserve=false to replace all existing forms with the provided forms.
+llvm::LogicalResult
+setNormalFormPassPostcondition(llvm::ArrayRef<wave::WaveNormalForm> forms,
+                               mlir::Operation *root, bool preserve = true);
 
 // Clears all normal form attributes from the operation, effectively setting
 // the normal form to None.
@@ -37,9 +38,10 @@ llvm::LogicalResult clearNormalFormPassPostcondition(mlir::Operation *root);
 // attribute that enforces verification. Emits diagnostics and returns failures
 // when it is not the case. Does *NOT* actually run verification, this is
 // automated by the presence of the attribute.
-llvm::LogicalResult verifyNormalFormPassPrecondition(wave::WaveNormalForm form,
-                                                     mlir::Operation *root,
-                                                     llvm::StringRef passName);
+llvm::LogicalResult
+verifyNormalFormPassPrecondition(llvm::ArrayRef<wave::WaveNormalForm> forms,
+                                 mlir::Operation *root,
+                                 llvm::StringRef passName);
 
 } // namespace wave
 

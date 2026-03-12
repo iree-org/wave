@@ -59,14 +59,16 @@ def ModuleOp : NormalFormOp<"module", [
 
     ```mlir
     // Enforce that all tensor types are fully specified.
-    normalform.module @my_kernel [#wave.normal_form<full_types>] {
+    normalform.module @my_kernel [#wave.normal_form<full_func_boundary>,
+                                  #wave.normal_form<full_op_types>] {
       func.func @compute(%arg: !wave.tensor<[64, 128] of f32>) {
         return
       }
     }
 
     // Multiple normal form attributes from different dialects.
-    normalform.module @validated [#wave.normal_form<full_types>, #other.normal_form] {
+    normalform.module @validated [#wave.normal_form<full_op_types>,
+                                  #other.normal_form] {
       func.func @compute(%arg: !wave.tensor<[64, 128] of f32>) {
         return
       }
