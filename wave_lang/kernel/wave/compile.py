@@ -1301,6 +1301,9 @@ def _generate_asm_code(mb, options):
         ]
         tail_passes = [
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+            # Use default waitcnt mode (ticketed); the previous explicit
+            # ticketed-waitcnt=false disabled ticket tracking which caused
+            # stale waitcnt values on some multi-wave configurations.
             "--waveasm-insert-waitcnt",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
@@ -1323,6 +1326,13 @@ def _generate_asm_code(mb, options):
 
         HW_VGPR_LIMIT = 256
 
+        # loop-address-promotion converts per-iteration LDS address
+        # arithmetic (V_ADD_U32) into precomputed rotating VGPR iter-args,
+        # removing VALU ops from the critical path.  The trade-off is extra
+        # live VGPRs for the promoted addresses.  For large block sizes
+        # (e.g. 256x160x256, 256x192x256) this can push the VGPR count
+        # past the gfx9 hardware limit of 256.  We try with the pass
+        # first and fall back without it when the limit is exceeded.
         result = _run_translate(["--waveasm-loop-address-promotion"])
         if result.returncode == 0:
             m = re.search(r"\.vgpr_count:\s*(\d+)", result.stdout)

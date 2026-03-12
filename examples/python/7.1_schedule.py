@@ -94,23 +94,6 @@ def _run_mxfp_gemm_preshuffle(
     )
 
 
-def _get_4wave_shape_from_block(block, mfma_tile_n=16):
-    """Choose a 4-wave shape (1x4, 2x2, or 4x1) that avoids fractional MFMA tiles.
-
-    With wave_shape=(1,4) each wave handles block_N/4 columns. If that is not
-    divisible by the MFMA tile width (16), the ceildiv expansion creates a
-    partial tile whose extra columns overlap with the next wave, producing
-    wrong results.  Prefer (1,4), fall back to (2,2), then (4,1).
-    """
-    m_blk, n_blk = block[0], block[1]
-    for wm, wn in [(1, 4), (2, 2), (4, 1)]:
-        cols_per_wave = n_blk // wn
-        rows_per_wave = m_blk // wm
-        if cols_per_wave % mfma_tile_n == 0 and rows_per_wave % mfma_tile_n == 0:
-            return (wm, wn)
-    return (1, 4)
-
-
 def _get_8wave_shape_from_block(block):
     """Choose an 8-wave shape (4x2 or 2x4) from block M/N dims.
 
@@ -392,13 +375,12 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     eliminate_epilogue=True,
 ):
     """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
-    wave_shape = _get_4wave_shape_from_block(block)
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
-        shape, block, wave_shape=wave_shape
-    )
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
     options.backend = "asm"
     options.use_buffer_ops = True
     options.wave_runtime = True
+    options.use_wave_asm_backend = True
+    options.dump_intermediates = "build/intermediates"
     options.eliminate_epilogue = eliminate_epilogue
     schedule = get_mxfp4_asymmetric_schedule(
         eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True

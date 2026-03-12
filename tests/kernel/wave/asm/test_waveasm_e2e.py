@@ -1351,7 +1351,7 @@ def _dbuf_mxfp4_helper(
         pytest.param((1024, 1024, 8192), (128, 32, 256), (2, 2), id="128x32x256"),
         pytest.param((896, 960, 8192), (224, 160, 256), (1, 4), id="224x160x256"),
         pytest.param((1024, 768, 8192), (256, 192, 256), (1, 4), id="256x192x256"),
-        pytest.param((1024, 960, 8192), (256, 160, 256), (1, 4), id="256x160x256"),
+        pytest.param((1024, 640, 8192), (256, 160, 256), (2, 2), id="256x160x256"),
         pytest.param((1024, 896, 8192), (256, 224, 256), (2, 2), id="256x224x256"),
     ],
 )
@@ -1369,15 +1369,15 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
 ):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
-    Uses get_mxfp4_asymmetric_schedule() with wave_shape=(1,4),
-    preshuffle B, and various block configurations.
-    When use_schedule=False, disables manual scheduling entirely.
+    Uses get_mxfp4_asymmetric_schedule() with preshuffle B and various
+    block configurations.  The wave_shape is chosen per block so that
+    each wave's tile dimensions are divisible by the MFMA tile width (16).
     Tests both eliminate_epilogue=True and False paths.
     """
     block_id = f"{block[0]}x{block[1]}x{block[2]}"
 
     # Skip blocks that cause fatal GPU memory faults (kills pytest process).
-    if block_id in ("224x160x256", "256x160x256"):
+    if block_id in ("224x160x256",):
         pytest.skip("C++ ASM backend generates OOB memory access for this block shape")
 
     # Epilogue elimination + unscheduled pipeline + dynamic dims: the
@@ -1392,6 +1392,14 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     # VGPR overflow: 256x224x256 scheduled pipeline exceeds 256 VGPR limit.
     if block_id == "256x224x256" and use_schedule:
         pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
+
+    # VGPR overflow: 256x160x256 without epilogue elimination and with
+    # scheduled pipeline exceeds the 256 VGPR hardware limit.
+    if block_id == "256x160x256" and use_schedule and not eliminate_epilogue:
+        pytest.xfail(
+            "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
+            "(ee=False) for 256x160x256"
+        )
 
     # VGPR overflow for 256x192x256: ee=True reduces register pressure
     # enough to pass with static dims; ee=False and dynamic dims still overflow.
