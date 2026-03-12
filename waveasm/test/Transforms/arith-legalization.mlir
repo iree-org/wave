@@ -293,13 +293,14 @@ waveasm.program @test_cmp_i64_slt_valu
   %vb = waveasm.pack %v1, %v1 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
 
   // Ordered i64 slt (VALU): hi signed + lo unsigned + select on hi equality.
+  // The compare materializes the boolean result to a VGPR (no final
+  // v_cmp_ne_i32 here — the consumer re-establishes VCC when needed).
   // CHECK: waveasm.v_cmp_lt_i32
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_cmp_lt_u32
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_cmp_eq_i32
   // CHECK: waveasm.v_cndmask_b32
-  // CHECK: waveasm.v_cmp_ne_i32
   %cmp = waveasm.arith.cmp slt, %va, %vb : (!waveasm.vreg<2>, !waveasm.vreg<2>) -> !waveasm.vreg
 
   // CHECK-NOT: waveasm.arith.
@@ -343,6 +344,8 @@ waveasm.program @test_select_i64
   %cmp = waveasm.arith.cmp slt, %v0, %v1 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg
 
   // i64 select: split, select each half, pack.
+  // (No v_cmp_ne_i32 here because the cond is from an i32 compare,
+  // which is already a VCC placeholder, not a materialized VGPR boolean.)
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.v_cndmask_b32
   // CHECK: waveasm.pack
