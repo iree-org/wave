@@ -113,11 +113,11 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
       divisorAPInt, /*LeadingZeros=*/0,
       /*AllowEvenDivisorOptimization=*/false);
 
-  LLVM_DEBUG(llvm::dbgs()
-             << "Magic number for divisor " << divisor << ": magic=0x"
-             << llvm::utohexstr(mag.Magic.getZExtValue())
-             << ", postShift=" << mag.PostShift << ", isAdd=" << mag.IsAdd
-             << "\n");
+  LLVM_DEBUG(llvm::dbgs() << "Magic number for divisor " << divisor
+                          << ": magic=0x"
+                          << llvm::utohexstr(mag.Magic.getZExtValue())
+                          << ", postShift=" << mag.PostShift
+                          << ", isAdd=" << mag.IsAdd << "\n");
 
   int64_t magicVal = static_cast<int64_t>(mag.Magic.getZExtValue());
   Value magicConst = createImmConst(magicVal, builder, loc, ctx);
@@ -147,7 +147,15 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
 
 /// Computes ceildiv(x, d) = floordiv(x, d) + (x mod d != 0 ? 1 : 0)
 /// given the floordiv quotient q and the divisor d as Values.
-/// Avoids the (x + d - 1) overflow that the naive identity has.
+///
+/// The naive identity ceildiv(x, d) = floordiv(x + d - 1, d) overflows when
+/// x + d - 1 > UINT32_MAX, since V_ADD_U32 wraps modulo 2^32. For example,
+/// ceildiv(0xFFFFFF00, 256): x + 255 = 0x100000FF wraps to 0xFF, giving
+/// 0xFF >> 8 = 0 instead of the correct 0x1000000.
+///
+/// This formulation avoids adding d - 1 to x entirely. All intermediates
+/// stay in range: q <= x, q * d <= x, rem < d, and q + 1 cannot overflow
+/// for any 32-bit x.
 static Value emitCeilFromFloorQuotient(Value q, Value x, Value d,
                                        OpBuilder &builder, Location loc,
                                        TranslationContext &ctx) {
@@ -541,10 +549,9 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
 
           if (isPowerOf2(divisor)) {
             int64_t shiftAmount = log2(divisor);
-            Value shiftConst =
-                createImmConst(shiftAmount, builder, loc, ctx);
-            Value q = V_LSHRREV_B32::create(builder, loc, vregType,
-                                            shiftConst, lhs);
+            Value shiftConst = createImmConst(shiftAmount, builder, loc, ctx);
+            Value q =
+                V_LSHRREV_B32::create(builder, loc, vregType, shiftConst, lhs);
             int64_t mask = divisor - 1;
             Value maskConst = createImmConst(mask, builder, loc, ctx);
             Value rem =
@@ -552,12 +559,10 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
             Value zeroConst = createImmConst(0, builder, loc, ctx);
             V_CMP_NE_U32::create(builder, loc, rem, zeroConst);
             Value oneConst = createImmConst(1, builder, loc, ctx);
-            Value oneVgpr =
-                V_MOV_B32::create(builder, loc, vregType, oneConst);
-            Value inc = V_CNDMASK_B32::create(builder, loc, vregType,
-                                              zeroConst, oneVgpr, zeroConst);
-            Value result =
-                V_ADD_U32::create(builder, loc, vregType, q, inc);
+            Value oneVgpr = V_MOV_B32::create(builder, loc, vregType, oneConst);
+            Value inc = V_CNDMASK_B32::create(builder, loc, vregType, zeroConst,
+                                              oneVgpr, zeroConst);
+            Value result = V_ADD_U32::create(builder, loc, vregType, q, inc);
             return ExprResult(result, BitRange());
           }
 
@@ -565,8 +570,8 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
             Value q =
                 emitConstantUnsignedFloordiv(lhs, divisor, builder, loc, ctx);
             Value dConst = createImmConst(divisor, builder, loc, ctx);
-            Value result = emitCeilFromFloorQuotient(q, lhs, dConst, builder,
-                                                    loc, ctx);
+            Value result =
+                emitCeilFromFloorQuotient(q, lhs, dConst, builder, loc, ctx);
             return ExprResult(result, BitRange());
           }
         }

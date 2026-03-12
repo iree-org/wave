@@ -257,8 +257,7 @@ int64_t log2(int64_t val);
 
 /// Create an immediate constant Value (combines createImmType + ConstantOp).
 inline mlir::Value createImmConst(int64_t val, mlir::OpBuilder &builder,
-                                  mlir::Location loc,
-                                  TranslationContext &ctx) {
+                                  mlir::Location loc, TranslationContext &ctx) {
   auto immType = ctx.createImmType(val);
   return ConstantOp::create(builder, loc, immType, val);
 }
