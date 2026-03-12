@@ -201,7 +201,10 @@ private:
       // consumes the result. Insert s_nop 0 to cover the required wait
       // state. See LLVM GCNHazardRecognizer::checkVALUHazards,
       // TransDefWaitstates = 1.
-      if (isTransOp(current) && isVALUOp(next)) {
+      // The consumer must be a non-Trans VALU; Trans can forward to Trans
+      // without penalty. See LLVM GCNHazardRecognizer::checkVALUHazards,
+      // guard: !SIInstrInfo::isTRANS(*VALU).
+      if (isTransOp(current) && isVALUOp(next) && !isTransOp(next)) {
         auto defs = getVGPRDefs(current);
         auto uses = getVGPRUses(next);
         if (hasIntersection(defs, uses)) {

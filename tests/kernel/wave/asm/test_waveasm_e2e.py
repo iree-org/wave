@@ -1140,6 +1140,7 @@ def _dbuf_mxfp4_helper(
     use_schedule=True,
     output_dtype="f32",
     wave_shape=None,
+    reorder_workgroups=None,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1185,12 +1186,15 @@ def _dbuf_mxfp4_helper(
     # Get tagged kernel + options (same as 7.1_schedule.py)
     # Use preshuffle B + asymmetric schedule with wave_shape=(1,4) for 4-wave,
     # standard double-buffer with wave_shape=(4,2) for 8-wave.
+    if reorder_workgroups is None:
+        reorder_workgroups = not dynamic_dims
+
     if num_waves <= 4:
         gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
             shape,
             block,
             wave_shape=wave_shape,
-            reorder_workgroups=not dynamic_dims,
+            reorder_workgroups=reorder_workgroups,
             output_dtype=tkl_dtype,
         )
         if use_schedule:
@@ -1389,6 +1393,41 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         use_schedule=use_schedule,
         output_dtype=output_dtype,
         wave_shape=wave_shape,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape,block,wave_shape",
+    [
+        pytest.param((1024, 1024, 8192), (128, 256, 256), (1, 4), id="128x256x256"),
+    ],
+)
+def test_dbuf_4wave_mxfp4_dynamic_mn_reorder_cpp_backend(
+    shape, block, wave_shape, compiler, dump_asm
+):
+    """MXFP4 GEMM with dynamic M,N and workgroup reordering enabled.
+
+    Regression test for illegal memory access caused by:
+    - SRD base adjustment using unsigned multiply (S_MUL_HI_U32 vs S_MUL_HI_I32)
+    - Swizzle SRDs with wrong num_records (0xFFFFFFFF vs source copy)
+    - Trans pipeline forwarding hazard (missing s_nop)
+
+    These issues only manifested when workgroup reordering was enabled with
+    dynamic dimensions, because negative byte offsets appeared in the SRD
+    base adjustment.
+    """
+    _dbuf_mxfp4_helper(
+        shape=shape,
+        block=block,
+        num_waves=4,
+        use_stagger=False,
+        compiler=compiler,
+        dump_asm=dump_asm,
+        dynamic_dims=True,
+        use_buffer_ops=True,
+        use_schedule=True,
+        wave_shape=wave_shape,
+        reorder_workgroups=True,
     )
 
 

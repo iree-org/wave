@@ -150,3 +150,21 @@ waveasm.program @trans_no_hazard_non_valu_consumer target = #waveasm.target<#wav
 
   waveasm.s_endpgm
 }
+
+// Test: Trans -> Trans (same VGPR) -- no s_nop needed.
+// The forwarding hazard only applies when a non-Trans VALU consumes
+// the Trans result. See LLVM: !SIInstrInfo::isTRANS(*VALU) guard.
+// CHECK-LABEL: waveasm.program @trans_trans_no_hazard
+waveasm.program @trans_trans_no_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+
+  // CHECK: waveasm.v_rcp_f32
+  %rcp = waveasm.v_rcp_f32 %v0 : !waveasm.pvreg<0> -> !waveasm.vreg
+
+  // Trans consuming Trans result -- no forwarding hazard.
+  // CHECK-NOT: waveasm.s_nop
+  // CHECK: waveasm.v_sqrt_f32
+  %sqrt = waveasm.v_sqrt_f32 %rcp : !waveasm.vreg -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}
