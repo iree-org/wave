@@ -456,10 +456,7 @@ def WaveASM_V_SIN_F32 : VALUUnaryOp<"v_sin_f32">;
 def WaveASM_V_COS_F32 : VALUUnaryOp<"v_cos_f32">;
 
 // Lane operations (VGPR -> SGPR)
-// Not Pure: emitSrdNumRecords uses this op to write a dynamic validBytes
-// into a precolored SRD register without capturing the SSA result.  With
-// Pure, DCE would eliminate it and silently break the SRD.
-def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", []> {
+def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", [Pure]> {
   let summary = "Read first lane of VGPR to SGPR";
   let description = [{
     Reads the value from the first active lane of a VGPR and places it in an SGPR.
@@ -1149,6 +1146,20 @@ def WaveASM_S_SETPRIO : WaveASM_CountedScalarOp<"s_setprio"> {
 //===----------------------------------------------------------------------===//
 // Misc/Utility Operations
 //===----------------------------------------------------------------------===//
+
+def WaveASM_DCEProtectOp : WAVEASMOp<"dce_protect"> {
+  let summary = "Prevent DCE of a value written to a precolored register";
+  let description = [{
+    Dummy side-effecting op that keeps its operand alive through DCE.
+
+    When an op writes to a precolored physical register (e.g. an SRD word)
+    but no SSA consumer uses the result, DCE would eliminate the producer.
+    Placing dce_protect on the result prevents this.  The op emits nothing
+    in the final assembly.
+  }];
+  let arguments = (ins WaveASM_AnySGPR:$val);
+  let assemblyFormat = "$val attr-dict `:` type($val)";
+}
 
 def WaveASM_CommentOp : WAVEASMOp<"comment"> {
   let summary = "Emit a comment in generated assembly";

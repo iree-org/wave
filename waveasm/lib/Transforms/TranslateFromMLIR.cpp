@@ -660,7 +660,9 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
     auto numRecType = PSRegType::get(mlirCtx, N + 2, 1);
     Value nrVal = adj.numRecordsOverride;
     if (isVGPRType(nrVal.getType())) {
-      V_READFIRSTLANE_B32::create(builder, loc, numRecType, nrVal);
+      auto result =
+          V_READFIRSTLANE_B32::create(builder, loc, numRecType, nrVal);
+      DCEProtectOp::create(builder, loc, result);
     } else {
       auto sccType = ctx.createSRegType();
       auto zeroImm = ctx.createImmType(0);

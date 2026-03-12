@@ -336,8 +336,8 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
   return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
       .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
-            PrecoloredSRegOp, PrecoloredARegOp, ConstantOp, PackOp, ExtractOp>(
-          [](auto) { return std::nullopt; })
+            PrecoloredSRegOp, PrecoloredARegOp, ConstantOp, PackOp, ExtractOp,
+            DCEProtectOp>([](auto) { return std::nullopt; })
 
       .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
         std::optional<int64_t> vmcnt, lgkmcnt, expcnt;

@@ -372,7 +372,8 @@ static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
       Value src = *mapped;
       auto dstType = PSRegType::get(builder.getContext(), srdBase + 2, 1);
       if (isVGPRType(src.getType())) {
-        V_READFIRSTLANE_B32::create(builder, loc, dstType, src);
+        auto result = V_READFIRSTLANE_B32::create(builder, loc, dstType, src);
+        DCEProtectOp::create(builder, loc, result);
       } else {
         auto sccType = ctx.createSRegType();
         auto zeroImm = ctx.createImmType(0);
