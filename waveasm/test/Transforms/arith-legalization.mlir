@@ -133,14 +133,14 @@ waveasm.program @test_add_i64_salu
   %b = waveasm.precolored.sreg 2, 2 : !waveasm.sreg<2, 2>
 
   // Precolored SGPR pairs: split into lo/hi via precolored.sreg at known indices.
-  // CHECK-DAG: waveasm.precolored.sreg 0 : !waveasm.sreg
-  // CHECK-DAG: waveasm.precolored.sreg 1 : !waveasm.sreg
-  // CHECK-DAG: waveasm.precolored.sreg 2 : !waveasm.sreg
-  // CHECK-DAG: waveasm.precolored.sreg 3 : !waveasm.sreg
+  // CHECK-DAG: [[A_LO:%.*]] = waveasm.precolored.sreg 0 : !waveasm.sreg
+  // CHECK-DAG: [[A_HI:%.*]] = waveasm.precolored.sreg 1 : !waveasm.sreg
+  // CHECK-DAG: [[B_LO:%.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
+  // CHECK-DAG: [[B_HI:%.*]] = waveasm.precolored.sreg 3 : !waveasm.sreg
   // Carry chain: s_add_u32 (lo) then s_addc_u32 (hi).
-  // CHECK: waveasm.s_add_u32
-  // CHECK-NEXT: waveasm.s_addc_u32
-  // CHECK: waveasm.pack
+  // CHECK: [[LO:%.*]], %{{.*}} = waveasm.s_add_u32 [[A_LO]], [[B_LO]]
+  // CHECK-NEXT: [[HI:%.*]], %{{.*}} = waveasm.s_addc_u32 [[A_HI]], [[B_HI]]
+  // CHECK: waveasm.pack [[LO]], [[HI]]
   %add = waveasm.arith.add %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg<2, 2>
 
   // CHECK-NOT: waveasm.arith.
@@ -159,9 +159,11 @@ waveasm.program @test_add_i64_valu
   %vb = waveasm.pack %b, %b : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
 
   // VGPR i64 add: splitI64 looks through pack, uses originals directly.
-  // CHECK: waveasm.v_add_co_u32
-  // CHECK-NEXT: waveasm.v_addc_co_u32
-  // CHECK: waveasm.pack
+  // CHECK: [[A:%.*]] = waveasm.precolored.vreg 0
+  // CHECK: [[B:%.*]] = waveasm.precolored.vreg 1
+  // CHECK: [[ADD_LO:%.*]], %{{.*}} = waveasm.v_add_co_u32 [[A]], [[B]]
+  // CHECK-NEXT: [[ADD_HI:%.*]], %{{.*}} = waveasm.v_addc_co_u32 [[A]], [[B]]
+  // CHECK: waveasm.pack [[ADD_LO]], [[ADD_HI]]
   %add = waveasm.arith.add %va, %vb : (!waveasm.vreg<2>, !waveasm.vreg<2>) -> !waveasm.vreg<2>
 
   // CHECK-NOT: waveasm.arith.
@@ -177,14 +179,19 @@ waveasm.program @test_mul_i64_salu
   %a = waveasm.precolored.sreg 0, 2 : !waveasm.sreg<2, 2>
   %b = waveasm.precolored.sreg 2, 2 : !waveasm.sreg<2, 2>
 
-  // Schoolbook i64 multiply: lo = mul_lo, hi = mul_hi + cross1 + cross2.
-  // CHECK: waveasm.s_mul_i32
-  // CHECK: waveasm.s_mul_hi_u32
-  // CHECK: waveasm.s_mul_i32
-  // CHECK: waveasm.s_mul_i32
-  // CHECK: waveasm.s_add_u32
-  // CHECK: waveasm.s_add_u32
-  // CHECK: waveasm.pack
+  // Schoolbook i64 multiply: lo = mul_lo(a_lo, b_lo).
+  // hi = mul_hi(a_lo, b_lo) + mul_lo(a_lo, b_hi) + mul_lo(a_hi, b_lo).
+  // CHECK-DAG: [[A_LO:%.*]] = waveasm.precolored.sreg 0 : !waveasm.sreg
+  // CHECK-DAG: [[A_HI:%.*]] = waveasm.precolored.sreg 1 : !waveasm.sreg
+  // CHECK-DAG: [[B_LO:%.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
+  // CHECK-DAG: [[B_HI:%.*]] = waveasm.precolored.sreg 3 : !waveasm.sreg
+  // CHECK: [[RES_LO:%.*]] = waveasm.s_mul_i32 [[A_LO]], [[B_LO]]
+  // CHECK: [[HI_PART:%.*]] = waveasm.s_mul_hi_u32 [[A_LO]], [[B_LO]]
+  // CHECK: [[CROSS1:%.*]] = waveasm.s_mul_i32 [[A_LO]], [[B_HI]]
+  // CHECK: [[CROSS2:%.*]] = waveasm.s_mul_i32 [[A_HI]], [[B_LO]]
+  // CHECK: [[HI_TEMP:%.*]], %{{.*}} = waveasm.s_add_u32 [[HI_PART]], [[CROSS1]]
+  // CHECK: [[RES_HI:%.*]], %{{.*}} = waveasm.s_add_u32 [[HI_TEMP]], [[CROSS2]]
+  // CHECK: waveasm.pack [[RES_LO]], [[RES_HI]]
   %mul = waveasm.arith.mul %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg<2, 2>
 
   // CHECK-NOT: waveasm.arith.
@@ -202,13 +209,17 @@ waveasm.program @test_mul_i64_valu
   %va = waveasm.pack %a, %a : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
   %vb = waveasm.pack %b, %b : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
 
-  // VALU schoolbook: mul_lo, mul_hi, 2x mul_lo, v_add3_u32.
-  // CHECK: waveasm.v_mul_lo_u32
-  // CHECK: waveasm.v_mul_hi_u32
-  // CHECK: waveasm.v_mul_lo_u32
-  // CHECK: waveasm.v_mul_lo_u32
-  // CHECK: waveasm.v_add3_u32
-  // CHECK: waveasm.pack
+  // VALU schoolbook: lo = mul_lo(a_lo, b_lo).
+  // hi = mul_hi(a_lo, b_lo) + mul_lo(a_lo, b_hi) + mul_lo(a_hi, b_lo).
+  // splitI64 looks through pack, so all operands trace back to the two vregs.
+  // CHECK: [[A:%.*]] = waveasm.precolored.vreg 0
+  // CHECK: [[B:%.*]] = waveasm.precolored.vreg 1
+  // CHECK: [[RES_LO:%.*]] = waveasm.v_mul_lo_u32 [[A]], [[B]]
+  // CHECK: [[HI_PART:%.*]] = waveasm.v_mul_hi_u32 [[A]], [[B]]
+  // CHECK: [[CROSS1:%.*]] = waveasm.v_mul_lo_u32 [[A]], [[B]]
+  // CHECK: [[CROSS2:%.*]] = waveasm.v_mul_lo_u32 [[A]], [[B]]
+  // CHECK: [[RES_HI:%.*]] = waveasm.v_add3_u32 [[HI_PART]], [[CROSS1]], [[CROSS2]]
+  // CHECK: waveasm.pack [[RES_LO]], [[RES_HI]]
   %mul = waveasm.arith.mul %va, %vb : (!waveasm.vreg<2>, !waveasm.vreg<2>) -> !waveasm.vreg<2>
 
   // CHECK-NOT: waveasm.arith.
@@ -271,10 +282,14 @@ waveasm.program @test_cmp_i64_eq
   %b = waveasm.precolored.sreg 2, 2 : !waveasm.sreg<2, 2>
 
   // i64 eq: XOR each half, OR, compare to 0.
-  // CHECK: waveasm.s_xor_b32
-  // CHECK: waveasm.s_xor_b32
-  // CHECK: waveasm.s_or_b32
-  // CHECK: waveasm.s_cmp_eq_i32
+  // CHECK-DAG: [[A_LO:%.*]] = waveasm.precolored.sreg 0 : !waveasm.sreg
+  // CHECK-DAG: [[A_HI:%.*]] = waveasm.precolored.sreg 1 : !waveasm.sreg
+  // CHECK-DAG: [[B_LO:%.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
+  // CHECK-DAG: [[B_HI:%.*]] = waveasm.precolored.sreg 3 : !waveasm.sreg
+  // CHECK: [[XOR_LO:%.*]] = waveasm.s_xor_b32 [[A_LO]], [[B_LO]]
+  // CHECK: [[XOR_HI:%.*]] = waveasm.s_xor_b32 [[A_HI]], [[B_HI]]
+  // CHECK: [[COMBINED:%.*]] = waveasm.s_or_b32 [[XOR_LO]], [[XOR_HI]]
+  // CHECK: waveasm.s_cmp_eq_i32 [[COMBINED]], %{{.*}}
   %cmp = waveasm.arith.cmp eq, %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg
 
   // CHECK-NOT: waveasm.arith.
@@ -317,11 +332,15 @@ waveasm.program @test_cmp_i64_slt_salu
   %b = waveasm.precolored.sreg 2, 2 : !waveasm.sreg<2, 2>
 
   // Ordered i64 slt (SALU): hiLt | (hiEq & loLt).
-  // CHECK: waveasm.s_cmp_lt_i32
-  // CHECK: waveasm.s_cmp_eq_i32
-  // CHECK: waveasm.s_cmp_lt_u32
-  // CHECK: waveasm.s_and_b32
-  // CHECK: waveasm.s_or_b32
+  // CHECK-DAG: [[A_LO:%.*]] = waveasm.precolored.sreg 0 : !waveasm.sreg
+  // CHECK-DAG: [[A_HI:%.*]] = waveasm.precolored.sreg 1 : !waveasm.sreg
+  // CHECK-DAG: [[B_LO:%.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
+  // CHECK-DAG: [[B_HI:%.*]] = waveasm.precolored.sreg 3 : !waveasm.sreg
+  // CHECK: [[HI_LT:%.*]] = waveasm.s_cmp_lt_i32 [[A_HI]], [[B_HI]]
+  // CHECK: [[HI_EQ:%.*]] = waveasm.s_cmp_eq_i32 [[A_HI]], [[B_HI]]
+  // CHECK: [[LO_LT:%.*]] = waveasm.s_cmp_lt_u32 [[A_LO]], [[B_LO]]
+  // CHECK: [[EQ_AND_LO:%.*]] = waveasm.s_and_b32 [[HI_EQ]], [[LO_LT]]
+  // CHECK: waveasm.s_or_b32 [[HI_LT]], [[EQ_AND_LO]]
   %cmp = waveasm.arith.cmp slt, %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg
 
   // CHECK-NOT: waveasm.arith.
@@ -344,11 +363,12 @@ waveasm.program @test_select_i64
   %cmp = waveasm.arith.cmp slt, %v0, %v1 : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg
 
   // i64 select: split, select each half, pack.
+  // splitI64 looks through pack. v_cndmask_b32 arg order: (false, true, vcc).
   // (No v_cmp_ne_i32 here because the cond is from an i32 compare,
   // which is already a VCC placeholder, not a materialized VGPR boolean.)
-  // CHECK: waveasm.v_cndmask_b32
-  // CHECK: waveasm.v_cndmask_b32
-  // CHECK: waveasm.pack
+  // CHECK: [[SEL_LO:%.*]] = waveasm.v_cndmask_b32 [[VB:%.*]], [[VA:%.*]], %{{.*}}
+  // CHECK: [[SEL_HI:%.*]] = waveasm.v_cndmask_b32 [[VB]], [[VA]], %{{.*}}
+  // CHECK: waveasm.pack [[SEL_LO]], [[SEL_HI]]
   %sel = waveasm.arith.select %cmp, %va, %vb : (!waveasm.vreg<2>, !waveasm.vreg<2>, !waveasm.vreg) -> !waveasm.vreg<2>
 
   // CHECK-NOT: waveasm.arith.
