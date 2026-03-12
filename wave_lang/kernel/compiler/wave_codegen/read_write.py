@@ -704,6 +704,18 @@ def _create_vec_read_write(
         oob_index_value = _get_out_of_bounds_index(element_type)
         oob_index = arith_d.constant(IndexType.get(), oob_index_value)
 
+        if splatted_mask:
+            # All lanes share the same mask: use a scalar select to avoid
+            # broadcasting into vector<Nxindex> temporaries that would
+            # consume N VGPRs each during their live range.
+            selected_index = arith_d.select(mask_splat, offset_th, oob_index)
+
+            if is_read:
+                return vector_d.load(vector_type, mem, indices=[selected_index])
+            else:
+                vector_d.store(value, mem, indices=[selected_index])
+                return
+
         oob_index = vector_d.broadcast(
             VectorType.get(vector_type.shape, IndexType.get()), oob_index
         )
@@ -724,18 +736,6 @@ def _create_vec_read_write(
 
         # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
         selected_index = arith_d.select(mask, offsets_vec, oob_index)
-        elems = list()
-
-        if splatted_mask:
-            # mask is same for all of them, can just pick the first index
-            selected_index = extract(selected_index, 0)
-
-            if is_read:
-                return vector_d.load(vector_type, mem, indices=[selected_index])
-
-            else:
-                vector_d.store(value, mem, indices=[selected_index])
-                return
 
         for i in range(elements_per_thread):
             # mask is not same for all elements, need to unroll

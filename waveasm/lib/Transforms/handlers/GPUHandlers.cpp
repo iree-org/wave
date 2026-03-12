@@ -41,52 +41,38 @@ LogicalResult handleGPUThreadId(Operation *op, TranslationContext &ctx) {
   gpu::Dimension dim = threadIdOp.getDimension();
 
   // Check if this is a multi-wave kernel
-  // For multi-wave, the hardware provides flat_workitem_id in v0
-  // For single-wave, we compute lane_id using v_mbcnt
+  // On gfx9/gfx950 hardware, all thread IDs are packed into v0:
+  //   v0[9:0]   = workitem_id_x
+  //   v0[19:10] = workitem_id_y
+  //   v0[29:20] = workitem_id_z
+  // We use v_bfe_u32 / v_and_b32 to extract the appropriate field.
   if (ctx.isMultiWaveKernel()) {
-    // Multi-wave: hardware provides flat workitem ID in v0
-    // The flat workitem ID is packed as: tid_x + tid_y * wg_x + tid_z * wg_x *
-    // wg_y We use v_bfe_u32 to extract the individual components Following
-    // Python's approach: 10 bits per dimension (supports up to 1024 per dim)
-
-    // Mark that this kernel uses workitem ID (set
-    // amdhsa_system_vgpr_workitem_id)
     ctx.setUsesWorkitemId(true);
 
-    // Get flat workitem ID from v0
-    auto flatWorkitemId =
-        PrecoloredVRegOp::create(builder, loc, vregType, 0, 1);
-
-    // Determine bit offset and width based on dimension
-    // Python uses 10 bits per dimension:
-    // - tid_x: bits 0-9 (offset=0, width=10)
-    // - tid_y: bits 10-19 (offset=10, width=10)
-    // - tid_z: bits 20-29 (offset=20, width=10)
-    int64_t bitOffset = 0;
-    int64_t bitWidth = 10;
+    auto v0 = PrecoloredVRegOp::create(builder, loc, vregType, 0, 1);
 
     switch (dim) {
-    case gpu::Dimension::x:
-      bitOffset = 0;
-      break;
-    case gpu::Dimension::y:
-      bitOffset = 10;
-      break;
-    case gpu::Dimension::z:
-      bitOffset = 20;
+    case gpu::Dimension::x: {
+      auto immMask = ctx.createImmType(0x3FF);
+      auto maskConst = ConstantOp::create(builder, loc, immMask, 0x3FF);
+      result = V_AND_B32::create(builder, loc, vregType, maskConst, v0);
       break;
     }
-
-    // Create constants for offset and width
-    auto immOffset = ctx.createImmType(bitOffset);
-    auto offsetConst = ConstantOp::create(builder, loc, immOffset, bitOffset);
-
-    auto immWidth = ctx.createImmType(bitWidth);
-    auto widthConst = ConstantOp::create(builder, loc, immWidth, bitWidth);
-
-    // v_bfe_u32 dst, src, offset, width - extract bits [offset, offset+width-1]
-    result = V_BFE_U32::create(builder, loc, vregType, flatWorkitemId,
-                               offsetConst, widthConst);
+    case gpu::Dimension::y: {
+      auto imm10 = ctx.createImmType(10);
+      auto shift10 = ConstantOp::create(builder, loc, imm10, 10);
+      result = V_BFE_U32::create(builder, loc, vregType, v0, shift10, shift10);
+      break;
+    }
+    case gpu::Dimension::z: {
+      auto imm20 = ctx.createImmType(20);
+      auto imm10 = ctx.createImmType(10);
+      auto shift20 = ConstantOp::create(builder, loc, imm20, 20);
+      auto width10 = ConstantOp::create(builder, loc, imm10, 10);
+      result = V_BFE_U32::create(builder, loc, vregType, v0, shift20, width10);
+      break;
+    }
+    }
   } else {
     // Single-wave: compute lane ID using v_mbcnt
     // Note: for single-wave, tid_x == lane_id, and tid_y/tid_z are always 0

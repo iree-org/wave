@@ -1287,9 +1287,7 @@ def _generate_asm_code(mb, options):
         mlir_path = mlir_file.name
 
     try:
-        cmd = [
-            waveasm_translate,
-            f"--target={options.target}",
+        base_passes = [
             "--mlir-cse",
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
@@ -1300,9 +1298,10 @@ def _generate_asm_code(mb, options):
             "--waveasm-memory-offset-opt",
             "--canonicalize",
             "--waveasm-scoped-cse",
-            "--waveasm-loop-address-promotion",
+        ]
+        tail_passes = [
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
+            "--waveasm-insert-waitcnt",
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
             f"--workgroup-size-x={wg[0]}",
@@ -1310,7 +1309,38 @@ def _generate_asm_code(mb, options):
             f"--workgroup-size-z={wg[2]}",
             mlir_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        def _run_translate(extra_passes):
+            full_cmd = (
+                [waveasm_translate, f"--target={options.target}"]
+                + base_passes
+                + extra_passes
+                + tail_passes
+            )
+            return subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=60
+            )
+
+        import re
+
+        HW_VGPR_LIMIT = 256
+
+        result = _run_translate(["--waveasm-loop-address-promotion"])
+        if result.returncode == 0:
+            m = re.search(r"\.vgpr_count:\s*(\d+)", result.stdout)
+            if m and int(m.group(1)) > HW_VGPR_LIMIT:
+                import sys
+
+                sys.stderr.write(
+                    f"[waveasm] VGPR overflow ({m.group(1)} > {HW_VGPR_LIMIT}),"
+                    " retrying without loop-address-promotion\n"
+                )
+                result = _run_translate([])
+
+        if result.stderr:
+            import sys
+
+            sys.stderr.write(result.stderr)
         if result.returncode != 0:
             raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
         asm_text = result.stdout

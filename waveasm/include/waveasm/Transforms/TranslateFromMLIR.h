@@ -620,7 +620,7 @@ public:
   void setUsesWorkgroupIdY(bool uses = true) { usesWorkgroupIdY = uses; }
   void setUsesWorkgroupIdZ(bool uses = true) { usesWorkgroupIdZ = uses; }
 
-  /// Mark that the kernel uses workitem/thread ID
+  /// Mark that the kernel uses workitem/thread ID (x dimension)
   void setUsesWorkitemId(bool uses = true) { usesWorkitemId = uses; }
 
   /// Query system register usage

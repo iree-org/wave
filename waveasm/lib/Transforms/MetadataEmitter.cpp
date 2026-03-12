@@ -278,21 +278,23 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   lines.push_back("  .amdhsa_system_sgpr_workgroup_id_z " +
                   std::to_string(usesWorkgroupIdZ ? 1 : 0));
 
-  int64_t systemVgprWorkitemId = 0;
-  auto workgroupSize = program.getWorkgroupSize();
-  if (workgroupSize.has_value() && workgroupSize->size() >= 2) {
-    int64_t wgY = 1, wgZ = 1;
-    if (auto intAttr = dyn_cast<IntegerAttr>((*workgroupSize)[1])) {
-      wgY = intAttr.getInt();
-    }
-    if (workgroupSize->size() >= 3) {
-      if (auto intAttr = dyn_cast<IntegerAttr>((*workgroupSize)[2])) {
+  // Derive system_vgpr_workitem_id from workgroup dimensions.
+  // When wgZ > 1, hardware provides thread IDs in v0 (x), v1 (y), v2 (z).
+  // When wgY > 1 (and wgZ == 1), hardware provides v0 (x), v1 (y).
+  int64_t wgY = 1, wgZ = 1;
+  if (auto wgAttr = program->getAttrOfType<ArrayAttr>("workgroup_size")) {
+    if (wgAttr.size() >= 2)
+      if (auto intAttr = dyn_cast<IntegerAttr>(wgAttr[1]))
+        wgY = intAttr.getInt();
+    if (wgAttr.size() >= 3)
+      if (auto intAttr = dyn_cast<IntegerAttr>(wgAttr[2]))
         wgZ = intAttr.getInt();
-      }
-    }
-    if (wgY > 1 || wgZ > 1) {
-      systemVgprWorkitemId = 1;
-    }
+  }
+  int64_t systemVgprWorkitemId = 0;
+  if (wgZ > 1) {
+    systemVgprWorkitemId = 2;
+  } else if (wgY > 1) {
+    systemVgprWorkitemId = 1;
   }
   lines.push_back("  .amdhsa_system_vgpr_workitem_id " +
                   std::to_string(systemVgprWorkitemId));

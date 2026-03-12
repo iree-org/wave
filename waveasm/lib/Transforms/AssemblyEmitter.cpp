@@ -318,10 +318,11 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
     line += " op_sel:[" + std::to_string(selLo0) + "," +
             std::to_string(selLo1) + ",0]";
   }
-  if (selHi0 || selHi1) {
-    line += " op_sel_hi:[" + std::to_string(selHi0) + "," +
-            std::to_string(selHi1) + ",0]";
-  }
+  // Always emit op_sel_hi for scaled MFMA: the hardware default for
+  // VOP3P-class instructions is [1,1,1], not [0,0,0]. Omitting it when
+  // all zeros causes the wrong scale bytes to be selected.
+  line += " op_sel_hi:[" + std::to_string(selHi0) + "," +
+          std::to_string(selHi1) + ",0]";
 
   int32_t cbsz = 4;
   int32_t blgp = 4;
@@ -685,6 +686,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
               SmallVector<bool> handled(pendingCopies.size(), false);
 
+              // Allocate swap temps once and reuse across all swaps.
+              // Swaps are emitted sequentially so the temp is dead after
+              // each 3-instruction sequence and can be reused.
+              int64_t vSwapTemp = -1;
+              int64_t sSwapTemp = -1;
+
               for (size_t i = 0; i < pendingCopies.size(); ++i) {
                 if (handled[i])
                   continue;
@@ -697,22 +704,28 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                     if (pendingCopies[i].isSGPR) {
                       int64_t regA = pendingCopies[i].dst;
                       int64_t regB = pendingCopies[j].dst;
-                      int64_t tmp = peakSGPRs;
-                      peakSGPRs = std::max(peakSGPRs, tmp + 1);
-                      os << "  s_mov_b32 s" << tmp << ", s" << regA << "\n";
+                      if (sSwapTemp < 0) {
+                        sSwapTemp = peakSGPRs;
+                        peakSGPRs = std::max(peakSGPRs, sSwapTemp + 1);
+                      }
+                      os << "  s_mov_b32 s" << sSwapTemp << ", s" << regA
+                         << "\n";
                       os << "  s_mov_b32 s" << regA << ", s" << regB << "\n";
-                      os << "  s_mov_b32 s" << regB << ", s" << tmp << "\n";
+                      os << "  s_mov_b32 s" << regB << ", s" << sSwapTemp
+                         << "\n";
                       handled[i] = true;
                       handled[j] = true;
                       break;
                     }
                     int64_t regA = pendingCopies[i].dst;
                     int64_t regB = pendingCopies[j].dst;
-                    int64_t tmp = peakVGPRs;
-                    peakVGPRs = std::max(peakVGPRs, tmp + 1);
-                    os << "  v_mov_b32 v" << tmp << ", v" << regA << "\n";
+                    if (vSwapTemp < 0) {
+                      vSwapTemp = peakVGPRs;
+                      peakVGPRs = std::max(peakVGPRs, vSwapTemp + 1);
+                    }
+                    os << "  v_mov_b32 v" << vSwapTemp << ", v" << regA << "\n";
                     os << "  v_mov_b32 v" << regA << ", v" << regB << "\n";
-                    os << "  v_mov_b32 v" << regB << ", v" << tmp << "\n";
+                    os << "  v_mov_b32 v" << regB << ", v" << vSwapTemp << "\n";
                     handled[i] = true;
                     handled[j] = true;
                     break;
