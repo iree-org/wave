@@ -216,8 +216,9 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = True
+    options.minimize_shared_allocs = False
     options.linearize_shared_access = True
+    options.wave_runtime = True
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
