@@ -50,6 +50,24 @@ def WaveASM_ArithMulOp : ArithPseudoOp<"mul", [Commutative]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Bitwise
+//===----------------------------------------------------------------------===//
+
+def WaveASM_ArithOrOp : ArithPseudoOp<"or", [Commutative]> {
+  let summary = "Generic bitwise OR (legalized to s_or_b32/b64 or v_or_b32/b64)";
+  let arguments = (ins WaveASM_AnyOperand:$lhs, WaveASM_AnyOperand:$rhs);
+  let results = (outs WaveASM_AnyReg:$dst);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def WaveASM_ArithAndOp : ArithPseudoOp<"and", [Commutative]> {
+  let summary = "Generic bitwise AND (legalized to s_and_b32/b64 or v_and_b32/b64)";
+  let arguments = (ins WaveASM_AnyOperand:$lhs, WaveASM_AnyOperand:$rhs);
+  let results = (outs WaveASM_AnyReg:$dst);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+//===----------------------------------------------------------------------===//
 // Comparison
 //===----------------------------------------------------------------------===//
 

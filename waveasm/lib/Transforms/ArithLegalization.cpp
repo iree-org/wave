@@ -496,6 +496,46 @@ static LogicalResult legalizeMul(ArithMulOp op, OpBuilder &builder) {
   return success();
 }
 
+/// Legalize a generic bitwise op (or, and) to SALU/VALU concrete ops.
+/// Template parameters: the ArithPseudoOp, and the four machine ops
+/// (SALU i32, SALU i64, VALU i32, VALU i64).
+template <typename ArithOp, typename SALUOp32, typename SALUOp64,
+          typename VALUOp32, typename VALUOp64>
+static LogicalResult legalizeBitwiseOp(ArithOp op, OpBuilder &builder) {
+  int64_t width = getRegWidth(op.getLhs());
+  if (failed(checkWidth(op, width)))
+    return failure();
+
+  Location loc = op.getLoc();
+  Value lhs = op.getLhs();
+  Value rhs = op.getRhs();
+  Value result;
+
+  if (width == 2) {
+    // i64: bitwise ops have native s_*_b64 / v_*_b64 instructions.
+    if (anyVGPR({lhs, rhs})) {
+      lhs = sgprToVgpr(lhs, builder, loc);
+      auto vregTy = VRegType::get(builder.getContext(), 2);
+      result = VALUOp64::create(builder, loc, vregTy, lhs, rhs);
+    } else {
+      auto sregTy = SRegType::get(builder.getContext(), 2, 2);
+      result = SALUOp64::create(builder, loc, sregTy, lhs, rhs);
+    }
+  } else {
+    if (anyVGPR({lhs, rhs})) {
+      lhs = sgprToVgpr(lhs, builder, loc);
+      auto vregTy = VRegType::get(builder.getContext());
+      result = VALUOp32::create(builder, loc, vregTy, lhs, rhs);
+    } else {
+      auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+      result = SALUOp32::create(builder, loc, sregTy, lhs, rhs);
+    }
+  }
+  op.replaceAllUsesWith(result);
+  op.erase();
+  return success();
+}
+
 static LogicalResult legalizeCmp(ArithCmpOp op, OpBuilder &builder) {
   Location loc = op.getLoc();
   int64_t width = getRegWidth(op.getLhs());
@@ -717,8 +757,8 @@ struct ArithLegalizationPass
   void runOnOperation() override {
     // Post-order walk is safe for in-place erasure of the current op.
     WalkResult walkResult = getOperation()->walk([&](Operation *op) {
-      if (!isa<ArithAddOp, ArithMulOp, ArithCmpOp, ArithSelectOp, ArithTruncOp,
-               ArithSExtOp, ArithZExtOp>(op))
+      if (!isa<ArithAddOp, ArithMulOp, ArithOrOp, ArithAndOp, ArithCmpOp,
+               ArithSelectOp, ArithTruncOp, ArithSExtOp, ArithZExtOp>(op))
         return WalkResult::advance();
 
       OpBuilder builder(op);
@@ -726,6 +766,14 @@ struct ArithLegalizationPass
           TypeSwitch<Operation *, LogicalResult>(op)
               .Case([&](ArithAddOp o) { return legalizeAdd(o, builder); })
               .Case([&](ArithMulOp o) { return legalizeMul(o, builder); })
+              .Case([&](ArithOrOp o) {
+                return legalizeBitwiseOp<ArithOrOp, S_OR_B32, S_OR_B64,
+                                         V_OR_B32, V_OR_B64>(o, builder);
+              })
+              .Case([&](ArithAndOp o) {
+                return legalizeBitwiseOp<ArithAndOp, S_AND_B32, S_AND_B64,
+                                         V_AND_B32, V_AND_B64>(o, builder);
+              })
               .Case([&](ArithCmpOp o) { return legalizeCmp(o, builder); })
               .Case([&](ArithSelectOp o) { return legalizeSelect(o, builder); })
               .Case([&](ArithTruncOp o) { return legalizeTrunc(o, builder); })
