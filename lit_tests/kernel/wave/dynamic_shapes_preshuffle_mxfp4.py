@@ -4,20 +4,16 @@
 Test dynamic-shapes support for preshuffle-B MXFP4 GEMM.
 
 When M, N, K are dynamic (not substituted at compile time), the compiler
-must emit a runtime guard (scf.if) that checks whether K is large enough
-for the pipelined kernel path (prologue + scf.for + epilogue).  If K is
-too small, the else branch yields zero accumulators and falls through to
-a non-pipelined epilogue loop.
+emits a pipelined kernel with gather_to_lds prefetch and software-pipelined
+scf.for loop.  Index simplification (factoring out divisor-multiples from
+floor/Mod expressions) enables the scheduler to prove the pipeline guard
+is always satisfied, eliminating the scf.if entirely.
 
 Key structural invariants verified:
   1. Function signature accepts dynamic index arguments for M, N, K.
-  2. scf.if guard selects between pipelined and fallback paths.
-  3. The pipelined "then" branch contains:
-     - gather_to_lds prefetch (prologue)
-     - scf.for main loop with amdgpu.scaled_mfma
-     - epilogue scaled_mfma after the loop
-  4. The "else" branch yields zero accumulators (scf.yield with %cst).
-  5. A second scf.for after the scf.if handles remaining K iterations.
+  2. Prologue gather_to_lds prefetch loads.
+  3. scf.for main loop with amdgpu.scaled_mfma.
+  4. Epilogue scaled_mfma after the loop.
 """
 
 from wave_lang.kernel.wave.compile import wave_compile
@@ -55,29 +51,17 @@ def test_dynamic_preshuffle_b_mxfp4():
     # 1. Dynamic index arguments for M, N, K in function signature.
     # CHECK: func.func @gemm(%arg0: {{.*}}, %arg1: {{.*}}, %arg2: {{.*}}, %arg3: {{.*}}, %arg4: {{.*}}, %arg5: index, %arg6: index, %arg7: index)
 
-    # 2. scf.if guard: pipelined path vs fallback.
-    # CHECK: scf.if %{{.*}} ->
-
-    # 3a. Pipelined "then" branch: prologue gather_to_lds prefetch.
+    # 2. Prologue gather_to_lds prefetch (no scf.if guard — simplification
+    #    proves the pipeline guard is always satisfied).
     # CHECK: amdgpu.gather_to_lds
     # CHECK: amdgpu.gather_to_lds
 
-    # 3b. Pipelined "then" branch: main loop with scaled_mfma.
+    # 3. Main pipelined loop with scaled_mfma.
     # CHECK: scf.for
     # CHECK: amdgpu.scaled_mfma
     # CHECK: scf.yield
 
-    # 3c. Pipelined "then" branch: epilogue scaled_mfma after loop.
-    # CHECK: amdgpu.scaled_mfma
-
-    # 4. Else branch: fallback yields zero accumulators.
-    # CHECK: } else {
-    # CHECK-NEXT: scf.yield %cst
-
-    # 5. Non-pipelined epilogue scf.for after the scf.if.
-    # CHECK: scf.for
-    # CHECK: amdgpu.lds_barrier
-    # CHECK: amdgpu.gather_to_lds
+    # 4. Epilogue scaled_mfma after the loop.
     # CHECK: amdgpu.scaled_mfma
 
 
@@ -111,36 +95,23 @@ def test_dynamic_preshuffle_b_mxfp4_eliminate_epilogue():
     # 1. Dynamic index arguments for M, N, K in function signature.
     # CHECK: func.func @gemm(%arg0: {{.*}}, %arg1: {{.*}}, %arg2: {{.*}}, %arg3: {{.*}}, %arg4: {{.*}}, %arg5: index, %arg6: index, %arg7: index)
 
-    # 2. scf.if guard: pipelined path vs fallback.
-    # CHECK: scf.if %{{.*}} ->
-
-    # 3. Pipelined loop steps by 1 (no epilogue to peel off).
+    # 2. Pipelined loop steps by 1 (no epilogue to peel off).
+    #    No scf.if guard — simplification proves it always satisfied.
     # CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1
 
-    # 4. Loop carries shared-memory buffers as iter_args (epilogue folded in).
+    # 3. Loop carries shared-memory buffers as iter_args (epilogue folded in).
     # CHECK-SAME: memref<{{.*}}, #gpu.address_space<workgroup>>
 
-    # 5. OOB guard: arith.select chooses real validBytes vs 0 for out-of-range
+    # 4. OOB guard: arith.select chooses real validBytes vs 0 for out-of-range
     #    iterations, so the hardware returns zeros on OOB loads.
     # CHECK: arith.select %{{.*}}, %c2147483646_i64, %c0_i64 : i64
 
-    # 6. fat_raw_buffer_cast uses the dynamically selected validBytes.
+    # 5. fat_raw_buffer_cast uses the dynamically selected validBytes.
     # CHECK: amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}})
 
-    # 7. scaled_mfma inside the pipelined loop.
+    # 6. scaled_mfma inside the pipelined loop.
     # CHECK: amdgpu.scaled_mfma
 
-    # 8. Loop body ends; no epilogue mfma between loop end and scf.yield.
+    # 7. Loop body ends; no epilogue mfma between loop end and scf.yield.
     # CHECK: scf.yield
     # CHECK-NEXT: }
-
-    # 9. Then-branch yields loop results directly (no epilogue ops).
-    # CHECK: scf.yield
-
-    # 10. Else branch: fallback yields zero accumulators.
-    # CHECK: } else {
-    # CHECK-NEXT: scf.yield %cst
-
-    # 11. Remainder scf.for after the scf.if.
-    # CHECK: scf.for
-    # CHECK: amdgpu.scaled_mfma

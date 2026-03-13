@@ -433,6 +433,9 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     constraints += [tkw.Assumption(Eq(N % 32, 0))]
     constraints += [tkw.Assumption(Eq(K % 256, 0))]
 
+    # K is always large enough for software pipelining.
+    constraints += [tkw.Assumption(K > BLOCK_K * 6)]
+
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
             M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
