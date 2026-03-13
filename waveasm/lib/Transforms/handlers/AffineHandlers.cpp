@@ -54,7 +54,7 @@ namespace waveasm {
 // absorbing the constant term's quotient into the reduced expression.
 //
 // Math: FloorDiv(G*(A+q) + r, G*D') = FloorDiv(A+q, D')
-//       when 0 <= r < G, because r/(G*D') < 1/D' <= 0.5.
+//       when 0 <= r < G and D' >= 2 (always true here).
 //===----------------------------------------------------------------------===//
 
 static constexpr int64_t kMaxConst32 =
@@ -82,6 +82,7 @@ static bool collectSumCoefficients(AffineExpr e,
     return true;
   }
   if (isa<AffineDimExpr>(e) || isa<AffineSymbolExpr>(e)) {
+    // A bare dimension or symbol has an implicit coefficient of 1.
     coeffs.push_back(1);
     return true;
   }
@@ -94,40 +95,32 @@ static bool collectSumCoefficients(AffineExpr e,
            collectSumCoefficients(bin.getRHS(), coeffs, freeConst);
 
   if (bin.getKind() == AffineExprKind::Mul) {
-    if (auto c = dyn_cast<AffineConstantExpr>(bin.getRHS())) {
-      // Recurse into LHS and multiply found coefficients
+    auto tryConstMul = [&](AffineExpr constSide, AffineExpr exprSide) -> bool {
+      auto c = dyn_cast<AffineConstantExpr>(constSide);
+      if (!c)
+        return false;
       SmallVector<int64_t> inner;
       int64_t innerConst = 0;
-      if (!collectSumCoefficients(bin.getLHS(), inner, innerConst))
+      if (!collectSumCoefficients(exprSide, inner, innerConst))
         return false;
       for (int64_t ic : inner)
         coeffs.push_back(ic * c.getValue());
       freeConst += innerConst * c.getValue();
       return true;
-    }
-    if (auto c = dyn_cast<AffineConstantExpr>(bin.getLHS())) {
-      SmallVector<int64_t> inner;
-      int64_t innerConst = 0;
-      if (!collectSumCoefficients(bin.getRHS(), inner, innerConst))
-        return false;
-      for (int64_t ic : inner)
-        coeffs.push_back(ic * c.getValue());
-      freeConst += innerConst * c.getValue();
+    };
+    if (tryConstMul(bin.getRHS(), bin.getLHS()) ||
+        tryConstMul(bin.getLHS(), bin.getRHS()))
       return true;
-    }
-    // Both sides are non-constant -- treat the whole thing as opaque
+    // Both sides are non-constant -- treat as opaque
     coeffs.push_back(1);
     return true;
   }
 
-  // FloorDiv, CeilDiv, Mod sub-expressions may carry their own large
-  // constants.  Recursively normalize them but treat the result as an
-  // opaque coefficient=1 term for the outer sum.
+  // FloorDiv, CeilDiv, Mod sub-expressions are opaque for coefficient
+  // collection — they contribute an implicit coefficient of 1.
   if (bin.getKind() == AffineExprKind::FloorDiv ||
       bin.getKind() == AffineExprKind::CeilDiv ||
       bin.getKind() == AffineExprKind::Mod) {
-    // The multiplier attached to this sub-expression is implicitly 1
-    // for the purpose of computing the outer GCD.
     coeffs.push_back(1);
     return true;
   }
@@ -159,16 +152,16 @@ static AffineExpr divideExprByGCD(AffineExpr e, int64_t g, int64_t &constAdj,
     return l + r;
   }
   if (bin.getKind() == AffineExprKind::Mul) {
-    // Divide the constant factor by g
-    if (auto c = dyn_cast<AffineConstantExpr>(bin.getRHS())) {
-      int64_t newVal = c.getValue() / g;
-      auto newLHS = divideExprByGCD(bin.getLHS(), 1, constAdj, ctx);
-      return newLHS * getAffineConstantExpr(newVal, ctx);
-    }
-    if (auto c = dyn_cast<AffineConstantExpr>(bin.getLHS())) {
-      int64_t newVal = c.getValue() / g;
-      auto newRHS = divideExprByGCD(bin.getRHS(), 1, constAdj, ctx);
-      return getAffineConstantExpr(newVal, ctx) * newRHS;
+    // Divide whichever side is the constant factor by g.
+    // The non-constant side is recursed with g=1 so that any nested
+    // free constants still get their floor-quotient absorbed into constAdj.
+    for (auto [constSide, exprSide] : {std::pair{bin.getRHS(), bin.getLHS()},
+                                       std::pair{bin.getLHS(), bin.getRHS()}}) {
+      if (auto c = dyn_cast<AffineConstantExpr>(constSide)) {
+        int64_t newVal = c.getValue() / g;
+        auto reduced = divideExprByGCD(exprSide, 1, constAdj, ctx);
+        return reduced * getAffineConstantExpr(newVal, ctx);
+      }
     }
     return e;
   }
@@ -178,9 +171,8 @@ static AffineExpr divideExprByGCD(AffineExpr e, int64_t g, int64_t &constAdj,
 
 /// Try to normalize a FloorDiv expression whose divisor exceeds 32 bits.
 /// Returns a normalized expression or std::nullopt on failure.
-static std::optional<AffineExpr> tryNormalizeFloorDiv(AffineExpr numerator,
-                                                      int64_t divisor,
-                                                      MLIRContext *ctx) {
+static std::optional<AffineExpr>
+tryNormalizeFloorDiv(AffineExpr numerator, int64_t divisor, MLIRContext *ctx) {
   SmallVector<int64_t> coeffs;
   int64_t freeConst = 0;
   if (!collectSumCoefficients(numerator, coeffs, freeConst))
@@ -242,7 +234,10 @@ static AffineExpr normalizeExpr(AffineExpr e, MLIRContext *ctx) {
     }
   }
 
-  // Rebuild with (possibly normalized) children
+  // Only rebuild if a child actually changed
+  if (lhs == bin.getLHS() && rhs == bin.getRHS())
+    return e;
+
   switch (bin.getKind()) {
   case AffineExprKind::Add:
     return lhs + rhs;
@@ -490,8 +485,10 @@ LogicalResult handleAffineApply(Operation *op, TranslationContext &ctx) {
   // TODO: Re-enable constant extraction only for values used directly in memory
   // ops
   int64_t constAddend = 0;
-  AffineExpr exprToCompile =
-      normalizeExpr(expr, applyOp.getContext());
+  // Reduce any 50+ bit constants introduced by MLIR's affine canonicalizer
+  // back to 32-bit range before emitting GPU instructions (see normalization
+  // section at the top of this file).
+  AffineExpr exprToCompile = normalizeExpr(expr, applyOp.getContext());
 
   // Simple pattern matching for common affine expressions
   // Pattern: d0 mod N -> v_and_b32 (when N is power of 2)
