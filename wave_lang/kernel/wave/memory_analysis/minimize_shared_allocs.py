@@ -152,7 +152,7 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     )
     if has_conditionals:
         # TODO: Make minimize_shared_allocs conditional-aware
-        pass
+        return
 
     update_sort_keys(trace, trace.get_root_graph())
 
