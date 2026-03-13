@@ -1,6 +1,6 @@
 // RUN: water-opt %s --water-wave-infer-index-exprs --allow-unregistered-dialect --split-input-file --verify-diagnostics | FileCheck %s
 
-// expected-error @below {{expects the root operation or its ancestor to guarantee the full_types normal form}}
+// expected-error @below {{expects the root operation or its ancestor to guarantee the full_func_boundary normal form}}
 normalform.module [] {
   func.func @normal_form() {
     return
@@ -9,7 +9,7 @@ normalform.module [] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
                         %c: !wave.tensor<[@M, @N] of f32>) {
@@ -22,7 +22,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // expected-error @below {{expected a hardware constraint}}
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -36,7 +36,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // expected-error @below {{expected either waves_per_block in the hardware constraint or wave constraints on an ancestor op}}
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -52,7 +52,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @simple_mma
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -87,7 +87,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Batched (3D) MMA: batch dimension B is leading; M, N, K indexing is as in 2D.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @batched_mma
   func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
                          %b: !wave.tensor<[@B, @N, @K] of f16>,
@@ -128,7 +128,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // Make sure the tiling constraints apply to batch dimensions. Note that there
 // are tests below for propagation across `wave.iterate`, here it is not the
 // point.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @batched_mma_in_a_loop
   func.func @batched_mma_in_a_loop(%a: !wave.tensor<[@B, @M, @K] of f16>,
                                    %b: !wave.tensor<[@B, @N, @K] of f16>,
@@ -171,7 +171,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @simple_mma_with_reads_and_write
   func.func @simple_mma_with_reads_and_write(%a: !wave.tensor<[@M, @K] of f16>,
                                              %b: !wave.tensor<[@N, @K] of f16>,
@@ -219,7 +219,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // MMA only, with wave constraints and workgroup constraints for M, N, K.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_with_workgroup_constraints
   func.func @mma_with_workgroup_constraints(%a: !wave.tensor<[@M, @K] of f16>,
                                             %b: !wave.tensor<[@N, @K] of f16>,
@@ -255,7 +255,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // Two MMAs in a row. We need to store to the temporary storage and
 // load back because of the index (layout) change.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @mma_chain
   func.func @mma_chain(%a: !wave.tensor<[@M, @K] of f16>,
                        %b: !wave.tensor<[@N, @K] of f16>,
@@ -349,7 +349,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x8_f16
   func.func @mma_32x32x8_f16(%a: !wave.tensor<[@M, @K] of f16>,
                              %b: !wave.tensor<[@N, @K] of f16>,
@@ -379,7 +379,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Check that an unmapped dimension gets the default (0, 1, 1) index expression.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x8_f16_3d
   func.func @mma_32x32x8_f16_3d(%a: !wave.tensor<[@B, @M, @K] of f16>,
                                 %b: !wave.tensor<[@B, @N, @K] of f16>,
@@ -412,7 +412,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_16x16x32_f16
   func.func @mma_16x16x32_f16(%a: !wave.tensor<[@M, @K] of f16>,
                               %b: !wave.tensor<[@N, @K] of f16>,
@@ -441,7 +441,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_16x16x32_k4_f8
   func.func @mma_16x16x32_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
                                 %b: !wave.tensor<[@N, @K] of f8E5M2>,
@@ -470,7 +470,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x16_f16
   func.func @mma_32x32x16_f16(%a: !wave.tensor<[@M, @K] of f16>,
                               %b: !wave.tensor<[@N, @K] of f16>,
@@ -499,7 +499,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x16_k4_f8
   func.func @mma_32x32x16_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
                                 %b: !wave.tensor<[@N, @K] of f8E5M2>,
@@ -528,7 +528,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // Technically this is a matrix multiplication, but we really care about the iterators.
   func.func @iterate(%a: !wave.tensor<[@M, @K] of bf16, <shared>>,
                      %b: !wave.tensor<[@N, @K] of bf16, <shared>>,
@@ -585,7 +585,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @unregistered_noprop(%a: !wave.tensor<[@M, @K] of f16>,
                              %b: !wave.tensor<[@N, @K] of f16>,
                              %c: !wave.tensor<[@M, @N] of f32>)
@@ -606,7 +606,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // Cannot propagate for only pure operations in absence of MMA/writes/reductions.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @simple_add(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@M, @K] of f16>)
       -> !wave.tensor<[@M, @K] of f16>
@@ -626,7 +626,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // There is no inference source here so we can't infer.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @failed_to_infer_write(%src: !wave.tensor<[@M, @N] of f32>, %dst: !wave.tensor<[@M, @N] of f32, <global>>)
     attributes { wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
@@ -643,7 +643,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // There is no inference source here so we can't infer.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @failed_to_infer_binop(%a: !wave.tensor<[@M, @N] of f32>, %b: !wave.tensor<[@M, @N] of f32>)
     -> !wave.tensor<[@M, @N] of f32>
     attributes { wave.constraints = [
@@ -659,7 +659,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // expected-error @below {{unsupported constraint type: #wave.device_constraint}}
   func.func @empty() attributes {
     wave.constraints = [
@@ -674,7 +674,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @allocate_register_index(
     %a: !wave.tensor<[@M, @K] of f16>
   ) attributes {
@@ -703,7 +703,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @tiling_constraints_in_iter(
     %x: !wave.tensor<[@M, @K] of f16>
   ) -> !wave.tensor<[@M, @N] of f32> attributes {
@@ -755,7 +755,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @tiling_constraints_in_nested_iter(
     %x: !wave.tensor<[@M, @K] of f16>
   ) attributes {
@@ -814,7 +814,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Test broadcast propagates index expressions (identity propagation).
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @broadcast_index_exprs
   func.func @broadcast_index_exprs(
       %a: !wave.tensor<[@M, @K] of f16>,
@@ -843,7 +843,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Test broadcast gets index expression for broadcasted dimension via backward propagation.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @broadcast_index_exprs_backward
   func.func @broadcast_index_exprs_backward(
       %a: !wave.tensor<[@M, @K] of f16>,
@@ -889,7 +889,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // Backward propagation from the MMA should give the register only M's index
 // expr, not N (the broadcast dimension).
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @broadcast_mma_back_to_register
   func.func @broadcast_mma_back_to_register(
       %a: !wave.tensor<[@M, @K] of f16>,
@@ -924,7 +924,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // through permute to write. The permute swaps M and N dimensions, which should
 // swap their strides.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @permute_propagation
   func.func @permute_propagation(
     %a: !wave.tensor<[@M, @K] of f16>,

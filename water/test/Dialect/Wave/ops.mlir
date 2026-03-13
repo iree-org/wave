@@ -563,7 +563,7 @@ func.func @permute_with_index(%arg0: !wave.tensor<[@M, @N] of f16, <register>>) 
 // -----
 // Test wave.iterate and wave.yield with vector types
 
-normalform.module [#wave.normal_form<full_types>] attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
 
 // Test that wave.iterate supports vector types in both iter_args and captures
 // CHECK-LABEL: @iterate_vector_types

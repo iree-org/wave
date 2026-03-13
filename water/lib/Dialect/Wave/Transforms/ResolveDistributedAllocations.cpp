@@ -150,8 +150,8 @@ struct ResolveDistributedAllocations
       return signalPassFailure();
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::ResolvedAllocations |
-                wave::WaveNormalForm::OrderedSymsSpecified,
+            {wave::WaveNormalForm::ResolvedAllocations,
+             wave::WaveNormalForm::OrderedSymsSpecified},
             getOperation())))
       return signalPassFailure();
   }

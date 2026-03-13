@@ -661,8 +661,8 @@ public:
   using WaterWaveInferTypesPassBase::WaterWaveInferTypesPassBase;
 
   void runOnOperation() override {
-    if (llvm::failed(verifyNormalFormPassPrecondition(
-            wave::WaveNormalForm::FunctionBoundarySpecified, getOperation(),
+    if (llvm::failed(wave::verifyNormalFormPassPrecondition(
+            {wave::WaveNormalForm::FunctionBoundarySpecified}, getOperation(),
             getArgument())))
       return signalPassFailure();
 
@@ -715,8 +715,10 @@ public:
       return signalPassFailure();
 
     if (!partial) {
-      llvm::LogicalResult result = setNormalFormPassPostcondition(
-          wave::WaveNormalForm::AllTypesSpecified, getOperation());
+      llvm::LogicalResult result = wave::setNormalFormPassPostcondition(
+          {wave::WaveNormalForm::FunctionBoundarySpecified,
+           wave::WaveNormalForm::OpTypesSpecified},
+          getOperation());
       if (llvm::failed(result) && !force)
         return signalPassFailure();
     }
@@ -1198,8 +1200,9 @@ public:
 
   void runOnOperation() override {
     if (failed(wave::verifyNormalFormPassPrecondition(
-            wave::WaveNormalForm::AllTypesSpecified, getOperation(),
-            getArgument())))
+            {wave::WaveNormalForm::FunctionBoundarySpecified,
+             wave::WaveNormalForm::OpTypesSpecified},
+            getOperation(), getArgument())))
       return signalPassFailure();
 
     llvm::DenseMap<Operation *, Attribute> constraints;
@@ -1271,7 +1274,7 @@ public:
     }
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
+            {wave::WaveNormalForm::MemoryOnlyTypes}, getOperation())))
       return signalPassFailure();
   }
 };
@@ -1874,9 +1877,10 @@ public:
   using Base::Base;
 
   void runOnOperation() override {
-    if (llvm::failed(verifyNormalFormPassPrecondition(
-            wave::WaveNormalForm::AllTypesSpecified, getOperation(),
-            getArgument())))
+    if (llvm::failed(wave::verifyNormalFormPassPrecondition(
+            {wave::WaveNormalForm::FunctionBoundarySpecified,
+             wave::WaveNormalForm::OpTypesSpecified},
+            getOperation(), getArgument())))
       return signalPassFailure();
 
     IRRewriter rewriter(&getContext());
@@ -1905,7 +1909,7 @@ public:
     });
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::IndexExprsSpecified, getOperation())))
+            {wave::WaveNormalForm::IndexExprsSpecified}, getOperation())))
       return signalPassFailure();
   }
 };

@@ -34,12 +34,9 @@ namespace wave {
 static SmallVector<normalform::NormalFormAttrInterface>
 collectWaveNormalForms(MLIRContext *ctx) {
   SmallVector<normalform::NormalFormAttrInterface> normalForms;
-  for (unsigned bit = 0, lastBit = WaveNormalFormAttr::getLastSetBit();
-       bit <= lastBit; ++bit) {
-    WaveNormalForm form =
-        static_cast<WaveNormalForm>(static_cast<uint32_t>(1) << bit);
+  normalForms.reserve(WaveNormalFormAttr::AllCases.size());
+  for (WaveNormalForm form : WaveNormalFormAttr::AllCases)
     normalForms.push_back(WaveNormalFormAttr::get(ctx, form));
-  }
   return normalForms;
 }
 

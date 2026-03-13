@@ -2,7 +2,7 @@
 
 // Technically these are matrix multiplications, but we really care about the iterators.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @make_isolated
   // CHECK-SAME:  %[[ARG_A:.+]]: !wave.tensor<[@M, @K] of bf16, <shared>>
   // CHECK-SAME:  %[[ARG_B:.+]]: !wave.tensor<[@N, @K] of bf16, <shared>>
@@ -38,7 +38,7 @@ normalform.module [#wave.normal_form<full_types>] {
   }
 }
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @make_non_isolated
   // CHECK-SAME:  %[[ARG_A:.+]]: !wave.tensor<[@M, @K] of bf16, <shared>>
   // CHECK-SAME:  %[[ARG_B:.+]]: !wave.tensor<[@N, @K] of bf16, <shared>>

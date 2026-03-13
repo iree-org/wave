@@ -54,11 +54,12 @@ struct LowerWaveToMLIRPass
     Operation *op = getOperation();
 
     if (failed(wave::verifyNormalFormPassPrecondition(
-            wave::WaveNormalForm::AllTypesSpecified |
-                wave::WaveNormalForm::MemoryOnlyTypes |
-                wave::WaveNormalForm::ResolvedAllocations |
-                wave::WaveNormalForm::IndexExprsSpecified |
-                wave::WaveNormalForm::OrderedSymsSpecified,
+            {wave::WaveNormalForm::FunctionBoundarySpecified,
+             wave::WaveNormalForm::OpTypesSpecified,
+             wave::WaveNormalForm::MemoryOnlyTypes,
+             wave::WaveNormalForm::ResolvedAllocations,
+             wave::WaveNormalForm::IndexExprsSpecified,
+             wave::WaveNormalForm::OrderedSymsSpecified},
             op, getPassName())))
       return signalPassFailure();
 
