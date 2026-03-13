@@ -520,6 +520,8 @@ def build_graph_passes(
         partial(partition_ops_with_gpr_offsets, trace, launchable.constraints),
         partial(partition_strided_operators, trace, launchable.constraints),
         partial(remove_chained_extractslice, trace),
+        # Run an early coalescing pass so scheduling (including manual schedules)
+        # can reason about merged read widths/counts instead of only pre-merge reads.
         partial(
             merge_contiguous_reads,
             trace,
@@ -1293,9 +1295,7 @@ def _generate_asm_code(mb, options):
         mlir_path = mlir_file.name
 
     try:
-        cmd = [
-            waveasm_translate,
-            f"--target={options.target}",
+        base_passes = [
             "--mlir-cse",
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
@@ -1306,9 +1306,29 @@ def _generate_asm_code(mb, options):
             "--waveasm-memory-offset-opt",
             "--canonicalize",
             "--waveasm-scoped-cse",
-            "--waveasm-loop-address-promotion",
+        ]
+        # (2,2) wave shapes generate extract_strided_slice -> V_BFE_U32
+        # for scale extraction, creating load->VALU data hazards that
+        # require ticketed waitcnt.  (1,4) shapes use scalesIdxA on the
+        # MFMA directly and don't hit this path.
+        #   (1,4): wg=(64,4,1)  == waves_in_m=1, waves_in_n=4 == off
+        #   (2,2): wg=(128,2,1) == waves_in_m=2, waves_in_n=2 == on
+        #   (4,1): wg=(256,1,1) == waves_in_m=4, waves_in_n=1 == off
+        threads_per_wave = 64
+        waves_in_m = wg[0] // threads_per_wave
+        waves_in_n = wg[1]
+        # TODO: improve Ticketing logic (better latency-covering heuristics,
+        # smarter coalescing) so ticketed waitcnt can be always-on without
+        # a performance hit, removing this wave-shape conditional.
+        use_ticketed_waitcnt = waves_in_m >= 2 and waves_in_n >= 2
+        waitcnt_flag = (
+            "--waveasm-insert-waitcnt"
+            if use_ticketed_waitcnt
+            else "--waveasm-insert-waitcnt=ticketed-waitcnt=false"
+        )
+        tail_passes = [
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            "--waveasm-insert-waitcnt=ticketed-waitcnt=false",
+            waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
             f"--workgroup-size-x={wg[0]}",
@@ -1316,7 +1336,33 @@ def _generate_asm_code(mb, options):
             f"--workgroup-size-z={wg[2]}",
             mlir_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        def _run_translate(extra_passes):
+            full_cmd = (
+                [waveasm_translate, f"--target={options.target}"]
+                + base_passes
+                + extra_passes
+                + tail_passes
+            )
+            return subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
+
+        import re
+
+        HW_VGPR_LIMIT = 256
+
+        # loop-address-promotion converts per-iteration LDS address
+        # arithmetic (V_ADD_U32) into precomputed rotating VGPR iter-args,
+        # removing VALU ops from the critical path.  The trade-off is extra
+        # live VGPRs for the promoted addresses.  For large block sizes
+        # (e.g. 256x160x256, 256x192x256) this can push the VGPR count
+        # past the gfx9 hardware limit of 256.  We try with the pass
+        # first and fall back without it when the limit is exceeded.
+        result = _run_translate(["--waveasm-loop-address-promotion"])
+        if result.returncode == 0:
+            m = re.search(r"\.vgpr_count:\s*(\d+)", result.stdout)
+            if m and int(m.group(1)) > HW_VGPR_LIMIT:
+                result = _run_translate([])
+
         if result.returncode != 0:
             raise RuntimeError(f"waveasm-translate failed:\n{result.stderr}")
         asm_text = result.stdout
