@@ -133,17 +133,20 @@ struct BitRange {
                     std::max(int64_t(0), highBit - n));
   }
 
-  /// Create range from a constant value
+  /// Create range from a constant value.
+  /// Negative constants use their unsigned 32-bit representation so the
+  /// OR-for-add optimisation in AffineHandlers sees the actually-set bits.
   static BitRange fromConstant(int64_t value) {
     if (value == 0)
       return BitRange(0, 0);
-    int64_t bits = 0;
-    int64_t v = value;
-    while (v > 0) {
-      bits++;
-      v >>= 1;
-    }
-    return BitRange(0, bits - 1);
+    // Work with the 32-bit unsigned representation so negative values
+    // (e.g. -16 = 0xFFFFFFF0) are handled correctly.
+    uint32_t uval = static_cast<uint32_t>(value);
+    if (uval == 0)
+      return BitRange(0, 0);
+    int low = llvm::countr_zero(uval);
+    int high = 31 - llvm::countl_zero(uval);
+    return BitRange(low, high);
   }
 
   /// Create range for a value with known max
