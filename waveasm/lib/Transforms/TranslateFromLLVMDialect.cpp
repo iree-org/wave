@@ -49,6 +49,8 @@ namespace waveasm {
 static constexpr int64_t kSRDWord1BaseMask = 0xFFFF;
 /// Default SRD word 3 flags set by the prologue (OOB_SELECT=2).
 static constexpr int64_t kSRDDefaultFlags = 0x20000;
+/// Default num_records when buffer size is unknown (max 4-byte-aligned value).
+static constexpr int64_t kSRDDefaultNumRecords = 0x7FFFFFFC;
 
 /// Tracks decomposed buffer pointer info from GEP operations.
 /// A GEP on ptr<7> decomposes into (SRD, byte-offset-vgpr).
@@ -702,7 +704,7 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
     for (auto arg : func.getBody().getArguments()) {
       if (isa<LLVM::LLVMPointerType>(arg.getType())) {
         int64_t argIdx = arg.getArgNumber();
-        ctx.queueSRDSetup(arg, argIdx, /*bufferSize=*/0x7FFFFFFC);
+        ctx.queueSRDSetup(arg, argIdx, /*bufferSize=*/kSRDDefaultNumRecords);
       } else {
         scalarArgs.push_back(arg);
         ctx.queueScalarArgLoad(arg, arg.getArgNumber());
