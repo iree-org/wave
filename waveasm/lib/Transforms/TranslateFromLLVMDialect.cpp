@@ -463,7 +463,8 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
 
   // GEP index is a dynamic Value (not a constant attr).
   auto indices = op.getIndices();
-  assert(indices.size() == 1 && "expected single GEP index");
+  if (indices.size() != 1)
+    return op->emitOpError("GEP with multiple indices not yet supported");
   auto idx = indices[0].dyn_cast<Value>();
   if (!idx)
     return op->emitOpError("GEP with constant index attr not yet supported");
