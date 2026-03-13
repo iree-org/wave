@@ -13,6 +13,35 @@
 using namespace mlir;
 using namespace waveasm;
 
+/// Insert a move instruction to coerce `src` into a register of the target
+/// type's register class.  Returns the coerced value, or a null Value if the
+/// target type is not a recognized register type.
+static Value coerceToRegType(OpBuilder &builder, Location loc,
+                             TranslationContext &ctx, Type targetType,
+                             Value src) {
+  auto regClass = getRegClass(targetType);
+  if (!regClass)
+    return {};
+  int64_t size = getRegSize(targetType);
+  Type regType;
+  switch (*regClass) {
+  case RegClass::AGPR:
+    regType = ctx.createARegType(size);
+    break;
+  case RegClass::VGPR:
+    regType = ctx.createVRegType(size);
+    break;
+  case RegClass::SGPR:
+    regType = ctx.createSRegType(size);
+    break;
+  default:
+    llvm_unreachable("unhandled register class");
+  }
+  if (*regClass == RegClass::SGPR)
+    return S_MOV_B32::create(builder, loc, regType, src);
+  return V_MOV_B32::create(builder, loc, regType, src);
+}
+
 /// Check if a value is a memref in LDS (workgroup address space).
 /// Used to detect memref iter_args that carry LDS buffer offsets.
 static bool isLDSMemRefValue(Value val) {
@@ -333,7 +362,8 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
   auto waveIfOp =
       IfOp::create(builder, loc, resultTypes, conditionValue, hasElse);
 
-  // Translate then region
+  // Translate then region body (yield created later, after type coercion).
+  SmallVector<Value> thenYieldVals;
   {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&waveIfOp.getThenBlock());
@@ -345,24 +375,20 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
       }
     }
 
-    // Get yield values and create waveasm.yield
     auto scfYield =
         cast<scf::YieldOp>(ifOp.getThenRegion().front().getTerminator());
-
-    SmallVector<Value> yieldVals;
     for (Value res : scfYield.getResults()) {
       if (auto mapped = ctx.getMapper().getMapped(res)) {
-        yieldVals.push_back(*mapped);
+        thenYieldVals.push_back(*mapped);
       } else {
         scfYield.emitError("yield result not mapped");
         return nullptr;
       }
     }
-
-    YieldOp::create(builder, loc, yieldVals);
   }
 
-  // Translate else region if present
+  // Translate else region body (yield created later, after type coercion).
+  SmallVector<Value> elseYieldVals;
   if (hasElse) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(waveIfOp.getElseBlock());
@@ -376,18 +402,73 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
 
     auto scfYield =
         cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
-
-    SmallVector<Value> yieldVals;
     for (Value res : scfYield.getResults()) {
       if (auto mapped = ctx.getMapper().getMapped(res)) {
-        yieldVals.push_back(*mapped);
+        elseYieldVals.push_back(*mapped);
       } else {
         scfYield.emitError("yield result not mapped");
         return nullptr;
       }
     }
+  }
 
-    YieldOp::create(builder, loc, yieldVals);
+  // Coerce yield values so both branches produce type-compatible results.
+  // One branch may produce register values (AGPR/VGPR/SGPR) while the
+  // other yields bare immediates (e.g. zero constants).  The waveasm.if
+  // verifier requires both branches to yield type-compatible values.
+  if (hasElse) {
+    for (unsigned i = 0, numYields = thenYieldVals.size(); i < numYields; ++i) {
+      Type thenType = thenYieldVals[i].getType();
+      Type elseType = elseYieldVals[i].getType();
+      if (typesCompatible(thenType, elseType))
+        continue;
+      // Coerce the immediate side to the register side.
+      if (getRegClass(thenType)) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToEnd(waveIfOp.getElseBlock());
+        Value coerced =
+            coerceToRegType(builder, loc, ctx, thenType, elseYieldVals[i]);
+        if (!coerced) {
+          ifOp.emitError("unsupported type coercion for yield result ")
+              << i << ": then type " << thenType << ", else type " << elseType;
+          return nullptr;
+        }
+        elseYieldVals[i] = coerced;
+      } else if (getRegClass(elseType)) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToEnd(&waveIfOp.getThenBlock());
+        Value coerced =
+            coerceToRegType(builder, loc, ctx, elseType, thenYieldVals[i]);
+        if (!coerced) {
+          ifOp.emitError("unsupported type coercion for yield result ")
+              << i << ": then type " << thenType << ", else type " << elseType;
+          return nullptr;
+        }
+        thenYieldVals[i] = coerced;
+      } else {
+        ifOp.emitError("unsupported type coercion for yield result ")
+            << i << ": then type " << thenType << ", else type " << elseType;
+        return nullptr;
+      }
+    }
+  }
+
+  // Create then yield and update if-op result types.
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(&waveIfOp.getThenBlock());
+    YieldOp::create(builder, loc, thenYieldVals);
+    for (unsigned i = 0, e = waveIfOp->getNumResults(); i < e; ++i) {
+      if (i < thenYieldVals.size())
+        waveIfOp->getResult(i).setType(thenYieldVals[i].getType());
+    }
+  }
+
+  // Create else yield.
+  if (hasElse) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(waveIfOp.getElseBlock());
+    YieldOp::create(builder, loc, elseYieldVals);
   }
 
   // Map if results
