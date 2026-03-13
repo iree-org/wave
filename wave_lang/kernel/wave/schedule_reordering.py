@@ -457,6 +457,9 @@ def insert_cond_barrier(cond_reg, trace, graph, location: Optional[CapturedLocat
     cond_barrier.location = location
     barrier_graph.parent_op = cond_barrier
     trace.add_subgraph(barrier_graph_name, barrier_graph)
+    local_root = get_custom(cond_barrier).get_root_graph()
+    if barrier_graph_name not in local_root.subgraphs:
+        local_root.subgraphs[barrier_graph_name] = barrier_graph
     return cond_barrier
 
 
