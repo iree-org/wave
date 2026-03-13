@@ -282,7 +282,8 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   // When wgZ > 1, hardware provides thread IDs in v0 (x), v1 (y), v2 (z).
   // When wgY > 1 (and wgZ == 1), hardware provides v0 (x), v1 (y).
   int64_t wgY = 1, wgZ = 1;
-  if (auto wgAttr = program->getAttrOfType<ArrayAttr>("workgroup_size")) {
+  auto wgAttr = program.getWorkgroupSizeAttr();
+  if (wgAttr) {
     if (wgAttr.size() >= 2)
       if (auto intAttr = dyn_cast<IntegerAttr>(wgAttr[1]))
         wgY = intAttr.getInt();

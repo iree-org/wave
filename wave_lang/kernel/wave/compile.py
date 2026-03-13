@@ -1299,12 +1299,28 @@ def _generate_asm_code(mb, options):
             "--canonicalize",
             "--waveasm-scoped-cse",
         ]
+        # (2,2) wave shapes generate extract_strided_slice -> V_BFE_U32
+        # for scale extraction, creating load->VALU data hazards that
+        # require ticketed waitcnt.  (1,4) shapes use scalesIdxA on the
+        # MFMA directly and don't hit this path.
+        #   (1,4): wg=(64,4,1)  == waves_in_m=1, waves_in_n=4 == off
+        #   (2,2): wg=(128,2,1) == waves_in_m=2, waves_in_n=2 == on
+        #   (4,1): wg=(256,1,1) == waves_in_m=4, waves_in_n=1 == off
+        threads_per_wave = 64
+        waves_in_m = wg[0] // threads_per_wave
+        waves_in_n = wg[1]
+        # TODO: improve Ticketing logic (better latency-covering heuristics,
+        # smarter coalescing) so ticketed waitcnt can be always-on without
+        # a performance hit, removing this wave-shape conditional.
+        use_ticketed_waitcnt = waves_in_m >= 2 and waves_in_n >= 2
+        waitcnt_flag = (
+            "--waveasm-insert-waitcnt"
+            if use_ticketed_waitcnt
+            else "--waveasm-insert-waitcnt=ticketed-waitcnt=false"
+        )
         tail_passes = [
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
-            # Use default waitcnt mode (ticketed); the previous explicit
-            # ticketed-waitcnt=false disabled ticket tracking which caused
-            # stale waitcnt values on some multi-wave configurations.
-            "--waveasm-insert-waitcnt",
+            waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
             f"--workgroup-size-x={wg[0]}",
