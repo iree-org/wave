@@ -1,8 +1,8 @@
 # WaveASM Legalization Design
 
 This document describes the legalization strategy for the WaveASM backend:
-how illegal or pseudo-operations are lowered to legal AMDGCN machine
-instructions with correct register placement and operand widths.
+how pseudo-ops are lowered to legal AMDGCN machine ops with correct
+register placement and operand widths.
 
 ## Problem Statement
 
@@ -23,7 +23,7 @@ Both frontends face the same set of legalization problems:
    must be in VGPRs.
 - **Constant bus**: VALU instructions can read at most one SGPR operand per
    instruction (pre-GFX10). Violations require inserting SGPR-to-VGPR moves.
-- **Instruction selection**: A pseudo-op "add" can lower to `s_add_u32` (scalar),
+- **Instruction selection**: A pseudo-op `arith.add` can lower to `s_add_u32` (scalar),
    `v_add_u32` (vector), or a carry chain for i64.
 
 ## Architecture
@@ -90,7 +90,7 @@ where the SGPR/VGPR and width choice depends on context. Operations with
 unambiguous lowering (SRD setup, buffer loads, MFMA, barriers, branch, endpgm)
 continue to emit concrete machine ops directly during translation.
 
-### Pseudo-ops
+### Implemented pseudo-ops
 
 | Pseudo-op | Lowers to (SALU) | Lowers to (VALU) |
 |-----------|-----------------|-------------------|
@@ -178,8 +178,7 @@ After register assignment, scan each VALU instruction. If it reads more than
 one distinct SGPR:
 1. Pick one SGPR operand (prefer the one with fewer uses, to minimize moves).
 2. Insert `v_mov_b32` to copy it to a VGPR.
-3. Cache the move: if the same SGPR is used in multiple instructions, reuse the
-   same VGPR copy (subject to liveness).
+3. Rely on CSE to deduplicate identical moves.
 
 ### VGPR → SGPR (future)
 
@@ -224,16 +223,14 @@ the same ground for the subset of IR patterns we generate.
 2. Add instruction selection pass (pseudo-op → concrete, SALU vs VALU).
 3. Add VGPR→SGPR support (`v_readfirstlane_b32`) if needed.
 
-## Open Questions
+## Resolved Questions
 
-- **Should pseudo-ops carry an explicit type attribute (i32/i64) or use a
-  polymorphic result type?** Explicit attribute is simpler to pattern-match in
-  passes; polymorphic type is more MLIR-idiomatic.
-- **Should type and register legalization be one pass or two?** If width
-  decisions always precede register decisions, two passes are cleaner. If they
-  interact (e.g., i64 scalar add uses SALU carry chain, i64 vector add uses
-  VALU carry chain), a combined pass may be simpler.
-- **Value range analysis for narrowing**: should the type legalization pass
-  accept annotations (e.g., "this arg is a tensor dimension, fits in i32") or
-  should it analyze value ranges? Annotations are simpler and sufficient for
-  our use cases.
+- **Pseudo-op type representation**: pseudo-ops use polymorphic result types
+  (register-file-agnostic `!waveasm.sreg`/`!waveasm.vreg`/`!waveasm.imm`).
+  Width is inferred from operand register sizes.
+- **Pass count**: type legalization, register legalization, and instruction
+  selection are currently combined in a single `ArithLegalization` pass.
+  Splitting into separate passes is tracked as future work.
+- **Value range analysis**: not needed. The LLVM frontend already emits
+  explicit `trunc` ops where narrowing is safe; legalization lowers those
+  and uses i64 carry-chain expansion for true 64-bit arithmetic.
