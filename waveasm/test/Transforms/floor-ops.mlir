@@ -24,7 +24,8 @@ func.func @div_by_7(%arg0: i32) -> i32 {
   // CHECK: waveasm.v_sub_u32
   // CHECK: waveasm.v_lshrrev_b32
   // CHECK: waveasm.v_add_u32
-  // CHECK: waveasm.v_lshrrev_b32
+  // CHECK: [[SHIFT:%[^ ]+]] = waveasm.constant 2
+  // CHECK: waveasm.v_lshrrev_b32 [[SHIFT]],
   %c7 = arith.constant 7 : i32
   %div = arith.divui %arg0, %c7 : i32
   return %div : i32
