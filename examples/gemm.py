@@ -1,14 +1,7 @@
-"""
-GEMM Examples
-
-Demonstrates matrix multiplication patterns including basic GEMM, dynamic expert selection,
-input reordering, scatter operations, and conditional weight application.
-"""
-
 import torch
 import argparse
+
 import wave_lang.kernel.wave as tkw
-import wave_lang.kernel.lang as tkl
 from wave_lang.kernel._support.dtype import f16, f32, i32
 from wave_lang.kernel._support.indexing import sym
 from wave_lang.kernel.lang.global_symbols import *
@@ -50,8 +43,7 @@ def list_tests():
         print(f"  {test}")
 
 
-def simple_gemm_test(is_debug=False):
-    """Basic matrix multiplication kernel."""
+def simple_gemm_test():
     # Define constraints for the kernel
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -67,7 +59,7 @@ def simple_gemm_test(is_debug=False):
     ]
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
@@ -114,16 +106,17 @@ def simple_gemm_test(is_debug=False):
     # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
-        print_ir_after="all" if is_debug else [],
+        print_ir_after="all",
+        print_ir_before="all",
     )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
-
-    if is_debug:
-        print(compiled_gemm.asm)
+    compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, c)
+
+    with open("gemm.mlir", "w") as f:
+        f.write(compiled_gemm.asm)
 
     # Verify the result using PyTorch's matmul
     expected = torch.matmul(a, b.t())
@@ -136,8 +129,7 @@ def simple_gemm_test(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gemm_select_expert(is_debug=False):
-    """GEMM with expert selection from 3D tensor using fixed and dynamic indexing."""
+def downcast_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -162,7 +154,7 @@ def test_gemm_select_expert(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
@@ -213,7 +205,7 @@ def test_gemm_select_expert(is_debug=False):
         subs=hyperparams,
     )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, c)
@@ -226,8 +218,7 @@ def test_gemm_select_expert(is_debug=False):
         c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
     ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
 
-    if is_debug:
-        print(compiled_gemm.asm)
+    print(compiled_gemm.asm)
     print("GEMM test passed!")
 
     i = tkw.IndexMapping.iterator(0)
@@ -243,7 +234,7 @@ def test_gemm_select_expert(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         idx: i32,
@@ -296,7 +287,7 @@ def test_gemm_select_expert(is_debug=False):
         subs=hyperparams,
     )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, 1, c)
@@ -312,8 +303,7 @@ def test_gemm_select_expert(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gemm_dynamic_expert(is_debug=False):
-    """GEMM with runtime expert selection from 3D weight tensor."""
+def dyn_downcast_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -349,7 +339,7 @@ def test_gemm_dynamic_expert(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         idx: i32,
@@ -401,9 +391,10 @@ def test_gemm_dynamic_expert(is_debug=False):
     options = WaveCompileOptions(
         subs=hyperparams,
         print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
     )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, 1, c)
@@ -421,8 +412,7 @@ def test_gemm_dynamic_expert(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gemm_reordered_input(is_debug=False):
-    """GEMM with dynamically reordered input rows."""
+def reorder_a_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -459,7 +449,7 @@ def test_gemm_reordered_input(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         reorder_a: Memory[M, ADDRESS_SPACE_A, i32],  # Input matrix A
@@ -522,11 +512,11 @@ def test_gemm_reordered_input(is_debug=False):
     options = WaveCompileOptions(
         subs=hyperparams,
         print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
     )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
-    if is_debug:
-        print(compiled_gemm.asm)
+    compiled_gemm = wave_compile(options, gemm)
+    print(compiled_gemm.asm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, reorder_a, a_back, c, 1)
@@ -552,8 +542,7 @@ def test_gemm_reordered_input(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gather_rows(is_debug=False):
-    """Gather operation to reorder matrix rows based on dynamic indices."""
+def scatter_a_test(is_debug=False):
     M_DIV_2 = sym.M_DIV_2
     I = sym.I
     # Define constraints for the kernel
@@ -592,14 +581,14 @@ def test_gather_rows(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
         a_back: Memory[M, K, ADDRESS_SPACE_A, f16],  # Output matrix A
     ):
         # Initialize the accumulator register with zeros
         @tkw.conditional(THREAD_0 < M_DIV_2)
-        def gather_op():
+        def scatter_op():
             tid = tkw.scalar(THREAD_0, i32)
             reordered_idx = tkw.read(
                 reorder_a,
@@ -644,7 +633,8 @@ def test_gather_rows(is_debug=False):
     if is_debug:
         options = WaveCompileOptions(
             subs=hyperparams,
-            print_ir_after="all" if is_debug else [],
+            print_ir_after="all",
+            print_ir_before="all",
         )
     else:
         options = WaveCompileOptions(
@@ -652,10 +642,11 @@ def test_gather_rows(is_debug=False):
         )
 
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     if is_debug:
-        print(compiled_gemm.asm)
+        with open("scatter_a.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
     reorder_a = torch.randperm(m // 2).to(torch.int32).to(device="cuda")
@@ -672,11 +663,10 @@ def test_gather_rows(is_debug=False):
     print("A: ", a[reorder_a[0]])
     print("Reordered A: ", reordered_a[0])
 
-    print("gather_a test passed!")
+    print("scatter_a test passed!")
 
 
-def test_gather_then_gemm(is_debug=False):
-    """Gather rows into shared memory then perform GEMM on reordered data."""
+def scatter_a_simple_gemm_test(is_debug=False):
     M_DIV_2 = sym.M_DIV_2
     SHARED_MEM = sym.SHARED_MEM
     I = sym.I
@@ -729,7 +719,7 @@ def test_gather_then_gemm(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
@@ -743,7 +733,7 @@ def test_gather_then_gemm(is_debug=False):
         valid_threads = THREAD_0 < M_DIV_2
 
         @tkw.conditional(valid_threads)
-        def gather_op():
+        def scatter_op():
             tid = tkw.Register[M_DIV_2, i32](THREAD_0)
             reordered_idx = tkw.read(
                 reorder_a,
@@ -813,17 +803,19 @@ def test_gather_then_gemm(is_debug=False):
     if is_debug:
         options = WaveCompileOptions(
             subs=hyperparams,
-            print_ir_after="all" if is_debug else [],
+            print_ir_after="all",
+            print_ir_before="all",
         )
     else:
         options = WaveCompileOptions(
             subs=hyperparams,
         )
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     if is_debug:
-        print(compiled_gemm.asm)
+        with open("scatter_a_simple_gemm.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
     reorder_a = torch.randperm(4).to(torch.int32).to(device="cuda")
@@ -853,11 +845,10 @@ def test_gather_then_gemm(is_debug=False):
         c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
     ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
 
-    print("gather_then_gemm test passed!")
+    print("scatter_a_simple_gemm test passed!")
 
 
-def test_gather_gemm_expert(is_debug=False):
-    """Gather rows, then GEMM with expert selection."""
+def scatter_gemm_test(is_debug=False):
     E = sym.E
     M_DIV_2 = sym.M_DIV_2
     # Define constraints for the kernel
@@ -909,7 +900,7 @@ def test_gather_gemm_expert(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
@@ -926,7 +917,7 @@ def test_gather_gemm_expert(is_debug=False):
         condition = THREAD_0 < M_DIV_2
 
         @tkw.conditional(condition)
-        def gather_op():
+        def scatter_op():
             tid = tkw.Register[M_DIV_2, i32](THREAD_0)
             reordered_idx = tkw.read(
                 reorder_a,
@@ -997,7 +988,8 @@ def test_gather_gemm_expert(is_debug=False):
     if is_debug:
         options = WaveCompileOptions(
             subs=hyperparams,
-            print_ir_after="all" if is_debug else [],
+            print_ir_after="all",
+            print_ir_before="all",
         )
     else:
         options = WaveCompileOptions(
@@ -1005,10 +997,11 @@ def test_gather_gemm_expert(is_debug=False):
         )
 
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     if is_debug:
-        print(compiled_gemm.asm)
+        with open("scatter_gemm.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
     reorder_a = torch.randperm(m // 2).to(torch.int32).to(device="cuda")
@@ -1039,14 +1032,13 @@ def test_gather_gemm_expert(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gather_gemm_padded(is_debug=False):
-    """Gather with padding support, GEMM, then scatter output back."""
+def scatter_gemm_w_padding_test(is_debug=False):
     E = sym.E
     BLOCK_SHAPE = sym.BLOCK_SHAPE
     PAD_VALUE = sym.PAD_VALUE
 
     IDX = sym.IDX
-    GATHER_IDX = sym.GATHER_IDX
+    SCATTER_IDX = sym.SCATTER_IDX
     # Define constraints for the kernel
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -1109,7 +1101,7 @@ def test_gather_gemm_padded(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         reorder_a: Memory[BLOCK_SHAPE, ADDRESS_SPACE_A, i32],  # Input matrix A
@@ -1130,7 +1122,7 @@ def test_gather_gemm_padded(is_debug=False):
         condition = THREAD_0 < BLOCK_SHAPE
 
         @tkw.conditional(condition)
-        def gather_op():
+        def scatter_op():
             tid = tkw.Register[BLOCK_SHAPE, i32](THREAD_0)
             reordered_idx = tkw.read(
                 reorder_a,
@@ -1138,7 +1130,7 @@ def test_gather_gemm_padded(is_debug=False):
                 mapping_dynamic_vals=(tid,),
             )
 
-            tkw.set_symbol(GATHER_IDX, reordered_idx)
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
             is_not_padding = reordered_idx < tkw.scalar(PAD_VALUE, i32)
 
             @tkw.conditional(is_not_padding)
@@ -1185,8 +1177,8 @@ def test_gather_gemm_padded(is_debug=False):
                 mapping_dynamic_vals=(tid,),
             )
 
-            tkw.set_symbol(GATHER_IDX, reordered_idx)
-            is_not_padding = GATHER_IDX < PAD_VALUE
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
 
             @tkw.conditional(is_not_padding)
             def then():
@@ -1237,7 +1229,8 @@ def test_gather_gemm_padded(is_debug=False):
     if is_debug:
         options = WaveCompileOptions(
             subs=hyperparams,
-            print_ir_after="all" if is_debug else [],
+            print_ir_after="all",
+            print_ir_before="all",
         )
     else:
         options = WaveCompileOptions(
@@ -1245,10 +1238,11 @@ def test_gather_gemm_padded(is_debug=False):
         )
 
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     if is_debug:
-        print(compiled_gemm.asm)
+        with open("scatter_gemm_w_padding.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
     reorder_a = torch.randperm(m).to(torch.int32).to(device="cuda")
@@ -1293,8 +1287,7 @@ def test_gather_gemm_padded(is_debug=False):
     print("GEMM test passed!")
 
 
-def test_gather_gemm_fused(is_debug=False):
-    """Fused gather-GEMM-scatter with multiple experts (MOE-style)."""
+def scatter_gemm_fused_test(is_debug=False):
     E = sym.E
     TOTAL_ELEMS = sym.TOTAL_ELEMS
     NUM_BLOCKS = sym.NUM_BLOCKS
@@ -1302,7 +1295,7 @@ def test_gather_gemm_fused(is_debug=False):
     PAD_VALUE = sym.PAD_VALUE
 
     IDX = sym.IDX
-    GATHER_IDX = sym.GATHER_IDX
+    SCATTER_IDX = sym.SCATTER_IDX
     # Define constraints for the kernel
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -1393,7 +1386,7 @@ def test_gather_gemm_fused(is_debug=False):
     )
 
     @tkw.wave(constraints)
-    def wave_kernel(
+    def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         reorder_a: Memory[TOTAL_ELEMS, ADDRESS_SPACE_A, i32],  # Input matrix A
@@ -1417,7 +1410,7 @@ def test_gather_gemm_fused(is_debug=False):
         condition = THREAD_0 < BLOCK_SHAPE
 
         @tkw.conditional(condition)
-        def gather_op():
+        def scatter_op():
             tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
             wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_2)
             tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
@@ -1427,8 +1420,8 @@ def test_gather_gemm_fused(is_debug=False):
                 mapping_dynamic_vals=(tid_offset,),
             )
 
-            tkw.set_symbol(GATHER_IDX, reordered_idx)
-            is_not_padding = GATHER_IDX < PAD_VALUE
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
 
             @tkw.conditional(is_not_padding)
             def then():
@@ -1476,8 +1469,8 @@ def test_gather_gemm_fused(is_debug=False):
                 mapping_dynamic_vals=(tid_offset,),
             )
 
-            tkw.set_symbol(GATHER_IDX, reordered_idx)
-            is_not_padding = GATHER_IDX < PAD_VALUE
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
 
             @tkw.conditional(is_not_padding)
             def then():
@@ -1537,7 +1530,8 @@ def test_gather_gemm_fused(is_debug=False):
     if is_debug:
         options = WaveCompileOptions(
             subs=hyperparams,
-            print_ir_after="all" if is_debug else [],
+            print_ir_after="all",
+            print_ir_before="all",
         )
     else:
         options = WaveCompileOptions(
@@ -1545,10 +1539,11 @@ def test_gather_gemm_fused(is_debug=False):
         )
 
     options = set_default_run_config(options)
-    compiled_gemm = wave_compile(options, wave_kernel)
+    compiled_gemm = wave_compile(options, gemm)
 
     if is_debug:
-        print(compiled_gemm.asm)
+        with open("scatter_gemm_fused.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
     reorder_a = torch.randperm(total_elems).to(torch.int32).to(device="cuda")
@@ -1621,145 +1616,148 @@ def test_gather_gemm_fused(is_debug=False):
     print("GEMM test passed!")
 
 
-def fused_gemms(is_debug=False):
-    """Fused GEMM kernel where we run two GEMMs back to back."""
-    N1 = sym.N1
-    N2 = sym.N2
-    BLOCK_N1 = sym.BLOCK_N1
-    BLOCK_N2 = sym.BLOCK_N2
+def conditional_weight_gemm_test(is_debug=False):
+    """
+    Test GEMM with conditional topk_weight multiplication.
 
-    # Define constraints for the kernel
+    This demonstrates how to conditionally multiply GEMM output by weights based on an i32 flag.
+    Use case: In MoE, GEMM1 doesn't need weight multiplication, but GEMM2 does.
+
+    - When apply_weights=0: output = A @ B.T
+    - When apply_weights=1: output = (A @ B.T) * weights
+    """
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
-        tkw.WorkgroupConstraint(N2, BLOCK_N2, 1),
-        tkw.WaveConstraint(M, BLOCK_M / 2),
-        tkw.WaveConstraint(N2, BLOCK_N2 / 2),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
-        tkw.TilingConstraint(N1, BLOCK_N1),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={M: 16, N1: 16, N2: 16, K: 16},
+            vector_shapes={M: 16, N: 16, K: 16},
         ),
     ]
-
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    k = tkw.IndexMapping.iterator(2)
-    d0 = tkw.IndexMapping.dynamic_val(0)
-
-    a_read_map = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={M: d0, K: j},
-        outputs={M: i, K: j},
-        dynamic_val_mappings={M: i},
-    )
-
-    w1_read_map = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={N1: i, K: j},
-        outputs={N1: i, K: j},
-    )
-
-    w2_read_map = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={N2: i, N1: j},
-        outputs={N2: i, N1: j},
-    )
 
     @tkw.wave(constraints)
     def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
-        w1: Memory[N1, K, ADDRESS_SPACE_B, f16],  # Input matrix B
-        w2: Memory[N2, N1, ADDRESS_SPACE_B, f16],  # Input matrix D
-        c: Memory[M, N2, ADDRESS_SPACE_C, f32],  # Output matrix C
+        b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        weights: Memory[M, ADDRESS_SPACE_A, f32],  # TopK weights per row
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+        apply_weights: i32,  # Flag: 0 = no multiply, 1 = multiply by weights
     ):
         # Initialize the accumulator register with zeros
-        c_reg1 = Register[M, N1, f32](0.0)
-        c_reg2 = Register[M, N2, f32](0.0)
-
-        c_back1 = tkw.allocate(
-            shape=(M, N1),
-            distributed_shape=(M, N1),
-            dtype=tkl.f32,
-        )
+        c_reg = Register[M, N, f32](0.0)
 
         # Iterate over the K dimension to compute the dot product
-        @tkw.iterate(K, init_args=[c_reg1])
-        def repeat1(acc: Register[M, N1, f32]) -> Register[M, N1, f32]:
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
             # Load elements from A and B
             a_reg = tkw.read(a)
-            w1_reg = tkw.read(w1)
-            acc = tkw.mma(a_reg, w1_reg, acc)
+            b_reg = tkw.read(b)
+
+            # Compute matrix multiplication and accumulate
+            acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 
-        # Store the final result to C
-        tkw.write(repeat1, c_back1)
+        # Store GEMM result in register (don't write to memory yet)
+        tkw.write(repeat, c)
 
-        @tkw.iterate(N1, init_args=[c_reg2])
-        def repeat2(acc: Register[M, N2, f32]) -> Register[M, N2, f32]:
-            # Load elements from A and B
-            a_reg = tkw.read(c_back1)
-            a_reg = tkw.cast(a_reg, f16)
-            w2_reg = tkw.read(w2)
-            acc = tkw.mma(a_reg, w2_reg, acc)
-            return acc
+        # Conditionally multiply by weights if flag is set
+        condition = apply_weights == tkw.scalar(1, i32)
 
-        # Store the final result to C
-        tkw.write(repeat2, c)
+        @tkw.conditional(condition)
+        def apply_topk_weights():
+            weights_reg = tkw.read(weights)
+            weights_broadcast = tkw.broadcast(weights_reg, target_shape=[M, N])
+            c_reg = tkw.read(c)
+            result = c_reg * weights_broadcast
+            tkw.write(result, c)
 
     # Create test matrices
-    m, k = 64, 64  # Small dimensions for testing
-    n1, n2 = 64, 64
+    m, n, k = 64, 64, 64
+
     # Initialize input matrices with random values
     torch.manual_seed(0)
     a = torch.randn(m, k, dtype=torch.float16, device="cuda")
-    w1 = torch.randn(n1, k, dtype=torch.float16, device="cuda")
-    w2 = torch.randn(n2, n1, dtype=torch.float16, device="cuda")
-    c = torch.zeros(m, n2, dtype=torch.float32, device="cuda")
-    c_back1 = torch.zeros(m, n1, dtype=torch.float32, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
 
-    # Set hyperparameters for compilation
+    # TopK weights (simulating router weights in MoE)
+    weights = torch.full((m,), 2.0, dtype=torch.float32, device="cuda")
+
+    # Test 1: Without weight multiplication (apply_weights=0)
+    c_no_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
     hyperparams = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
-        BLOCK_N1: 64,
-        BLOCK_N2: 64,
+        BLOCK_N: 64,
         BLOCK_K: 32,
         M: m,
-        N1: n1,
-        N2: n2,
+        N: n,
         K: k,
     }
 
-    # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
         print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
 
+    # Run with apply_weights=0
+    compiled_gemm(a, b, weights, c_no_weights, 0)
+
     if is_debug:
-        print(compiled_gemm.asm)
-        with open("gemm.mlir", "w") as f:
+        with open("conditional_weight_gemm.mlir", "w") as f:
             f.write(compiled_gemm.asm)
 
-    # Run the GEMM kernel
-    compiled_gemm(a, w1, w2, c)
+    # Test 2: With weight multiplication (apply_weights=1)
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    compiled_gemm(a, b, weights, c_with_weights, 1)
 
-    # Verify the result using PyTorch's matmul
-    expected = torch.matmul(a, w1.t())
-    expected = torch.matmul(expected, w2.t())
+    # Verify results
+    expected_no_weights = torch.matmul(a, b.t()).to(torch.float32)
+    expected_with_weights = expected_no_weights * weights.view(-1, 1)
 
-    # Check if results are close (accounting for floating-point precision)
-    assert torch.allclose(
-        c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
-    ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
+    print("\n=== Conditional Weight GEMM Test ===")
+    print(f"Matrix dimensions: M={m}, N={n}, K={k}")
+    print(f"Weights shape: {weights.shape}")
+    print(f"Weights mean: {weights.mean().item():.4f}")
 
-    print("GEMM test passed!")
+    # Test without weights
+    torch.testing.assert_close(
+        c_no_weights.to(torch.float16),
+        expected_no_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 1 passed: apply_weights=0 (no multiplication)")
+
+    breakpoint()
+    # Test with weights
+    torch.testing.assert_close(
+        c_with_weights.to(torch.float16),
+        expected_with_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 2 passed: apply_weights=1 (with multiplication)")
+
+    # Verify that results are different
+    assert not torch.allclose(
+        c_no_weights, c_with_weights, rtol=1e-3, atol=1e-3
+    ), "Outputs should differ when weights are applied"
+
+    print(
+        f"\nOutput difference when weights applied: {((c_with_weights - c_no_weights).abs().mean().item()):.4f}"
+    )
+    print("Conditional weight GEMM test passed!")
 
 
 if __name__ == "__main__":

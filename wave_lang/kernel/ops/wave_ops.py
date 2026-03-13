@@ -200,7 +200,11 @@ def conditional(
 
 
 def iterate(
-    axis: IndexExpr, init_args: Sequence["Register"]
+    axis: IndexExpr,
+    init_args: Sequence["Register"],
+    step: int = 1,
+    start: Optional[IndexExpr] = None,
+    condition: Optional[IndexExpr] = None,
 ) -> Callable[[Callable[[AccT], AccT]], AccT]: ...
 
 
@@ -2509,6 +2513,8 @@ class Iterate(NestedRegionOp):
         expand_dims: list[IndexSymbol] = []
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         return_node = get_custom(subgraph.output_node())
+        if return_node.return_vals[0] is None:
+            return []
         assert isinstance(return_node, Output)
         for return_val in return_node.yielded_values:
             return_dims = get_custom(return_val).indexing_dims
