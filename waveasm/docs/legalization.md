@@ -58,7 +58,6 @@ in dedicated post-translation passes.
   │  - Assigns SGPR vs VGPR per value    │
   │  - Inserts v_mov_b32 for SGPR→VGPR   │
   │  - Enforces constant bus limits      │
-  │  - Caches moves to avoid duplicates  │
   └──────────────┬───────────────────────┘
                  │
                  ▼
