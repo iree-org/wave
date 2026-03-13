@@ -643,6 +643,12 @@ static LogicalResult translateOp(Operation *op, LLVMTranslationState &st) {
       .Case([&](LLVM::AddOp o) {
         return handleBinaryOp<LLVM::AddOp, ArithAddOp>(o, st);
       })
+      .Case([&](LLVM::OrOp o) {
+        return handleBinaryOp<LLVM::OrOp, ArithOrOp>(o, st);
+      })
+      .Case([&](LLVM::AndOp o) {
+        return handleBinaryOp<LLVM::AndOp, ArithAndOp>(o, st);
+      })
       .Case([&](ROCDL::MakeBufferRsrcOp o) {
         return handleMakeBufferRsrc(o, st);
       })
