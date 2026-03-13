@@ -529,6 +529,14 @@ def build_graph_passes(
         partial(partition_ops_with_gpr_offsets, trace, launchable.constraints),
         partial(partition_strided_operators, trace, launchable.constraints),
         partial(remove_chained_extractslice, trace),
+        # Run an early coalescing pass so scheduling (including manual schedules)
+        # can reason about merged read widths/counts instead of only pre-merge reads.
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        ),
     ]
 
     graph_passes += [
