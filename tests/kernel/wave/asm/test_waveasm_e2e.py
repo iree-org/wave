@@ -1142,6 +1142,7 @@ def _dbuf_mxfp4_helper(
     wave_shape=None,
     reorder_workgroups=None,
     eliminate_epilogue=False,
+    no_unroll=False,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1168,6 +1169,7 @@ def _dbuf_mxfp4_helper(
     from wave_lang.kernel.wave.schedules import (
         get_mxfp4_dbuf_schedule,
         get_mxfp4_asymmetric_schedule,
+        get_mxfp4_asymmetric_nounroll_schedule,
     )
     from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
@@ -1200,9 +1202,14 @@ def _dbuf_mxfp4_helper(
         )
         options.eliminate_epilogue = eliminate_epilogue
         if use_schedule:
-            schedule = get_mxfp4_asymmetric_schedule(
-                eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
-            )
+            if no_unroll:
+                schedule = get_mxfp4_asymmetric_nounroll_schedule(
+                    eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+                )
+            else:
+                schedule = get_mxfp4_asymmetric_schedule(
+                    eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+                )
         else:
             schedule = None
             options.schedule = SchedulingType.NONE
@@ -1442,6 +1449,44 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         output_dtype=output_dtype,
         wave_shape=wave_shape,
         eliminate_epilogue=eliminate_epilogue,
+    )
+
+
+@pytest.mark.parametrize("eliminate_epilogue", [True], ids=["ee"])
+@pytest.mark.parametrize(
+    "shape,block,wave_shape",
+    [
+        pytest.param((1024, 896, 8192), (256, 224, 256), (2, 2), id="256x224x256"),
+    ],
+)
+def test_dbuf_4wave_mxfp4_nounroll_gemm_cpp_backend(
+    shape,
+    block,
+    wave_shape,
+    eliminate_epilogue,
+    compiler,
+    dump_asm,
+):
+    """End-to-end test for asymmetric MXFP4 GEMM with no-unroll schedule.
+
+    The no-unroll schedule (unroll_factor=1) reduces register pressure by
+    not unrolling the K-loop body, allowing larger block sizes like
+    256x224x256 that would otherwise exceed the 256-VGPR hardware limit
+    with the standard asymmetric schedule.
+    """
+    _dbuf_mxfp4_helper(
+        shape=shape,
+        block=block,
+        num_waves=4,
+        use_stagger=False,
+        compiler=compiler,
+        dump_asm=dump_asm,
+        use_buffer_ops=True,
+        use_schedule=True,
+        output_dtype="f32",
+        wave_shape=wave_shape,
+        eliminate_epilogue=eliminate_epilogue,
+        no_unroll=True,
     )
 
 
