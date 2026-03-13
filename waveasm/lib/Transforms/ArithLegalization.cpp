@@ -437,6 +437,8 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
 /// re-establish VCC right before the v_cndmask_b32 that consumes it.
 /// Returns a VCC placeholder suitable for v_cndmask_b32's condition operand.
 static Value ensureVCC(Value cond, OpBuilder &builder, Location loc) {
+  if (isSGPRType(cond.getType()))
+    cond = sgprToVgpr(cond, builder, loc);
   if (isVGPRType(cond.getType())) {
     auto zeroTy = ImmType::get(builder.getContext(), 0);
     Value zero = ConstantOp::create(builder, loc, zeroTy, 0);

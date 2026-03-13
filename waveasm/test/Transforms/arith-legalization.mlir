@@ -102,6 +102,26 @@ waveasm.program @test_select
   waveasm.s_endpgm
 }
 
+// CHECK-LABEL: waveasm.program @test_select_sgpr_cond
+waveasm.program @test_select_sgpr_cond
+  target = #waveasm.target<#waveasm.gfx950, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 16 : i64} {
+
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.vreg
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.vreg
+  %s0 = waveasm.precolored.sreg 0 : !waveasm.sreg
+
+  // SGPR condition: must be moved to VGPR and compared to set VCC.
+  // CHECK: waveasm.v_mov_b32
+  // CHECK: waveasm.v_cmp_ne_i32
+  // CHECK: waveasm.v_cndmask_b32
+  %sel = waveasm.arith.select %s0, %v0, %v1 : (!waveasm.vreg, !waveasm.vreg, !waveasm.sreg) -> !waveasm.vreg
+
+  // CHECK-NOT: waveasm.arith.
+  waveasm.s_endpgm
+}
+
 // CHECK-LABEL: waveasm.program @test_wide_narrowing
 waveasm.program @test_wide_narrowing
   target = #waveasm.target<#waveasm.gfx950, 5>
