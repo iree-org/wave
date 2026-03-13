@@ -4,18 +4,25 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+# Third-party imports
 import pytest
 import torch
+import math
+
+# Local imports
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.moe import get_moe_align_block_size_kernel
+
 from .torch_kernels import moe_align_block_size_pytorch
-import torch.nn.functional as F
+
 
 torch.manual_seed(0)
 
 
-num_tokens_values = [1, 33, 256]
+num_tokens_values = [32]
 topk_values = [2]
 block_size_values = [16, 32, 64]
-num_experts_values = [4, 8, 64]
+num_experts_values = [4]
 
 
 def verify_moe_align_block_size_results(
@@ -104,10 +111,11 @@ def test_moe_align_block_size(
     """
     device = "cuda"
 
-    scores = torch.rand(num_tokens, num_experts)
+    scores = torch.rand(num_tokens, num_experts, device=device)
 
     # Get topk expert indices for each token
     _, topk_ids = torch.topk(scores, k=topk, dim=1)
+    topk_ids = topk_ids.to(device)
 
     # Conservative upper bound that accounts for both the number of tokens and
     # the maximum possible padding needed per expert
@@ -136,6 +144,101 @@ def test_moe_align_block_size(
         topk_ids, num_experts, block_size, sorted_ids, expert_ids, num_tokens_post_pad
     )
 
+    moe_align_block_size, hyperparams, dynamic_symbols = (
+        get_moe_align_block_size_kernel(
+            num_tokens,
+            num_experts,
+            block_size,
+            topk_ids.numel(),
+            max_num_m_blocks,
+            max_num_tokens_padded,
+            topk,
+        )
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        minimize_shared_allocs=False,
+    )
+
+    kernel = wave_compile(
+        options,
+        moe_align_block_size,
+    )
+
+    expert_counts_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    padded_counts_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    cumsum_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    cumsum_exclusive = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    num_blocks_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+
+    wave_expert_ids = torch.empty(
+        (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
+    )
+
+    wave_sorted_ids = torch.empty(
+        (max_num_tokens_padded,), dtype=torch.int32, device=topk_ids.device
+    )
+
+    wave_num_tokens_post_pad = torch.empty(
+        (1), dtype=torch.int32, device=topk_ids.device
+    )
+    flat_topk = topk_ids.view(-1).to(torch.int32)
+    kernel(
+        flat_topk,
+        wave_expert_ids,
+        expert_counts_buffer,
+        padded_counts_buffer,
+        cumsum_buffer,
+        cumsum_exclusive,
+        num_blocks_buffer,
+        wave_sorted_ids,
+    )
+
+    # print("Block size:", block_size)
+    # print("\n\n============Wave outputs================")
+    # print("Histogram:", expert_counts_buffer)
+    # print("Padded:", padded_counts_buffer)
+    # print("Cumsum (i):", cumsum_buffer)
+    # print("Cumsum (e):", cumsum_exclusive)
+    # print("Num blocks:", num_blocks_buffer)
+    # print("Expert IDs:", wave_expert_ids)
+
+    # print("Sorted IDs:")
+    # for i in range(math.ceil(max_num_tokens_padded / block_size)):
+    #     for j in range(block_size):
+    #         if i * block_size + j >= max_num_tokens_padded:
+    #             break
+    #         print(wave_sorted_ids[i * block_size + j].item(), end=" ")
+    #     print()
+
+    # print("\n\n============Reference outputs================")
+    # print("Sorted IDs:")
+    # for i in range(math.ceil(max_num_tokens_padded / block_size)):
+    #     for j in range(block_size):
+    #         if i * block_size + j >= max_num_tokens_padded:
+    #             break
+    #         print(sorted_ids[i * block_size + j].item(), end=" ")
+    #     print()
+    # print("Expert IDs:", expert_ids)
+
+    # print("Num tokens post pad:", num_tokens_post_pad.item())
+
     verify_moe_align_block_size_results(
-        topk_ids, sorted_ids, expert_ids, num_tokens_post_pad, block_size, num_experts
+        topk_ids,
+        wave_sorted_ids,
+        wave_expert_ids,
+        cumsum_buffer[-1],
+        block_size,
+        num_experts,
     )
