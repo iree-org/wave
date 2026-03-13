@@ -34,7 +34,8 @@ namespace waveasm {
 } // namespace waveasm
 
 /// Convert a virtual register type to a physical register type.
-/// Returns the original type unchanged if it's not a virtual register type
+/// Also handles re-indexing an already-physical type to a new physReg.
+/// Returns the original type unchanged if it's not a register type
 /// or if physReg < 0.
 static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
                              int64_t physReg) {
@@ -46,6 +47,12 @@ static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
     return PSRegType::get(ctx, physReg, sreg.getSize());
   if (auto areg = dyn_cast<ARegType>(virtualType))
     return PARegType::get(ctx, physReg, areg.getSize());
+  if (auto pvreg = dyn_cast<PVRegType>(virtualType))
+    return PVRegType::get(ctx, physReg, pvreg.getSize());
+  if (auto psreg = dyn_cast<PSRegType>(virtualType))
+    return PSRegType::get(ctx, physReg, psreg.getSize());
+  if (auto pareg = dyn_cast<PARegType>(virtualType))
+    return PARegType::get(ctx, physReg, pareg.getSize());
   return virtualType;
 }
 
@@ -428,14 +435,27 @@ private:
       }
     });
 
-    // Also update if op result types from yield operand types
+    // Also update if op result types.
+    // Prefer the allocation mapping (which respects loop ties) over the
+    // then-yield operand type.  When an if result feeds a loop init arg,
+    // the allocator ties it to the loop block arg and both receive the
+    // same physical register.  The then-yield operand may carry a
+    // *different* physical register (from the inner loop), so copying it
+    // blindly would break the LoopLikeOpInterface verifier which requires
+    // exact type equality between init args and region iter_args.
     program.walk([&](IfOp ifOp) {
       auto &thenBlock = ifOp.getThenBlock();
-      if (auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator())) {
-        for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
-          if (i < yieldOp.getResults().size()) {
-            ifOp->getResult(i).setType(yieldOp.getResults()[i].getType());
-          }
+      auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator());
+      if (!yieldOp)
+        return;
+      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+        Value res = ifOp->getResult(i);
+        int64_t physReg = mapping.getPhysReg(res);
+        if (physReg >= 0) {
+          res.setType(
+              makePhysicalType(ifOp->getContext(), res.getType(), physReg));
+        } else if (i < yieldOp.getResults().size()) {
+          res.setType(yieldOp.getResults()[i].getType());
         }
       }
     });
