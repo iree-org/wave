@@ -725,7 +725,8 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
     }
 
     // Enable all workgroup IDs so the SGPR layout is predictable.
-    // The real LLVM backend does the same (enables all three).
+    // Note: LLVM enables them selectively via amdgpu-no-workgroup-id-{y,z}
+    // attributes. We enable all three unconditionally for simplicity.
     ctx.enableAllWorkgroupIds();
 
     for (Operation &op : func.getBody().front()) {
