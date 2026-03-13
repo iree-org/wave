@@ -331,7 +331,7 @@ def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
   }];
 
   let options = [
-    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+    Option<"targetArch", "target", "std::string", "\"gfx950\"",
            "Target GPU architecture">
   ];
 
