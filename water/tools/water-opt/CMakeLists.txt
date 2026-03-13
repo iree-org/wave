@@ -6,8 +6,8 @@ set(LIBS
         MLIRArithDialect
         MLIRGPUDialect
         MLIRGPUToLLVMIRTranslation
-        MLIRLLVMToLLVMIRTranslation
         MLIRLinalgTransformOps
+        MLIRLLVMToLLVMIRTranslation
         MLIRMemRefTransformOps
         MLIRNormalFormDialect
         MLIRNormalFormTransforms

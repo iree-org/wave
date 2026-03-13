@@ -6,9 +6,9 @@ add_mlir_library(MLIRWaterPipelines
 
   LINK_LIBS PUBLIC
   MLIRIR
-  MLIRPass
-  MLIRTransforms
   MLIRNormalFormDialect
   MLIRNormalFormTransforms
+  MLIRPass
+  MLIRTransforms
   MLIRWaveTransforms
 )

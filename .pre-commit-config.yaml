@@ -31,3 +31,10 @@ repos:
       - id: clang-format
         name: Run clang-format on C/C++/etc. files
         exclude_types: ["jupyter", "json"]
+
+# Sort file and library lists in CMake files.
+-   repo: https://github.com/Hardcode84/3
+    rev: v0.3.0
+    hooks:
+    -   id: sort-cmake-lists
+        exclude: llvm-project/
