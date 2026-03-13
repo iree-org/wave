@@ -151,8 +151,11 @@ void KernelGenerator::emitMaterializedLiteral(
     llvm::SmallVector<std::string> &lines, Operation *op,
     llvm::StringRef mnemonic, int literalOperandIdx, int64_t literalValue) {
   std::string scratchReg = formatVGPRRange(kScratchVGPR, 1);
-  lines.push_back("  v_mov_b32 " + scratchReg + ", " +
-                  std::to_string(literalValue));
+  if (scratchVGPRValue != literalValue) {
+    lines.push_back("  v_mov_b32 " + scratchReg + ", " +
+                    std::to_string(literalValue));
+    scratchVGPRValue = literalValue;
+  }
 
   llvm::SmallVector<std::string> operands;
   for (Value result : op->getResults()) {

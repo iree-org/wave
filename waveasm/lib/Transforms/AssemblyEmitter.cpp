@@ -99,9 +99,14 @@ KernelGenerator::materializeLiteralOperand(Value operand, int scratchIdx) {
   auto [isLit, val] = getLiteralValue(operand);
   if (isLit && !isInlineConstant(val)) {
     std::string scratch = formatVGPRRange(scratchIdx, 1);
+    peakVGPRs = std::max(peakVGPRs, static_cast<int64_t>(scratchIdx + 1));
+    // Reuse cached value if kScratchVGPR already holds this literal.
+    if (scratchIdx == kScratchVGPR && scratchVGPRValue == val)
+      return {scratch, ""};
     std::string prefix =
         "  v_mov_b32 " + scratch + ", " + std::to_string(val) + "\n";
-    peakVGPRs = std::max(peakVGPRs, static_cast<int64_t>(scratchIdx + 1));
+    if (scratchIdx == kScratchVGPR)
+      scratchVGPRValue = val;
     return {scratch, prefix};
   }
   return {resolveValue(operand), ""};
@@ -536,6 +541,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                          ", " + src;
                 writeSrc = formatVGPRRange(kScratchVGPR, 1);
                 peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+                invalidateScratchCache();
               }
               for (int64_t i = 0; i < size; ++i) {
                 if (!lines.empty())
@@ -559,6 +565,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             std::string src = resolveValue(srcVal);
             std::string scratch = formatVGPRRange(kScratchVGPR, 1);
             peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            invalidateScratchCache();
             return "  v_mov_b32 " + scratch + ", " + src +
                    "\n  v_accvgpr_write_b32 " + resolveValue(result) + ", " +
                    scratch;
@@ -621,6 +628,8 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         }
 
         os << labelName << ":\n";
+        // Back-edge merges with loop entry; cannot assume scratch contents.
+        invalidateScratchCache();
         for (Operation &bodyOp : body) {
           if (auto condOp = dyn_cast<ConditionOp>(&bodyOp)) {
             {
@@ -801,6 +810,9 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         if (ifOp.hasElse()) {
           os << "  s_branch " << endLabel << "\n";
           os << elseLabel << ":\n";
+          // Else block is entered from the branch at the top, not from
+          // the then block, so scratch cache from then-block is invalid.
+          invalidateScratchCache();
           for (Operation &elseOp : *ifOp.getElseBlock()) {
             if (isa<YieldOp>(&elseOp))
               continue;
@@ -820,6 +832,8 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         }
 
         os << endLabel << ":";
+        // Then/else branches may leave different values in scratch VGPR.
+        invalidateScratchCache();
         return os.str();
       })
       .Case<ConditionOp>([&](ConditionOp) -> std::optional<std::string> {
@@ -897,6 +911,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 "  v_mov_b32 " + scratch + ", " + std::to_string(val1) + "\n";
             src1 = scratch;
             peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            scratchVGPRValue = val1;
           } else {
             std::swap(src0, src1);
           }
@@ -1043,6 +1058,7 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   for (Operation &op : program.getBodyBlock()) {
     if (auto labelOp = dyn_cast<LabelOp>(op)) {
       lines.push_back(generateLabel(labelOp));
+      invalidateScratchCache();
       continue;
     }
     if (auto commentOp = dyn_cast<CommentOp>(op)) {

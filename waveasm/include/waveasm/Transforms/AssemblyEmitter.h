@@ -198,12 +198,20 @@ private:
   /// Counter for generating unique loop labels in assembly
   int loopLabelCounter = 0;
 
-  /// Scratch VGPR for loading non-inline literals
+  /// Scratch VGPR for loading non-inline literals.
   /// We use a lower VGPR (v15) to avoid excessive VGPR allocation.
   /// The Python backend uses v_mov_b32 to materialize large constants
   /// during IR generation, which is better.
   /// TODO: Handle this properly during MLIR translation instead.
   static constexpr int64_t kScratchVGPR = 15;
+
+  /// Cached value currently held in kScratchVGPR, used to avoid redundant
+  /// v_mov_b32 materializations of the same literal.
+  std::optional<int64_t> scratchVGPRValue;
+
+  /// Invalidate the scratch VGPR cache (call on control flow changes or
+  /// when kScratchVGPR is written with a non-literal value).
+  void invalidateScratchCache() { scratchVGPRValue = std::nullopt; }
 };
 
 //===----------------------------------------------------------------------===//
