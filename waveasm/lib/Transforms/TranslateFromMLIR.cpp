@@ -296,6 +296,8 @@ void TranslationContext::emitSRDPrologue() {
     // size/stride. Must use RawOp: S_MOV_B64/S_MOV_B32 are Pure (SALUUnaryOp)
     // and write to physical registers with no SSA consumer, so CSE/DCE
     // eliminates them.
+    // TODO: Replace with typed ops once regalloc supports contiguous
+    // allocation constraints for PackOp inputs.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;

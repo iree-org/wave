@@ -424,6 +424,11 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
   if (srdOp) {
     int64_t srdBase = srdOp.getIndex();
 
+    // TODO: Replace RawOp with typed S_AND_B32/S_MOV_B32 ops. Blocked on
+    // regalloc supporting contiguous allocation constraints for PackOp
+    // inputs, so SRD sub-registers can be addressed without hardcoded
+    // register strings.
+
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
     std::string andStr = "s_and_b32 s" + std::to_string(srdBase + 1) + ", s" +
                          std::to_string(srdBase + 1) + ", 0x" +
