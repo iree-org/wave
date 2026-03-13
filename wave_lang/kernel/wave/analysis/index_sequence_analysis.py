@@ -379,7 +379,20 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
                 for dim, seq in seqs.items()
             }
 
-        node_index = ensure_symbols_positive(node.index)
+        # Filter out symbols that should not belong to the index sequence,
+        # such as those corresponding to reduction dimensions in operations
+        # defining the operands of this operation. Keep everything for
+        # oeprations that are reductions.
+        # TODO: fixing this properly requires redefining `indexing_dims` to
+        # be local rather than look at operands.
+        if not isinstance(custom, (MMABase, ReduceOp)):
+            node_index = {
+                k: v for k, v in node.index.items() if k in custom.type.symbolic_shape
+            }
+        else:
+            node_index = node.index
+
+        node_index = ensure_symbols_positive(node_index)
         inferred_index = ensure_symbols_positive(inferred_index)
 
         # Check that that indices match, raise an error if they don't. Start by
