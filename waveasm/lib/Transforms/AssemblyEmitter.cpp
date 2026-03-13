@@ -979,22 +979,6 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           return formatter.format(mnem64, operands);
         }
 
-        // Carry ops (v_add_co_u32 etc.): on GFX9, carry is implicit VCC.
-        // v_add_co_u32:  dst, vcc, src0, src1
-        // v_addc_co_u32: dst, vcc, src0, src1, vcc  (carry-in appended)
-        if (defaultOp->getNumResults() == 2 && mnemonic.contains("_co_")) {
-          llvm::SmallVector<std::string> operands;
-          operands.push_back(resolveValue(defaultOp->getResult(0)));
-          operands.push_back("vcc");
-          for (Value operand : defaultOp->getOperands())
-            operands.push_back(resolveValue(operand));
-          bool isCarryIn =
-              mnemonic.contains("addc") || mnemonic.contains("subb");
-          if (isCarryIn)
-            operands.push_back("vcc");
-          return formatter.format(mnemonic, operands);
-        }
-
         return emitDefaultFormat(defaultOp, mnemonic);
       });
 }
