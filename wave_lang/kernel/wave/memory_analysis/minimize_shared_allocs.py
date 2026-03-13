@@ -55,16 +55,14 @@ def _get_propagated_users(node: fx.Node) -> list[fx.Node]:
 
 def compute_live_intervals(
     allocs: list[fx.Node],
-) -> tuple[list[fx.Node], dict[fx.Node, LiveInterval]]:
+) -> dict[fx.Node, LiveInterval]:
     """Compute live intervals for shared allocations that still have uses."""
 
-    live_allocs = []
     live_intervals = {}
     for alloc in allocs:
         users = _get_propagated_users(alloc)
         if not users:
             continue
-        live_allocs.append(alloc)
         interval = LiveInterval()
         for user in users:
             if user._sort_key < interval.start:
@@ -72,7 +70,7 @@ def compute_live_intervals(
             if user._sort_key > interval.end:
                 interval.end = user._sort_key
         live_intervals[alloc] = interval
-    return live_allocs, live_intervals
+    return live_intervals
 
 
 def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
@@ -140,10 +138,11 @@ def get_alloc_info(
     allocs = trace.walk(is_shared_alloc)
     if not allocs:
         return None, None, None
-    allocs, live_intervals = compute_live_intervals(allocs)
-    if not allocs:
+    live_intervals = compute_live_intervals(allocs)
+    if not live_intervals:
         return None, None, None
 
+    allocs = list(live_intervals)
     alloc_info = [
         (
             get_shared_memory_allocation_size(x),

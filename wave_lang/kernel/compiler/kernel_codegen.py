@@ -411,6 +411,9 @@ class KernelSignature:
                     ret.append(user)
                     continue
 
+                # All subgraphs (including nested ones) are registered in a
+                # flat dict on the root graph, so this lookup works at any
+                # nesting depth.
                 root_subgraphs = custom.get_root_graph().subgraphs
                 if custom.subgraph_name not in root_subgraphs:
                     raise KeyError(custom.subgraph_name)

@@ -23,7 +23,7 @@ def add_test_node(graph: fx.Graph, name: str) -> fx.Node:
     """
     # Create a NewScalar node with a unique float value based on name hash
     # This ensures each node has a distinct value while being deterministic
-    value = float(hash(name) % 1000)
+    value = float(hash(name) % (2**31))
     node = NewScalar(value=value, dtype=DataType("f32"))
     node.add_to_graph(graph)
     return node.fx_node

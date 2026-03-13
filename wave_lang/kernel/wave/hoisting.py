@@ -120,7 +120,7 @@ def remove_unused_captured_vars(reduction: CustomOp, subgraph: fx.Graph):
         if len(captured_vars[captured_idx].users) == 0:
             get_custom(captured_vars[captured_idx]).erase()
             # Order of captured vars in subgraph do not necessarily match order of root
-            # implicit_capture. Especially if we introduce instruction reoderings.
+            # implicit_capture. Especially if we introduce instruction reorderings.
             root_capture_idx = new_implicit_captures.index(
                 captured_vars[captured_idx].meta["lifted"]
             )

@@ -15,7 +15,7 @@ from ..ops.wave_ops import (
     Reshape,
     get_custom,
 )
-from .region_canonicalization import RegionFormat, requires_region_format
+
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -87,7 +87,6 @@ def replace_subexpr(
     main_expr = main_expr.subs(src_subexpr, dst_subexpr)
 
 
-@requires_region_format(RegionFormat.ISOLATED)
 def decompose_vmma_ops(
     trace: CapturedTrace,
     constraints: list[Constraint],

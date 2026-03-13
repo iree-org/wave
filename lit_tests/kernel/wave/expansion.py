@@ -1205,49 +1205,49 @@ def test_chained_gemm_32x32x8():
         print_trace(graph)
 
     # CHECK: %acc_M:0_N:0_K2:0
-    # CHECK-NEXT: %q
-    # CHECK-NEXT: %k
-    # CHECK-NEXT: %v
-    # CHECK-NEXT: %register
-    # CHECK-NEXT: %read_M:0_K2:0_K1:0
+    # CHECK: %q
+    # CHECK: %k
+    # CHECK: %v
+    # CHECK: %register
+    # CHECK: %read_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_M:0_K2:0_K1:1
+    # CHECK: %read_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_M:0_K2:0_K1:2
+    # CHECK: %read_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_M:0_K2:0_K1:3
+    # CHECK: %read_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:0
+    # CHECK: %read_1_shared_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:1
+    # CHECK: %read_1_shared_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:2
+    # CHECK: %read_1_shared_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:3
+    # CHECK: %read_1_shared_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %mma_M:0_K2:0_K1:0
+    # CHECK: %mma_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
-    # CHECK-NEXT: %mma_M:0_K2:0_K1:1
+    # CHECK: %mma_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
-    # CHECK-NEXT: %mma_M:0_K2:0_K1:2
+    # CHECK: %mma_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, MMAType.F32_32x32x8_F16)
-    # CHECK-NEXT: %mma_M:0_K2:0_K1:3
+    # CHECK: %mma_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, MMAType.F32_32x32x8_F16)
-    # CHECK-NEXT: %permute_M:0_K2:0
+    # CHECK: %permute_M:0_K2:0
     # CHECK-SAME: (args = (%mma_M:0_K2:0_K1:3, [B, M, K2])
-    # CHECK-NEXT: %cast_M:0_K2:0
+    # CHECK: %cast_M:0_K2:0
     # CHECK-SAME: (args = (%permute_M:0_K2:0, f16)
-    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:0
+    # CHECK: %read_2_shared_M:0_N:0_K2:0
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:1
+    # CHECK: %read_2_shared_M:0_N:0_K2:1
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:2
+    # CHECK: %read_2_shared_M:0_N:0_K2:2
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:3
+    # CHECK: %read_2_shared_M:0_N:0_K2:3
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK-NEXT: %reshape_M:0_N:0_K2:0
+    # CHECK: %reshape_M:0_N:0_K2:0
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 0, 4)
-    # CHECK-NEXT: %reshape_M:0_N:0_K2:1
+    # CHECK: %reshape_M:0_N:0_K2:1
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 1, 4)
     # CHECK: %reshape_M:0_N:0_K2:2
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 2, 4)

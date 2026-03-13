@@ -965,7 +965,7 @@ class CustomOp(ABC):
 
     def replace_uses_with(
         self,
-        new_node: CustomOp | fx.Node | list[fx.Node],
+        new_node: CustomOp | fx.Node,
         *,
         graph: Optional[fx.Graph] = None,
         propagate_location: bool = True,
@@ -1024,7 +1024,7 @@ class CustomOp(ABC):
             ):
                 new_node.users[user] = None
 
-    def replace_all_uses_with(self, new_node: CustomOp | fx.Node | list[fx.Node]):
+    def replace_all_uses_with(self, new_node: CustomOp | fx.Node):
         """Replace all uses of the current node with the new node."""
         self.replace_uses_with(new_node)
 
@@ -2444,6 +2444,7 @@ class NestedRegionOp(CustomOp):
             direct_sources_in_order: list[fx.Node] = []
         else:
             by_outer, direct_sources_in_order = lookup
+        # dict-keyed-by-None is used as an insertion-order set.
         captures: dict[fx.Node, None] = {}
 
         for outer_node in self.implicit_captures:
@@ -2488,8 +2489,17 @@ class NestedRegionOp(CustomOp):
         outer_node: fx.Node | CustomOp,
         location: Optional[CapturedLocation] = None,
     ) -> fx.Node:
-        """Insert a lifted placeholder that represents `outer_node` in `graph`."""
+        """Return a lifted placeholder that represents `outer_node` in `graph`.
+
+        If one already exists in the leading placeholder prefix, it is
+        returned directly. Otherwise a new one is created.
+        """
         outer_node = cls.capture_source(outer_node)
+        for node in graph.nodes:
+            if not isinstance(get_custom(node), Placeholder):
+                break
+            if node.meta.get("lifted") is outer_node:
+                return node
         placeholder = Placeholder(outer_node.name, outer_node.type)
         with graph.inserting_after(cls._last_region_input_or_root(graph)):
             placeholder_node = placeholder.add_to_graph(graph, loc=location)

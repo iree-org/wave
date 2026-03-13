@@ -41,9 +41,11 @@ Structural invariants:
 - these capture placeholders form the leading non-`IterArg` input prefix of the
   subgraph
 - the parent `NestedRegionOp.implicit_captures` list is the authoritative
-  ordered capture signature
-- each local capture placeholder resolves to exactly one outer source via
-  `meta["lifted"]`
+  ordered capture signature: it defines *which* outer values are captured and in
+  *what order*
+- each local capture placeholder carries a `meta["lifted"]` link to its outer
+  source. This per-placeholder metadata is derived from `implicit_captures` and
+  must stay consistent with it (the verifier checks this)
 
 In other words, the region interface is explicit and isolated from above.
 
@@ -78,8 +80,9 @@ Structural properties:
 
 - captured outer values are represented by region-local placeholders
 - the mapping from a local placeholder back to its outer source may still be
-  recovered with legacy heuristics, such as placeholder name or placeholder
-  position within the capture prefix
+  recovered with ad-hoc conventions that pre-existing passes relied on: name
+  matching and positional fallback within the capture prefix (codified in
+  `_try_resolve_legacy_capture_source` in `region_canonicalization.py`)
 - unlike `ISOLATED`, this form does not require `implicit_captures` plus
   `meta["lifted"]` to be the sole authoritative description of the capture
   interface
@@ -112,9 +115,11 @@ outer values directly, especially around captured memory operands.
 
 This is a hybrid legacy form used by scheduling-related passes.
 
-Structural properties:
+Structural properties (schedule-signature sources are the outer values that
+define the region boundary from the scheduler's point of view, namely
+outer-graph `Placeholder`s, i.e. kernel arguments, and `NewRegister`s):
 
-- placeholders are kept only for schedule-signature sources
+- placeholders are kept only for those schedule-signature sources
 - non-signature captures are rewritten back to direct outer references
 - the region mixes explicit placeholders for signature-defining values with
   direct outer references for everything else

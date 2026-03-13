@@ -1369,10 +1369,11 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
         local_map[block_arg] = arg_node
 
     # Rebuild region captures as lifted placeholders instead of mapping block
-    # arguments directly to outer values. MLIR uses block arguments for captures,
-    # but the FX-side canonical region form represents them as explicit local
-    # placeholders with `meta["lifted"]` links so MLIR -> FX -> MLIR roundtrips
-    # preserve the canonical isolated interface.
+    # arguments directly to outer values. MLIR uses block arguments for captures
+    # (and admits both explicit and implicit capture forms), but the FX-side
+    # canonical region form represents them as explicit local placeholders with
+    # `meta["lifted"]` links so MLIR -> FX -> MLIR roundtrips preserve the
+    # canonical isolated interface.
     for block_arg, capture_node in zip(block_args[iter_count:], captures):
         capture_placeholder = Iterate.materialize_capture_placeholder(
             subgraph, capture_node

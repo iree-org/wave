@@ -424,5 +424,45 @@ class TestCheckCallableEquivalent:
         assert not result
 
 
+class TestReplaceUsesWith:
+    """Tests for CustomOp.replace_uses_with."""
+
+    def test_single_node_replacement(self):
+        graph = create_simple_graph()
+        a = add_test_node(graph, "a")
+        b = add_test_node(graph, "b")
+        user = add_test_node(graph, "user")
+        user._update_args_kwargs((a,), {})
+
+        get_custom(a).replace_uses_with(b)
+        assert user.args == (b,)
+        assert user not in a.users
+        assert user in b.users
+
+    def test_identity_replacement_is_noop(self):
+        graph = create_simple_graph()
+        a = add_test_node(graph, "a")
+        user = add_test_node(graph, "user")
+        user._update_args_kwargs((a,), {})
+
+        get_custom(a).replace_uses_with(a)
+        assert user.args == (a,)
+        assert user in a.users
+
+    def test_graph_scoped_replacement(self):
+        graph1 = create_simple_graph()
+        graph2 = create_simple_graph()
+        a = add_test_node(graph1, "a")
+        b = add_test_node(graph1, "b")
+        user1 = add_test_node(graph1, "user1")
+        user1._update_args_kwargs((a,), {})
+        user2 = add_test_node(graph2, "user2")
+        user2._update_args_kwargs((a,), {})
+
+        get_custom(a).replace_uses_with(b, graph=graph1)
+        assert user1.args == (b,)
+        assert user2.args == (a,)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

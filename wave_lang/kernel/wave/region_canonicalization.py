@@ -87,15 +87,12 @@ def _collect_capture_sources(
     region: NestedRegionOp, subgraph: fx.Graph
 ) -> list[fx.Node]:
     """Collect outer capture sources in stable signature order."""
-    captures: list[fx.Node] = []
-    seen: set[fx.Node] = set()
+    # dict-keyed-by-None is used as an insertion-order set.
+    captures: dict[fx.Node, None] = {}
 
     def remember(source: fx.Node):
         source = region.capture_source(source)
-        if source in seen:
-            return
-        seen.add(source)
-        captures.append(source)
+        captures.setdefault(source, None)
 
     for source in region.implicit_captures:
         remember(source)
@@ -124,7 +121,7 @@ def _collect_capture_sources(
         remember(source)
     for source in _collect_direct_capture_uses(subgraph):
         remember(source)
-    return captures
+    return list(captures)
 
 
 def _collect_direct_capture_uses(graph: fx.Graph) -> list[fx.Node]:
@@ -267,12 +264,7 @@ def _canonicalize_nested_region(region: NestedRegionOp, subgraph: fx.Graph) -> N
         template = legacy[0] if legacy else None
         location = getattr(template, "location", None) if template else None
         canonical = next(
-            (
-                node
-                for node in legacy
-                if isinstance(get_custom(node), Placeholder)
-                and not isinstance(get_custom(node), IterArg)
-            ),
+            (node for node in legacy if isinstance(get_custom(node), Placeholder)),
             None,
         )
         if canonical is None:
@@ -384,24 +376,6 @@ def enable_legacy_capture_placeholders(trace: CapturedTrace) -> None:
 
 def enable_direct_capture_refs(trace: CapturedTrace) -> None:
     """Convert lifted placeholders back into direct outer references."""
-
-    def erase_unused_capture_sources(
-        sources: list[fx.Node], subgraph: fx.Graph
-    ) -> None:
-        """Erase dead outer capture sources that became redundant after rewriting."""
-
-        for source in sources:
-            outer_source = NestedRegionOp.capture_source(source)
-            if outer_source.graph is subgraph or outer_source.users:
-                continue
-            if isinstance(get_custom(outer_source), Placeholder):
-                continue
-            if isinstance(get_custom(outer_source), NestedRegionOp):
-                continue
-            if isinstance(get_custom(outer_source), NewRegister):
-                continue
-            get_custom(outer_source).erase()
-
     root_graph = trace.get_root_graph()
     for region, subgraph in _iter_nested_regions(root_graph):
         sources = _collect_capture_sources(region, subgraph)
@@ -412,26 +386,14 @@ def enable_direct_capture_refs(trace: CapturedTrace) -> None:
             is not None
             and local_capture is not region.capture_source(source)
         }
-        for user in subgraph.nodes:
-            changed = False
-
-            def rewrite(arg):
-                nonlocal changed
-                if isinstance(arg, fx.Node) and arg in replacements:
-                    changed = True
-                    return replacements[arg]
-                return arg
-
-            new_args = fx.map_arg(user.args, rewrite)
-            new_kwargs = fx.map_arg(user.kwargs, rewrite)
-            if changed:
-                user._update_args_kwargs(new_args, new_kwargs)
-        for local_capture in replacements:
-            subgraph.erase_node(local_capture)
+        for local_capture, outer_source in replacements.items():
+            get_custom(local_capture).replace_uses_with(
+                outer_source, graph=subgraph, propagate_location=False
+            )
+            get_custom(local_capture).erase()
         region.refresh_captures(
             subgraph, lookup=_build_capture_lookup(region, subgraph)
         )
-        erase_unused_capture_sources(sources, subgraph)
 
 
 def enable_schedule_signature_placeholders(trace: CapturedTrace) -> None:
@@ -439,7 +401,7 @@ def enable_schedule_signature_placeholders(trace: CapturedTrace) -> None:
     root_graph = trace.get_root_graph()
     for region, subgraph in _iter_nested_regions(root_graph):
         all_sources = _collect_capture_sources(region, subgraph)
-        by_outer, direct_sources_in_order = _build_capture_lookup(region, subgraph)
+        by_outer, _ = _build_capture_lookup(region, subgraph)
         signature_sources = [
             source
             for source in all_sources
@@ -470,6 +432,8 @@ def graph_pass_region_mode(graph_pass: Callable) -> RegionFormat:
     graph_pass_fn = (
         graph_pass.func if isinstance(graph_pass, functools.partial) else graph_pass
     )
+    if inspect.ismethod(graph_pass_fn):
+        graph_pass_fn = graph_pass_fn.__func__
     return getattr(graph_pass_fn, _REQUIRED_REGION_FORMAT_ATTR, RegionFormat.ISOLATED)
 
 
@@ -590,17 +554,10 @@ def wrap_graph_passes_with_region_adapters(
     """Wrap raw graph passes so each pass sees its declared region view."""
     canonicalize_region_captures(trace)
     wrapped_passes = []
-    assume_canonical_input = True
     for graph_pass in graph_passes:
         mode = graph_pass_region_mode(graph_pass)
 
-        def wrapped(
-            graph_pass=graph_pass,
-            mode=mode,
-            assume_canonical_input=assume_canonical_input,
-        ):
-            if not assume_canonical_input:
-                canonicalize_region_captures(trace)
+        def wrapped(graph_pass=graph_pass, mode=mode):
             _rewrite_region(trace, mode)
             result = graph_pass()
             canonicalize_region_captures(trace)
@@ -609,7 +566,6 @@ def wrap_graph_passes_with_region_adapters(
         wrapped.__name__ = getattr(graph_pass, "__name__", type(graph_pass).__name__)
         setattr(wrapped, _RAW_GRAPH_PASS_ATTR, graph_pass)
         wrapped_passes.append(wrapped)
-        assume_canonical_input = True
     return wrapped_passes
 
 

@@ -123,11 +123,12 @@ def test_simple_hoisting():
     # CHECK: %write_M:0_N:0_K:0
 
     # CHECK: === Iterate Subgraph ===
-    # CHECK: %acc_M:0_N:0_K:0
-    # CHECK: %a
-    # CHECK: %read_1_M:0_N:0_K:0
-    # CHECK: %b
-    # CHECK: %read_2_M:0_N:0_K:0
-    # CHECK: %add_M:0_N:0_K:0
-    # CHECK: %mma_M:0_N:0_K:0
+    # CHECK: %acc_M:0_N:0_K:0 :
+    # CHECK: %a :
+    # CHECK: %b :
+    # CHECK: %read_1_M:0_N:0_K:0 :
+    # CHECK: %read_2_M:0_N:0_K:0 :
+    # CHECK: %add_M:0_N:0_K:0 :
+    # CHECK: %mma_M:0_N:0_K:0 :
+    # CHECK: %add_1_M:0_N:0_K:0 :
     # CHECK: return [add_1_M:0_N:0_K:0]
