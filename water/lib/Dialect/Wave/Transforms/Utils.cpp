@@ -74,6 +74,8 @@ wave::setNormalFormPassPostcondition(ArrayRef<wave::WaveNormalForm> forms,
   });
 
   SmallVector<normalform::NormalFormAttrInterface> newAttrs;
+  newAttrs.reserve(sortedForms.size());
+
   for (wave::WaveNormalForm form : sortedForms)
     newAttrs.push_back(wave::WaveNormalFormAttr::get(root->getContext(), form));
 

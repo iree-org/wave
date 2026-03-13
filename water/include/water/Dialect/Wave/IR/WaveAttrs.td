@@ -127,6 +127,11 @@ def WaveNormalFormAttr
       DeclareAttrInterfaceMethods<NormalFormAttrInterface, ["verifyOperation"]>
     ]> {
   let assemblyFormat = "`<` $value `>`";
+  let extraClassDeclaration = [{
+    static constexpr std::initializer_list<::wave::WaveNormalForm> AllCases = { }]#
+      !interleave(!foreach(case, WaveNormalFormEnum.enumerants,
+        "::wave::WaveNormalForm::" # case.symbol), ", ") #[{ };
+  }];
 }
 
 //-----------------------------------------------------------------------------

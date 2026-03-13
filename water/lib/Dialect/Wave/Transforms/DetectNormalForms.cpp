@@ -33,16 +33,9 @@ namespace wave {
 /// Collect all Wave dialect normal forms that can be inferred.
 static SmallVector<normalform::NormalFormAttrInterface>
 collectWaveNormalForms(MLIRContext *ctx) {
-  constexpr WaveNormalForm allForms[] = {
-      WaveNormalForm::FunctionBoundarySpecified,
-      WaveNormalForm::OpTypesSpecified,
-      WaveNormalForm::IndexExprsSpecified,
-      WaveNormalForm::MemoryOnlyTypes,
-      WaveNormalForm::ResolvedAllocations,
-      WaveNormalForm::OrderedSymsSpecified,
-  };
   SmallVector<normalform::NormalFormAttrInterface> normalForms;
-  for (WaveNormalForm form : allForms)
+  normalForms.reserve(WaveNormalFormAttr::AllCases.size());
+  for (WaveNormalForm form : WaveNormalFormAttr::AllCases)
     normalForms.push_back(WaveNormalFormAttr::get(ctx, form));
   return normalForms;
 }
