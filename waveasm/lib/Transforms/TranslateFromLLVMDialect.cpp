@@ -678,6 +678,11 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
   if (!target)
     return rootOp->emitError() << "unknown target: " << targetId;
 
+  if (!isa<GFX950TargetAttr>(target))
+    return rootOp->emitError()
+           << "LLVM->WaveASM translation only supports gfx950, got "
+           << targetId;
+
   SmallVector<LLVM::LLVMFuncOp> kernels;
   rootOp->walk([&](LLVM::LLVMFuncOp func) {
     if (func->hasAttr("gpu.kernel") || func->hasAttr("rocdl.kernel"))
@@ -713,8 +718,9 @@ static LogicalResult translateLLVMModule(Operation *rootOp,
 
     ctx.emitSRDPrologue();
 
-    // Map scalar (non-pointer) args to their preloaded SGPR positions.
-    // On gfx950, arg N is preloaded at s[2+N*2 : 2+N*2+1] (64-bit each).
+    // Map scalar (non-pointer) args to their SGPR positions.
+    // gfx950 hardware preloads arg N into s[2+N*2 : 2+N*2+1] (64-bit each).
+    // Assumes all scalar args fit in the preload window (no overflow).
     for (auto arg : scalarArgs) {
       int64_t argIdx = arg.getArgNumber();
       int64_t preloadBase = 2 + argIdx * 2;
