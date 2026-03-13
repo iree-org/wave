@@ -44,8 +44,9 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
         global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
         shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
 
-        # Matrix A scale
+        # Matrix A scale (global -> VGPR reads)
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
+        read_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.Read)
         global_to_shared_a_scale = tkw.filter_nodes(
             all_read_a_scale, node_type=tkw.GatherToLDS
         )
@@ -56,8 +57,9 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
         global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
         shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
 
-        # Matrix B scale
+        # Matrix B scale (global -> VGPR reads)
         all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+        read_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
         global_to_shared_b_scale = tkw.filter_nodes(
             all_read_b_scale, node_type=tkw.GatherToLDS
         )
@@ -276,16 +278,20 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
         shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
 
-        # Matrix A scale
+        # Matrix A scale (global -> VGPR reads)
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
+        read_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.Read)
+        read_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.Read)
 
         # Matrix B data
         all_read_b = tkw.get_node_by_tag("read_b")
         global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
         shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
 
-        # Matrix B scale
+        # Matrix B scale (global -> VGPR reads)
         all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+        read_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
+        read_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
 
         # Bitcast operations (needed alongside compute)
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
@@ -308,8 +314,8 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                     (
                         global_to_shared_a,
                         global_to_shared_b,
-                        all_read_a_scale,
-                        all_read_b_scale,
+                        read_a_scale,
+                        read_b_scale,
                     ),
                     (),
                     (),
@@ -342,11 +348,11 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         loop_shared_load_b = tkw.filter_nodes(
             shared_load_b, subgraph=pipeline_loop.KERNEL
         )
-        loop_all_read_a_scale = tkw.filter_nodes(
-            all_read_a_scale, subgraph=pipeline_loop.KERNEL
+        loop_read_a_scale = tkw.filter_nodes(
+            read_a_scale, subgraph=pipeline_loop.KERNEL
         )
-        loop_all_read_b_scale = tkw.filter_nodes(
-            all_read_b_scale, subgraph=pipeline_loop.KERNEL
+        loop_read_b_scale = tkw.filter_nodes(
+            read_b_scale, subgraph=pipeline_loop.KERNEL
         )
         loop_bitcast_a = tkw.filter_nodes(bitcast_a, subgraph=pipeline_loop.KERNEL)
         loop_bitcast_a_scale = tkw.filter_nodes(
@@ -367,11 +373,11 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         loop_shared_load_b_0, loop_shared_load_b_1 = tkw.partition_by_dim(
             loop_shared_load_b, dim=K, num_partitions=2
         )
-        loop_all_read_a_scale_0, loop_all_read_a_scale_1 = tkw.partition_by_dim(
-            loop_all_read_a_scale, dim=K, num_partitions=2
+        loop_read_a_scale_0, loop_read_a_scale_1 = tkw.partition_by_dim(
+            loop_read_a_scale, dim=K, num_partitions=2
         )
-        loop_all_read_b_scale_0, loop_all_read_b_scale_1 = tkw.partition_by_dim(
-            loop_all_read_b_scale, dim=K, num_partitions=2
+        loop_read_b_scale_0, loop_read_b_scale_1 = tkw.partition_by_dim(
+            loop_read_b_scale, dim=K, num_partitions=2
         )
 
         loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
@@ -409,8 +415,8 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                 loop_bitcast_a_scale_0,
                 loop_bitcast_b_0,
                 loop_bitcast_b_scale_0,
-                loop_all_read_a_scale_0,  # prefetch A & B scales for next iteration
-                loop_all_read_b_scale_0,
+                loop_read_a_scale_0,  # prefetch A & B scales for next iteration
+                loop_read_b_scale_0,
                 tkw.SchedulingBarrier([]),
             ]
         )
@@ -446,8 +452,8 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                     loop_bitcast_a_scale_1,
                     loop_bitcast_b_1,
                     loop_bitcast_b_scale_1,
-                    loop_all_read_a_scale_1,
-                    loop_all_read_b_scale_1,
+                    loop_read_a_scale_1,
+                    loop_read_b_scale_1,
                     tkw.SchedulingBarrier([]),
                     tkw.WorkgroupBarrier(),
                     tkw.SchedulingBarrier([]),
@@ -507,14 +513,16 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
         global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
         shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
 
-        # Matrix A scale
+        # Matrix A scale (global -> VGPR reads)
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
+        read_a_scale = tkw.filter_nodes(all_read_a_scale, node_type=tkw.Read)
 
         # Matrix B data
         all_read_b = tkw.get_node_by_tag("read_b")
 
-        # Matrix B scale
+        # Matrix B scale (global -> VGPR reads)
         all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+        read_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
 
         # Bitcast operations (needed alongside compute)
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
@@ -710,7 +718,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.GatherToLDS)
         shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
 
-        # Matrix A scale
+        # Matrix A scale (global -> VGPR reads)
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
 
         # Matrix B data - GatherToLDS (global->shared) + Read (shared load)
@@ -718,8 +726,9 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.GatherToLDS)
         shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
 
-        # Matrix B scale
+        # Matrix B scale (global -> VGPR reads)
         all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+        read_b_scale = tkw.filter_nodes(all_read_b_scale, node_type=tkw.Read)
 
         # Bitcast operations (needed alongside compute)
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
@@ -807,13 +816,20 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
             loop_bitcast_b, dim=K, num_partitions=2
         )
 
+        # Count only actual global->VGPR Read nodes from the scheduled scale groups.
+        loop_a_scale_reads = tkw.filter_nodes(loop_all_read_a_scale, node_type=tkw.Read)
+        loop_b_scale_reads = tkw.filter_nodes(loop_all_read_b_scale, node_type=tkw.Read)
+        number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
+            loop_b_scale_reads
+        )
+
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
-        use_extra_barrier = True
+        use_extra_barrier = False
         # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
         cluster_0_ops = [
             tkw.SchedulingBarrier([]),
-            tkw.MemoryCounterWait(load=0),
+            # tkw.MemoryCounterWait(load=0),
             tkw.WorkgroupBarrier(),
         ]
         if use_extra_barrier:
@@ -864,6 +880,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                     loop_bitcast_a_1,
                     loop_bitcast_b_1,
                     tkw.SchedulingBarrier([]),
+                    tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
                     tkw.WorkgroupBarrier(),
                     tkw.SchedulingBarrier([]),
                 ],
@@ -882,6 +899,8 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         # Insert barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
         tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
 
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
