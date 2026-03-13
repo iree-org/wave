@@ -1766,11 +1766,10 @@ def get_mxfp4_asymmetric_schedule(
             bitcast_b_scale, subgraph=pipeline_loop.KERNEL
         )
         loop_scaled_mma = tkw.filter_nodes(scaled_mma, subgraph=pipeline_loop.KERNEL)
-        # Partition by K dimension for interleaving compute with memory ops.
-        # NOTE: Bitcasts MUST also be partitioned by K to match their producer
-        # shared loads, otherwise reorder_graph fails with
-        # "Cannot find producer(s)" because bitcasts in an earlier cluster
-        # would depend on shared loads in a later cluster.
+        # Partition MFMAs and bitcasts by M for interleaving compute with
+        # memory ops.  With odd M-tile counts (e.g. 7) the partitions will
+        # be unequal (4+3); interleave_operations handles this via offset
+        # clamping and tail flush.
         loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
             loop_scaled_mma, dim=M, num_partitions=2
         )
@@ -1782,8 +1781,14 @@ def get_mxfp4_asymmetric_schedule(
         )
 
         # Interleave MFMAs with memory ops (matching aiter f4gemm pattern).
-        # First half: g2v_b (buffer_load_dwordx4) and shared_load_a_1
-        # (ds_read_b128) interleaved every 4 MFMAs.
+        # Clamp start_offsets so they fit within each partition when the M
+        # tile count is odd (e.g. 7 tiles split into 4+3).
+        base_offsets = [0, 3, 2, 0]
+        base_intervals = [4, 4, 2, 4]
+
+        def _clamp_offsets(n, offsets):
+            return [min(o, max(0, n - 1)) for o in offsets]
+
         interleaved_mma_0 = tkw.interleave_operations(
             base_ops=loop_scaled_mma_0,
             interleaved_ops=[
@@ -1792,8 +1797,8 @@ def get_mxfp4_asymmetric_schedule(
                 loop_shared_load_a_scale_1,
                 loop_g2v_b_scale,
             ],
-            intervals=[4, 4, 2, 4],
-            start_offsets=[0, 3, 2, 0],
+            intervals=base_intervals,
+            start_offsets=_clamp_offsets(len(loop_scaled_mma_0), base_offsets),
             start_after_groups=[[], [], [1], [0]],
         )
 
@@ -1805,8 +1810,8 @@ def get_mxfp4_asymmetric_schedule(
                 loop_shared_load_a_scale_0,
                 loop_g2s_a_scale,
             ],
-            intervals=[4, 4, 2, 4],
-            start_offsets=[0, 3, 2, 0],
+            intervals=base_intervals,
+            start_offsets=_clamp_offsets(len(loop_scaled_mma_1), base_offsets),
             start_after_groups=[[], [], [1], [0]],
         )
 

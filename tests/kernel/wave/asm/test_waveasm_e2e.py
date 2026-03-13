@@ -1349,7 +1349,7 @@ def _dbuf_mxfp4_helper(
     [
         pytest.param((1024, 1024, 8192), (128, 256, 256), (1, 4), id="128x256x256"),
         pytest.param((1024, 1024, 8192), (128, 32, 256), (2, 2), id="128x32x256"),
-        pytest.param((896, 960, 8192), (224, 160, 256), (1, 4), id="224x160x256"),
+        pytest.param((896, 640, 8192), (224, 160, 256), (2, 2), id="224x160x256"),
         pytest.param((1024, 768, 8192), (256, 192, 256), (1, 4), id="256x192x256"),
         pytest.param((1024, 640, 8192), (256, 160, 256), (2, 2), id="256x160x256"),
         pytest.param((1024, 896, 8192), (256, 224, 256), (2, 2), id="256x224x256"),
@@ -1376,10 +1376,6 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     """
     block_id = f"{block[0]}x{block[1]}x{block[2]}"
 
-    # Skip blocks that cause fatal GPU memory faults (kills pytest process).
-    if block_id in ("224x160x256",):
-        pytest.skip("C++ ASM backend generates OOB memory access for this block shape")
-
     # Epilogue elimination + unscheduled pipeline + dynamic dims: the
     # unscheduled path makes K dynamic, but EE's validBytes clamping is
     # only wired for the pipelined (scheduled) loop structure.
@@ -1393,6 +1389,13 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     if block_id == "256x224x256" and use_schedule:
         pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
 
+    # VGPR overflow: 224x160x256 without epilogue elimination and with
+    # scheduled pipeline exceeds the 256 VGPR hardware limit.
+    if block_id == "224x160x256" and use_schedule and not eliminate_epilogue:
+        pytest.xfail(
+            "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
+            "(ee=False) for 224x160x256"
+        )
     # VGPR overflow: 256x160x256 without epilogue elimination and with
     # scheduled pipeline exceeds the 256 VGPR hardware limit.
     if block_id == "256x160x256" and use_schedule and not eliminate_epilogue:

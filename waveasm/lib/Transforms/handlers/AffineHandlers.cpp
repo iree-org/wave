@@ -96,9 +96,14 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
 // Magic number division by constant (via LLVM's UnsignedDivisionByConstantInfo)
 //===----------------------------------------------------------------------===//
 //
-// For a constant divisor d >= 2, computes magic multiplier m and post-shift s:
-//   floor(x / d) = mulhi(x, m) >> s              (simple form)
-//   floor(x / d) = (mulhi(x,m) + ((x-mulhi(x,m))>>1)) >> (s-1)  (add form)
+// For a constant divisor d >= 2, computes magic multiplier m and post-shift s
+// using LLVM's UnsignedDivisionByConstantInfo (Hacker's Delight):
+//   floor(x / d) = mulhi(x, m) >> s                                (simple)
+//   floor(x / d) = (mulhi(x,m) + ((x - mulhi(x,m)) >> 1)) >> s    (add)
+//
+// LLVM's PostShift already incorporates the -1 reduction for the add form,
+// so both forms use PostShift directly (matching LLVM's own BuildUDIV in
+// TargetLowering.cpp).
 // Exact for all 32-bit unsigned x. Produces 2-5 VALU instructions vs ~20 for
 // the general Barrett reduction.
 //===----------------------------------------------------------------------===//
@@ -106,6 +111,12 @@ Value emitUnsignedFloordiv(Value x, Value d, OpBuilder &builder, Location loc,
 Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
                                    Location loc, TranslationContext &ctx) {
   assert(divisor >= 2 && "divisor must be >= 2");
+
+  if (static_cast<uint64_t>(divisor) > 0xFFFFFFFFULL) {
+    llvm::errs() << "ERROR: divisor " << divisor << " (0x"
+                 << llvm::utohexstr(static_cast<uint64_t>(divisor))
+                 << ") exceeds 32 bits in emitConstantUnsignedFloordiv\n";
+  }
 
   auto vregType = ctx.createVRegType();
   llvm::APInt divisorAPInt(32, static_cast<uint64_t>(divisor));
@@ -133,13 +144,13 @@ Value emitConstantUnsignedFloordiv(Value x, int64_t divisor, OpBuilder &builder,
   };
 
   if (mag.IsAdd) {
-    // result = (q + ((x - q) >> 1)) >> (PostShift - 1)
+    // add form: (mulhi(x,m) + ((x - mulhi(x,m)) >> 1)) >> PostShift
     Value xSubQ = V_SUB_U32::create(builder, loc, vregType, x, q);
     Value oneConst = createImmConst(1, builder, loc, ctx);
     Value halfDiff =
         V_LSHRREV_B32::create(builder, loc, vregType, oneConst, xSubQ);
     Value sum = V_ADD_U32::create(builder, loc, vregType, q, halfDiff);
-    return emitShiftRight(sum, mag.PostShift - 1);
+    return emitShiftRight(sum, mag.PostShift);
   }
 
   return emitShiftRight(q, mag.PostShift);

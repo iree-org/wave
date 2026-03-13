@@ -3,7 +3,7 @@
 // Test: affine.apply with constant non-power-of-2 divisors.
 // These use magic number multiplication (Hacker's Delight):
 //   Simple form: mulhi(x, magic) >> shift
-//   Add form:    (mulhi(x, m) + ((x - mulhi(x, m)) >> 1)) >> (shift - 1)
+//   Add form:    (mulhi(x, m) + ((x - mulhi(x, m)) >> 1)) >> shift
 
 module {
 func.func @magic_div(%binding: !stream.binding) {

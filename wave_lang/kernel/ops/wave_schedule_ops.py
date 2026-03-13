@@ -771,32 +771,34 @@ class PartitionByDim(CustomScheduleOp):
             if custom.expanded_dims and dim in custom.expanded_dims:
                 dim_ids.add(custom.expanded_dims[dim])
 
-        # Validate that the dimension can be partitioned by the num_partitions
         dim_expand_size = len(dim_ids)
-        assert (
-            dim_expand_size >= num_partitions and dim_expand_size % num_partitions == 0
-        ), (
-            f"Dimension {dim} has {dim_expand_size} unique IDs which cannot be evenly "
-            f"partitioned by num_partitions {num_partitions}"
+        assert dim_expand_size >= num_partitions, (
+            f"Dimension {dim} has {dim_expand_size} unique IDs which is fewer "
+            f"than num_partitions {num_partitions}"
         )
 
-        # Sort nodes by dimension and compute partition boundaries
+        # Sort nodes by dimension ID so we can slice contiguous ranges.
         sorted_nodes_list = sorted(
             nodes_list, key=lambda x: get_custom(x).expanded_dims[dim]
         )
         nodes_per_dim = len(sorted_nodes_list) // dim_expand_size
-        partition_size = dim_expand_size // num_partitions
 
-        # Partition nodes by dimension ID ranges
+        # Compute per-partition sizes.  When dim_expand_size is not evenly
+        # divisible (e.g. 7 IDs split into 2), the first partitions get
+        # ceil(size/n) IDs and the last ones get floor(size/n).  For even
+        # counts this produces equal halves, so it is backward-compatible.
+        base, extra = divmod(dim_expand_size, num_partitions)
+        partition_sizes = [
+            base + (1 if i < extra else 0) for i in range(num_partitions)
+        ]
+
         partitioned_nodes = []
-        for partition_id in range(num_partitions):
-            lower_bound_dim_id = partition_id * partition_size
-            upper_bound_dim_id = (partition_id + 1) * partition_size
-
-            start_idx = lower_bound_dim_id * nodes_per_dim
-            end_idx = upper_bound_dim_id * nodes_per_dim
-
+        offset = 0
+        for psize in partition_sizes:
+            start_idx = offset * nodes_per_dim
+            end_idx = (offset + psize) * nodes_per_dim
             partitioned_nodes.append(sorted_nodes_list[start_idx:end_idx])
+            offset += psize
 
         # Return tuple of partitioned node lists directly instead of wrapping in proxy
         return tuple(partitioned_nodes)
