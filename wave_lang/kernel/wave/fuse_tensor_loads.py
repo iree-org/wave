@@ -18,6 +18,7 @@ from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..wave.constraints import Constraint
 from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
@@ -301,6 +302,7 @@ def find_adjacent_loads(
     return fusable_pairs
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def fuse_tensor_loads(
     trace: CapturedTrace,
     constraints: list[Constraint],

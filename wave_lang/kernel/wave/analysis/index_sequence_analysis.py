@@ -19,6 +19,10 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     PersistentEmitter,
 )
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel.wave.region_canonicalization import (
+    RegionFormat,
+    requires_region_format,
+)
 from wave_lang.support.logging import get_logger
 
 from ..._support.indexing import IndexSequence, IndexSymbol
@@ -343,6 +347,7 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
             ) from e
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def set_node_indices_water_checked(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -371,6 +376,7 @@ def set_node_indices_water_checked(
     _reset_water_id(trace)
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def set_node_indices(
     trace: CapturedTrace,
     constraints: list[Constraint],

@@ -43,6 +43,8 @@ with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous d
     - shared offset preserves tile-level index: similar structure to global offset
 """
 
+from .region_canonicalization import RegionFormat, requires_region_format
+
 import logging
 import math
 from collections import defaultdict
@@ -290,6 +292,7 @@ def clear_padding(write: Write):
     custom_memory.update_arg("distributed_shape", tuple(new_distributed_shape))
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def tensor_load_to_shared(
     trace: CapturedTrace,
     constraints: list[Constraint],

@@ -108,7 +108,7 @@ def test_gemm():
         apply_shared_memory_indexing_corrections(trace, constraints)
         if visualize:
             visualize_graph(trace.get_subgraph("region_0"), "after.png")
-        add_shared_memory_barriers(trace)
+        add_shared_memory_barriers(trace, canonicalize_output=False)
         print_trace(trace)
     # Root graph:
     # CHECK: %a

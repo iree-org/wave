@@ -411,9 +411,10 @@ class KernelSignature:
                     ret.append(user)
                     continue
 
-                if custom.subgraph_name not in graph.subgraphs:
+                root_subgraphs = custom.get_root_graph().subgraphs
+                if custom.subgraph_name not in root_subgraphs:
                     raise KeyError(custom.subgraph_name)
-                subgraph = graph.subgraphs[custom.subgraph_name]
+                subgraph = root_subgraphs[custom.subgraph_name]
                 nested_placeholders = filter_fx_graph(subgraph, is_placeholder)
                 for nested in nested_placeholders:
                     captured = get_custom(nested).get_captured_fx_node()

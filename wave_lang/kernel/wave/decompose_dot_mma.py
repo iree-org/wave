@@ -10,6 +10,7 @@ import torch.fx as fx
 
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import MMA, Add, CastOp, Mul, Sum, get_custom
+from .region_canonicalization import RegionFormat, requires_region_format
 from .constraints import (
     Constraint,
     GenericDot,
@@ -17,6 +18,7 @@ from .constraints import (
 from .utils.general_utils import get_hardware_constraint
 
 
+@requires_region_format(RegionFormat.ISOLATED)
 def decompose_dot_mma(trace: CapturedTrace, constraints: list[Constraint]):
     """
     Decomposes dot MMA operations into the dot products and cross-thread reductions.

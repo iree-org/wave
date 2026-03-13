@@ -869,15 +869,18 @@ class CustomOp(ABC):
 
     def update_arg(self, idx_or_name: int | str | fx.Node, value: CustomOp | fx.Node):
         """
-        Update the value of an argument in the node while keeping the
-        underlying fx.Node consistent.
+        Update an operand or named field while keeping the underlying
+        `fx.Node` consistent for both positional arguments and keyword
+        arguments.
         """
         inherited_field_count = len(CustomOp.__dataclass_fields__)
         field_names = [field.name for field in fields(self)[inherited_field_count:]]
+        field_name = None
         if isinstance(idx_or_name, str):
             if idx_or_name not in field_names:
                 raise ValueError(f"Field {idx_or_name} not found")
             idx = field_names.index(idx_or_name)
+            field_name = idx_or_name
         elif isinstance(idx_or_name, fx.Node):
             idx = self.fx_node.args.index(idx_or_name)
         else:
@@ -886,10 +889,19 @@ class CustomOp(ABC):
             value = value.fx_node
         # Skip the fields defined by the abstract base class
         if 0 <= idx < len(field_names):
-            field_name = field_names[idx]
+            field_name = field_name or field_names[idx]
             # Set the new value for the field
             setattr(self, field_name, value)
-            self.fx_node.update_arg(idx, value)
+            if field_name in self.fx_node.kwargs:
+                kwargs = dict(self.fx_node.kwargs)
+                kwargs[field_name] = value
+                self.fx_node.kwargs = kwargs
+            elif idx < len(self.fx_node.args):
+                self.fx_node.update_arg(idx, value)
+            else:
+                raise IndexError(
+                    f"Field '{field_name}' is not present in fx.Node args or kwargs"
+                )
         else:
             raise IndexError("Index out of range")
 
@@ -951,12 +963,70 @@ class CustomOp(ABC):
         else:
             new_node.location = self.location
 
-    def replace_all_uses_with(self, new_node: CustomOp | fx.Node):
-        """Replace all uses of the current node with the new node."""
+    def replace_uses_with(
+        self,
+        new_node: CustomOp | fx.Node | list[fx.Node],
+        *,
+        graph: Optional[fx.Graph] = None,
+        propagate_location: bool = True,
+    ) -> None:
+        """Replace uses of this node, optionally restricted to one graph.
+
+        When `graph` is `None`, this replaces every use of the current node.
+        When `graph` is provided, only uses in that specific `fx.Graph` are
+        replaced.
+
+        This matters for nested regions: the same FX node may be referenced from
+        multiple graphs at the same time, for example from a nested subgraph and
+        from sibling or outer graphs. A graph-scoped replacement therefore does
+        not imply that the current node becomes globally dead. After the call,
+        the node may still have uses in other graphs that were intentionally left
+        untouched.
+        """
         if isinstance(new_node, CustomOp):
             new_node = new_node.fx_node
-        self.replacement_location_propagate(new_node)
-        self.fx_node.replace_all_uses_with(new_node)
+        if self.fx_node is new_node:
+            return
+        if propagate_location:
+            self.replacement_location_propagate(new_node)
+
+        def contains(node: fx.Node, user: fx.Node) -> bool:
+            found = False
+
+            def visit(arg):
+                nonlocal found
+                if arg is node:
+                    found = True
+                return arg
+
+            fx.map_arg((user.args, user.kwargs), visit)
+            return found
+
+        for user in list(self.fx_node.users):
+            if graph is not None and user.graph is not graph:
+                continue
+            user._update_args_kwargs(
+                fx.map_arg(
+                    user.args, lambda arg: new_node if arg is self.fx_node else arg
+                ),
+                fx.map_arg(
+                    user.kwargs, lambda arg: new_node if arg is self.fx_node else arg
+                ),
+            )
+            if self.fx_node.graph is not user.graph and not contains(
+                self.fx_node, user
+            ):
+                self.fx_node.users.pop(user, None)
+            if (
+                isinstance(new_node, fx.Node)
+                and new_node.graph is not user.graph
+                and contains(new_node, user)
+            ):
+                new_node.users[user] = None
+
+    def replace_all_uses_with(self, new_node: CustomOp | fx.Node | list[fx.Node]):
+        """Replace all uses of the current node with the new node."""
+        self.replace_uses_with(new_node)
 
     def replace_all_uses_with_except(
         self, new_node: CustomOp | fx.Node, except_nodes: list[CustomOp]
@@ -1510,14 +1580,8 @@ class Placeholder(CustomOp):
         if not isinstance(custom, NestedRegionOp):
             return
 
-        # Cleanup dead captures
         subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        live_captures = []
-        for var in custom.implicit_captures:
-            if custom.get_captured_fx_node(subgraph, var):
-                live_captures.append(var)
-
-        custom.update_arg("implicit_captures", live_captures)
+        custom.refresh_captures(subgraph)
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2314,31 +2378,145 @@ class Read(CustomOp):
 
 class NestedRegionOp(CustomOp):
     def captured_vars(self, graph: fx.Graph) -> list[fx.Node]:
-        """
-        Nodes that are placeholders and are not iter args are captured vars.
-        """
+        """Return local Placeholder nodes that represent captured outer values."""
         captured_vars = []
         for nested_node in graph.nodes:
             custom = get_custom(nested_node)
-            if isinstance(custom, Placeholder) and not isinstance(custom, IterArg):
-                captured_vars.append(nested_node)
+            if isinstance(custom, IterArg):
+                continue
+            captured = self.capture_source(nested_node)
+            # Before canonicalization, malformed or legacy placeholders may still
+            # resolve to another local node instead of a true outer source.
+            if captured is nested_node or captured.graph is graph:
+                continue
+            captured_vars.append(nested_node)
         return captured_vars
 
-    def get_outer_node(self, outer_node: fx.Node) -> fx.Node:
-        while "lifted" in outer_node.meta:
-            outer_node = outer_node.meta["lifted"]
-        return outer_node
-
     def get_captured_fx_node(
-        self, graph: fx.Graph, outer_node: fx.Node
+        self,
+        graph: fx.Graph,
+        outer_node: fx.Node,
+        lookup: tuple[dict[fx.Node, fx.Node], list[fx.Node]] | None = None,
     ) -> Optional[fx.Node]:
-        outer_node = self.get_outer_node(outer_node)
+        """Return the local representative for `outer_node` in `graph` if it exists."""
+        outer_node = self.capture_source(outer_node)
+        if lookup is not None:
+            by_outer, _ = lookup
+            return by_outer.get(outer_node)
         for var in self.captured_vars(graph):
-            custom = get_custom(var)
-            if custom.get_captured_fx_node() == outer_node:
+            if self.capture_source(var) is outer_node:
                 return var
-
         return None
+
+    def get_capture_bindings(
+        self,
+        graph: fx.Graph,
+        lookup: tuple[dict[fx.Node, fx.Node], list[fx.Node]] | None = None,
+    ) -> list[tuple[fx.Node, fx.Node]]:
+        """Return `(outer_source, local_region_value)` pairs in signature order."""
+        by_outer = (
+            # Keep the first local representative for each outer source as the
+            # canonical binding when multiple legacy nodes still alias it.
+            {self.capture_source(var): var for var in self.captured_vars(graph)}
+            if lookup is None
+            else lookup[0]
+        )
+        bindings = []
+        for outer_node in self.implicit_captures:
+            outer_source = self.capture_source(outer_node)
+            captured = by_outer.get(outer_source)
+            if captured is not None:
+                bindings.append((outer_source, captured))
+        return bindings
+
+    def refresh_captures(
+        self,
+        graph: fx.Graph,
+        lookup: tuple[dict[fx.Node, fx.Node], list[fx.Node]] | None = None,
+    ) -> None:
+        """Refresh the capture signature from the current graph contents."""
+        if lookup is None:
+            # Match `get_capture_bindings`: the first local representative
+            # becomes the canonical binding for each outer source.
+            by_outer = {
+                self.capture_source(var): var for var in self.captured_vars(graph)
+            }
+            direct_sources_in_order: list[fx.Node] = []
+        else:
+            by_outer, direct_sources_in_order = lookup
+        captures: dict[fx.Node, None] = {}
+
+        for outer_node in self.implicit_captures:
+            resolved = self.capture_source(outer_node)
+            if resolved in by_outer:
+                captures.setdefault(resolved, None)
+        for outer_node in direct_sources_in_order:
+            captures.setdefault(outer_node, None)
+
+        self.update_arg("implicit_captures", list(captures))
+
+    @staticmethod
+    def capture_source(node: fx.Node | CustomOp) -> fx.Node:
+        """Return the defining outer value for a local Placeholder node."""
+        if isinstance(node, CustomOp):
+            node = node.fx_node
+        seen: set[fx.Node] = set()
+        while "lifted" in node.meta:
+            if node in seen:
+                raise ValueError(
+                    f"Cycle detected while resolving lifted capture source for {node}"
+                )
+            seen.add(node)
+            node = node.meta["lifted"]
+        return node
+
+    @staticmethod
+    def _last_region_input_or_root(graph: fx.Graph) -> fx.Node:
+        """Return the last leading region-input node in `graph`."""
+        last = graph._root
+        for node in graph.nodes:
+            if isinstance(get_custom(node), Placeholder):
+                last = node
+            else:
+                break
+        return last
+
+    @classmethod
+    def materialize_capture_placeholder(
+        cls,
+        graph: fx.Graph,
+        outer_node: fx.Node | CustomOp,
+        location: Optional[CapturedLocation] = None,
+    ) -> fx.Node:
+        """Insert a lifted placeholder that represents `outer_node` in `graph`."""
+        outer_node = cls.capture_source(outer_node)
+        placeholder = Placeholder(outer_node.name, outer_node.type)
+        with graph.inserting_after(cls._last_region_input_or_root(graph)):
+            placeholder_node = placeholder.add_to_graph(graph, loc=location)
+        if placeholder_node.name != outer_node.name:
+            # Preserve the outer source name when possible for compatibility
+            # with legacy code paths that still correlate capture placeholders
+            # with outer values by name.
+            # `add_to_graph` goes through `fx.Graph.create_node`, which may
+            # auto-rename to keep graph-local names unique. Restore the
+            # semantic capture name afterwards, renaming any conflicting node if
+            # we can still find one.
+            conflicting_node = next(
+                (
+                    node
+                    for node in graph.nodes
+                    if node is not placeholder_node and node.name == outer_node.name
+                ),
+                None,
+            )
+            if conflicting_node is not None:
+                conflicting_node.name = placeholder_node.name
+            placeholder_node.name = outer_node.name
+        # `Placeholder.add_to_graph` only creates the FX node; keep the type on
+        # the FX node itself so later passes do not need to re-infer it.
+        placeholder_node.type = outer_node.type
+        placeholder_node.meta["lifted"] = outer_node
+        return placeholder_node
 
     def get_root_graph(self):
         """

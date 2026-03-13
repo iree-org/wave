@@ -93,12 +93,12 @@ def test_gemm():
         idxc.subs = subs
         trace: CapturedTrace = gemm()
         idxc.finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
+        initialize_iter_args(trace, canonicalize_output=False)
+        add_get_results(trace, canonicalize_output=False)
+        infer_types(trace, canonicalize_output=False)
         promote_placeholders(trace, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
+        set_node_indices(trace, constraints, canonicalize_output=False)
+        expand_graph(trace, constraints, canonicalize_output=False)
         set_post_expansion_indices(trace, constraints)
         hoist_loop_invariant_ops(trace, constraints)
         minimize_global_loads(trace, constraints)
@@ -268,6 +268,8 @@ def test_gemm():
     # CHECK-NEXT: %acc_M:1_N:1_K:0
     # CHECK-NEXT: %a
     # CHECK-NEXT: %b
+    # CHECK-NEXT: %allocate
+    # CHECK-NEXT: %allocate_1
     # CHECK-NEXT: %read_37
     # CHECK-SAME: (%a, 8, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_18
@@ -325,6 +327,8 @@ def test_gemm():
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
     # CHECK-NEXT: placeholder(_name=a
     # CHECK-NEXT: placeholder(_name=b, _type=Memory[N, K].of(f16))
+    # CHECK-NEXT: placeholder(_name=allocate, _type=Memory[M, K].of(f16))
+    # CHECK-NEXT: placeholder(_name=allocate_1, _type=Memory[N, K].of(f16))
     # CHECK-NEXT: read(memory=a, elements_per_thread=8,
     # CHECK-SAME: index={M: $WG0*BLOCK_M + Mod(16*$T1 + 32*$T2 + floor($T0/8), 64) : 1 : 1, K: ARGK*BLOCK_K + 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: write(register_=read_37, memory=allocate, elements_per_thread=8,
@@ -340,7 +344,7 @@ def test_gemm():
     # CHECK-NEXT: read(memory=b, elements_per_thread=8,
     # CHECK-SAME: index={N: $WG1*BLOCK_N + BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64) : 1 : 1, K: ARGK*BLOCK_K + 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: write(register_=read_40, memory=allocate_1, elements_per_thread=8,
-    # CHECK-SMAE: index={N: BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64), K: 8*(Mod($T0, 8)) : 8 : 1})
+    # CHECK-SAME: index={N: BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64) : 1 : 1, K: 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: read(memory=allocate_1, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, _write_dependency=[write_20, write_21], index={N: BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=allocate_1, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, _write_dependency=[write_20, write_21], index={N: BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=allocate_1, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, _write_dependency=[write_20, write_21], index={N: BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 32 : 4 : 1})

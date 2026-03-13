@@ -108,10 +108,7 @@ def test_gemm_pipelined():
         minimize_global_loads(trace, constraints)
         apply_shared_memory_indexing_corrections(trace, constraints)
         schedule_graph(
-            trace,
-            constraints,
-            True,
-            SchedulingType.MODULO,
+            trace, constraints, True, SchedulingType.MODULO, canonicalize_output=False
         )
 
     print_subgraph(trace, "pipelined_iterate", False)

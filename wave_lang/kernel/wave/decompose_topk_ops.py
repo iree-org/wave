@@ -15,6 +15,7 @@ from .._support.location import CapturedLocation
 from .._support.tracing import CapturedTrace
 from .._support.indexing import IndexSequence, IndexExpr
 from ..lang.global_symbols import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import (
     Broadcast,
     Eq,
@@ -533,6 +534,7 @@ def decompose_topk_op(
         # that target them, and remove them together.
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def decompose_topk_ops(
     trace: CapturedTrace,
     constraints: list[Constraint],

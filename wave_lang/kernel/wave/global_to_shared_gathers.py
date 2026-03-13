@@ -15,6 +15,7 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
 from ..ops.wave_ops import Read, Write, get_custom
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -384,6 +385,7 @@ def add_optimized_nodes(
     return optimized_writes, shared_read_metadata
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def global_to_shared_gathers(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This function converts global gathers to shared gathers.

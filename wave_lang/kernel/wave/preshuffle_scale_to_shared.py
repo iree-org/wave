@@ -38,6 +38,8 @@ from copy import deepcopy
 import sympy
 import torch.fx as fx
 
+from .region_canonicalization import RegionFormat, requires_region_format
+
 from wave_lang.support.logging import get_logger
 
 from .._support.indexing import IndexSequence
@@ -186,6 +188,7 @@ def _create_wide_read_1d(
         read.erase()
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def preshuffle_scale_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     """Transform shared memory layout for preshuffle scale buffers.
 

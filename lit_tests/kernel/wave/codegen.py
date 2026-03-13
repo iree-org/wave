@@ -900,6 +900,7 @@ def test_int_to_float_handler_conversion():
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
+        compile_to_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)

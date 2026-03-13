@@ -12,6 +12,7 @@ from wave_lang.support.logging import get_logger
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from .constraints import Constraint, get_constrained_shape
 from .utils.classes import KernelLaunchInfo
 from .utils.graph_utils import move_node_after
@@ -255,6 +256,7 @@ def promote_placeholders(
     fix_manual_allocate_dependencies(graph)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def compute_shared_memory_usage(
     graph: CapturedTrace, kernel_launch_info: KernelLaunchInfo
 ):

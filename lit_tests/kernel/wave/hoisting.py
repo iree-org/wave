@@ -94,14 +94,14 @@ def test_simple_hoisting():
         }
         trace = simple_kernel()
         idxc.finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
+        initialize_iter_args(trace, canonicalize_output=False)
+        add_get_results(trace, canonicalize_output=False)
+        infer_types(trace, canonicalize_output=False)
+        set_node_indices(trace, constraints, canonicalize_output=False)
+        expand_graph(trace, constraints, canonicalize_output=False)
         set_post_expansion_indices(trace, constraints)
         remove_chained_getresult(trace)
-        hoist_loop_invariant_ops(trace, constraints)
+        hoist_loop_invariant_ops(trace, constraints, canonicalize_output=False)
 
     print("=== Root Graph ===")
     print_trace(trace)
@@ -130,4 +130,4 @@ def test_simple_hoisting():
     # CHECK: %read_2_M:0_N:0_K:0
     # CHECK: %add_M:0_N:0_K:0
     # CHECK: %mma_M:0_N:0_K:0
-    # CHECK: %add_1_M:0_N:0_K:0
+    # CHECK: return [add_1_M:0_N:0_K:0]

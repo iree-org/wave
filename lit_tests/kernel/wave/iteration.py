@@ -393,16 +393,18 @@ def test_partial_unroll_iteration():
         idxc.subs = subs
         trace: CapturedTrace = iterated_gemm()
         idxc.finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
+        initialize_iter_args(trace, canonicalize_output=False)
+        add_get_results(trace, canonicalize_output=False)
+        infer_types(trace, canonicalize_output=False)
         promote_placeholders(trace, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
+        set_node_indices(trace, constraints, canonicalize_output=False)
+        expand_graph(trace, constraints, canonicalize_output=False)
         set_post_expansion_indices(trace, constraints)
         hoist_loop_invariant_ops(trace, constraints)
         minimize_global_loads(trace, constraints)
-        apply_shared_memory_indexing_corrections(trace, constraints)
+        apply_shared_memory_indexing_corrections(
+            trace, constraints, canonicalize_output=False
+        )
 
         # Check the graph before unrolling
         # Find iterate and unroll
@@ -413,8 +415,6 @@ def test_partial_unroll_iteration():
         print_graph(trace.get_subgraph(iterate.subgraph_name))
 
         # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]
         # CHECK-NEXT: [write]
         # CHECK-NEXT: [read]
@@ -434,8 +434,6 @@ def test_partial_unroll_iteration():
         # TODO: Check that the bounds are correct, and steps
 
         # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]
         # CHECK-NEXT: [write]
         # CHECK-NEXT: [read]
@@ -460,8 +458,6 @@ def test_partial_unroll_iteration():
         assert iterate.step == 4  # step multiplied again (2 * 2 = 4)
 
         # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
         # CHECK-NEXT: [read]
         # CHECK-NEXT: [write]
         # CHECK-NEXT: [read]

@@ -13,6 +13,7 @@ import torch.fx as fx
 from .._support.tracing import CapturedTrace
 from .compile_options import WaveCompileOptions
 from .constraints import Constraint, TilingConstraint
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import (
     get_custom,
     Iterate,
@@ -131,6 +132,7 @@ def is_multicast_tensor_load(node: fx.Node) -> bool:
     return True
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def add_cluster_barriers(
     trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
 ):

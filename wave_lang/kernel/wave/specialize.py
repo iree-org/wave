@@ -36,6 +36,8 @@ Synchronization:
         - load partition waiting on compute to signal empty.
 """
 
+from .region_canonicalization import RegionFormat, requires_region_format
+
 import math
 from typing import Optional, List
 from collections import defaultdict
@@ -171,6 +173,7 @@ def set_specialized_conditions(
     return (is_load_wave, is_compute_wave, wave_id)
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def specialize_kernel(
     trace: CapturedTrace,
     constraints: list[Constraint],

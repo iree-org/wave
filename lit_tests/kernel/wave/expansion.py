@@ -78,10 +78,10 @@ def test_read_write_equal_sizes():
         idxc.subs = subs
         graph = read_write_same_size()
         idxc.finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # CHECK: %a
@@ -161,10 +161,10 @@ def test_read_write():
         idxc.subs = subs
         graph = read_write_different_dims()
         idxc.finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # CHECK: %a
@@ -243,11 +243,11 @@ def test_write_in_iterate():
         idxc.subs = subs
         graph = write_in_iterate()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # Root graph:
@@ -326,11 +326,11 @@ def test_no_writes():
         idxc.subs = subs
         graph = no_writes()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
 
@@ -367,11 +367,11 @@ def test_gemm():
         idxc.subs = subs
         graph = gemm()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # Root graph:
@@ -432,6 +432,7 @@ def test_gemm():
     # CHECK-NEXT: %acc_M:1_N:1_K:0
 
     # CHECK-NEXT: %a
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_M:0_N:0_K:0
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
@@ -441,7 +442,6 @@ def test_gemm():
     # CHECK-NEXT: %read_M:1_N:0_K:1
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
-    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
     # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
@@ -475,11 +475,11 @@ def test_gemm():
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
     # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
@@ -559,11 +559,11 @@ def test_batched_gemm():
         idxc.subs = subs
         graph = batched_gemm()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # Root graph:
@@ -621,6 +621,7 @@ def test_batched_gemm():
     # CHECK-NEXT: %acc_M:1_N:1_K:0
 
     # CHECK-NEXT: %a
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_M:0_N:0_K:0
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
@@ -630,7 +631,6 @@ def test_batched_gemm():
     # CHECK-NEXT: %read_M:1_N:0_K:1
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
-    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
     # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
@@ -664,11 +664,11 @@ def test_batched_gemm():
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
     # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
@@ -742,11 +742,11 @@ def test_gemm_non_direct_acc():
         idxc.subs = subs
         graph = gemm_non_direct_acc()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # CHECK: %add_M:0_N:0_K:0
@@ -811,11 +811,11 @@ def test_tiled_max():
         idxc.subs = subs
         graph = tiled_max()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # CHECK: max(arg=[read_M:0_K:0, read_M:0_K:1, read_M:0_K:2, read_M:0_K:3], init=acc_M:0_K:0
@@ -845,11 +845,11 @@ def test_gemm_iterate_expansion_only():
         idxc.subs = subs
         graph = gemm()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # Root graph:
@@ -879,12 +879,12 @@ def test_gemm_iterate_expansion_only():
     # CHECK: %acc_M:0_N:0_K:0
 
     # CHECK-NEXT: %a
+    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_M:0_N:0_K:0
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
     # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
-    # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
     # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
@@ -901,9 +901,9 @@ def test_gemm_iterate_expansion_only():
 
     # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
     # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: placeholder(_name=b
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
@@ -992,11 +992,11 @@ def test_attention():
         idxc.subs = subs
         graph = attention()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
 
@@ -1089,10 +1089,10 @@ def py_arithmetic_different_dims():
         idxc.subs = subs
         graph = py_arithmetic_different_dims()
         idxc.finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
     # CHECK: %a
@@ -1196,58 +1196,58 @@ def test_chained_gemm_32x32x8():
         idxc.subs = subs
         graph = chained_gemm_32x32x8()
         idxc.finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
+        initialize_iter_args(graph, canonicalize_output=False)
+        add_get_results(graph, canonicalize_output=False)
+        infer_types(graph, canonicalize_output=False)
+        set_node_indices(graph, constraints, canonicalize_output=False)
+        expand_graph(graph, constraints, canonicalize_output=False)
         set_post_expansion_indices(graph, constraints)
         print_trace(graph)
 
     # CHECK: %acc_M:0_N:0_K2:0
-    # CHECK: %register
-    # CHECK: %q
-    # CHECK: %read_M:0_K2:0_K1:0
+    # CHECK-NEXT: %q
+    # CHECK-NEXT: %k
+    # CHECK-NEXT: %v
+    # CHECK-NEXT: %register
+    # CHECK-NEXT: %read_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_M:0_K2:0_K1:1
+    # CHECK-NEXT: %read_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_M:0_K2:0_K1:2
+    # CHECK-NEXT: %read_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_M:0_K2:0_K1:3
+    # CHECK-NEXT: %read_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %k
-    # CHECK: %read_1_shared_M:0_K2:0_K1:0
+    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_1_shared_M:0_K2:0_K1:1
+    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_1_shared_M:0_K2:0_K1:2
+    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_1_shared_M:0_K2:0_K1:3
+    # CHECK-NEXT: %read_1_shared_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %mma_M:0_K2:0_K1:0
+    # CHECK-NEXT: %mma_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
-    # CHECK: %mma_M:0_K2:0_K1:1
+    # CHECK-NEXT: %mma_M:0_K2:0_K1:1
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
-    # CHECK: %mma_M:0_K2:0_K1:2
+    # CHECK-NEXT: %mma_M:0_K2:0_K1:2
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, MMAType.F32_32x32x8_F16)
-    # CHECK: %mma_M:0_K2:0_K1:3
+    # CHECK-NEXT: %mma_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, MMAType.F32_32x32x8_F16)
-    # CHECK: %permute_M:0_K2:0
+    # CHECK-NEXT: %permute_M:0_K2:0
     # CHECK-SAME: (args = (%mma_M:0_K2:0_K1:3, [B, M, K2])
-    # CHECK: %cast_M:0_K2:0
+    # CHECK-NEXT: %cast_M:0_K2:0
     # CHECK-SAME: (args = (%permute_M:0_K2:0, f16)
-    # CHECK: %v
-    # CHECK: %read_2_shared_M:0_N:0_K2:0
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:0
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_2_shared_M:0_N:0_K2:1
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:1
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_2_shared_M:0_N:0_K2:2
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:2
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %read_2_shared_M:0_N:0_K2:3
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K2:3
     # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
-    # CHECK: %reshape_M:0_N:0_K2:0
+    # CHECK-NEXT: %reshape_M:0_N:0_K2:0
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 0, 4)
-    # CHECK: %reshape_M:0_N:0_K2:1
+    # CHECK-NEXT: %reshape_M:0_N:0_K2:1
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 1, 4)
     # CHECK: %reshape_M:0_N:0_K2:2
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0}, 2, 4)

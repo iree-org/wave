@@ -37,6 +37,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..region_canonicalization import RegionFormat, requires_region_format
 from ..constraints import (
     Constraint,
 )
@@ -439,6 +440,7 @@ def get_mma_reduction_count(arg: MMA, dim_scaling: dict[IndexSymbol, int]) -> in
     return reduction_count
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def add_get_results(trace: CapturedTrace):
     iterate_ops = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
     conditional_ops = trace.walk(lambda x: isinstance(get_custom(x), Conditional))
@@ -972,6 +974,7 @@ def is_leaf_node(node):
     )
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def expand_graph(
     trace: CapturedTrace,
     constraints: Sequence[Constraint],

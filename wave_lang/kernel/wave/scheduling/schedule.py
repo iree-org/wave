@@ -26,6 +26,7 @@ from ...ops.wave_ops import (
     get_custom,
 )
 from ..constraints import Constraint
+from ..region_canonicalization import RegionFormat, requires_region_format
 from ..utils.general_utils import (
     get_tiling_constraint,
 )
@@ -606,6 +607,7 @@ def propagate_scheduling_parameters_to_iter_args(
         }
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def schedule_graph(
     trace: CapturedTrace,
     constraints: list[Constraint],

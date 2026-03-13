@@ -78,6 +78,7 @@ class WaveCompileOptions:
     check_water_analysis: bool = False
     enforce_locations: bool = True
     drop_debug_info_before_mlir: bool = True
+    verify_region_captures: bool = True
 
     # === Performance options ===
     optimization_level: bool = True

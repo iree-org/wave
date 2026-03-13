@@ -41,6 +41,7 @@ from .constraints import (
     get_grid_shape,
     get_device_layout,
 )
+from .region_canonicalization import RegionFormat, requires_region_format
 
 from .symbolic_constraints import SymbolicAlias
 from .utils.general_utils import (
@@ -314,6 +315,7 @@ class LaunchableWave(Launchable):
 
         return trace
 
+    @requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
     def create_induction_vars(self, trace: CapturedTrace) -> None:
         """
         Creates induction variables for all the reductions in the graph
@@ -359,6 +361,7 @@ class LaunchableWave(Launchable):
 
             hardware_constraint.waves_per_block = tuple(waves_per_block)
 
+    @requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
     def initialize_reductions(self, trace: CapturedTrace) -> None:
         """
         For each reduction, initializes the reduction count by looking at the
@@ -500,6 +503,7 @@ class LaunchableWave(Launchable):
     def __repr__(self):
         return f"tk.wave @{self._name}[{self.grid_type}]"
 
+    @requires_region_format(RegionFormat.DIRECT_OUTER_REF)
     def run_manual_schedule(
         self,
         trace: CapturedTrace,

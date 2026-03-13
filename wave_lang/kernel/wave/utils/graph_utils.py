@@ -50,6 +50,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..region_canonicalization import RegionFormat, requires_region_format
 from .classes import Failure, Result, Success
 from .symbol_utils import (
     collect_allowed_induction_symbols,
@@ -865,6 +866,16 @@ def assert_traces_equivalent(
         raise AssertionError(f"Traces are not equivalent: {check_result.error}")
 
 
+def assert_traces_mutually_equivalent(
+    lhs: CapturedTrace,
+    rhs: CapturedTrace,
+    subs: Optional[dict[IndexSymbol, int]] = None,
+) -> None:
+    """Assert structural equivalence in both directions."""
+    assert_traces_equivalent(lhs, rhs, subs=subs)
+    assert_traces_equivalent(rhs, lhs, subs=subs)
+
+
 def assert_constraints_equivalent(
     lhs_constraints: Sequence[Any],
     rhs_constraints: Sequence[Any],
@@ -1011,6 +1022,7 @@ def remove_chained_getresult(trace: CapturedTrace):
             get_custom(node).graph.erase_node(node)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def remove_chained_extractslice(trace: CapturedTrace):
     def is_chained_extractslice(node: fx.Node) -> bool:
         custom = get_custom(node)
@@ -1362,6 +1374,7 @@ def is_iterate_subgraph(graph: fx.Graph):
     return isinstance(get_custom(graph.parent_op), Iterate)
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def initialize_iter_args(trace: CapturedTrace) -> None:
     """
     Initializes the IterArgs in each reduction with an index
@@ -1380,12 +1393,6 @@ def initialize_iter_args(trace: CapturedTrace) -> None:
             if isinstance(custom, IterArg):
                 custom.iter_idx = count
                 count += 1
-
-
-def get_outer_node(outer_node: fx.Node) -> fx.Node:
-    while "lifted" in outer_node.meta:
-        outer_node = outer_node.meta["lifted"]
-    return outer_node
 
 
 def is_barrier_between_same_graph(
@@ -1674,7 +1681,7 @@ def prepare_subgraph_for_conditional(
             placeholder.meta["lifted"] = node
 
         placeholders[node] = placeholder
-        implicit_captures.append(get_outer_node(node))
+        implicit_captures.append(NestedRegionOp.capture_source(node))
 
     return subgraph, implicit_captures, placeholders
 

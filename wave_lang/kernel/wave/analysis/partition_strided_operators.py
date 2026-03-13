@@ -31,6 +31,7 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..region_canonicalization import RegionFormat, requires_region_format
 from ..assumptions import get_divisibility_subs
 from ..constraints import Constraint
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -101,6 +102,7 @@ def _get_symbolic_shape_and_vector_shapes(
     return register_shape, vector_shapes
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def partition_strided_operators(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This function analyzes the index sequence of operators in the graph
@@ -246,6 +248,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
         custom.graph.erase_node(operator)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This function analyzes the index sequence of reads and writes in a graph.
@@ -430,6 +433,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def merge_contiguous_reads(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
@@ -1730,6 +1734,7 @@ def _merge_contiguous_reads_once(
     return merged_any
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def partition_gather_like_ops(
     trace: CapturedTrace, constraints: list[Constraint], target: str
 ):
@@ -1915,6 +1920,7 @@ def _simplify_mapping(
     )
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def simplify_indices(trace: CapturedTrace, constraints: Sequence[Constraint] = ()):
     """Pre-simplify index expressions on all ops.
 

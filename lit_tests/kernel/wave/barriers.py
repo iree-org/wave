@@ -114,7 +114,7 @@ def test_read_write_equal_sizes():
         expand_graph(trace, constraints)
         set_post_expansion_indices(trace, constraints)
         tweak_index(graph)
-        add_shared_memory_barriers(trace)
+        add_shared_memory_barriers(trace, canonicalize_output=False)
         print_trace(trace, False)
     # CHECK: %a
     # CHECK-NEXT: %c
@@ -205,7 +205,7 @@ def test_gemm():
         set_post_expansion_indices(trace, constraints)
         tweak_index(graph)
         hoist_loop_invariant_ops(trace, constraints)
-        add_shared_memory_barriers(trace)
+        add_shared_memory_barriers(trace, canonicalize_output=False)
         print_trace(trace, False)
     # Root graph:
     # CHECK: %a
@@ -330,8 +330,14 @@ def test_split_barriers():
         tweak_index(graph)
         hoist_loop_invariant_ops(trace, constraints)
         schedule_graph(trace, constraints, True, enable_scheduling)
-        schedule_reordering(trace, constraints, enable_scheduling, use_global_to_shared)
-        add_shared_memory_barriers(trace, target="gfx1201")
+        schedule_reordering(
+            trace,
+            constraints,
+            enable_scheduling,
+            use_global_to_shared,
+            canonicalize_output=False,
+        )
+        add_shared_memory_barriers(trace, target="gfx1201", canonicalize_output=False)
         print_trace(trace, False)
 
     # Note: In pipelined loops, signal/wait pairs may have operations between them

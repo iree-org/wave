@@ -10,6 +10,7 @@ import numpy as np
 import torch.fx as fx
 
 from wave_lang.kernel._support.tracing import CapturedTrace
+from ..region_canonicalization import RegionFormat, requires_region_format
 
 from ..._support.dtype import i8
 from ...lang.global_symbols import *
@@ -45,21 +46,33 @@ def propagate_user(user: fx.Node) -> list[fx.Node]:
     return [user]
 
 
-def compute_live_intervals(allocs: list[fx.Node]):
-    """
-    Compute the live intervals for the allocs.
-    """
+def _get_propagated_users(node: fx.Node) -> list[fx.Node]:
+    """Return users of `node`, propagated through region entry/exit adapters."""
+
+    users, _ = get_users(node, None)
+    return flatten_list([propagate_user(u) for u in users])
+
+
+def compute_live_intervals(
+    allocs: list[fx.Node],
+) -> tuple[list[fx.Node], dict[fx.Node, LiveInterval]]:
+    """Compute live intervals for shared allocations that still have uses."""
+
+    live_allocs = []
     live_intervals = {}
     for alloc in allocs:
-        live_intervals[alloc] = LiveInterval()
-        users, _ = get_users(alloc, None)
-        users = flatten_list([propagate_user(u) for u in users])
+        users = _get_propagated_users(alloc)
+        if not users:
+            continue
+        live_allocs.append(alloc)
+        interval = LiveInterval()
         for user in users:
-            if user._sort_key < live_intervals[alloc].start:
-                live_intervals[alloc].start = user._sort_key
-            if user._sort_key > live_intervals[alloc].end:
-                live_intervals[alloc].end = user._sort_key
-    return live_intervals
+            if user._sort_key < interval.start:
+                interval.start = user._sort_key
+            if user._sort_key > interval.end:
+                interval.end = user._sort_key
+        live_intervals[alloc] = interval
+    return live_allocs, live_intervals
 
 
 def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
@@ -69,8 +82,7 @@ def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
 def get_use(
     alloc: fx.Node, live_interval: LiveInterval, match_sort_key: int
 ) -> fx.Node:
-    users, _ = get_users(alloc, None)
-    users = flatten_list([propagate_user(u) for u in users])
+    users = _get_propagated_users(alloc)
     matches = [x for x in users if x._sort_key == live_interval.start]
     if len(matches) != 1:
         raise ValueError(
@@ -111,7 +123,13 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
         )
 
 
-def get_alloc_info(trace: CapturedTrace):
+def get_alloc_info(
+    trace: CapturedTrace,
+) -> tuple[
+    list[fx.Node] | None,
+    dict[fx.Node, LiveInterval] | None,
+    list[tuple[int, tuple[int], tuple[int]]] | None,
+]:
     def is_shared_alloc(alloc: fx.Node) -> bool:
         custom = get_custom(alloc)
         return (
@@ -122,7 +140,9 @@ def get_alloc_info(trace: CapturedTrace):
     allocs = trace.walk(is_shared_alloc)
     if not allocs:
         return None, None, None
-    live_intervals = compute_live_intervals(allocs)
+    allocs, live_intervals = compute_live_intervals(allocs)
+    if not allocs:
+        return None, None, None
 
     alloc_info = [
         (
@@ -136,6 +156,7 @@ def get_alloc_info(trace: CapturedTrace):
     return allocs, live_intervals, alloc_info
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     """
     Minimize the number of shared allocs by reusing them.

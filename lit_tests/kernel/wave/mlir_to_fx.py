@@ -405,11 +405,13 @@ def mlir_to_fx_unspecified_address_space():
     errors = error_diagnostics(fx_diags)
     assert errors == [], f"unexpected errors: {errors}"
 
-    # Collect address space symbols from Memory-typed placeholders (each
-    # corresponds to a distinct function argument).
+    # Collect address space symbols from root Memory placeholders only.
+    # Canonical MLIR import reconstructs lifted capture placeholders in
+    # subgraphs, and those should intentionally reuse the same unresolved
+    # address space symbol as their captured root argument.
     placeholder_addrs = [
         node.type.address_space
-        for node in fx_trace.walk(lambda n: n)
+        for node in fx_trace.get_root_graph().nodes
         if isinstance(get_custom(node), Placeholder)
         and node.type is not None
         and issubclass(node.type, Memory)

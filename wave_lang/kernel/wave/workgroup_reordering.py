@@ -8,10 +8,12 @@ from .._support.indexing import *
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from .constraints import *
 from .utils.symbol_utils import *
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def reorder_workgroups(graph: CapturedTrace, reordering_constraints):
     if len(reordering_constraints) == 0:
         return

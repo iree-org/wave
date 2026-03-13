@@ -27,6 +27,7 @@ from typing import Any
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.constraints import Constraint
+from wave_lang.kernel.wave.region_canonicalization import canonicalize_region_captures
 from wave_lang.kernel.wave.mlir_converter.diagnostics import (
     FileLocation,
     MLIRDiagnostic,
@@ -262,6 +263,8 @@ def _prepare_water_request(
     Snapshots the trace's node state, expands the water-analysis pipeline if
     requested, and returns the dill-serialized request bytes.
     """
+    canonicalize_region_captures(trace)
+
     # Ensure additional node fields (like .type) are not lost during pickling.
     trace.snapshot_node_state()
 
@@ -323,6 +326,7 @@ def _unpack_fx_response(
             f"fx_emitter trace has unexpected type: {type(response.trace)}"
         )
     response.trace.restore_node_state()
+    canonicalize_region_captures(response.trace)
     return response.trace, response.constraints, response.options, response.diagnostics
 
 

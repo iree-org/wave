@@ -13,6 +13,7 @@ from .utils.symbol_utils import safe_subs
 from .utils.tag_utils import propagate_tag
 
 from .global_to_shared_gathers import update_read_mapping_dynamic_values
+from .region_canonicalization import RegionFormat, requires_region_format
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     Read,
@@ -223,6 +224,7 @@ def rewrite_node(
     custom_node.replace_all_uses_with(concat)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def mark_hardware_transpose_candidates(
     trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
 ):

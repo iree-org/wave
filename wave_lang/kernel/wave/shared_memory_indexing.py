@@ -10,9 +10,11 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import AtomicOp, Read, Write, get_custom
 from .constraints import Constraint
+from .region_canonicalization import RegionFormat, requires_region_format
 from .utils.general_utils import is_shared_mem_access, remove_global_indexing
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def apply_shared_memory_indexing_corrections(
     trace: CapturedTrace, constraints: list[Constraint]
 ):

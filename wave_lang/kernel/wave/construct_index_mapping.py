@@ -8,9 +8,11 @@ from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import Read, Write, get_custom
 from ..lang.wave_types import IndexMapping, index_symbol, IndexSymbol
 from ..wave.constraints import Constraint, IteratorBindings
+from .region_canonicalization import RegionFormat, requires_region_format
 import sympy
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def construct_index_mapping(
     trace: CapturedTrace, constraints: list[Constraint]
 ) -> None:

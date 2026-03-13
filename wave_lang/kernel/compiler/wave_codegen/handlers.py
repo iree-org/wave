@@ -1476,8 +1476,7 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
             for i, iter_arg in enumerate(iter_args):
                 emitter.bind_node_proxy(iter_arg, flat_else_return[i])
 
-        captured_vars: list[fx.Node] = get_custom(node).captured_vars(subgraph)
-        for root_v, subgraph_v in zip(implicit_capture, captured_vars):
+        for root_v, subgraph_v in get_custom(node).get_capture_bindings(subgraph):
             emitter._node_values[subgraph_v] = emitter.lookup_node_values(root_v)
 
         # Emit the subgraph.
@@ -1568,13 +1567,7 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
         )
         for i, v in enumerate(forOp.inner_iter_args):
             emitter.bind_node_proxy(iter_args[i], IRProxyValue(v))
-        captured_vars: list[fx.Node] = get_custom(node).captured_vars(subgraph)
-        for subgraph_v in captured_vars:
-            if "lifted" not in subgraph_v.meta:
-                raise ValueError(
-                    "Cannot find subgraph_v's corresponding value in the root graph."
-                )
-            root_v = subgraph_v.meta["lifted"]
+        for root_v, subgraph_v in get_custom(node).get_capture_bindings(subgraph):
             emitter._node_values[subgraph_v] = emitter.lookup_node_values(root_v)
         # Emit the subgraph.
         return_values = emitter._emit_graph(subgraph)
@@ -1661,9 +1654,7 @@ def handle_iterate_while(emitter: WaveEmitter, node: fx.Node):
     with InsertionPoint(whileOp.after.blocks[0]):
         subgraph = emitter.trace.get_subgraph(subgraph)
         # Map the captured variables from the root graph to the subgraph
-        for root_v, subgraph_v in zip(
-            implicit_capture, get_custom(node).captured_vars(subgraph)
-        ):
+        for root_v, subgraph_v in get_custom(node).get_capture_bindings(subgraph):
             emitter._node_values[subgraph_v] = emitter.lookup_node_values(root_v)
 
         # Map the iteration variable

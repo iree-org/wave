@@ -19,6 +19,7 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
 from ..ops.wave_ops import Extract, Read, Reshape, Write, get_custom
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..wave.utils.tag_utils import propagate_tag
 from ..wave.constraints import (
     Constraint,
@@ -367,6 +368,7 @@ def create_transpose_writes(
     return new_writes
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def in_thread_transpose(
     trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
 ):

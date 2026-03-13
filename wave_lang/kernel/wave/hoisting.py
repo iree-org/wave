@@ -13,6 +13,7 @@ from wave_lang.support.logging import get_logger
 from ..lang.global_symbols import *
 from ..ops.wave_ops import *
 from .constraints import Constraint
+from .region_canonicalization import RegionFormat, requires_region_format
 from .utils.general_utils import get_induction_variable
 
 logger = get_logger("wave.hoisting")
@@ -118,7 +119,7 @@ def remove_unused_captured_vars(reduction: CustomOp, subgraph: fx.Graph):
     for captured_idx in reversed(range(len(captured_vars))):
         if len(captured_vars[captured_idx].users) == 0:
             get_custom(captured_vars[captured_idx]).erase()
-            # Order of captured_vars in subgraph do not necessarily match order of root
+            # Order of captured vars in subgraph do not necessarily match order of root
             # implicit_capture. Especially if we introduce instruction reoderings.
             root_capture_idx = new_implicit_captures.index(
                 captured_vars[captured_idx].meta["lifted"]
@@ -127,6 +128,7 @@ def remove_unused_captured_vars(reduction: CustomOp, subgraph: fx.Graph):
             reduction.update_arg("implicit_captures", new_implicit_captures)
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]):
     """Hoists ops that are loop-invariant from reduction subgraphs to outer root graph."""
     root_graph = trace.get_root_graph()
@@ -139,7 +141,7 @@ def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]
                         custom_node, constraints
                     )
                     subgraph = trace.get_subgraph(custom_node.subgraph_name)
-                    # Captured variables from inside the loop.
+                    # Region-local representatives of captured outer values.
                     captured_vars = custom_node.captured_vars(subgraph)
                     hoistable_ops = get_hoistable_ops(
                         subgraph, captured_vars, induction_variable

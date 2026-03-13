@@ -72,6 +72,14 @@ from .minimize_global_loads import minimize_global_loads
 from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
 from .promotion import compute_shared_memory_usage, promote_placeholders
+from .region_canonicalization import (
+    RegionFormat,
+    prepare_region_captures,
+    raw_graph_pass,
+    requires_region_format,
+    verify_canonical_region_captures,
+    wrap_graph_passes_with_region_adapters,
+)
 from .schedule_reordering import schedule_reordering
 from .scheduling.loop_reconstruction import guard_g2s_with_bounds_check
 from .scheduling.schedule import schedule_graph
@@ -458,7 +466,8 @@ def build_graph_passes(
     all compilation stages. Each pass is a zero-argument callable (typically a
     `partial`). Passes mutate the *trace* in place and must be executed in
     the returned order within the same `IndexingContext` that was active when
-    the trace was created.
+    the trace was created. The returned passes include canonical-region
+    adapters according to each pass's declared region-format requirements.
     """
     if debug_arg_info is None:
         debug_arg_info = []
@@ -616,7 +625,8 @@ def build_graph_passes(
         )
     )
 
-    return graph_passes
+    raw_graph_passes = [raw_graph_pass(graph_pass) for graph_pass in graph_passes]
+    return wrap_graph_passes_with_region_adapters(trace, raw_graph_passes)
 
 
 def _build_initial_pass_pipeline(
@@ -630,10 +640,12 @@ def _build_initial_pass_pipeline(
 ) -> list[Callable]:
     idxc = IndexingContext.current()
 
-    def finalize_indices():
+    @requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
+    def finalize_indices(trace: CapturedTrace):
         idxc.finalize()
 
-    def substitute_vector_shapes():
+    @requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
+    def substitute_vector_shapes(trace: CapturedTrace):
         launchable.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
     return (
@@ -642,8 +654,8 @@ def _build_initial_pass_pipeline(
             partial(initialize_iter_args, trace),
             partial(launchable.create_induction_vars, trace),
             partial(launchable.initialize_reductions, trace),
-            finalize_indices,
-            substitute_vector_shapes,
+            partial(finalize_indices, trace),
+            partial(substitute_vector_shapes, trace),
             partial(add_get_results, trace),
             partial(infer_types, trace, launchable.constraints),
             partial(construct_index_mapping, trace, launchable.constraints),
@@ -801,6 +813,9 @@ def compile_launchable_to_mlir(
 
     # Only emit MLIR if we don't have a module yet.
     if not module_op:
+        # The non-Water Wave emitter currently consumes the schedule-style
+        # hybrid region view rather than fully canonical captures.
+        prepare_region_captures(trace, RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
         emitter = WaveEmitter(
             dispatch_entrypoint,
             trace,
@@ -914,9 +929,13 @@ def _trace_launchable_and_get_kernel_signature(
 
     pass_times = {}
     for p in graph_passes:
+        if options.verify_region_captures:
+            verify_canonical_region_captures(trace, f"before {p.__name__}")
         try_apply_pass(
             p, trace, print_ir_before, print_ir_after, profile_pass, pass_times
         )
+        if options.verify_region_captures:
+            verify_canonical_region_captures(trace, f"after {p.__name__}")
 
     if options.print_pass_times:
         pass_times_list = sorted(pass_times.items(), key=lambda x: x[1], reverse=True)

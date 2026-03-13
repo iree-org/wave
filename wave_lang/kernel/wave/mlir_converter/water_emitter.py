@@ -74,7 +74,6 @@ from wave_lang.kernel.ops.wave_ops import (
     NewRegister,
     Output,
     Placeholder,
-    Placeholder,
     Read,
     ReduceOp as Reduce,
     Reshape,

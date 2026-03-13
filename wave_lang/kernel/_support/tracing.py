@@ -186,6 +186,8 @@ class CapturedTrace:
 
     def add_subgraph(self, name: str, graph: fx.Graph):
         self.region_graph.subgraphs[name] = graph
+        if name != self.root_graph:
+            self.get_root_graph().subgraphs[name] = graph
 
     def get_root_graph(self) -> fx.Graph:
         return self.get_subgraph(self.root_graph)

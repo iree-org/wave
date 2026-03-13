@@ -97,6 +97,7 @@ from wave_lang.kernel.wave.constraints import (
 from wave_lang.kernel.wave.mlir_converter.diagnostics import MLIRDiagnostic, WaterError
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import FxEmitterResponse
 from wave_lang.kernel.wave.mlir_converter.water_emitter import serialize_location
+from wave_lang.kernel.wave.region_canonicalization import canonicalize_region_captures
 from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
 from wave_lang.support.indexing import index_symbol, IndexSequence
 from wave_lang.kernel._support.indexing import IndexExpr, IndexSymbol, safe_subs
@@ -148,7 +149,6 @@ from attr_type_converter import (
     mlir_element_type_to_dtype,
     symbol_attr_to_name,
 )
-
 
 # Converted attribute value: The union of all types that may be produced
 # for a single MLIR attribute.
@@ -733,6 +733,7 @@ def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
         offset=offset,
         tail_padding=tail_padding,
     )
+    allocate_op.fx_node.type = allocate_op.type
     _apply_mlir_attrs_to_fx_node(allocate_op.fx_node, converted_attrs)
     parse_ctx.add_mapping(op.result, allocate_op.fx_node)
 
@@ -1310,7 +1311,6 @@ def _create_get_result_nodes(
 
         if isinstance(result_index, dict):
             get_result_op.fx_node.index = result_index
-
         parse_ctx.add_mapping(result, get_result_op.fx_node)
 
 
@@ -1322,7 +1322,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     (operands and block arguments). Then creates a nested subgraph for the iterate body:
     - Iterator axis from the iterator attribute
     - Init args become IterArg placeholders in the subgraph
-    - Captures (explicit after makeIsolated) are mapped directly to outer values
+    - Captures (explicit after makeIsolated) become lifted placeholders in the subgraph
     - GetResult nodes for each iterate result
     """
     axis = index_symbol(symbol_attr_to_name(op.iterator))
@@ -1349,7 +1349,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
 
     # Create a local scope for the iterate body.
     # - IterArg block arguments -> new IterArg placeholder nodes in subgraph
-    # - Capture block arguments -> mapped directly to outer values (no placeholders)
+    # - Capture block arguments -> new lifted placeholders in subgraph
     local_map: dict[ir.Value, fx.Node | int | float] = {}
 
     # Map iter args to new placeholder nodes in the subgraph
@@ -1368,10 +1368,16 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
             arg_node.vector_shapes = dict(init_node.vector_shapes)
         local_map[block_arg] = arg_node
 
-    # Map capture block arguments directly to their outer values rather than
-    # creating lifted placeholders (the graph comparison handles both forms).
+    # Rebuild region captures as lifted placeholders instead of mapping block
+    # arguments directly to outer values. MLIR uses block arguments for captures,
+    # but the FX-side canonical region form represents them as explicit local
+    # placeholders with `meta["lifted"]` links so MLIR -> FX -> MLIR roundtrips
+    # preserve the canonical isolated interface.
     for block_arg, capture_node in zip(block_args[iter_count:], captures):
-        local_map[block_arg] = capture_node
+        capture_placeholder = Iterate.materialize_capture_placeholder(
+            subgraph, capture_node
+        )
+        local_map[block_arg] = capture_placeholder
 
     # Parse the body operations. All values now resolve within local_map.
     _convert_ops(
@@ -1426,6 +1432,16 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
         iterate_op.fx_node.type = result_types[0]
     else:
         iterate_op.fx_node.type = result_types
+
+    converted_attrs = _convert_supported_attrs(
+        op,
+        ignore_attrs={
+            AttrNames.INDEX.mlir_name,
+            "iterator",
+            "operandSegmentSizes",
+        },
+    )
+    _apply_mlir_attrs_to_fx_node(iterate_op.fx_node, converted_attrs)
 
     # Create GetResult nodes for each iterate result
     _create_get_result_nodes(
@@ -1615,6 +1631,7 @@ def convert_mlir_to_trace(
 
         _initialize_vector_shapes(trace, hw)
         _initialize_tiling_constraints(trace, constraints)
+        canonicalize_region_captures(trace)
         return trace, constraints, options, diagnostics
 
 

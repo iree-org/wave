@@ -17,6 +17,7 @@ from .._support.indexing import IndexSymbol
 from ..lang.wave_types import IndexMapping, Memory
 from .compile_options import WaveCompileOptions
 from .constraints import Constraint, TilingConstraint
+from .region_canonicalization import RegionFormat, requires_region_format
 from typing import TypedDict, Any
 import sympy
 
@@ -34,6 +35,7 @@ def is_debug_log_transformer(node):
     return isinstance(get_custom(node), DebugLog)
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def debug_log_hoist(trace: CapturedTrace, debug_handlers: list[Any]):
     """
     Finds debug log ops and hoists kernel inputs for them.
@@ -64,6 +66,7 @@ def debug_log_hoist(trace: CapturedTrace, debug_handlers: list[Any]):
             )
 
 
+@requires_region_format(RegionFormat.LEGACY_PLACEHOLDERS)
 def debug_log_write_replace(
     trace: CapturedTrace,
     constraints: list[Constraint],

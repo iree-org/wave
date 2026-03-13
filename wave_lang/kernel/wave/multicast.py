@@ -22,6 +22,7 @@ import sympy
 from .._support.indexing import IndexExpr, IndexSymbol, IndexSequence, safe_subs
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import WORKGROUP_0, WORKGROUP_1, WORKGROUP_2
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import TensorLoadToLDS, get_custom
 from .compile_options import WaveCompileOptions
 from .constraints import Constraint, WorkgroupConstraint
@@ -89,6 +90,7 @@ def compute_multicast_mask(
     return sympy.simplify(mask_expr)
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def multicast(
     trace: CapturedTrace,
     constraints: list[Constraint],

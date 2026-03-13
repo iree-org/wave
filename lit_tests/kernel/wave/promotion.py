@@ -181,7 +181,7 @@ def test_gemm():
         infer_types(trace)
         for read_node in read_nodes:
             promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-        hoist_loop_invariant_ops(trace, constraints)
+        hoist_loop_invariant_ops(trace, constraints, canonicalize_output=False)
         print_trace(trace, False)
     # Root graph:
     # CHECK: %a

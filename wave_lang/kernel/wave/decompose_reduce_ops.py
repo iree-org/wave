@@ -15,6 +15,7 @@ from .._support.indexing import IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from .._support.location import CapturedLocation
 from ..lang.global_symbols import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import (
     Add,
     Allocate,
@@ -313,6 +314,7 @@ def emit_interwave_reduction(
     return interwave_reduction
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def decompose_reduce_ops(
     trace: CapturedTrace,
     constraints: list[Constraint],

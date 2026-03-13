@@ -7,11 +7,13 @@
 from wave_lang.support.logging import get_logger
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import get_custom
+from .region_canonicalization import RegionFormat, requires_region_format
 from typing import Optional
 
 logger = get_logger("wave.ops_location_check")
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def location_check_pass(
     trace: CapturedTrace,
     pass_name: str = "unnamed",

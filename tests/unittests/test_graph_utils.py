@@ -7,7 +7,7 @@
 import pytest
 import sympy
 import torch.fx as fx
-from wave_lang.kernel._support.dtype import DataType
+from tests.unittests.test_utils import add_test_node
 from wave_lang.kernel.wave.utils.graph_utils import (
     is_barrier_between,
     is_barrier_between_same_graph,
@@ -18,7 +18,6 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 )
 from wave_lang.kernel.ops.wave_ops import (
     SharedMemoryBarrier,
-    NewScalar,
     Iterate,
     Conditional,
     Output,
@@ -32,25 +31,6 @@ def create_simple_graph():
     """Create a simple fx.Graph for testing."""
     graph = fx.Graph()
     return graph
-
-
-def add_test_node(graph: fx.Graph, name: str) -> fx.Node:
-    """
-    Add a test node to the graph.
-
-    Args:
-        graph: The fx.Graph to add the node to
-        name: A name/identifier for the node (used as the value for NewScalar)
-
-    Returns:
-        The created fx.Node
-    """
-    # Create a NewScalar node with a unique float value based on name hash
-    # This ensures each node has a distinct value while being deterministic
-    value = float(hash(name) % 1000)
-    node = NewScalar(value=value, dtype=DataType("f32"))
-    node.add_to_graph(graph)
-    return node.fx_node
 
 
 def add_barrier_node(graph: fx.Graph) -> fx.Node:

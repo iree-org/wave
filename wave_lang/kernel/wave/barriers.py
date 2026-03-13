@@ -16,6 +16,7 @@ from ..ops.wave_ops import (
     SharedMemoryBarrierWait,
     get_custom,
 )
+from .region_canonicalization import RegionFormat, requires_region_format
 from .utils.graph_utils import (
     is_barrier_between,
 )
@@ -156,6 +157,7 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
                 )
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def add_shared_memory_barriers(
     trace: CapturedTrace,
     target: Optional[str] = None,

@@ -8,6 +8,7 @@ import sympy
 import torch.fx as fx
 
 from ..ops.wave_ops import Read, Write
+from .region_canonicalization import RegionFormat, requires_region_format
 from .assumptions import get_divisibility_subs
 from .constraints import Constraint, DistributionConstraint, ReorderingConstraint
 from .utils.general_utils import (
@@ -57,6 +58,7 @@ def is_divisible(
     return simplify(diff) == 0
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def generate_bounds_exprs(
     trace: CapturedTrace,
     constraints: list[Constraint],

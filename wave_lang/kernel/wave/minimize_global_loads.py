@@ -15,13 +15,21 @@ from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
-from ..ops.wave_ops import Read, Write, GatherToLDS, TensorLoadToLDS, get_custom
+from ..ops.wave_ops import (
+    Read,
+    Write,
+    GatherToLDS,
+    TensorLoadToLDS,
+    CustomOp,
+    get_custom,
+)
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
     TilingConstraint,
     WorkgroupConstraint,
 )
+from .region_canonicalization import RegionFormat, requires_region_format
 from .utils.general_utils import (
     ceildiv,
     delinearize_index,
@@ -134,7 +142,7 @@ def identify_optimizable_loads(
         num_global_loads > (M * N) / (T * L)
     where the memory has shape [M, N], there are T threads and each thread can load L elements.
     """
-    optimizable_loads: dict[fx.Node, tuple[int, list[Read], set["Custom"]]] = {}
+    optimizable_loads: dict[fx.Node, tuple[int, list[Read], set[CustomOp]]] = {}
     processed_memories = set()
     for read_node in global_read_nodes:
         custom = get_custom(read_node)
@@ -367,6 +375,7 @@ def update_write_dependencies(
     DCE(trace)
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def minimize_global_loads(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This function attempts to minimize the number of global loads in a graph.

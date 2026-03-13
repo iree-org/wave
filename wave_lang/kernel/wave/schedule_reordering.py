@@ -19,6 +19,7 @@ from .._support.tracing import CapturedTrace
 from .._support.location import CapturedLocation
 from .._support.fx import filter_fx_graph
 from ..lang.global_symbols import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import (
     MMA,
     Conditional,
@@ -854,6 +855,7 @@ def get_ops_of_type(graph, operation_type):
     ]
 
 
+@requires_region_format(RegionFormat.DIRECT_OUTER_REF)
 def schedule_reordering(
     trace: CapturedTrace,
     constraints: list[Constraint],

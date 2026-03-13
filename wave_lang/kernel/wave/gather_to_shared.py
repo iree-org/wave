@@ -18,6 +18,7 @@ import torch.fx as fx
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol, xor
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
+from .region_canonicalization import RegionFormat, requires_region_format
 from ..ops.wave_ops import (
     CustomOp,
     GatherToLDS,
@@ -455,6 +456,7 @@ def get_load_width(
     return load_width
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def gather_to_shared(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -574,6 +576,7 @@ def gather_to_shared(
     DCE(trace)
 
 
+@requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def gather_to_shared_swizzling(
     trace: CapturedTrace,
     constraints: list[Constraint],
