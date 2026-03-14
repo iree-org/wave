@@ -320,6 +320,7 @@ def update_shared_memory_read(
     if custom_memory_shape != metadata.memory_shape:
         permutation = [custom_memory_shape.index(k) for k in metadata.memory_shape]
         custom_memory.update_arg("shape", metadata.memory_shape)
+        custom_memory.fx_node.type = custom_memory.type
         new_distributed_shape = []
         for i, perm in enumerate(permutation):
             offset = 0
