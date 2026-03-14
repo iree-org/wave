@@ -34,10 +34,13 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/Timing.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Timer.h"
 
 #define DEBUG_TYPE "waveasm-translate"
 #include "llvm/Support/InitLLVM.h"
@@ -110,6 +113,8 @@ int main(int argc, char **argv) {
   // Register passes so PassPipelineCLParser can expose them as CLI flags.
   waveasm::registerWaveASMPasses();
   mlir::registerTransformsPasses();
+  mlir::registerPassManagerCLOptions();
+  mlir::registerDefaultTimingManagerCLOptions();
 
   // Construct AFTER pass registration — PassNameParser::initialize() snapshots
   // the registry, so passes must already be registered at this point.
@@ -160,6 +165,11 @@ int main(int argc, char **argv) {
     // Run pre-translation MLIR passes.
     {
       PassManager prePm(&context);
+      if (failed(applyPassManagerCLOptions(prePm))) {
+        llvm::errs() << "Failed to apply pass manager CLI options\n";
+        return 1;
+      }
+      applyDefaultTimingPassManagerCLOptions(prePm);
       // Scalarize vector.extract from broadcast+dense-const patterns so the
       // translator only sees ordinary scalar IR.
       prePm.addPass(waveasm::createWAVEASMExtractScalarization());
@@ -171,28 +181,39 @@ int main(int argc, char **argv) {
       }
     }
 
-    // Use TranslationOptions if workgroup size is specified
-    if (workgroupSizeX > 0 || workgroupSizeY > 0 || workgroupSizeZ > 0) {
-      waveasm::TranslationOptions options;
-      options.targetId = targetId.getValue();
-      options.workgroupSizeX = workgroupSizeX;
-      options.workgroupSizeY = workgroupSizeY;
-      options.workgroupSizeZ = workgroupSizeZ;
-      options.subgroupSize = subgroupSize;
-      if (failed(waveasm::translateModule(*module, options))) {
-        llvm::errs() << "Translation failed\n";
-        return 1;
+    // Translate MLIR to WaveASM IR.
+    {
+      llvm::Timer translationTimer("TranslateFromMLIR",
+                                   "MLIR to WaveASM translation");
+      translationTimer.startTimer();
+      if (workgroupSizeX > 0 || workgroupSizeY > 0 || workgroupSizeZ > 0) {
+        waveasm::TranslationOptions options;
+        options.targetId = targetId.getValue();
+        options.workgroupSizeX = workgroupSizeX;
+        options.workgroupSizeY = workgroupSizeY;
+        options.workgroupSizeZ = workgroupSizeZ;
+        options.subgroupSize = subgroupSize;
+        if (failed(waveasm::translateModule(*module, options))) {
+          llvm::errs() << "Translation failed\n";
+          return 1;
+        }
+      } else {
+        if (failed(waveasm::translateModule(*module, targetId))) {
+          llvm::errs() << "Translation failed\n";
+          return 1;
+        }
       }
-    } else {
-      if (failed(waveasm::translateModule(*module, targetId))) {
-        llvm::errs() << "Translation failed\n";
-        return 1;
-      }
+      translationTimer.stopTimer();
     }
   }
 
   // Build pass pipeline from CLI flags.
   PassManager pm(&context);
+  if (failed(applyPassManagerCLOptions(pm))) {
+    llvm::errs() << "Failed to apply pass manager CLI options\n";
+    return 1;
+  }
+  applyDefaultTimingPassManagerCLOptions(pm);
   if (passPipeline.hasAnyOccurrences()) {
     auto errorHandler = [](const Twine &msg) {
       llvm::errs() << msg << "\n";
@@ -238,18 +259,20 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Emit assembly if requested
+  // Emit assembly if requested.
   if (emitAssembly) {
-    // Create an empty physical mapping (for already-physical registers)
+    llvm::Timer asmTimer("EmitAssembly", "WaveASM assembly emission");
+    asmTimer.startTimer();
+    // Create an empty physical mapping (for already-physical registers).
     waveasm::PhysicalMapping mapping;
 
-    // Find all programs and emit assembly for each
+    // Find all programs and emit assembly for each.
     bool success = true;
     module->walk([&](waveasm::ProgramOp program) {
-      if (failed(waveasm::writeAssembly(program, mapping, outputStream))) {
+      if (failed(waveasm::writeAssembly(program, mapping, outputStream)))
         success = false;
-      }
     });
+    asmTimer.stopTimer();
 
     return success ? 0 : 1;
   }
