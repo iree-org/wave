@@ -70,6 +70,11 @@ def WaveASMDialect : Dialect {
     // Name of the ABI attribute on kernel programs
     static constexpr ::llvm::StringLiteral kABIAttrName = "waveasm.abi";
 
+    /// Original kernel name before symbol mangling.
+    static ::llvm::StringRef getKernelNameAttrName() {
+      return "kernel_name";
+    }
+
     // Registration functions
     void registerAttributes();
     void registerTypes();

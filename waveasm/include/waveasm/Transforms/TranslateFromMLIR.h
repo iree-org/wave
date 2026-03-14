@@ -410,7 +410,7 @@ public:
   /// Update buffer size for a pending SRD (called when we see reinterpret_cast)
   void updateSRDBufferSize(mlir::Value memref, int64_t bufferSize);
 
-  /// Get the number of kernel arguments (bindings + scalar args)
+  /// Get the number of kernel arguments (bindings + scalar args).
   size_t getNumKernelArgs() const {
     return pendingSRDs.size() + pendingScalarArgs.size();
   }
@@ -645,11 +645,29 @@ public:
     return count;
   }
 
-  /// Get SGPR index for workgroup ID in the given dimension (0=x, 1=y, 2=z)
-  /// System SGPRs (workgroup IDs) come after user SGPRs
+  /// Get SGPR index for workgroup ID in the given dimension (0=x, 1=y, 2=z).
+  /// System SGPRs are only allocated for enabled dimensions, so we count
+  /// only the enabled IDs before the requested dimension.
   int64_t getWorkgroupIdSgprIndex(int dimension) const {
     int64_t baseIndex = getUserSgprCount();
-    return baseIndex + dimension;
+    // When all three IDs are enabled (e.g., via enableAllWorkgroupIds()),
+    // the layout is simply base + dimension.
+    if (usesWorkgroupIdX && usesWorkgroupIdY && usesWorkgroupIdZ)
+      return baseIndex + dimension;
+    int64_t offset = 0;
+    if (dimension > 0 && usesWorkgroupIdX)
+      offset++;
+    if (dimension > 1 && usesWorkgroupIdY)
+      offset++;
+    return baseIndex + offset;
+  }
+
+  /// Enable all three workgroup IDs so that the SGPR layout is predictable.
+  /// Call this before translating any ops to avoid ordering dependencies.
+  void enableAllWorkgroupIds() {
+    usesWorkgroupIdX = true;
+    usesWorkgroupIdY = true;
+    usesWorkgroupIdZ = true;
   }
 
   /// Check if this is a multi-wave kernel (more than 64 threads per workgroup)

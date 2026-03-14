@@ -9,6 +9,7 @@
 #include "waveasm/Dialect/WaveASMDialect.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
+#include "waveasm/Transforms/AssemblyEmitter.h"
 #include "waveasm/Transforms/Utils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -161,8 +162,9 @@ void TranslationContext::emitSRDPrologue() {
   // branch+alignment)
   bool isGFX95 = llvm::isa<GFX950TargetAttr>(target);
 
-  // Recompute SRD base indices now that we know the total number of args
-  // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs)
+  // Recompute SRD base indices now that we know the total number of args.
+  // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs).
+  size_t numPreloadedArgs = getNumKernelArgs();
   int64_t userSgprCount = 2; // kernarg ptr
   if (isGFX95) {
     userSgprCount += std::min(int64_t(14), (int64_t)getNumKernelArgs() * 2);
@@ -207,26 +209,14 @@ void TranslationContext::emitSRDPrologue() {
     // Hardware limits user SGPRs to 16 (s[0:15]), so only reserve preload
     // slots for args that fit within the limit. Overflow args are loaded
     // via explicit s_load from the kernarg buffer at runtime.
-    llvm::DenseSet<int64_t> reservedPreloadBases;
-    for (const auto &pending : pendingSRDs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
+    // Reserve all arg positions, not just pointer args with SRDs.
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t preloadBase = 2 + i * 2;
       if (preloadBase >= 16)
         continue;
-      if (reservedPreloadBases.insert(preloadBase).second) {
-        auto preloadType = createSRegType(2, 2);
-        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
-                                 /*size=*/2);
-      }
-    }
-    for (const auto &pending : pendingScalarArgs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
-      if (preloadBase >= 16)
-        continue;
-      if (reservedPreloadBases.insert(preloadBase).second) {
-        auto preloadType = createSRegType(2, 2);
-        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
-                                 /*size=*/2);
-      }
+      auto preloadType = createSRegType(2, 2);
+      PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
+                               /*size=*/2);
     }
   }
 
@@ -240,11 +230,12 @@ void TranslationContext::emitSRDPrologue() {
     auto kernargBase =
         PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
-    for (const auto &pending : pendingSRDs) {
-      int64_t loadBase = 2 + pending.argIndex * 2;
+    // Load all kernel args (pointers and scalars) into preload positions.
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t loadBase = 2 + i * 2;
       if (loadBase >= 16)
         continue; // Overflow arg: loaded via s_load_dword path below.
-      int64_t kernargOffset = pending.argIndex * 8;
+      int64_t kernargOffset = i * 8;
 
       auto loadDstType = createSRegType(2, loadBase);
       auto offsetImm = builder.getType<ImmType>(kernargOffset);
@@ -254,31 +245,16 @@ void TranslationContext::emitSRDPrologue() {
                              offsetConst);
     }
 
-    // Also load scalar kernel arguments (index types) from kernarg buffer.
-    // Scalar args that still fit in the preload SGPR window can be loaded
-    // before the aligned main entry.
+    // Overflow scalar args: loaded after the aligned entry point below.
     int64_t overflowSgprBase =
         (srdStartIndex + (int64_t)pendingSRDs.size() * 4 + 3) & ~3;
-    for (const auto &pending : pendingScalarArgs) {
-      int64_t loadBase = 2 + pending.argIndex * 2;
-      if (loadBase >= 16)
-        continue;
-      int64_t kernargOffset = pending.argIndex * 8;
-
-      auto loadDstType = createSRegType(2, loadBase);
-      auto offsetImm = builder.getType<ImmType>(kernargOffset);
-      auto offsetConst =
-          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
-                             offsetConst);
-    }
 
     // Step 2: Branch to aligned entry point (gfx95* requirement).
     // Keep any high-SGPR overflow loads after the aligned entry; LLVM does the
     // same, and loading them before the branch leaves the overflow arg stale
     // on gfx95 hardware.
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
-    std::string kernelName = program.getSymName().str();
+    std::string kernelName = getKernelName(program).str();
     std::string mainLabel = ".L_" + kernelName + "_main";
 
     RawOp::create(builder, loc, "s_branch " + mainLabel);
@@ -320,6 +296,8 @@ void TranslationContext::emitSRDPrologue() {
     // size/stride. Must use RawOp: S_MOV_B64/S_MOV_B32 are Pure (SALUUnaryOp)
     // and write to physical registers with no SSA consumer, so CSE/DCE
     // eliminates them.
+    // TODO: Replace with typed ops once regalloc supports contiguous
+    // allocation constraints for PackOp inputs.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;

@@ -217,6 +217,7 @@ class LDSStoreOp<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 include "waveasm/Dialect/WaveASMControlFlowOps.td"
+include "waveasm/Dialect/WaveASMArithOps.td"
 
 //===----------------------------------------------------------------------===//
 // Program Container
