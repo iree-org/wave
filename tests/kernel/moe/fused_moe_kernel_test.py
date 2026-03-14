@@ -8,7 +8,10 @@ import pytest
 import torch
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+from wave_lang.kernel.wave.utils.run_utils import (
+    set_default_run_config,
+    get_arch_family,
+)
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 from wave_lang.kernel.wave.constraints import MMAType
@@ -398,6 +401,7 @@ rtol, atol = 1e-2, 1e-2
 block_size_values = [4]
 
 
+@pytest.mark.skipif(get_arch_family() != "RDNA", reason="Requires RDNA4 GPU (gfx120x)")
 @pytest.mark.parametrize("num_tokens", num_tokens_values)
 @pytest.mark.parametrize("n", n_values)
 @pytest.mark.parametrize("k", k_values)
@@ -556,7 +560,27 @@ def test_fused_moe(
 
     print(f"\n--- Final ---")
     print(f"  tkw  mean={tkw_output.mean():.4f}, ref mean={ref_output.mean():.4f}")
-    print(f"  max_diff={(tkw_output - ref_output).abs().max():.6f}")
+    abs_diff = (tkw_output - ref_output).abs()
+    rel_diff = abs_diff / (ref_output.abs() + 1e-8)
+    mismatched = ((abs_diff > atol) & (rel_diff > rtol)).sum().item()
+    total = tkw_output.numel()
+    abs_max_val = abs_diff.max().item()
+    abs_max_idx = tuple(
+        v.item() for v in torch.unravel_index(abs_diff.argmax(), tkw_output.shape)
+    )
+    rel_max_val = rel_diff.max().item()
+    rel_max_idx = tuple(
+        v.item() for v in torch.unravel_index(rel_diff.argmax(), tkw_output.shape)
+    )
+    print(
+        f"  Mismatched elements: {mismatched} / {total} ({100 * mismatched / total:.1f}%)"
+    )
+    print(
+        f"  Greatest absolute difference: {abs_max_val:.6f} at index {abs_max_idx} (up to {atol} allowed)"
+    )
+    print(
+        f"  Greatest relative difference: {rel_max_val:.6f} at index {rel_max_idx} (up to {rtol} allowed)"
+    )
 
     torch.testing.assert_close(
         gemm1_out_f32, ref_gemm1_f32, rtol=rtol, atol=atol, msg="GEMM1 output mismatch"
