@@ -133,7 +133,7 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
     const llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WaveConstraintAttr>
         &waveConstraints,
     wave::WaveHyperparameterAttr hyperparams,
-    SmallVectorImpl<unsigned> &wavesPerBlock) {
+    SmallVectorImpl<int32_t> &wavesPerBlock) {
   // Default to 1 wave per block for each dimension, this may be recomputed
   // later if the corresponding constraints are provided.
   wavesPerBlock.assign(/*NumElts=*/3, /*Elt=*/1);
@@ -168,7 +168,7 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
     int64_t numWaves = workgroupSize / waveSize;
     unsigned wgDim =
         static_cast<unsigned>(wgConstraint.getWorkgroupDim().getValue());
-    wavesPerBlock[wgDim] = static_cast<unsigned>(numWaves);
+    wavesPerBlock[wgDim] = static_cast<int32_t>(numWaves);
   }
 
   return success();

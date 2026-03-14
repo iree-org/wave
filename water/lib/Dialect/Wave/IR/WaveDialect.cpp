@@ -315,10 +315,10 @@ verifyConstraints(ArrayAttr constraints,
   // verify consistency between wave constraints and waves_per_block
   // * If both wave constraints and waves_per_block are present, the computed
   // number of waves per dimension should match the waves_per_block attribute.
-  if (hardwareConstraint && !hardwareConstraint.getWavesPerBlock().empty() &&
+  if (hardwareConstraint && hardwareConstraint.getWavesPerBlock() &&
       !waveConstraints.empty()) {
-    llvm::ArrayRef<unsigned> wavesPerBlock =
-        hardwareConstraint.getWavesPerBlock();
+    llvm::ArrayRef<int32_t> wavesPerBlock =
+        hardwareConstraint.getWavesPerBlock().asArrayRef();
     for (auto &&[symbol, waveConstraint] : waveConstraints) {
       wave::WorkgroupConstraintAttr wgConstraint = workgroupConstraints[symbol];
       unsigned wgDim =
@@ -335,6 +335,8 @@ verifyConstraints(ArrayAttr constraints,
 
   // verify TilingConstraint
   // * The number of tiles should be greater than or equal to one.
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedTilingSizes(
+      tilingConstraints.size());
   for (auto &&[symbol, constraint] : tilingConstraints) {
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
@@ -351,11 +353,50 @@ verifyConstraints(ArrayAttr constraints,
            "failed to resolve dimesion symbol");
 
     int64_t resolvedTileSize = evaluated->front();
+    resolvedTilingSizes[symbol] = resolvedTileSize;
     int64_t resolvedDim = resolvedDims->front();
     int64_t numTiles = resolvedDim / resolvedTileSize;
     if (numTiles < 1) {
       return emitError() << "invalid number of tiles: " << numTiles
                          << " for dimension: " << symbol;
+    }
+  }
+
+  // Verify consistency between vector_shapes and constraint tile sizes.
+  // * When no mma_type is set, vector_shapes should match the resolved tile
+  //   sizes from the corresponding WorkgroupConstraint/TilingConstraint.
+  // * When mma_type is present, vector_shapes derives from the MMA instruction
+  //   geometry and is expected to differ from the constraint tile sizes.
+  if (hardwareConstraint && hardwareConstraint.getVectorShapes() &&
+      !hardwareConstraint.getMmaType()) {
+    DictionaryAttr vectorShapes = hardwareConstraint.getVectorShapes();
+    for (NamedAttribute entry : vectorShapes) {
+      llvm::StringRef dimName = entry.getName();
+      int64_t vectorShapeSize =
+          llvm::cast<IntegerAttr>(entry.getValue()).getInt();
+
+      for (auto &&[symbol, size] : resolvedWorkgroupSizes) {
+        if (symbol.getName() != dimName)
+          continue;
+        if (size != vectorShapeSize) {
+          return emitError()
+                 << "vector_shapes entry '" << dimName << "' ("
+                 << vectorShapeSize
+                 << ") does not match workgroup constraint tile size (" << size
+                 << ") for dimension: " << symbol;
+        }
+      }
+
+      for (auto &&[symbol, size] : resolvedTilingSizes) {
+        if (symbol.getName() != dimName)
+          continue;
+        if (size != vectorShapeSize) {
+          return emitError() << "vector_shapes entry '" << dimName << "' ("
+                             << vectorShapeSize
+                             << ") does not match tiling constraint tile size ("
+                             << size << ") for dimension: " << symbol;
+        }
+      }
     }
   }
 

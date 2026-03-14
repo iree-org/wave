@@ -784,15 +784,15 @@ struct PyHardwareConstraintAttr
     c.def_static(
         "get",
         [](unsigned threadsPerWave,
-           const std::optional<std::vector<unsigned>> &wavesPerBlock,
+           const std::optional<std::vector<int32_t>> &wavesPerBlock,
            std::optional<MlirAttribute> mmaType,
            std::optional<MlirAttribute> vectorShapes, unsigned maxBitsPerLoad,
            mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
                context) {
-          unsigned *wavesPerBlockPtr = nullptr;
+          int32_t *wavesPerBlockPtr = nullptr;
           size_t wavesPerBlockSize = 0;
           if (wavesPerBlock.has_value()) {
-            wavesPerBlockPtr = const_cast<unsigned *>(wavesPerBlock->data());
+            wavesPerBlockPtr = const_cast<int32_t *>(wavesPerBlock->data());
             wavesPerBlockSize = wavesPerBlock->size();
           }
 
@@ -812,7 +812,7 @@ struct PyHardwareConstraintAttr
       return mlirHardwareConstraintAttrGetThreadsPerWave(self);
     });
     c.def_prop_ro("waves_per_block", [](MlirAttribute self) {
-      std::vector<unsigned> out;
+      std::vector<int32_t> out;
       intptr_t n = mlirHardwareConstraintAttrGetNumWavesPerBlock(self);
       out.reserve(n);
       for (intptr_t i = 0; i < n; ++i)
