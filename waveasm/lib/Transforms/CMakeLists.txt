@@ -30,6 +30,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   RegionBuilder.cpp
   ScalePackElimination.cpp
   ScopedCSE.cpp
+  SGPRPromotion.cpp
   Ticketing.cpp
   TranslateFromMLIR.cpp
   ${HANDLERS_FULL_PATHS}

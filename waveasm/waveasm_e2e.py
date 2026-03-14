@@ -201,6 +201,7 @@ class WaveASMCompiler:
             str(self.waveasm_translate),
             f"--target={self.target}",
             "--mlir-cse",  # Pre-translation MLIR CSE for redundant index elimination.
+            "--waveasm-sgpr-promotion",  # Promote uniform VALU ops to SALU.
             "--waveasm-scoped-cse",  # Scoped CSE.
             "--waveasm-peephole",  # Peephole optimizations (fuse lshl+add, etc.).
             "--waveasm-scale-pack-elimination",

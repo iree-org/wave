@@ -775,6 +775,9 @@ def WaveASM_S_PACK_LL_B32_B16 : SALUBinaryOp<"s_pack_ll_b32_b16">;
 def WaveASM_S_PACK_LH_B32_B16 : SALUBinaryOp<"s_pack_lh_b32_b16">;
 def WaveASM_S_PACK_HH_B32_B16 : SALUBinaryOp<"s_pack_hh_b32_b16">;
 
+// Conditional select based on SCC
+def WaveASM_S_CSELECT_B32 : SALUBinaryOp<"s_cselect_b32">;
+
 //===----------------------------------------------------------------------===//
 // SALU Compare Instructions
 //===----------------------------------------------------------------------===//

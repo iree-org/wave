@@ -247,6 +247,31 @@ def WAVEASMExtractScalarization
 }
 
 //===----------------------------------------------------------------------===//
+// SGPR Promotion Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMSGPRPromotion : Pass<"waveasm-sgpr-promotion"> {
+  let summary = "Promote VALU ops with all-SGPR operands to SALU equivalents";
+  let description = [{
+    Identifies VALU operations whose operands are all SGPR or immediate and
+    replaces them with SALU equivalents.  This reduces VGPR pressure for
+    uniform computations (e.g. workgroup staggering, SRD base address
+    calculation) that the translation handlers emitted as VALU because
+    affine.apply unconditionally creates VGPRs.
+
+    The pass walks the IR in program order so that promotions cascade
+    naturally: once a V_ADD_U32 becomes S_ADD_U32, downstream users that
+    previously saw a VGPR operand now see an SGPR and may also become
+    promotable.
+
+    After promotion, V_READFIRSTLANE_B32 ops whose source is already SGPR
+    are eliminated as identity operations.
+  }];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Offset Optimization Pass
 //===----------------------------------------------------------------------===//
 
