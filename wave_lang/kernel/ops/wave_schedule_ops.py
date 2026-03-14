@@ -137,6 +137,9 @@ def _insert_cond_barrier(
 
     barrier_graph.parent_op = cond_barrier
     trace.add_subgraph(barrier_graph_name, barrier_graph)
+    local_root = get_custom(cond_barrier).get_root_graph()
+    if barrier_graph_name not in local_root.subgraphs:
+        local_root.subgraphs[barrier_graph_name] = barrier_graph
 
     return cond_barrier
 

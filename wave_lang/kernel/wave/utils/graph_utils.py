@@ -1719,6 +1719,8 @@ def finish_conditional_subgraph(
     # Register subgraph with trace
     subgraph.parent_op = conditional
     trace.add_subgraph(subgraph._name, subgraph)
-    trace.get_root_graph().subgraphs[subgraph._name] = subgraph
+    local_root = get_custom(conditional).get_root_graph()
+    if subgraph._name not in local_root.subgraphs:
+        local_root.subgraphs[subgraph._name] = subgraph
 
     return conditional

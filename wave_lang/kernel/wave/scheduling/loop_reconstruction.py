@@ -943,9 +943,11 @@ def construct_pipelined_loop(
     )
 
     pipelined_reduction_graph.parent_op = pipelined_reduction
-    trace.add_subgraph(
-        get_custom(pipelined_reduction).subgraph_name, pipelined_reduction_graph
-    )
+    subgraph_name = get_custom(pipelined_reduction).subgraph_name
+    trace.add_subgraph(subgraph_name, pipelined_reduction_graph)
+    local_root = get_custom(pipelined_reduction).get_root_graph()
+    if subgraph_name not in local_root.subgraphs:
+        local_root.subgraphs[subgraph_name] = pipelined_reduction_graph
 
     if eliminate_epilogue:
         pipelined_reduction.meta["eliminate_epilogue"] = True

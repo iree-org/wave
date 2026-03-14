@@ -362,7 +362,9 @@ def emit_interwave_scan(
     # that the compiler can't find.
     exec_on_last.parent_op = cond_store
     trace.add_subgraph(sub_store, exec_on_last)
-    trace.get_root_graph().subgraphs[sub_store] = exec_on_last
+    local_root = get_custom(cond_store).get_root_graph()
+    if sub_store not in local_root.subgraphs:
+        local_root.subgraphs[sub_store] = exec_on_last
 
     # read all per-wave totals
     read_totals = Read(
