@@ -58,7 +58,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
-from ...wave.utils.symbol_utils import safe_subs, simplify
+from ...wave.utils.symbol_utils import ixs_simplify, safe_subs, simplify
 from ..base import ValidationError
 from ..builder import IRProxyValue
 from ..utils import (
@@ -150,9 +150,9 @@ def _build_dyn_vals_map(
             return _build_dyn_vals_map_from_nodes(dynamic_vals)
         return {}
 
-    assert len(mapping.dynamic_val_indices) == len(
-        dynamic_vals
-    ), f"Expected {len(mapping.dynamic_val_indices)} dynamic values but got {len(dynamic_vals)}"
+    assert len(mapping.dynamic_val_indices) == len(dynamic_vals), (
+        f"Expected {len(mapping.dynamic_val_indices)} dynamic values but got {len(dynamic_vals)}"
+    )
     return {
         sym: _extract0(val)
         for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
@@ -342,9 +342,9 @@ def _linearize_shared_mem(memory: CustomOp) -> Value:
     Convert shared memory with statically shaped N-d memref into 1-D memref.
     """
     flat_numel = math.prod(memory.type.shape)
-    assert (
-        memory.type.has_static_shape
-    ), "Expecting static shape to linearize for shared memory."
+    assert memory.type.has_static_shape, (
+        "Expecting static shape to linearize for shared memory."
+    )
     memory_space = memory.type.memory_space
     flat_memref_type = MemRefType.get(
         [flat_numel], memory.type.element_type, memory_space=memory_space
@@ -1282,9 +1282,9 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     # TODO: Support elements_per_thread size mismatch and broadcasting
 
-    assert (
-        tuple(insert_type.shape) == vector_shape
-    ), f"Shape doesn't match: {tuple(insert_type.shape)} and {(vector_shape)}"
+    assert tuple(insert_type.shape) == vector_shape, (
+        f"Shape doesn't match: {tuple(insert_type.shape)} and {(vector_shape)}"
+    )
 
     if not hasattr(node, "index"):
         raise ValidationError("codegen expected write to have index attr.")
@@ -1563,9 +1563,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    assert len(sources) == len(
-        destinations
-    ), "sources and destinations must have the same number of elements."
+    assert len(sources) == len(destinations), (
+        "sources and destinations must have the same number of elements."
+    )
 
     i1 = IntegerType.get_signless(1)
     i16 = IntegerType.get_signless(16)
@@ -1640,9 +1640,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         if padding := original_dst.padding:
             bytewidth = element_type.bitwidth() // 8
             unpadded_dim = int(subs_idxc(original_dst.unpadded_shape[-1])) * bytewidth
-            assert (
-                unpadded_dim >= 8
-            ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
+            assert unpadded_dim >= 8, (
+                f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
+            )
             DWORD_SIZE = 4
             pad_interval = arith_d.constant(i32, unpadded_dim // DWORD_SIZE)
             pad_amount = arith_d.constant(i32, (padding * bytewidth) // DWORD_SIZE)
@@ -1651,7 +1651,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         if local_multicast_mask := subs_idxc(
             safe_subs(multicast_mask, {INPUT_SELECTOR: i})
         ):
-            local_multicast_mask = sympy.simplify(local_multicast_mask)
+            local_multicast_mask = ixs_simplify(local_multicast_mask)
             local_multicast_mask_val = gen_sympy_index(subs, local_multicast_mask)
             workgroup_mask = arith_d.index_cast(i16, local_multicast_mask_val)
             workgroup_mask = vector_d.from_elements(v1i16, [workgroup_mask])
