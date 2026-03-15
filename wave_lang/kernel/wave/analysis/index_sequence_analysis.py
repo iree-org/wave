@@ -360,21 +360,19 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
             return {
                 dim: IndexSequence(
                     start=(
-                        sympy.simplify(
+                        ixs_simplify(
                             seq.start.subs(symbol_remapping, simultaneous=True)
                         )
                         if isinstance(seq.start, IndexExpr)
                         else seq.start
                     ),
                     size=(
-                        sympy.simplify(
-                            seq.size.subs(symbol_remapping, simultaneous=True)
-                        )
+                        ixs_simplify(seq.size.subs(symbol_remapping, simultaneous=True))
                         if isinstance(seq.size, IndexExpr)
                         else seq.size
                     ),
                     stride=(
-                        sympy.simplify(
+                        ixs_simplify(
                             seq.stride.subs(symbol_remapping, simultaneous=True)
                         )
                         if isinstance(seq.stride, IndexExpr)
