@@ -10,6 +10,10 @@ import operator as op
 from typing import Callable, Optional
 
 import sympy
+import ixsimpl
+from ixsimpl.sympy_conv import extract_assumptions as _extract_assumptions
+from ixsimpl.sympy_conv import from_sympy as _conv_from_sympy
+from ixsimpl.sympy_conv import to_sympy as _conv_to_sympy
 
 # Reexport symbols from indexing.py
 from ..._support.indexing import (
@@ -20,6 +24,7 @@ from ..._support.indexing import (
     safe_subs,  # noqa
     subs_idxc,  # noqa
     is_literal,  # noqa
+    xor as _wave_xor,
 )
 
 
@@ -56,6 +61,40 @@ _LAMBDIFY_MODULES = {
     "Max": max,
     "Abs": abs,
 }
+
+
+####################################################################
+# ixsimpl roundtrip helper.
+####################################################################
+
+# Module-level context reused across calls to benefit from hash-consing.
+_ixs_ctx = ixsimpl.Context()
+
+
+def ixs_simplify(
+    expr: sympy.Expr,
+    extra_assumptions: list[ixsimpl.Expr] | None = None,
+) -> sympy.Expr:
+    """Simplify a sympy expression via ixsimpl roundtrip.
+
+    Converts *expr* to an ixsimpl node, simplifies with assumptions
+    derived from the sympy symbol properties (nonnegative, positive,
+    etc.) plus any *extra_assumptions*, then converts back to sympy.
+
+    Falls back to the original *expr* on conversion errors.
+    """
+    if not isinstance(expr, sympy.Basic) or expr.is_Atom:
+        return expr
+    try:
+        ixs_expr = _conv_from_sympy(_ixs_ctx, expr)
+        assumptions = _extract_assumptions(_ixs_ctx, expr)
+        if extra_assumptions:
+            assumptions.extend(extra_assumptions)
+        ixs_expr = ixs_expr.simplify(assumptions=assumptions)
+        sym_map = {s.name: s for s in expr.free_symbols}
+        return _conv_to_sympy(ixs_expr, symbols=sym_map, xor_fn=_wave_xor)
+    except (ValueError, TypeError, OverflowError):
+        return expr
 
 
 ####################################################################
