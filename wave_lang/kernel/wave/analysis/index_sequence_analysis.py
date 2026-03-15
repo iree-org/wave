@@ -81,6 +81,7 @@ from ..utils.graph_utils import (
     get_inputs,
     get_users,
 )
+from ..utils.symbol_utils import ixs_simplify
 from ..utils.mma_utils import (
     get_mma_dimensional_mapping,
 )
@@ -292,9 +293,9 @@ def _check_index_difference_is_zero(
     """Check if two index sequences are equal, raise assertions if not."""
 
     def f(seq1: IndexSequence, seq2: IndexSequence) -> bool:
-        start = sympy.simplify(seq1.start - seq2.start)
-        size = sympy.simplify(seq1.size - seq2.size)
-        stride = sympy.simplify(seq1.stride - seq2.stride)
+        start = ixs_simplify(seq1.start - seq2.start)
+        size = ixs_simplify(seq1.size - seq2.size)
+        stride = ixs_simplify(seq1.stride - seq2.stride)
         if start != 0:
             raise ValueError(f"Start difference: {start}")
         if size != 0:
