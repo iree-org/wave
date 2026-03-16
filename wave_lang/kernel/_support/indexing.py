@@ -1,5 +1,6 @@
 from __future__ import annotations  # Needed to defer IndexSequence type evaluation
 import copy
+import warnings
 from abc import ABC
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional, Type, TypeVar, Union
@@ -123,8 +124,6 @@ def _resolve_chained_subs(
             resolved[key] = val
 
     if pending:
-        import warnings
-
         cycle_keys = sorted(str(k) for k in pending.keys())
         warnings.warn(
             f"_resolve_chained_subs: circular dependency among"

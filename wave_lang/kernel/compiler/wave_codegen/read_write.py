@@ -844,7 +844,6 @@ def _try_iv_split_offset(
     precomputed_iv_stride: (
         dict[sympy.Symbol, IndexExpr | list[IndexExpr]] | None
     ) = None,
-    **kwargs,
 ) -> Optional[Value]:
     """Compute a hoisted IV-split linearized offset for a loop-carried read.
 
