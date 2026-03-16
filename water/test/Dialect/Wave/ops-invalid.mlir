@@ -1263,3 +1263,11 @@ func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of 
   %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] {index = [{}, {}]} : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return
 }
+
+// -----
+
+func.func @bitcast_indivisible_bitwidths(%v: !wave.tensor<[@A, @B] of i8>) {
+  // expected-error @below {{larger element bitwidth (8) must be evenly divisible by the smaller (6)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8> to !wave.tensor<[@A, @C] of f6E2M3FN>
+  return
+}

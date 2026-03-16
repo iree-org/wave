@@ -158,6 +158,18 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with ValueError."
 
+    # Hyperparameters with expr_list values for derived symbols.
+    s0 = ir.AffineSymbolExpr.get(0)
+    k_div_2_map = ir.AffineMap.get(
+        0, 1, [ir.AffineExpr.get_floor_div(s0, ir.AffineExpr.get_constant(2))]
+    )
+    k_div_2_expr = wave.WaveExprListAttr.get(
+        [wave.WaveSymbolAttr.get("K")], k_div_2_map
+    )
+    # CHECK: #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 2)>}>
+    hyper_with_expr = wave.WaveHyperparameterAttr.get({"K": 128, "K2": k_div_2_expr})
+    print(hyper_with_expr)
+
     # CHECK: #wave.address_space<shared>
     addr_attr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Shared)
     print(addr_attr)
@@ -475,6 +487,46 @@ module attributes {transform.with_named_sequence} {
     # CHECK: normalform.module
     # CHECK-SAME: #wave.normal_form<
     print(payload_module)
+
+    # ---------------------------------------------------------------
+    # Test BitcastOp Python bindings
+    # ---------------------------------------------------------------
+
+    loc = ir.Location.unknown()
+
+    M_sym = wave.WaveSymbolAttr.get("M")
+    K_sym = wave.WaveSymbolAttr.get("K")
+    K_half_sym = wave.WaveSymbolAttr.get("K2")
+    K_scale_sym = wave.WaveSymbolAttr.get("K32")
+    N_sym = wave.WaveSymbolAttr.get("N")
+    reg_addr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Register)
+
+    i8_type = wave.WaveTensorType.get(
+        [M_sym, K_half_sym], True, ir.IntegerType.get_signless(8), reg_addr
+    )
+    f4_type = wave.WaveTensorType.get(
+        [M_sym, K_sym], True, ir.Type.parse("f4E2M1FN"), reg_addr
+    )
+    f8e8m0_type = wave.WaveTensorType.get(
+        [M_sym, K_scale_sym], True, ir.Type.parse("f8E8M0FNU"), reg_addr
+    )
+    f32_acc_type = wave.WaveTensorType.get(
+        [M_sym, N_sym], True, ir.F32Type.get(), reg_addr
+    )
+
+    bitcast_test_module = ir.Module.parse(
+        """
+func.func @bitcast_test(%arg0: !wave.tensor<[@M, @K2] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>> {
+  %0 = wave.bitcast %arg0 : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+}
+"""
+    )
+    # CHECK: wave.bitcast
+    # CHECK-SAME: !wave.tensor<[@M, @K2] of i8, <register>>
+    # CHECK-SAME: to
+    # CHECK-SAME: !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    print(bitcast_test_module)
 
 
 # CHECK: wave_ok

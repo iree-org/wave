@@ -63,6 +63,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     ApplyExpr,
     BinaryOpBase,
+    BitcastOp as Bitcast,
     Extract,
     ExtractSlice,
     get_custom,
@@ -107,6 +108,7 @@ try:
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         ApplyExprOp,
+        BitcastOp,
         SubOp,
         AllocateOp,
         BroadcastOp,
@@ -161,6 +163,7 @@ except Exception as e:
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
     "apply_expr": ApplyExprOp,
+    "bitcast": BitcastOp,
     "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
@@ -197,6 +200,13 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f16": ir.F16Type.get,
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
+    "f8E5M2": ir.Float8E5M2Type.get,
+    "f8E5M2FNUZ": ir.Float8E5M2FNUZType.get,
+    "f8E4M3FN": ir.Float8E4M3FNType.get,
+    "f8E4M3FNUZ": ir.Float8E4M3FNUZType.get,
+    "f8E8M0FNU": ir.Float8E8M0FNUType.get,
+    "f6E2M3FN": ir.Float6E2M3FNType.get,
+    "f4E2M1FN": ir.Float4E2M1FNType.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
     # 'bool' is an alias for 'i1'.
     "bool": lambda: ir.IntegerType.get_signless(1),
@@ -254,6 +264,26 @@ def _map_address_space(addr) -> WaveAddressSpaceAttr:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
 
 
+def _derived_dim_clean_name(expr: sympy.Expr) -> str | None:
+    """Return a clean MLIR-friendly name for a derived SymPy expression, or
+    None if the expression is already a plain symbol or number."""
+    if expr.is_Symbol or expr.is_Number:
+        return None
+    if len(expr.free_symbols) != 1:
+        return None
+    base = list(expr.free_symbols)[0]
+    _, denom = expr.as_numer_denom()
+    if isinstance(denom, sympy.Integer) and denom > 1:
+        return f"{base.name}{int(denom)}"
+    numer, _ = expr.as_numer_denom()
+    if isinstance(expr, sympy.Mul):
+        args = expr.args
+        ints = [a for a in args if a.is_Integer]
+        if len(ints) == 1:
+            return f"{base.name}{int(ints[0])}"
+    return str(expr).replace("/", "").replace("*", "").replace(" ", "")
+
+
 def _create_wave_tensor_type(
     ctx: ir.Context,
     symbolic_shape: tuple,
@@ -261,7 +291,10 @@ def _create_wave_tensor_type(
     address_space_attr: WaveAddressSpaceAttr,
 ) -> ir.Type:
     """Helper function to create a WaveTensorType from shape, dtype, and address space."""
-    shape_attrs = [WaveSymbolAttr.get(str(s)) for s in symbolic_shape]
+    shape_attrs = []
+    for s in symbolic_shape:
+        clean = _derived_dim_clean_name(s)
+        shape_attrs.append(WaveSymbolAttr.get(clean if clean else str(s)))
     element_type = _dtype_to_mlir_scalar_type(dtype)
     return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
 
@@ -310,6 +343,17 @@ def _convert_sympy_expr_to_affine_map(
     # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
     expr = expr.subs(symbol_mapping)
     expr = sympy.simplify(expr)
+
+    # Bare symbolic fractions like BLOCK_K/32 cannot be represented as affine
+    # expressions directly. Wrap them in floor() so they lower to floordiv.
+    # All Wave symbols are positive integers, so floor(x/n) == x/n when x is
+    # divisible by n.
+    if isinstance(expr, sympy.Mul):
+        _, denom = expr.as_numer_denom()
+        if denom != 1 and not isinstance(denom, sympy.Integer):
+            pass
+        elif isinstance(denom, sympy.Integer) and denom > 1:
+            expr = sympy.floor(expr)
 
     return convert_sympy_to_affine_map(
         expr, [sym.name for sym in symbol_mapping.values()]
@@ -752,6 +796,8 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
+                elif isinstance(node, Bitcast):
+                    mlir_op = op_builder(result_type, get_single_mapped_value(node.arg))
                 elif isinstance(node, Reduce):
                     args = node.arg if isinstance(node.arg, Sequence) else [node.arg]
                     inputs = [get_single_mapped_value(a) for a in args]
@@ -1245,12 +1291,38 @@ def _create_kernel_module(
                         f"Unexpected non-int mapping in hyperparameters: {k} -> {v}. "
                         f"Expected all non-int values to be address spaces"
                     )
-        # Convert the symbols in subs to strings and attach as
-        # WaveHyperparameterAttr to func_op
+        # Build the hyperparameters dict: base symbols map to integers,
+        # derived dims (e.g. K/2) map to WaveExprListAttr expressions.
+        hyper_params: dict[str, int | WaveExprListAttr] = {
+            str(k): v for k, v in options.subs.items() if isinstance(v, int)
+        }
+        # Collect derived symbolic dimensions from tensor shapes across the
+        # graph.  Instead of pre-evaluating them to integers, encode the
+        # affine relationship so the C++ backend can resolve them symbolically.
+        for node in trace.walk():
+            c = get_custom(node)
+            t = getattr(c, "_type", None) or getattr(c, "type", None)
+            shapes = []
+            if t is not None:
+                shapes = getattr(t, "symbolic_shape", None) or []
+            for dim_expr in shapes:
+                clean = _derived_dim_clean_name(dim_expr)
+                if clean is None or clean in hyper_params:
+                    continue
+                free = list(dim_expr.free_symbols)
+                if len(free) != 1:
+                    continue
+                base_sym = free[0]
+                if str(base_sym) not in hyper_params:
+                    continue
+                sym_mapping = preprocess_symbols(free)
+                affine_map = _convert_sympy_expr_to_affine_map(dim_expr, sym_mapping)
+                sym_attrs = [
+                    symbol_name_to_attribute(sym.name) for sym in sym_mapping.values()
+                ]
+                hyper_params[clean] = WaveExprListAttr.get(sym_attrs, affine_map)
         func_op.operation.attributes["wave.hyperparameters"] = (
-            wave.WaveHyperparameterAttr.get(
-                {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
-            )
+            wave.WaveHyperparameterAttr.get(hyper_params)
         )
 
         try:
