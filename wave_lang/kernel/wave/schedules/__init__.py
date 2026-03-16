@@ -18,7 +18,6 @@ from .gemm_mxfp4_double_buffer import (
     get_mxfp4_dbuf_mixed_pingpong_schedule,
     get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule,
     get_mxfp4_asymmetric_schedule,
-    get_mxfp4_asymmetric_nounroll_schedule,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "get_mxfp4_dbuf_pingpong_schedule_Bshuffled",
     "get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds",
     "get_mxfp4_asymmetric_schedule",
-    "get_mxfp4_asymmetric_nounroll_schedule",
     "get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule",
     "get_attention_prefetch_schedule",
 ]

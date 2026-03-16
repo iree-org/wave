@@ -27,7 +27,6 @@ from wave_lang.kernel.wave.schedules import (
     get_mxfp4_dbuf_pingpong_schedule,
     get_mxfp4_dbuf_mixed_pingpong_schedule,
     get_mxfp4_asymmetric_schedule,
-    get_mxfp4_asymmetric_nounroll_schedule,
     get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled,
     get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds,
@@ -387,14 +386,12 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     options.wave_runtime = True
     options.dump_intermediates = "build/intermediates"
     options.eliminate_epilogue = eliminate_epilogue
-    if no_unroll:
-        schedule = get_mxfp4_asymmetric_nounroll_schedule(
-            eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
-        )
-    else:
-        schedule = get_mxfp4_asymmetric_schedule(
-            eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
-        )
+    schedule = get_mxfp4_asymmetric_schedule(
+        eliminate_epilogue=eliminate_epilogue,
+        is_bscale_shuffled=True,
+        unroll_factor=1 if no_unroll else 2,
+        unroll_kernel=not no_unroll,
+    )
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)

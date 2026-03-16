@@ -1169,7 +1169,6 @@ def _dbuf_mxfp4_helper(
     from wave_lang.kernel.wave.schedules import (
         get_mxfp4_dbuf_schedule,
         get_mxfp4_asymmetric_schedule,
-        get_mxfp4_asymmetric_nounroll_schedule,
     )
     from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
@@ -1202,14 +1201,12 @@ def _dbuf_mxfp4_helper(
         )
         options.eliminate_epilogue = eliminate_epilogue
         if use_schedule:
-            if no_unroll:
-                schedule = get_mxfp4_asymmetric_nounroll_schedule(
-                    eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
-                )
-            else:
-                schedule = get_mxfp4_asymmetric_schedule(
-                    eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
-                )
+            schedule = get_mxfp4_asymmetric_schedule(
+                eliminate_epilogue=eliminate_epilogue,
+                is_bscale_shuffled=True,
+                unroll_factor=1 if no_unroll else 2,
+                unroll_kernel=not no_unroll,
+            )
         else:
             schedule = None
             options.schedule = SchedulingType.NONE
