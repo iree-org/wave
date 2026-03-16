@@ -234,7 +234,7 @@ def _get_strides_from_memref(mem: Value) -> list[Value]:
     return list(metadata[2 + rank : 2 + 2 * rank])
 
 
-def _symbolic_strides_match_physical(memory, symbolic_shape) -> bool:
+def _symbolic_strides_match_physical(memory: CustomOp, symbolic_shape) -> bool:
     """Return True when it is safe to linearize a write using symbolic strides.
 
     Memories with an explicit physical_layout whose shape differs from the
@@ -243,10 +243,10 @@ def _symbolic_strides_match_physical(memory, symbolic_shape) -> bool:
     strides produces incorrect offsets, so we must fall back to
     multi-dimensional stores in that case.
     """
-    mem_type = getattr(memory, "type", None)
+    mem_type = memory.type
     if mem_type is None:
         return True
-    layout = getattr(mem_type, "physical_layout", None)
+    layout = mem_type.physical_layout
     if layout is None:
         return True
     layout_shape = layout.shape
