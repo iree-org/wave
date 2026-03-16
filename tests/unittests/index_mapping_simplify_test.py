@@ -76,6 +76,22 @@ class TestSimplifyIndexMapping:
         # prove i1 < D.
         assert not changed
 
+    def test_no_simplification_mismatched_flat_exprs(self):
+        """floor(A/K) and Mod(B, K) with unrelated A, B must not pair."""
+        i0 = IndexMapping.iterator(0)
+        i1 = IndexMapping.iterator(1)
+
+        flat_a = i0 * K + i1
+        flat_b = i0 * 3 + i1  # Different expression, same divisor K.
+        m = IndexMapping(
+            num_iterators=2,
+            inputs={M: flat_a // K, K: sympy.Mod(flat_b, K)},
+            outputs={M: i0, K: i1},
+        )
+
+        m_new, changed = simplify_index_mapping(m)
+        assert not changed
+
     def test_no_simplification_b_data_preshuffle(self):
         """B-data preshuffle: within_nblk can exceed K_PACKED for general K."""
         n_it = IndexMapping.iterator(0)

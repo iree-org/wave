@@ -65,6 +65,10 @@ class TestIsProvablyDivisible:
         f = sympy.floor(y / 8)
         assert not _is_provably_divisible(7 * f * x, 8 * f)
 
+    def test_zero_coefficient_divisor(self):
+        """0*D should not cause ZeroDivisionError."""
+        assert not _is_provably_divisible(x, 0 * D)
+
 
 # ── split_sum_by_divisibility ───────────────────────────────────────────────
 
