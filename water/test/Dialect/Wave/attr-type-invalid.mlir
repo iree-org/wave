@@ -173,3 +173,18 @@ water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<@M = #wave.
 water_test.wave_symbol_mapping {three_results_mapping = #wave.symbol_mapping<
   @M = #wave.expr_list<[#wave.symbol<"A">] -> (A)>
 >}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list must be a floor division expression}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list must be a floor division expression}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, BLOCK_K = 32 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">, #wave.symbol<"BLOCK_K">] -> (K floordiv 2 + BLOCK_K floordiv 4)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" has dividend (128) that is not evenly divisible by the divisor (3)}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 3)>}>} {}

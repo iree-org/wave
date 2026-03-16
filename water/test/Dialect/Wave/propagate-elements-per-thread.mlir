@@ -744,3 +744,21 @@ func.func @reshape_backward_multiple_operands(
   return
 }
 }
+
+// -----
+
+// Test bitcast forward propagation: i8 to f4 doubles elements_per_thread
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+normalform.module [#wave.normal_form<full_types>] {
+// CHECK-LABEL: @bitcast_forward_propagation
+func.func @bitcast_forward_propagation(%mem: !wave.tensor<[@M, @K2] of i8, <global>>, %out_mem: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 2)>, M = 16, N = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>, vector_shapes = {M = 1, N = 1, K = 128, K2 = 64}, max_bits_per_load = 128>]} {
+  // Read 16 i8 elements (K2 dimension, 16 elements per thread)
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> vector<16xi8>
+  %data = wave.read %mem {elements_per_thread = 16} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
+
+  // Bitcast: 16 i8 -> 32 f4 (doubles EPT from 16 to 32)
+  // CHECK: wave.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
+  %bitcasted = wave.bitcast %data : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return
+}
+}

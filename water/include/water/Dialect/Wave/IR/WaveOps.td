@@ -740,6 +740,34 @@ def CastOp : WaveOp<"cast", [
   let hasVerifier = 1;
 }
 
+def BitcastOp : WaveOp<"bitcast", [
+    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Reinterpret the bits of a register-resident tensor as a different type";
+  let description = [{
+    Reinterprets the raw bits of a register-resident tensor to a different
+    element type without changing the data. The last dimension of the result
+    is scaled by the ratio of source-to-destination element bitwidths.
+
+    For example, bitcasting a tensor with i8 elements to f4E2M1FN doubles
+    the last dimension (8/4 = 2), while bitcasting to f8E8M0FNU preserves
+    the dimension (8/8 = 1).
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to bitcast">:$value_to_cast
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Bitcast value">:$result
+  );
+
+  let assemblyFormat =
+    "$value_to_cast " # commonArgumentsSyntax # " attr-dict `:`"
+    "qualified(type($value_to_cast)) `to` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
 def BroadcastOp : WaveOp<"broadcast", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     NoOpElementsPerThreadOpTrait,

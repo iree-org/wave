@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -388,6 +389,84 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
             << "defines hyperparameters when its ancestor already had";
         diag.attachNote(parent->getLoc()) << "ancestor";
         return diag;
+      }
+    }
+
+    // Verify expr_list values in the hyperparameters: each must be a
+    // single-result affine map whose sole expression is a single floor
+    // division.  All referenced symbols must exist as entries in the same
+    // mapping, and the dividend must be evenly divisible by the divisor.
+    for (const NamedAttribute &entry : hyperparams.getMapping()) {
+      wave::WaveExprListAttr exprList =
+          llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+      if (!exprList)
+        continue;
+      if (exprList.getMap().getNumResults() != 1) {
+        return op->emitError()
+               << "hyperparameter " << entry.getName()
+               << " must be a single-result expr_list, but has "
+               << exprList.getMap().getNumResults() << " results";
+      }
+      for (Attribute symAttr : exprList.getSymbols()) {
+        wave::WaveSymbolAttr waveSym =
+            llvm::dyn_cast<wave::WaveSymbolAttr>(symAttr);
+        if (!waveSym) {
+          return op->emitError()
+                 << "hyperparameter " << entry.getName()
+                 << " expr_list contains non-WaveSymbolAttr symbol: "
+                 << symAttr;
+        }
+        usedSymbols.insert(waveSym.getName());
+        if (!hyperparams.getMapping().contains(waveSym.getName())) {
+          return op->emitError()
+                 << "hyperparameter " << entry.getName()
+                 << " references symbol " << waveSym
+                 << " not defined in the same hyperparameters mapping";
+        }
+      }
+
+      // The expression must contain exactly one floor division.
+      AffineExpr result = exprList.getMap().getResult(0);
+
+      // The expression must be a single floor division.
+      AffineBinaryOpExpr divExpr = llvm::dyn_cast<AffineBinaryOpExpr>(result);
+      if (!divExpr || divExpr.getKind() != AffineExprKind::FloorDiv) {
+        return op->emitError()
+               << "hyperparameter " << entry.getName()
+               << " expr_list must be a floor division expression";
+      }
+
+      // Verify that the dividend is evenly divisible by the divisor.
+      // Resolve all symbols to constants and evaluate both sides.
+      llvm::SmallVector<AffineExpr> replacements;
+      replacements.reserve(exprList.getMap().getNumSymbols());
+      bool allResolved = true;
+      for (Attribute symAttr : exprList.getSymbols()) {
+        StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
+        std::optional<int64_t> val = hyperparams.getSymbolValue(dep);
+        if (!val) {
+          allResolved = false;
+          break;
+        }
+        replacements.push_back(getAffineConstantExpr(*val, op->getContext()));
+      }
+      if (allResolved) {
+        AffineExpr lhsExpr = divExpr.getLHS().replaceSymbols(replacements);
+        lhsExpr = simplifyAffineExpr(lhsExpr, 0, 0);
+        AffineExpr rhsExpr = divExpr.getRHS().replaceSymbols(replacements);
+        rhsExpr = simplifyAffineExpr(rhsExpr, 0, 0);
+        AffineConstantExpr lhsConst =
+            llvm::dyn_cast<AffineConstantExpr>(lhsExpr);
+        AffineConstantExpr rhsConst =
+            llvm::dyn_cast<AffineConstantExpr>(rhsExpr);
+        if (lhsConst && rhsConst && rhsConst.getValue() != 0 &&
+            lhsConst.getValue() % rhsConst.getValue() != 0) {
+          return op->emitError()
+                 << "hyperparameter " << entry.getName() << " has dividend ("
+                 << lhsConst.getValue()
+                 << ") that is not evenly divisible by the divisor ("
+                 << rhsConst.getValue() << ")";
+        }
       }
     }
 

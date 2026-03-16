@@ -2453,6 +2453,208 @@ LogicalResult wave::CastOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// BitcastOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::BitcastOp::verify() {
+  Type valueType = getValueToCast().getType();
+  Type resultType = getResult().getType();
+
+  auto valueTensor = llvm::dyn_cast<wave::WaveTensorType>(valueType);
+  auto resultTensor = llvm::dyn_cast<wave::WaveTensorType>(resultType);
+
+  if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
+      resultTensor.getFullySpecified()) {
+    auto rank = valueTensor.getRank();
+    if (rank == 0)
+      return emitOpError("rank-0 wave tensors are not supported in bitcast");
+
+    if (rank != resultTensor.getRank())
+      return emitOpError("rank of input (")
+             << rank << ") must match rank of result ("
+             << resultTensor.getRank() << ")";
+
+    // All dimensions except the last must match.
+    for (unsigned i = 0, e = rank - 1; i < e; ++i) {
+      if (valueTensor.getShape()[i] != resultTensor.getShape()[i])
+        return emitOpError("dimension ")
+               << i << " of input and result must match";
+    }
+
+    unsigned srcBW = valueTensor.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBW = resultTensor.getElementType().getIntOrFloatBitWidth();
+    unsigned maxBW = std::max(srcBW, dstBW);
+    unsigned minBW = std::min(srcBW, dstBW);
+    if (maxBW % minBW != 0)
+      return emitOpError("larger element bitwidth (")
+             << maxBW << ") must be evenly divisible by the smaller (" << minBW
+             << ")";
+    if (srcBW != dstBW &&
+        valueTensor.getShape().back() == resultTensor.getShape().back())
+      return emitOpError("trailing dimension must be scaled by the "
+                         "element bitwidth ratio (")
+             << srcBW << "-bit to " << dstBW << "-bit)";
+  }
+
+  auto valueVec = llvm::dyn_cast<VectorType>(valueType);
+  auto resultVec = llvm::dyn_cast<VectorType>(resultType);
+  if (valueVec && resultVec) {
+    unsigned srcBitWidth = valueVec.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBitWidth = resultVec.getElementType().getIntOrFloatBitWidth();
+    int64_t srcElements = valueVec.getNumElements();
+    int64_t dstElements = resultVec.getNumElements();
+    if (srcElements * srcBitWidth != dstElements * dstBitWidth)
+      return emitOpError("total bit count must be preserved");
+  }
+
+  return success();
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateForward(
+    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  wave::WaveTensorType srcType = operandTypes[0];
+  if (!srcType || !srcType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBits = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBits = dstElemType.getIntOrFloatBitWidth();
+
+  // Same bitwidth: all dimensions are identical, use identity propagation.
+  if (srcBits == dstBits)
+    return wave::detail::propagateShapeInformation(srcType, resultTypes[0],
+                                                   "input", "result", errs);
+
+  // Different bitwidths: the last dimension is scaled. We need the result IR
+  // type to carry the destination's last dimension symbol.
+  auto dstIRType = llvm::dyn_cast<wave::WaveTensorType>(getResult().getType());
+  if (!dstIRType || !dstIRType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  // Build the expected result shape: leading dims from source, last dim from
+  // the result IR type (which carries its own symbolic dimension name).
+  SmallVector<wave::WaveSymbolAttr> newShape(srcType.getShape().drop_back(1));
+  newShape.push_back(dstIRType.getShape().back());
+
+  // Validate the last dimension ratio via hyperparameters when available.
+  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(getOperation());
+
+  if (hyper) {
+    std::optional<int64_t> srcLast =
+        hyper.getSymbolValue(srcType.getShape().back().getName());
+    std::optional<int64_t> dstLast =
+        hyper.getSymbolValue(dstIRType.getShape().back().getName());
+    if (srcLast && dstLast && *srcLast * srcBits != *dstLast * dstBits) {
+      errs << "bitcast trailing dimension mismatch: source last dim ("
+           << *srcLast << ") * " << srcBits << " bits != result last dim ("
+           << *dstLast << ") * " << dstBits << " bits";
+      return failure();
+    }
+  }
+
+  return wave::detail::propagateShapeInformation(newShape, resultTypes[0],
+                                                 "input", "result", errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateBackward(
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  wave::WaveTensorType dstType = resultTypes[0];
+  if (!dstType || !dstType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBits = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBits = dstElemType.getIntOrFloatBitWidth();
+
+  // Same bitwidth: all dimensions are identical, use identity propagation.
+  if (srcBits == dstBits)
+    return wave::detail::propagateShapeInformation(dstType, operandTypes[0],
+                                                   "result", "input", errs);
+
+  // Different bitwidths: the last dimension is scaled. We need the source IR
+  // type to carry the source's last dimension symbol.
+  auto srcIRType =
+      llvm::dyn_cast<wave::WaveTensorType>(getValueToCast().getType());
+  if (!srcIRType || !srcIRType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  // Build the expected source shape: leading dims from result, last dim from
+  // the source IR type (which carries its own symbolic dimension name).
+  SmallVector<wave::WaveSymbolAttr> newShape(dstType.getShape().drop_back(1));
+  newShape.push_back(srcIRType.getShape().back());
+
+  // Validate the last dimension ratio via hyperparameters when available.
+  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(getOperation());
+
+  if (hyper) {
+    std::optional<int64_t> srcLast =
+        hyper.getSymbolValue(srcIRType.getShape().back().getName());
+    std::optional<int64_t> dstLast =
+        hyper.getSymbolValue(dstType.getShape().back().getName());
+    if (srcLast && dstLast && *srcLast * srcBits != *dstLast * dstBits) {
+      errs << "bitcast trailing dimension mismatch: source last dim ("
+           << *srcLast << ") * " << srcBits << " bits != result last dim ("
+           << *dstLast << ") * " << dstBits << " bits";
+      return failure();
+    }
+  }
+
+  return wave::detail::propagateShapeInformation(newShape, operandTypes[0],
+                                                 "result", "input", errs);
+}
+
+LogicalResult wave::BitcastOp::finalizeTypeInference() { return success(); }
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (operandElements[0].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned srcEpt = operandElements[0].getValue();
+  unsigned dstEpt = srcEpt * srcBitWidth / dstBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(dstEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      resultElements, "computed from bitcast ratio", "", "result", errs);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (resultElements[0].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned dstEpt = resultElements[0].getValue();
+  unsigned srcEpt = dstEpt * dstBitWidth / srcBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(srcEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      operandElements, "computed from bitcast ratio", "", "input", errs);
+}
+
+//-----------------------------------------------------------------------------
 // ReciprocalOp
 //-----------------------------------------------------------------------------
 

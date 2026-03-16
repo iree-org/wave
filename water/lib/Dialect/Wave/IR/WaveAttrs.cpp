@@ -486,14 +486,83 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
 std::optional<int64_t>
 WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   DictionaryAttr mapping = getMapping();
-  Attribute attr = mapping.get(symbolName);
-  if (!attr)
+  llvm::StringMap<int64_t> resolved;
+  llvm::StringSet<> visited;
+
+  // Iterative worklist: each entry is a symbol name still to resolve.
+  // When we pop a name whose dependencies are all resolved we can evaluate
+  // its expression; otherwise we push it back followed by its unresolved
+  // dependencies (topological-sort style).
+  llvm::SmallVector<StringRef> worklist({symbolName});
+
+  while (!worklist.empty()) {
+    StringRef name = worklist.back();
+
+    if (resolved.contains(name)) {
+      worklist.pop_back();
+      continue;
+    }
+
+    Attribute attr = mapping.get(name);
+    if (!attr)
+      return std::nullopt;
+
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+      resolved[name] = intAttr.getInt();
+      worklist.pop_back();
+      continue;
+    }
+
+    auto exprList = cast<WaveExprListAttr>(attr);
+
+    // Check whether all dependencies are already resolved.
+    bool allResolved = true;
+    for (Attribute symAttr : exprList.getSymbols()) {
+      auto waveSym = cast<WaveSymbolAttr>(symAttr);
+      if (!resolved.count(waveSym.getName())) {
+        allResolved = false;
+        break;
+      }
+    }
+
+    if (!allResolved) {
+      // Cycle detection: if we've already tried expanding this name once,
+      // pushing it again means a cycle.
+      if (!visited.insert(name).second)
+        return std::nullopt;
+
+      // Push unresolved dependencies so they get processed first.
+      for (Attribute symAttr : exprList.getSymbols()) {
+        StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
+        if (!resolved.count(dep))
+          worklist.push_back(dep);
+      }
+      continue;
+    }
+
+    // All deps resolved -- evaluate the affine expression.
+    AffineMap map = exprList.getMap();
+    llvm::SmallVector<AffineExpr> replacements;
+    replacements.reserve(map.getNumSymbols());
+    for (Attribute symAttr : exprList.getSymbols()) {
+      int64_t val = resolved[cast<WaveSymbolAttr>(symAttr).getName()];
+      replacements.push_back(getAffineConstantExpr(val, mapping.getContext()));
+    }
+
+    AffineExpr result = map.getResult(0).replaceSymbols(replacements);
+    result = simplifyAffineExpr(result, map.getNumDims(), map.getNumSymbols());
+    auto constExpr = dyn_cast<AffineConstantExpr>(result);
+    if (!constExpr)
+      return std::nullopt;
+
+    resolved[name] = constExpr.getValue();
+    worklist.pop_back();
+  }
+
+  auto it = resolved.find(symbolName);
+  if (it == resolved.end())
     return std::nullopt;
-
-  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
-    return intAttr.getInt();
-
-  return std::nullopt;
+  return it->second;
 }
 
 bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {

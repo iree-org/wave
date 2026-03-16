@@ -24,6 +24,19 @@ func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
   return %0 : !wave.tensor<[@B, @M, @N] of f32>
 }
 
+// CHECK-LABEL: @bitcast_i8_to_f4
+func.func @bitcast_i8_to_f4(%v: !wave.tensor<[@M, @K2] of i8>) -> !wave.tensor<[@M, @K] of f4E2M1FN> {
+  // CHECK: wave.bitcast
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @K2] of i8> to !wave.tensor<[@M, @K] of f4E2M1FN>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN>
+}
+
+// CHECK-LABEL: @bitcast_i8_to_f8e8m0
+func.func @bitcast_i8_to_f8e8m0(%v: !wave.tensor<[@M, @K32] of i8>) -> !wave.tensor<[@M, @K32] of f8E8M0FNU> {
+  // CHECK: wave.bitcast
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @K32] of i8> to !wave.tensor<[@M, @K32] of f8E8M0FNU>
+  return %0 : !wave.tensor<[@M, @K32] of f8E8M0FNU>
+}
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
