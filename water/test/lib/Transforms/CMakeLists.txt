@@ -5,6 +5,7 @@ add_public_tablegen_target(MLIRWaterTestTransformsIncGen)
 add_mlir_library(MLIRWaterTestTransforms
   Passes.cpp
   TestInUseAnalysis.cpp
+  TestUniformityAnalysis.cpp
   TestWaveDialectFunctions.cpp
   TestWaveDialectInferIndexExprs.cpp
 
