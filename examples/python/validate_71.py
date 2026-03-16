@@ -109,6 +109,16 @@ def _abbreviated(text: str, n: int = 5) -> str:
     return "\n".join(lines[:n] + ["..."] + lines[-n:])
 
 
+def _wave_shape_for(mt_display: str) -> str:
+    """Return the wave_shape string for a macro tile, or 'default' if not overridden."""
+    extra = MACRO_TILE_OVERRIDES.get(mt_display, {}).get("extra_args", [])
+    try:
+        idx = extra.index("--wave_shape")
+        return extra[idx + 1]
+    except (ValueError, IndexError):
+        return "default"
+
+
 def _resolve_test_name(n_wave: int, backend: str, dyn: str) -> str:
     """Look up the 7.1_schedule.py test function from (n_wave, backend, dyn)."""
     key = (n_wave, backend, dyn)
@@ -232,9 +242,11 @@ def main() -> None:
             if status != "PASS":
                 any_fail = True
 
+            ws = _wave_shape_for(mt_display)
             print(
                 f"dyn={args.dyn}, n-wave={args.n_wave}, backend={args.backend}, "
-                f"macro-tile={mt_display}, shape={shape_display}, result={status}"
+                f"macro-tile={mt_display}, wave_shape={ws}, "
+                f"shape={shape_display}, result={status}"
             )
             if args.verbose and status != "PASS" and output:
                 for line in _abbreviated(output).splitlines():
