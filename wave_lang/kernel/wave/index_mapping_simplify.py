@@ -26,7 +26,7 @@ from collections.abc import Sequence
 
 from ..lang.wave_types import IndexMapping
 from .utils.symbol_utils import (
-    _split_sum_by_divisibility,
+    split_sum_by_divisibility,
     IndexExpr,
     IndexSymbol,
     simplify,
@@ -182,15 +182,18 @@ def _expr_bounds_with_iters(
 def _find_floordiv_mod_pairs(
     input_mapping: dict[IndexSymbol, IndexExpr],
 ) -> list[tuple]:
-    """Find paired floor/Mod expressions sharing the same divisor.
+    """Find paired floor/Mod expressions that share the same flat expression.
 
     Returns list of (dim_q, dim_r, numerator, divisor, addend) tuples where:
       dim_q has expression: addend + floor(numerator / divisor)
       dim_r has expression: Mod(something, divisor)
 
-    Note: sympy auto-evaluates Mod(A*D + B, D) → Mod(B, D), so the Mod's
-    first arg may not match the floor's numerator exactly.  We match on
-    the divisor and verify compatibility.
+    Pairing requires both matching divisors AND compatible numerators.
+    Since sympy auto-evaluates ``Mod(A*D + B, D) -> Mod(B, D)``, the
+    Mod's first arg may differ from the floor's numerator by a multiple
+    of D.  We verify this: ``(floor_numer - mod_arg) % D == 0``.
+
+    Each Mod is consumed at most once to prevent ambiguous rewrites.
     """
     floor_info: list[tuple] = []  # (dim, numerator, divisor, addend)
     mod_info: list[tuple] = []  # (dim, arg, divisor)
@@ -220,15 +223,43 @@ def _find_floordiv_mod_pairs(
                         floor_info.append((dim, numer, denom, addend))
                         break
 
-    # Match on divisor.
+    # Match on divisor, verify numerator compatibility, consume each Mod once.
+    consumed_mods: set[int] = set()
     pairs = []
     for dim_q, numer, divisor, addend in floor_info:
-        for dim_r, mod_arg, mod_divisor in mod_info:
-            if divisor == mod_divisor:
-                pairs.append((dim_q, dim_r, numer, divisor, addend))
-                break
+        for i, (dim_r, mod_arg, mod_divisor) in enumerate(mod_info):
+            if i in consumed_mods:
+                continue
+            if divisor != mod_divisor:
+                continue
+            # Verify the floor and Mod share the same flat expression
+            # (modulo multiples of D that sympy auto-reduced away).
+            diff = sympy.cancel(numer - mod_arg)
+            if not _is_provably_divisible_by(diff, divisor):
+                continue
+            consumed_mods.add(i)
+            pairs.append((dim_q, dim_r, numer, divisor, addend))
+            break
 
     return pairs
+
+
+def _is_provably_divisible_by(expr: sympy.Expr, divisor: sympy.Expr) -> bool:
+    """Check if *expr* is provably divisible by *divisor*.
+
+    Handles zero, exact equality, and delegates to split_sum_by_divisibility
+    for additive decomposition (all terms must be multiples of divisor).
+    """
+    if expr.is_zero:
+        return True
+    if expr == divisor:
+        return True
+    result = split_sum_by_divisibility(expr, divisor)
+    if result is None:
+        return False
+    # All terms are divisible iff remainder is zero.
+    _, remainder = result
+    return remainder.is_zero
 
 
 def simplify_index_mapping(
@@ -253,7 +284,7 @@ def simplify_index_mapping(
     pairs = _find_floordiv_mod_pairs(input_mapping)
     for dim_q, dim_r, flat_expr, divisor, addend in pairs:
         # Step 1: Factor out D-multiples from flat_expr.
-        split = _split_sum_by_divisibility(flat_expr, divisor)
+        split = split_sum_by_divisibility(flat_expr, divisor)
         if split is None:
             quotient = sympy.Integer(0)
             remainder = flat_expr
@@ -290,7 +321,7 @@ def simplify_index_mapping(
         # Evaluate floor/ceiling after substitution.
         try:
             divisor_lb = sympy.Integer(int(divisor_lb))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
 
         diff = simplify(hi - divisor_lb)

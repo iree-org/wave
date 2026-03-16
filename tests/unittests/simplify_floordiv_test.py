@@ -10,7 +10,7 @@ import sympy
 
 from wave_lang.kernel.wave.utils.symbol_utils import (
     simplify,
-    _split_sum_by_divisibility,
+    split_sum_by_divisibility,
     _is_provably_divisible,
 )
 
@@ -66,25 +66,25 @@ class TestIsProvablyDivisible:
         assert not _is_provably_divisible(7 * f * x, 8 * f)
 
 
-# ── _split_sum_by_divisibility ───────────────────────────────────────────────
+# ── split_sum_by_divisibility ───────────────────────────────────────────────
 
 
 class TestSplitSumByDivisibility:
     def test_basic_split(self):
-        q, r = _split_sum_by_divisibility(3 * D * x + y, D)
+        q, r = split_sum_by_divisibility(3 * D * x + y, D)
         assert q == 3 * x
         assert r == y
 
     def test_no_divisible_terms(self):
-        assert _split_sum_by_divisibility(x + y, D) is None
+        assert split_sum_by_divisibility(x + y, D) is None
 
     def test_all_divisible(self):
-        q, r = _split_sum_by_divisibility(6 * x + 3, sympy.Integer(3))
+        q, r = split_sum_by_divisibility(6 * x + 3, sympy.Integer(3))
         assert q == 2 * x + 1
         assert r == sympy.Integer(0)
 
     def test_multiple_divisible_terms(self):
-        q, r = _split_sum_by_divisibility(D * x + D * y + z, D)
+        q, r = split_sum_by_divisibility(D * x + D * y + z, D)
         assert simplify(q - (x + y)) == 0
         assert r == z
 
@@ -112,7 +112,7 @@ class TestSimplifyFloorDiv:
     def test_mod_basic(self):
         expr = sympy.Mod(3 * D * x + y, D)
         result = simplify(expr)
-        assert result == sympy.Mod(y, D, evaluate=False) or result == sympy.Mod(y, D)
+        assert sympy.simplify(result - sympy.Mod(y, D)) == 0
 
     def test_mod_all_divisible(self):
         expr = sympy.Mod(D * x + D * y, D)

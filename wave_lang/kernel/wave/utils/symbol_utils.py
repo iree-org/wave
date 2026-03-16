@@ -132,6 +132,8 @@ def _is_provably_divisible(term: sympy.Expr, divisor: sympy.Expr) -> bool:
     # Decompose the divisor into numeric and symbolic parts.
     # E.g. 8*floor(...) -> (8, floor(...))
     div_coeff, div_sym = _split_coeff(divisor)
+    if div_coeff.is_zero:
+        return False
 
     if isinstance(term, sympy.Mul):
         # Check if term contains div_sym as a multiplicative factor
@@ -178,7 +180,7 @@ def _contains_factor(factors: list[sympy.Expr], target: sympy.Expr) -> bool:
     return False
 
 
-def _split_sum_by_divisibility(
+def split_sum_by_divisibility(
     expr: sympy.Expr, divisor: sympy.Expr
 ) -> tuple[sympy.Expr, sympy.Expr] | None:
     """Split *expr* into ``(quotient, remainder)`` such that
@@ -326,7 +328,7 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
         numer, denom = inner.as_numer_denom()
         if denom == 1:
             return None
-        result = _split_sum_by_divisibility(numer, denom)
+        result = split_sum_by_divisibility(numer, denom)
         if result is None:
             return None
         quotient, remainder = result
@@ -347,7 +349,7 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
         if not isinstance(expr, sympy.Mod):
             return None
         p, q = expr.args
-        result = _split_sum_by_divisibility(p, q)
+        result = split_sum_by_divisibility(p, q)
         if result is None:
             return None
         _quotient, remainder = result
@@ -373,19 +375,6 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
 
 
 _simplify_cache: dict[sympy.Basic, sympy.Expr] = {}
-
-
-def simplify_divisor_multiples(expr: sympy.Expr) -> sympy.Expr:
-    """Factor out divisor-multiples from floor/Mod without expand/cancel.
-
-    Applies only the ``transform_floor_div`` and ``transform_mod_div``
-    rewrites from ``_custom_simplify_once``.  This is safe for complex
-    post-substitution expressions where ``sympy.expand`` / ``sympy.cancel``
-    would destroy the expression structure.
-    """
-    if not isinstance(expr, sympy.Basic) or expr.is_Atom:
-        return expr
-    return _custom_simplify_once(expr)
 
 
 def simplify(expr: sympy.Expr) -> sympy.Expr:
