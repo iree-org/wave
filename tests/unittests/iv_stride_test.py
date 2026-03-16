@@ -132,7 +132,9 @@ class TestMemSimplify:
 class TestLinearizeDims:
     def test_simple_2d(self):
         """[row, col] * [stride, 1] -> row*stride + col."""
-        row, col, stride = sympy.symbols("row col stride", integer=True, nonnegative=True)
+        row, col, stride = sympy.symbols(
+            "row col stride", integer=True, nonnegative=True
+        )
         result = linearize_dims([row, col], [stride, 1])
         assert sympy.expand(result - (row * stride + col)) == 0
 
