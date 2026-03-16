@@ -18,7 +18,10 @@ from ..assumptions import get_divisibility_subs
 from .general_utils import infer_dim, get_fastest_index
 from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, simplify, subs_idxc
 from ....support.indexing import piecewise_aware_subs
+from ....support.logging import get_logger
 from ...compiler.utils import strides_from_symbolic_shape
+
+logger = get_logger("wave.mapping_utils")
 
 K = TypeVar("K")  # Key type
 V = TypeVar("V")  # Value type
@@ -417,10 +420,13 @@ def compute_iv_stride_through_mapping(
             coeff = sympy.expand(start).coeff(sym)
             concrete = subs_idxc(coeff)
             if not isinstance(concrete, (int, sympy.Integer)):
-                print(
-                    f"IV coeff for {sym} is non-concrete: coeff={coeff}"
-                    f"  resolved={concrete} (type={type(concrete).__name__})"
-                    f" — skipping this IV"
+                logger.debug(
+                    "IV coeff for %s is non-concrete: coeff=%s"
+                    "  resolved=%s (type=%s) -- skipping this IV",
+                    sym,
+                    coeff,
+                    concrete,
+                    type(concrete).__name__,
                 )
                 continue
             iv_info[sym] = (iter_sym, int(concrete))
@@ -428,10 +434,10 @@ def compute_iv_stride_through_mapping(
     if not iv_info:
         return None
 
-    print(f"=== compute_iv_stride_through_mapping  is_read={is_read} ===")
-    print(f"  iters: {dict(iters)}")
+    logger.debug("=== compute_iv_stride_through_mapping  is_read=%s ===", is_read)
+    logger.debug("  iters: %s", dict(iters))
     for iv_sym, (iv_iter, cc) in iv_info.items():
-        print(f"  IV {iv_sym} -> iter={iv_iter}  coeff={cc}")
+        logger.debug("  IV %s -> iter=%s  coeff=%s", iv_sym, iv_iter, cc)
 
     map_dims = mapping.input_shape if is_read else mapping.output_shape
     raw_exprs = (
@@ -445,9 +451,12 @@ def compute_iv_stride_through_mapping(
 
     for i, (raw, resolved) in enumerate(zip(raw_exprs, dim_exprs)):
         changed = str(raw) != str(resolved)
-        print(
-            f"  dim[{i}]  raw={raw}  ->  resolved={resolved}"
-            f"{'  (CHANGED by subs_idxc)' if changed else ''}"
+        logger.debug(
+            "  dim[%d]  raw=%s  ->  resolved=%s%s",
+            i,
+            raw,
+            resolved,
+            "  (CHANGED by subs_idxc)" if changed else "",
         )
 
     if mem_strides is None:
@@ -459,9 +468,10 @@ def compute_iv_stride_through_mapping(
     stride_free = set()
     for s in mem_strides:
         stride_free |= sympy.sympify(s).free_symbols
-    print(
-        f"  mem_strides={mem_strides}"
-        f"  (symbolic={sorted(str(s) for s in stride_free) if stride_free else 'none'})"
+    logger.debug(
+        "  mem_strides=%s  (symbolic=%s)",
+        mem_strides,
+        sorted(str(s) for s in stride_free) if stride_free else "none",
     )
 
     div_fwd, div_bwd = get_divisibility_subs(constraints)
@@ -469,17 +479,17 @@ def compute_iv_stride_through_mapping(
         fwd_dict = dict(div_fwd)
         dim_exprs = [sympy.sympify(e).subs(fwd_dict) for e in dim_exprs]
         mem_strides = [sympy.sympify(s).subs(fwd_dict) for s in mem_strides]
-        print(f"  divisibility fwd subs: {fwd_dict}")
+        logger.debug("  divisibility fwd subs: %s", fwd_dict)
         for i, e in enumerate(dim_exprs):
-            print(f"  dim_after_div_subs[{i}] = {e}")
-        print(f"  mem_strides_after_div_subs={mem_strides}")
+            logger.debug("  dim_after_div_subs[%d] = %s", i, e)
+        logger.debug("  mem_strides_after_div_subs=%s", mem_strides)
     else:
         floor_subs = _infer_floor_to_exact(mem_strides)
         if floor_subs:
             dim_exprs = [sympy.sympify(e).subs(floor_subs) for e in dim_exprs]
-            print(f"  floor_to_exact subs (fallback): {floor_subs}")
+            logger.debug("  floor_to_exact subs (fallback): %s", floor_subs)
             for i, e in enumerate(dim_exprs):
-                print(f"  dim_after_subs[{i}] = {e}")
+                logger.debug("  dim_after_subs[%d] = %s", i, e)
 
     result: dict[sympy.Symbol, IndexExpr | list[IndexExpr]] = {}
 
@@ -488,9 +498,10 @@ def compute_iv_stride_through_mapping(
             dim_exprs, mem_strides, iters, iv_iter, concrete_coeff
         )
         if stride_or_cycle is None:
-            print(
-                f"  _probe_iv_stride returned None for IV {iv_sym}"
-                f" — no pattern detected, returning None for entire mapping"
+            logger.debug(
+                "  _probe_iv_stride returned None for IV %s"
+                " -- no pattern detected, returning None for entire mapping",
+                iv_sym,
             )
             return None
         result[iv_sym] = stride_or_cycle
@@ -506,7 +517,7 @@ def compute_iv_stride_through_mapping(
         result = {k: _bwd(v) for k, v in result.items()}
 
     for iv_sym, val in result.items():
-        print(f"  RESULT  {iv_sym} -> {val}")
+        logger.debug("  RESULT  %s -> %s", iv_sym, val)
 
     return result
 
@@ -582,7 +593,7 @@ def _probe_iv_stride(
     (repeating cycle), or ``None`` on failure.
     """
 
-    print(f"_probe_iv_stride  iv_iter={iv_iter}  coeff={concrete_coeff}")
+    logger.debug("_probe_iv_stride  iv_iter=%s  coeff=%s", iv_iter, concrete_coeff)
 
     # Step 1: linearize symbolically, then compute probe depth from the
     # flat expression's divisors.  Apply subs_idxc to iv_flat so the
@@ -599,7 +610,7 @@ def _probe_iv_stride(
     iv_flat = subs_idxc(iv_flat)
     probe_depth = _compute_probe_depth(iv_flat, concrete_coeff)
 
-    print(f"  probe_depth={probe_depth}")
+    logger.debug("  probe_depth=%d", probe_depth)
 
     # Step 2: evaluate P+1 concrete addresses.
     def _linearized_addr(iv_val: int) -> IndexExpr:
@@ -613,10 +624,13 @@ def _probe_iv_stride(
     for iv in range(probe_depth + 1):
         a = _linearized_addr(iv)
         if getattr(a, "free_symbols", set()):
-            print(
-                f"  addr[iv={iv}] = {a}  (free={a.free_symbols})"
-                f"\n  *** ERROR: address contains unresolved free symbols."
-                f"  Fix chained symbolic dependencies upstream."
+            logger.warning(
+                "  addr[iv=%d] = %s  (free=%s)"
+                " -- address contains unresolved free symbols."
+                " Fix chained symbolic dependencies upstream.",
+                iv,
+                a,
+                a.free_symbols,
             )
             return None
         addrs.append(int(a))
@@ -624,9 +638,9 @@ def _probe_iv_stride(
     diffs = [addrs[i + 1] - addrs[i] for i in range(probe_depth)]
 
     for i, a in enumerate(addrs):
-        print(f"  addr[iv={i}] = {a}")
+        logger.debug("  addr[iv=%d] = %s", i, a)
     for i, d in enumerate(diffs):
-        print(f"  diff[{i}] = {d}")
+        logger.debug("  diff[%d] = %s", i, d)
 
     if not diffs:
         return None
@@ -638,20 +652,24 @@ def _probe_iv_stride(
         if all(diffs[i] == diffs[i % cycle_len] for i in range(probe_depth)):
             cycle = [sympy.Integer(diffs[i]) for i in range(cycle_len)]
             if cycle_len == 1:
-                print(
-                    f"  -> CONSTANT stride = {cycle[0]}"
-                    f"  (concrete=True, probe_depth={probe_depth})"
+                logger.debug(
+                    "  -> CONSTANT stride = %s  (probe_depth=%d)",
+                    cycle[0],
+                    probe_depth,
                 )
                 return cycle[0]
-            print(
-                f"  -> CYCLIC stride (len={cycle_len}): {diffs[:cycle_len]}"
-                f"  (concrete=True, probe_depth={probe_depth})"
+            logger.debug(
+                "  -> CYCLIC stride (len=%d): %s  (probe_depth=%d)",
+                cycle_len,
+                diffs[:cycle_len],
+                probe_depth,
             )
             return cycle
 
-    print(
-        f"  -> FAILED: no constant or cyclic pattern in {probe_depth}"
-        f" diffs.  diffs={diffs}"
+    logger.debug(
+        "  -> FAILED: no constant or cyclic pattern in %d diffs.  diffs=%s",
+        probe_depth,
+        diffs,
     )
     return None
 
