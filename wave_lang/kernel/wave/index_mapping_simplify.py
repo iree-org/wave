@@ -29,6 +29,7 @@ from .utils.symbol_utils import (
     _split_sum_by_divisibility,
     IndexExpr,
     IndexSymbol,
+    simplify,
     subs_idxc,
 )
 
@@ -271,7 +272,7 @@ def simplify_index_mapping(
         # Check lo >= 0.
         lo_nonneg = lo.is_nonnegative if hasattr(lo, "is_nonnegative") else None
         if lo_nonneg is None:
-            lo_simplified = sympy.simplify(lo)
+            lo_simplified = simplify(lo)
             lo_nonneg = lo_simplified.is_nonnegative
         if not lo_nonneg:
             continue
@@ -292,7 +293,7 @@ def simplify_index_mapping(
         except (TypeError, ValueError):
             pass
 
-        diff = sympy.simplify(hi - divisor_lb)
+        diff = simplify(hi - divisor_lb)
         if diff.is_negative is not True:
             continue
 
