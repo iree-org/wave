@@ -63,39 +63,76 @@ _LAMBDIFY_MODULES = {
 ####################################################################
 
 
-@lru_cache(maxsize=1024)
-def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
+def expr_bounds(
+    expr: sympy.Expr,
+    symbol_bounds: dict[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]] | None = None,
+) -> tuple[sympy.Expr, sympy.Expr] | None:
     """Compute (lo, hi) bounds for a sympy expression via interval arithmetic.
 
-    Free symbols are assumed to be non-negative integers (hardware indices).
-    Returns (lo, hi) or None if bounds cannot be determined.
+    When *symbol_bounds* is provided, symbols found in the dict use those
+    concrete ranges instead of the default [0, oo) assumption.  This
+    enables tighter results for tile-level expressions with known iterator
+    ranges.
+
+    Free symbols not in *symbol_bounds* are assumed to be non-negative
+    integers (hardware indices).  Returns (lo, hi) or None if bounds
+    cannot be determined.
     """
+    hashable = (
+        tuple(sorted(symbol_bounds.items(), key=lambda kv: str(kv[0])))
+        if symbol_bounds
+        else None
+    )
+    return _expr_bounds_cached(expr, hashable)
+
+
+@lru_cache(maxsize=1024)
+def _expr_bounds_cached(
+    expr: sympy.Expr,
+    symbol_bounds_tuple: tuple | None = None,
+) -> tuple[sympy.Expr, sympy.Expr] | None:
+    """Cached implementation of expr_bounds.
+
+    Takes *symbol_bounds* as a hashable tuple of (symbol, (lo, hi)) pairs.
+    """
+    sb = dict(symbol_bounds_tuple) if symbol_bounds_tuple else None
+
     if expr.is_Integer or expr.is_Rational:
         return (expr, expr)
     if expr.is_Symbol:
+        if sb and expr in sb:
+            return sb[expr]
         return (sympy.Integer(0), sympy.oo) if expr.is_nonnegative else None
     if isinstance(expr, sympy.Mod):
         p, q = expr.args
         if q.is_positive and q.is_number:
-            p_bounds = expr_bounds(p)
-            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
-                return p_bounds
+            p_b = _expr_bounds_cached(p, symbol_bounds_tuple)
+            try:
+                if p_b and p_b[0] >= 0 and p_b[1] < q:
+                    return p_b
+            except TypeError:
+                pass  # Symbolic comparison -- fall through to default.
             return (sympy.Integer(0), q - 1)
+        # Symbolic modulus: Mod(p, q) is in [0, q-1] when q > 0.
+        # Use the upper bound of q as a conservative ceiling.
+        q_b = _expr_bounds_cached(q, symbol_bounds_tuple)
+        if q_b and q_b[0].is_positive:
+            return (sympy.Integer(0), q_b[1] - 1)
         return None
     if isinstance(expr, sympy.floor):
-        inner_bounds = expr_bounds(expr.args[0])
-        if inner_bounds:
-            return (sympy.floor(inner_bounds[0]), sympy.floor(inner_bounds[1]))
+        inner_b = _expr_bounds_cached(expr.args[0], symbol_bounds_tuple)
+        if inner_b:
+            return (sympy.floor(inner_b[0]), sympy.floor(inner_b[1]))
         return None
     if isinstance(expr, sympy.Add):
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [_expr_bounds_cached(a, symbol_bounds_tuple) for a in expr.args]
         if all(b is not None for b in bounds):
             return (sum(b[0] for b in bounds), sum(b[1] for b in bounds))
         return None
     if isinstance(expr, sympy.Mul):
         if not expr.args:
             return (sympy.Integer(1), sympy.Integer(1))
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [_expr_bounds_cached(a, symbol_bounds_tuple) for a in expr.args]
         if all(b is not None for b in bounds):
             # Bail out if any bound is infinite (0 * oo = NaN).
             if any(sympy.oo in b or -sympy.oo in b for b in bounds):
@@ -103,7 +140,10 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
             lo, hi = bounds[0]
             for b in bounds[1:]:
                 corners = [lo * b[0], lo * b[1], hi * b[0], hi * b[1]]
-                lo, hi = min(corners), max(corners)
+                try:
+                    lo, hi = min(corners), max(corners)
+                except TypeError:
+                    return None
             return (lo, hi)
         return None
     return None

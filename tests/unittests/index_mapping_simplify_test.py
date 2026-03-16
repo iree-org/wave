@@ -13,8 +13,8 @@ from wave_lang.kernel.lang.wave_types import IndexMapping
 from wave_lang.kernel.wave.index_mapping_simplify import (
     simplify_index_mapping,
     _get_iterator_bounds,
-    _expr_bounds_with_iters,
 )
+from wave_lang.kernel.wave.utils.symbol_utils import expr_bounds
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -115,7 +115,7 @@ class TestSimplifyIndexMapping:
         assert not changed
 
 
-class TestExprBoundsWithIters:
+class TestExprBoundsWithSymbolBounds:
     def test_iterator_bounds(self):
         i0 = IndexMapping.iterator(0)
         i1 = IndexMapping.iterator(1)
@@ -124,8 +124,8 @@ class TestExprBoundsWithIters:
             i1: (sympy.Integer(0), sympy.Integer(63)),
         }
 
-        assert _expr_bounds_with_iters(i0, bounds) == (0, 15)
-        assert _expr_bounds_with_iters(i1, bounds) == (0, 63)
+        assert expr_bounds(i0, bounds) == (0, 15)
+        assert expr_bounds(i1, bounds) == (0, 63)
 
     def test_within_nblk_bounds(self):
         """within_nblk for tile [0,15]x[0,63] is bounded to [0,1023]."""
@@ -139,7 +139,7 @@ class TestExprBoundsWithIters:
         within_nblk = (
             (k_it // 32) * 512 + ((k_it // 16) % 2) * 256 + (n_it % 16) * 16 + k_it % 16
         )
-        result = _expr_bounds_with_iters(within_nblk, bounds)
+        result = expr_bounds(within_nblk, bounds)
         assert result is not None
         assert result[0] == 0
         assert result[1] == 1023

@@ -26,6 +26,7 @@ from collections.abc import Sequence
 
 from ..lang.wave_types import IndexMapping
 from .utils.symbol_utils import (
+    expr_bounds,
     split_sum_by_divisibility,
     IndexExpr,
     IndexSymbol,
@@ -116,67 +117,6 @@ def get_tile_sizes_from_index(
         if isinstance(seq, IndexSequence):
             tile_sizes[dim] = seq.size
     return tile_sizes
-
-
-def _expr_bounds_with_iters(
-    expr: sympy.Expr,
-    iter_bounds: dict[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]],
-) -> tuple[sympy.Expr, sympy.Expr] | None:
-    """Compute [lo, hi] bounds for *expr* via structural interval arithmetic.
-
-    Unlike the module-level ``expr_bounds`` (which only handles sympy
-    assumptions), this function uses concrete iterator ranges from
-    *iter_bounds* to produce tighter results for tile-level expressions.
-    """
-    if expr.is_Integer or expr.is_Rational:
-        return (expr, expr)
-    if expr.is_Symbol:
-        if expr in iter_bounds:
-            return iter_bounds[expr]
-        return (sympy.Integer(0), sympy.oo) if expr.is_nonnegative else None
-
-    # For floor/Mod/Add/Mul, delegate to structural recursion.
-    if isinstance(expr, sympy.Mod):
-        p, q = expr.args
-        if q.is_positive and q.is_number:
-            return (sympy.Integer(0), q - 1)
-        # Symbolic modulus: Mod(p, q) is in [0, q-1] when q > 0.
-        # Use the upper bound of q as a conservative ceiling.
-        q_bounds = _expr_bounds_with_iters(q, iter_bounds)
-        if q_bounds and q_bounds[0].is_positive:
-            return (sympy.Integer(0), q_bounds[1] - 1)
-        return None
-
-    if isinstance(expr, sympy.floor):
-        inner_bounds = _expr_bounds_with_iters(expr.args[0], iter_bounds)
-        if inner_bounds:
-            return (sympy.floor(inner_bounds[0]), sympy.floor(inner_bounds[1]))
-        return None
-
-    if isinstance(expr, sympy.Add):
-        bounds = [_expr_bounds_with_iters(a, iter_bounds) for a in expr.args]
-        if all(b is not None for b in bounds):
-            return (sum(b[0] for b in bounds), sum(b[1] for b in bounds))
-        return None
-
-    if isinstance(expr, sympy.Mul):
-        if not expr.args:
-            return (sympy.Integer(1), sympy.Integer(1))
-        bounds = [_expr_bounds_with_iters(a, iter_bounds) for a in expr.args]
-        if all(b is not None for b in bounds):
-            if any(sympy.oo in b or -sympy.oo in b for b in bounds):
-                return None
-            lo, hi = bounds[0]
-            for b in bounds[1:]:
-                corners = [lo * b[0], lo * b[1], hi * b[0], hi * b[1]]
-                try:
-                    lo, hi = min(corners), max(corners)
-                except TypeError:
-                    return None
-            return (lo, hi)
-        return None
-
-    return None
 
 
 def _find_floordiv_mod_pairs(
@@ -276,7 +216,7 @@ def simplify_index_mapping(
 
     Returns (new_mapping, changed).
     """
-    iter_bounds = _get_iterator_bounds(mapping, tile_sizes)
+    symbol_bounds = _get_iterator_bounds(mapping, tile_sizes)
     sym_lower_bounds = _get_symbol_lower_bounds(constraints)
     input_mapping = dict(mapping.input_mapping)
     changed = False
@@ -292,7 +232,7 @@ def simplify_index_mapping(
             quotient, remainder = split
 
         # Step 2: Check if remainder is bounded in [0, D).
-        rem_bounds = _expr_bounds_with_iters(remainder, iter_bounds)
+        rem_bounds = expr_bounds(remainder, symbol_bounds)
         if rem_bounds is None:
             continue
 
