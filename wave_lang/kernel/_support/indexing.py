@@ -83,6 +83,62 @@ def subs_idxc(
     return IndexingContext.current().subs_expr(input)
 
 
+def _resolve_chained_subs(
+    subs: dict[IndexSymbol, int | IndexSymbol],
+) -> dict[IndexSymbol, int | IndexSymbol]:
+    """Resolve chained dependencies in a substitution dictionary.
+
+    When a substitution dict has ``{K: 8192, K_SCALE: K // 32}``, a single
+    simultaneous substitution pass replaces ``K_SCALE`` with ``K // 32``
+    but leaves the ``K`` inside the replacement unresolved.
+
+    This function processes entries in topological (dependency) order:
+    entries whose values don't reference other keys are resolved first,
+    then their concrete values are substituted into the remaining entries.
+
+    Only the values are updated; the keys (symbols being defined) are
+    never modified.
+    """
+    all_keys = set(subs.keys())
+    resolved: dict = {}
+    pending = dict(subs)
+
+    while pending:
+        ready = []
+        for key, val in pending.items():
+            if not isinstance(val, sympy.Basic):
+                ready.append(key)
+                continue
+            deps = (val.free_symbols & all_keys) - {key} - set(resolved.keys())
+            if not deps:
+                ready.append(key)
+
+        if not ready:
+            break
+
+        for key in ready:
+            val = pending.pop(key)
+            if isinstance(val, sympy.Basic) and resolved:
+                val = piecewise_aware_subs(val, resolved)
+            resolved[key] = val
+
+    if pending:
+        import warnings
+
+        cycle_keys = sorted(str(k) for k in pending.keys())
+        warnings.warn(
+            f"_resolve_chained_subs: circular dependency among"
+            f" {cycle_keys} — substitution may be incomplete",
+            stacklevel=2,
+        )
+        for key, val in pending.items():
+            if isinstance(val, sympy.Basic) and resolved:
+                val = piecewise_aware_subs(val, resolved)
+            resolved[key] = val
+
+    return resolved
+
+
 def is_literal(input: IndexSymbol | int) -> bool:
     """
     Check if input is a literal number value.
@@ -153,7 +209,7 @@ class IndexingContext:
         )
 
     def set_subs(self, subs: dict[IndexSymbol, int | IndexSymbol]):
-        self.subs = copy.deepcopy(subs)
+        self.subs = _resolve_chained_subs(copy.deepcopy(subs))
         self.cached_subs = {}
 
     def subs_expr(self, expr: IndexExpr) -> IndexExpr:

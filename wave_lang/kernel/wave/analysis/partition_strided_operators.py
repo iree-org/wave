@@ -805,6 +805,9 @@ def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=N
         wide_read.vector_shapes = deepcopy(tag_source.vector_shapes)
     if mask_expr is not None:
         wide_read.precomputed_mask_expr = mask_expr
+    anchor_iv_stride = anchor_custom.fx_node.meta.get("iv_stride")
+    if anchor_iv_stride is not None:
+        wide_read.meta["iv_stride"] = anchor_iv_stride
     propagate_tag(tag_source, wide_read)
     return wide_read
 
