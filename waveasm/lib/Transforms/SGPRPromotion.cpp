@@ -26,6 +26,7 @@
 #include "waveasm/Transforms/Passes.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/Debug.h"
 
@@ -52,6 +53,28 @@ static bool allOperandsScalar(Operation *op) {
                       [](Value v) { return isScalarOrImm(v); });
 }
 
+/// Check whether any user of a value is a region-bearing op (loop, if).
+/// Promoting such values would create a type mismatch between the init
+/// operand (now SGPR) and the region block argument (still VGPR/AGPR).
+static bool hasRegionBearingUser(Value v) {
+  for (Operation *user : v.getUsers()) {
+    if (user->getNumRegions() > 0)
+      return true;
+  }
+  return false;
+}
+
+/// Check whether a value was produced by an op that is truly Pure
+/// (no SCC side effects).  Only these are safe to expose to LICM
+/// after readfirstlane elimination.  S_MUL_I32 is Pure; S_AND_B32,
+/// S_LSHL_B32 etc. set SCC and are not.
+static bool isProducedByPureOp(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return false;
+  return isPure(def);
+}
+
 /// Materialize an operand for SALU use.  If the value is an immediate,
 /// emit S_MOV_B32 to place it in an SGPR (SALU src0 must be SGPR;
 /// src1 can be SGPR or inline constant, but literals need S_MOV).
@@ -76,18 +99,43 @@ struct SGPRPromotionPass
 
     getOperation()->walk([&](Block *block) {
       for (Operation &op : llvm::make_early_inc_range(*block)) {
-        // --- V_READFIRSTLANE_B32 elimination ---
+        // --- V_READFIRSTLANE_B32 with SGPR source ---
+        // When an op feeding readfirstlane was promoted to SALU, the
+        // source becomes SGPR and readfirstlane is semantically an
+        // identity.  We can eliminate it IF the defining op is truly
+        // Pure (doesn't set SCC) -- otherwise LICM might hoist the
+        // SCC-setting op across a live SCC range, corrupting loop
+        // control flow.  For non-Pure sources, insert V_MOV_B32 to
+        // satisfy readfirstlane's VGPR operand constraint.
         if (auto rfl = dyn_cast<V_READFIRSTLANE_B32>(&op)) {
           if (isSGPRType(rfl.getSrc().getType())) {
-            rfl.getDst().replaceAllUsesWith(rfl.getSrc());
-            op.erase();
-            ++numReadfirstlaneElim;
+            if (isProducedByPureOp(rfl.getSrc())) {
+              rfl.getDst().replaceAllUsesWith(rfl.getSrc());
+              op.erase();
+              ++numReadfirstlaneElim;
+            } else {
+              auto vregTy = VRegType::get(ctx, 1, 1);
+              OpBuilder rflBuilder(&op);
+              Value vgprCopy = V_MOV_B32::create(rflBuilder, op.getLoc(),
+                                                 vregTy, rfl.getSrc());
+              op.setOperand(0, vgprCopy);
+            }
           }
           continue;
         }
 
         // --- VALU → SALU promotion ---
         if (!allOperandsScalar(&op))
+          continue;
+
+        // Don't promote if the result feeds a region-bearing op (loop, if)
+        // as an init operand -- the region block args have fixed types and
+        // changing the init from VGPR to SGPR would cause a type mismatch.
+        if (op.getNumResults() > 0 && hasRegionBearingUser(op.getResult(0)))
+          continue;
+
+        // Don't promote if any result is not a simple VGPR (skip AGPR, etc.)
+        if (op.getNumResults() > 0 && !isVGPRType(op.getResult(0).getType()))
           continue;
 
         auto sregType = SRegType::get(ctx, 1, 1);
@@ -191,12 +239,16 @@ struct SGPRPromotionPass
                                                                  s1);
                                      });
         } else if (auto movOp = dyn_cast<V_MOV_B32>(&op)) {
-          Value s0 = ensureSGPR(movOp.getSrc(), builder, loc, sregType);
-          Value result = S_MOV_B32::create(builder, loc, sregType, s0);
-          op.getResult(0).replaceAllUsesWith(result);
-          op.erase();
-          ++numPromoted;
-          promoted = true;
+          // V_MOV_B32 can produce AGPR results (for accumulator init).
+          // Only promote to S_MOV_B32 when the result is a VGPR.
+          if (isVGPRType(movOp.getDst().getType())) {
+            Value s0 = ensureSGPR(movOp.getSrc(), builder, loc, sregType);
+            Value result = S_MOV_B32::create(builder, loc, sregType, s0);
+            op.getResult(0).replaceAllUsesWith(result);
+            op.erase();
+            ++numPromoted;
+            promoted = true;
+          }
         } else if (auto lshlOrOp = dyn_cast<V_LSHL_OR_B32>(&op)) {
           // Decompose V_LSHL_OR_B32(src, shift, orend) into
           // S_LSHL_B32 + S_OR_B32 (no ternary SALU equivalent).
@@ -223,10 +275,76 @@ struct SGPRPromotionPass
       }
     });
 
+    // --- Post-promotion fixup: insert V_MOV_B32 for SGPR values used ---
+    // --- by VALU ops that can't accept SGPR in that operand position ---
+    // Only run fixup when promotions actually happened.
+    unsigned numFixups = 0;
+    if (numPromoted == 0)
+      return;
+    auto vregType = VRegType::get(ctx, 1, 1);
+
+    getOperation()->walk([&](Operation *valuOp) {
+      // Only fix VALU ops (ops that produce VGPR results or have no results
+      // but are known VALU instructions).
+      bool isVALU = false;
+      if (valuOp->getNumResults() > 0 &&
+          isVGPRType(valuOp->getResult(0).getType()))
+        isVALU = true;
+      // V_CNDMASK_B32 produces VGPR
+      if (isa<V_CNDMASK_B32>(valuOp))
+        isVALU = true;
+      if (!isVALU)
+        return;
+
+      // V_CNDMASK_B32: src1 (index 1) MUST be VGPR in VOP2 encoding.
+      // src0 (index 0) CAN be SGPR or inline constant.
+      // Also enforce: at most one SGPR/constant-bus source among src0/src1.
+      if (auto cndOp = dyn_cast<V_CNDMASK_B32>(valuOp)) {
+        Value src1 = cndOp.getSrc1();
+        if (isSGPRType(src1.getType())) {
+          llvm::errs() << "SGPR-FIXUP-CNDMASK: at ";
+          valuOp->getLoc().print(llvm::errs());
+          llvm::errs() << "\n";
+          OpBuilder fixBuilder(valuOp);
+          Value copy = V_MOV_B32::create(fixBuilder, valuOp->getLoc(),
+                                         vregType, src1);
+          valuOp->setOperand(1, copy);
+          ++numFixups;
+        }
+        return;
+      }
+
+      // General VALU constant bus restriction: at most one SGPR source.
+      // GFX9 VOP3 supports multiple SGPRs from the SAME pair, but different
+      // SGPR pairs violate the restriction.  Conservatively copy extras.
+      unsigned sgrpCount = 0;
+      for (unsigned i = 0; i < valuOp->getNumOperands(); ++i) {
+        if (isSGPRType(valuOp->getOperand(i).getType()))
+          ++sgrpCount;
+      }
+      if (sgrpCount > 1) {
+        bool seenFirst = false;
+        for (unsigned i = 0; i < valuOp->getNumOperands(); ++i) {
+          if (isSGPRType(valuOp->getOperand(i).getType())) {
+            if (!seenFirst) {
+              seenFirst = true;
+              continue;
+            }
+            OpBuilder fixBuilder(valuOp);
+            Value copy = V_MOV_B32::create(fixBuilder, valuOp->getLoc(),
+                                           vregType, valuOp->getOperand(i));
+            valuOp->setOperand(i, copy);
+            ++numFixups;
+          }
+        }
+      }
+    });
+
     LLVM_DEBUG(llvm::dbgs() << "SGPRPromotion: promoted " << numPromoted
                             << " VALU ops to SALU, eliminated "
                             << numReadfirstlaneElim
-                            << " V_READFIRSTLANE_B32 ops\n");
+                            << " V_READFIRSTLANE_B32 ops, inserted "
+                            << numFixups << " SGPR->VGPR fixup copies\n");
   }
 };
 

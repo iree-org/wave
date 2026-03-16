@@ -1308,6 +1308,7 @@ def _generate_asm_code(mb, options):
     try:
         base_passes = [
             "--mlir-cse",
+            "--waveasm-sgpr-promotion",
             "--waveasm-scoped-cse",
             "--waveasm-peephole",
             "--waveasm-scale-pack-elimination",

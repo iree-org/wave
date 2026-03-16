@@ -91,7 +91,20 @@ class SALUUnaryOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Binary: dst = op(src0, src1)
+// Most SALU ops set SCC as a side effect (SCC = result != 0).
+// They carry ArithmeticOp for CSE within a scope but NOT Pure,
+// since hoisting them across SCC-live ranges (e.g. via LICM)
+// could clobber SCC between an S_CMP and an S_CBRANCH.
 class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp], traits)> {
+  let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_AnySGPR:$dst);
+  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst)";
+}
+
+// SALU Binary that does NOT set SCC (safe to hoist / mark Pure).
+// Only s_mul_i32 and s_mul_hi_{u,i}32 fall into this category.
+class SALUBinaryPureOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
   let results = (outs WaveASM_AnySGPR:$dst);
@@ -727,10 +740,10 @@ def WaveASM_S_ADDC_U32 : SALUBinaryWithCarryOp<"s_addc_u32">;
 def WaveASM_S_ADD_I32 : SALUBinaryWithCarryOp<"s_add_i32">;
 def WaveASM_S_SUB_U32 : SALUBinaryWithCarryOp<"s_sub_u32">;
 def WaveASM_S_SUB_I32 : SALUBinaryWithCarryOp<"s_sub_i32">;
-// Multiplication does not set SCC
-def WaveASM_S_MUL_I32 : SALUBinaryOp<"s_mul_i32">;
-def WaveASM_S_MUL_HI_U32 : SALUBinaryOp<"s_mul_hi_u32">;
-def WaveASM_S_MUL_HI_I32 : SALUBinaryOp<"s_mul_hi_i32">;
+// Multiplication does not set SCC -- safe to mark Pure.
+def WaveASM_S_MUL_I32 : SALUBinaryPureOp<"s_mul_i32">;
+def WaveASM_S_MUL_HI_U32 : SALUBinaryPureOp<"s_mul_hi_u32">;
+def WaveASM_S_MUL_HI_I32 : SALUBinaryPureOp<"s_mul_hi_i32">;
 
 // Bitwise
 def WaveASM_S_AND_B32 : SALUBinaryOp<"s_and_b32">;
