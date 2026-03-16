@@ -1865,3 +1865,35 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %0 : vector<4xf32>
   }
 }
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_bitcast_i8_to_f4
+  func.func @lower_bitcast_i8_to_f4() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_i8 = arith.constant 0 : i8
+    // CHECK: %[[SRC:.*]] = arith.constant dense<0> : vector<16xi8>
+    %src = wave.register %cst_i8 : vector<16xi8>
+
+    // CHECK-NOT: wave.bitcast
+    // CHECK: vector.bitcast %[[SRC]] : vector<16xi8> to vector<32xf4E2M1FN>
+    %res = wave.bitcast %src : vector<16xi8> to vector<32xf4E2M1FN>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_bitcast_i8_to_f8e8m0
+  func.func @lower_bitcast_i8_to_f8e8m0() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_i8 = arith.constant 0 : i8
+    // CHECK: %[[SRC:.*]] = arith.constant dense<0> : vector<1xi8>
+    %src = wave.register %cst_i8 : vector<1xi8>
+
+    // CHECK-NOT: wave.bitcast
+    // CHECK: vector.bitcast %[[SRC]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    %res = wave.bitcast %src : vector<1xi8> to vector<1xf8E8M0FNU>
+    return
+  }
+}

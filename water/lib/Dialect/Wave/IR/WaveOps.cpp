@@ -2613,6 +2613,358 @@ LogicalResult wave::CastOp::verify() {
   return success();
 }
 
+/// Return true if the hyperparameter for \p sym is a WaveExprListAttr.
+static bool isExprListDim(DictionaryAttr mapping, wave::WaveSymbolAttr sym) {
+  Attribute attr = mapping.get(sym.getName());
+  return llvm::isa_and_nonnull<wave::WaveExprListAttr>(attr);
+}
+
+/// Return the indices of all scaled dimensions in a bitcast.  A scaled
+/// dimension is one whose symbol maps to a WaveExprListAttr (a derived
+/// expression) in the hyperparameters rather than a plain IntegerAttr.
+/// Returns an empty vector when no hyperparameters are available or when no
+/// expr_list dimension is found.
+static SmallVector<unsigned> getScaledDimensions(wave::BitcastOp op) {
+  wave::WaveHyperparameterAttr hyper =
+      wave::getHyperparameters(op.getOperation());
+  if (!hyper)
+    return {};
+  auto srcType =
+      llvm::dyn_cast<wave::WaveTensorType>(op.getValueToCast().getType());
+  auto dstType = llvm::dyn_cast<wave::WaveTensorType>(op.getResult().getType());
+  if (!srcType || !dstType)
+    return {};
+  ArrayRef<wave::WaveSymbolAttr> srcShape = srcType.getShape();
+  ArrayRef<wave::WaveSymbolAttr> dstShape = dstType.getShape();
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  SmallVector<unsigned> scaledDims;
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      scaledDims.push_back(i);
+  }
+  return scaledDims;
+}
+
+/// Verify that the scaled dimension of a bitcast is consistent with the
+/// element bitwidth ratio.  The caller must have identified a scaled dimension
+/// via getScaledDimensions(), which requires hyperparameters.
+/// \p scaledDim is the dimension index that carries the scaling.
+/// Returns success when the constraint holds.
+static LogicalResult verifyBitcastScaledDim(wave::WaveHyperparameterAttr hyper,
+                                            wave::WaveTensorType srcType,
+                                            wave::WaveTensorType dstType,
+                                            unsigned srcBits, unsigned dstBits,
+                                            unsigned scaledDim,
+                                            llvm::raw_ostream &errs) {
+  unsigned maxBW = std::max(srcBits, dstBits);
+  unsigned minBW = std::min(srcBits, dstBits);
+  if (maxBW % minBW != 0) {
+    errs << "larger element bitwidth (" << maxBW
+         << ") must be evenly divisible by the smaller (" << minBW << ")";
+    return failure();
+  }
+  if (srcBits == dstBits)
+    return success();
+
+  int64_t srcDimVal =
+      hyper.getKnownSymbolValue(srcType.getShape()[scaledDim].getName());
+  int64_t dstDimVal =
+      hyper.getKnownSymbolValue(dstType.getShape()[scaledDim].getName());
+  if (srcDimVal * srcBits != dstDimVal * dstBits) {
+    errs << "bitcast scaled dimension #" << scaledDim << " mismatch: source ("
+         << srcDimVal << ") * " << srcBits << " bits != result (" << dstDimVal
+         << ") * " << dstBits << " bits";
+    return failure();
+  }
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// BitcastOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::BitcastOp::verify() {
+  Type valueType = getValueToCast().getType();
+  Type resultType = getResult().getType();
+
+  wave::WaveTensorType valueTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(valueType);
+  wave::WaveTensorType resultTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(resultType);
+
+  if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
+      resultTensor.getFullySpecified()) {
+    size_t rank = valueTensor.getRank();
+    if (rank == 0)
+      return emitOpError("rank-0 wave tensors are not supported in bitcast");
+
+    if (rank != resultTensor.getRank())
+      return emitOpError("rank of input (")
+             << rank << ") must match rank of result ("
+             << resultTensor.getRank() << ")";
+
+    unsigned srcBW = valueTensor.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBW = resultTensor.getElementType().getIntOrFloatBitWidth();
+
+    // Detect which dimension is scaled.  The scaled dimension is the one
+    // backed by a WaveExprListAttr in the hyperparameters.
+    SmallVector<unsigned> scaledDims = getScaledDimensions(*this);
+    if (scaledDims.size() > 1)
+      return emitOpError("expected at most one scaled dimension (backed by "
+                         "an expr_list hyperparameter), but found ")
+             << scaledDims.size();
+    std::optional<unsigned> scaledDim =
+        scaledDims.empty() ? std::nullopt : std::optional(scaledDims[0]);
+
+    // Verify that all non-scaled dimensions match.
+    SmallVector<int> srcNonScaled, dstNonScaled;
+    for (unsigned i = 0; i < rank; ++i) {
+      if (scaledDim && i == *scaledDim)
+        continue;
+      srcNonScaled.push_back(i);
+      dstNonScaled.push_back(i);
+    }
+    if (failed(wave::detail::verifyTypesMatchingDimensions(
+            getLoc(), "input", valueTensor, srcNonScaled, "result",
+            resultTensor, dstNonScaled)))
+      return failure();
+
+    if (scaledDim) {
+      std::string errMsg;
+      llvm::raw_string_ostream errStream(errMsg);
+      wave::WaveHyperparameterAttr hyper =
+          wave::getHyperparameters(getOperation());
+      if (failed(verifyBitcastScaledDim(hyper, valueTensor, resultTensor, srcBW,
+                                        dstBW, *scaledDim, errStream)))
+        return emitOpError(errMsg);
+    } else if (srcBW != dstBW) {
+      return emitOpError("element bitwidths differ (")
+             << srcBW << " vs " << dstBW
+             << ") but no scaled dimension was found";
+    }
+
+    return success();
+  }
+
+  VectorType valueVec = llvm::dyn_cast<VectorType>(valueType);
+  VectorType resultVec = llvm::dyn_cast<VectorType>(resultType);
+  if (valueVec && resultVec) {
+    unsigned srcBitWidth = valueVec.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBitWidth = resultVec.getElementType().getIntOrFloatBitWidth();
+    unsigned maxBW = std::max(srcBitWidth, dstBitWidth);
+    unsigned minBW = std::min(srcBitWidth, dstBitWidth);
+    if (maxBW % minBW != 0)
+      return emitOpError("larger element bitwidth (")
+             << maxBW << ") must be evenly divisible by the smaller (" << minBW
+             << ")";
+    int64_t srcElements = valueVec.getNumElements();
+    int64_t dstElements = resultVec.getNumElements();
+    if (srcElements * srcBitWidth != dstElements * dstBitWidth)
+      return emitOpError("total bit count must be preserved");
+  }
+
+  return success();
+}
+
+// Remap the index expression lattice for bitcast: non-scaled dimensions pass
+// through as identity, and the scaled dimension gets its symbol renamed and its
+// step (and start/stride if present) scaled by the element bitwidth ratio.
+// \p scaledDim is the index of the dimension that carries the scaling.
+static IndexExprsLatticeStorage
+scaleBitcastIndexExprs(const IndexExprsLatticeStorage &inputLattice,
+                       ArrayRef<wave::WaveSymbolAttr> fromShape,
+                       ArrayRef<wave::WaveSymbolAttr> toShape,
+                       unsigned fromBits, unsigned toBits, unsigned scaledDim,
+                       MLIRContext *ctx) {
+  if (inputLattice.isBottom() || inputLattice.isTop())
+    return inputLattice;
+
+  assert(fromShape.size() == toShape.size() &&
+         "bitcast shapes must have equal rank");
+
+  DictionaryAttr inputDict = inputLattice.getConcreteValue();
+
+  unsigned ratio =
+      (fromBits > toBits) ? (fromBits / toBits) : (toBits / fromBits);
+  bool scaleUp = fromBits > toBits;
+
+  SmallVector<NamedAttribute> newMappings;
+  newMappings.reserve(inputDict.size());
+
+  WaveSymbolAttr fromScaledSym = fromShape[scaledDim];
+  WaveSymbolAttr toScaledSym = toShape[scaledDim];
+
+  for (NamedAttribute namedAttr : inputDict) {
+    StringRef symName = namedAttr.getName().getValue();
+    auto mapping = llvm::cast<WaveIndexMappingAttr>(namedAttr.getValue());
+
+    // Non-scaled dimensions: pass through unchanged.
+    if (symName != fromScaledSym.getName()) {
+      newMappings.push_back(namedAttr);
+      continue;
+    }
+
+    // Scaled dimension: rename the symbol key and scale the step by the
+    // bitwidth ratio.  If the step has no thread dimensions (thread-independent
+    // initialization), skip this lattice to avoid producing a zero-step mapping
+    // that would conflict with a real propagated value.
+    AffineMap stepMap = mapping.getStep();
+    if (!stepMap || (stepMap.getNumDims() == 0 && stepMap.getNumSymbols() == 0))
+      return IndexExprsLatticeStorage::bottom();
+
+    auto scaleMap = [&](AffineMap map) -> AffineMap {
+      AffineExpr scaled =
+          scaleUp ? map.getResult(0) * ratio : map.getResult(0).floorDiv(ratio);
+      return AffineMap::get(map.getNumDims(), map.getNumSymbols(), scaled, ctx);
+    };
+
+    AffineMap newStep = scaleMap(stepMap);
+    auto newMapping =
+        WaveIndexMappingAttr::get(ctx, mapping.getSymbols(), mapping.getStart(),
+                                  newStep, mapping.getStride());
+
+    newMappings.push_back(NamedAttribute(
+        StringAttr::get(ctx, toScaledSym.getName()), newMapping));
+  }
+
+  if (newMappings.empty())
+    return IndexExprsLatticeStorage::bottom();
+
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, newMappings),
+                                  inputLattice.getPriorities(),
+                                  inputLattice.getVectorShape());
+}
+
+// Shared propagation logic for BitcastOp index expressions in both directions.
+// \p fromExprs is the source lattice, \p toExprs is the destination to update.
+// \p fromType / \p toType are the wave tensor types on the respective sides.
+// \p fromBits / \p toBits are the element bitwidths on the respective sides.
+static llvm::FailureOr<ChangeResult> propagateBitcastIndexExprs(
+    wave::BitcastOp op, llvm::ArrayRef<IndexExprsLatticeStorage> fromExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> toExprs,
+    WaveTensorType fromType, WaveTensorType toType, unsigned fromBits,
+    unsigned toBits, StringRef fromName, StringRef toName, mlir::Value toValue,
+    wave::EmitErrorFn emitError) {
+  if (!fromType || !fromType.getFullySpecified() || !toType ||
+      !toType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (fromBits == toBits)
+    return wave::detail::identityIndexExprsPropagate(
+        fromExprs, toExprs, toValue, fromName, toName, emitError);
+
+  // Detect which dimension is scaled using the hyperparameters.
+  SmallVector<unsigned> scaledDims = getScaledDimensions(op);
+  std::optional<unsigned> scaledDim =
+      scaledDims.empty() ? std::nullopt : std::optional(scaledDims[0]);
+
+  if (!scaledDim) {
+    InFlightDiagnostic diag = emitError()
+                              << "could not determine scaled dimension for "
+                                 "BitcastOp with differing bitwidths";
+    return diag;
+  }
+
+  IndexExprsLatticeStorage scaled = scaleBitcastIndexExprs(
+      fromExprs[0], fromType.getShape(), toType.getShape(), fromBits, toBits,
+      *scaledDim, op.getContext());
+
+  IndexExprsLatticeStorage newLattice =
+      IndexExprsLatticeStorage::join(toExprs[0], scaled);
+
+  if (newLattice.isTop() && !toExprs[0].isTop() && !scaled.isTop()) {
+    InFlightDiagnostic diag = emitError()
+                              << "conflict when propagating " << fromName
+                              << " to " << toName << " lattice in BitcastOp";
+    diag.attachNote() << toName << " lattice: " << toExprs[0];
+    diag.attachNote() << fromName << " lattice: " << fromExprs[0];
+    return diag;
+  }
+
+  return updateIfChanged(toExprs[0], newLattice);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(*this, operandExprs, resultExprs, inputType,
+                                    resultType, srcBits, dstBits, "operand",
+                                    "result", getResult(), emitError);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(
+      *this, resultExprs, operandExprs, resultType, inputType, dstBits, srcBits,
+      "result", "operand", getValueToCast(), emitError);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (operandElements[getValueToCastMutable().getOperandNumber()].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned srcEpt = operandElements[0].getValue();
+  unsigned dstEpt = srcEpt * srcBitWidth / dstBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(dstEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      resultElements, "computed from bitcast ratio", "", "result", errs);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (resultElements[0].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned dstEpt = resultElements[0].getValue();
+  unsigned srcEpt = dstEpt * dstBitWidth / srcBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(srcEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      operandElements, "computed from bitcast ratio", "", "input", errs);
+}
+
 //-----------------------------------------------------------------------------
 // ReciprocalOp
 //-----------------------------------------------------------------------------

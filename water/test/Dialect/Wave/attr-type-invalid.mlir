@@ -173,3 +173,58 @@ water_test.wave_symbol_mapping {index_mapping = #wave.symbol_mapping<@M = #wave.
 water_test.wave_symbol_mapping {three_results_mapping = #wave.symbol_mapping<
   @M = #wave.expr_list<[#wave.symbol<"A">] -> (A)>
 >}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" must be a single-result expr_list, but has 2 results}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2, K ceildiv 4)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list may only contain wave symbols: #wave.index_symbol<T0>}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.index_symbol<T0>] -> (T0 ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" references symbol #wave.symbol<"Z"> not defined in the same hyperparameters mapping}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"Z">] -> (Z ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list must be a ceiling division expression}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list must be a ceiling division expression}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, BLOCK_K = 32 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">, #wave.symbol<"BLOCK_K">] -> (K ceildiv 2 + BLOCK_K ceildiv 4)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list dividend must be a symbol}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, BLOCK_K = 32 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">, #wave.symbol<"BLOCK_K">] -> ((K + BLOCK_K) ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list divisor must be a constant}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, BLOCK_K = 32 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">, #wave.symbol<"BLOCK_K">] -> (K ceildiv BLOCK_K)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" has dividend (128) that is not evenly divisible by the divisor (3)}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 3)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: B, A}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{A = #wave.expr_list<[#wave.symbol<"B">] -> (B ceildiv 2)>, B = #wave.expr_list<[#wave.symbol<"A">] -> (A ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: Z, Y, X}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{X = #wave.expr_list<[#wave.symbol<"Y">] -> (Y ceildiv 2)>, Y = #wave.expr_list<[#wave.symbol<"Z">] -> (Z ceildiv 2)>, Z = #wave.expr_list<[#wave.symbol<"X">] -> (X ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: A}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{A = #wave.expr_list<[#wave.symbol<"A">] -> (A ceildiv 2)>}>} {}

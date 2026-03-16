@@ -486,14 +486,77 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
 std::optional<int64_t>
 WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   DictionaryAttr mapping = getMapping();
-  Attribute attr = mapping.get(symbolName);
-  if (!attr)
+  llvm::StringMap<int64_t> resolved;
+
+  // Iterative worklist: each entry is a symbol name still to resolve.
+  // When we pop a name whose dependencies are all resolved we can evaluate
+  // its expression; otherwise we push it back followed by its unresolved
+  // dependencies (topological-sort style).
+  llvm::SmallVector<StringRef> worklist({symbolName});
+
+  while (!worklist.empty()) {
+    StringRef name = worklist.back();
+
+    if (resolved.contains(name)) {
+      worklist.pop_back();
+      continue;
+    }
+
+    Attribute attr = mapping.get(name);
+    if (!attr)
+      return std::nullopt;
+
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+      resolved[name] = intAttr.getInt();
+      worklist.pop_back();
+      continue;
+    }
+
+    auto exprList = cast<WaveExprListAttr>(attr);
+
+    // Push unresolved dependencies so they get processed first.
+    bool pushedDeps = false;
+    for (Attribute symAttr : exprList.getSymbols()) {
+      StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
+      if (!resolved.contains(dep)) {
+        worklist.push_back(dep);
+        pushedDeps = true;
+      }
+    }
+
+    if (pushedDeps)
+      continue;
+
+    // All deps resolved -- evaluate the affine expression.
+    AffineMap map = exprList.getMap();
+    llvm::SmallVector<AffineExpr> replacements;
+    replacements.reserve(map.getNumSymbols());
+    for (Attribute symAttr : exprList.getSymbols()) {
+      int64_t val = resolved[cast<WaveSymbolAttr>(symAttr).getName()];
+      replacements.push_back(getAffineConstantExpr(val, mapping.getContext()));
+    }
+
+    AffineExpr result = map.getResult(0).replaceSymbols(replacements);
+    result = simplifyAffineExpr(result, map.getNumDims(), map.getNumSymbols());
+    auto constExpr = dyn_cast<AffineConstantExpr>(result);
+    if (!constExpr)
+      return std::nullopt;
+
+    resolved[name] = constExpr.getValue();
+    worklist.pop_back();
+  }
+
+  auto it = resolved.find(symbolName);
+  if (it == resolved.end())
     return std::nullopt;
+  return it->second;
+}
 
-  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
-    return intAttr.getInt();
-
-  return std::nullopt;
+int64_t
+WaveHyperparameterAttr::getKnownSymbolValue(StringRef symbolName) const {
+  std::optional<int64_t> value = getSymbolValue(symbolName);
+  assert(value && "expected symbol to exist and be resolvable");
+  return *value;
 }
 
 bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {

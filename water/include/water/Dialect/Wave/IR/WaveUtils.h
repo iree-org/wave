@@ -69,6 +69,13 @@ void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                   mlir::AffineMap map, bool inverse,
                   llvm::SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape);
 
+/// Verify that derived hyperparameter symbols (expr_list values) form a DAG.
+/// Returns success if there are no cycles, or emits a diagnostic naming the
+/// cycle participants.
+llvm::LogicalResult verifyHyperparameterAcyclicity(
+    wave::WaveHyperparameterAttr hyperparams, mlir::MLIRContext *ctx,
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError);
+
 } // namespace wave
 
 namespace llvm {

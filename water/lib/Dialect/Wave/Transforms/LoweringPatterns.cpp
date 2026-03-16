@@ -697,6 +697,35 @@ public:
   }
 };
 
+//===----------------------------------------------------------------------===//
+// BitcastOp
+//===----------------------------------------------------------------------===//
+
+class BitcastOpLoweringPattern : public OpConversionPattern<wave::BitcastOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::BitcastOp op, wave::BitcastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value input = adaptor.getValueToCast();
+    Type dstType = getTypeConverter()->convertType(op.getResult().getType());
+
+    if (!dstType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    auto dstVecType = dyn_cast<VectorType>(dstType);
+    if (!dstVecType)
+      return rewriter.notifyMatchFailure(
+          op, "expected vector type for bitcast lowering");
+
+    auto bitcast =
+        vector::BitCastOp::create(rewriter, op.getLoc(), dstVecType, input);
+    rewriter.replaceOp(op, bitcast);
+    return success();
+  }
+};
+
 /// Evaluate a Wave expression list to constant integer values.
 /// Since the Wave dialect verifier ensures expressions contain no symbols,
 /// this only handles pure constant expressions.
@@ -1224,6 +1253,7 @@ void wave::populateWaveMiscellaneousOpsLoweringPatterns(
   patterns.add<
       // clang-format off
       ApplyExprOpLoweringPattern,
+      BitcastOpLoweringPattern,
       BroadcastOpLoweringPattern,
       CastOpLoweringPattern,
       ExtractOpLoweringPattern,
