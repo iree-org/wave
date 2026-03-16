@@ -6,7 +6,6 @@
 """Tests for IV stride extraction, mem_simplify, probe depth, and chained subs."""
 
 import warnings
-from math import gcd
 
 import pytest
 import sympy
@@ -248,7 +247,7 @@ class TestProbeIvStride:
         dim_exprs = [i0, i1]
         strides = [sympy.Integer(16), sympy.Integer(1)]
         iters = {i0: 0, i1: 1}
-        with IndexingContext() as idxc:
+        with IndexingContext():
             result = _probe_iv_stride(
                 dim_exprs, strides, iters, iv_iter=i0, concrete_coeff=1
             )
@@ -261,7 +260,7 @@ class TestProbeIvStride:
         dim_exprs = [i0, i1]
         strides = [sympy.Integer(8), sympy.Integer(1)]
         iters = {i0: 0, i1: 1}
-        with IndexingContext() as idxc:
+        with IndexingContext():
             result = _probe_iv_stride(
                 dim_exprs, strides, iters, iv_iter=i0, concrete_coeff=2
             )
@@ -278,7 +277,7 @@ class TestProbeIvStride:
         dim_exprs = [sympy.floor(flat / 128), sympy.Mod(flat, 128)]
         strides = [sympy.Integer(128), sympy.Integer(1)]
         iters = {i0: 0, i1: 1}
-        with IndexingContext() as idxc:
+        with IndexingContext():
             result = _probe_iv_stride(
                 dim_exprs, strides, iters, iv_iter=i0, concrete_coeff=1
             )
@@ -292,7 +291,7 @@ class TestProbeIvStride:
         dim_exprs = [sympy.Mod(i0, 2)]
         strides = [sympy.Integer(1)]
         iters = {i0: 0}
-        with IndexingContext() as idxc:
+        with IndexingContext():
             result = _probe_iv_stride(
                 dim_exprs, strides, iters, iv_iter=i0, concrete_coeff=1
             )

@@ -1,4 +1,4 @@
-# Copyright 2025 The IREE Authors
+# Copyright 2026 The IREE Authors
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -59,13 +59,17 @@ def annotate_iv_strides(
             idxc, mem_sym_shape, allow_mixed_shapes=True
         )
 
-        iv_stride = compute_iv_stride_through_mapping(
-            mapping,
-            symbolic_shape,
-            index,
-            is_read=True,
-            mem_strides=list(phys_strides),
-            constraints=constraints,
-        )
+        try:
+            iv_stride = compute_iv_stride_through_mapping(
+                mapping,
+                symbolic_shape,
+                index,
+                is_read=True,
+                mem_strides=list(phys_strides),
+                constraints=constraints,
+            )
+        except ValueError:
+            # Probe depth overflow -- fall back to symbolic extraction in codegen.
+            continue
         if iv_stride is not None:
             node.meta["iv_stride"] = iv_stride

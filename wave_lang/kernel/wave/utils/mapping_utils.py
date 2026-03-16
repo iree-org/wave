@@ -274,7 +274,7 @@ def _expand_mod(expr: sympy.Expr) -> sympy.Expr:
     if not expr.has(sympy.Mod):
         return expr
     return expr.replace(
-        lambda e: isinstance(e, sympy.Mod),
+        lambda e: isinstance(e, sympy.Mod) and e.args[1] != 0,
         lambda e: e.args[0] - e.args[1] * sympy.floor(e.args[0] / e.args[1]),
     )
 
@@ -350,6 +350,9 @@ def linearize_dims(
         → floor(E/D)*D + E - D*floor(E/D)
         → E
     """
+    assert len(dim_exprs) == len(
+        strides
+    ), "dim_exprs and strides must have equal length"
     total = sum(d * s for d, s in zip(dim_exprs, strides))
     return mem_simplify(total)
 
