@@ -168,7 +168,7 @@ jobs:
           echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
 
       - name: "Setting up Rust"
-        uses: actions-rust-lang/setup-rust-toolchain@a0b538fa0b742a6aa35d6e2c169b4bd06d225a98 # v1.15.3
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
         with:
           toolchain: stable
 
@@ -429,7 +429,7 @@ jobs:
 
       - name: Upload coverage HTML report
         id: upload-coverage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: water-coverage-html
           path: cmake_build/coverage-html
