@@ -98,8 +98,8 @@ class WaveEmitter:
     options: WaveCompileOptions
     grid: list[IndexExpr]
     kernel_name: str
+    _node_values: dict[fx.Node, List[IRProxyValue]]
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
-    _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
 
     def __post_init__(self):
         self.dynamic_symbols = self.options.dynamic_symbols
