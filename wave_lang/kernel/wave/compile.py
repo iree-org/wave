@@ -1111,7 +1111,7 @@ def wave_compile(
                 ) = compile_launchable_to_mlir(
                     launchable=kernel,
                     trace=graph,
-                    context=None,
+                    context=overriding_module_op.context,
                     module_op=overriding_module_op,
                     options=options,
                 )
