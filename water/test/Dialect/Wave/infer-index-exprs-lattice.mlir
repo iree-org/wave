@@ -1946,3 +1946,72 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %result : !wave.tensor<[@M] of f32>
   }
 }
+
+// -----
+
+// Conflict between an explicitly set LHS index expression and what the scaled
+// MMA result implies triggers a diagnostic during backward propagation.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @scaled_mma_lhs_vs_implied(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>,
+                                vector_shapes = {M = 16, N = 16, K = 128, K32 = 4}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (16)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (16)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 128, K32 = 4}>
+  } {
+    // expected-error @below {{conflict for LHS vector shape when propagating from implied by scaled MMA kind lattice}}
+    // expected-note @below {{original LHS lattice}}
+    // expected-note @below {{implied by scaled MMA kind lattice}}
+    %r = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+         {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>,
+          wave_test.override_operand_index = [[3, {
+            M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 32, 32)>
+          }]]}
+         : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Scaled MMA with no conflicting operand indices infers index expressions from
+// the MMA kind.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: func.func @scaled_mma_infer_index_exprs
+  func.func @scaled_mma_infer_index_exprs(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>,
+                                vector_shapes = {M = 16, N = 16, K = 128, K32 = 4}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (16)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (16)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 128, K32 = 4}>
+  } {
+    // CHECK: wave.scaled_mma
+    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0 mod 16
+    %r = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+         {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+         : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
