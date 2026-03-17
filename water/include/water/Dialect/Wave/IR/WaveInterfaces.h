@@ -465,6 +465,7 @@ private:
 struct ElementsPerThreadInit {
   wave::WaveSymbolAttr threadXDimension;
   wave::WaveHyperparameterAttr hyperparams;
+  wave::HardwareConstraintAttr hardwareConstraint;
 };
 
 namespace detail {

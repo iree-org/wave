@@ -1215,8 +1215,14 @@ public:
 
       wave::ElementsPerThreadInit init;
       init.threadXDimension = nullptr;
+      init.hardwareConstraint = nullptr;
       init.hyperparams = wave::getHyperparameters(parent);
       for (Attribute constraint : cast<ArrayAttr>(attr)) {
+        if (auto hwConstraint =
+                dyn_cast<wave::HardwareConstraintAttr>(constraint)) {
+          init.hardwareConstraint = hwConstraint;
+          continue;
+        }
         auto workgroupConstraint =
             dyn_cast<wave::WorkgroupConstraintAttr>(constraint);
         if (!workgroupConstraint)
