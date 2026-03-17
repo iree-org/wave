@@ -2127,6 +2127,14 @@ class ScaledMMA(MMABase):
         return indices
 
     @property
+    def _is_fp4(self) -> bool:
+        from .._support.dtype import f4e2m1fn
+
+        lhs_dtype = self.lhs_type.dtype if self.lhs_type else None
+        rhs_dtype = self.rhs_type.dtype if self.rhs_type else None
+        return lhs_dtype == rhs_dtype and lhs_dtype == f4e2m1fn
+
+    @property
     def lhs_index(self) -> dict[IndexSymbol, IndexSequence]:
         operand_map = {
             MMA_LHS: 1,
@@ -2134,6 +2142,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.lhs_type.symbolic_shape)
 
@@ -2145,6 +2154,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 1,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.lhs_scale_type.symbolic_shape)
 
@@ -2156,6 +2166,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.rhs_type.symbolic_shape)
 
@@ -2167,6 +2178,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 1,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.rhs_scale_type.symbolic_shape)
 
@@ -2178,6 +2190,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 1,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         if self.acc_type is None or self.index is None:
             return None
@@ -3465,7 +3478,7 @@ class BitcastOp(CustomOp, ABC):
 
     @property
     def scale_factor(self):
-        src_width = self.arg.type.dtype.bitwidth()
+        src_width = get_custom(self.arg).type.dtype.bitwidth()
         dst_width = self.dtype.bitwidth()
         if src_width % dst_width != 0:
             raise NotImplementedError(

@@ -1865,3 +1865,74 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %0 : vector<4xf32>
   }
 }
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_bitcast_i8_to_f4
+  func.func @lower_bitcast_i8_to_f4() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_i8 = arith.constant 0 : i8
+    // CHECK: %[[SRC:.*]] = arith.constant dense<0> : vector<16xi8>
+    %src = wave.register %cst_i8 : vector<16xi8>
+
+    // CHECK-NOT: wave.bitcast
+    // CHECK: vector.bitcast %[[SRC]] : vector<16xi8> to vector<32xf4E2M1FN>
+    %res = wave.bitcast %src : vector<16xi8> to vector<32xf4E2M1FN>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_bitcast_i8_to_f8e8m0
+  func.func @lower_bitcast_i8_to_f8e8m0() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_i8 = arith.constant 0 : i8
+    // CHECK: %[[SRC:.*]] = arith.constant dense<0> : vector<1xi8>
+    %src = wave.register %cst_i8 : vector<1xi8>
+
+    // CHECK-NOT: wave.bitcast
+    // CHECK: vector.bitcast %[[SRC]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    %res = wave.bitcast %src : vector<1xi8> to vector<1xf8E8M0FNU>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+  // CHECK-LABEL: func.func @lower_scaled_mma_f4_16x16x128
+  func.func @lower_scaled_mma_f4_16x16x128() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_f4 = arith.constant 0.0 : f4E2M1FN
+    // CHECK: %[[LHS:.*]] = arith.constant dense<0.000000e+00> : vector<32xf4E2M1FN>
+    %lhs = wave.register %cst_f4 : vector<32xf4E2M1FN>
+
+    %cst_scale = arith.constant 0.0 : f8E8M0FNU
+    // CHECK: %[[LHS_SCALE:.*]] = arith.constant dense<{{.*}}> : vector<1xf8E8M0FNU>
+    %lhs_scale = wave.register %cst_scale : vector<1xf8E8M0FNU>
+
+    %cst_f4_b = arith.constant 0.0 : f4E2M1FN
+    // CHECK: %[[RHS:.*]] = arith.constant dense<0.000000e+00> : vector<32xf4E2M1FN>
+    %rhs = wave.register %cst_f4_b : vector<32xf4E2M1FN>
+
+    %cst_scale_b = arith.constant 0.0 : f8E8M0FNU
+    // CHECK: %[[RHS_SCALE:.*]] = arith.constant dense<{{.*}}> : vector<1xf8E8M0FNU>
+    %rhs_scale = wave.register %cst_scale_b : vector<1xf8E8M0FNU>
+
+    %cst_f32 = arith.constant 0.0 : f32
+    // CHECK: %[[ACC:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    %acc = wave.register %cst_f32 : vector<4xf32>
+
+    // CHECK: %[[LHS_S:.*]] = vector.extract %[[LHS_SCALE]][0]
+    // CHECK: %[[RHS_S:.*]] = vector.extract %[[RHS_SCALE]][0]
+    // CHECK-NOT: wave.scaled_mma
+    // CHECK: amdgpu.scaled_mfma 16x16x128
+    // CHECK-SAME: f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+    %res = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+      {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (vector<32xf4E2M1FN>, vector<1xf8E8M0FNU>,
+         vector<32xf4E2M1FN>, vector<1xf8E8M0FNU>,
+         vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}

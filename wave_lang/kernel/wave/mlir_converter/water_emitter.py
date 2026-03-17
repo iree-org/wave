@@ -78,6 +78,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Read,
     ReduceOp as Reduce,
     Reshape,
+    ScaledMMA,
     SelfIndex,
     SelectOp as Select,
     SharedMemoryBarrier,
@@ -127,6 +128,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        ScaledMmaOp,
         SelectOp,
         SelfIndexOp,
         ShuffleOp,
@@ -180,6 +182,7 @@ WAVE_OP_CONSTRUCTORS = {
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
+    "scaled_mma": ScaledMmaOp,
     "shuffle": ShuffleOp,
     "iterate": IterateOp,
     "output": YieldOp,
@@ -401,7 +404,27 @@ def _attach_attributes(
 
         allowed_induction_symbols = collect_allowed_induction_symbols(node.fx_node)
 
-        if isinstance(node, MMA):
+        if isinstance(node, ScaledMMA):
+            # ScaledMMA needs exactly 6 index entries (lhs, lhs_scale, rhs,
+            # rhs_scale, acc, result) to match
+            # ScaledMmaOp::getIndexExprValuesAndDescriptions.
+            for attr_name in (
+                "lhs_index",
+                "lhs_scale_index",
+                "rhs_index",
+                "rhs_scale_index",
+            ):
+                if idx := getattr(node, attr_name, None):
+                    dict_attrs.append(
+                        _build_index_mapping_dict(idx, allowed_induction_symbols)
+                    )
+            if acc_index := getattr(node, "acc_index", None):
+                acc_attr = _build_index_mapping_dict(
+                    acc_index, allowed_induction_symbols
+                )
+                dict_attrs.append(acc_attr)
+                dict_attrs.append(acc_attr)
+        elif isinstance(node, MMA):
             # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
             # match MmaOp::getIndexExprValuesAndDescriptions which serializes
             # operandExprs + resultExprs.  The Python-side index sequence
@@ -785,6 +808,29 @@ def _emit_ops_from_graph(
 
                         # create YieldOp
                         YieldOp([get_single_mapped_value(output) for output in outputs])
+                elif isinstance(node, ScaledMMA):
+                    mma_kind = (
+                        ir.Attribute.parse(
+                            f"#wave.mma_kind<{node.mma_type.name.lower()}>",
+                            context=ctx,
+                        )
+                        if node.mma_type is not None
+                        else None
+                    )
+                    lhs = get_single_mapped_value(node.lhs)
+                    lhs_scale = get_single_mapped_value(node.lhs_scale)
+                    rhs = get_single_mapped_value(node.rhs)
+                    rhs_scale = get_single_mapped_value(node.rhs_scale)
+                    acc = get_single_mapped_value(node.acc)
+                    mlir_op = op_builder(
+                        result_type,
+                        lhs,
+                        lhs_scale,
+                        rhs,
+                        rhs_scale,
+                        acc,
+                        kind=mma_kind,
+                    )
                 elif isinstance(node, MMA):
                     mma_kind = (
                         ir.Attribute.parse(

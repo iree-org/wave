@@ -1316,11 +1316,56 @@ public:
   }
 };
 
+class ScaledMmaOpLoweringPattern
+    : public OpConversionPattern<wave::ScaledMmaOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ScaledMmaOp op, wave::ScaledMmaOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value lhs = adaptor.getLhs();
+    Value lhsScale = adaptor.getLhsScale();
+    Value rhs = adaptor.getRhs();
+    Value rhsScale = adaptor.getRhsScale();
+    Value acc = adaptor.getAccumulator();
+
+    std::optional<wave::WaveMmaKind> kind = op.getKind();
+    if (!kind)
+      return rewriter.notifyMatchFailure(
+          op, "scaled mma operation without kind attribute");
+
+    auto [M, N, K] =
+        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), *kind);
+
+    // amdgpu.scaled_mfma expects scalar f8E8M0FNU or vector<4xf8E8M0FNU>.
+    // If we have vector<1xf8E8M0FNU>, extract the scalar element.
+    auto extractScaleScalar = [&](Value scale) -> Value {
+      auto vecTy = dyn_cast<VectorType>(scale.getType());
+      if (vecTy && vecTy.getNumElements() == 1) {
+        return vector::ExtractOp::create(rewriter, op.getLoc(), scale,
+                                         static_cast<int64_t>(0));
+      }
+      return scale;
+    };
+    lhsScale = extractScaleScalar(lhsScale);
+    rhsScale = extractScaleScalar(rhsScale);
+
+    auto scaledMfma =
+        amdgpu::ScaledMFMAOp::create(rewriter, op.getLoc(), acc.getType(), M, N,
+                                     K, lhs, rhs, acc, lhsScale, rhsScale,
+                                     /*scalesIdxA=*/0, /*scalesIdxB=*/0);
+    rewriter.replaceOp(op, scaledMfma.getResult());
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
                                            RewritePatternSet &patterns) {
-  patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
+  patterns.add<MmaOpLoweringPattern, ScaledMmaOpLoweringPattern>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
