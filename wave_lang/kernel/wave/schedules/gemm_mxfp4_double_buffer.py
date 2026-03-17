@@ -829,7 +829,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
         cluster_0_ops = [
             tkw.SchedulingBarrier([]),
-            # tkw.MemoryCounterWait(load=0),
+            tkw.MemoryCounterWait(load=0),
             tkw.WorkgroupBarrier(),
         ]
         if use_extra_barrier:

@@ -87,7 +87,8 @@ def _run_mxfp_gemm_preshuffle(
     x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
     out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
 
-    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+    for _ in range(50):
+        gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
@@ -200,7 +201,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=True
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -218,7 +219,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.use_buffer_ops = True
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
-    options.wave_runtime = False
+    options.wave_runtime = True
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
@@ -227,6 +228,17 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         use_stagger=True, shape=shape
     )
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    options.subs[UNROLL_FACTOR] = 2
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
