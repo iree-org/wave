@@ -179,6 +179,14 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
+    # Divisibility assumptions for M, N, K (no effect for static shapes).
+    constraints += [tkw.Assumption(Eq(M % 32, 0))]
+    constraints += [tkw.Assumption(Eq(N % 32, 0))]
+    constraints += [tkw.Assumption(Eq(K % 256, 0))]
+
+    # K is always large enough for software pipelining.
+    constraints += [tkw.Assumption(K > BLOCK_K * 6)]
+
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
             M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
@@ -431,7 +439,11 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     # Divisibility assumptions for M, N, K (no effect for static shapes).
     constraints += [tkw.Assumption(Eq(M % 32, 0))]
     constraints += [tkw.Assumption(Eq(N % 32, 0))]
-    constraints += [tkw.Assumption(Eq(K % 256, 0))]
+    constraints += [tkw.Assumption(Eq(K % BLOCK_K, 0))]
+    # Stronger tile-aligned assumptions: allow gather_to_shared and
+    # generate_bounds_exprs to prove full tile alignment and omit masking predicates.
+    constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
 
     # K is always large enough for software pipelining.
     constraints += [tkw.Assumption(K > BLOCK_K * 6)]
