@@ -670,7 +670,7 @@ def _create_vec_read_write(
     # The mask computation may fail to translate (vector<Nxindex> ops are
     # unsupported), but the backend loads unconditionally in that case,
     # relying on hardware OOB checking (SRD boundsCheck) to return zero.
-    if buffer_ops_enabled and getattr(emitter.options, "use_wave_asm_backend", False):
+    if buffer_ops_enabled and getattr(emitter.options, "backend", "llvm") == "asm":
         no_masked_load_store_ops = False
     else:
         no_masked_load_store_ops = buffer_ops_enabled
