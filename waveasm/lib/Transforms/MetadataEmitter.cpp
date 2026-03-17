@@ -140,18 +140,15 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
   auto targetKind = targetAttr.getTargetKind();
   bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetKind);
 
+  int64_t numArgs = 2;
+  if (auto numArgsAttr =
+          program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
+    numArgs = numArgsAttr.getInt();
+  }
+
   int64_t userSgprCount = 2;
   if (isGfx950) {
-    int64_t preloadLength = program.getKernargPreloadLength();
-    // Only fall back to numArgs*2 when kernarg_preload_length was never
-    // explicitly set (no num_kernel_args attr).  An explicit 0 means
-    // "no preloading" and must be respected.
-    if (preloadLength == 0 &&
-        !program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
-      int64_t numArgs = 2;
-      preloadLength = numArgs * 2;
-    }
-    userSgprCount = 2 + preloadLength;
+    userSgprCount = std::min(int64_t(16), 2 + numArgs * 2);
   }
 
   int64_t wgIdXIndex = userSgprCount;
@@ -208,15 +205,16 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
 
   auto targetAttr = program.getTarget();
   auto targetKind = targetAttr.getTargetKind();
-  int64_t preloadLength = program.getKernargPreloadLength();
   bool usePreloading = llvm::isa<GFX950TargetAttr>(targetKind);
 
-  // Only fall back to numArgs*2 when kernarg_preload_length was never
-  // explicitly set.  An explicit 0 means "no preloading".
-  if (usePreloading && preloadLength == 0 &&
-      !program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
+  int64_t preloadLength = program.getKernargPreloadLength();
+  if (usePreloading && preloadLength == 0) {
     int64_t numArgs = 2;
-    preloadLength = numArgs * 2;
+    if (auto numArgsAttr =
+            program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
+      numArgs = numArgsAttr.getInt();
+    }
+    preloadLength = std::min(int64_t(14), numArgs * 2);
   }
 
   int64_t userSgprCount = 2;
