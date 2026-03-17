@@ -234,26 +234,23 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
     auto readOp = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr);
     ctx.getMapper().mapValue(loadOp.getResult(), readOp.getResult(0));
   } else {
-    // Global load
-    auto sregType = ctx.createSRegType(4, 4);
-    auto srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+    // Global load — use the same SRD lookup and voffset computation as
+    // vector.load so that fat_raw_buffer memrefs get the correct adjusted SRD.
+    auto [voffset, instOffset] = computeVOffsetFromIndices(
+        memrefType, loadOp.getIndices(), ctx, loc, loadOp.getMemref());
 
-    Value voffset;
-    if (!loadOp.getIndices().empty()) {
-      if (auto mapped = ctx.getMapper().getMapped(loadOp.getIndices()[0])) {
-        voffset = *mapped;
-      }
-    }
-    if (!voffset) {
-      auto immType = ctx.createImmType(0);
-      voffset = ConstantOp::create(builder, loc, immType, 0);
+    Value srd;
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(loadOp.getMemref())) {
+      srd = emitSRDBaseAdjustment(*adj, loadOp.getMemref(), ctx, loc);
+    } else {
+      srd = lookupSRD(loadOp.getMemref(), ctx, loc);
     }
 
-    auto zeroImm = builder.getType<ImmType>(0);
-    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-    auto loadInstr = BUFFER_LOAD_DWORD::create(
-        builder, loc, TypeRange{vregType}, srd, voffset, zeroConst);
-    ctx.getMapper().mapValue(loadOp.getResult(), loadInstr.getResult(0));
+    int64_t elemBytes = getElementBytes(memrefType.getElementType());
+    auto loadResults =
+        emitBufferLoads(srd, voffset, instOffset, elemBytes, ctx, loc);
+    if (!loadResults.empty())
+      ctx.getMapper().mapValue(loadOp.getResult(), loadResults[0]);
   }
 
   return success();
@@ -287,22 +284,18 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
 
     DS_WRITE_B32::create(builder, loc, *data, vaddr);
   } else {
-    // Global store
-    auto sregType = ctx.createSRegType(4, 4);
-    auto srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+    // Global store — use proper SRD lookup and voffset computation.
+    auto [voffset, instOffset] = computeVOffsetFromIndices(
+        memrefType, storeOp.getIndices(), ctx, loc, storeOp.getMemref());
 
-    Value voffset;
-    if (!storeOp.getIndices().empty()) {
-      if (auto mapped = ctx.getMapper().getMapped(storeOp.getIndices()[0])) {
-        voffset = *mapped;
-      }
-    }
-    if (!voffset) {
-      auto immType = ctx.createImmType(0);
-      voffset = ConstantOp::create(builder, loc, immType, 0);
+    Value srd;
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(storeOp.getMemref())) {
+      srd = emitSRDBaseAdjustment(*adj, storeOp.getMemref(), ctx, loc);
+    } else {
+      srd = lookupSRD(storeOp.getMemref(), ctx, loc);
     }
 
-    BUFFER_STORE_DWORD::create(builder, loc, *data, srd, voffset);
+    BUFFER_STORE_DWORD::create(builder, loc, *data, srd, voffset, instOffset);
   }
 
   return success();
