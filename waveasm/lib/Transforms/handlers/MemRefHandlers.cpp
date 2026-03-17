@@ -308,32 +308,6 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
-/// Handle memref.extract_strided_metadata - extract offset from SRD adjustment.
-/// Results: (base_buffer, offset, sizes..., strides...).
-/// The offset is needed by eliminate_epilogue's _compute_valid_bytes to clamp
-/// the SRD NUM_RECORDS field so OOB loads in extended iterations return zero.
-LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
-                                                 TranslationContext &ctx) {
-  auto metaOp = cast<memref::ExtractStridedMetadataOp>(op);
-  Value source = metaOp.getSource();
-
-  auto *adj = ctx.getPendingSRDBaseAdjust(source);
-  if (!adj) {
-    if (auto castOp = source.getDefiningOp<memref::CastOp>())
-      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
-  }
-
-  if (auto src = ctx.getMapper().getMapped(source))
-    ctx.getMapper().mapValue(metaOp.getBaseBuffer(), *src);
-
-  if (adj) {
-    Value offsetResult = metaOp.getOffset();
-    ctx.getMapper().mapValue(offsetResult, adj->elementOffset);
-  }
-
-  return success();
-}
-
 /// Handle memref.cast - pass through source and propagate metadata.
 /// memref.cast only changes the static type (e.g. erasing dynamic info);
 /// it does not change the underlying buffer, so all runtime metadata
