@@ -293,9 +293,6 @@ void TranslationContext::emitSRDPrologue() {
     }
 
     // Step 2: Branch to aligned entry point (gfx95* requirement).
-    // Keep any high-SGPR overflow loads after the aligned entry; LLVM does the
-    // same, and loading them before the branch leaves the overflow arg stale
-    // on gfx95 hardware.
     // NOTE: Labels/branches are control flow and must remain as RawOp for now.
     std::string kernelName = program.getSymName().str();
     std::string mainLabel = ".L_" + kernelName + "_main";
@@ -304,32 +301,7 @@ void TranslationContext::emitSRDPrologue() {
     RawOp::create(builder, loc, ".p2align 8");
     RawOp::create(builder, loc, mainLabel + ":");
 
-    // Step 3: Load scalar overflow args after the aligned entry point.
-    // Reserve overflow SGPR slots so the register allocator avoids them.
-    for (int64_t i = 0; i < numOverflowScalars; ++i) {
-      int64_t base = overflowSgprBase + i * 2;
-      auto ovfType = createSRegType(2, 2);
-      PrecoloredSRegOp::create(builder, loc, ovfType, base, /*size=*/2);
-    }
-
-    int64_t overflowIdx = 0;
-    for (const auto &pending : pendingScalarArgs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
-      if (preloadBase < 16)
-        continue;
-      int64_t loadBase = overflowSgprBase + overflowIdx * 2;
-      overflowIdx++;
-      int64_t kernargOffset = pending.argIndex * 8;
-
-      auto loadDstType = createSRegType(2, loadBase);
-      auto offsetImm = builder.getType<ImmType>(kernargOffset);
-      auto offsetConst =
-          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
-                             offsetConst);
-    }
-
-    // Step 4: Wait for all scalar loads to complete.
+    // Step 3: Wait for all scalar loads to complete.
     auto i32Type = builder.getI32Type();
     auto lgkmcntAttr = IntegerAttr::get(i32Type, 0);
     S_WAITCNT::create(builder, loc, /*vmcnt=*/IntegerAttr{}, lgkmcntAttr,
