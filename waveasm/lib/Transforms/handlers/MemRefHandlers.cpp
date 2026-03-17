@@ -361,8 +361,16 @@ LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
   bool hasStridesAndOffset =
       succeeded(sourceType.getStridesAndOffset(staticStrides, staticOffset));
 
-  // Result #1: offset — map to constant or dynamic offset value.
-  if (hasStridesAndOffset && staticOffset != ShapedType::kDynamic) {
+  // Result #1: offset — prefer SRD adjustment offset (needed by epilogue
+  // elimination's _compute_valid_bytes), then fall back to static offset.
+  auto *adj = ctx.getPendingSRDBaseAdjust(source);
+  if (!adj) {
+    if (auto castOp = source.getDefiningOp<memref::CastOp>())
+      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
+  }
+  if (adj) {
+    ctx.getMapper().mapValue(metadataOp.getOffset(), adj->elementOffset);
+  } else if (hasStridesAndOffset && staticOffset != ShapedType::kDynamic) {
     auto immType = ctx.createImmType(staticOffset);
     auto offsetVal = ConstantOp::create(builder, loc, immType, staticOffset);
     ctx.getMapper().mapValue(metadataOp.getOffset(), offsetVal);
