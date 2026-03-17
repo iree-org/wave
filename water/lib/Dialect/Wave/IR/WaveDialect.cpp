@@ -222,6 +222,7 @@ verifyConstraints(ArrayAttr constraints,
   // * The number of workgroups should be greater than or equal to one.
   llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedWorkgroupSizes(
       workgroupConstraints.size());
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedSizes;
   llvm::SmallDenseSet<wave::WaveWorkgroupDimAttr, 4> assignedDims;
   llvm::SmallDenseSet<wave::WaveWorkgroupDimAttr, 4> needsPrimaryDim;
   for (auto &&[symbol, constraint] : workgroupConstraints) {
@@ -250,6 +251,7 @@ verifyConstraints(ArrayAttr constraints,
 
     int64_t workgroupSize = evaluated->front();
     resolvedWorkgroupSizes[symbol] = workgroupSize;
+    resolvedSizes[symbol] = workgroupSize;
 
     std::optional<llvm::SmallVector<int64_t>> resolvedDims =
         wave::resolveSymbolNames(symbol, hyperparams);
@@ -310,6 +312,7 @@ verifyConstraints(ArrayAttr constraints,
                          << workgroupSize << " for dimension: " << symbol;
     }
     resolvedWaveCounts[symbol] = numWaves;
+    resolvedSizes[symbol] = resolvedWaveSize;
   }
 
   // verify consistency between wave constraints and waves_per_block
@@ -354,6 +357,7 @@ verifyConstraints(ArrayAttr constraints,
 
     int64_t resolvedTileSize = evaluated->front();
     resolvedTilingSizes[symbol] = resolvedTileSize;
+    resolvedSizes[symbol] = resolvedTileSize;
     int64_t resolvedDim = resolvedDims->front();
     int64_t numTiles = resolvedDim / resolvedTileSize;
     if (numTiles < 1) {
@@ -362,40 +366,34 @@ verifyConstraints(ArrayAttr constraints,
     }
   }
 
-  // Verify consistency between vector_shapes and constraint tile sizes.
-  // * When no mma_type is set, vector_shapes should match the resolved tile
-  //   sizes from the corresponding WorkgroupConstraint/TilingConstraint.
-  // * When mma_type is present, vector_shapes derives from the MMA instruction
-  //   geometry and is expected to differ from the constraint tile sizes.
+  // Verify consistency between constraints and vector_shapes (when mma_type
+  // is absent). Each vector_shapes entry must match the resolved tile size
+  // from the most specific constraint for that dimension: WaveConstraint >
+  // WorkgroupConstraint > TilingConstraint.
   if (hardwareConstraint && hardwareConstraint.getVectorShapes() &&
       !hardwareConstraint.getMmaType()) {
     DictionaryAttr vectorShapes = hardwareConstraint.getVectorShapes();
-    for (NamedAttribute entry : vectorShapes) {
-      llvm::StringRef dimName = entry.getName();
-      int64_t vectorShapeSize =
-          llvm::cast<IntegerAttr>(entry.getValue()).getInt();
+    for (NamedAttribute dimension : vectorShapes) {
+      llvm::StringRef symbolName = dimension.getName().getValue();
+      int64_t size = llvm::cast<IntegerAttr>(dimension.getValue()).getInt();
 
-      for (auto &&[symbol, size] : resolvedWorkgroupSizes) {
-        if (symbol.getName() != dimName)
-          continue;
-        if (size != vectorShapeSize) {
-          return emitError()
-                 << "vector_shapes entry '" << dimName << "' ("
-                 << vectorShapeSize
-                 << ") does not match workgroup constraint tile size (" << size
-                 << ") for dimension: " << symbol;
-        }
+      wave::WaveSymbolAttr symbol =
+          wave::WaveSymbolAttr::get(hyperparams.getContext(), symbolName);
+
+      auto it = resolvedSizes.find(symbol);
+
+      if (it == resolvedSizes.end()) {
+        // Batch dimensions may not be present in the resolved sizes map.
+        continue;
       }
 
-      for (auto &&[symbol, size] : resolvedTilingSizes) {
-        if (symbol.getName() != dimName)
-          continue;
-        if (size != vectorShapeSize) {
-          return emitError() << "vector_shapes entry '" << dimName << "' ("
-                             << vectorShapeSize
-                             << ") does not match tiling constraint tile size ("
-                             << size << ") for dimension: " << symbol;
-        }
+      int64_t resolvedSize = it->second;
+
+      if (size > resolvedSize) {
+        return emitError() << "vector_shapes entry '" << symbolName << "' ("
+                           << size
+                           << ") is greater than the resolved tile size ("
+                           << resolvedSize << ") for dimension: " << symbol;
       }
     }
   }
