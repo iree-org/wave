@@ -41,10 +41,7 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False, use_waveasm=False
 def _xfail_waveasm_dynamic_strides(
     use_waveasm: bool, dynamic_dims: bool, buffer_ops: bool
 ):
-    if use_waveasm and buffer_ops:
-        pytest.xfail(
-            "waveasm does not support dynamic strides with dynamic_dims or buffer_ops"
-        )
+    pass
 
 
 @param_bool("dynamic_dims", "dyn")
