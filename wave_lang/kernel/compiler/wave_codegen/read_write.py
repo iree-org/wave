@@ -614,7 +614,14 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    no_masked_load_store_ops = buffer_ops_enabled
+    # With the waveasm backend, allow masked loads even with buffer ops.
+    # The mask computation may fail to translate (vector<Nxindex> ops are
+    # unsupported), but the backend loads unconditionally in that case,
+    # relying on hardware OOB checking (SRD boundsCheck) to return zero.
+    if buffer_ops_enabled and getattr(emitter.options, "use_wave_asm_backend", False):
+        no_masked_load_store_ops = False
+    else:
+        no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
     splatted_mask = mask_splat is not None
