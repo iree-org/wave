@@ -654,11 +654,12 @@ public:
 
   /// Get the number of user SGPRs (for computing system SGPR offsets)
   /// User SGPRs include: kernarg ptr (2) + preloaded args (on gfx950+)
-  /// Only SRD (buffer pointer) args are preloaded; scalar args use s_load.
+  /// Hardware limits user SGPRs to 16 on gfx950. Args that don't fit are
+  /// loaded via explicit s_load into overflow SGPR slots after the SRDs.
   int64_t getUserSgprCount() const {
     int64_t count = 2; // kernarg_segment_ptr
     if (llvm::isa<GFX950TargetAttr>(target)) {
-      count += getNumPreloadedArgs() * 2;
+      count += std::min(size_t(14), getNumKernelArgs() * 2);
     }
     return count;
   }
