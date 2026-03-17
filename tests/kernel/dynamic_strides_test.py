@@ -31,7 +31,6 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False, use_waveasm=False
         wave_runtime=True,
         use_buffer_ops=buffer_ops,
         backend="asm" if use_waveasm else "llvm",
-        use_wave_asm_backend=use_waveasm,
     )
     options = set_default_run_config(options)
     return wave_compile(options, gemm), options
