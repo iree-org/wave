@@ -184,6 +184,11 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     constraints += [tkw.Assumption(Eq(N % 32, 0))]
     constraints += [tkw.Assumption(Eq(K % 256, 0))]
 
+    # Include assumption that K is divisible by BLOCK_K to allow gather_to_shared ops to omit masking predicates.
+    constraints += [tkw.Assumption(Eq(K % BLOCK_K, 0))]
+    constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
+
     # K is always large enough for software pipelining.
     constraints += [tkw.Assumption(K > BLOCK_K * 6)]
 
@@ -439,11 +444,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     # Divisibility assumptions for M, N, K (no effect for static shapes).
     constraints += [tkw.Assumption(Eq(M % 32, 0))]
     constraints += [tkw.Assumption(Eq(N % 32, 0))]
-    constraints += [tkw.Assumption(Eq(K % BLOCK_K, 0))]
-    # Stronger tile-aligned assumptions: allow gather_to_shared and
-    # generate_bounds_exprs to prove full tile alignment and omit masking predicates.
-    constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
-    constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
+    constraints += [tkw.Assumption(Eq(K % 256, 0))]
 
     # K is always large enough for software pipelining.
     constraints += [tkw.Assumption(K > BLOCK_K * 6)]
