@@ -967,7 +967,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @propagate_from_write
   func.func @propagate_from_write(
     %a: !wave.tensor<[@M, @N] of f32>,
@@ -1007,7 +1007,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Elements per thread provided on the op used instead of the value inferred from workgroup constraints.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @propagate_from_write_explicit_ept
   func.func @propagate_from_write_explicit_ept(
     %output: !wave.tensor<[@M, @N] of f32>
@@ -1033,7 +1033,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Elements per thread is used for the trailing dimension because its vector shape is no longer 1.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @propagate_from_write_vector_shape
   func.func @propagate_from_write_vector_shape(
     %output: !wave.tensor<[@M, @N] of f32>
@@ -1061,7 +1061,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // Test that unmapped dimensions get default (0, 1, 1) index expressions
 // when there are no workgroup/wave/tiling constraints for them.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @unmapped_dimension_default
   func.func @unmapped_dimension_default(
     %a: !wave.tensor<[@B, @M, @N] of f32>,
@@ -1099,7 +1099,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // All writes should establish index expressions with the same priority,
 // and the join should succeed since they agree.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @multiple_writes_consistent
   func.func @multiple_writes_consistent(
     %a: !wave.tensor<[@M, @N] of f32>,
@@ -1147,7 +1147,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // -----
 
 // Test write when all dimension symbols are absent from constraints.
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @write_all_dimensions_unmapped
   func.func @write_all_dimensions_unmapped(
     %a: !wave.tensor<[@P, @Q] of f32>,
@@ -1177,7 +1177,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // MMa index expression has higher priority than write.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @write_after_mma_priority
   func.func @write_after_mma_priority(
     %a: !wave.tensor<[@M, @K] of f16>,
@@ -1212,7 +1212,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @batched_mma_with_reads_and_write
   func.func @batched_mma_with_reads_and_write(%a: !wave.tensor<[@B, @M, @K] of f16>,
                                               %b: !wave.tensor<[@B, @N, @K] of f16>,
@@ -1273,7 +1273,7 @@ normalform.module [#wave.normal_form<full_types>] {
 // Make sure we write index expr initialization doesn't crash
 // on rank-0 tensors.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @write_rank0_tensor
   func.func @write_rank0_tensor(
     %src: !wave.tensor<[] of f32>,

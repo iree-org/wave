@@ -855,7 +855,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @priority_join
   func.func @priority_join(
     %a: !wave.tensor<[@M] of f32>,
@@ -886,7 +886,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] attributes { wave_test.disable_backward } {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
   func.func @same_priority_conflict(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -913,7 +913,7 @@ normalform.module [#wave.normal_form<full_types>] attributes { wave_test.disable
 
 // Test that higher priority from write propagates backward through multiple operations.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @priority_backward_through_chain
   func.func @priority_backward_through_chain(
     %a: !wave.tensor<[@M] of f32>,
@@ -1002,7 +1002,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // Check that this value overrides the one the write is initialized
 // with give its priority is only 1.
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @propagate_priority_equal_values
   func.func @propagate_priority_equal_values(
     %a: !wave.tensor<[@M] of f32>,
