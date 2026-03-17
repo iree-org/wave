@@ -818,7 +818,7 @@ def combine_indices(
     which make the index sequence (access pattern) thread specific. These are
     added to the thread independent index which is obtained from the constraints.
     """
-    combined_index = {k: v for k, v in thread_independent_index.items()}
+    combined_index = {k: deepcopy(v) for k, v in thread_independent_index.items()}
     for k in combined_index:
         if k in thread_dependent_index:
             combined_index[k].start += thread_dependent_index[k].start
