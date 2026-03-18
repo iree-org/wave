@@ -188,3 +188,18 @@ module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, 
 
 // expected-error @below {{hyperparameter "K2" has dividend (128) that is not evenly divisible by the divisor (3)}}
 module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 3)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: B, A}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{A = #wave.expr_list<[#wave.symbol<"B">] -> (B ceildiv 2)>, B = #wave.expr_list<[#wave.symbol<"A">] -> (A ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: Z, Y, X}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{X = #wave.expr_list<[#wave.symbol<"Y">] -> (Y ceildiv 2)>, Y = #wave.expr_list<[#wave.symbol<"Z">] -> (Z ceildiv 2)>, Z = #wave.expr_list<[#wave.symbol<"X">] -> (X ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter dependency cycle: A}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{A = #wave.expr_list<[#wave.symbol<"A">] -> (A ceildiv 2)>}>} {}
