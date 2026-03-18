@@ -502,13 +502,18 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
     Values can be:
     - `IntegerAttr`: a concrete integer value for a base symbol.
     - `WaveExprListAttr`: an affine expression over other symbols defined in
-      the same mapping, for derived symbols.
+      the same mapping, for derived symbols.  The expression must be a
+      single-result affine map whose sole result is a single `ceildiv`
+      expression (no additions, multiplications, or nested divisions at the
+      top level).  All symbols referenced by the expression must be defined
+      in the same mapping, and the dividend must be evenly divisible by the
+      divisor after resolving all symbols to their concrete values.
 
     Example:
     ```
     #wave.hyperparameters<{M = 16 : i64, K = 128 : i64,
-      K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 2)>,
-      K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 32)>}>
+      K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>,
+      K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>}>
     ```
   }];
 

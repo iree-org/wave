@@ -161,12 +161,12 @@ with ir.Context() as ctx:
     # Hyperparameters with expr_list values for derived symbols.
     s0 = ir.AffineSymbolExpr.get(0)
     k_div_2_map = ir.AffineMap.get(
-        0, 1, [ir.AffineExpr.get_floor_div(s0, ir.AffineExpr.get_constant(2))]
+        0, 1, [ir.AffineExpr.get_ceil_div(s0, ir.AffineExpr.get_constant(2))]
     )
     k_div_2_expr = wave.WaveExprListAttr.get(
         [wave.WaveSymbolAttr.get("K")], k_div_2_map
     )
-    # CHECK: #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 2)>}>
+    # CHECK: #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
     hyper_with_expr = wave.WaveHyperparameterAttr.get({"K": 128, "K2": k_div_2_expr})
     print(hyper_with_expr)
 
@@ -321,17 +321,17 @@ with ir.Context() as ctx:
     # CHECK: M
     print(M.name)
 
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     symbol_attrs = [
         wave.WaveSymbolAttr.get("M"),
         wave.WaveSymbolAttr.get("BLOCK_M"),
     ]
     s0 = ir.AffineSymbolExpr.get(0)
     s1 = ir.AffineSymbolExpr.get(1)
-    expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_floor_div(s0, s1)])
+    expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_ceil_div(s0, s1)])
     expr_attr = wave.WaveExprListAttr.get(symbol_attrs, expr_map)
     print(expr_attr)
-    # CHECK: ()[s0, s1] -> (s0 floordiv s1)
+    # CHECK: ()[s0, s1] -> (s0 ceildiv s1)
     print(expr_attr.map)
 
     # CHECK: #wave.expr_list<[] -> (512)>
@@ -382,52 +382,52 @@ with ir.Context() as ctx:
     # CHECK: [2, 2, 1]
     print(hardware_constr_3.waves_per_block)
 
-    # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, device_dim = 0>
+    # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, device_dim = 0>
     device_constr = wave.DeviceConstraintAttr.get(
         dim="M", tile_size=expr_attr, device_dim=0
     )
     print(device_constr)
     # CHECK: #wave.symbol<"M">
     print(device_constr.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(device_constr.tile_size)
     # CHECK: 0
     print(device_constr.device_dim)
 
-    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
+    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, workgroup_dim = <x>>
     wg_constr = wave.WorkgroupConstraintAttr.get(
         dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
     )
     print(wg_constr)
 
-    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
+    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
     wg_constr_1 = wave.WorkgroupConstraintAttr.get(
         dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x, primary=False
     )
     print(wg_constr_1)
     # CHECK: #wave.symbol<"M">
     print(wg_constr_1.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(wg_constr_1.tile_size)
     # CHECK: #wave.workgroup_dim<x>
     print(wg_constr_1.workgroup_dim)
     # CHECK: False
     print(wg_constr_1.primary)
 
-    # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
+    # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>>
     wg_constr_2 = wave.WaveConstraintAttr.get(dim="M", tile_size=expr_attr)
     print(wg_constr_2)
     # CHECK: #wave.symbol<"M">
     print(wg_constr_2.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(wg_constr_2.tile_size)
 
-    # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
+    # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>>
     tiling_constr = wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr)
     print(tiling_constr)
     # CHECK: #wave.symbol<"M">
     print(tiling_constr.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(tiling_constr.tile_size)
 
     # CHECK: #wave.normal_form<full_func_boundary>
