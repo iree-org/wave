@@ -2512,43 +2512,35 @@ LogicalResult wave::BitcastOp::verify() {
   return success();
 }
 
-llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateForward(
-    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
-    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
-    llvm::raw_ostream &errs) {
-  wave::WaveTensorType srcType = operandTypes[0];
-  if (!srcType || !srcType.getFullySpecified())
+/// Shared propagation logic for BitcastOp in both directions.
+/// \p fromType is the known lattice type, \p toType is the type to update.
+/// \p lastDimIRType provides the symbolic last-dimension name for the "to" side
+/// when bitwidths differ.
+static llvm::FailureOr<ChangeResult> propagateBitcastShape(
+    Operation *op, wave::WaveTensorType fromType, wave::WaveTensorType &toType,
+    wave::WaveTensorType lastDimIRType, unsigned srcBits, unsigned dstBits,
+    StringRef fromName, StringRef toName, llvm::raw_ostream &errs) {
+  if (!fromType || !fromType.getFullySpecified())
     return ChangeResult::NoChange;
 
-  Type srcElemType = wave::getElementType(getValueToCast().getType());
-  Type dstElemType = wave::getElementType(getResult().getType());
-  unsigned srcBits = srcElemType.getIntOrFloatBitWidth();
-  unsigned dstBits = dstElemType.getIntOrFloatBitWidth();
-
-  // Same bitwidth: all dimensions are identical, use identity propagation.
   if (srcBits == dstBits)
-    return wave::detail::propagateShapeInformation(srcType, resultTypes[0],
-                                                   "input", "result", errs);
+    return wave::detail::propagateShapeInformation(fromType, toType, fromName,
+                                                   toName, errs);
 
-  // Different bitwidths: the last dimension is scaled. We need the result IR
-  // type to carry the destination's last dimension symbol.
-  auto dstIRType = llvm::dyn_cast<wave::WaveTensorType>(getResult().getType());
-  if (!dstIRType || !dstIRType.getFullySpecified())
+  if (!lastDimIRType || !lastDimIRType.getFullySpecified())
     return ChangeResult::NoChange;
 
-  // Build the expected result shape: leading dims from source, last dim from
-  // the result IR type (which carries its own symbolic dimension name).
-  SmallVector<wave::WaveSymbolAttr> newShape(srcType.getShape().drop_back(1));
-  newShape.push_back(dstIRType.getShape().back());
+  // Leading dims from the known side, last dim from the IR type of the
+  // unknown side (which carries its own symbolic dimension name).
+  SmallVector<wave::WaveSymbolAttr> newShape(fromType.getShape().drop_back(1));
+  newShape.push_back(lastDimIRType.getShape().back());
 
-  // Validate the last dimension ratio via hyperparameters when available.
-  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(getOperation());
-
+  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(op);
   if (hyper) {
     std::optional<int64_t> srcLast =
-        hyper.getSymbolValue(srcType.getShape().back().getName());
+        hyper.getSymbolValue(fromType.getShape().back().getName());
     std::optional<int64_t> dstLast =
-        hyper.getSymbolValue(dstIRType.getShape().back().getName());
+        hyper.getSymbolValue(lastDimIRType.getShape().back().getName());
     if (srcLast && dstLast && *srcLast * srcBits != *dstLast * dstBits) {
       errs << "bitcast trailing dimension mismatch: source last dim ("
            << *srcLast << ") * " << srcBits << " bits != result last dim ("
@@ -2557,57 +2549,37 @@ llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateForward(
     }
   }
 
-  return wave::detail::propagateShapeInformation(newShape, resultTypes[0],
-                                                 "input", "result", errs);
+  return wave::detail::propagateShapeInformation(newShape, toType, fromName,
+                                                 toName, errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateForward(
+    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  wave::WaveTensorType dstIRType =
+      llvm::dyn_cast<wave::WaveTensorType>(getResult().getType());
+  return propagateBitcastShape(getOperation(), operandTypes[0], resultTypes[0],
+                               dstIRType, srcBits, dstBits, "input", "result",
+                               errs);
 }
 
 llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateBackward(
     llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
     llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
-  wave::WaveTensorType dstType = resultTypes[0];
-  if (!dstType || !dstType.getFullySpecified())
-    return ChangeResult::NoChange;
-
-  Type srcElemType = wave::getElementType(getValueToCast().getType());
-  Type dstElemType = wave::getElementType(getResult().getType());
-  unsigned srcBits = srcElemType.getIntOrFloatBitWidth();
-  unsigned dstBits = dstElemType.getIntOrFloatBitWidth();
-
-  // Same bitwidth: all dimensions are identical, use identity propagation.
-  if (srcBits == dstBits)
-    return wave::detail::propagateShapeInformation(dstType, operandTypes[0],
-                                                   "result", "input", errs);
-
-  // Different bitwidths: the last dimension is scaled. We need the source IR
-  // type to carry the source's last dimension symbol.
-  auto srcIRType =
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  wave::WaveTensorType srcIRType =
       llvm::dyn_cast<wave::WaveTensorType>(getValueToCast().getType());
-  if (!srcIRType || !srcIRType.getFullySpecified())
-    return ChangeResult::NoChange;
-
-  // Build the expected source shape: leading dims from result, last dim from
-  // the source IR type (which carries its own symbolic dimension name).
-  SmallVector<wave::WaveSymbolAttr> newShape(dstType.getShape().drop_back(1));
-  newShape.push_back(srcIRType.getShape().back());
-
-  // Validate the last dimension ratio via hyperparameters when available.
-  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(getOperation());
-
-  if (hyper) {
-    std::optional<int64_t> srcLast =
-        hyper.getSymbolValue(srcIRType.getShape().back().getName());
-    std::optional<int64_t> dstLast =
-        hyper.getSymbolValue(dstType.getShape().back().getName());
-    if (srcLast && dstLast && *srcLast * srcBits != *dstLast * dstBits) {
-      errs << "bitcast trailing dimension mismatch: source last dim ("
-           << *srcLast << ") * " << srcBits << " bits != result last dim ("
-           << *dstLast << ") * " << dstBits << " bits";
-      return failure();
-    }
-  }
-
-  return wave::detail::propagateShapeInformation(newShape, operandTypes[0],
-                                                 "result", "input", errs);
+  return propagateBitcastShape(getOperation(), resultTypes[0], operandTypes[0],
+                               srcIRType, dstBits, srcBits, "result", "input",
+                               errs);
 }
 
 LogicalResult wave::BitcastOp::finalizeTypeInference() { return success(); }
