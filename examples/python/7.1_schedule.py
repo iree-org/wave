@@ -370,8 +370,8 @@ def test_dbuf_4wave_mxfp_asymmetric_gemm_cpp(
 
 def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     is_debug=False,
-    shape=(2048, 2048, 16384),  # 4*T0, 4*T1, 16384
-    block=(64, 64, 256),
+    shape=(1024, 1024, 8192),  # 4*T0, 4*T1, 16384
+    block=(128, 256, 256),
     eliminate_epilogue=True,
 ):
     """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
@@ -401,7 +401,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm(
     is_debug=False,
     shape=(1024, 1024, 8192),
     block=(128, 256, 256),
-    eliminate_epilogue=True,
+    eliminate_epilogue=False,
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K."""
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
@@ -448,13 +448,13 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     options.eliminate_epilogue = eliminate_epilogue
     options.dump_intermediates = "build/intermediates/"
     schedule = get_mxfp4_asymmetric_schedule(
-        eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+        eliminate_epilogue=eliminate_epilogue,
+        is_bscale_shuffled=True,
+        m_tile=block[0],
     )
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
-    from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
-    options.schedule = SchedulingType.NONE
-    gemm = wave_compile(options, gemm)
+    gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     print(
