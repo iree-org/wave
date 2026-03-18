@@ -2474,12 +2474,11 @@ LogicalResult wave::BitcastOp::verify() {
              << rank << ") must match rank of result ("
              << resultTensor.getRank() << ")";
 
-    // All dimensions except the last must match.
-    for (unsigned i = 0, e = rank - 1; i < e; ++i) {
-      if (valueTensor.getShape()[i] != resultTensor.getShape()[i])
-        return emitOpError("dimension ")
-               << i << " of input and result must match";
-    }
+    auto leadingDims = llvm::to_vector(llvm::seq<int>(rank - 1));
+    if (failed(wave::detail::verifyTypesMatchingDimensions(
+            getLoc(), "input", valueTensor, leadingDims, "result", resultTensor,
+            leadingDims)))
+      return failure();
 
     unsigned srcBW = valueTensor.getElementType().getIntOrFloatBitWidth();
     unsigned dstBW = resultTensor.getElementType().getIntOrFloatBitWidth();
