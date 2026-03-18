@@ -1041,3 +1041,144 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return
   }
 }
+
+// -----
+
+// Bitcast forward: i8 (8-bit) to f4 (4-bit) doubles the step on the last
+// dimension. Leading dimensions pass through unchanged.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @bitcast_forward_scales_step
+  func.func @bitcast_forward_scales_step(
+    %src: !wave.tensor<[@M, @K2] of i8, <global>>,
+    %dst: !wave.tensor<[@M, @K] of f4E2M1FN, <global>>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
+  } {
+    // Inject K2 step=16 on the read result.
+    %data = wave.read %src {wave_test.override_result_index = [[0, {
+        "K2" = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>,
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    }]]} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
+
+    // After bitcast i8->f4 (8-bit to 4-bit), the K2 step of 16 should become
+    // K step of 32 (doubled). M passes through unchanged.
+    // CHECK: wave.bitcast
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %bitcasted = wave.bitcast %data
+      : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+
+    // CHECK: wave.write
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    wave.write %bitcasted, %dst
+      : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>, !wave.tensor<[@M, @K] of f4E2M1FN, <global>>
+
+    return
+  }
+}
+
+// -----
+
+// Bitcast backward: f4 (4-bit) result index expressions should scale down
+// to i8 (8-bit) operand index expressions (step halved).
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @bitcast_backward_scales_step
+  func.func @bitcast_backward_scales_step(
+    %src: !wave.tensor<[@M, @K2] of i8, <global>>,
+    %dst: !wave.tensor<[@M, @K] of f4E2M1FN, <global>>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
+  } {
+    // CHECK: wave.read
+    // CHECK-DAG: K2 : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %data = wave.read %src
+      : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
+
+    // Inject K step=32 on the bitcast result. Backward propagation should
+    // produce K2 step=16 (halved) on the read.
+    %bitcasted = wave.bitcast %data {wave_test.override_result_index = [[0, {
+      K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>,
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    }]]} : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+
+    wave.write %bitcasted, %dst
+      : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>, !wave.tensor<[@M, @K] of f4E2M1FN, <global>>
+
+    return
+  }
+}
+
+// -----
+
+// Bitcast with f4 (4-bit) to i8 (8-bit) halves the step on the last dimension.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @bitcast_narrow_to_wide_halves_step
+  func.func @bitcast_narrow_to_wide_halves_step(
+    %src: !wave.tensor<[@M, @K] of f4E2M1FN, <global>>,
+    %dst: !wave.tensor<[@M, @K2] of i8, <global>>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
+  } {
+    %data = wave.read %src {wave_test.override_result_index = [[0, {
+      K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>,
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    }]]} : (!wave.tensor<[@M, @K] of f4E2M1FN, <global>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+
+    // After bitcast f4->i8 (4-bit to 8-bit), the K step of 32 should become
+    // K2 step of 16 (halved). M passes through unchanged.
+    // CHECK: wave.bitcast
+    // CHECK-DAG: K2 : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %bitcasted = wave.bitcast %data
+      : !wave.tensor<[@M, @K] of f4E2M1FN, <register>> to !wave.tensor<[@M, @K2] of i8, <register>>
+
+    wave.write %bitcasted, %dst
+      : !wave.tensor<[@M, @K2] of i8, <register>>, !wave.tensor<[@M, @K2] of i8, <global>>
+
+    return
+  }
+}
+
+// -----
+
+// Bitcast with same bitwidth (i8 to f8E8M0FNU): step is preserved.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @bitcast_same_bitwidth_identity
+  func.func @bitcast_same_bitwidth_identity(
+    %src: !wave.tensor<[@M, @K] of i8, <global>>,
+    %dst: !wave.tensor<[@M, @K] of f8E8M0FNU, <global>>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128}>
+  } {
+    %data = wave.read %src {wave_test.override_result_index = [[0, {
+      K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>,
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    }]]} : (!wave.tensor<[@M, @K] of i8, <global>>) -> !wave.tensor<[@M, @K] of i8, <register>>
+
+    // Same bitwidth: step is preserved, symbol name stays K.
+    // CHECK: wave.bitcast
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %bitcasted = wave.bitcast %data
+      : !wave.tensor<[@M, @K] of i8, <register>> to !wave.tensor<[@M, @K] of f8E8M0FNU, <register>>
+
+    wave.write %bitcasted, %dst
+      : !wave.tensor<[@M, @K] of f8E8M0FNU, <register>>, !wave.tensor<[@M, @K] of f8E8M0FNU, <global>>
+
+    return
+  }
+}
