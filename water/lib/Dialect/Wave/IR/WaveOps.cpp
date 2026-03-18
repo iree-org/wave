@@ -2584,6 +2584,144 @@ llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateBackward(
 
 LogicalResult wave::BitcastOp::finalizeTypeInference() { return success(); }
 
+// Remap the index expression lattice for bitcast: leading dimensions pass
+// through as identity, but the last dimension gets its symbol renamed and its
+// step (and start/stride if present) scaled by the element bitwidth ratio.
+static IndexExprsLatticeStorage
+scaleBitcastIndexExprs(const IndexExprsLatticeStorage &inputLattice,
+                       ArrayRef<wave::WaveSymbolAttr> fromShape,
+                       ArrayRef<wave::WaveSymbolAttr> toShape,
+                       unsigned fromBits, unsigned toBits, MLIRContext *ctx) {
+  if (inputLattice.isBottom() || inputLattice.isTop())
+    return inputLattice;
+
+  assert(fromShape.size() == toShape.size() &&
+         "bitcast shapes must have equal rank");
+
+  DictionaryAttr inputDict = inputLattice.getConcreteValue();
+
+  // When bitwidths are the same, fall through to identity-like propagation
+  // but still rename the last-dim symbol if needed.
+  unsigned ratio =
+      (fromBits > toBits) ? (fromBits / toBits) : (toBits / fromBits);
+  bool scaleUp = fromBits > toBits;
+
+  SmallVector<NamedAttribute> newMappings;
+  newMappings.reserve(inputDict.size());
+
+  WaveSymbolAttr fromLastSym = fromShape.back();
+  WaveSymbolAttr toLastSym = toShape.back();
+
+  for (NamedAttribute namedAttr : inputDict) {
+    StringRef symName = namedAttr.getName().getValue();
+    auto mapping = llvm::dyn_cast<WaveIndexMappingAttr>(namedAttr.getValue());
+    if (!mapping)
+      continue;
+
+    // Leading dimensions: pass through unchanged if the symbol also exists
+    // in the target shape.
+    if (symName != fromLastSym.getName()) {
+      newMappings.push_back(namedAttr);
+      continue;
+    }
+
+    // Last dimension: rename the symbol key and scale the step by the
+    // bitwidth ratio. Also scale start and stride when present.
+    auto scaleMap = [&](AffineMap map) -> AffineMap {
+      if (!map)
+        return map;
+      AffineExpr scaled =
+          scaleUp ? map.getResult(0) * ratio : map.getResult(0).floorDiv(ratio);
+      return AffineMap::get(map.getNumDims(), map.getNumSymbols(), scaled, ctx);
+    };
+
+    AffineMap newStep = scaleMap(mapping.getStep());
+    auto newMapping =
+        WaveIndexMappingAttr::get(ctx, mapping.getSymbols(), mapping.getStart(),
+                                  newStep, mapping.getStride());
+
+    newMappings.push_back(
+        NamedAttribute(StringAttr::get(ctx, toLastSym.getName()), newMapping));
+  }
+
+  if (newMappings.empty())
+    return IndexExprsLatticeStorage::bottom();
+
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, newMappings),
+                                  inputLattice.getPriority());
+}
+
+// Shared propagation logic for BitcastOp index expressions in both directions.
+// \p fromExprs is the source lattice, \p toExprs is the destination to update.
+// \p fromType / \p toType are the wave tensor types on the respective sides.
+// \p fromBits / \p toBits are the element bitwidths on the respective sides.
+static llvm::FailureOr<ChangeResult> propagateBitcastIndexExprs(
+    wave::BitcastOp op, llvm::ArrayRef<IndexExprsLatticeStorage> fromExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> toExprs,
+    WaveTensorType fromType, WaveTensorType toType, unsigned fromBits,
+    unsigned toBits, StringRef fromName, StringRef toName,
+    wave::EmitErrorFn emitError) {
+  if (!fromType || !fromType.getFullySpecified() || !toType ||
+      !toType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (fromBits == toBits)
+    return wave::detail::identityIndexExprsPropagate(
+        fromExprs, toExprs, toType, fromName, toName, emitError);
+
+  IndexExprsLatticeStorage scaled = scaleBitcastIndexExprs(
+      fromExprs[0], fromType.getShape(), toType.getShape(), fromBits, toBits,
+      op.getContext());
+
+  IndexExprsLatticeStorage newLattice =
+      IndexExprsLatticeStorage::join(toExprs[0], scaled);
+
+  if (newLattice.isTop() && !toExprs[0].isTop() && !scaled.isTop()) {
+    InFlightDiagnostic diag = emitError()
+                              << "conflict when propagating " << fromName
+                              << " to " << toName << " lattice in BitcastOp";
+    diag.attachNote() << toName << " lattice: " << toExprs[0];
+    diag.attachNote() << fromName << " lattice: " << fromExprs[0];
+    return diag;
+  }
+
+  return updateIfChanged(toExprs[0], newLattice);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(*this, operandExprs, resultExprs, inputType,
+                                    resultType, srcBits, dstBits, "operand",
+                                    "result", emitError);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(*this, resultExprs, operandExprs,
+                                    resultType, inputType, dstBits, srcBits,
+                                    "result", "operand", emitError);
+}
+
 llvm::FailureOr<mlir::ChangeResult>
 wave::BitcastOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
