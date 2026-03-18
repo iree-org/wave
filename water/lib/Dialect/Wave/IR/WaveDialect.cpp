@@ -413,8 +413,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
         if (!waveSym) {
           return op->emitError()
                  << "hyperparameter " << entry.getName()
-                 << " expr_list contains non-WaveSymbolAttr symbol: "
-                 << symAttr;
+                 << " expr_list may only contain wave symbols: " << symAttr;
         }
         usedSymbols.insert(waveSym.getName());
         if (!hyperparams.getMapping().contains(waveSym.getName())) {
