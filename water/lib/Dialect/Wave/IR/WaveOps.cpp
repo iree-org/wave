@@ -1106,6 +1106,44 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
+// Joins the given lattice with another lattice in place and handles conflicts.
+// If the lattice is already top, or the join result does not change the
+// lattice, the function returns success. If joining produces top (i.e., an
+// undecidable or conflicting result) that differs from the original, an error
+// is emitted using the provided emitError function.
+static LogicalResult
+joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
+                             StringRef latticeName,
+                             const wave::IndexExprsLatticeStorage &other,
+                             StringRef otherName, wave::EmitErrorFn emitError) {
+  if (lattice.isTop())
+    return success();
+
+  IndexExprsLatticeStorage joined =
+      IndexExprsLatticeStorage::join(lattice, other);
+  if (joined == lattice)
+    return success();
+  if (joined.isTop()) {
+    InFlightDiagnostic diag = emitError()
+                              << "conflict for " << latticeName
+                              << " index expression when propagating from "
+                              << otherName << " lattice";
+    diag.attachNote() << "original " << latticeName << " lattice: " << lattice;
+    diag.attachNote() << otherName << " lattice: " << other;
+    return diag;
+  }
+
+#ifndef NDEBUG
+  assert(IndexExprsLatticeStorage::join(joined, lattice) == joined &&
+         "join should not move the lattice backward");
+  assert(IndexExprsLatticeStorage::join(joined, other) == joined &&
+         "join should not move the lattice forward");
+#endif
+
+  lattice.unsafeSet(joined);
+  return success();
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1137,11 +1175,12 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
-      DictionaryAttr::get(getContext(), symbolMappings),
-      wave::IndexExprsLatticeStorage::kMmaPriority));
-
-  return llvm::success();
+  return joinIndexExprsLatticeInPlace(
+      resultExprs[0], "MMA result",
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), symbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority),
+      "implied by MMA kind", emitError);
 }
 
 // Initialize the index expression lattices for the operands of the MMA
@@ -1209,19 +1248,29 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
         return attr.getName() != mSymbol.getName();
       });
 
-  operandExprs[getLhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), lhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getRhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), rhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getAccumulatorMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  return llvm::success();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getLhsMutable().getOperandNumber()], "LHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), lhsSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getRhsMutable().getOperandNumber()], "RHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), rhsSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getAccumulatorMutable().getOperandNumber()],
+          "accumulator",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority),
+          "implied by MMA kind", emitError)))
+    return failure();
+  return success();
 }
 
 // Special case for MMA where we also want to have index expressions
@@ -2358,12 +2407,21 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       tensorType.getShape(), initObject.symbolConstraints, indexMappings);
-  operandExprs[getValueToStoreMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
-  operandExprs[getMemoryMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getValueToStoreMutable().getOperandNumber()],
+          "value to store",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority),
+          "implied by write operation", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getMemoryMutable().getOperandNumber()], "memory",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority),
+          "implied by write operation", emitError)))
+    return failure();
 
   return success();
 }
