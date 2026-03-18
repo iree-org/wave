@@ -526,6 +526,11 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
     /// evaluated by recursively resolving the referenced symbols.
     std::optional<int64_t> getSymbolValue(::llvm::StringRef symbolName) const;
 
+    /// Like getSymbolValue, but asserts that the symbol exists and can be
+    /// resolved.  Use when the caller has already verified the symbol is
+    /// present.
+    int64_t getKnownSymbolValue(::llvm::StringRef symbolName) const;
+
     /// Check if a symbol exists in the mapping
     bool hasSymbol(::llvm::StringRef symbolName) const;
 

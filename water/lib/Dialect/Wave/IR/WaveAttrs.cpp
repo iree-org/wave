@@ -552,6 +552,13 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   return it->second;
 }
 
+int64_t
+WaveHyperparameterAttr::getKnownSymbolValue(StringRef symbolName) const {
+  std::optional<int64_t> value = getSymbolValue(symbolName);
+  assert(value && "expected symbol to exist and be resolvable");
+  return *value;
+}
+
 bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
   return getMapping().get(symbolName) != nullptr;
 }
