@@ -423,6 +423,22 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
                  << " not defined in the same hyperparameters mapping";
         }
       }
+    }
+
+    // Verify that derived symbols do not form cycles.
+    if (llvm::failed(wave::verifyHyperparameterAcyclicity(
+            hyperparams, op->getContext(), [&]() { return op->emitError(); })))
+      return llvm::failure();
+
+    // Verify expr_list values in the hyperparameters: each must be a
+    // single-result affine map whose sole expression is a single ceiling
+    // division.  All referenced symbols must exist as entries in the same
+    // mapping, and the dividend must be evenly divisible by the divisor.
+    for (const NamedAttribute &entry : hyperparams.getMapping()) {
+      wave::WaveExprListAttr exprList =
+          llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+      if (!exprList)
+        continue;
 
       // The expression must contain exactly one ceiling division.
       AffineExpr result = exprList.getMap().getResult(0);
@@ -439,33 +455,25 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       // Resolve all symbols to constants and evaluate both sides.
       llvm::SmallVector<AffineExpr> replacements;
       replacements.reserve(exprList.getMap().getNumSymbols());
-      bool allResolved = true;
       for (Attribute symAttr : exprList.getSymbols()) {
         StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
         std::optional<int64_t> val = hyperparams.getSymbolValue(dep);
-        if (!val) {
-          allResolved = false;
-          break;
-        }
         replacements.push_back(getAffineConstantExpr(*val, op->getContext()));
       }
-      if (allResolved) {
-        AffineExpr lhsExpr = divExpr.getLHS().replaceSymbols(replacements);
-        lhsExpr = simplifyAffineExpr(lhsExpr, 0, 0);
-        AffineExpr rhsExpr = divExpr.getRHS().replaceSymbols(replacements);
-        rhsExpr = simplifyAffineExpr(rhsExpr, 0, 0);
-        AffineConstantExpr lhsConst =
-            llvm::dyn_cast<AffineConstantExpr>(lhsExpr);
-        AffineConstantExpr rhsConst =
-            llvm::dyn_cast<AffineConstantExpr>(rhsExpr);
-        if (lhsConst && rhsConst && rhsConst.getValue() != 0 &&
-            lhsConst.getValue() % rhsConst.getValue() != 0) {
-          return op->emitError()
-                 << "hyperparameter " << entry.getName() << " has dividend ("
-                 << lhsConst.getValue()
-                 << ") that is not evenly divisible by the divisor ("
-                 << rhsConst.getValue() << ")";
-        }
+
+      AffineExpr lhsExpr = divExpr.getLHS().replaceSymbols(replacements);
+      lhsExpr = simplifyAffineExpr(lhsExpr, 0, 0);
+      AffineExpr rhsExpr = divExpr.getRHS().replaceSymbols(replacements);
+      rhsExpr = simplifyAffineExpr(rhsExpr, 0, 0);
+      AffineConstantExpr lhsConst = llvm::cast<AffineConstantExpr>(lhsExpr);
+      AffineConstantExpr rhsConst = llvm::cast<AffineConstantExpr>(rhsExpr);
+      if (rhsConst.getValue() != 0 &&
+          lhsConst.getValue() % rhsConst.getValue() != 0) {
+        return op->emitError()
+               << "hyperparameter " << entry.getName() << " has dividend ("
+               << lhsConst.getValue()
+               << ") that is not evenly divisible by the divisor ("
+               << rhsConst.getValue() << ")";
       }
     }
 

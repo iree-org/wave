@@ -13,9 +13,11 @@
 #include "mlir/IR/Dialect.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
 
@@ -172,4 +174,35 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
   }
 
   return success();
+}
+
+LogicalResult wave::verifyHyperparameterAcyclicity(
+    wave::WaveHyperparameterAttr hyperparams, MLIRContext *ctx,
+    llvm::function_ref<InFlightDiagnostic()> emitError) {
+  HyperparamDepGraph graph;
+  for (const NamedAttribute &entry : hyperparams.getMapping()) {
+    auto exprList = llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+    if (!exprList)
+      continue;
+    wave::WaveSymbolAttr key =
+        wave::WaveSymbolAttr::get(ctx, entry.getName().getValue());
+    graph.exprListKeys.push_back(key);
+    auto &edges = graph.deps[key];
+    for (Attribute symAttr : exprList.getSymbols())
+      edges.push_back(llvm::cast<wave::WaveSymbolAttr>(symAttr));
+  }
+
+  const HyperparamDepGraph *graphPtr = &graph;
+  for (auto scci = llvm::scc_begin(graphPtr); !scci.isAtEnd(); ++scci) {
+    if (!scci.hasCycle())
+      continue;
+    const auto &scc = *scci;
+    llvm::SmallVector<StringRef> names;
+    for (const HyperparamDepGraph::Node &n : scc)
+      if (n.sym)
+        names.push_back(n.sym.getName());
+    return emitError() << "hyperparameter dependency cycle: "
+                       << llvm::join(names, ", ");
+  }
+  return llvm::success();
 }

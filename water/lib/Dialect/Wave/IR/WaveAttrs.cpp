@@ -487,7 +487,6 @@ std::optional<int64_t>
 WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   DictionaryAttr mapping = getMapping();
   llvm::StringMap<int64_t> resolved;
-  llvm::StringSet<> visited;
 
   // Iterative worklist: each entry is a symbol name still to resolve.
   // When we pop a name whose dependencies are all resolved we can evaluate
@@ -525,13 +524,8 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
       }
     }
 
-    if (pushedDeps) {
-      // Cycle detection: if we've already tried expanding this name once,
-      // seeing it again with unresolved deps means a cycle.
-      if (!visited.insert(name).second)
-        return std::nullopt;
+    if (pushedDeps)
       continue;
-    }
 
     // All deps resolved -- evaluate the affine expression.
     AffineMap map = exprList.getMap();
