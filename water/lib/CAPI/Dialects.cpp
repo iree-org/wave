@@ -258,8 +258,7 @@ MlirAttribute mlirWaveHyperparameterAttrGet(MlirAttribute mapping) {
 
   assert(llvm::all_of(dictAttr,
                       [](const NamedAttribute &namedAttr) {
-                        return llvm::isa<IntegerAttr>(namedAttr.getValue()) ||
-                               llvm::isa<wave::WaveExprListAttr>(
+                        return llvm::isa<IntegerAttr, wave::WaveExprListAttr>>(
                                    namedAttr.getValue());
                       }) &&
          "expected mapping to contain only integer or WaveExprListAttr values");
