@@ -515,28 +515,21 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
 
     auto exprList = cast<WaveExprListAttr>(attr);
 
-    // Check whether all dependencies are already resolved.
-    bool allResolved = true;
+    // Push unresolved dependencies so they get processed first.
+    bool pushedDeps = false;
     for (Attribute symAttr : exprList.getSymbols()) {
-      auto waveSym = cast<WaveSymbolAttr>(symAttr);
-      if (!resolved.contains(waveSym.getName())) {
-        allResolved = false;
-        break;
+      StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
+      if (!resolved.contains(dep)) {
+        worklist.push_back(dep);
+        pushedDeps = true;
       }
     }
 
-    if (!allResolved) {
+    if (pushedDeps) {
       // Cycle detection: if we've already tried expanding this name once,
-      // pushing it again means a cycle.
+      // seeing it again with unresolved deps means a cycle.
       if (!visited.insert(name).second)
         return std::nullopt;
-
-      // Push unresolved dependencies so they get processed first.
-      for (Attribute symAttr : exprList.getSymbols()) {
-        StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
-        if (!resolved.contains(dep))
-          worklist.push_back(dep);
-      }
       continue;
     }
 
