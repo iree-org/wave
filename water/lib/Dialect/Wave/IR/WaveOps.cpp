@@ -2494,6 +2494,8 @@ LogicalResult wave::BitcastOp::verify() {
       return emitOpError("trailing dimension must be scaled by the "
                          "element bitwidth ratio (")
              << srcBW << "-bit to " << dstBW << "-bit)";
+
+    return success();
   }
 
   auto valueVec = llvm::dyn_cast<VectorType>(valueType);
