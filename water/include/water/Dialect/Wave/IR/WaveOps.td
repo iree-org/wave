@@ -753,6 +753,15 @@ def BitcastOp : WaveOp<"bitcast", [
     For example, bitcasting a tensor with i8 elements to f4E2M1FN doubles
     the last dimension (8/4 = 2), while bitcasting to f8E8M0FNU preserves
     the dimension (8/8 = 1).
+
+    When both operand and result are fully-specified wave tensors, the
+    verifier enforces:
+
+    - The rank must be non-zero and must match between input and result.
+    - All dimensions except the trailing one must be identical.
+    - The larger element bitwidth must be evenly divisible by the smaller.
+    - When the element bitwidths differ, the trailing dimension must be
+      scaled accordingly (it may not remain unchanged).
   }];
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Value to bitcast">:$value_to_cast
