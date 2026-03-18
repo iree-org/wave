@@ -393,9 +393,10 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
     }
 
     // Verify expr_list values in the hyperparameters: each must be a
-    // single-result affine map whose sole expression is a single ceiling
-    // division.  All referenced symbols must exist as entries in the same
-    // mapping, and the dividend must be evenly divisible by the divisor.
+    // single-result affine map whose sole expression is a ceiling division of a
+    // symbol by a constant.  All referenced symbols must exist as entries in
+    // the same mapping, and the dividend must be evenly divisible by the
+    // divisor.
     for (const NamedAttribute &entry : hyperparams.getMapping()) {
       wave::WaveExprListAttr exprList =
           llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
@@ -431,9 +432,10 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       return llvm::failure();
 
     // Verify expr_list values in the hyperparameters: each must be a
-    // single-result affine map whose sole expression is a single ceiling
-    // division.  All referenced symbols must exist as entries in the same
-    // mapping, and the dividend must be evenly divisible by the divisor.
+    // single-result affine map whose sole expression is a ceiling division of a
+    // symbol by a constant.  All referenced symbols must exist as entries in
+    // the same mapping, and the dividend must be evenly divisible by the
+    // divisor.
     for (const NamedAttribute &entry : hyperparams.getMapping()) {
       wave::WaveExprListAttr exprList =
           llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
@@ -443,12 +445,20 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       // The expression must contain exactly one ceiling division.
       AffineExpr result = exprList.getMap().getResult(0);
 
-      // The expression must be a single ceiling division.
+      // The expression must be a ceiling division of a symbol by a constant.
       AffineBinaryOpExpr divExpr = llvm::dyn_cast<AffineBinaryOpExpr>(result);
       if (!divExpr || divExpr.getKind() != AffineExprKind::CeilDiv) {
         return op->emitError()
                << "hyperparameter " << entry.getName()
                << " expr_list must be a ceiling division expression";
+      }
+      if (!llvm::isa<AffineSymbolExpr>(divExpr.getLHS())) {
+        return op->emitError() << "hyperparameter " << entry.getName()
+                               << " expr_list dividend must be a symbol";
+      }
+      if (!llvm::isa<AffineConstantExpr>(divExpr.getRHS())) {
+        return op->emitError() << "hyperparameter " << entry.getName()
+                               << " expr_list divisor must be a constant";
       }
 
       // Verify that the dividend is evenly divisible by the divisor.
