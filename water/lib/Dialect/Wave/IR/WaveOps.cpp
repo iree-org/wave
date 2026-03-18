@@ -2617,7 +2617,7 @@ wave::BitcastOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
-  if (operandElements[0].isBottom())
+  if (operandElements[getValueToCastMutable().getOperandNumber()].isBottom())
     return ChangeResult::NoChange;
 
   Type srcElemType = wave::getElementType(getValueToCast().getType());
