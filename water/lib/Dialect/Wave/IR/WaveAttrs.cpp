@@ -519,7 +519,7 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
     bool allResolved = true;
     for (Attribute symAttr : exprList.getSymbols()) {
       auto waveSym = cast<WaveSymbolAttr>(symAttr);
-      if (!resolved.count(waveSym.getName())) {
+      if (!resolved.contains(waveSym.getName())) {
         allResolved = false;
         break;
       }
@@ -534,7 +534,7 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
       // Push unresolved dependencies so they get processed first.
       for (Attribute symAttr : exprList.getSymbols()) {
         StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
-        if (!resolved.count(dep))
+        if (!resolved.contains(dep))
           worklist.push_back(dep);
       }
       continue;
