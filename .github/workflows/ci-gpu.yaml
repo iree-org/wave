@@ -210,7 +210,8 @@ jobs:
         if: ${{ env.HAS_GPU == 'true' && env.IS_CDNA4 == 'false' }}
         run: |
           python -m pip install --upgrade pip
-          pip install -r pytorch-rocm-requirements.txt
+          ./gen-pytorch-rocm-requirements.py -o /tmp/pytorch-rocm-requirements.txt
+          pip install -r /tmp/pytorch-rocm-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -e ".[dev]"
 
