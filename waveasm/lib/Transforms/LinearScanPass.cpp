@@ -33,6 +33,24 @@ namespace waveasm {
 #include "waveasm/Transforms/Passes.h.inc"
 } // namespace waveasm
 
+/// Get a value's physical register index from the mapping, falling back to
+/// the type's index for already-physical (precolored) values.
+/// Returns -1 if the value has no physical register assignment.
+static int64_t getEffectivePhysReg(Value value,
+                                   const PhysicalMapping &mapping) {
+  int64_t physReg = mapping.getPhysReg(value);
+  if (physReg >= 0)
+    return physReg;
+  Type ty = value.getType();
+  if (auto pvreg = dyn_cast<PVRegType>(ty))
+    return pvreg.getIndex();
+  if (auto pareg = dyn_cast<PARegType>(ty))
+    return pareg.getIndex();
+  if (auto psreg = dyn_cast<PSRegType>(ty))
+    return psreg.getIndex();
+  return -1;
+}
+
 /// Convert a virtual register type to a physical register type.
 /// Also handles re-indexing an already-physical type to a new physReg.
 /// Returns the original type unchanged if it's not a register type
@@ -236,30 +254,40 @@ private:
 
     auto [mapping, stats] = *result;
 
-    // Handle waveasm.extract ops: result = source[offset]
-    // Set the extract result's physical register = source's physical register +
-    // offset
+    // Handle waveasm.extract ops: result = source[offset].
+    // Set the extract result's physical register = source's physReg + offset.
     program.walk([&](ExtractOp extractOp) {
-      Value source = extractOp.getVector();
-      Value extractResult = extractOp.getResult();
-      int64_t index = extractOp.getIndex();
-
-      // Get source's physical register (may be precolored or allocated)
-      int64_t sourcePhysReg = -1;
-      Type srcType = source.getType();
-      if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
-        sourcePhysReg = pvreg.getIndex();
-      } else if (auto pareg = dyn_cast<PARegType>(srcType)) {
-        sourcePhysReg = pareg.getIndex();
-      } else {
-        sourcePhysReg = mapping.getPhysReg(source);
-      }
-
-      if (sourcePhysReg >= 0) {
-        // Set the extract result to source + offset
-        mapping.setPhysReg(extractResult, sourcePhysReg + index);
-      }
+      int64_t sourcePhysReg =
+          getEffectivePhysReg(extractOp.getVector(), mapping);
+      if (sourcePhysReg >= 0)
+        mapping.setPhysReg(extractOp.getResult(),
+                           sourcePhysReg + extractOp.getIndex());
     });
+
+    // Handle waveasm.pack ops: input[i] gets result's physReg + i.
+    // Pack inputs were excluded from the allocation worklists during liveness
+    // analysis, so they have no mapping yet. Assign them here from the pack
+    // result's contiguous allocation.
+    WalkResult packResult = program.walk([&](PackOp packOp) {
+      int64_t resultPhysReg = getEffectivePhysReg(packOp.getResult(), mapping);
+      if (resultPhysReg < 0) {
+        packOp.emitError(
+            "pack result has no physical register; cannot assign inputs");
+        return WalkResult::interrupt();
+      }
+      llvm::DenseSet<Value> seen;
+      for (auto [i, input] : llvm::enumerate(packOp.getElements())) {
+        if (!seen.insert(input).second) {
+          packOp.emitError("duplicate pack input at index ")
+              << i << "; each input must be a distinct value";
+          return WalkResult::interrupt();
+        }
+        mapping.setPhysReg(input, resultPhysReg + static_cast<int64_t>(i));
+      }
+      return WalkResult::advance();
+    });
+    if (packResult.wasInterrupted())
+      return failure();
 
     // Transform the IR: replace virtual register types with physical types
     OpBuilder builder(program.getContext());
