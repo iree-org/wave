@@ -2537,14 +2537,14 @@ static llvm::FailureOr<ChangeResult> propagateBitcastShape(
 
   wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(op);
   if (hyper) {
-    std::optional<int64_t> srcLast =
-        hyper.getSymbolValue(fromType.getShape().back().getName());
-    std::optional<int64_t> dstLast =
-        hyper.getSymbolValue(lastDimIRType.getShape().back().getName());
-    if (srcLast && dstLast && *srcLast * srcBits != *dstLast * dstBits) {
+    int64_t srcLast =
+        hyper.getKnownSymbolValue(fromType.getShape().back().getName());
+    int64_t dstLast =
+        hyper.getKnownSymbolValue(lastDimIRType.getShape().back().getName());
+    if (srcLast * srcBits != dstLast * dstBits) {
       errs << "bitcast trailing dimension mismatch: source last dim ("
-           << *srcLast << ") * " << srcBits << " bits != result last dim ("
-           << *dstLast << ") * " << dstBits << " bits";
+           << srcLast << ") * " << srcBits << " bits != result last dim ("
+           << dstLast << ") * " << dstBits << " bits";
       return failure();
     }
   }

@@ -467,7 +467,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       replacements.reserve(exprList.getMap().getNumSymbols());
       for (Attribute symAttr : exprList.getSymbols()) {
         StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
-        std::optional<int64_t> val = hyperparams.getSymbolValue(dep);
+        int64_t val = hyperparams.getKnownSymbolValue(dep);
         replacements.push_back(getAffineConstantExpr(*val, op->getContext()));
       }
 
