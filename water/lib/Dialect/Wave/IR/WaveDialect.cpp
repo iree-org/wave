@@ -468,7 +468,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       for (Attribute symAttr : exprList.getSymbols()) {
         StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
         int64_t val = hyperparams.getKnownSymbolValue(dep);
-        replacements.push_back(getAffineConstantExpr(*val, op->getContext()));
+        replacements.push_back(getAffineConstantExpr(val, op->getContext()));
       }
 
       AffineExpr lhsExpr = divExpr.getLHS().replaceSymbols(replacements);
