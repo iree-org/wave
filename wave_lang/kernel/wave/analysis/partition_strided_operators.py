@@ -40,9 +40,11 @@ from ..utils.tag_utils import propagate_tag
 from ..utils.general_utils import (
     all_equal,
     get_fastest_index,
+    get_flat_offset,
     get_hardware_constraint,
     get_largest_index_and_size,
     infer_dim,
+    is_flattened_index,
 )
 from ..utils.mma_utils import (
     simplify_index,
@@ -581,14 +583,19 @@ def _flatten_bounds_to_mask_expr(
             index = transform_info.transformed_index
 
     conditions = []
-    for dim, bound in custom.bounds.items():
-        if dim not in index:
-            continue
-        start = (
-            index[dim].start if isinstance(index[dim], IndexSequence) else index[dim]
-        )
-        if isinstance(start, int):
-            start = sympy.Integer(start)
+    for key, bound in custom.bounds.items():
+        if isinstance(key, IndexSymbol) and key in index:
+            # Legacy per-dim bound.
+            start = (
+                index[key].start
+                if isinstance(index[key], IndexSequence)
+                else index[key]
+            )
+            if isinstance(start, int):
+                start = sympy.Integer(start)
+        else:
+            # Expression-keyed bound (from flattened index).
+            start = key
         if isinstance(bound, int):
             bound = sympy.Integer(bound)
         conditions.append(sympy.StrictLessThan(start, bound))
@@ -1514,12 +1521,18 @@ def _wide_merge_fastpath_pass(
 
         read_infos = []
         for custom, node in customs:
-            phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
-            if phys_start is None:
-                continue
-            flat_offset = sum(
-                phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
-            )
+            if is_flattened_index(custom.index):
+                flat_offset = get_flat_offset(custom.index)
+                phys_start = {dim: sympy.Integer(0) for dim in symbolic_dims}
+                phys_start[symbolic_dims[-1]] = flat_offset
+            else:
+                phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
+                if phys_start is None:
+                    continue
+                flat_offset = sum(
+                    phys_start[dim] * stride
+                    for dim, stride in zip(symbolic_dims, strides)
+                )
             read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
 
         if len(read_infos) < 2:
@@ -1703,12 +1716,18 @@ def _merge_contiguous_reads_once(
 
         read_infos = []
         for custom, node in customs:
-            phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
-            if phys_start is None:
-                continue
-            flat_offset = sum(
-                phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
-            )
+            if is_flattened_index(custom.index):
+                flat_offset = get_flat_offset(custom.index)
+                phys_start = {dim: sympy.Integer(0) for dim in symbolic_dims}
+                phys_start[symbolic_dims[-1]] = flat_offset
+            else:
+                phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
+                if phys_start is None:
+                    continue
+                flat_offset = sum(
+                    phys_start[dim] * stride
+                    for dim, stride in zip(symbolic_dims, strides)
+                )
             read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
 
         merged, did_merge = _pairwise_merge(
