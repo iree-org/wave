@@ -1986,10 +1986,65 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         };
 
         SmallVector<Value> valuesForIndexExpr;
-        std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
-            iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
         SmallVector<Attribute> indexExprs;
         indexExprs.reserve(valuesForIndexExpr.size());
+
+        // Special case for MMA operations. We always set their index attribute
+        // to whatever is implied by the MMA kind regardless of the values
+        // inferred for operands because MMAs must retain their specific index
+        // expressions.
+        // TODO: this shouldn't strictly necessary in a purely MLIR flow and is
+        // kept for Python compatibility.
+        std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
+            iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+        if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation())) {
+          SmallVector<wave::IndexExprsLatticeStorage> operandLattices;
+          operandLattices.resize(3, wave::IndexExprsLatticeStorage::bottom());
+          wave::EmitDelayedErrorFn delayedError;
+          Attribute constraints;
+          // TODO(#1049): this is not ideal, especially when combined with
+          // getting hyperparameters below, we could just have a double walk
+          // with a kernel operation first if we had one, or even do a
+          // per-kernel pass.
+          for (Operation *parent = mma->getParentOp(); parent && !constraints;
+               parent = parent->getParentOp()) {
+            constraints = parent->getAttrOfType<ArrayAttr>(
+                wave::WaveDialect::kWaveConstraintsAttrName);
+          }
+          assert(constraints && "constraints not found");
+          if (failed(mma.initializeIndexExprsBackward(
+                  operandLattices,
+                  *wave::IndexExprsAnalysisInit::create(
+                      mma->getLoc(), constraints,
+                      wave::getHyperparameters(mma)),
+                  [&]() { return mma->emitError(); }, delayedError)))
+            return WalkResult::interrupt();
+          if (delayedError) {
+            InFlightDiagnostic diag = mma->emitError();
+            delayedError(diag);
+            return WalkResult::interrupt();
+          }
+          for (unsigned i = 0, e = operandLattices.size(); i < e; ++i) {
+            SmallString<32> description;
+            llvm::raw_svector_ostream os(description);
+            descriptionGenerator(os, i);
+            [[maybe_unused]] LogicalResult logicalResult =
+                detail::checkAndAppendIndexExpr(
+                    mma->getLoc(), operandLattices[i], description, indexExprs);
+            assert(succeeded(logicalResult) &&
+                   "failed to append implied index expression, it must not be "
+                   "bottom/top");
+          }
+          if (failed(detail::checkAndAppendIndexExpr(
+                  mma->getLoc(), getLatticeValue(mma.getResult()), "mma result",
+                  indexExprs)))
+            return WalkResult::interrupt();
+
+          iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                         ArrayAttr::get(iface->getContext(), indexExprs));
+          return WalkResult::advance();
+        }
+
         for (auto &&[i, value] : llvm::enumerate(valuesForIndexExpr)) {
           llvm::SmallString<32> description;
           llvm::raw_svector_ostream os(description);
