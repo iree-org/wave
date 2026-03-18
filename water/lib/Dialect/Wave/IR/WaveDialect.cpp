@@ -393,7 +393,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
     }
 
     // Verify expr_list values in the hyperparameters: each must be a
-    // single-result affine map whose sole expression is a single floor
+    // single-result affine map whose sole expression is a single ceiling
     // division.  All referenced symbols must exist as entries in the same
     // mapping, and the dividend must be evenly divisible by the divisor.
     for (const NamedAttribute &entry : hyperparams.getMapping()) {
@@ -425,15 +425,15 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
         }
       }
 
-      // The expression must contain exactly one floor division.
+      // The expression must contain exactly one ceiling division.
       AffineExpr result = exprList.getMap().getResult(0);
 
-      // The expression must be a single floor division.
+      // The expression must be a single ceiling division.
       AffineBinaryOpExpr divExpr = llvm::dyn_cast<AffineBinaryOpExpr>(result);
-      if (!divExpr || divExpr.getKind() != AffineExprKind::FloorDiv) {
+      if (!divExpr || divExpr.getKind() != AffineExprKind::CeilDiv) {
         return op->emitError()
                << "hyperparameter " << entry.getName()
-               << " expr_list must be a floor division expression";
+               << " expr_list must be a ceiling division expression";
       }
 
       // Verify that the dividend is evenly divisible by the divisor.

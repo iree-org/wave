@@ -345,15 +345,15 @@ def _convert_sympy_expr_to_affine_map(
     expr = sympy.simplify(expr)
 
     # Bare symbolic fractions like BLOCK_K/32 cannot be represented as affine
-    # expressions directly. Wrap them in floor() so they lower to floordiv.
-    # All Wave symbols are positive integers, so floor(x/n) == x/n when x is
+    # expressions directly. Wrap them in ceiling() so they lower to ceildiv.
+    # All Wave symbols are positive integers, so ceiling(x/n) == x/n when x is
     # divisible by n.
     if isinstance(expr, sympy.Mul):
         _, denom = expr.as_numer_denom()
         if denom != 1 and not isinstance(denom, sympy.Integer):
             pass
         elif isinstance(denom, sympy.Integer) and denom > 1:
-            expr = sympy.floor(expr)
+            expr = sympy.ceiling(expr)
 
     return convert_sympy_to_affine_map(
         expr, [sym.name for sym in symbol_mapping.values()]
