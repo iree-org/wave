@@ -835,6 +835,7 @@ def testAsmBackendCache(tmp_path):
     # First compilation - should be a cache miss
     kernel1 = wave_compile(options, simple_copy)
     kernel1(a, b)
+    assert_close(a, b)
 
     assert (
         cache_manager.cache_misses == 1 and cache_manager.cache_hits == 0
@@ -851,6 +852,7 @@ def testAsmBackendCache(tmp_path):
     # Second compilation - should be a cache hit
     kernel2 = wave_compile(options, simple_copy)
     kernel2(a, b)
+    assert_close(a, b)
 
     assert (
         cache_manager.cache_misses == 1 and cache_manager.cache_hits == 1
