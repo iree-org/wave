@@ -463,6 +463,63 @@ bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
       });
 }
 
+FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsForward(
+    TypeRange operandTypes, Type resultType,
+    llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError) {
+  auto targetTensorType = dyn_cast<WaveTensorType>(resultType);
+  if (!targetTensorType) {
+    emitError() << "expected result tensor type, got " << resultType;
+    return failure();
+  }
+
+  // Multiple operands appear after expansion, which requires index inference to
+  // work, so this is not expected to happen with correct pass pipeline setup.
+  if (operandExprs.size() != 2) {
+    emitError()
+        << "index inference not supported for reduction with multiple operands";
+    return failure();
+  }
+
+  // Forward propagation is identity only for symbols that are present.
+  return identityIndexExprsPropagate(
+             operandExprs[0].keepOnlySymbols(targetTensorType.getShape()),
+             resultExprs, operandTypes, "reduced value", "result", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], resultExprs, operandTypes,
+                                     "init", "result", emitError);
+}
+
+FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsBackward(
+    TypeRange operandTypes,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError) {
+  auto initTensorType = dyn_cast<WaveTensorType>(operandTypes[1]);
+  if (!initTensorType) {
+    emitError() << "expected init tensor type, got " << operandTypes[1];
+    return failure();
+  }
+  if (operandExprs.size() != 2) {
+    emitError()
+        << "index inference not supported for reduction with multiple operands";
+    return failure();
+  }
+
+  // Backward propagation to the reduced is identity: it will propagate
+  // expressions for symbols present in both target and source, but additional
+  // propagation from the op defining the operand is needed to cover reduction
+  // dimensions. Backward propagation to the init is full identity.
+  return identityIndexExprsPropagate(resultExprs[0], operandExprs, operandTypes,
+                                     "result", "operands", emitError) |
+         identityIndexExprsPropagate(
+             operandExprs[0].keepOnlySymbols(initTensorType.getShape()),
+             operandExprs[1], operandTypes[1], "operand", "init", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], operandExprs[0],
+                                     operandTypes[0], "init", "operand",
+                                     emitError);
+}
+
 //-----------------------------------------------------------------------------
 // Index expr initialization
 //-----------------------------------------------------------------------------

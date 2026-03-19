@@ -60,6 +60,10 @@ void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------
 
+class IndexExprsLatticeStorage;
+class IndexExprsAnalysisInit;
+class WaveInferIndexExprsOpInterface;
+
 namespace detail {
 // Propagate shape information from `from` tensor types to `to` tensor types.
 // Expects all fully-specified tensor types to have the same shape, prints an
@@ -126,6 +130,18 @@ llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesBackward(
 // operation is complete, i.e., all values have fully specified types.
 bool isReductionTypeInferenceComplete(mlir::Value input, mlir::Value init,
                                       mlir::Value result);
+
+llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsForward(
+    mlir::TypeRange operandTypes, mlir::Type resultType,
+    llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError);
+
+llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsBackward(
+    mlir::TypeRange operandTypes,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError);
 
 // Check whether the `from` and `to` tensor types have reconcilable shapes and
 // and print error messages to `errs` otherwise. The error message uses `toName`
@@ -207,6 +223,32 @@ public:
                                                  concrete.getResult()))
       concrete.removeAxisAttr();
     return llvm::success();
+  }
+};
+
+template <typename OpTy>
+class ReductionIndexExprsInferenceOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy,
+                                      ReductionIndexExprsInferenceOpTrait> {
+public:
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsForward(
+      llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+      EmitErrorFn errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
+    return detail::propagateReductionIndexExprsForward(
+        concrete.getOperands().getTypes(), concrete.getResult().getType(),
+        operandExprs, resultExprs, errs);
+  }
+
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsBackward(
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs, EmitErrorFn errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
+    return detail::propagateReductionIndexExprsBackward(
+        concrete.getOperands().getTypes(), operandExprs, resultExprs, errs);
   }
 };
 
