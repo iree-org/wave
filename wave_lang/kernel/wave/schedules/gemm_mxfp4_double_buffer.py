@@ -826,6 +826,9 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         if block is not None and block == (256, 192, 256):
             safe = 2
 
+        if block is not None and block == (256, 160, 256):
+            safe = 5
+
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
         use_extra_barrier = False
@@ -899,11 +902,77 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                 ),
             ]
 
+        elif block is not None and block == (256, 160, 256):
+            cluster_0_ops = [
+                tkw.SchedulingBarrier([]),
+                tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
+                tkw.WorkgroupBarrier(),
+            ]
+            if use_extra_barrier:
+                cluster_0_ops.append(tkw.WorkgroupBarrier())
+            cluster_0_ops.extend(
+                [
+                    loop_global_to_shared,
+                    tkw.SchedulingBarrier([]),
+                    loop_shared_load_a_0,
+                    loop_shared_load_b_0,
+                    loop_bitcast_a_0,
+                    loop_bitcast_a_scale,
+                    loop_bitcast_b_0,
+                    loop_bitcast_b_scale,
+                    loop_shared_load_a_1,
+                    loop_shared_load_b_1,
+                    tkw.SchedulingBarrier([]),
+                ]
+            )
+            if use_stagger:
+                cluster_0_ops.extend(
+                    [
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ]
+                )
+
+            clusters = [
+                tkw.cluster(cluster_0_ops),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_0,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SchedulingBarrier([]),
+                        loop_bitcast_a_1,
+                        loop_bitcast_b_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWait(
+                            load=(number_outstanding_loads_to_vgpr + safe)
+                        ),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_1,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
+
         else:
 
             cluster_0_ops = [
                 tkw.SchedulingBarrier([]),
-                tkw.MemoryCounterWait(load=0),
+                # tkw.MemoryCounterWait(load=0),
                 tkw.WorkgroupBarrier(),
             ]
             if use_extra_barrier:
@@ -967,10 +1036,9 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
             ]
 
         # Insert barriers at loop boundaries
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
         tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
-
-        tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
 
         # Apply the cluster-based reordering
         tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
