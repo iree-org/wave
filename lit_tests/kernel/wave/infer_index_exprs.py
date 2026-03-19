@@ -12,9 +12,14 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as wave
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 
+from wave_lang.kernel.wave.templates import AttentionShape
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_vanilla_attention_kernel,
+)
+from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
 
 def _get_matrix_add_kernel():
@@ -272,9 +277,38 @@ def testMultiResultIterate():
     assert compiled_kernel is not None
 
 
+def testAttention():
+    attention, hyperparams, _ = get_vanilla_attention_kernel(
+        AttentionShape(
+            num_query_heads=8,
+            num_kv_heads=2,
+            query_seq_len=256,
+            head_size_kv=64,
+            head_size=64,
+            kv_seq_len=256,
+        ),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+        dynamic_dims=False,
+    )
+
+    options_mlir = WaveCompileOptions(
+        subs=hyperparams,
+        run_bench=False,
+        check_water_analysis=True,
+        compile_to_mlir=True,
+        # TODO(#982): this pass creates IR that appears malformed, though pywave
+        # manages to execute it.
+        # enable_mark_hardware_transpose_candidates=False,
+    )
+    options_mlir = set_default_run_config(options_mlir)
+    compiled_kernel = wave_compile(options_mlir, attention)
+    assert compiled_kernel is not None
+
+
 if __name__ == "__main__":
     testMatrixAdd(implicit_broadcast=False)
     testMatrixAdd(implicit_broadcast=True)
     testMmaChain()
     testGemm()
     testMultiResultIterate()
+    testAttention()
