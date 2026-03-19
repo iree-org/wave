@@ -62,7 +62,7 @@ llvm::LogicalResult computeWavesPerBlockFromConstraints(
     const llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WaveConstraintAttr>
         &waveConstraints,
     wave::WaveHyperparameterAttr hyperparams,
-    llvm::SmallVectorImpl<unsigned> &wavesPerBlock);
+    llvm::SmallVectorImpl<int32_t> &wavesPerBlock);
 
 /// Permute the shape according to the mapping.
 void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,

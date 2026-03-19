@@ -1,6 +1,6 @@
 // RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-functions --split-input-file --verify-diagnostics
 
-// expected-error @below {{waves_per_block (1) should have 3 elements}}
+// expected-error @below {{waves_per_block should have 3 elements}}
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
                                            waves_per_block = [1],
                                            mma_type = #wave.mma_kind<f32_16x16x16_f16>,
@@ -250,5 +250,30 @@ func.func private @test_waves_per_block_mismatch_multi_dim() attributes { wave.h
 #hw_constraint_wpb3 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 4, 1]>
 // expected-error @below {{computed number of waves (2) for dimension #wave.symbol<"M"> does not match waves_per_block[1] = 4}}
 func.func private @test_waves_per_block_mismatch_y_dim() attributes { wave.hyperparameters = #hyperparams_wpb3, wave.constraints = [#wg_constraint_wpb3, #wv_constraint_wpb3, #hw_constraint_wpb3] }
+
+// -----
+
+#hyperparams_vs1 = #wave.hyperparameters<{M = 64, BLOCK_M = 32}>
+#wg_constraint_vs1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#hw_constraint_vs1 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 64}>
+// expected-error @below {{vector_shapes entry 'M' (64) is greater than the resolved tile size (32) for dimension: #wave.symbol<"M">}}
+func.func private @test_vector_shapes_wg_greater() attributes { wave.hyperparameters = #hyperparams_vs1, wave.constraints = [#wg_constraint_vs1, #hw_constraint_vs1] }
+
+// -----
+
+#hyperparams_vs2 = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#tl_constraint_vs2 = #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+#hw_constraint_vs2 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 256}>
+// expected-error @below {{vector_shapes entry 'K' (256) is greater than the resolved tile size (128) for dimension: #wave.symbol<"K">}}
+func.func private @test_vector_shapes_tiling_greater() attributes { wave.hyperparameters = #hyperparams_vs2, wave.constraints = [#tl_constraint_vs2, #hw_constraint_vs2] }
+
+// -----
+
+#hyperparams_vs3 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_vs3 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_vs3 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_vs3 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 64}>
+// expected-error @below {{vector_shapes entry 'M' (64) is greater than the resolved tile size (32) for dimension: #wave.symbol<"M">}}
+func.func private @test_vector_shapes_wave_greater() attributes { wave.hyperparameters = #hyperparams_vs3, wave.constraints = [#wg_constraint_vs3, #wv_constraint_vs3, #hw_constraint_vs3] }
 
 // -----

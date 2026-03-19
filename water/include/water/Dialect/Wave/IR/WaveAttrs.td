@@ -213,18 +213,12 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
     configuration rather than fundamental hardware constraints.
   }];
   let parameters = (ins "unsigned":$threads_per_wave,
-                        OptionalArrayRefParameter<"unsigned">:$waves_per_block,
+                        OptionalParameter<"::mlir::DenseI32ArrayAttr">:$waves_per_block,
                         OptionalParameter<"::wave::WaveMmaKindAttr">:$mma_type,
                         OptionalParameter<"::mlir::DictionaryAttr">:$vector_shapes,
                         DefaultValuedParameter<"unsigned", "128">:$max_bits_per_load);
 
-  let assemblyFormat = [{
-    `<` `threads_per_wave` `=` $threads_per_wave
-    (`,` `waves_per_block` `=` `[` $waves_per_block^ `]`)?
-    (`,` `mma_type` `=` $mma_type^)?
-    (`,` `vector_shapes` `=` $vector_shapes^)?
-    (`,` `max_bits_per_load` `=` $max_bits_per_load^)? `>`
-  }];
+  let assemblyFormat = "`<` struct(params) `>`";
 
   let genVerifyDecl = 1;
 }

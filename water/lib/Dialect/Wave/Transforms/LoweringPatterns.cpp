@@ -1327,9 +1327,12 @@ static void warnIfReductionScopeMismatch(Operation *op, bool isBlockReduction) {
         llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint);
     if (!hwConstraint)
       continue;
-    ArrayRef<unsigned> wavesPerBlock = hwConstraint.getWavesPerBlock();
-    unsigned totalWaves = 1;
-    for (unsigned w : wavesPerBlock)
+    if (!hwConstraint.getWavesPerBlock())
+      continue;
+    llvm::ArrayRef<int32_t> wavesPerBlock =
+        hwConstraint.getWavesPerBlock().asArrayRef();
+    int64_t totalWaves = 1;
+    for (int32_t w : wavesPerBlock)
       totalWaves *= w;
     if (isBlockReduction && totalWaves == 1) {
       op->emitWarning()
