@@ -350,16 +350,22 @@ def convert_index_mapping_array_to_sympy(
     rhs_index = _convert_index_mapping_dict_to_sympy(array_attr[1])
     acc_index = _convert_index_mapping_dict_to_sympy(array_attr[2])
     result_index = _convert_index_mapping_dict_to_sympy(array_attr[3])
-    mk_symbols = set(lhs_index.keys())
-    nk_symbols = set(rhs_index.keys())
-    m_symbol = (mk_symbols - nk_symbols).pop()
-    n_symbol = (nk_symbols - mk_symbols).pop()
-    k_symbol = (mk_symbols.intersection(nk_symbols)).pop()
+    bmk_symbols = set(lhs_index.keys())
+    bnk_symbols = set(rhs_index.keys())
+    bnm_symbols = set(acc_index.keys())
+    b_symbols = bmk_symbols.intersection(bnk_symbols).intersection(bnm_symbols)
+    m_symbol = (bmk_symbols - bnk_symbols).pop()
+    n_symbol = (bnk_symbols - bmk_symbols).pop()
+    k_symbol = (bmk_symbols - {m_symbol} - b_symbols).pop()
     assert lhs_index[k_symbol] == rhs_index[k_symbol]
     assert rhs_index[n_symbol] == acc_index[n_symbol]
     assert acc_index[m_symbol] == result_index[m_symbol]
     assert acc_index[n_symbol] == result_index[n_symbol]
-    return {
+    for b_symbol in b_symbols:
+        assert lhs_index[b_symbol] == rhs_index[b_symbol]
+        assert rhs_index[b_symbol] == acc_index[b_symbol]
+        assert acc_index[b_symbol] == result_index[b_symbol]
+    return {b_symbol: lhs_index[b_symbol] for b_symbol in b_symbols} | {
         m_symbol: _make_piecewise_sequence(
             (lhs_index[m_symbol], ~index_symbol(MMA_ACC_SYMBOL_NAME)),
             (acc_index[m_symbol], index_symbol(MMA_ACC_SYMBOL_NAME)),
