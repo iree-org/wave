@@ -586,8 +586,8 @@ public:
 
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
-                           int32_t priority);
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
+                           mlir::DictionaryAttr vectorShape);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
@@ -611,6 +611,15 @@ public:
     assert(getConcreteValue() && "no priority for lattice top/bottom");
     return priority;
   }
+
+  // Returns the vector shape stored in the lattice instance, or null if the
+  // lattice instance is a top or a bottom or has no vector shape set.
+  mlir::DictionaryAttr getVectorShape() const;
+
+  // Returns true if joining these two lattices would result in top due to a
+  // vector shape conflict. This is useful for emitting specific diagnostics.
+  static bool hasVectorShapeConflict(const IndexExprsLatticeStorage &lhs,
+                                     const IndexExprsLatticeStorage &rhs);
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -660,6 +669,11 @@ private:
   // values with lower priority in joins.
   int32_t priority;
 
+  // The vector shape associated with this lattice value. This is a dictionary
+  // mapping symbol names to vector dimension sizes. Two concrete lattice values
+  // with different vector shapes cannot be joined and will result in top.
+  mlir::DictionaryAttr vectorShape;
+
   // State flags.
   constexpr static unsigned kUninitializedState = 0;
   constexpr static unsigned kSpecificTypeState = 1;
@@ -686,6 +700,12 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             mlir::TypeRange toTypes, llvm::StringRef fromName,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
+
+// Create a new vector shape dictionary attribute with only the provided symbols
+// present.
+mlir::DictionaryAttr
+filterVectorShape(mlir::DictionaryAttr vectorShape,
+                  llvm::ArrayRef<wave::WaveSymbolAttr> symbols);
 
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an

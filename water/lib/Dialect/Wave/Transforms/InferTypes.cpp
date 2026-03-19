@@ -1383,7 +1383,9 @@ public:
             wave::TilingConstraintAttr tilingConstraint =
                 llvm::cast<wave::TilingConstraintAttr>(*it);
             for (Value capture : iterateOp.getCaptureBlockArgs()) {
-              if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
+              auto captureType =
+                  dyn_cast<wave::WaveTensorType>(capture.getType());
+              if (!captureType)
                 continue;
               auto dict = DictionaryAttr::get(
                   iterSymbolAttr.getContext(),
@@ -1397,8 +1399,10 @@ public:
                   wave::IndexExprsLatticeStorage::join(
                       captureLattice->getValue(),
                       wave::IndexExprsLatticeStorage(
-                          dict,
-                          wave::IndexExprsLatticeStorage::kLowestPriority)));
+                          dict, wave::IndexExprsLatticeStorage::kLowestPriority,
+                          wave::detail::filterVectorShape(
+                              initObject->hardwareConstraint.getVectorShapes(),
+                              captureType.getShape()))));
             }
           }
         }
@@ -1410,12 +1414,14 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority,
+                       DictionaryAttr vecShape) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value),
-                          wave::IndexExprsLatticeStorage(dict, priority));
+                unsafeSet(
+                    getLatticeElement(value),
+                    wave::IndexExprsLatticeStorage(dict, priority, vecShape));
               })))
         return llvm::failure();
     }
@@ -1715,12 +1721,14 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority,
+                       DictionaryAttr vecShape) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value),
-                          wave::IndexExprsLatticeStorage(dict, priority));
+                unsafeSet(
+                    getLatticeElement(value),
+                    wave::IndexExprsLatticeStorage(dict, priority, vecShape));
               })))
         return llvm::failure();
     }

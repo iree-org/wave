@@ -38,25 +38,56 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr,
-                         wave::IndexExprsLatticeStorage::kHighestPriority);
+        setIndexForValue(value, nullptr, 0, nullptr);
         continue;
       }
 
-      auto array = llvm::dyn_cast<ArrayAttr>(attr);
-      auto priority = (array && !array.empty())
-                          ? llvm::dyn_cast<IntegerAttr>(array.getValue()[0])
-                          : IntegerAttr();
-      auto dict = (array && array.size() > 1)
-                      ? llvm::dyn_cast<DictionaryAttr>(array.getValue()[1])
-                      : DictionaryAttr();
-      if (!priority || !dict) {
-        return op->emitError() << "expected " << attributeName
-                               << " to be an array containing an integer "
-                                  "priority and a dictionary mapping";
+      // Support formats:
+      // 1. DictionaryAttr (index expressions only, default priority, no
+      // vectorShape)
+      // 2. ArrayAttr [priority, indexExprs] - priority (IntegerAttr) and dict
+      // 3. ArrayAttr [indexExprs, vectorShape] - dict and optional vectorShape
+      // 4. ArrayAttr [priority, indexExprs, vectorShape] - all three
+      DictionaryAttr indexExprs = nullptr;
+      int32_t priority = wave::IndexExprsLatticeStorage::kLowestPriority;
+      DictionaryAttr vectorShape = nullptr;
+
+      if (auto arrayAttr = llvm::dyn_cast<ArrayAttr>(attr)) {
+        if (arrayAttr.size() == 2) {
+          if (auto firstInt = llvm::dyn_cast<IntegerAttr>(arrayAttr[0])) {
+            // [priority, dict]
+            priority = firstInt.getInt();
+            indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
+          } else {
+            // [dict, vectorShape]
+            indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[0]);
+            if (!llvm::isa<UnitAttr>(arrayAttr[1]))
+              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
+          }
+        } else if (arrayAttr.size() == 3) {
+          // [priority, dict, vectorShape]
+          if (auto firstInt = llvm::dyn_cast<IntegerAttr>(arrayAttr[0])) {
+            priority = firstInt.getInt();
+            indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
+            if (!llvm::isa<UnitAttr>(arrayAttr[2]))
+              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[2]);
+          }
+        }
+      } else {
+        indexExprs = llvm::dyn_cast<DictionaryAttr>(attr);
       }
 
-      setIndexForValue(value, dict, priority.getInt());
+      if (!indexExprs ||
+          llvm::any_of(indexExprs.getValue(), [](NamedAttribute attr) {
+            return !llvm::isa<wave::WaveIndexMappingAttr>(attr.getValue());
+          })) {
+        return op->emitError()
+               << "expected " << attributeName
+               << " to be an array of "
+                  "dictionaries with WaveIndexMappingAttr or UnitAttr values";
+      }
+
+      setIndexForValue(value, indexExprs, priority, vectorShape);
     }
     return success();
   };

@@ -712,6 +712,118 @@ void MmaSingleIndexExprBuilder::populate(
 }
 } // namespace
 
+// Get the attribute representing the vector shape implied by the given MMA
+// operation kind for its M, N, K dimensions.
+static DictionaryAttr getMmaVectorShape(
+    Location loc, wave::WaveMmaKind kind, wave::WaveSymbolAttr mSymbol,
+    wave::WaveSymbolAttr nSymbol, wave::WaveSymbolAttr kSymbol,
+    ArrayRef<wave::WaveSymbolAttr> batchSymbols, DictionaryAttr hwVectorShape,
+    wave::EmitDelayedErrorFn *delayedErrorEmitter) {
+  int m, n, k;
+  switch (kind) {
+  case wave::WaveMmaKind::F32_16x16x16_F16:
+  case wave::WaveMmaKind::I32_16x16x16_I8:
+    m = 16;
+    n = 16;
+    k = 16;
+    break;
+  case wave::WaveMmaKind::F32_32x32x8_F16:
+  case wave::WaveMmaKind::I32_32x32x8_I8:
+    m = 32;
+    n = 32;
+    k = 8;
+    break;
+  case wave::WaveMmaKind::F32_16x16x32_F8:
+  case wave::WaveMmaKind::F32_16x16x32_BF16:
+  case wave::WaveMmaKind::F32_16x16x32_F16:
+  case wave::WaveMmaKind::F32_16x16x32_K8_F16:
+  case wave::WaveMmaKind::I32_16x16x32_I8:
+  case wave::WaveMmaKind::F32_16x16x32_K4_F8:
+    m = 16;
+    n = 16;
+    k = 32;
+    break;
+  case wave::WaveMmaKind::F32_32x32x16_F8:
+  case wave::WaveMmaKind::F32_32x32x16_BF16:
+  case wave::WaveMmaKind::F32_32x32x16_F16:
+  case wave::WaveMmaKind::F32_32x32x16_K8_F16:
+  case wave::WaveMmaKind::I32_32x32x16_I8:
+  case wave::WaveMmaKind::F32_32x32x16_K4_F8:
+    m = 32;
+    n = 32;
+    k = 16;
+    break;
+  default:
+    return nullptr;
+  }
+
+  MLIRContext *ctx = loc->getContext();
+  auto iAttr = [&](int64_t value) {
+    return IntegerAttr::get(IntegerType::get(ctx, 64), value);
+  };
+  SmallVector<NamedAttribute> attributes;
+  if (mSymbol)
+    attributes.emplace_back(mSymbol.getName(), iAttr(m));
+  if (nSymbol)
+    attributes.emplace_back(nSymbol.getName(), iAttr(n));
+  if (kSymbol)
+    attributes.emplace_back(kSymbol.getName(), iAttr(k));
+
+  if (hwVectorShape) {
+    for (NamedAttribute attr : hwVectorShape) {
+      if (mSymbol && attr.getName() == mSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != m) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [mSymbol, m,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << mSymbol << " to " << m
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (nSymbol && attr.getName() == nSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != n) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [nSymbol, n,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << nSymbol << " to " << n
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (kSymbol && attr.getName() == kSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != k) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [kSymbol, k,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << kSymbol << " to " << k
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (llvm::any_of(batchSymbols, [&](wave::WaveSymbolAttr symbol) {
+            return symbol.getName() == attr.getName();
+          })) {
+        attributes.push_back(attr);
+      }
+    }
+  }
+
+  return DictionaryAttr::get(ctx, attributes);
+}
+
 // Populate `attributes` with index expressions for the symbols associated with
 // M, N, K dimensions of the given MMA operation kind provided the configuration
 // of wavefronts in the workgroup. Any symbol may be omitted as long as at least
@@ -1037,7 +1149,12 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "MMA result",
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), symbolMappings), priority),
+          DictionaryAttr::get(getContext(), symbolMappings), priority,
+          getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                            /*kSymbol=*/nullptr,
+                            /*batchSymbols=*/indexingSymbols.drop_back(2),
+                            initObject.hardwareConstraint.getVectorShapes(),
+                            /*delayedErrorEmitter=*/nullptr)),
       "implied by MMA kind", emitError);
 }
 
@@ -1117,13 +1234,22 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), lhsSymbolMappings), priority),
+              DictionaryAttr::get(getContext(), lhsSymbolMappings), priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
+                                /*nSymbol=*/nullptr, kSymbol, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), rhsSymbolMappings), priority),
+              DictionaryAttr::get(getContext(), rhsSymbolMappings), priority,
+              getMmaVectorShape(getLoc(), *mmaKind,
+                                /*mSymbol=*/nullptr, nSymbol, kSymbol,
+                                batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1131,7 +1257,11 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
           "accumulator",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-              priority),
+              priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                                /*kSymbol=*/nullptr, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
     return failure();
   return success();
@@ -2276,14 +2406,21 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
           "value to store",
           IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), indexMappings),
-              IndexExprsLatticeStorage::kWritePriority),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getValueToStore().getType())
+                      .getShape())),
           "implied by write operation", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getMemoryMutable().getOperandNumber()], "memory",
           IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), indexMappings),
-              IndexExprsLatticeStorage::kWritePriority),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getMemory().getType()).getShape())),
           "implied by write operation", emitError)))
     return failure();
 
@@ -2305,7 +2442,8 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
         lattice.getPriority() < IndexExprsLatticeStorage::kMmaPriority)
       return lattice;
     return IndexExprsLatticeStorage(lattice.getConcreteValue(),
-                                    IndexExprsLatticeStorage::kMmaPriority);
+                                    IndexExprsLatticeStorage::kMmaPriority,
+                                    lattice.getVectorShape());
   };
   IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
   IndexExprsLatticeStorage rhs = forceMmaPriority(operandExprs[1]);
@@ -2830,7 +2968,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   }
 
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
-                                  inputLattice.getPriority());
+                                  inputLattice.getPriority(),
+                                  inputLattice.getVectorShape());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(
