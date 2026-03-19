@@ -129,6 +129,13 @@ called `ordered_syms`, which needs to be revised. Index expressions are lattice
 objects attached to a value by a dataflow analysis, but they may be attached to
 operations similarly to Python for verification purposes.
 
+**Both** implement a heuristic that avoids propagating index expressions if they
+don't cover non-unit dimensions of the vector shape, all dimensions if the rank
+of the index expression dictionary is larger, or a subset thereof if it is
+smaller (but the dictionary must not contain other expressions). This heuristic
+is based on some notion of "completeness" of the index expressions, but is
+practically needed to avoid conflicts in attention kernels. A more robust
+solution would require comprehensive re-layout insertion.
 
 Index Sequence analysis
 -----------------------

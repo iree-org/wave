@@ -20,6 +20,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "wave-interfaces"
 
 using namespace mlir;
 
@@ -1749,72 +1753,98 @@ llvm::operator<<(llvm::raw_ostream &os,
   return os;
 }
 
+// Heuristic to stop index expression propagation Currently, it stops
+// propagation of index expressions if they don't cover all non-unit dimension
+// of the "to" vector shape.
+// XXX: this is carried over lhs the python prototype and is not principled.
+bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
+                               const wave::IndexExprsLatticeStorage &to) {
+  if (from.isBottom() || from.isTop() || !from.getVectorShape() || to.isTop() ||
+      to.isBottom())
+    return true;
+
+  SmallVector<StringAttr> nonBatchDims = llvm::map_to_vector(
+      llvm::make_filter_range(
+          from.getVectorShape(),
+          [](const NamedAttribute &attr) {
+            return cast<IntegerAttr>(attr.getValue()).getValue().sgt(1);
+          }),
+      [](NamedAttribute attr) { return attr.getName(); });
+  SmallVector<StringAttr> toKeys = llvm::map_to_vector(
+      to.getConcreteValue(),
+      [](const NamedAttribute &attr) { return attr.getName(); });
+  if ((toKeys.size() < nonBatchDims.size() &&
+       !llvm::all_of(toKeys,
+                     [&](StringAttr key) {
+                       return llvm::is_contained(nonBatchDims, key);
+                     })) ||
+      !llvm::all_of(nonBatchDims, [&](StringAttr key) {
+        return llvm::is_contained(toKeys, key);
+      })) {
+    return false;
+  }
+  return true;
+}
+
 llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
     llvm::ArrayRef<IndexExprsLatticeStorage> from,
     llvm::MutableArrayRef<IndexExprsLatticeStorage> to, TypeRange toTypes,
     llvm::StringRef fromName, llvm::StringRef toName,
     wave::EmitErrorFn emitError) {
-  // Join all "from" lattices.
-  IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::bottom();
-  bool fromTop = false;
-  for (const IndexExprsLatticeStorage &fromLattice : from) {
-    // If one of the from lattices reached the top, no need to keep joining, the
-    // result is known to be top.
-    if (fromLattice.isTop()) {
-      fromTop = true;
-      joined = IndexExprsLatticeStorage::top();
-      break;
-    }
-    joined = IndexExprsLatticeStorage::join(joined, fromLattice);
-  }
-
-  // Report if joining non-top "from" lattices reached the top as this is
-  // indicative of a "sideways" conflict.
-  if (joined.isTop() && !fromTop) {
-    InFlightDiagnostic diag = emitError()
-                              << "incompatible " << fromName << " lattices"
-                              << " when propagating from those to " << toName;
-    for (auto &&[i, fromLattice] : llvm::enumerate(from)) {
-      diag.attachNote() << fromName << " #" << i << " lattice: " << fromLattice;
-    }
-    return diag;
-  }
-
-  // Propagate to all "to" lattices.
   ChangeResult changeResult = ChangeResult::NoChange;
-  for (auto &&[i, toLattice] : llvm::enumerate(to)) {
-    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(toTypes[i]);
-    if (!tensorType) {
-      toLattice = IndexExprsLatticeStorage::top();
+  for (auto &&[toNum, toLattice] : llvm::enumerate(to)) {
+    if (toLattice.isTop())
       continue;
-    }
-    IndexExprsLatticeStorage filtered =
-        joined.keepOnlySymbols(tensorType.getShape());
-    IndexExprsLatticeStorage newLattice =
-        IndexExprsLatticeStorage::join(toLattice, filtered);
 
-    // Report an error only when the lattice moved to the top state, which is
-    // indicative of a conflict, not when it was in the top state to start with.
-    // Also avoid reporting errors when joined lattice is in the top state: it
-    // is either reported above or it means the conflict was found elsewhere and
-    // we are just propagating it.
-    if (newLattice.isTop() && !toLattice.isTop() && !filtered.isTop()) {
-      InFlightDiagnostic diag =
-          emitError() << "conflict when propagating index expressions from "
-                      << fromName << " to " << toName << " #" << i;
-      diag.attachNote() << "original " << toName << " lattice: " << toLattice;
-      for (auto &&[j, fromLattice] : llvm::enumerate(from)) {
-        diag.attachNote() << fromName << " #" << j
-                          << " lattice: " << fromLattice;
+    for (auto &&[fromNum, fromLattice] : llvm::enumerate(from)) {
+      bool fromTop = false;
+
+      // If one of the from lattices reached the top, no need to keep joining,
+      // the result is known to be top. The error will have been reported
+      // already, no need to repeat it.
+      if (fromLattice.isTop()) {
+        fromTop = true;
+        toLattice = IndexExprsLatticeStorage::top();
+        break;
       }
-      return diag;
-    }
 
-    if (newLattice != toLattice) {
-      changeResult = ChangeResult::Change;
-      toLattice = newLattice;
+      // XXX: a more efficient way would have been to join all "from" lattices
+      // first, and then join that into each "to" lattice. But this heuristic
+      // would not work in that case.
+      if (!shouldPropagateIndexExprs(toLattice, fromLattice)) {
+        LLVM_DEBUG(LDBG() << "not propagating index expressions from "
+                          << fromName << " #" << fromNum << " to " << toName
+                          << " #" << toNum << "\n";);
+        continue;
+      }
+
+      IndexExprsLatticeStorage joined =
+          IndexExprsLatticeStorage::join(toLattice, fromLattice);
+      if (joined.isTop() && !fromTop) {
+        bool isVectorShapeConflict =
+            !getJoinedVectorShape(
+                toLattice.getVectorShape(), fromLattice.getVectorShape(),
+                toLattice.getPriority(), fromLattice.getPriority(),
+                llvm::StringSet<>()) &&
+            toLattice.getVectorShape() && fromLattice.getVectorShape();
+        InFlightDiagnostic diag =
+            emitError() << "conflict when propagating "
+                        << (isVectorShapeConflict ? "vector shapes"
+                                                  : "index expressions")
+                        << " from " << fromName << " #" << fromNum << " to "
+                        << toName << " #" << toNum;
+        diag.attachNote() << "original " << toName << " lattice: " << toLattice;
+        diag.attachNote() << fromName << " #" << fromNum
+                          << " lattice: " << fromLattice;
+        return diag;
+      }
+      if (joined != toLattice) {
+        changeResult = ChangeResult::Change;
+        toLattice = joined;
+      }
     }
   }
+
   return changeResult;
 }
 

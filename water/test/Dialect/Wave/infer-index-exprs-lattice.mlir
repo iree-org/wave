@@ -23,7 +23,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
     }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
 
-    // expected-error @below {{conflict when propagating index expressions from result to operand #0}}
+    // expected-error @below {{conflict when propagating index expressions from result #0 to operand #0}}
     // expected-note @below {{original operand lattice}}
     // expected-note @below {{result #0 lattice}}
     %mul = wave.mul %add, %c {wave_test.override_result_index = [[1, {
@@ -51,10 +51,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
     }]]}: (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
 
-    // expected-error @below {{conflict when propagating index expressions from operand to result #0}}
+    // expected-error @below {{conflict when propagating index expressions from operand #0 to result #0}}
     // expected-note @below {{original result lattice}}
     // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
     %mul = wave.mul %add, %c {wave_test.override_result_index = [[1, {
       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>,
       K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
@@ -75,9 +74,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
     // expected-note @below {{operand #1 lattice}}
+    // expected-note @below {{original result lattice}}
     %add = wave.add %a, %b {wave_test.override_operand_index = [[1, {
       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
       K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
@@ -232,9 +231,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -258,9 +257,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40 + 2, 1, 1)>
     }], [1, {
@@ -285,9 +284,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1,{
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 3, 1)>
     }], [1, {
@@ -311,9 +310,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
     }], [1, {
@@ -389,9 +388,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, T0, 1)>
     }], [1, {
@@ -417,9 +416,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -444,9 +443,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<WG1>] -> (WG0, 1, 1)>
     }], [1, {
@@ -665,9 +664,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     %result = wave.iterate @K iter_args(%a) {
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
-      // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-      // expected-note @below {{operand #0 lattice}}
-      // expected-note @below {{operand #1 lattice}}
+      // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+      // expected-note @below {{original result lattice:}}
+      // expected-note @below {{operand #1 lattice:}}
       %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave.index_mapping<[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
       }], [1, {
@@ -792,9 +791,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // Both operands have same priority but different expressions - should conflict
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
-    // expected-note @below {{operand #1 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
+    // expected-note @below {{operand #1 lattice:}}
     %sum = wave.add %a, %b {wave_test.override_operand_index = [[1, {
       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
     }], [1, {
@@ -1198,8 +1197,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice:}}
+    // expected-error @below {{conflict when propagating vector shapes from operand #1 to result #0}}
+    // expected-note @below {{original result lattice:}}
     // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i64}],
@@ -1207,6 +1206,105 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Tests for shouldPropagateIndexExprs (propagation stopper): when the
+// destination lattice has a vector shape, join from a source is skipped
+// unless the source's index keys cover every non-unit dimension of that shape.
+// Forward: destination is the result lattice; backward: destination is each
+// operand lattice.
+
+// Operand #0 only maps M while the result vector shape has two non-unit dims;
+// a deliberately conflicting M on operand #0 is not joined, so operand #1
+// supplies the consistent {M, K} mapping. Without this rule, this would have
+// led to a conflict.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  // CHECK-LABEL: @propagation_stopper_forward_partial_operand
+  func.func @propagation_stopper_forward_partial_operand(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@M, @K] of f16>
+  ) -> !wave.tensor<[@M, @K] of f16> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
+    // CHECK: override
+    %result = wave.add %a, %b {
+      wave_test.override_result_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (<NULL>, <NULL>, <NULL>)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (<NULL>, <NULL>, <NULL>)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ],
+      wave_test.override_operand_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}],
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ]
+    } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    return %result : !wave.tensor<[@M, @K] of f16>
+  }
+}
+
+// -----
+
+// Backward: result lattice only maps M while operands have vector shapes with
+// two non-unit dims; propagating result into operands is skipped. Without the
+// heuristic, this would have resulted in a conflict. Note that we need the
+// additional unary operands because the index value attached to the operation
+// corresponds to results, so we need operations to check for index values of
+// essentially "wave.add" operands.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes {wave_test.disable_forward} {
+  // CHECK-LABEL: @propagation_stopper_backward_partial_result
+  func.func @propagation_stopper_backward_partial_result(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@M, @K] of f16>
+  ) -> !wave.tensor<[@M, @K] of f16> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.reciprocal
+    // CHECK-SAME: index
+    // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK: wave.reciprocal
+    // CHECK-SAME: index
+    // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    %a_rp = wave.reciprocal %a {
+      wave_test.override_operand_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    %b_rp = wave.reciprocal %b {
+      wave_test.override_operand_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    %result = wave.add %a_rp, %b_rp {
+      wave_test.override_operand_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}],
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ],
+      wave_test.override_result_index = [
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
+         {M = 4 : i32, K = 4 : i32}]
+      ]
+    } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    return %result : !wave.tensor<[@M, @K] of f16>
   }
 }
 
@@ -1284,7 +1382,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // Input and init have different N expressions - should conflict
-    // expected-error @below {{conflict when propagating index expressions from init to result #0}}
+    // expected-error @below {{conflict when propagating index expressions from init #0 to result #0}}
     // expected-note @below {{original result lattice}}
     // expected-note @below {{init #0 lattice}}
     %result = wave.max_element %input init(%init) <warp> {wave_test.override_operand_index = [
