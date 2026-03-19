@@ -7,6 +7,7 @@ from copy import deepcopy
 from functools import lru_cache
 import math
 import operator as op
+import threading
 from typing import Callable, Optional
 
 import sympy
@@ -67,8 +68,39 @@ _LAMBDIFY_MODULES = {
 # ixsimpl roundtrip helper.
 ####################################################################
 
-# Module-level context reused across calls to benefit from hash-consing.
-_ixs_ctx = ixsimpl.Context()
+# Thread-local context reused across calls to benefit from hash-consing.
+# The C context is not thread-safe and GIL is optional since Python 3.13,
+# so each thread gets its own instance.
+_ixs_local = threading.local()
+
+
+def _get_ixs_ctx() -> ixsimpl.Context:
+    """Return the thread-local ixsimpl context, creating it on first use."""
+    try:
+        return _ixs_local.ctx
+    except AttributeError:
+        _ixs_local.ctx = ixsimpl.Context()
+        return _ixs_local.ctx
+
+
+def _ixs_simplify_core(
+    ctx: ixsimpl.Context,
+    expr: sympy.Expr,
+    extra_assumptions: list[ixsimpl.Expr] | None = None,
+) -> sympy.Expr:
+    """Convert *expr* through ixsimpl and simplify.
+
+    Raises ``ValueError``/``TypeError``/``OverflowError`` on conversion
+    failure so callers can distinguish "unsupported expression" from
+    "simplified but unchanged".
+    """
+    ixs_expr = _conv_from_sympy(ctx, expr)
+    assumptions = _extract_assumptions(ctx, expr)
+    if extra_assumptions:
+        assumptions.extend(extra_assumptions)
+    ixs_expr = ixs_expr.simplify(assumptions=assumptions)
+    sym_map = {s.name: s for s in expr.free_symbols}
+    return _conv_to_sympy(ixs_expr, symbols=sym_map, xor_fn=_wave_xor)
 
 
 def ixs_simplify(
@@ -86,13 +118,7 @@ def ixs_simplify(
     if not isinstance(expr, sympy.Basic) or expr.is_Atom:
         return expr
     try:
-        ixs_expr = _conv_from_sympy(_ixs_ctx, expr)
-        assumptions = _extract_assumptions(_ixs_ctx, expr)
-        if extra_assumptions:
-            assumptions.extend(extra_assumptions)
-        ixs_expr = ixs_expr.simplify(assumptions=assumptions)
-        sym_map = {s.name: s for s in expr.free_symbols}
-        return _conv_to_sympy(ixs_expr, symbols=sym_map, xor_fn=_wave_xor)
+        return _ixs_simplify_core(_get_ixs_ctx(), expr, extra_assumptions)
     except (ValueError, TypeError, OverflowError):
         return expr
 
@@ -456,16 +482,19 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
 def simplify(expr: sympy.Expr) -> sympy.Expr:
     """Simplify a sympy expression via ixsimpl roundtrip.
 
-    Delegates to ``ixs_simplify`` which handles bounds reasoning,
+    Delegates to ``_ixs_simplify_core`` which handles bounds reasoning,
     floor/Mod rewrites, and rational cancellation natively.
-    Falls back to a sympy expand + cancel loop on conversion errors.
+    Falls back to a sympy expand + cancel loop only when the expression
+    cannot be converted to ixsimpl (as opposed to being converted
+    successfully but not simplified further).
     """
     if not isinstance(expr, sympy.Basic):
         return expr
-    result = ixs_simplify(expr)
-    if result is not expr:
-        return result
-    # Fallback: ixs_simplify returned expr unchanged (conversion error).
+    try:
+        return _ixs_simplify_core(_get_ixs_ctx(), expr)
+    except (ValueError, TypeError, OverflowError):
+        pass
+    # Fallback: conversion to ixsimpl failed.
     expr = sympy.expand(expr)
     for _ in range(5):
         new_expr = _bounds_simplify_once(expr)
