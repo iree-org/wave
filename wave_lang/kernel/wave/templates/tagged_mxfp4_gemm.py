@@ -303,7 +303,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         M: shape[0],
         N: shape[1],
         K: shape[2],
-        K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,
+        K_SCALE_SHUFFLED: (((K // 32) + 7) // 8) * 8,
     }
     if b_preshuffled:
         hyperparams[K_PACKED] = K // 2
