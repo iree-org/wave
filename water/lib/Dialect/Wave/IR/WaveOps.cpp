@@ -1111,6 +1111,19 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
   return success();
 }
 
+void wave::detail::buildThreadIndependentIndexMappings(
+    Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
+    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings) {
+  auto tensorType = dyn_cast<wave::WaveTensorType>(type);
+  if (!tensorType)
+    return;
+
+  ArrayRef<wave::WaveSymbolAttr> indexingSymbols = tensorType.getShape();
+  mixInThreadIndependentConstraints(
+      op, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup

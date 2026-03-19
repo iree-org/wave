@@ -695,8 +695,12 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
+    // Note that indexing over K is still present, but it uses the default (0, 1, 1) value
+    // and none of the index expressions use _Iter_K
     // CHECK: wave.read
-    // CHECK-SAME: {M : <[] -> (42, 1, 1)>
+    // CHECK-DAG: M : <[] -> (42, 1, 1)>
+    // CHECK-DAG: K : <[] -> (0, 1, 1)>
+    // CHECK: wave.iterate
     %b_reg = wave.read %b : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
     %result = wave.iterate @K iter_args(%a) {
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
