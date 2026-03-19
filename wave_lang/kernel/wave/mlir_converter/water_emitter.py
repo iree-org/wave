@@ -1435,6 +1435,7 @@ def _build_response(
                 def record_index(
                     attribute: ir.Attribute,
                     inferred_attributes: dict[str, dict[str, Any]],
+                    element: int = 0,
                 ):
                     assert isinstance(
                         attribute, ir.StringAttr
@@ -1450,7 +1451,7 @@ def _build_response(
                     inferred_attributes[attribute.value].update(
                         {
                             "index": convert_index_mapping_array_to_sympy(
-                                op, op.attributes["index"]
+                                op, op.attributes["index"], element
                             )
                         }
                     )
@@ -1461,8 +1462,8 @@ def _build_response(
                     assert isinstance(
                         result_attribute, ir.ArrayAttr
                     ), f"Unexpected attribute type: {result_attribute}."
-                    for attribute in result_attribute:
-                        record_index(attribute, inferred_attributes)
+                    for i, attribute in enumerate(result_attribute):
+                        record_index(attribute, inferred_attributes, i)
 
                 return ir.WalkResult.ADVANCE
 

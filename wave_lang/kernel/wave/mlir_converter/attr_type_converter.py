@@ -334,8 +334,14 @@ def _make_piecewise_sequence(
 
 
 def convert_index_mapping_array_to_sympy(
-    op: ir.Operation, array_attr: ir.ArrayAttr
+    op: ir.Operation, array_attr: ir.ArrayAttr, element: int = 0
 ) -> dict[IndexSymbol, IndexSequence]:
+    assert element == 0 or isinstance(op.opview, wave.IterateOp)
+
+    if isinstance(op.opview, wave.IterateOp):
+        assert element < len(array_attr)
+        return _convert_index_mapping_dict_to_sympy(array_attr[element])
+
     # TODO: for some reason, isinstance(op.opview, MmaOp) is not working. Something is off with dialect loading/registration.
     if op.name != "wave.mma":
         assert (

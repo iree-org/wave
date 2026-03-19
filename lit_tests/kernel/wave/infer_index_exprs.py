@@ -207,8 +207,74 @@ def testMmaChain():
     assert compiled_kernel is not None
 
 
+def testMultiResultIterate():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    dtype = tkl.f16
+
+    constraints = [
+        wave.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=MMAType.F32_16x16x16_F16,
+        ),
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+        wave.TilingConstraint(K, BLOCK_K),
+    ]
+
+    @wave.wave(constraints)
+    def multi_result_gemm(
+        a: tkl.Memory[M, K, SHARED_ADDRESS_SPACE, dtype],
+        b: tkl.Memory[N, K, SHARED_ADDRESS_SPACE, dtype],
+        c1: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        c2: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        acc1 = tkl.Register[M, N, tkl.f32](0.0)
+        acc2 = tkl.Register[M, N, tkl.f32](1.0)
+
+        @wave.iterate(K, init_args=[acc1, acc2])
+        def repeat(
+            iter_acc1: tkl.Register[M, N, tkl.f32],
+            iter_acc2: tkl.Register[M, N, tkl.f32],
+        ) -> (tkl.Register[M, N, tkl.f32], tkl.Register[M, N, tkl.f32]):
+            a_reg = wave.read(a, elements_per_thread=4)
+            b_reg = wave.read(b, elements_per_thread=4)
+            new_acc1 = wave.mma(a_reg, b_reg, iter_acc1)
+            new_acc2 = wave.mma(a_reg, b_reg, iter_acc2)
+            return new_acc1, new_acc2
+
+        result1, result2 = repeat
+        wave.write(result1, c1, elements_per_thread=4)
+        wave.write(result2, c2, elements_per_thread=4)
+
+    hyperparams = {
+        M: 64,
+        N: 64,
+        K: 64,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 64,
+    }
+
+    # Test multi-result iterate compilation
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        run_bench=False,
+        compile_to_mlir=True,
+        check_water_analysis=True,
+    )
+    compiled_kernel = wave_compile(options, multi_result_gemm)
+    assert compiled_kernel is not None
+
+
 if __name__ == "__main__":
     testMatrixAdd(implicit_broadcast=False)
     testMatrixAdd(implicit_broadcast=True)
     testMmaChain()
     testGemm()
+    testMultiResultIterate()
