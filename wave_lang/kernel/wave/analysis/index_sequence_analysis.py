@@ -941,12 +941,9 @@ def propagate_indices(
                 source, source_index, source_vector_shapes, symbolic_constraints
             ):
                 continue
-            # GetResults inherit their index from the Iterate node
-            # and hence we don't need to update their index.
             source.vector_shapes = deepcopy(source_vector_shapes)
-            if not isinstance(source, GetResult):
-                source_index = source.transform_index(source_index)
-                source.index = combine_indices(source.index, source_index)
+            source_index = source.transform_index(source_index)
+            source.index = combine_indices(source.index, source_index)
             append_aliased_shapes(source, symbolic_constraints)
         visited.add(source)
         for func in [get_inputs, get_users]:
