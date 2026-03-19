@@ -299,6 +299,11 @@ def IdentityIndexExprsOpTrait
   let cppNamespace = "::wave";
 }
 
+def ReductionIndexExprsInferenceOpTrait
+    : NativeOpTrait<"ReductionIndexExprsInferenceOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 //-----------------------------------------------------------------------------
 // Traits indicating sideways propagation requirements
 //-----------------------------------------------------------------------------

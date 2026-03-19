@@ -103,6 +103,7 @@ class BinaryWaveOp<string mnemonic>
 class ReductionWaveOp<string mnemonic>
     : WaveOp<mnemonic,
         [WaveInferTypeOpInterface, ReductionTypeInferenceOpTrait,
+         WaveInferIndexExprsOpInterface, ReductionIndexExprsInferenceOpTrait,
          WaveElementsPerThreadOpInterface, ReductionElementsPerThreadOpTrait,
          RequiresSidewaysBackwardPropagationOpTrait, WaveReductionOpTrait]>,
       WaveArithmeticOpDoc {

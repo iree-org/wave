@@ -1171,3 +1171,89 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %result : !wave.tensor<[@M] of f32>
   }
 }
+
+// -----
+
+//
+// Tests for reduction operations (wave.max_element, wave.min_element, etc.)
+//
+
+// Test that reduction forward propagation keeps only symbols present in result shape
+// and propagates init unchanged.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  // CHECK-LABEL: @reduction_forward_propagation
+  func.func @reduction_forward_propagation(
+    %input: !wave.tensor<[@N, @M] of f32>,
+    %init: !wave.tensor<[@N] of f32>
+  ) -> !wave.tensor<[@N] of f32, <register>> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Reduction result has shape [@N]; init has shape [@N]; input has [@N, @M].
+    // Forward propagation should keep only N from input, and propagate init fully.
+    // CHECK: wave.max_element
+    // CHECK-SAME: index
+    // CHECK-SAME: N : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    %result = wave.max_element %input init(%init) <warp> {wave_test.override_operand_index = [
+      {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+       M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+      {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}
+    ]} : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+    return %result : !wave.tensor<[@N] of f32, <register>>
+  }
+}
+
+// -----
+
+// Test that reduction backward propagation propagates to init keeping only init symbols,
+// and propagates to reduced value as identity.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @reduction_backward_propagation
+  func.func @reduction_backward_propagation(
+    %input: !wave.tensor<[@N, @M] of f32>,
+    %init: !wave.tensor<[@N] of f32>
+  ) -> !wave.tensor<[@N] of f32, <register>> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Backward propagation should propagate result to both operands,
+    // but for init, keep only symbols in init shape.
+    // CHECK: wave.max_element
+    // CHECK-SAME: index
+    // CHECK-SAME: N : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    %result = wave.max_element %input init(%init) <warp> {wave_test.override_result_index = [{
+      N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    }]} : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+    return %result : !wave.tensor<[@N] of f32, <register>>
+  }
+}
+
+// -----
+
+// Test reduction with conflicting index expressions in forward propagation
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  func.func @reduction_forward_conflict(
+    %input: !wave.tensor<[@N, @M] of f32>,
+    %init: !wave.tensor<[@N] of f32>
+  ) -> !wave.tensor<[@N] of f32, <register>> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Input and init have different N expressions - should conflict
+    // expected-error @below {{conflict when propagating index expressions from init to result #0}}
+    // expected-note @below {{original result lattice}}
+    // expected-note @below {{init #0 lattice}}
+    %result = wave.max_element %input init(%init) <warp> {wave_test.override_operand_index = [
+      {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+       M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
+      {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}
+    ]} : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
+    return %result : !wave.tensor<[@N] of f32, <register>>
+  }
+}
