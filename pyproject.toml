@@ -37,6 +37,7 @@ dependencies = [
     "sympy",
     "torch>=2.6,<2.10",
     "typing_extensions",
+    "ixsimpl @ git+https://github.com/hardcode84/4.git@075e1bcc2333ec2db3815e5d18b7898f1f1a4b81",
 ]
 
 dynamic = ["version"]
