@@ -37,6 +37,7 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
+    Reshape,
     TensorLoadToLDS,
     MMA,
     MMABase,
@@ -281,7 +282,8 @@ def _set_water_id(trace: CapturedTrace):
 def _reset_water_id(trace: CapturedTrace):
     """Remove the previously set unique identifier for each node in the trace."""
     for node in trace.walk(lambda x: x):
-        delattr(node, "_water_id")
+        if hasattr(node, "_water_id"):
+            delattr(node, "_water_id")
 
 
 def _check_index_difference_is_zero(
@@ -313,9 +315,16 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
     those to find the index inferred by Water.
     """
     for node in trace.walk(lambda x: x):
-        water_id = getattr(node, "_water_id")
+        water_id = getattr(node, "_water_id", None)
         custom = get_custom(node)
         if isinstance(custom, (Placeholder, Output)):
+            continue
+        # Broadcast and Reshape may be inserted by pywave, and separately by
+        # water emitter on-the-fly, making them not have water ids. This means
+        # the MLIR equivalent pass is only doing propagation, not conflict
+        # resolution. When we want to replace the pass, we need to keep conflict
+        # resolution separate.
+        if water_id is None and isinstance(custom, (Broadcast, Reshape)):
             continue
         if water_id not in inferred:
             raise RuntimeError(

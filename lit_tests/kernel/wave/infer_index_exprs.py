@@ -52,6 +52,45 @@ def _get_matrix_add_kernel():
     return matrix_add, hyperparams
 
 
+def _get_matrix_add_implicit_broadcast_kernel():
+    """Matrix addition with implicit broadcast on the RHS.
+
+    We should safely ignore the broadcast during Water inference.
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    ADDRESS_SPACE = tkl.sym.GLOBAL_ADDRESS_SPACE
+    dtype = tkl.f16
+
+    constraints = [
+        wave.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 4, N: 1}),
+        wave.WorkgroupConstraint(M, BLOCK_M, 0),
+        wave.WorkgroupConstraint(N, BLOCK_N, 1),
+    ]
+
+    @wave.wave(constraints)
+    def matrix_add_implicit_broadcast(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, dtype],
+        b: tkl.Memory[M, ADDRESS_SPACE, dtype],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, dtype],
+    ):
+        a_reg = wave.read(a)
+        b_reg = wave.read(b)
+        c_reg = a_reg + b_reg
+        wave.write(c_reg, c)
+
+    hyperparams = {
+        M: 128,
+        N: 128,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    return matrix_add_implicit_broadcast, hyperparams
+
+
 def _get_mma_chain_kernel():
     # Input sizes
     M = tkl.sym.M
@@ -104,8 +143,12 @@ def _get_mma_chain_kernel():
     return mma_chain, hyperparams
 
 
-def testMatrixAdd():
-    kernel, params = _get_matrix_add_kernel()
+def testMatrixAdd(implicit_broadcast: bool):
+    kernel, params = (
+        _get_matrix_add_implicit_broadcast_kernel()
+        if implicit_broadcast
+        else _get_matrix_add_kernel()
+    )
     options = WaveCompileOptions(
         subs=params,
         run_bench=False,
@@ -165,6 +208,7 @@ def testMmaChain():
 
 
 if __name__ == "__main__":
-    testMatrixAdd()
+    testMatrixAdd(implicit_broadcast=False)
+    testMatrixAdd(implicit_broadcast=True)
     testMmaChain()
     testGemm()
