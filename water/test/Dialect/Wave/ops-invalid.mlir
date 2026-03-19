@@ -1266,8 +1266,40 @@ func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of 
 
 // -----
 
+func.func @bitcast_rank0(%v: !wave.tensor<[] of f32, <register>>) {
+  // expected-error @below {{'wave.bitcast' op rank-0 wave tensors are not supported in bitcast}}
+  wave.bitcast %v : !wave.tensor<[] of f32, <register>> to !wave.tensor<[] of i8, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_rank_mismatch(%v: !wave.tensor<[@A, @B] of i8, <register>>) {
+  // expected-error @below {{'wave.bitcast' op rank of input (2) must match rank of result (3)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8, <register>> to !wave.tensor<[@A, @B, @C] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_leading_dim_mismatch(%v: !wave.tensor<[@A, @B] of i8, <register>>) {
+  // expected-error @below {{expected input dimension #0 (#wave.symbol<"A">) to match result dimension #0 (#wave.symbol<"C">)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8, <register>> to !wave.tensor<[@C, @D] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
 func.func @bitcast_indivisible_bitwidths(%v: !wave.tensor<[@A, @B] of i8>) {
   // expected-error @below {{larger element bitwidth (8) must be evenly divisible by the smaller (6)}}
   wave.bitcast %v : !wave.tensor<[@A, @B] of i8> to !wave.tensor<[@A, @C] of f6E2M3FN>
+  return
+}
+
+// -----
+
+func.func @bitcast_vector_total_bits(%v: vector<8xf32>) {
+  // expected-error @below {{'wave.bitcast' op total bit count must be preserved}}
+  wave.bitcast %v : vector<8xf32> to vector<4xf32>
   return
 }
