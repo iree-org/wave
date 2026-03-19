@@ -837,6 +837,40 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
+// Tiling for iterator K must not be joined into index lattices of [@M, @N] tensors used
+// inside `wave.iterate @K` (whether as explicit captures or as outer SSA values).
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @iterate_k_capture_without_k_dim
+  func.func @iterate_k_capture_without_k_dim(
+    %mask: !wave.tensor<[@M, @N] of f32, <global>>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64}>
+  } {
+    %cst = arith.constant 0.0 : f32
+    %acc_init = wave.register %cst : !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.iterate @K iter_args({{.*}}) attributes {index = [{M = #wave.index_mapping<[] -> (0, 1, 1)>, N = #wave.index_mapping<[] -> (0, 1, 1)>}]}
+    %out = wave.iterate @K iter_args(%acc_init) captures(%mask) {
+    ^bb0(%acc: !wave.tensor<[@M, @N] of f32>, %m: !wave.tensor<[@M, @N] of f32, <global>>):
+      // CHECK: wave.read{{.*}}index [{M : <[] -> (0, 1, 1)>, N : <[] -> (0, 1, 1)>}]
+      // CHECK-NOT: wave.iter<"K">
+      // CHECK-NOT: _Iter_K
+      %m_read = wave.read %m : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32>
+      // CHECK: wave.add{{.*}}index [{M : <[] -> (0, 1, 1)>, N : <[] -> (0, 1, 1)>}]
+      %sum = wave.add %acc, %m_read : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+      wave.yield %sum : !wave.tensor<[@M, @N] of f32>
+    } : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32, <global>>) -> (!wave.tensor<[@M, @N] of f32>)
+
+    return %out : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @tiling_constraints_in_nested_iter(
     %x: !wave.tensor<[@M, @K] of f16>

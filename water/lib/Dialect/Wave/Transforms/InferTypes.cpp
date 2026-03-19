@@ -1387,6 +1387,8 @@ public:
                   dyn_cast<wave::WaveTensorType>(capture.getType());
               if (!captureType)
                 continue;
+              if (!llvm::is_contained(captureType.getShape(), iterSymbolAttr))
+                continue;
               auto dict = DictionaryAttr::get(
                   iterSymbolAttr.getContext(),
                   {{iterSymbolAttr.getName(),
