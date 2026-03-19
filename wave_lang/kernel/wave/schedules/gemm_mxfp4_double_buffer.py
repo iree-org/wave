@@ -691,7 +691,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
 
 
 def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
-    use_stagger: bool = True, shape: tuple = None
+    use_stagger: bool = True, shape: tuple = None, block: tuple = None
 ):
     """Return a double-buffered MXFP4 schedule for wave_compile().
     Same as get_mxfp4_dbuf_pingpong_schedule_Bshuffled(), but B data is read
@@ -822,79 +822,149 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
             loop_b_scale_reads
         )
+        safe = 0
+        if block is not None and block == (256, 192, 256):
+            safe = 2
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
         use_extra_barrier = False
-        # Build cluster 0: first K-partition loads + bitcasts + GatherToLDS
-        cluster_0_ops = [
-            tkw.SchedulingBarrier([]),
-            tkw.MemoryCounterWait(load=0),
-            tkw.WorkgroupBarrier(),
-        ]
-        if use_extra_barrier:
-            cluster_0_ops.append(tkw.WorkgroupBarrier())
-        cluster_0_ops.extend(
-            [
-                loop_global_to_shared,
+
+        if block is not None and block == (256, 192, 256):
+
+            cluster_0_ops = [
                 tkw.SchedulingBarrier([]),
-                loop_shared_load_a_0,
-                loop_shared_load_b_0,
-                loop_bitcast_a_0,
-                loop_bitcast_a_scale,
-                loop_bitcast_b_0,
-                loop_bitcast_b_scale,
-                loop_all_read_a_scale,  # prefetch A & B scales for next iteration
-                loop_all_read_b_scale,
-                tkw.SchedulingBarrier([]),
+                tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
+                tkw.WorkgroupBarrier(),
             ]
-        )
-        if use_stagger:
+            if use_extra_barrier:
+                cluster_0_ops.append(tkw.WorkgroupBarrier())
             cluster_0_ops.extend(
                 [
-                    tkw.WorkgroupBarrier(),
+                    loop_global_to_shared,
+                    tkw.SchedulingBarrier([]),
+                    loop_shared_load_a_0,
+                    loop_shared_load_b_0,
+                    loop_bitcast_a_0,
+                    loop_bitcast_a_scale,
+                    loop_bitcast_b_0,
+                    loop_bitcast_b_scale,
                     tkw.SchedulingBarrier([]),
                 ]
             )
+            if use_stagger:
+                cluster_0_ops.extend(
+                    [
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ]
+                )
 
-        clusters = [
-            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
-            tkw.cluster(cluster_0_ops),
-            # Cluster 1: First K-partition scaled_mma (high priority)
-            tkw.cluster(
+            clusters = [
+                tkw.cluster(cluster_0_ops),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_0,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SchedulingBarrier([]),
+                        loop_all_read_a_scale,
+                        loop_all_read_b_scale,
+                        loop_shared_load_a_1,
+                        loop_shared_load_b_1,
+                        loop_bitcast_a_1,
+                        loop_bitcast_b_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWait(
+                            load=(number_outstanding_loads_to_vgpr + safe)
+                        ),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_1,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
+
+        else:
+
+            cluster_0_ops = [
+                tkw.SchedulingBarrier([]),
+                tkw.MemoryCounterWait(load=0),
+                tkw.WorkgroupBarrier(),
+            ]
+            if use_extra_barrier:
+                cluster_0_ops.append(tkw.WorkgroupBarrier())
+            cluster_0_ops.extend(
                 [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_0,
-                    tkw.SetWavePrio(0),
+                    loop_global_to_shared,
                     tkw.SchedulingBarrier([]),
-                    tkw.WorkgroupBarrier(),
+                    loop_shared_load_a_0,
+                    loop_shared_load_b_0,
+                    loop_bitcast_a_0,
+                    loop_bitcast_a_scale,
+                    loop_bitcast_b_0,
+                    loop_bitcast_b_scale,
+                    loop_all_read_a_scale,
+                    loop_all_read_b_scale,
                     tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 2: Second K-partition shared loads/bitcasts
-            tkw.cluster(
-                [
-                    tkw.SchedulingBarrier([]),
-                    loop_shared_load_a_1,
-                    loop_shared_load_b_1,
-                    loop_bitcast_a_1,
-                    loop_bitcast_b_1,
-                    tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
-                    tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 3: Second K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_1,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-        ]
+                ]
+            )
+            if use_stagger:
+                cluster_0_ops.extend(
+                    [
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ]
+                )
+
+            clusters = [
+                tkw.cluster(cluster_0_ops),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_0,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SchedulingBarrier([]),
+                        loop_shared_load_a_1,
+                        loop_shared_load_b_1,
+                        loop_bitcast_a_1,
+                        loop_bitcast_b_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWait(load=(number_outstanding_loads_to_vgpr)),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_1,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
 
         # Insert barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
