@@ -225,7 +225,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
         for sym in options.dynamic_symbols:
             del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
-        use_stagger=True, shape=shape
+        use_stagger=True, shape=shape, block=block
     )
     UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
     options.subs[UNROLL_FACTOR] = 2
