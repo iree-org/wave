@@ -738,11 +738,36 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
 
+// Build thread-independent index mapping for a single tensor type and append to
+// symbolMappings. Used by identity and reduction index expr initialization.
+// Defined in WaveOps.cpp to use mixInThreadIndependentConstraints function
+// template that needs access to specific ops, which we don't want in
+// interfaces.
+// TODO: move all the index expr logic to one file and avoid this spreadout.
+void buildThreadIndependentIndexMappings(
+    mlir::Operation *op, mlir::Type type,
+    const IndexExprsAnalysisInit &initObject,
+    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings);
+
 // Create a new vector shape dictionary attribute with only the provided symbols
 // present.
 mlir::DictionaryAttr
 filterVectorShape(mlir::DictionaryAttr vectorShape,
                   llvm::ArrayRef<wave::WaveSymbolAttr> symbols);
+
+// Default implementation for interface: initialize index expressions with
+// thread-independent constraints for all values returned by
+// getIndexExprValuesAndDescriptions. Forward analysis initializes results,
+// backward analysis initializes operands.
+llvm::LogicalResult defaultInitializeIndexExprsForward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError);
+llvm::LogicalResult defaultInitializeIndexExprsBackward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter);
 
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an
