@@ -2452,6 +2452,45 @@ LogicalResult wave::CastOp::verify() {
   return success();
 }
 
+/// Verify that the trailing dimensions of a bitcast are consistent with the
+/// element bitwidth ratio.  When hyperparameters are available the check is
+/// precise (srcLast * srcBits == dstLast * dstBits); otherwise we fall back
+/// to a purely symbolic comparison.
+/// Returns success when the constraint holds or cannot be checked.
+static LogicalResult
+verifyBitcastTrailingDim(Operation *op, wave::WaveTensorType srcType,
+                         wave::WaveTensorType dstType, unsigned srcBits,
+                         unsigned dstBits, llvm::raw_ostream &errs) {
+  unsigned maxBW = std::max(srcBits, dstBits);
+  unsigned minBW = std::min(srcBits, dstBits);
+  if (maxBW % minBW != 0) {
+    errs << "larger element bitwidth (" << maxBW
+         << ") must be evenly divisible by the smaller (" << minBW << ")";
+    return failure();
+  }
+  if (srcBits == dstBits)
+    return success();
+
+  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(op);
+  if (hyper) {
+    int64_t srcLast =
+        hyper.getKnownSymbolValue(srcType.getShape().back().getName());
+    int64_t dstLast =
+        hyper.getKnownSymbolValue(dstType.getShape().back().getName());
+    if (srcLast * srcBits != dstLast * dstBits) {
+      errs << "bitcast trailing dimension mismatch: source last dim ("
+           << srcLast << ") * " << srcBits << " bits != result last dim ("
+           << dstLast << ") * " << dstBits << " bits";
+      return failure();
+    }
+  } else if (srcType.getShape().back() == dstType.getShape().back()) {
+    errs << "trailing dimension must be scaled by the element bitwidth ratio ("
+         << srcBits << "-bit to " << dstBits << "-bit)";
+    return failure();
+  }
+  return success();
+}
+
 //-----------------------------------------------------------------------------
 // BitcastOp
 //-----------------------------------------------------------------------------
@@ -2482,17 +2521,11 @@ LogicalResult wave::BitcastOp::verify() {
 
     unsigned srcBW = valueTensor.getElementType().getIntOrFloatBitWidth();
     unsigned dstBW = resultTensor.getElementType().getIntOrFloatBitWidth();
-    unsigned maxBW = std::max(srcBW, dstBW);
-    unsigned minBW = std::min(srcBW, dstBW);
-    if (maxBW % minBW != 0)
-      return emitOpError("larger element bitwidth (")
-             << maxBW << ") must be evenly divisible by the smaller (" << minBW
-             << ")";
-    if (srcBW != dstBW &&
-        valueTensor.getShape().back() == resultTensor.getShape().back())
-      return emitOpError("trailing dimension must be scaled by the "
-                         "element bitwidth ratio (")
-             << srcBW << "-bit to " << dstBW << "-bit)";
+    std::string errMsg;
+    llvm::raw_string_ostream errStream(errMsg);
+    if (failed(verifyBitcastTrailingDim(getOperation(), valueTensor,
+                                        resultTensor, srcBW, dstBW, errStream)))
+      return emitOpError(errMsg);
 
     return success();
   }
@@ -2534,19 +2567,9 @@ static llvm::FailureOr<ChangeResult> propagateBitcastShape(
   SmallVector<wave::WaveSymbolAttr> newShape(fromType.getShape().drop_back(1));
   newShape.push_back(lastDimIRType.getShape().back());
 
-  wave::WaveHyperparameterAttr hyper = wave::getHyperparameters(op);
-  if (hyper) {
-    int64_t srcLast =
-        hyper.getKnownSymbolValue(fromType.getShape().back().getName());
-    int64_t dstLast =
-        hyper.getKnownSymbolValue(lastDimIRType.getShape().back().getName());
-    if (srcLast * srcBits != dstLast * dstBits) {
-      errs << "bitcast trailing dimension mismatch: source last dim ("
-           << srcLast << ") * " << srcBits << " bits != result last dim ("
-           << dstLast << ") * " << dstBits << " bits";
-      return failure();
-    }
-  }
+  if (failed(verifyBitcastTrailingDim(op, fromType, lastDimIRType, srcBits,
+                                      dstBits, errs)))
+    return failure();
 
   return wave::detail::propagateShapeInformation(newShape, toType, fromName,
                                                  toName, errs);
