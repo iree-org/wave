@@ -176,6 +176,21 @@ water_test.wave_symbol_mapping {three_results_mapping = #wave.symbol_mapping<
 
 // -----
 
+// expected-error @below {{hyperparameter "K2" must be a single-result expr_list, but has 2 results}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2, K ceildiv 4)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" expr_list may only contain wave symbols: #wave.index_symbol<T0>}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.index_symbol<T0>] -> (T0 ceildiv 2)>}>} {}
+
+// -----
+
+// expected-error @below {{hyperparameter "K2" references symbol #wave.symbol<"Z"> not defined in the same hyperparameters mapping}}
+module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"Z">] -> (Z ceildiv 2)>}>} {}
+
+// -----
+
 // expected-error @below {{hyperparameter "K2" expr_list must be a ceiling division expression}}
 module attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K)>}>} {}
 
