@@ -717,6 +717,26 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return None
 
+    def _same_value(a, b) -> bool:
+        """Structural equality for emitter values (_ApplyExpr / OpResult).
+
+        Detects when two independently-built IR values represent the same
+        computation.  Used in _add to avoid denominator explosion when
+        adding _Rationals that share a common denominator.
+        """
+        if isinstance(a, _ApplyExpr) and isinstance(b, _ApplyExpr):
+            if a.expr != b.expr or len(a.args) != len(b.args):
+                return False
+            return all(_same_value(x, y) for x, y in zip(a.args, b.args))
+        if isinstance(a, (Value, OpResult)) and isinstance(b, (Value, OpResult)):
+            if a is b:
+                return True
+            a_val = get_const_val(a)
+            b_val = get_const_val(b)
+            if a_val is not None and b_val is not None:
+                return a_val == b_val
+        return False
+
     overflow_flags = arith_d.IntegerOverflowFlags.nsw | arith_d.IntegerOverflowFlags.nuw
 
     def muli(lhs, rhs):
@@ -912,6 +932,9 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             numerator = add_expr(numerator, rhs.numerator)
             return _Rational(numerator, rhs.denominator)
         elif is_rational_lhs and is_rational_rhs:
+            if _same_value(lhs.denominator, rhs.denominator):
+                numerator = add_expr(lhs.numerator, rhs.numerator)
+                return _Rational(numerator, lhs.denominator)
             lhs_numerator = muli_expr(lhs.numerator, rhs.denominator)
             rhs_numerator = muli_expr(rhs.numerator, lhs.denominator)
             numerator = add_expr(lhs_numerator, rhs_numerator)
