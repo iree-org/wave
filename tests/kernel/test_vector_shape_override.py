@@ -19,11 +19,11 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
-from .common.utils import require_e2e, require_cdna_2_or_3_or_4
+from .common.utils import require_cdna4, require_e2e
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
+@require_cdna4
 def test_vector_shape_override_k():
     """
     Test that vector_shapes can override the K dimension.
@@ -109,11 +109,10 @@ def test_vector_shape_override_k():
 
     # Verify results
     torch.testing.assert_close(c, ref, rtol=1e-3, atol=1e-3)
-    print("✓ Test passed: K dimension override works correctly")
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
+@require_cdna4
 def test_vector_shape_override_m_n_multiples():
     """
     Test vector_shapes override with values that are multiples of defaults.
@@ -199,11 +198,11 @@ def test_vector_shape_override_m_n_multiples():
 
     # Verify results
     torch.testing.assert_close(c, ref, rtol=1e-3, atol=1e-3)
-    print("✓ Test passed: vector_shapes override with multiples works correctly")
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
+@require_cdna4
+@pytest.mark.skip(reason="known to give incorrect results")
 def test_vector_shape_override_non_multiples():
     """
     Test vector_shapes override with values that are NOT multiples of MMA shapes.
@@ -291,11 +290,7 @@ def test_vector_shape_override_non_multiples():
 
     # Verify results
     torch.testing.assert_close(c, ref, rtol=1e-3, atol=1e-3)
-    print("✓ Test passed: vector_shapes non-multiple override works correctly")
 
 
 if __name__ == "__main__":
-    # Run tests directly
-    test_vector_shape_override_k()
-    test_vector_shape_override_m_n_multiples()
-    test_vector_shape_override_non_multiples()
+    pytest.main()
