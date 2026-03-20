@@ -244,6 +244,45 @@ def MmaOp : WaveOp<"mma",
   }];
 }
 
+def ScaledMmaOp : WaveOp<"scaled_mma",
+    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
+     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+      ["initializeIndexExprsForward", "initializeIndexExprsBackward",
+       "getIndexExprValuesAndDescriptions"]>]>,
+            WaveArithmeticOpDoc {
+  let summary = "Scaled matrix multiply and accumulate";
+  let description = [{
+    Performs a scaled matrix multiply-accumulate using microscaling floating
+    point (MXFP) formats. Each data operand has an associated per-group
+    scale factor (E8M0 format). The computation is:
+
+      result = accumulator + (lhs_scale * lhs) @ (rhs_scale * rhs)
+
+    where scales are applied per group of K elements (group size is fixed
+    at 32 by hardware).
+  }] # baseDescription;
+
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Left-hand side of the multiplication">:$lhs,
+    Arg<WaveTensorInRegister, "Scale factors for the left-hand side">:$lhs_scale,
+    Arg<WaveTensorInRegister, "Right-hand side of the multiplication">:$rhs,
+    Arg<WaveTensorInRegister, "Scale factors for the right-hand side">:$rhs_scale,
+    Arg<WaveTensorInRegister, "Accumulator for addition">:$accumulator,
+    Arg<OptionalAttr<WaveMmaKindAttr>, "Kind of the scaled MMA intrinsic to target">:$kind
+  ), commonArguments);
+
+  let results = (outs
+    Arg<WaveTensorInRegister, "Result">:$result
+  );
+
+  let assemblyFormat =
+    "$lhs `,` $lhs_scale `,` $rhs `,` $rhs_scale `,` $accumulator "
+    # commonArgumentsSyntax # "attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+
+}
+
 //-----------------------------------------------------------------------------
 // Control flow operations
 //-----------------------------------------------------------------------------

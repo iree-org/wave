@@ -867,14 +867,15 @@ void MmaSingleIndexExprBuilder::populate(
 // one is provided, e.g., for the LHS of the operation, only M and N symbols may
 // be provided. If `isAccumulator` is set, the index expressions are created for
 // the accumulator/result of an MMA, which may affect the expression for the M
-// dimension.
-static llvm::LogicalResult
-populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
-                        llvm::ArrayRef<unsigned> wavesPerWorkgroup,
-                        int64_t threadsPerWave, wave::WaveSymbolAttr mSymbol,
-                        wave::WaveSymbolAttr nSymbol,
-                        wave::WaveSymbolAttr kSymbol,
-                        llvm::SmallVectorImpl<NamedAttribute> &attributes) {
+// dimension. If `isScaled` is set, the K expression uses the scale operand
+// mapping (one scale per SCALE_GROUP_SIZE K-elements). If `isFP4` is set,
+// the K expression uses the FP4 data mapping.
+static llvm::LogicalResult populateMmaIndexingExpr(
+    wave::WaveMmaKind kind, bool isAccumulator, bool isScaled, bool isFP4,
+    llvm::ArrayRef<unsigned> wavesPerWorkgroup, int64_t threadsPerWave,
+    wave::WaveSymbolAttr mSymbol, wave::WaveSymbolAttr nSymbol,
+    wave::WaveSymbolAttr kSymbol,
+    llvm::SmallVectorImpl<NamedAttribute> &attributes) {
   MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
   llvm::SmallVector<Attribute> symbolNames = {
@@ -999,6 +1000,42 @@ populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
         .k()
         .offset(8 * gprNum.floorDiv(4) + 4 * laneId.floorDiv(32) + (gprNum % 4))
         .size(8)
+        .stride(1)
+        .populate(attributes);
+    return llvm::success();
+
+  case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
+    builder.m()
+        .offset(isAccumulator ? 4 * laneId.floorDiv(16) : laneId % 16)
+        .size(isAccumulator ? 4 : 1)
+        .stride(isAccumulator ? 16 : 1)
+        .n()
+        .offset(laneId % 16)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset((isScaled || isFP4)
+                    ? 32 * laneId.floorDiv(16)
+                    : 64 * gprNum.floorDiv(16) + 16 * laneId.floorDiv(16) +
+                          (gprNum % 16))
+        .size(32)
+        .stride(1)
+        .populate(attributes);
+    return llvm::success();
+  case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
+    builder.m()
+        .offset(isAccumulator ? (8 * gprNum.floorDiv(4) % 32) +
+                                    4 * laneId.floorDiv(32) + (gprNum % 4)
+                              : laneId % 32)
+        .size(isAccumulator ? 16 : 1)
+        .stride(isAccumulator ? 32 : 1)
+        .n()
+        .offset(laneId % 32)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(32 * laneId.floorDiv(32))
+        .size(32)
         .stride(1)
         .populate(attributes);
     return llvm::success();
@@ -1128,7 +1165,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     return emitError() << "MMA operation without kind attribute not supported";
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
-          /*isAccumulator=*/true, initObject.wavesPerBlock,
+          /*isAccumulator=*/true, /*isScaled=*/false, /*isFP4=*/false,
+          initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           /*kSymbol=*/nullptr, symbolMappings))) {
     return emitError() << "MMA kind not supported by index deduction";
@@ -1160,6 +1198,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   wave::WaveSymbolAttr nSymbol = resultType.getShape().back();
   wave::WaveSymbolAttr kSymbol = lhsType.getShape().back();
 
+  bool isFP4 = lhsType.getElementType() == Float4E2M1FNType::get(getContext());
+
   std::optional<wave::WaveMmaKind> mmaKind = getKind();
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
@@ -1169,7 +1209,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   llvm::SmallVector<NamedAttribute> operandSymbolMappings;
   operandSymbolMappings.reserve(lhsType.getShape().size() + 1);
   if (llvm::failed(populateMmaIndexingExpr(
-          *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
+          *mmaKind, /*isAccumulator=*/false, /*isScaled=*/false,
+          /*isFP4=*/isFP4, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           kSymbol, operandSymbolMappings))) {
     return emitError() << "MMA kind not supported by index deduction";
@@ -1179,7 +1220,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   accumulatorSymbolMappings.reserve(resultType.getShape().size());
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
-          /*isAccumulator=*/true, initObject.wavesPerBlock,
+          /*isAccumulator=*/true, /*isScaled=*/false, /*isFP4=*/isFP4,
+          initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           nullptr, accumulatorSymbolMappings))) {
     return emitError() << "MMA kind not supported by index deduction";
@@ -1466,6 +1508,478 @@ wave::MmaOp::propagateElementsPerThreadBackward(
           *accumulatorResult == mlir::ChangeResult::Change)
              ? mlir::ChangeResult::Change
              : mlir::ChangeResult::NoChange;
+}
+
+//-----------------------------------------------------------------------------
+// ScaledMmaOp
+//-----------------------------------------------------------------------------
+
+static bool isScaledMmaKind(wave::WaveMmaKind kind) {
+  return kind == wave::WaveMmaKind::F32_16x16x128_F8F6F4 ||
+         kind == wave::WaveMmaKind::F32_32x32x64_F8F6F4;
+}
+
+LogicalResult wave::ScaledMmaOp::verify() {
+  Type lhsTypeGeneric = getLhs().getType();
+  Type rhsTypeGeneric = getRhs().getType();
+  Type lhsScaleTypeGeneric = getLhsScale().getType();
+  Type rhsScaleTypeGeneric = getRhsScale().getType();
+  Type accumulatorTypeGeneric = getAccumulator().getType();
+  Type resultTypeGeneric = getResult().getType();
+
+  WaveTensorType lhsType = dyn_cast<wave::WaveTensorType>(lhsTypeGeneric);
+  WaveTensorType rhsType = dyn_cast<wave::WaveTensorType>(rhsTypeGeneric);
+  WaveTensorType lhsScaleType =
+      dyn_cast<wave::WaveTensorType>(lhsScaleTypeGeneric);
+  WaveTensorType rhsScaleType =
+      dyn_cast<wave::WaveTensorType>(rhsScaleTypeGeneric);
+  WaveTensorType accumulatorType =
+      dyn_cast<wave::WaveTensorType>(accumulatorTypeGeneric);
+  WaveTensorType resultType = dyn_cast<wave::WaveTensorType>(resultTypeGeneric);
+
+  // TODO: need to verify vector types, but for that, we need to know what they
+  // must look like based on the MMA enum.
+  if (!lhsType || !rhsType || !accumulatorType || !resultType)
+    return success();
+
+  if (failed(detail::verifyElementTypesMatch(getLoc(), "LHS", lhsType, "RHS",
+                                             rhsType)) ||
+      failed(detail::verifyElementTypesMatch(
+          getLoc(), "LHS scale", lhsScaleType, "RHS scale", rhsScaleType)) ||
+      failed(detail::verifyElementTypesMatch(getLoc(), "result", resultType,
+                                             "accumulator", accumulatorType)))
+    return failure();
+
+  if (lhsType.getRank() < 2)
+    return emitOpError() << "expects at least 2D operands for scaled MMA";
+
+  if (!getKind())
+    return success();
+
+  wave::WaveMmaKind kind = *getKind();
+  if (!isScaledMmaKind(kind))
+    return emitOpError() << "expected a scaled MMA kind (F8F6F4 variant), got "
+                         << wave::stringifyEnum(kind);
+
+  return checkMmaTypeCompatibility(getLoc(), kind, lhsType.getElementType(),
+                                   accumulatorType.getElementType());
+}
+
+llvm::FailureOr<ChangeResult> wave::ScaledMmaOp::propagateForward(
+    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
+    llvm::raw_ostream &errs) {
+  return detail::propagateShapeInformation(
+      operandTypes[getAccumulatorMutable().getOperandNumber()], resultTypes[0],
+      "accumulator", "result", errs);
+}
+
+llvm::FailureOr<ChangeResult> wave::ScaledMmaOp::propagateBackward(
+    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
+    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
+  return detail::propagateShapeInformation(
+      resultTypes[0], operandTypes[getAccumulatorMutable().getOperandNumber()],
+      "result", "accumulator", errs);
+}
+
+LogicalResult wave::ScaledMmaOp::finalizeTypeInference() { return success(); }
+
+LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
+  ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
+      cast<wave::WaveTensorType>(getResult().getType()).getShape();
+  SmallVector<NamedAttribute> symbolMappings;
+  symbolMappings.reserve(indexingSymbols.size());
+
+  assert(indexingSymbols.size() >= 2 &&
+         "at least 2 indexing symbols are required for MMA result");
+  wave::WaveSymbolAttr mSymbol = indexingSymbols.drop_back().back();
+  wave::WaveSymbolAttr nSymbol = indexingSymbols.back();
+
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind)
+    return emitError() << "scaled MMA without kind attribute not supported";
+  if (llvm::failed(populateMmaIndexingExpr(
+          *mmaKind, /*isAccumulator=*/true, /*isScaled=*/false, /*isFP4=*/false,
+          initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          /*kSymbol=*/nullptr, symbolMappings))) {
+    return emitError() << "scaled MMA kind not supported by index deduction";
+  }
+
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
+  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
+      DictionaryAttr::get(getContext(), symbolMappings),
+      wave::IndexExprsLatticeStorage::kMmaPriority));
+
+  return llvm::success();
+}
+
+llvm::FailureOr<ChangeResult> wave::ScaledMmaOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
+  if (!resultType)
+    return updateIfChanged(resultExprs[0],
+                           wave::IndexExprsLatticeStorage::top());
+
+  wave::IndexExprsLatticeStorage resultLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+
+  // LHS data: ignore M symbol (different indexing in LHS vs result).
+  if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
+    Attribute mSymbol = lhsType.getShape().drop_back().back();
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice, operandExprs[getLhsMutable().getOperandNumber()],
+        {mSymbol});
+  }
+
+  // RHS data: propagate all.
+  if (llvm::isa<wave::WaveTensorType>(getRhs().getType()))
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice, operandExprs[getRhsMutable().getOperandNumber()]);
+
+  // Accumulator: propagate all.
+  if (llvm::isa<wave::WaveTensorType>(getAccumulator().getType()))
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice,
+        operandExprs[getAccumulatorMutable().getOperandNumber()]);
+
+  resultLattice = resultLattice.keepOnlySymbols(resultType.getShape());
+  wave::IndexExprsLatticeStorage newResultLattice =
+      wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
+
+  if (newResultLattice.isTop() && !resultExprs[0].isTop())
+    return emitError() << "conflict when propagating forward to result in "
+                          "ScaledMmaOp";
+
+  return updateIfChanged(resultExprs[0], newResultLattice);
+}
+
+llvm::FailureOr<ChangeResult> wave::ScaledMmaOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
+
+  wave::IndexExprsLatticeStorage operandLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+  wave::IndexExprsLatticeStorage accumulatorLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+
+  for (const wave::IndexExprsLatticeStorage &resultExpr : resultExprs) {
+    if (!resultType)
+      continue;
+    Attribute mSymbol = resultType.getShape().drop_back().back();
+    operandLattice = wave::IndexExprsLatticeStorage::join(
+        operandLattice, resultExpr, {mSymbol});
+    accumulatorLattice =
+        wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
+  }
+
+  ChangeResult changeResult = ChangeResult::NoChange;
+
+  // Helper to propagate to a single operand.
+  auto propagateTo = [&](unsigned operandNum, StringRef operandName,
+                         const wave::IndexExprsLatticeStorage &lattice,
+                         mlir::Type type) -> LogicalResult {
+    auto tensorType = dyn_cast<wave::WaveTensorType>(type);
+    if (!tensorType)
+      return success();
+    wave::IndexExprsLatticeStorage filtered =
+        lattice.keepOnlySymbols(tensorType.getShape());
+    wave::IndexExprsLatticeStorage newLattice =
+        wave::IndexExprsLatticeStorage::join(operandExprs[operandNum],
+                                             filtered);
+    if (newLattice.isTop() && !operandExprs[operandNum].isTop())
+      return emitError() << "conflict when propagating backward to "
+                         << operandName << " in ScaledMmaOp";
+    if (newLattice != operandExprs[operandNum]) {
+      operandExprs[operandNum] = newLattice;
+      changeResult = ChangeResult::Change;
+    }
+    return success();
+  };
+
+  if (failed(propagateTo(getLhsMutable().getOperandNumber(), "LHS",
+                         operandLattice, getLhs().getType())) ||
+      failed(propagateTo(getLhsScaleMutable().getOperandNumber(), "LHS scale",
+                         operandLattice, getLhsScale().getType())) ||
+      failed(propagateTo(getRhsMutable().getOperandNumber(), "RHS",
+                         operandLattice, getRhs().getType())) ||
+      failed(propagateTo(getRhsScaleMutable().getOperandNumber(), "RHS scale",
+                         operandLattice, getRhsScale().getType())) ||
+      failed(propagateTo(getAccumulatorMutable().getOperandNumber(),
+                         "accumulator", accumulatorLattice,
+                         getAccumulator().getType())))
+    return failure();
+
+  return changeResult;
+}
+
+LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter) {
+  auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
+  auto lhsType = llvm::cast<wave::WaveTensorType>(getLhs().getType());
+  assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() >= 2 &&
+         "at least 2D scaled MMA operations are supported");
+  wave::WaveSymbolAttr mSymbol = resultType.getShape().drop_back().back();
+  wave::WaveSymbolAttr nSymbol = resultType.getShape().back();
+  wave::WaveSymbolAttr kSymbol = lhsType.getShape().back();
+
+  auto lhsScaleType = llvm::cast<wave::WaveTensorType>(getLhsScale().getType());
+  wave::WaveSymbolAttr kScaleSymbol = lhsScaleType.getShape().back();
+
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind)
+    return emitError() << "scaled MMA without kind attribute not supported";
+
+  // Data operand index expressions (lhs, rhs).
+  llvm::SmallVector<NamedAttribute> operandSymbolMappings;
+  operandSymbolMappings.reserve(lhsType.getShape().size() + 1);
+  if (llvm::failed(populateMmaIndexingExpr(
+          *mmaKind, /*isAccumulator=*/false, /*isScaled=*/false,
+          /*isFP4=*/false, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          kSymbol, operandSymbolMappings))) {
+    return emitError() << "scaled MMA kind not supported by index deduction";
+  }
+
+  // Scale operand index expressions (lhs_scale, rhs_scale).
+  llvm::SmallVector<NamedAttribute> scaleSymbolMappings;
+  scaleSymbolMappings.reserve(lhsScaleType.getShape().size() + 1);
+  if (llvm::failed(populateMmaIndexingExpr(
+          *mmaKind, /*isAccumulator=*/false, /*isScaled=*/true,
+          /*isFP4=*/false, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          kScaleSymbol, scaleSymbolMappings))) {
+    return emitError()
+           << "scaled MMA kind not supported by scale index deduction";
+  }
+
+  // Accumulator index expressions.
+  llvm::SmallVector<NamedAttribute> accumulatorSymbolMappings;
+  accumulatorSymbolMappings.reserve(resultType.getShape().size());
+  // Accumulator type is f32 and does not get scaled
+  if (llvm::failed(populateMmaIndexingExpr(
+          *mmaKind, /*isAccumulator=*/true, /*isScaled=*/false,
+          /*isFP4=*/false, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          nullptr, accumulatorSymbolMappings))) {
+    return emitError() << "scaled MMA kind not supported by index deduction";
+  }
+
+  ArrayRef<wave::WaveSymbolAttr> batchSymbols =
+      resultType.getShape().drop_back(2);
+
+  // Mix in thread-independent constraints for data operands.
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      llvm::concat<const WaveSymbolAttr>(batchSymbols,
+                                         ArrayRef{mSymbol, nSymbol, kSymbol}),
+      initObject.symbolConstraints, operandSymbolMappings);
+
+  // Mix in thread-independent constraints for scale operands.
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      llvm::concat<const WaveSymbolAttr>(
+          batchSymbols, ArrayRef{mSymbol, nSymbol, kScaleSymbol}),
+      initObject.symbolConstraints, scaleSymbolMappings);
+
+  // Mix in thread-independent constraints for accumulator.
+  mixInThreadIndependentConstraints(
+      *this, initObject.hardwareConstraint.getThreadsPerWave(),
+      llvm::concat<const WaveSymbolAttr>(batchSymbols,
+                                         ArrayRef{mSymbol, nSymbol}),
+      initObject.symbolConstraints, accumulatorSymbolMappings);
+
+  // LHS: filter out N symbol.
+  llvm::SmallVector<NamedAttribute> lhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != nSymbol.getName();
+      });
+  // RHS: filter out M symbol.
+  llvm::SmallVector<NamedAttribute> rhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != mSymbol.getName();
+      });
+  // LHS scale: filter out N symbol.
+  llvm::SmallVector<NamedAttribute> lhsScaleSymbolMappings =
+      llvm::filter_to_vector(scaleSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != nSymbol.getName();
+      });
+  // RHS scale: filter out M symbol.
+  llvm::SmallVector<NamedAttribute> rhsScaleSymbolMappings =
+      llvm::filter_to_vector(scaleSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != mSymbol.getName();
+      });
+
+  operandExprs[getLhsMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), lhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
+  operandExprs[getLhsScaleMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), lhsScaleSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
+  operandExprs[getRhsMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), rhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
+  operandExprs[getRhsScaleMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), rhsScaleSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
+  operandExprs[getAccumulatorMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
+  return llvm::success();
+}
+
+std::function<void(raw_ostream &, unsigned)>
+wave::ScaledMmaOp::getIndexExprValuesAndDescriptions(
+    llvm::SmallVectorImpl<Value> &values) {
+  values.reserve(6);
+  llvm::append_range(values, getOperands());
+  values.push_back(getResult());
+  unsigned lhsPos = getLhsMutable().getOperandNumber();
+  unsigned lhsScalePos = getLhsScaleMutable().getOperandNumber();
+  unsigned rhsPos = getRhsMutable().getOperandNumber();
+  unsigned rhsScalePos = getRhsScaleMutable().getOperandNumber();
+  unsigned accPos = getAccumulatorMutable().getOperandNumber();
+  return [lhsPos, lhsScalePos, rhsPos, rhsScalePos, accPos](raw_ostream &os,
+                                                            unsigned i) {
+    assert(i < 6 && "unexpected position");
+    if (i == lhsPos)
+      os << "lhs";
+    else if (i == lhsScalePos)
+      os << "lhs scale";
+    else if (i == rhsPos)
+      os << "rhs";
+    else if (i == rhsScalePos)
+      os << "rhs scale";
+    else if (i == accPos)
+      os << "accumulator";
+    else
+      os << "result";
+  };
+}
+
+/// MXFP group scale factor for GFX950 and GFX1250.
+static constexpr unsigned kScaleGroupSize = 32;
+
+/// Compute the expected elements per thread for a specific scaled MMA operand.
+/// Handles LHS, LHS scale, RHS, RHS scale, and accumulator operands.
+/// Returns failure if the hardware constraint is missing or the operand index
+/// is unrecognized.
+static llvm::FailureOr<unsigned> computeScaledMmaElementsPerThread(
+    wave::ScaledMmaOp op, wave::WaveMmaSpec spec,
+    wave::HardwareConstraintAttr hardwareConstraint, unsigned operandIndex) {
+  if (!hardwareConstraint)
+    return mlir::failure();
+  unsigned threadsPerWave = hardwareConstraint.getThreadsPerWave();
+  unsigned totalElements;
+  if (operandIndex == op.getLhsMutable().getOperandNumber()) {
+    totalElements = spec.m * spec.k;
+  } else if (operandIndex == op.getLhsScaleMutable().getOperandNumber()) {
+    totalElements = spec.m * (spec.k / kScaleGroupSize);
+  } else if (operandIndex == op.getRhsMutable().getOperandNumber()) {
+    totalElements = spec.n * spec.k;
+  } else if (operandIndex == op.getRhsScaleMutable().getOperandNumber()) {
+    totalElements = spec.n * (spec.k / kScaleGroupSize);
+  } else if (operandIndex == op.getAccumulatorMutable().getOperandNumber()) {
+    totalElements = spec.m * spec.n;
+  } else {
+    return llvm::failure();
+  }
+  return totalElements / threadsPerWave;
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::ScaledMmaOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind) {
+    errs << "scaled MMA operation has no MMA kind";
+    return mlir::failure();
+  }
+  wave::WaveMmaSpec spec =
+      wave::WaveMmaKindAttr::getSpec(getContext(), *mmaKind);
+  llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
+      computeScaledMmaElementsPerThread(
+          *this, spec, init.hardwareConstraint,
+          getAccumulatorMutable().getOperandNumber());
+  if (llvm::failed(expectedElementsPerThreadResult)) {
+    errs << "scaled MMA operation has no hardware constraints available";
+    return llvm::failure();
+  }
+  unsigned expectedElementsPerThread = *expectedElementsPerThreadResult;
+  wave::ElementsPerThreadLatticeValue expectedResult(expectedElementsPerThread);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expectedResult, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      resultElements, "computed from scaled MMA kind", "", "result", errs);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::ScaledMmaOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &init) {
+  assert(operandElements.size() == 5 &&
+         "scaled MMA operation must have exactly 5 operands");
+
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind) {
+    errs << "scaled MMA operation has no MMA kind";
+    return mlir::failure();
+  }
+  wave::WaveMmaSpec spec =
+      wave::WaveMmaKindAttr::getSpec(getContext(), *mmaKind);
+
+  struct OperandInfo {
+    unsigned operandNumber;
+    llvm::StringRef name;
+  };
+  // TOOD: use getIndexExprValuesAndDescriptions to populate the operands
+  OperandInfo operands[] = {
+      {getLhsMutable().getOperandNumber(), "LHS operand"},
+      {getLhsScaleMutable().getOperandNumber(), "LHS scale operand"},
+      {getRhsMutable().getOperandNumber(), "RHS operand"},
+      {getRhsScaleMutable().getOperandNumber(), "RHS scale operand"},
+      {getAccumulatorMutable().getOperandNumber(), "accumulator operand"},
+  };
+
+  mlir::ChangeResult combinedChange = mlir::ChangeResult::NoChange;
+  for (auto &info : operands) {
+    llvm::FailureOr<unsigned> expectedResult =
+        computeScaledMmaElementsPerThread(*this, spec, init.hardwareConstraint,
+                                          info.operandNumber);
+    if (llvm::failed(expectedResult)) {
+      errs << "scaled MMA operation has no hardware constraints available";
+      return llvm::failure();
+    }
+    wave::ElementsPerThreadLatticeValue expected(*expectedResult);
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> slice =
+        operandElements.slice(info.operandNumber, 1);
+    llvm::FailureOr<mlir::ChangeResult> result =
+        wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+            expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+            slice, "computed from scaled MMA kind", "", info.name, errs);
+    if (llvm::failed(result))
+      return llvm::failure();
+    combinedChange |= *result;
+  }
+
+  return combinedChange;
 }
 
 //-----------------------------------------------------------------------------
