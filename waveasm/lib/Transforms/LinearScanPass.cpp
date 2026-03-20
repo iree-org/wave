@@ -230,16 +230,20 @@ private:
     // the corresponding PrecoloredSRegOp is DCE'd (it has [Pure] + no
     // SSA users). See the GFX950 prologue in emitSRDPrologue for details.
     program.walk([&](RawOp rawOp) {
-      if (auto sregUses = rawOp.getSregUses()) {
-        for (int64_t idx : *sregUses) {
-          if (!reservedSGPRs.count(idx))
+      auto reserve = [](llvm::DenseSet<int64_t> &set,
+                        std::optional<ArrayRef<int64_t>> uses, StringRef kind) {
+        if (!uses)
+          return;
+        for (int64_t idx : *uses) {
+          if (!set.count(idx))
             LLVM_DEBUG(llvm::dbgs()
-                       << "reserving raw-op sreg_uses s" << idx << "\n");
-          reservedSGPRs.insert(idx);
+                       << "reserving raw-op " << kind << " " << idx << "\n");
+          set.insert(idx);
         }
-      }
-      // TODO: handle vreg_uses / areg_uses when the corresponding
-      // reserved-register sets exist in the allocator.
+      };
+      reserve(reservedSGPRs, rawOp.getSregUses(), "sreg_uses s");
+      reserve(reservedVGPRs, rawOp.getVregUses(), "vreg_uses v");
+      reserve(reservedAGPRs, rawOp.getAregUses(), "areg_uses a");
     });
 
     // Create allocator with precolored values and tied operands.

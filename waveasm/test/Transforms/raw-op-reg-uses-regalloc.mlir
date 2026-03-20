@@ -1,6 +1,8 @@
 // RUN: waveasm-translate --waveasm-linear-scan %s | FileCheck %s
-// Verify that sreg_uses on RawOp reserves physical SGPRs so the
-// linear-scan allocator does not assign them to virtual registers.
+// Verify that register-use annotations on RawOp reserve physical registers
+// so the linear-scan allocator does not assign them to virtual registers.
+
+// -----  sreg_uses  -----
 
 // Without sreg_uses the allocator would assign s[2:3] to %val.
 // With sreg_uses = [2, 3] it must skip to s[4:5].
@@ -19,8 +21,8 @@ waveasm.program @sreg_uses_reserve target = #waveasm.target<#waveasm.gfx942, 5> 
 }
 
 // Without sreg_uses the same virtual register gets s[2:3].
-// CHECK-LABEL: waveasm.program @no_sreg_uses_baseline
-waveasm.program @no_sreg_uses_baseline target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+// CHECK-LABEL: waveasm.program @sreg_uses_baseline
+waveasm.program @sreg_uses_baseline target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %s0 = waveasm.precolored.sreg 0, 2 : !waveasm.psreg<0, 2>
   %c0 = waveasm.constant 0 : !waveasm.imm<0>
 
@@ -46,6 +48,36 @@ waveasm.program @sreg_uses_multiple target = #waveasm.target<#waveasm.gfx942, 5>
   // Must skip to s6.
   // CHECK: waveasm.s_load_dwordx2 {{.*}} -> !waveasm.psreg<6, 2>
   %val = waveasm.s_load_dwordx2 %s0, %c0 : !waveasm.psreg<0, 2>, !waveasm.imm<0> -> !waveasm.sreg<2>
+
+  waveasm.s_endpgm
+}
+
+// -----  vreg_uses  -----
+
+// vreg_uses = [2] forces the allocator to skip v2.
+// CHECK-LABEL: waveasm.program @vreg_uses_reserve
+waveasm.program @vreg_uses_reserve target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+
+  waveasm.raw "v_mov_b32 v2, v0" vreg_uses = [2]
+
+  // CHECK: waveasm.v_add_u32 {{.*}} -> !waveasm.pvreg<3>
+  %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.vreg
+
+  waveasm.s_endpgm
+}
+
+// Without vreg_uses the allocator assigns v2.
+// CHECK-LABEL: waveasm.program @vreg_uses_baseline
+waveasm.program @vreg_uses_baseline target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+
+  waveasm.raw "v_mov_b32 v2, v0"
+
+  // CHECK: waveasm.v_add_u32 {{.*}} -> !waveasm.pvreg<2>
+  %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.vreg
 
   waveasm.s_endpgm
 }
