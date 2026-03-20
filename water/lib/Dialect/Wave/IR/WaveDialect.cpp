@@ -398,10 +398,15 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
     // the same mapping, and the dividend must be evenly divisible by the
     // divisor.
     for (const NamedAttribute &entry : hyperparams.getMapping()) {
+      if (llvm::isa<IntegerAttr>(entry.getValue()))
+        continue;
+
       wave::WaveExprListAttr exprList =
           llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
       if (!exprList)
-        continue;
+        return op->emitError() << "hyperparameter " << entry.getName()
+                               << " must either be an integer or an expr_list";
+
       if (exprList.getMap().getNumResults() != 1) {
         return op->emitError()
                << "hyperparameter " << entry.getName()
@@ -431,11 +436,6 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
             hyperparams, op->getContext(), [&]() { return op->emitError(); })))
       return llvm::failure();
 
-    // Verify expr_list values in the hyperparameters: each must be a
-    // single-result affine map whose sole expression is a ceiling division of a
-    // symbol by a constant.  All referenced symbols must exist as entries in
-    // the same mapping, and the dividend must be evenly divisible by the
-    // divisor.
     for (const NamedAttribute &entry : hyperparams.getMapping()) {
       wave::WaveExprListAttr exprList =
           llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
