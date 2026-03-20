@@ -82,7 +82,7 @@ def _detect_rocm_version() -> str:
 # Version string candidates
 # ---------------------------------------------------------------------------
 
-_VER_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
+_VER_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].+)?$")
 
 
 def _version_candidates(raw: str) -> list[str]:
