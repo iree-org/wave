@@ -901,6 +901,10 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                     ],
                 ),
             ]
+            tkw.insert_before(
+                pipeline_loop.KERNEL,
+                tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
+            )
 
         elif block is not None and block == (256, 160, 256):
             cluster_0_ops = [
@@ -967,12 +971,16 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                     ],
                 ),
             ]
+            tkw.insert_before(
+                pipeline_loop.KERNEL,
+                tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
+            )
 
         else:
 
             cluster_0_ops = [
                 tkw.SchedulingBarrier([]),
-                # tkw.MemoryCounterWait(load=0),
+                tkw.MemoryCounterWait(load=0),
                 tkw.WorkgroupBarrier(),
             ]
             if use_extra_barrier:
@@ -1034,9 +1042,10 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                     ],
                 ),
             ]
+            tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
 
         # Insert barriers at loop boundaries
-        tkw.insert_before(pipeline_loop.KERNEL, tkw.MemoryCounterWait(load=0))
+
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
         tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
