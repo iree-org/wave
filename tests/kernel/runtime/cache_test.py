@@ -11,7 +11,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import copy
-from unittest import skip
 import pytest
 import torch
 from torch.testing import assert_close
@@ -782,7 +781,7 @@ def testChangeFreeVarOfNestedFunction(tmp_path):
 @require_e2e
 @require_cache
 @require_cdna3
-@skip(reason="Crashes and/or produces incorrect results.")
+@pytest.mark.skip(reason="Crashes and/or produces incorrect results.")
 def testAsmBackendCache(tmp_path):
     """Test that ASM backend caching works correctly."""
     reset_cache_manager(tmp_path)
