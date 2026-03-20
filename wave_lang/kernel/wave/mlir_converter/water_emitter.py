@@ -281,7 +281,7 @@ def _derived_dim_clean_name(expr: sympy.Expr) -> str | None:
         ints = [a for a in args if a.is_Integer]
         if len(ints) == 1:
             return f"{base.name}{int(ints[0])}"
-    return str(expr).replace("/", "").replace("*", "").replace(" ", "")
+    raise NotImplementedError(f"shortening expression {expr} is not yet supported")
 
 
 def _create_wave_tensor_type(
