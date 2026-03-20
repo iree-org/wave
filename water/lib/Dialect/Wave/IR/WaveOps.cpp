@@ -2544,37 +2544,6 @@ LogicalResult wave::BitcastOp::verify() {
   return success();
 }
 
-/// Shared propagation logic for BitcastOp in both directions.
-/// \p fromType is the known lattice type, \p toType is the type to update.
-/// \p lastDimIRType provides the symbolic last-dimension name for the "to" side
-/// when bitwidths differ.
-static llvm::FailureOr<ChangeResult> propagateBitcastShape(
-    Operation *op, wave::WaveTensorType fromType, wave::WaveTensorType &toType,
-    wave::WaveTensorType lastDimIRType, unsigned srcBits, unsigned dstBits,
-    StringRef fromName, StringRef toName, llvm::raw_ostream &errs) {
-  if (!fromType || !fromType.getFullySpecified())
-    return ChangeResult::NoChange;
-
-  if (srcBits == dstBits)
-    return wave::detail::propagateShapeInformation(fromType, toType, fromName,
-                                                   toName, errs);
-
-  if (!lastDimIRType || !lastDimIRType.getFullySpecified())
-    return ChangeResult::NoChange;
-
-  // Leading dims from the known side, last dim from the IR type of the
-  // unknown side (which carries its own symbolic dimension name).
-  SmallVector<wave::WaveSymbolAttr> newShape(fromType.getShape().drop_back(1));
-  newShape.push_back(lastDimIRType.getShape().back());
-
-  if (failed(verifyBitcastTrailingDim(op, fromType, lastDimIRType, srcBits,
-                                      dstBits, errs)))
-    return failure();
-
-  return wave::detail::propagateShapeInformation(newShape, toType, fromName,
-                                                 toName, errs);
-}
-
 // Remap the index expression lattice for bitcast: leading dimensions pass
 // through as identity, but the last dimension gets its symbol renamed and its
 // step (and start/stride if present) scaled by the element bitwidth ratio.
