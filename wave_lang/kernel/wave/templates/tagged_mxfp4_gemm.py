@@ -179,6 +179,19 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
+    # Divisibility assumptions for M, N, K (no effect for static shapes).
+    constraints += [tkw.Assumption(Eq(M % 32, 0))]
+    constraints += [tkw.Assumption(Eq(N % 32, 0))]
+    constraints += [tkw.Assumption(Eq(K % 256, 0))]
+
+    # Include assumption that K is divisible by BLOCK_K to allow gather_to_shared ops to omit masking predicates.
+    constraints += [tkw.Assumption(Eq(K % BLOCK_K, 0))]
+    constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
+
+    # K is always large enough for software pipelining.
+    constraints += [tkw.Assumption(K > BLOCK_K * 6)]
+
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
             M, N, BLOCK_M, BLOCK_N, GROUP_SIZE_N
@@ -290,7 +303,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         M: shape[0],
         N: shape[1],
         K: shape[2],
-        K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,
+        K_SCALE_SHUFFLED: (((K // 32) + 7) // 8) * 8,
     }
     if b_preshuffled:
         hyperparams[K_PACKED] = K // 2

@@ -218,14 +218,26 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.use_buffer_ops = True
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
+    options.wave_runtime = True
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
             del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
-        use_stagger=True, shape=shape
+        use_stagger=True, shape=shape, block=block
     )
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    options.subs[UNROLL_FACTOR] = 2
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
