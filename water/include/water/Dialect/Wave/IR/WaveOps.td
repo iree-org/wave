@@ -281,12 +281,6 @@ def ScaledMmaOp : WaveOp<"scaled_mma",
     # commonArgumentsSyntax # "attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 
-  let extraClassDeclaration = [{
-    /// Compute the expected elements per thread for a specific operand of this
-    /// scaled MMA operation. Returns failure if no hardware constraints are
-    /// available.
-    llvm::FailureOr<unsigned> computeElementsPerThreadForOperand(unsigned operandIndex);
-  }];
 }
 
 //-----------------------------------------------------------------------------

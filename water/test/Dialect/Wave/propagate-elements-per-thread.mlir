@@ -769,8 +769,8 @@ func.func @bitcast_forward_propagation(%mem: !wave.tensor<[@M, @K2] of i8, <glob
 //   a: Memory[M, K/2, i8]  ->  read  ->  bitcast to f4E2M1FN  ->  scaled_mma
 // EPT flows: read produces 16 xi8, bitcast doubles to 32 xf4, scaled_mma
 // consumes 32 xf4 for data, 1 xf8E8M0FNU for scales, 4 xf32 for acc.
-// CHECK: #wave.normal_form<full_types,memory_only_types>
-normalform.module [#wave.normal_form<full_types>] {
+// CHECK: #wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
 // CHECK-LABEL: @scaled_mma_backward_propagation
 func.func @scaled_mma_backward_propagation(
     %a_mem: !wave.tensor<[@M, @K2] of i8, <global>>,
@@ -778,7 +778,7 @@ func.func @scaled_mma_backward_propagation(
     %b_mem: !wave.tensor<[@N, @K2] of i8, <global>>,
     %b_scale_mem: !wave.tensor<[@N, @K32] of f8E8M0FNU, <global>>,
     %acc_mem: !wave.tensor<[@M, @N] of f32, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K floordiv 32)>, M = 16, N = 16}>,
+    attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16, N = 16}>,
       wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>, vector_shapes = {M = 1, N = 1, K = 128, K2 = 64, K32 = 4}, max_bits_per_load = 128>]} {
 
   // LHS: read i8 from [M, K2] -> 16 xi8, then bitcast to 32 xf4

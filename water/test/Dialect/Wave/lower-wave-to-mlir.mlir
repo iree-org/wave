@@ -1868,7 +1868,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
   // CHECK-LABEL: func.func @lower_bitcast_i8_to_f4
   func.func @lower_bitcast_i8_to_f4() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     %cst_i8 = arith.constant 0 : i8
@@ -1884,7 +1884,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 
 // -----
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
   // CHECK-LABEL: func.func @lower_bitcast_i8_to_f8e8m0
   func.func @lower_bitcast_i8_to_f8e8m0() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     %cst_i8 = arith.constant 0 : i8
@@ -1900,7 +1900,7 @@ normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,re
 
 // -----
 
-normalform.module [#wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations,ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
   // CHECK-LABEL: func.func @lower_scaled_mma_f4_16x16x128
   func.func @lower_scaled_mma_f4_16x16x128() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     %cst_f4 = arith.constant 0.0 : f4E2M1FN

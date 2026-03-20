@@ -24,7 +24,7 @@ import numpy as np
 import torch.fx as fx
 from typing_extensions import Self
 
-from .._support.dtype import DataType, i1, i32
+from .._support.dtype import DataType, i1, i32, f4e2m1fn
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import CapturedLocation, capture_location
 from .._support.regions import RegionGraph
@@ -2128,8 +2128,6 @@ class ScaledMMA(MMABase):
 
     @property
     def _is_fp4(self) -> bool:
-        from .._support.dtype import f4e2m1fn
-
         lhs_dtype = self.lhs_type.dtype if self.lhs_type else None
         rhs_dtype = self.rhs_type.dtype if self.rhs_type else None
         return lhs_dtype == rhs_dtype and lhs_dtype == f4e2m1fn

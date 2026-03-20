@@ -414,16 +414,22 @@ def _attach_attributes(
                 "rhs_index",
                 "rhs_scale_index",
             ):
-                if idx := getattr(node, attr_name, None):
-                    dict_attrs.append(
-                        _build_index_mapping_dict(idx, allowed_induction_symbols)
+                idx = getattr(node, attr_name, None)
+                if idx is None:
+                    raise ValueError(
+                        f"ScaledMMA node is missing required index attribute '{attr_name}'"
                     )
-            if acc_index := getattr(node, "acc_index", None):
-                acc_attr = _build_index_mapping_dict(
-                    acc_index, allowed_induction_symbols
+                dict_attrs.append(
+                    _build_index_mapping_dict(idx, allowed_induction_symbols)
                 )
-                dict_attrs.append(acc_attr)
-                dict_attrs.append(acc_attr)
+            acc_index = getattr(node, "acc_index", None)
+            if acc_index is None:
+                raise ValueError(
+                    "ScaledMMA node is missing required index attribute 'acc_index'"
+                )
+            acc_attr = _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+            dict_attrs.append(acc_attr)
+            dict_attrs.append(acc_attr)
         elif isinstance(node, MMA):
             # MMA needs exactly 4 index entries (lhs, rhs, acc, result) to
             # match MmaOp::getIndexExprValuesAndDescriptions which serializes
@@ -431,22 +437,18 @@ def _attach_attributes(
             # analysis only tracks 3 (lhs, rhs, acc), so we emit acc_index
             # twice: once for the accumulator operand and once for the
             # result (MMA result type == acc type).
-            if lhs_index := getattr(node, "lhs_index", None):
+            for attr_name in ("lhs_index", "rhs_index", "acc_index"):
+                idx = getattr(node, attr_name, None)
+                if idx is None:
+                    raise ValueError(
+                        f"MMA node is missing required index attribute '{attr_name}'"
+                    )
                 dict_attrs.append(
-                    _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
+                    _build_index_mapping_dict(idx, allowed_induction_symbols)
                 )
-            if rhs_index := getattr(node, "rhs_index", None):
-                dict_attrs.append(
-                    _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
-                )
-            if acc_index := getattr(node, "acc_index", None):
-                acc_attr = _build_index_mapping_dict(
-                    acc_index, allowed_induction_symbols
-                )
-                # Append acc_index for both the accumulator operand and the
-                # result, since MMA result type == acc type.
-                dict_attrs.append(acc_attr)
-                dict_attrs.append(acc_attr)
+            # Append acc_index again for the result, since MMA result
+            # type == acc type.
+            dict_attrs.append(dict_attrs[-1])
         else:
             dict_attrs.append(
                 _build_index_mapping_dict(node.index, allowed_induction_symbols)
