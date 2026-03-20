@@ -37,6 +37,15 @@ func.func @bitcast_i8_to_f8e8m0(%v: !wave.tensor<[@M, @K32] of i8>) -> !wave.ten
   %0 = wave.bitcast %v : !wave.tensor<[@M, @K32] of i8> to !wave.tensor<[@M, @K32] of f8E8M0FNU>
   return %0 : !wave.tensor<[@M, @K32] of f8E8M0FNU>
 }
+
+// CHECK-LABEL: @bitcast_hyper_valid
+func.func @bitcast_hyper_valid(%v: !wave.tensor<[@M, @N] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 16, K = 32}>} {
+  // CHECK: wave.bitcast %{{.*}} : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice

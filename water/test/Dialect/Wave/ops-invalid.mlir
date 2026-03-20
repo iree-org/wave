@@ -1308,3 +1308,20 @@ func.func @bitcast_vector_total_bits(%v: vector<8xf32>) {
   wave.bitcast %v : vector<8xf32> to vector<4xf32>
   return
 }
+
+// -----
+
+func.func @bitcast_hyper_invalid(%v: !wave.tensor<[@M, @N] of i8, <register>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 16, K = 16}>} {
+  // expected-error @below {{'wave.bitcast' op bitcast trailing dimension mismatch}}
+  wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_wrong_trailing_dim(%v: !wave.tensor<[@M, @N] of i8, <register>>) {
+  // expected-error @below {{'wave.bitcast' op trailing dimension must be scaled by the element bitwidth ratio (8-bit to 4-bit)}}
+  wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @N] of f4E2M1FN, <register>>
+  return
+}
