@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/LogicalResult.h"
+#include <cstdint>
 #include <optional>
 
 using namespace mlir;
@@ -461,29 +462,18 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
                                << " expr_list divisor must be a constant";
       }
 
-      // Verify that the dividend is evenly divisible by the divisor.
-      // Resolve all symbols to constants and evaluate both sides.
-      llvm::SmallVector<AffineExpr> replacements;
-      replacements.reserve(exprList.getMap().getNumSymbols());
-      for (Attribute symAttr : exprList.getSymbols()) {
-        StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
-        int64_t val = hyperparams.getKnownSymbolValue(dep);
-        replacements.push_back(getAffineConstantExpr(val, op->getContext()));
-      }
+      Attribute symAttr = exprList.getSymbols().back();
+      StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
+      int64_t lhs = hyperparams.getKnownSymbolValue(dep);
 
-      AffineExpr lhsExpr = divExpr.getLHS().replaceSymbols(replacements);
-      lhsExpr = simplifyAffineExpr(lhsExpr, 0, 0);
-      AffineExpr rhsExpr = divExpr.getRHS().replaceSymbols(replacements);
-      rhsExpr = simplifyAffineExpr(rhsExpr, 0, 0);
-      AffineConstantExpr lhsConst = llvm::cast<AffineConstantExpr>(lhsExpr);
-      AffineConstantExpr rhsConst = llvm::cast<AffineConstantExpr>(rhsExpr);
-      if (rhsConst.getValue() != 0 &&
-          lhsConst.getValue() % rhsConst.getValue() != 0) {
+      AffineExpr rhsExpr = divExpr.getRHS();
+      int64_t rhs = llvm::cast<AffineConstantExpr>(rhsExpr).getValue();
+
+      if (rhs != 0 && lhs % rhs != 0) {
         return op->emitError()
                << "hyperparameter " << entry.getName() << " has dividend ("
-               << lhsConst.getValue()
-               << ") that is not evenly divisible by the divisor ("
-               << rhsConst.getValue() << ")";
+               << lhs << ") that is not evenly divisible by the divisor ("
+               << rhs << ")";
       }
     }
 
