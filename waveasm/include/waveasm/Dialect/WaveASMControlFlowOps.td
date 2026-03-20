@@ -104,7 +104,7 @@ def WaveASM_ConditionOp : WAVEASMOp<"condition", [
     Terminator,
     HasParent<"LoopOp">,
     DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface,
-      ["getSuccessorRegions"]>
+      ["getSuccessorRegions", "getMutableSuccessorOperands"]>
   ]> {
   let summary = "Loop condition terminator";
   let description = [{

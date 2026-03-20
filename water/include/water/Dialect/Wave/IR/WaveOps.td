@@ -319,7 +319,7 @@ def IterateOp : Op<WaveDialect, "iterate", [
 
 def YieldOp : Op<WaveDialect, "yield",
     [Terminator, HasParent<"::wave::IterateOp">,
-     DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>]> {
+     DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface, ["getMutableSuccessorOperands"]>]> {
   let summary = "Yields values from the current control flow context";
 
   let arguments = (ins
