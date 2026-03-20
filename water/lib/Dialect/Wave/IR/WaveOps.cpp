@@ -2575,37 +2575,6 @@ static llvm::FailureOr<ChangeResult> propagateBitcastShape(
                                                  toName, errs);
 }
 
-llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateForward(
-    llvm::ArrayRef<wave::WaveTensorType> operandTypes,
-    llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
-    llvm::raw_ostream &errs) {
-  unsigned srcBits =
-      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
-  unsigned dstBits =
-      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
-  wave::WaveTensorType dstIRType =
-      llvm::dyn_cast<wave::WaveTensorType>(getResult().getType());
-  return propagateBitcastShape(getOperation(), operandTypes[0], resultTypes[0],
-                               dstIRType, srcBits, dstBits, "input", "result",
-                               errs);
-}
-
-llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateBackward(
-    llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
-    llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
-  unsigned srcBits =
-      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
-  unsigned dstBits =
-      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
-  wave::WaveTensorType srcIRType =
-      llvm::dyn_cast<wave::WaveTensorType>(getValueToCast().getType());
-  return propagateBitcastShape(getOperation(), resultTypes[0], operandTypes[0],
-                               srcIRType, dstBits, srcBits, "result", "input",
-                               errs);
-}
-
-LogicalResult wave::BitcastOp::finalizeTypeInference() { return success(); }
-
 // Remap the index expression lattice for bitcast: leading dimensions pass
 // through as identity, but the last dimension gets its symbol renamed and its
 // step (and start/stride if present) scaled by the element bitwidth ratio.

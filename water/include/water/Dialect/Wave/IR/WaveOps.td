@@ -741,7 +741,6 @@ def CastOp : WaveOp<"cast", [
 }
 
 def BitcastOp : WaveOp<"bitcast", [
-    DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Reinterpret the bits of a register-resident tensor as a different type";
