@@ -1173,26 +1173,32 @@ def WaveASM_RawOp : WAVEASMOp<"raw"> {
   let description = [{
     Embeds a raw assembly string directly into the output.  Because the
     register allocator cannot see implicit register references inside the
-    text, callers that read physical registers should populate the
-    corresponding `*_reads` attribute so the allocator can reserve them.
+    text, callers that use physical registers should populate the
+    corresponding `*_uses` attribute so the allocator can reserve them.
   }];
   let arguments = (ins StrAttr:$text,
-                       OptionalAttr<DenseI64ArrayAttr>:$sreg_reads,
-                       OptionalAttr<DenseI64ArrayAttr>:$vreg_reads,
-                       OptionalAttr<DenseI64ArrayAttr>:$areg_reads);
+                       OptionalAttr<DenseI64ArrayAttr>:$sreg_uses,
+                       OptionalAttr<DenseI64ArrayAttr>:$vreg_uses,
+                       OptionalAttr<DenseI64ArrayAttr>:$areg_uses);
   let builders = [
-    // Text-only convenience builder (no register annotations).
-    OpBuilder<(ins "::llvm::StringRef":$text), [{
-      build($_builder, $_state, text,
-            /*sreg_reads=*/nullptr,
-            /*vreg_reads=*/nullptr,
-            /*areg_reads=*/nullptr);
+    // Convenience builder that accepts plain ArrayRef<int64_t> for each
+    // register-use set. Empty arrays produce nullptr (omitted attribute).
+    OpBuilder<(ins "::llvm::StringRef":$text,
+                   CArg<"::llvm::ArrayRef<int64_t>", "{}">:$sregUses,
+                   CArg<"::llvm::ArrayRef<int64_t>", "{}">:$vregUses,
+                   CArg<"::llvm::ArrayRef<int64_t>", "{}">:$aregUses), [{
+      auto toAttr = [&](::llvm::ArrayRef<int64_t> r) -> ::mlir::DenseI64ArrayAttr {
+        return r.empty() ? nullptr
+                         : ::mlir::DenseI64ArrayAttr::get($_builder.getContext(), r);
+      };
+      build($_builder, $_state, text, toAttr(sregUses),
+            toAttr(vregUses), toAttr(aregUses));
     }]>,
   ];
   let assemblyFormat = "$text"
-    "(`sreg_reads` `=` $sreg_reads^)?"
-    "(`vreg_reads` `=` $vreg_reads^)?"
-    "(`areg_reads` `=` $areg_reads^)?"
+    "(`sreg_uses` `=` $sreg_uses^)?"
+    "(`vreg_uses` `=` $vreg_uses^)?"
+    "(`areg_uses` `=` $areg_uses^)?"
     "attr-dict";
 }
 

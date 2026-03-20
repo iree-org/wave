@@ -565,36 +565,28 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
 
   int64_t newSrdBase = ctx.getNextSwizzleSRDIndex();
 
-  // sreg_reads on all RawOps below: these read from srcSrdBase, which is a
+  // sreg_uses on all RawOps below: these read from srcSrdBase, which is a
   // precolored SRD position whose PrecoloredSRegOp survives DCE (it has SSA
   // users). The reservation is therefore redundant with precoloring but
   // explicitly documents the physical-register dependency for the allocator.
-  auto sregAttr = [&](ArrayRef<int64_t> regs) {
-    return DenseI64ArrayAttr::get(builder.getContext(), regs);
-  };
-
   std::string mov0 = "s_mov_b32 s" + std::to_string(newSrdBase) + ", s" +
                      std::to_string(srcSrdBase);
-  RawOp::create(builder, loc, mov0, sregAttr({srcSrdBase}),
-                /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+  RawOp::create(builder, loc, mov0, /*sregUses=*/{srcSrdBase});
 
   if (hasCacheSwizzle && !suppressWord3Swizzle) {
     int64_t srdWord1Bits = static_cast<int64_t>(swizzleStride | 0x4000) << 16;
     std::string and1 = "s_and_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
                        std::to_string(srcSrdBase + 1) + ", 0xffff";
-    RawOp::create(builder, loc, and1, sregAttr({srcSrdBase + 1}),
-                  /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+    RawOp::create(builder, loc, and1, /*sregUses=*/{srcSrdBase + 1});
 
     std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
                       std::to_string(newSrdBase + 1) + ", 0x" +
                       llvm::utohexstr(srdWord1Bits);
-    RawOp::create(builder, loc, or1, sregAttr({newSrdBase + 1}),
-                  /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+    RawOp::create(builder, loc, or1, /*sregUses=*/{newSrdBase + 1});
   } else {
     std::string mov1 = "s_mov_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
                        std::to_string(srcSrdBase + 1);
-    RawOp::create(builder, loc, mov1, sregAttr({srcSrdBase + 1}),
-                  /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+    RawOp::create(builder, loc, mov1, /*sregUses=*/{srcSrdBase + 1});
   }
 
   if (hasNonMaxValidBytes) {
@@ -608,8 +600,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     // offsets in-bounds, causing the hardware to access unmapped memory.
     std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", s" +
                        std::to_string(srcSrdBase + 2);
-    RawOp::create(builder, loc, mov2, sregAttr({srcSrdBase + 2}),
-                  /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+    RawOp::create(builder, loc, mov2, /*sregUses=*/{srcSrdBase + 2});
   }
 
   uint64_t word3 =

@@ -432,14 +432,12 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     // register strings.
 
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
-    // sreg_reads: srdBase+1 is a precolored SRD position; the annotation
+    // sreg_uses: srdBase+1 is a precolored SRD position; the annotation
     // documents the read dependency for the register allocator.
     std::string andStr = "s_and_b32 s" + std::to_string(srdBase + 1) + ", s" +
                          std::to_string(srdBase + 1) + ", 0x" +
                          llvm::utohexstr(kSRDWord1BaseMask);
-    RawOp::create(builder, loc, andStr,
-                  DenseI64ArrayAttr::get(builder.getContext(), {srdBase + 1}),
-                  /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+    RawOp::create(builder, loc, andStr, {srdBase + 1});
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
     auto flags = getConstantIntValue(op.getFlags());

@@ -307,11 +307,11 @@ void TranslationContext::emitSRDPrologue() {
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       // Copy base address with s_mov_b64.
-      // NOTE: no sreg_reads here. The source registers (preloadBase) are
+      // NOTE: no sreg_uses here. The source registers (preloadBase) are
       // targets of S_LOAD_DWORDX2 SSA ops whose physical register assignment
       // depends on NOT being in reservedSGPRs. The preload-position
       // PrecoloredSRegOps (above) have [Pure] and no SSA users, so DCE
-      // removes them; adding sreg_reads would reserve the positions while
+      // removes them; adding sreg_uses would reserve the positions while
       // removing the precoloring constraint, causing S_LOAD_DWORDX2 to be
       // assigned elsewhere while this RawOp still reads the original position.
       std::string movB64Str = "s_mov_b64 s[" + std::to_string(srdBase) + ":" +
@@ -348,7 +348,7 @@ void TranslationContext::emitSRDPrologue() {
       auto vregType = createVRegType();
       auto vreg =
           PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
-      // No sreg_reads: same reason as the s_mov_b64 above -- the source
+      // No sreg_uses: same reason as the s_mov_b64 above -- the source
       // SGPR is a preload or overflow position whose S_LOAD_DWORDX2 allocation
       // must not be blocked by reservation.
       RawOp::create(builder, loc,
@@ -397,15 +397,13 @@ void TranslationContext::emitSRDPrologue() {
       PrecoloredSRegOp::create(builder, loc, createSRegType(1, 1), sgprIdx, 1);
 
       // Use RawOp to load directly into the pinned SGPR.
-      // sreg_reads = {0, 1}: the load reads the kernarg pointer from s[0:1].
+      // sreg_uses = {0, 1}: the load reads the kernarg pointer from s[0:1].
       // Unlike the GFX950 preload path, here the load itself is a RawOp (not
       // an SSA S_LOAD_DWORDX2), so there is no conflict with reservation.
       RawOp::create(builder, loc,
                     "s_load_dword s" + std::to_string(sgprIdx) + ", s[0:1], " +
                         std::to_string(kernargOffset),
-                    DenseI64ArrayAttr::get(builder.getContext(),
-                                           {(int64_t)0, (int64_t)1}),
-                    /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+                    /*sregUses=*/{0, 1});
     }
 
     // Step 2: Wait for all scalar loads to complete
@@ -443,14 +441,13 @@ void TranslationContext::emitSRDPrologue() {
       auto vregType = createVRegType();
       auto vreg =
           PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
-      // sreg_reads: the source SGPR was written by a RawOp s_load_dword
+      // sreg_uses: the source SGPR was written by a RawOp s_load_dword
       // (not an SSA op), so there is no S_LOAD_DWORDX2 allocation to conflict
       // with. The reservation prevents regalloc from reusing sgprIdx.
       RawOp::create(builder, loc,
                     "v_mov_b32 v" + std::to_string(pending.argIndex) + ", s" +
                         std::to_string(sgprIdx),
-                    DenseI64ArrayAttr::get(builder.getContext(), {sgprIdx}),
-                    /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+                    /*sregUses=*/{sgprIdx});
       mapper.mapValue(pending.blockArg, vreg);
     }
   }
@@ -613,17 +610,15 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   // Copy source SRD base to new SRD.
   // Must use RawOp: S_MOV_B64 is Pure (SALUUnaryOp) and writes to a
   // physical register with no SSA consumer, so CSE/DCE eliminates it.
-  // sreg_reads: the source SRD registers are precolored positions whose
+  // sreg_uses: the source SRD registers are precolored positions whose
   // PrecoloredSRegOps survive DCE (they have SSA users via mapper), so
   // this reservation is redundant but documents the dependency.
   std::string copyBase = "s_mov_b64 s[" + std::to_string(N) + ":" +
                          std::to_string(N + 1) + "], s[" +
                          std::to_string(adj.srcSrdBase) + ":" +
                          std::to_string(adj.srcSrdBase + 1) + "]";
-  RawOp::create(
-      builder, loc, copyBase,
-      DenseI64ArrayAttr::get(mlirCtx, {adj.srcSrdBase, adj.srcSrdBase + 1}),
-      /*vreg_reads=*/nullptr, /*areg_reads=*/nullptr);
+  RawOp::create(builder, loc, copyBase,
+                /*sregUses=*/{adj.srcSrdBase, adj.srcSrdBase + 1});
 
   // Get element offset -> SGPR via v_readfirstlane_b32 (or s_mov_b32 if
   // already scalar).  Pinned to s[N+3].
