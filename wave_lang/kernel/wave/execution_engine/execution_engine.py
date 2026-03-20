@@ -158,7 +158,7 @@ def _create_options_from_env() -> "ExecutionEngineOptions":
     def _env_enabled(var: str, default: str = "0") -> bool:
         return bool(int(os.environ.get(var, default)))
 
-    options.enable_object_cache = _env_enabled("WAVE_ENABLE_OBJECT_CACHE")
+    options.enable_object_cache = _env_enabled("WAVE_ENABLE_OBJECT_CACHE", "1")
     options.enable_gdb_notification_listener = _env_enabled("WAVE_ENABLE_GDB_LISTENER")
     options.enable_perf_notification_listener = _env_enabled(
         "WAVE_ENABLE_PERF_LISTENER"
