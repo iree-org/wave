@@ -24,6 +24,9 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "waveasm-linear-scan"
 
 using namespace mlir;
 using namespace waveasm;
@@ -213,6 +216,34 @@ private:
           usedInitArgs.insert(loopOp.getInitArgs()[i]);
         }
       }
+    });
+
+    // Reserve physical registers declared on waveasm.raw ops.
+    // Raw ops embed physical register names as text that are invisible to
+    // SSA-based liveness analysis. The sreg_uses / vreg_uses / areg_uses
+    // attributes explicitly list the register indices the raw op uses.
+    //
+    // IMPORTANT: only RawOps whose source registers are NOT targets of SSA
+    // load ops (like S_LOAD_DWORDX2) should carry sreg_uses. Adding
+    // sreg_uses for a register that an SSA op must be allocated to will
+    // exclude it from the free pool, preventing correct allocation when
+    // the corresponding PrecoloredSRegOp is DCE'd (it has [Pure] + no
+    // SSA users). See the GFX950 prologue in emitSRDPrologue for details.
+    program.walk([&](RawOp rawOp) {
+      auto reserve = [](llvm::DenseSet<int64_t> &set,
+                        std::optional<ArrayRef<int64_t>> uses, StringRef kind) {
+        if (!uses)
+          return;
+        for (int64_t idx : *uses) {
+          if (!set.count(idx))
+            LLVM_DEBUG(llvm::dbgs()
+                       << "reserving raw-op " << kind << " " << idx << "\n");
+          set.insert(idx);
+        }
+      };
+      reserve(reservedSGPRs, rawOp.getSregUses(), "sreg_uses s");
+      reserve(reservedVGPRs, rawOp.getVregUses(), "vreg_uses v");
+      reserve(reservedAGPRs, rawOp.getAregUses(), "areg_uses a");
     });
 
     // Create allocator with precolored values and tied operands.
