@@ -473,7 +473,7 @@ func.func @child_alloc_with_tail_padding() {
 
 // -----
 
-// expected-error @below {{hyperparameter A must either be an integer or an expr_list}}
+// expected-error @below {{hyperparameter "A" must either be an integer or an expr_list}}
 module attributes { wave.hyperparameters = #wave.hyperparameters<{A = "hello"}> } {}
 
 // -----
