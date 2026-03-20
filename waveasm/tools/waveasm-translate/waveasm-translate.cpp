@@ -111,6 +111,12 @@ int main(int argc, char **argv) {
   waveasm::registerWaveASMPasses();
   mlir::registerTransformsPasses();
 
+  // Enable standard MLIR pass manager CLI options:
+  //   --mlir-print-ir-after-all, --mlir-print-ir-before-all,
+  //   --mlir-print-ir-after-change, --mlir-print-ir-after-failure, etc.
+  // IR is printed to stderr; pipe with 2>file to capture.
+  mlir::registerPassManagerCLOptions();
+
   // Construct AFTER pass registration — PassNameParser::initialize() snapshots
   // the registry, so passes must already be registered at this point.
   static mlir::PassPipelineCLParser passPipeline("", "Compiler passes to run");
@@ -193,6 +199,8 @@ int main(int argc, char **argv) {
 
   // Build pass pipeline from CLI flags.
   PassManager pm(&context);
+  // Apply CLI options for IR printing (--mlir-print-ir-after-all, etc.)
+  mlir::applyPassManagerCLOptions(pm);
   if (passPipeline.hasAnyOccurrences()) {
     auto errorHandler = [](const Twine &msg) {
       llvm::errs() << msg << "\n";

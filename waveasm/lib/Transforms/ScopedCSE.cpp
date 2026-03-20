@@ -155,6 +155,11 @@ bool isCSEEligible(Operation *op) {
   if (op->hasTrait<OpTrait::SpecialRegOp>())
     return false;
 
+  // SCC-reading ops are NOT CSE-eligible: their result depends on implicit
+  // SCC state, so two ops with identical operands can produce different results.
+  if (op->hasTrait<OpTrait::SCCUse>())
+    return false;
+
   // Precolored registers are not eligible (they're fixed)
   if (isa<PrecoloredSRegOp, PrecoloredVRegOp>(op))
     return false;

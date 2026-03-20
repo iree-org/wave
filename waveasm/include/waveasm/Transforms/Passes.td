@@ -38,8 +38,8 @@ def WAVEASMLinearScan : Pass<"waveasm-linear-scan"> {
   let options = [
     Option<"maxVGPRs", "max-vgprs", "int64_t", "256",
            "Maximum VGPRs available">,
-    Option<"maxSGPRs", "max-sgprs", "int64_t", "104",
-           "Maximum SGPRs available">,
+    Option<"maxSGPRs", "max-sgprs", "int64_t", "102",
+           "Maximum user-addressable SGPRs (s0-s101 on GFX9+)">,
     Option<"maxAGPRs", "max-agprs", "int64_t", "256",
            "Maximum AGPRs available">
   ];
@@ -244,6 +244,36 @@ def WAVEASMExtractScalarization
     "::mlir::arith::ArithDialect",
     "::mlir::vector::VectorDialect"
   ];
+}
+
+//===----------------------------------------------------------------------===//
+// SCC Verifier Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMSCCVerifier : Pass<"waveasm-scc-verifier"> {
+  let summary = "Verify SCC (Scalar Condition Code) liveness invariants";
+  let description = [{
+    Checks that no SCC-clobbering SALU instruction sits between an
+    SCC-producing op and its consumer.  Uses isa<> checks (not traits)
+    to avoid changing ODS-generated code for existing op classes.
+  }];
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Memory Offset Optimization Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMVGPRCompaction : Pass<"waveasm-vgpr-compaction"> {
+  let summary = "Compact physical VGPR assignments to reduce peak register count";
+  let description = [{
+    Re-assigns physical VGPRs after linear scan allocation to eliminate
+    fragmentation caused by interleaved buffer_load and ds_read destinations.
+    Uses a shortest-first greedy strategy: short-lived values get low
+    registers, long-lived values get high registers, eliminating gaps
+    from interleaving.
+  }];
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
 //===----------------------------------------------------------------------===//

@@ -166,9 +166,16 @@ std::string KernelGenerator::emitBufferStore(Operation *op,
   // Use VMEMStoreOpInterface to access operands by name
   if (auto storeOp = dyn_cast<VMEMStoreOpInterface>(op)) {
     std::string vdata = resolveValue(storeOp.getData());
-    std::string voffset = resolveValue(storeOp.getVoffset());
+    Value voffsetVal = storeOp.getVoffset();
     std::string srd = resolveValue(storeOp.getSaddr());
-    result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
+
+    if (isa<ImmType>(voffsetVal.getType())) {
+      result += " " + vdata + ", off, " + srd + ", 0";
+    } else {
+      std::string voffset = resolveValue(voffsetVal);
+      result += " " + vdata + ", " + voffset + ", " + srd + ", 0 offen";
+    }
+
     if (auto instOffsetAttr = op->getAttrOfType<IntegerAttr>("instOffset")) {
       int64_t offset = instOffsetAttr.getInt();
       if (offset > 0) {
@@ -533,16 +540,18 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             std::string src = resolveValue(srcVal);
             std::string lines;
             if (isAGPR) {
-              // v_accvgpr_write_b32 requires a VGPR source in this backend.
-              // Materialize immediate sources into the reserved scratch VGPR.
+              auto [isLit, litVal] = getLiteralValue(srcVal);
               std::string writeSrc = src;
-              if (srcIsImm) {
+              if (srcIsImm && !(isLit && isInlineConstant(litVal))) {
+                // Non-inline literal: materialize into scratch VGPR first.
                 lines += "  v_mov_b32 " + formatVGPRRange(kScratchVGPR, 1) +
                          ", " + src;
                 writeSrc = formatVGPRRange(kScratchVGPR, 1);
                 peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
                 invalidateScratchCache();
               }
+              // Inline constants (e.g. 0) go directly into
+              // v_accvgpr_write_b32 without a scratch VGPR.
               for (int64_t i = 0; i < size; ++i) {
                 if (!lines.empty())
                   lines += "\n";
@@ -563,6 +572,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         if (isAGPR) {
           if (srcIsImm) {
             std::string src = resolveValue(srcVal);
+            auto [isLit, litVal] = getLiteralValue(srcVal);
+            if (isLit && isInlineConstant(litVal)) {
+              // Inline constant: emit directly without scratch VGPR.
+              return "  v_accvgpr_write_b32 " + resolveValue(result) + ", " +
+                     src;
+            }
             std::string scratch = formatVGPRRange(kScratchVGPR, 1);
             peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
             invalidateScratchCache();
@@ -695,10 +710,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
               SmallVector<bool> handled(pendingCopies.size(), false);
 
-              // Allocate swap temps once and reuse across all swaps.
-              // Swaps are emitted sequentially so the temp is dead after
-              // each 3-instruction sequence and can be reused.
-              int64_t vSwapTemp = -1;
+              // SGPR swaps still need a temp; VGPR swaps use v_swap_b32.
               int64_t sSwapTemp = -1;
 
               for (size_t i = 0; i < pendingCopies.size(); ++i) {
@@ -728,13 +740,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                     }
                     int64_t regA = pendingCopies[i].dst;
                     int64_t regB = pendingCopies[j].dst;
-                    if (vSwapTemp < 0) {
-                      vSwapTemp = peakVGPRs;
-                      peakVGPRs = std::max(peakVGPRs, vSwapTemp + 1);
-                    }
-                    os << "  v_mov_b32 v" << vSwapTemp << ", v" << regA << "\n";
-                    os << "  v_mov_b32 v" << regA << ", v" << regB << "\n";
-                    os << "  v_mov_b32 v" << regB << ", v" << vSwapTemp << "\n";
+                    os << "  v_swap_b32 v" << regA << ", v" << regB << "\n";
                     handled[i] = true;
                     handled[j] = true;
                     break;
@@ -842,13 +848,21 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       .Case<YieldOp>(
           [&](YieldOp) -> std::optional<std::string> { return std::nullopt; })
       .Case<S_CMP_LT_U32, S_CMP_EQ_U32, S_CMP_LE_U32, S_CMP_GT_U32,
-            S_CMP_GE_U32, S_CMP_LT_I32, S_CMP_EQ_I32, S_CMP_LE_I32,
-            S_CMP_GT_I32, S_CMP_GE_I32>(
+            S_CMP_GE_U32, S_CMP_NE_U32, S_CMP_LT_I32, S_CMP_EQ_I32,
+            S_CMP_LE_I32, S_CMP_GT_I32, S_CMP_GE_I32, S_CMP_NE_I32>(
           [&](auto cmpOp) -> std::optional<std::string> {
             llvm::StringRef opName = cmpOp->getName().getStringRef();
             llvm::StringRef mnemonic = opName;
             if (opName.starts_with("waveasm.")) {
               mnemonic = opName.drop_front(8);
+            }
+            // s_cmp_ne_* → s_cmp_lg_* (ISA mnemonic)
+            std::string mnemStr;
+            if (mnemonic.contains("_ne_")) {
+              mnemStr = mnemonic.str();
+              size_t pos = mnemStr.find("_ne_");
+              mnemStr.replace(pos, 4, "_lg_");
+              mnemonic = mnemStr;
             }
             llvm::SmallVector<std::string> operands;
             for (Value operand : cmpOp->getOperands()) {

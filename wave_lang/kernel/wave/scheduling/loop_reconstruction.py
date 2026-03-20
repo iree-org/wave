@@ -851,12 +851,14 @@ def guard_g2s_with_bounds_check(
         max_iv = iterate.count
         induction_variable = get_induction_variable(iterate, constraints)
 
-        prefetch_offset = (num_stages - 1) * step
-        guard_condition = sympy.StrictLessThan(
-            induction_variable + prefetch_offset, max_iv
-        )
-
+        pipeline_depth = num_stages - 1
         for g2s in g2s_nodes:
+            custom = get_custom(g2s)
+            unroll_iter = getattr(custom, "unroll_iteration", 0) or 0
+            prefetch_offset = pipeline_depth + unroll_iter
+            guard_condition = sympy.StrictLessThan(
+                induction_variable + prefetch_offset, max_iv
+            )
             g2s.meta["g2s_guard"] = guard_condition
 
 

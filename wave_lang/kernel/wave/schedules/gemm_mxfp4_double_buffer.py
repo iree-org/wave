@@ -1992,8 +1992,8 @@ def get_mxfp4_asymmetric_schedule(
 
             tkw.reorder_graph(pipeline_loop.PROLOGUE, prologue_clusters)
             tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
-            unroll_factor = 2
-            tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
+        unroll_factor = 2
+        tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
         tkw.insert_at_start(
             pipeline_loop.KERNEL,

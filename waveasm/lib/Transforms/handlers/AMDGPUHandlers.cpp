@@ -351,8 +351,9 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
 
 /// Emit the SRD NUM_RECORDS field (word 2) from the validBytes operand.
 /// Static constants emit s_mov_b32; dynamic values (e.g. from arith.select
-/// for the branchless g2s guard) go through v_readfirstlane_b32 + s_add_u32
-/// (non-Pure to avoid DCE). Falls back to hardware maximum if absent.
+/// for the branchless g2s guard) use s_cmp + s_cselect when all operands
+/// are scalar, or v_readfirstlane_b32 for VGPR values.
+/// Falls back to hardware maximum if absent.
 static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
                               Operation *op, TranslationContext &ctx) {
   auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
@@ -365,6 +366,41 @@ static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
                         llvm::utohexstr(clamped);
       RawOp::create(builder, loc, mov);
       return;
+    }
+
+    // Detect arith.select(arith.cmpi(scalar, scalar), scalar, scalar)
+    // and emit s_cmp + s_cselect directly into SRD word 2.
+    if (auto selectOp = validBytesVal.getDefiningOp<arith::SelectOp>()) {
+      Value condVal = selectOp.getCondition();
+      if (auto cmpOp = condVal.getDefiningOp<arith::CmpIOp>()) {
+        Value cmpLhs = cmpOp.getLhs();
+        Value cmpRhs = cmpOp.getRhs();
+        Value trueVal = selectOp.getTrueValue();
+        Value falseVal = selectOp.getFalseValue();
+
+        auto cmpLhsMapped = ctx.getMapper().getMapped(cmpLhs);
+        auto cmpRhsMapped = ctx.getMapper().getMapped(cmpRhs);
+        auto trueMapped = ctx.getMapper().getMapped(trueVal);
+        auto falseMapped = ctx.getMapper().getMapped(falseVal);
+
+        if (cmpLhsMapped && cmpRhsMapped && trueMapped && falseMapped &&
+            isScalarOrImm(*cmpLhsMapped) && isScalarOrImm(*cmpRhsMapped) &&
+            isScalarOrImm(*trueMapped) && isScalarOrImm(*falseMapped)) {
+          emitScalarCmp(builder, loc, cmpOp.getPredicate(),
+                        *cmpLhsMapped, *cmpRhsMapped, ctx);
+
+          auto dstType = PSRegType::get(builder.getContext(), srdBase + 2, 1);
+          Value trueV = *trueMapped;
+          Value falseV = *falseMapped;
+          auto sregType = ctx.createSRegType();
+          if (isImmType(trueV.getType()))
+            trueV = S_MOV_B32::create(builder, loc, sregType, trueV);
+          auto result =
+              S_CSELECT_B32::create(builder, loc, dstType, trueV, falseV);
+          DCEProtectOp::create(builder, loc, result);
+          return;
+        }
+      }
     }
 
     auto mapped = ctx.getMapper().getMapped(validBytesVal);
