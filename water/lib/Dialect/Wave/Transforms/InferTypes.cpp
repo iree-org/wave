@@ -2017,13 +2017,14 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
                   *wave::IndexExprsAnalysisInit::create(
                       mma->getLoc(), constraints,
                       wave::getHyperparameters(mma)),
-                  [&]() { return mma->emitError(); }, delayedError)))
-            return WalkResult::interrupt();
-          if (delayedError) {
-            InFlightDiagnostic diag = mma->emitError();
-            delayedError(diag);
+                  [&]() { return mma->emitError(); }, delayedError))) {
+            if (delayedError) {
+              InFlightDiagnostic diag = mma->emitError();
+              delayedError(diag);
+            }
             return WalkResult::interrupt();
           }
+
           for (unsigned i = 0, e = operandLattices.size(); i < e; ++i) {
             SmallString<32> description;
             llvm::raw_svector_ostream os(description);
