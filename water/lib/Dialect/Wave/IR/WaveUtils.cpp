@@ -13,11 +13,13 @@
 #include "mlir/IR/Dialect.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/iterator.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
 
@@ -175,6 +177,89 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
 
   return success();
 }
+
+/// Dependency graph over hyperparameter symbols used for cycle detection via
+/// scc_iterator.  A synthetic root node (null symbol) fans out to every
+/// expr_list entry so that a single traversal covers all components.
+struct HyperparamDepGraph {
+  /// Adjacency list: symbol -> symbols it depends on.
+  llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<wave::WaveSymbolAttr>>
+      deps;
+  /// All expr_list symbols, also the edge list of the synthetic root.
+  llvm::SmallVector<wave::WaveSymbolAttr> exprListKeys;
+
+  /// A node carries a back-pointer to the graph so that child_begin/child_end
+  /// can look up the adjacency list without external state.
+  struct Node {
+    const HyperparamDepGraph *graph;
+    wave::WaveSymbolAttr sym;
+    bool operator==(const Node &o) const {
+      return graph == o.graph && sym == o.sym;
+    }
+    bool operator!=(const Node &o) const { return !(*this == o); }
+  };
+
+  Node root() const { return {this, {}}; }
+
+  llvm::ArrayRef<wave::WaveSymbolAttr>
+  children(wave::WaveSymbolAttr sym) const {
+    if (!sym)
+      return exprListKeys;
+    auto it = deps.find(sym);
+    if (it == deps.end())
+      return {};
+    return it->second;
+  }
+};
+
+namespace llvm {
+
+/// Adaptor that wraps a pointer into a WaveSymbolAttr adjacency list and
+/// produces Node values carrying the graph back-pointer.
+struct HyperparamChildIterator
+    : iterator_adaptor_base<
+          HyperparamChildIterator, const wave::WaveSymbolAttr *,
+          std::random_access_iterator_tag, HyperparamDepGraph::Node,
+          std::ptrdiff_t, const HyperparamDepGraph::Node *,
+          HyperparamDepGraph::Node> {
+  const HyperparamDepGraph *graph = nullptr;
+  HyperparamChildIterator() = default;
+  HyperparamChildIterator(const wave::WaveSymbolAttr *it,
+                          const HyperparamDepGraph *g)
+      : iterator_adaptor_base(it), graph(g) {}
+  HyperparamDepGraph::Node operator*() const { return {graph, *I}; }
+};
+
+template <> struct DenseMapInfo<HyperparamDepGraph::Node> {
+  static HyperparamDepGraph::Node getEmptyKey() {
+    return {nullptr, DenseMapInfo<wave::WaveSymbolAttr>::getEmptyKey()};
+  }
+  static HyperparamDepGraph::Node getTombstoneKey() {
+    return {nullptr, DenseMapInfo<wave::WaveSymbolAttr>::getTombstoneKey()};
+  }
+  static unsigned getHashValue(const HyperparamDepGraph::Node &n) {
+    return DenseMapInfo<wave::WaveSymbolAttr>::getHashValue(n.sym);
+  }
+  static bool isEqual(const HyperparamDepGraph::Node &a,
+                      const HyperparamDepGraph::Node &b) {
+    return a.graph == b.graph && a.sym == b.sym;
+  }
+};
+
+template <> struct GraphTraits<const HyperparamDepGraph *> {
+  using NodeRef = HyperparamDepGraph::Node;
+  using ChildIteratorType = HyperparamChildIterator;
+
+  static NodeRef getEntryNode(const HyperparamDepGraph *g) { return g->root(); }
+  static ChildIteratorType child_begin(NodeRef node) {
+    return {node.graph->children(node.sym).begin(), node.graph};
+  }
+  static ChildIteratorType child_end(NodeRef node) {
+    return {node.graph->children(node.sym).end(), node.graph};
+  }
+};
+
+} // namespace llvm
 
 LogicalResult wave::verifyHyperparameterAcyclicity(
     wave::WaveHyperparameterAttr hyperparams, MLIRContext *ctx,
