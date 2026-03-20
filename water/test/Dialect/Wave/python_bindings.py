@@ -495,24 +495,44 @@ module attributes {transform.with_named_sequence} {
     loc = ir.Location.unknown()
 
     M_sym = wave.WaveSymbolAttr.get("M")
+    # CHECK: #wave.symbol<"M">
+    print(M_sym)
     K_sym = wave.WaveSymbolAttr.get("K")
+    # CHECK: #wave.symbol<"K">
+    print(K_sym)
     K_half_sym = wave.WaveSymbolAttr.get("K2")
+    # CHECK: #wave.symbol<"K2">
+    print(K_half_sym)
     K_scale_sym = wave.WaveSymbolAttr.get("K32")
+    # CHECK: #wave.symbol<"K32">
+    print(K_scale_sym)
     N_sym = wave.WaveSymbolAttr.get("N")
+    # CHECK: #wave.symbol<"N">
+    print(N_sym)
     reg_addr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Register)
+    # CHECK: #wave.address_space<register>
+    print(reg_addr)
 
     i8_type = wave.WaveTensorType.get(
         [M_sym, K_half_sym], True, ir.IntegerType.get_signless(8), reg_addr
     )
+    # CHECK: !wave.tensor<[@M, @K2] of i8, <register>>
+    print(i8_type)
     f4_type = wave.WaveTensorType.get(
         [M_sym, K_sym], True, ir.Type.parse("f4E2M1FN"), reg_addr
     )
+    # CHECK: !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    print(f4_type)
     f8e8m0_type = wave.WaveTensorType.get(
         [M_sym, K_scale_sym], True, ir.Type.parse("f8E8M0FNU"), reg_addr
     )
+    # CHECK: !wave.tensor<[@M, @K32] of f8E8M0FNU, <register>>
+    print(f8e8m0_type)
     f32_acc_type = wave.WaveTensorType.get(
         [M_sym, N_sym], True, ir.F32Type.get(), reg_addr
     )
+    # CHECK: !wave.tensor<[@M, @N] of f32, <register>>
+    print(f32_acc_type)
 
     bitcast_test_module = ir.Module.parse(
         """
