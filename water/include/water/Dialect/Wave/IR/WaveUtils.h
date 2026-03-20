@@ -69,6 +69,23 @@ void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                   mlir::AffineMap map, bool inverse,
                   llvm::SmallVectorImpl<wave::WaveSymbolAttr> &permutedShape);
 
+/// Return the index of the first scaled dimension in a bitcast.  The scaled
+/// dimension is the one whose symbol maps to a WaveExprListAttr (a derived
+/// expression) in the hyperparameters rather than a plain IntegerAttr.
+/// Returns std::nullopt when no hyperparameters are available or when no
+/// expr_list dimension is found.
+std::optional<unsigned>
+getScaledDimension(llvm::ArrayRef<wave::WaveSymbolAttr> srcShape,
+                   llvm::ArrayRef<wave::WaveSymbolAttr> dstShape,
+                   wave::WaveHyperparameterAttr hyper);
+
+/// Count how many dimensions in the given shapes are backed by a
+/// WaveExprListAttr in the hyperparameters.  Returns 0 when no
+/// hyperparameters are available.
+unsigned countScaledDimensions(llvm::ArrayRef<wave::WaveSymbolAttr> srcShape,
+                               llvm::ArrayRef<wave::WaveSymbolAttr> dstShape,
+                               wave::WaveHyperparameterAttr hyper);
+
 /// Verify that derived hyperparameter symbols (expr_list values) form a DAG.
 /// Returns success if there are no cycles, or emits a diagnostic naming the
 /// cycle participants.

@@ -25,7 +25,8 @@ func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
 }
 
 // CHECK-LABEL: @bitcast_i8_to_f4
-func.func @bitcast_i8_to_f4(%v: !wave.tensor<[@M, @K2] of i8>) -> !wave.tensor<[@M, @K] of f4E2M1FN> {
+func.func @bitcast_i8_to_f4(%v: !wave.tensor<[@M, @K2] of i8>) -> !wave.tensor<[@M, @K] of f4E2M1FN>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
   // CHECK: wave.bitcast
   %0 = wave.bitcast %v : !wave.tensor<[@M, @K2] of i8> to !wave.tensor<[@M, @K] of f4E2M1FN>
   return %0 : !wave.tensor<[@M, @K] of f4E2M1FN>
@@ -40,10 +41,18 @@ func.func @bitcast_i8_to_f8e8m0(%v: !wave.tensor<[@M, @K32] of i8>) -> !wave.ten
 
 // CHECK-LABEL: @bitcast_hyper_valid
 func.func @bitcast_hyper_valid(%v: !wave.tensor<[@M, @N] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 16, K = 32}>} {
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, K = 32, N = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
   // CHECK: wave.bitcast %{{.*}} : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
   %0 = wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
   return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+}
+
+// CHECK-LABEL: @bitcast_non_last_dim_scaled
+func.func @bitcast_non_last_dim_scaled(%v: !wave.tensor<[@K2, @N] of i8, <register>>) -> !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, N = 16}>} {
+  // CHECK: wave.bitcast %{{.*}} : !wave.tensor<[@K2, @N] of i8, <register>> to !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+  %0 = wave.bitcast %v : !wave.tensor<[@K2, @N] of i8, <register>> to !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
 }
 
 // CHECK-LABEL: @extract_slice

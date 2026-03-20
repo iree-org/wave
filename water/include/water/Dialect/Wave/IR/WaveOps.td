@@ -746,21 +746,27 @@ def BitcastOp : WaveOp<"bitcast", [
   let summary = "Reinterpret the bits of a register-resident tensor as a different type";
   let description = [{
     Reinterprets the raw bits of a register-resident tensor to a different
-    element type without changing the data. The last dimension of the result
-    is scaled by the ratio of source-to-destination element bitwidths.
+    element type without changing the data. Exactly one dimension of the
+    result is scaled by the ratio of source-to-destination element bitwidths.
 
     For example, bitcasting a tensor with i8 elements to f4E2M1FN doubles
-    the last dimension (8/4 = 2), while bitcasting to f8E8M0FNU preserves
-    the dimension (8/8 = 1).
+    the scaled dimension (8/4 = 2), while bitcasting to f8E8M0FNU preserves
+    it (8/8 = 1).
+
+    The scaled dimension is detected automatically: when hyperparameters are
+    available, it is the dimension whose symbol maps to a `WaveExprListAttr`
+    (a derived expression) rather than a plain integer.  Otherwise the
+    verifier looks for the dimension whose symbol differs between source and
+    result, falling back to the last dimension.
 
     When both operand and result are fully-specified wave tensors, the
     verifier enforces:
 
     - The rank must be non-zero and must match between input and result.
-    - All dimensions except the trailing one must be identical.
+    - All dimensions except the scaled one must be identical.
     - The larger element bitwidth must be evenly divisible by the smaller.
-    - When the element bitwidths differ, the trailing dimension must be
-      scaled accordingly (it may not remain unchanged).
+    - When the element bitwidths differ, the scaled dimension must be
+      sized accordingly (it may not remain unchanged).
   }];
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Value to bitcast">:$value_to_cast

@@ -178,6 +178,46 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
   return success();
 }
 
+/// Return true if the hyperparameter for \p sym is a WaveExprListAttr.
+static bool isExprListDim(DictionaryAttr mapping, wave::WaveSymbolAttr sym) {
+  Attribute attr = mapping.get(sym.getName());
+  return llvm::isa_and_nonnull<wave::WaveExprListAttr>(attr);
+}
+
+std::optional<unsigned>
+wave::getScaledDimension(ArrayRef<wave::WaveSymbolAttr> srcShape,
+                         ArrayRef<wave::WaveSymbolAttr> dstShape,
+                         wave::WaveHyperparameterAttr hyper) {
+  if (!hyper)
+    return std::nullopt;
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      return i;
+  }
+  return std::nullopt;
+}
+
+unsigned wave::countScaledDimensions(ArrayRef<wave::WaveSymbolAttr> srcShape,
+                                     ArrayRef<wave::WaveSymbolAttr> dstShape,
+                                     wave::WaveHyperparameterAttr hyper) {
+  if (!hyper)
+    return 0;
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  unsigned count = 0;
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      ++count;
+  }
+  return count;
+}
+
 /// Dependency graph over hyperparameter symbols used for cycle detection via
 /// scc_iterator.  A synthetic root node (null symbol) fans out to every
 /// expr_list entry so that a single traversal covers all components.
