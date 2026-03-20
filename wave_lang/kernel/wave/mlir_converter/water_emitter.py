@@ -264,18 +264,19 @@ def _map_address_space(addr) -> WaveAddressSpaceAttr:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
 
 
-def _derived_dim_clean_name(expr: sympy.Expr) -> str | None:
+def _derived_dim_clean_name(expr: sympy.Expr) -> str:
     """Return a clean MLIR-friendly name for a derived SymPy expression, or
-    None if the expression is already a plain symbol or number."""
+    the original name if the expression is already a plain symbol"""
     if expr.is_Symbol or expr.is_Number:
-        return None
+        return expr.name
     if len(expr.free_symbols) != 1:
-        return None
+        raise NotImplementedError(
+            f"expressions with more than one free symbol {expr} are not yet supported"
+        )
     base = list(expr.free_symbols)[0]
     _, denom = expr.as_numer_denom()
     if isinstance(denom, sympy.Integer) and denom > 1:
         return f"{base.name}{int(denom)}"
-    numer, _ = expr.as_numer_denom()
     if isinstance(expr, sympy.Mul):
         args = expr.args
         ints = [a for a in args if a.is_Integer]
