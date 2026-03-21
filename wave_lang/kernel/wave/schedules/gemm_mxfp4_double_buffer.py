@@ -1573,7 +1573,10 @@ def get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule(use_stagger: bool = True):
 
 
 def get_mxfp4_asymmetric_schedule(
-    eliminate_epilogue: bool = False, is_bscale_shuffled: bool = False
+    eliminate_epilogue: bool = False,
+    is_bscale_shuffled: bool = False,
+    unroll_factor: int = 2,
+    unroll_kernel: bool = True,
 ):
     """Return an asymmetric-prefetch MXFP4 schedule for wave_compile().
 
@@ -1645,7 +1648,7 @@ def get_mxfp4_asymmetric_schedule(
 
         # This forces the pipeline to use double buffering
         pipeline_loop.multi_buffer_count = 2
-        pipeline_loop.unroll_factor = 2
+        pipeline_loop.unroll_factor = unroll_factor
 
         with pipeline_loop as pl:
             pl.set_stage(
@@ -1783,68 +1786,126 @@ def get_mxfp4_asymmetric_schedule(
         # Interleave MFMAs with memory ops (matching aiter f4gemm pattern).
         # Clamp start_offsets so they fit within each partition when the M
         # tile count is odd (e.g. 7 tiles split into 4+3).
-        base_offsets = [0, 3, 2, 0]
-        base_intervals = [4, 4, 2, 4]
-
         def _clamp_offsets(n, offsets):
             return [min(o, max(0, n - 1)) for o in offsets]
 
-        interleaved_mma_0 = tkw.interleave_operations(
-            base_ops=loop_scaled_mma_0,
-            interleaved_ops=[
-                loop_g2v_b,
-                loop_shared_load_a_1,
-                loop_shared_load_a_scale_1,
-                loop_g2v_b_scale,
-            ],
-            intervals=base_intervals,
-            start_offsets=_clamp_offsets(len(loop_scaled_mma_0), base_offsets),
-            start_after_groups=[[], [], [1], [0]],
-        )
-
-        interleaved_mma_1 = tkw.interleave_operations(
-            base_ops=loop_scaled_mma_1,
-            interleaved_ops=[
-                loop_g2s_a,
-                loop_shared_load_a_0,
-                loop_shared_load_a_scale_0,
-                loop_g2s_a_scale,
-            ],
-            intervals=base_intervals,
-            start_offsets=_clamp_offsets(len(loop_scaled_mma_1), base_offsets),
-            start_after_groups=[[], [], [1], [0]],
-        )
-
-        loop_B_g2v_bs = len(loop_g2v_b) + (
-            len(loop_g2v_b_scale) // b_scale_shuffling_factor
-        )
         loop_A_s2v_bs = len(loop_g2s_a) + len(loop_g2s_a_scale)
-        clusters = [
-            tkw.cluster(
-                [
-                    loop_bitcast_a_0,
-                    loop_bitcast_a_scale_0,
-                    loop_bitcast_b,
-                    loop_bitcast_b_scale,
-                    tkw.SchedulingBarrier([]),
-                    interleaved_mma_0,
-                    tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWaitBarrier(load=loop_B_g2v_bs, ds=0),
-                    tkw.SchedulingBarrier([]),
+
+        if unroll_kernel:
+            base_offsets = [0, 3, 2, 0]
+            base_intervals = [4, 4, 2, 4]
+
+            interleaved_mma_0 = tkw.interleave_operations(
+                base_ops=loop_scaled_mma_0,
+                interleaved_ops=[
+                    loop_g2v_b,
+                    loop_shared_load_a_1,
+                    loop_shared_load_a_scale_1,
+                    loop_g2v_b_scale,
                 ],
-            ),
-            tkw.cluster(
-                [
-                    loop_bitcast_a_1,
-                    loop_bitcast_a_scale_1,
-                    tkw.SchedulingBarrier([]),
-                    interleaved_mma_1,
-                    tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWaitBarrier(load=loop_A_s2v_bs, ds=0),
-                    tkw.SchedulingBarrier([]),
-                ]
-            ),
-        ]
+                intervals=base_intervals,
+                start_offsets=_clamp_offsets(len(loop_scaled_mma_0), base_offsets),
+                start_after_groups=[[], [], [1], [0]],
+            )
+
+            interleaved_mma_1 = tkw.interleave_operations(
+                base_ops=loop_scaled_mma_1,
+                interleaved_ops=[
+                    loop_g2s_a,
+                    loop_shared_load_a_0,
+                    loop_shared_load_a_scale_0,
+                    loop_g2s_a_scale,
+                ],
+                intervals=base_intervals,
+                start_offsets=_clamp_offsets(len(loop_scaled_mma_1), base_offsets),
+                start_after_groups=[[], [], [1], [0]],
+            )
+
+            loop_B_g2v_bs = len(loop_g2v_b) + (
+                len(loop_g2v_b_scale) // b_scale_shuffling_factor
+            )
+            clusters = [
+                tkw.cluster(
+                    [
+                        loop_bitcast_a_0,
+                        loop_bitcast_a_scale_0,
+                        loop_bitcast_b,
+                        loop_bitcast_b_scale,
+                        tkw.SchedulingBarrier([]),
+                        interleaved_mma_0,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWaitBarrier(load=loop_B_g2v_bs, ds=0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        loop_bitcast_a_1,
+                        loop_bitcast_a_scale_1,
+                        tkw.SchedulingBarrier([]),
+                        interleaved_mma_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWaitBarrier(load=loop_A_s2v_bs, ds=0),
+                        tkw.SchedulingBarrier([]),
+                    ]
+                ),
+            ]
+        else:
+            interleaved_mma_0 = tkw.interleave_operations(
+                base_ops=loop_scaled_mma_0,
+                interleaved_ops=[
+                    loop_shared_load_a_1,
+                    loop_shared_load_a_scale_1,
+                ],
+                intervals=[4, 2],
+                start_offsets=_clamp_offsets(len(loop_scaled_mma_0), [3, 2]),
+                start_after_groups=[[], [0]],
+            )
+
+            interleaved_mma_1 = tkw.interleave_operations(
+                base_ops=loop_scaled_mma_1,
+                interleaved_ops=[
+                    loop_shared_load_a_0,
+                    loop_shared_load_a_scale_0,
+                ],
+                intervals=[4, 2],
+                start_offsets=_clamp_offsets(len(loop_scaled_mma_1), [3, 2]),
+                start_after_groups=[[], [0]],
+            )
+
+            clusters = [
+                tkw.cluster(
+                    [
+                        loop_bitcast_a_0,
+                        loop_bitcast_a_scale_0,
+                        loop_bitcast_b,
+                        loop_bitcast_b_scale,
+                        tkw.SchedulingBarrier([]),
+                        interleaved_mma_0,
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        loop_bitcast_a_1,
+                        loop_bitcast_a_scale_1,
+                        tkw.SchedulingBarrier([]),
+                        interleaved_mma_1,
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                tkw.cluster(
+                    [
+                        loop_g2v_b,
+                        loop_g2v_b_scale,
+                        loop_g2s_a,
+                        loop_g2s_a_scale,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWaitBarrier(load=loop_A_s2v_bs, ds=0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
 
         if eliminate_epilogue:
             clusters += prologue_clusters
@@ -1992,8 +2053,9 @@ def get_mxfp4_asymmetric_schedule(
 
             tkw.reorder_graph(pipeline_loop.PROLOGUE, prologue_clusters)
             tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
-            unroll_factor = 2
-            tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
+            tkw.reorder_graph(pipeline_loop.EPILOGUE, epilogue_clusters_itr0)
+            if unroll_kernel:
+                tkw.unroll(pipeline_loop.KERNEL, unroll_factor)
 
         tkw.insert_at_start(
             pipeline_loop.KERNEL,

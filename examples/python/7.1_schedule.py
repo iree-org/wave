@@ -372,18 +372,25 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     is_debug=False,
     shape=(512, 1024, 8192),  # 4*T0, 4*T1, 8192
     block=(128, 256, 256),
+    wave_shape=(1, 4),
     eliminate_epilogue=True,
+    no_unroll=False,
 ):
     """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, block, wave_shape=wave_shape
+    )
     options.backend = "asm"
     options.use_buffer_ops = True
-    options.wave_runtime = True
     options.use_wave_asm_backend = True
+    options.wave_runtime = True
     options.dump_intermediates = "build/intermediates"
     options.eliminate_epilogue = eliminate_epilogue
     schedule = get_mxfp4_asymmetric_schedule(
-        eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
+        eliminate_epilogue=eliminate_epilogue,
+        is_bscale_shuffled=True,
+        unroll_factor=1 if no_unroll else 2,
+        unroll_kernel=not no_unroll,
     )
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
@@ -478,5 +485,7 @@ if __name__ == "__main__":
         args.shape,
         args.block,
         args.eliminate_epilogue,
+        args.wave_shape,
+        no_unroll=args.no_unroll,
     )
     exit(0 if success else 1)
