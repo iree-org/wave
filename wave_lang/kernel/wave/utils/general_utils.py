@@ -44,6 +44,16 @@ from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
 
 
+def is_flattened_index(index: dict) -> bool:
+    """Check whether *index* has been linearized to a 1-D flat offset."""
+    return LINEAR_INDEX in index
+
+
+def get_flat_offset(index: dict) -> IndexExpr:
+    """Return the scalar flat offset from a linearized index."""
+    return index[LINEAR_INDEX].start
+
+
 def make_index_uniform_per_wave(index, threads_per_wave, waves_per_block):
     # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
     wave_subs = {
