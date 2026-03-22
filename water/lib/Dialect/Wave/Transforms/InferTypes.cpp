@@ -1298,6 +1298,25 @@ private:
     propagateIfChanged(lattice, ChangeResult::Change);
   }
 
+  void safeSet(IndexExprsLattice *lattice, IndexExprsLatticeStorage value) {
+    if (lattice->getValue() == value)
+      return;
+#ifndef NDEBUG
+    IndexExprsLatticeStorage joined =
+        IndexExprsLatticeStorage::join(lattice->getValue(), value);
+    assert(IndexExprsLatticeStorage::join(joined, lattice->getValue()) ==
+               joined &&
+           "join should not move the lattice backward, did you forget to join "
+           "with the original lattice value in an interface method "
+           "implementation?");
+    assert(
+        IndexExprsLatticeStorage::join(joined, value) == joined &&
+        "join should not move the lattice forward, did you forget to join with "
+        "the original lattice value in an interface method implementation?");
+#endif
+    unsafeSet(lattice, value);
+  }
+
 public:
   explicit IndexExprsForwardAnalysis(
       DataFlowSolver &solver,
@@ -1345,25 +1364,9 @@ public:
             IndexExprsLattice *latticeObject = getLatticeElement(result);
             LDBG() << "  result #" << result.getResultNumber()
                    << " original: " << *latticeObject;
-            unsafeSet(latticeObject, lattice);
+            safeSet(latticeObject, lattice);
             LDBG() << "  result #" << result.getResultNumber()
                    << " updated: " << *latticeObject;
-          }
-        }
-
-        // Set block arguments to bottom initially so they can be join'ed
-        // with actual lattices coming from other operations.
-        for (Region &region : op->getRegions()) {
-          for (Block &block : region) {
-            for (Value value : block.getArguments()) {
-              if (!llvm::isa<wave::WaveTensorType>(value.getType()))
-                continue;
-
-              LDBG() << "setting block argument lattice " << value << " from "
-                     << PrintNoRegions(op) << " to bottom";
-              unsafeSet(getLatticeElement(value),
-                        IndexExprsLatticeStorage::bottom());
-            }
           }
         }
 
@@ -1380,7 +1383,9 @@ public:
             wave::TilingConstraintAttr tilingConstraint =
                 llvm::cast<wave::TilingConstraintAttr>(*it);
             for (Value capture : iterateOp.getCaptureBlockArgs()) {
-              if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
+              auto captureType =
+                  dyn_cast<wave::WaveTensorType>(capture.getType());
+              if (!captureType)
                 continue;
               auto dict = DictionaryAttr::get(
                   iterSymbolAttr.getContext(),
@@ -1388,10 +1393,16 @@ public:
                     wave::applyConstraint(tilingConstraint)}});
               LDBG() << "setting iterate block argument lattice " << capture
                      << " from " << PrintNoRegions(iterateOp) << " to " << dict;
-              unsafeSet(
-                  getLatticeElement(capture),
-                  wave::IndexExprsLatticeStorage(
-                      dict, wave::IndexExprsLatticeStorage::kLowestPriority));
+              IndexExprsLattice *captureLattice = getLatticeElement(capture);
+              safeSet(
+                  captureLattice,
+                  wave::IndexExprsLatticeStorage::join(
+                      captureLattice->getValue(),
+                      wave::IndexExprsLatticeStorage(
+                          dict, wave::IndexExprsLatticeStorage::kLowestPriority,
+                          wave::detail::filterVectorShape(
+                              initObject->hardwareConstraint.getVectorShapes(),
+                              captureType.getShape()))));
             }
           }
         }
@@ -1403,12 +1414,14 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority,
+                       DictionaryAttr vecShape) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value),
-                          wave::IndexExprsLatticeStorage(dict, priority));
+                unsafeSet(
+                    getLatticeElement(value),
+                    wave::IndexExprsLatticeStorage(dict, priority, vecShape));
               })))
         return llvm::failure();
     }
@@ -1504,15 +1517,7 @@ public:
 
     for (auto &&[resultLattice, lattice] :
          llvm::zip_equal(resultLattices, results)) {
-      // In release mode, just set the lattice value instead of calling join.
-      // The interface should have returned the correctly joined lattice and we
-      // don't want to re-join it and don't need the expensive check of the
-      // lattice direction.
-#ifndef NDEBUG
-      propagateIfChanged(lattice, lattice->join(resultLattice));
-#else
-      unsafeSet(lattice, resultLattice);
-#endif
+      safeSet(lattice, resultLattice);
     }
     return llvm::success();
   }
@@ -1628,6 +1633,25 @@ private:
     propagateIfChanged(lattice, ChangeResult::Change);
   }
 
+  void safeSet(IndexExprsLattice *lattice, IndexExprsLatticeStorage value) {
+    if (lattice->getValue() == value)
+      return;
+#ifndef NDEBUG
+    IndexExprsLatticeStorage joined =
+        IndexExprsLatticeStorage::join(lattice->getValue(), value);
+    assert(IndexExprsLatticeStorage::join(joined, lattice->getValue()) ==
+               joined &&
+           "join should not move the lattice backward, did you forget to join "
+           "with the original lattice value in an interface method "
+           "implementation?");
+    assert(
+        IndexExprsLatticeStorage::join(joined, value) == joined &&
+        "join should not move the lattice forward, did you forget to join with "
+        "the original lattice value in an interface method implementation?");
+#endif
+    unsafeSet(lattice, value);
+  }
+
 public:
   IndexExprsBackwardAnalysis(
       DataFlowSolver &solver, SymbolTableCollection &symbolTable,
@@ -1656,7 +1680,7 @@ public:
       if (llvm::failed(initObject))
         return llvm::failure();
 
-      parent->walk([&](Operation *op) -> WalkResult {
+      WalkResult walkResult = parent->walk([&](Operation *op) -> WalkResult {
         if (op->hasTrait<wave::RequiresSidewaysBackwardPropagationOpTrait>()) {
           for (Value operand : op->getOperands())
             addDependency(getLatticeElement(operand), getProgramPointAfter(op));
@@ -1683,33 +1707,28 @@ public:
                llvm::enumerate(op->getOperands(), operandExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(operand);
             LDBG() << "  operand #" << i << " original: " << *latticeObject;
-            unsafeSet(latticeObject, lattice);
+            safeSet(latticeObject, lattice);
             LDBG() << "  operand #" << i << " updated: " << *latticeObject;
           }
           return WalkResult::advance();
-        } else if (op->hasTrait<OpTrait::IsTerminator>()) {
-          // Set terminator operands to bottom initially so they can be join'ed
-          // with actual lattices coming from other operations.
-          for (Value operand : op->getOperands()) {
-            if (!llvm::isa<wave::WaveTensorType>(operand.getType()))
-              continue;
-            unsafeSet(getLatticeElement(operand),
-                      IndexExprsLatticeStorage::bottom());
-          }
         }
 
         return WalkResult::advance();
       });
+      if (walkResult.wasInterrupted())
+        return failure();
     }
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](Value value, DictionaryAttr dict, int32_t priority) {
+              top, [&](Value value, DictionaryAttr dict, int32_t priority,
+                       DictionaryAttr vecShape) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value),
-                          wave::IndexExprsLatticeStorage(dict, priority));
+                unsafeSet(
+                    getLatticeElement(value),
+                    wave::IndexExprsLatticeStorage(dict, priority, vecShape));
               })))
         return llvm::failure();
     }
@@ -1740,16 +1759,10 @@ public:
              << " to op operand " << PrintNoRegions(iterateOp);
       LDBG() << "block argument lattice: " << *blockArgLattice;
       LDBG() << "lattice: " << *lattice;
-#ifndef NDEBUG
-      propagateIfChanged(
-          lattice, lattice->join(blockArgLattice->getValue().withoutIterSymbols(
-                       iterateOp.getIterator())));
-#else
       IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
           lattice->getValue(), blockArgLattice->getValue().withoutIterSymbols(
                                    iterateOp.getIterator()));
-      unsafeSet(lattice, joined);
-#endif
+      safeSet(lattice, joined);
       LDBG() << "new lattice: " << *lattice;
       return;
     }
@@ -1770,13 +1783,9 @@ public:
              << position << " to terminator operand " << yieldOp;
       LDBG() << "result lattice: " << *resultLattice;
       LDBG() << "lattice: " << *lattice;
-#ifndef NDEBUG
-      propagateIfChanged(lattice, lattice->join(resultLattice->getValue()));
-#else
       IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
           lattice->getValue(), resultLattice->getValue());
-      unsafeSet(lattice, joined);
-#endif
+      safeSet(lattice, joined);
       LDBG() << "new lattice: " << *lattice;
       return;
     }
@@ -1862,15 +1871,7 @@ public:
 
     for (auto &&[operandLattice, lattice] :
          llvm::zip_equal(operandLattices, operands)) {
-      // In release mode, just set the lattice value instead of calling join.
-      // The interface should have returned the correctly joined lattice and we
-      // don't want to re-join it and don't need the expensive check of the
-      // lattice direction.
-#ifndef NDEBUG
-      propagateIfChanged(lattice, lattice->join(operandLattice));
-#else
-      unsafeSet(lattice, operandLattice);
-#endif
+      safeSet(lattice, operandLattice);
     }
     return llvm::success();
   }
@@ -1993,10 +1994,66 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         };
 
         SmallVector<Value> valuesForIndexExpr;
-        std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
-            iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
         SmallVector<Attribute> indexExprs;
         indexExprs.reserve(valuesForIndexExpr.size());
+
+        // Special case for MMA operations. We always set their index attribute
+        // to whatever is implied by the MMA kind regardless of the values
+        // inferred for operands because MMAs must retain their specific index
+        // expressions.
+        // TODO: this shouldn't strictly necessary in a purely MLIR flow and is
+        // kept for Python compatibility.
+        std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
+            iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+        if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation())) {
+          SmallVector<wave::IndexExprsLatticeStorage> operandLattices;
+          operandLattices.resize(3, wave::IndexExprsLatticeStorage::bottom());
+          wave::EmitDelayedErrorFn delayedError;
+          Attribute constraints;
+          // TODO(#1049): this is not ideal, especially when combined with
+          // getting hyperparameters below, we could just have a double walk
+          // with a kernel operation first if we had one, or even do a
+          // per-kernel pass.
+          for (Operation *parent = mma->getParentOp(); parent && !constraints;
+               parent = parent->getParentOp()) {
+            constraints = parent->getAttrOfType<ArrayAttr>(
+                wave::WaveDialect::kWaveConstraintsAttrName);
+          }
+          assert(constraints && "constraints not found");
+          if (failed(mma.initializeIndexExprsBackward(
+                  operandLattices,
+                  *wave::IndexExprsAnalysisInit::create(
+                      mma->getLoc(), constraints,
+                      wave::getHyperparameters(mma)),
+                  [&]() { return mma->emitError(); }, delayedError))) {
+            if (delayedError) {
+              InFlightDiagnostic diag = mma->emitError();
+              delayedError(diag);
+            }
+            return WalkResult::interrupt();
+          }
+
+          for (unsigned i = 0, e = operandLattices.size(); i < e; ++i) {
+            SmallString<32> description;
+            llvm::raw_svector_ostream os(description);
+            descriptionGenerator(os, i);
+            [[maybe_unused]] LogicalResult logicalResult =
+                detail::checkAndAppendIndexExpr(
+                    mma->getLoc(), operandLattices[i], description, indexExprs);
+            assert(succeeded(logicalResult) &&
+                   "failed to append implied index expression, it must not be "
+                   "bottom/top");
+          }
+          if (failed(detail::checkAndAppendIndexExpr(
+                  mma->getLoc(), getLatticeValue(mma.getResult()), "mma result",
+                  indexExprs)))
+            return WalkResult::interrupt();
+
+          iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                         ArrayAttr::get(iface->getContext(), indexExprs));
+          return WalkResult::advance();
+        }
+
         for (auto &&[i, value] : llvm::enumerate(valuesForIndexExpr)) {
           llvm::SmallString<32> description;
           llvm::raw_svector_ostream os(description);

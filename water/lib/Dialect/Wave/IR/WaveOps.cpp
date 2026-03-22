@@ -462,169 +462,20 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   return ChangeResult::Change;
 }
 
-// Update index expressions of the result of the MMA operation.
+// No propagation through MMA. The index expressions remain the same as set by
+// initialization since MMAs require very specific index expressions. If there
+// is a conflict with operands that were propagated from another MMA (other
+// operations have lower priority), it will be resolved in a separate pass after
+// the analysis completes.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-  if (!resultType)
-    return updateIfChanged(resultExprs[0],
-                           wave::IndexExprsLatticeStorage::top());
-
-  // Join LHS (ignoring M symbol), RHS, and accumulator lattices into result.
-  unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  wave::IndexExprsLatticeStorage resultLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  // LHS: ignore M symbol since it has different indexing in LHS vs result.
-  if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    Attribute mSymbol = lhsType.getShape().drop_back().back();
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
-  }
-
-  // RHS: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getRhs().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[rhsOperandNumber]);
-  }
-
-  // Accumulator: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getAccumulator().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[accumulatorOperandNumber]);
-  }
-
-  resultLattice = resultLattice.keepOnlySymbols(resultType.getShape());
-  wave::IndexExprsLatticeStorage newResultLattice =
-      wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
-
-  if (newResultLattice.isTop() && !resultExprs[0].isTop()) {
-    InFlightDiagnostic diag =
-        emitError()
-        << "conflict when propagating forward to the result lattice in MmaOp";
-    diag.attachNote() << "Result lattice: " << resultExprs[0];
-    diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-    diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-    diag.attachNote() << "Accumulator lattice: "
-                      << operandExprs[accumulatorOperandNumber];
-    return diag;
-  }
-
-  return updateIfChanged(resultExprs[0], newResultLattice);
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
-
-// Update index expressions of the operands of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  const unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  const unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  const unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  // Create separate lattices for operands (ignoring M symbol from results)
-  // and accumulator (with all symbols).
-  wave::IndexExprsLatticeStorage operandLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-  wave::IndexExprsLatticeStorage accumulatorLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  for (const wave::IndexExprsLatticeStorage &resultExpr : resultExprs) {
-    auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-    if (!resultType)
-      continue;
-
-    // For LHS/RHS operands, ignore M symbol.
-    Attribute mSymbol = resultType.getShape().drop_back().back();
-    operandLattice = wave::IndexExprsLatticeStorage::join(
-        operandLattice, resultExpr, {mSymbol});
-
-    // For accumulator, use all symbols.
-    accumulatorLattice =
-        wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
-  }
-
-  ChangeResult changeResult = ChangeResult::NoChange;
-
-  // Propagate to LHS (operand 0).
-  if (auto lhsType = llvm::dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(lhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[lhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[lhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to LHS from result in MmaOp";
-      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[lhsOperandNumber]) {
-      operandExprs[lhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to RHS (operand 1).
-  if (auto rhsType = llvm::dyn_cast<wave::WaveTensorType>(getRhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(rhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[rhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[rhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to RHS from result in MmaOp";
-      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[rhsOperandNumber]) {
-      operandExprs[rhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to accumulator (operand 2).
-  if (auto accType =
-          llvm::dyn_cast<wave::WaveTensorType>(getAccumulator().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        accumulatorLattice.keepOnlySymbols(accType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(
-            operandExprs[accumulatorOperandNumber], filtered);
-
-    if (newLattice.isTop() && !operandExprs[accumulatorOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to accumulator from result in MmaOp";
-      diag.attachNote() << "accumulator lattice: "
-                        << operandExprs[accumulatorOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[accumulatorOperandNumber]) {
-      operandExprs[accumulatorOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  return changeResult;
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
 
 // Check if the given type is one of the allowed types provided as template
@@ -860,6 +711,118 @@ void MmaSingleIndexExprBuilder::populate(
   parent.populate(attributes);
 }
 } // namespace
+
+// Get the attribute representing the vector shape implied by the given MMA
+// operation kind for its M, N, K dimensions.
+static DictionaryAttr getMmaVectorShape(
+    Location loc, wave::WaveMmaKind kind, wave::WaveSymbolAttr mSymbol,
+    wave::WaveSymbolAttr nSymbol, wave::WaveSymbolAttr kSymbol,
+    ArrayRef<wave::WaveSymbolAttr> batchSymbols, DictionaryAttr hwVectorShape,
+    wave::EmitDelayedErrorFn *delayedErrorEmitter) {
+  int m, n, k;
+  switch (kind) {
+  case wave::WaveMmaKind::F32_16x16x16_F16:
+  case wave::WaveMmaKind::I32_16x16x16_I8:
+    m = 16;
+    n = 16;
+    k = 16;
+    break;
+  case wave::WaveMmaKind::F32_32x32x8_F16:
+  case wave::WaveMmaKind::I32_32x32x8_I8:
+    m = 32;
+    n = 32;
+    k = 8;
+    break;
+  case wave::WaveMmaKind::F32_16x16x32_F8:
+  case wave::WaveMmaKind::F32_16x16x32_BF16:
+  case wave::WaveMmaKind::F32_16x16x32_F16:
+  case wave::WaveMmaKind::F32_16x16x32_K8_F16:
+  case wave::WaveMmaKind::I32_16x16x32_I8:
+  case wave::WaveMmaKind::F32_16x16x32_K4_F8:
+    m = 16;
+    n = 16;
+    k = 32;
+    break;
+  case wave::WaveMmaKind::F32_32x32x16_F8:
+  case wave::WaveMmaKind::F32_32x32x16_BF16:
+  case wave::WaveMmaKind::F32_32x32x16_F16:
+  case wave::WaveMmaKind::F32_32x32x16_K8_F16:
+  case wave::WaveMmaKind::I32_32x32x16_I8:
+  case wave::WaveMmaKind::F32_32x32x16_K4_F8:
+    m = 32;
+    n = 32;
+    k = 16;
+    break;
+  default:
+    return nullptr;
+  }
+
+  MLIRContext *ctx = loc->getContext();
+  auto iAttr = [&](int64_t value) {
+    return IntegerAttr::get(IntegerType::get(ctx, 64), value);
+  };
+  SmallVector<NamedAttribute> attributes;
+  if (mSymbol)
+    attributes.emplace_back(mSymbol.getName(), iAttr(m));
+  if (nSymbol)
+    attributes.emplace_back(nSymbol.getName(), iAttr(n));
+  if (kSymbol)
+    attributes.emplace_back(kSymbol.getName(), iAttr(k));
+
+  if (hwVectorShape) {
+    for (NamedAttribute attr : hwVectorShape) {
+      if (mSymbol && attr.getName() == mSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != m) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [mSymbol, m,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << mSymbol << " to " << m
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (nSymbol && attr.getName() == nSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != n) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [nSymbol, n,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << nSymbol << " to " << n
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (kSymbol && attr.getName() == kSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != k) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [kSymbol, k,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << kSymbol << " to " << k
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (llvm::any_of(batchSymbols, [&](wave::WaveSymbolAttr symbol) {
+            return symbol.getName() == attr.getName();
+          })) {
+        attributes.push_back(attr);
+      }
+    }
+  }
+
+  return DictionaryAttr::get(ctx, attributes);
+}
 
 // Populate `attributes` with index expressions for the symbols associated with
 // M, N, K dimensions of the given MMA operation kind provided the configuration
@@ -1106,6 +1069,44 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
+// Joins the given lattice with another lattice in place and handles conflicts.
+// If the lattice is already top, or the join result does not change the
+// lattice, the function returns success. If joining produces top (i.e., an
+// undecidable or conflicting result) that differs from the original, an error
+// is emitted using the provided emitError function.
+static LogicalResult
+joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
+                             StringRef latticeName,
+                             const wave::IndexExprsLatticeStorage &other,
+                             StringRef otherName, wave::EmitErrorFn emitError) {
+  if (lattice.isTop())
+    return success();
+
+  IndexExprsLatticeStorage joined =
+      IndexExprsLatticeStorage::join(lattice, other);
+  if (joined == lattice)
+    return success();
+  if (joined.isTop()) {
+    InFlightDiagnostic diag = emitError()
+                              << "conflict for " << latticeName
+                              << " index expression when propagating from "
+                              << otherName << " lattice";
+    diag.attachNote() << "original " << latticeName << " lattice: " << lattice;
+    diag.attachNote() << otherName << " lattice: " << other;
+    return diag;
+  }
+
+#ifndef NDEBUG
+  assert(IndexExprsLatticeStorage::join(joined, lattice) == joined &&
+         "join should not move the lattice backward");
+  assert(IndexExprsLatticeStorage::join(joined, other) == joined &&
+         "join should not move the lattice forward");
+#endif
+
+  lattice.unsafeSet(joined);
+  return success();
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1137,11 +1138,17 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
-      DictionaryAttr::get(getContext(), symbolMappings),
-      wave::IndexExprsLatticeStorage::kMmaPriority));
-
-  return llvm::success();
+  return joinIndexExprsLatticeInPlace(
+      resultExprs[0], "MMA result",
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), symbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority,
+          getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                            /*kSymbol=*/nullptr,
+                            /*batchSymbols=*/indexingSymbols.drop_back(2),
+                            initObject.hardwareConstraint.getVectorShapes(),
+                            /*delayedErrorEmitter=*/nullptr)),
+      "implied by MMA kind", emitError);
 }
 
 // Initialize the index expression lattices for the operands of the MMA
@@ -1209,19 +1216,42 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
         return attr.getName() != mSymbol.getName();
       });
 
-  operandExprs[getLhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), lhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getRhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), rhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getAccumulatorMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  return llvm::success();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getLhsMutable().getOperandNumber()], "LHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), lhsSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
+                                /*nSymbol=*/nullptr, kSymbol, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getRhsMutable().getOperandNumber()], "RHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), rhsSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority,
+              getMmaVectorShape(getLoc(), *mmaKind,
+                                /*mSymbol=*/nullptr, nSymbol, kSymbol,
+                                batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getAccumulatorMutable().getOperandNumber()],
+          "accumulator",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+              wave::IndexExprsLatticeStorage::kMmaPriority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                                /*kSymbol=*/nullptr, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  return success();
 }
 
 // Special case for MMA where we also want to have index expressions
@@ -2358,12 +2388,28 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       tensorType.getShape(), initObject.symbolConstraints, indexMappings);
-  operandExprs[getValueToStoreMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
-  operandExprs[getMemoryMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getValueToStoreMutable().getOperandNumber()],
+          "value to store",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getValueToStore().getType())
+                      .getShape())),
+          "implied by write operation", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getMemoryMutable().getOperandNumber()], "memory",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getMemory().getType()).getShape())),
+          "implied by write operation", emitError)))
+    return failure();
 
   return success();
 }
@@ -2897,7 +2943,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   }
 
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
-                                  inputLattice.getPriority());
+                                  inputLattice.getPriority(),
+                                  inputLattice.getVectorShape());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(
