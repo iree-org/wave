@@ -191,7 +191,7 @@ def get_moe_reduce_sum_kernel(
     b = tkl.sym.b
     k = tkl.sym.k
     d = tkl.sym.d
-    wave_size = 64
+    wave_size = 32
     BLOCK_B = 1
     BLOCK_K = sympy.ceiling(K / wave_size) * wave_size
     BLOCK_D = 1
@@ -200,7 +200,7 @@ def get_moe_reduce_sum_kernel(
     # Register layout is [B, D, K] so K is the fast dimension for reduction
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=32,
             vector_shapes={B: BLOCK_B, D: BLOCK_D, K: BLOCK_K},
         )
     ]
@@ -219,16 +219,11 @@ def get_moe_reduce_sum_kernel(
         weights: tkl.Memory[B, K, ADDRESS_SPACE, datatype],
         c: tkl.Memory[B, D, ADDRESS_SPACE, datatype],
     ):
-        # Read from [B, K, D] and transpose to [B, D, K] so K is fast
         gemm2_out = tkw.read(a, source=(b, k, d), target=(b, d, k))
-        # Read weights [B, K]
         topk_weights = tkw.read(weights, source=(b, k), target=(b, k))
-        # Broadcast to [B, D, K] (transposed layout with K as fast dim)
         topk_weights_broadcasted = tkw.broadcast(topk_weights, [B, D, K])
         res = gemm2_out * topk_weights_broadcasted
-        # Reduce over K (now the fast/innermost dimension)
         res = tkw.sum(res, dim=K)
-        # Write result [B, D] - D is the fast dimension in output
         tkw.write(res, c, source=(b, d), target=(b, d))
 
     hyperparams = {
