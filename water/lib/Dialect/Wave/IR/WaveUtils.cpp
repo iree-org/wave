@@ -13,9 +13,13 @@
 #include "mlir/IR/Dialect.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/iterator.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
 
@@ -172,4 +176,158 @@ LogicalResult wave::computeWavesPerBlockFromConstraints(
   }
 
   return success();
+}
+
+/// Return true if the hyperparameter for \p sym is a WaveExprListAttr.
+static bool isExprListDim(DictionaryAttr mapping, wave::WaveSymbolAttr sym) {
+  Attribute attr = mapping.get(sym.getName());
+  return llvm::isa_and_nonnull<wave::WaveExprListAttr>(attr);
+}
+
+std::optional<unsigned>
+wave::getScaledDimension(ArrayRef<wave::WaveSymbolAttr> srcShape,
+                         ArrayRef<wave::WaveSymbolAttr> dstShape,
+                         wave::WaveHyperparameterAttr hyper) {
+  if (!hyper)
+    return std::nullopt;
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      return i;
+  }
+  return std::nullopt;
+}
+
+unsigned wave::countScaledDimensions(ArrayRef<wave::WaveSymbolAttr> srcShape,
+                                     ArrayRef<wave::WaveSymbolAttr> dstShape,
+                                     wave::WaveHyperparameterAttr hyper) {
+  if (!hyper)
+    return 0;
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  unsigned count = 0;
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      ++count;
+  }
+  return count;
+}
+
+/// Dependency graph over hyperparameter symbols used for cycle detection via
+/// scc_iterator.  A synthetic root node (null symbol) fans out to every
+/// expr_list entry so that a single traversal covers all components.
+struct HyperparamDepGraph {
+  /// Adjacency list: symbol -> symbols it depends on.
+  llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<wave::WaveSymbolAttr>>
+      deps;
+  /// All expr_list symbols, also the edge list of the synthetic root.
+  llvm::SmallVector<wave::WaveSymbolAttr> exprListKeys;
+
+  /// A node carries a back-pointer to the graph so that child_begin/child_end
+  /// can look up the adjacency list without external state.
+  struct Node {
+    const HyperparamDepGraph *graph;
+    wave::WaveSymbolAttr sym;
+    bool operator==(const Node &o) const {
+      return graph == o.graph && sym == o.sym;
+    }
+    bool operator!=(const Node &o) const { return !(*this == o); }
+  };
+
+  Node root() const { return {this, {}}; }
+
+  llvm::ArrayRef<wave::WaveSymbolAttr>
+  children(wave::WaveSymbolAttr sym) const {
+    if (!sym)
+      return exprListKeys;
+    auto it = deps.find(sym);
+    if (it == deps.end())
+      return {};
+    return it->second;
+  }
+};
+
+namespace llvm {
+
+/// Adaptor that wraps a pointer into a WaveSymbolAttr adjacency list and
+/// produces Node values carrying the graph back-pointer.
+struct HyperparamChildIterator
+    : iterator_adaptor_base<
+          HyperparamChildIterator, const wave::WaveSymbolAttr *,
+          std::random_access_iterator_tag, HyperparamDepGraph::Node,
+          std::ptrdiff_t, const HyperparamDepGraph::Node *,
+          HyperparamDepGraph::Node> {
+  const HyperparamDepGraph *graph = nullptr;
+  HyperparamChildIterator() = default;
+  HyperparamChildIterator(const wave::WaveSymbolAttr *it,
+                          const HyperparamDepGraph *g)
+      : iterator_adaptor_base(it), graph(g) {}
+  HyperparamDepGraph::Node operator*() const { return {graph, *I}; }
+};
+
+template <> struct DenseMapInfo<HyperparamDepGraph::Node> {
+  static HyperparamDepGraph::Node getEmptyKey() {
+    return {nullptr, DenseMapInfo<wave::WaveSymbolAttr>::getEmptyKey()};
+  }
+  static HyperparamDepGraph::Node getTombstoneKey() {
+    return {nullptr, DenseMapInfo<wave::WaveSymbolAttr>::getTombstoneKey()};
+  }
+  static unsigned getHashValue(const HyperparamDepGraph::Node &n) {
+    return DenseMapInfo<wave::WaveSymbolAttr>::getHashValue(n.sym);
+  }
+  static bool isEqual(const HyperparamDepGraph::Node &a,
+                      const HyperparamDepGraph::Node &b) {
+    return a.graph == b.graph && a.sym == b.sym;
+  }
+};
+
+template <> struct GraphTraits<const HyperparamDepGraph *> {
+  using NodeRef = HyperparamDepGraph::Node;
+  using ChildIteratorType = HyperparamChildIterator;
+
+  static NodeRef getEntryNode(const HyperparamDepGraph *g) { return g->root(); }
+  static ChildIteratorType child_begin(NodeRef node) {
+    return {node.graph->children(node.sym).begin(), node.graph};
+  }
+  static ChildIteratorType child_end(NodeRef node) {
+    return {node.graph->children(node.sym).end(), node.graph};
+  }
+};
+
+} // namespace llvm
+
+LogicalResult wave::verifyHyperparameterAcyclicity(
+    wave::WaveHyperparameterAttr hyperparams, MLIRContext *ctx,
+    llvm::function_ref<InFlightDiagnostic()> emitError) {
+  HyperparamDepGraph graph;
+  for (const NamedAttribute &entry : hyperparams.getMapping()) {
+    auto exprList = llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+    if (!exprList)
+      continue;
+    wave::WaveSymbolAttr key =
+        wave::WaveSymbolAttr::get(ctx, entry.getName().getValue());
+    graph.exprListKeys.push_back(key);
+    auto &edges = graph.deps[key];
+    for (Attribute symAttr : exprList.getSymbols())
+      edges.push_back(llvm::cast<wave::WaveSymbolAttr>(symAttr));
+  }
+
+  const HyperparamDepGraph *graphPtr = &graph;
+  for (auto scci = llvm::scc_begin(graphPtr); !scci.isAtEnd(); ++scci) {
+    if (!scci.hasCycle())
+      continue;
+    const auto &scc = *scci;
+    llvm::SmallVector<StringRef> names;
+    for (const HyperparamDepGraph::Node &n : scc)
+      if (n.sym)
+        names.push_back(n.sym.getName());
+    return emitError() << "hyperparameter dependency cycle: "
+                       << llvm::join(names, ", ");
+  }
+  return llvm::success();
 }

@@ -495,12 +495,25 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   let mnemonic = "hyperparameters";
   let description = [{
     This attribute contains a dictionary mapping from symbol parameters (strings)
-    to their concrete integer values. It is used to resolve symbolic shapes
-    in wave.tensor types when converting to memref or vector types.
+    to either concrete integer values or affine expressions over other symbols.
+    It is used to resolve symbolic shapes in wave.tensor types when converting
+    to memref or vector types.
+
+    Values can be:
+    - `IntegerAttr`: a concrete integer value for a base symbol.
+    - `WaveExprListAttr`: an affine expression over other symbols defined in
+      the same mapping, for derived symbols.  The expression must be a
+      single-result affine map whose sole result is a `ceildiv` of a symbol
+      by an integer constant.  All symbols referenced by the expression must
+      be defined in the same mapping, and the dividend must be evenly
+      divisible by the divisor after resolving all symbols to their concrete
+      values.
 
     Example:
     ```
-    #wave.hyperparameters<{B = 64, H = 128, W = 256}>
+    #wave.hyperparameters<{M = 16 : i64, K = 128 : i64,
+      K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>,
+      K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>}>
     ```
   }];
 
@@ -508,8 +521,15 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   let assemblyFormat = "`<` $mapping `>`";
 
   let extraClassDeclaration = [{
-    /// Get the concrete value for a symbol name, returns std::nullopt if not found
+    /// Get the concrete value for a symbol name, returns std::nullopt if not
+    /// found. For derived symbols (WaveExprListAttr values), the expression is
+    /// evaluated by recursively resolving the referenced symbols.
     std::optional<int64_t> getSymbolValue(::llvm::StringRef symbolName) const;
+
+    /// Like getSymbolValue, but asserts that the symbol exists and can be
+    /// resolved.  Use when the caller has already verified the symbol is
+    /// present.
+    int64_t getKnownSymbolValue(::llvm::StringRef symbolName) const;
 
     /// Check if a symbol exists in the mapping
     bool hasSymbol(::llvm::StringRef symbolName) const;
