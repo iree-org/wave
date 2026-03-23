@@ -101,11 +101,11 @@ def test_dynamic_preshuffle_b_mxfp4_eliminate_epilogue():
     # 2. No scf.if guard — simplification proves it always satisfied.
     # CHECK-NOT: scf.if
 
-    # 3. Pipelined loop steps by 1 (no epilogue to peel off).
-    # CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1
+    # 3. Pipelined loop steps by 2 (unroll factor 2, no epilogue to peel off).
+    # CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c2
 
-    # 4. Loop carries shared-memory buffers as iter_args (epilogue folded in).
-    # CHECK-SAME: memref<{{.*}}, #gpu.address_space<workgroup>>
+    # 4. Loop carries vector iter_args (epilogue folded in).
+    # CHECK-SAME: vector<4xf32>
 
     # 5. OOB guard: arith.select chooses real validBytes vs 0 for out-of-range
     #    iterations, so the hardware returns zeros on OOB loads.

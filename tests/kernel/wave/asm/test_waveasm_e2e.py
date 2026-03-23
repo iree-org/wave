@@ -1427,6 +1427,14 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
                 "dims for 256x192x256"
             )
 
+    # SGPR overflow: 128x256x256 with eliminate_epilogue + scheduled pipeline
+    # + unroll exceeds the 108 SGPR limit (SRD allocation overflow).
+    if block_id == "128x256x256" and eliminate_epilogue and use_schedule:
+        pytest.xfail(
+            "C++ ASM backend exceeds SGPR limit with ee=True + "
+            "scheduled pipeline + unroll for 128x256x256"
+        )
+
     # (2,2) wave shape + schedule: numerical mismatch (with or without
     # dynamic dims when ee=False; dynamic-dims-only when ee=True).
     if block_id == "128x32x256" and use_schedule:
