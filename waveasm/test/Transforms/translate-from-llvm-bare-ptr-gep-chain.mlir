@@ -5,17 +5,14 @@
 
 // CHECK: waveasm.program @test__waveasm
 
-// Bare-pointer offset (row_bytes) truncated to i32.
-// CHECK: [[BASE_OFF:%.*]] = waveasm.arith.trunc
-
 // SRD word 1 patched.
 // CHECK: waveasm.raw "s_and_b32
 
-// First buffer GEP: base_off + tid.
+// First buffer GEP: seeded bare-pointer offset (64-bit) + tid (truncated).
 // CHECK: [[TID:%.*]] = waveasm.arith.trunc
-// CHECK: [[OFF0:%.*]] = waveasm.v_add_u32 [[BASE_OFF]], [[TID]]
+// CHECK: [[OFF0:%.*]] = waveasm.v_add_u32 %{{.*}}, [[TID]]
 
-// Chained buffer GEP: off0 + col_bytes.
+// Chained buffer GEP: off0 + col_bytes (truncated).
 // CHECK: [[COL:%.*]] = waveasm.arith.trunc
 // CHECK: [[OFF1:%.*]] = waveasm.v_add_u32 [[OFF0]], [[COL]]
 

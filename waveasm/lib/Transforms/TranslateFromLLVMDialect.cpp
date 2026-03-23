@@ -476,12 +476,9 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     return op->emitOpError("unmapped GEP index");
   Value newOffset = *resolved;
 
-  // Buffer voffsets are 32-bit. Truncate i64 GEP indices.
-  newOffset = truncToI32(newOffset, idx.getType(), builder, loc, ctx);
-
-  // Bare-pointer GEP (!llvm.ptr, not <7>): pointer arithmetic before
-  // make.buffer.rsrc. Propagate the mapper entry and accumulate
-  // the byte offset so it can be added to voffset at load/store time.
+  // Bare-pointer GEP (!llvm.ptr, not <7>): 64-bit pointer arithmetic before
+  // make.buffer.rsrc. Propagate the mapper entry and accumulate the byte
+  // offset so it can be folded into the SRD base later.
   auto baseTy = op.getBase().getType();
   unsigned addrSpace = 0;
   if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(baseTy))
@@ -495,16 +492,19 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     if (auto mapped = ctx.getMapper().getMapped(base))
       ctx.getMapper().mapValue(op.getResult(), *mapped);
 
-    // Accumulate base offset.
+    // Accumulate base offset with 64-bit add (pointer arithmetic).
     Value prevOffset = st.lookupBaseOffset(base);
     if (prevOffset) {
-      auto vregTy = ctx.createVRegType();
+      Type resTy = inferResultType({prevOffset, newOffset}, ctx);
       newOffset =
-          V_ADD_U32::create(builder, loc, vregTy, prevOffset, newOffset);
+          ArithAddOp::create(builder, loc, resTy, prevOffset, newOffset);
     }
     st.setBaseOffset(op.getResult(), newOffset);
     return success();
   }
+
+  // Buffer voffsets are 32-bit. Truncate i64 GEP indices.
+  newOffset = truncToI32(newOffset, idx.getType(), builder, loc, ctx);
 
   // Buffer GEP (ptr<7>): decompose into (SRD, voffset).
   // Check gepMap first -- covers both chained buffer GEPs and
