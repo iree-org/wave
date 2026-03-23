@@ -27,6 +27,15 @@ API reference material
    wave/wave
 
 
+Design documentation
+====================
+
+.. toctree::
+   :maxdepth: 1
+   :caption: IR Design
+
+   ir_design
+
 Project documentation
 =====================
 

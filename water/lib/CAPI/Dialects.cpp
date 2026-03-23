@@ -516,7 +516,7 @@ bool mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr) {
 
 MlirAttribute
 mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
-                              size_t wavesPerBlockSize, unsigned *wavesPerBlock,
+                              size_t wavesPerBlockSize, int32_t *wavesPerBlock,
                               MlirAttribute mmaType, MlirAttribute vectorShapes,
                               unsigned maxBitsPerLoad) {
   MLIRContext *ctx = unwrap(mlirCtx);
@@ -525,9 +525,14 @@ mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
   auto vectorShapesAttr =
       llvm::cast_if_present<DictionaryAttr>(unwrap(vectorShapes));
 
+  DenseI32ArrayAttr wavesPerBlockAttr;
+  if (wavesPerBlockSize > 0)
+    wavesPerBlockAttr = DenseI32ArrayAttr::get(
+        ctx, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize));
+
   return wrap(wave::HardwareConstraintAttr::get(
-      ctx, threadsPerWave, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize),
-      mmaTypeAttr, vectorShapesAttr, maxBitsPerLoad));
+      ctx, threadsPerWave, wavesPerBlockAttr, mmaTypeAttr, vectorShapesAttr,
+      maxBitsPerLoad));
 }
 
 MlirTypeID mlirWHardwareConstraintAttrGetTypeID() {
@@ -539,14 +544,15 @@ unsigned mlirHardwareConstraintAttrGetThreadsPerWave(MlirAttribute attr) {
       .getThreadsPerWave();
 }
 intptr_t mlirHardwareConstraintAttrGetNumWavesPerBlock(MlirAttribute attr) {
+  DenseI32ArrayAttr wpb =
+      llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr)).getWavesPerBlock();
+  return wpb ? wpb.size() : 0;
+}
+int32_t mlirHardwareConstraintAttrGetWavesPerBlockElem(MlirAttribute attr,
+                                                       intptr_t i) {
   return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
       .getWavesPerBlock()
-      .size();
-}
-unsigned mlirHardwareConstraintAttrGetWavesPerBlockElem(MlirAttribute attr,
-                                                        intptr_t i) {
-  return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
-      .getWavesPerBlock()[i];
+      .asArrayRef()[i];
 }
 MlirAttribute mlirHardwareConstraintAttrGetMmaType(MlirAttribute attr) {
   return wrap(

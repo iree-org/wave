@@ -108,3 +108,65 @@ func.func private @test_waves_per_block_no_wave_constraints() attributes { wave.
 #wv_constraint_wpb_valid4 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 #hw_constraint_wpb_valid4 = #wave.hardware_constraint<threads_per_wave = 64>
 func.func private @test_wave_constraints_no_waves_per_block() attributes { wave.hyperparameters = #hyperparams_wpb_valid4, wave.constraints = [#wg_constraint_wpb_valid4, #wv_constraint_wpb_valid4, #hw_constraint_wpb_valid4] }
+
+// CHECK-LABEL: @test_vector_shapes_match_wg
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 128 : i64}>
+#hyperparams_vs_valid1 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_vs_valid1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#hw_constraint_vs_valid1 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 128}>
+func.func private @test_vector_shapes_match_wg() attributes { wave.hyperparameters = #hyperparams_vs_valid1, wave.constraints = [#wg_constraint_vs_valid1, #hw_constraint_vs_valid1] }
+
+// CHECK-LABEL: @test_vector_shapes_match_wave
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 32 : i64}>
+#hyperparams_vs_valid2 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_vs_valid2 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_vs_valid2 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_vs_valid2 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 32}>
+func.func private @test_vector_shapes_match_wave() attributes { wave.hyperparameters = #hyperparams_vs_valid2, wave.constraints = [#wg_constraint_vs_valid2, #wv_constraint_vs_valid2, #hw_constraint_vs_valid2] }
+
+// CHECK-LABEL: @test_vector_shapes_match_tiling
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 128 : i64}>
+#hyperparams_vs_valid3 = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#tl_constraint_vs_valid3 = #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+#hw_constraint_vs_valid3 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 128}>
+func.func private @test_vector_shapes_match_tiling() attributes { wave.hyperparameters = #hyperparams_vs_valid3, wave.constraints = [#tl_constraint_vs_valid3, #hw_constraint_vs_valid3] }
+
+// CHECK-LABEL: @test_vector_shapes_with_mma_type
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, mma_type = <f32_16x16x16_f16>, vector_shapes = {K = 99 : i64, M = 99 : i64}>
+#hyperparams_vs_valid4 = #wave.hyperparameters<{M = 1024, K = 1024, BLOCK_M = 128, BLOCK_K = 128}>
+#wg_constraint_vs_valid4 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#tl_constraint_vs_valid4 = #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+#hw_constraint_vs_valid4 = #wave.hardware_constraint<threads_per_wave = 64, mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 99, K = 99}>
+func.func private @test_vector_shapes_with_mma_type() attributes { wave.hyperparameters = #hyperparams_vs_valid4, wave.constraints = [#wg_constraint_vs_valid4, #tl_constraint_vs_valid4, #hw_constraint_vs_valid4] }
+
+// CHECK-LABEL: @test_vector_shapes_multi_dim
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 64 : i64, M = 32 : i64, N = 64 : i64}>
+#hyperparams_vs_valid5 = #wave.hyperparameters<{M = 1024, N = 512, K = 1024, BLOCK_M = 128, BLOCK_N = 64, BLOCK_K = 64}>
+#wg_constraint_vs_valid5_m = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wg_constraint_vs_valid5_n = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+#wv_constraint_vs_valid5_m = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#tl_constraint_vs_valid5_k = #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+#hw_constraint_vs_valid5 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 32, N = 64, K = 64}>
+func.func private @test_vector_shapes_multi_dim() attributes { wave.hyperparameters = #hyperparams_vs_valid5, wave.constraints = [#wg_constraint_vs_valid5_m, #wg_constraint_vs_valid5_n, #wv_constraint_vs_valid5_m, #tl_constraint_vs_valid5_k, #hw_constraint_vs_valid5] }
+
+// CHECK-LABEL: @test_vector_shapes_smaller_than_wg
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 16 : i64}>
+#hyperparams_vs_valid6 = #wave.hyperparameters<{M = 64, BLOCK_M = 32}>
+#wg_constraint_vs_valid6 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#hw_constraint_vs_valid6 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 16}>
+func.func private @test_vector_shapes_smaller_than_wg() attributes { wave.hyperparameters = #hyperparams_vs_valid6, wave.constraints = [#wg_constraint_vs_valid6, #hw_constraint_vs_valid6] }
+
+// CHECK-LABEL: @test_vector_shapes_smaller_than_tiling
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 32 : i64}>
+#hyperparams_vs_valid7 = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#tl_constraint_vs_valid7 = #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+#hw_constraint_vs_valid7 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {K = 32}>
+func.func private @test_vector_shapes_smaller_than_tiling() attributes { wave.hyperparameters = #hyperparams_vs_valid7, wave.constraints = [#tl_constraint_vs_valid7, #hw_constraint_vs_valid7] }
+
+// CHECK-LABEL: @test_vector_shapes_smaller_than_wave
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 16 : i64}>
+#hyperparams_vs_valid8 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#wg_constraint_vs_valid8 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wv_constraint_vs_valid8 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
+#hw_constraint_vs_valid8 = #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 16}>
+func.func private @test_vector_shapes_smaller_than_wave() attributes { wave.hyperparameters = #hyperparams_vs_valid8, wave.constraints = [#wg_constraint_vs_valid8, #wv_constraint_vs_valid8, #hw_constraint_vs_valid8] }

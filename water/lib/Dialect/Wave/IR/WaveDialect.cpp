@@ -222,6 +222,7 @@ verifyConstraints(ArrayAttr constraints,
   // * The number of workgroups should be greater than or equal to one.
   llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedWorkgroupSizes(
       workgroupConstraints.size());
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedSizes;
   llvm::SmallDenseSet<wave::WaveWorkgroupDimAttr, 4> assignedDims;
   llvm::SmallDenseSet<wave::WaveWorkgroupDimAttr, 4> needsPrimaryDim;
   for (auto &&[symbol, constraint] : workgroupConstraints) {
@@ -250,6 +251,7 @@ verifyConstraints(ArrayAttr constraints,
 
     int64_t workgroupSize = evaluated->front();
     resolvedWorkgroupSizes[symbol] = workgroupSize;
+    resolvedSizes[symbol] = workgroupSize;
 
     std::optional<llvm::SmallVector<int64_t>> resolvedDims =
         wave::resolveSymbolNames(symbol, hyperparams);
@@ -310,15 +312,16 @@ verifyConstraints(ArrayAttr constraints,
                          << workgroupSize << " for dimension: " << symbol;
     }
     resolvedWaveCounts[symbol] = numWaves;
+    resolvedSizes[symbol] = resolvedWaveSize;
   }
 
   // verify consistency between wave constraints and waves_per_block
   // * If both wave constraints and waves_per_block are present, the computed
   // number of waves per dimension should match the waves_per_block attribute.
-  if (hardwareConstraint && !hardwareConstraint.getWavesPerBlock().empty() &&
+  if (hardwareConstraint && hardwareConstraint.getWavesPerBlock() &&
       !waveConstraints.empty()) {
-    llvm::ArrayRef<unsigned> wavesPerBlock =
-        hardwareConstraint.getWavesPerBlock();
+    llvm::ArrayRef<int32_t> wavesPerBlock =
+        hardwareConstraint.getWavesPerBlock().asArrayRef();
     for (auto &&[symbol, waveConstraint] : waveConstraints) {
       wave::WorkgroupConstraintAttr wgConstraint = workgroupConstraints[symbol];
       unsigned wgDim =
@@ -335,6 +338,8 @@ verifyConstraints(ArrayAttr constraints,
 
   // verify TilingConstraint
   // * The number of tiles should be greater than or equal to one.
+  llvm::SmallDenseMap<wave::WaveSymbolAttr, int64_t> resolvedTilingSizes(
+      tilingConstraints.size());
   for (auto &&[symbol, constraint] : tilingConstraints) {
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
@@ -351,11 +356,45 @@ verifyConstraints(ArrayAttr constraints,
            "failed to resolve dimesion symbol");
 
     int64_t resolvedTileSize = evaluated->front();
+    resolvedTilingSizes[symbol] = resolvedTileSize;
+    resolvedSizes[symbol] = resolvedTileSize;
     int64_t resolvedDim = resolvedDims->front();
     int64_t numTiles = resolvedDim / resolvedTileSize;
     if (numTiles < 1) {
       return emitError() << "invalid number of tiles: " << numTiles
                          << " for dimension: " << symbol;
+    }
+  }
+
+  // Verify consistency between constraints and vector_shapes (when mma_type
+  // is absent). Each vector_shapes entry must match the resolved tile size
+  // from the most specific constraint for that dimension: WaveConstraint >
+  // WorkgroupConstraint > TilingConstraint.
+  if (hardwareConstraint && hardwareConstraint.getVectorShapes() &&
+      !hardwareConstraint.getMmaType()) {
+    DictionaryAttr vectorShapes = hardwareConstraint.getVectorShapes();
+    for (NamedAttribute dimension : vectorShapes) {
+      llvm::StringRef symbolName = dimension.getName().getValue();
+      int64_t size = llvm::cast<IntegerAttr>(dimension.getValue()).getInt();
+
+      wave::WaveSymbolAttr symbol =
+          wave::WaveSymbolAttr::get(hyperparams.getContext(), symbolName);
+
+      auto it = resolvedSizes.find(symbol);
+
+      if (it == resolvedSizes.end()) {
+        // Batch dimensions may not be present in the resolved sizes map.
+        continue;
+      }
+
+      int64_t resolvedSize = it->second;
+
+      if (size > resolvedSize) {
+        return emitError() << "vector_shapes entry '" << symbolName << "' ("
+                           << size
+                           << ") is greater than the resolved tile size ("
+                           << resolvedSize << ") for dimension: " << symbol;
+      }
     }
   }
 
