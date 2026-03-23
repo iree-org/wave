@@ -10,9 +10,9 @@ Two wheel sources are tried, in order:
 Source (1) is preferred because it is a proper PIP package index; source (2)
 is a flat directory of wheels that AMD publishes for every ROCm release.
 
-The script probes each URL with an HTTP HEAD request and picks the first that
-responds.  Use --offline to skip probing and always emit the AMD --find-links
-URL (it covers every ROCm release).
+The script probes each URL by fetching its package listing and checking whether
+a torch version matching the spec is available.  Use --offline to skip probing
+and always emit the AMD --find-links URL (it covers every ROCm release).
 """
 
 from __future__ import annotations
@@ -107,14 +107,59 @@ def _version_candidates(raw: str) -> list[str]:
 # URL probing
 # ---------------------------------------------------------------------------
 
+_WHEEL_VER_RE = re.compile(r"torch-(\d+[0-9.]*(?:%2B[^-]*|(?:\+[^-]*))?)-")
 
-def _url_exists(url: str, timeout: float = 10) -> bool:
+
+def _parse_version_tuple(ver_str: str) -> tuple[int, ...] | None:
+    """Parse a version string into a comparable tuple, ignoring local part."""
+    base = ver_str.split("+")[0]
+    m = re.match(r"[\d.]+", base)
+    if not m:
+        return None
     try:
-        req = Request(url, method="HEAD")
-        resp = urlopen(req, timeout=timeout)
-        return resp.status < 400
+        return tuple(int(p) for p in m.group(0).split("."))
+    except ValueError:
+        return None
+
+
+def _parse_spec_bounds(
+    spec: str,
+) -> tuple[tuple[int, ...] | None, tuple[int, ...] | None]:
+    """Parse 'torch>=X.Y,<X.Y' into (lower_inclusive, upper_exclusive)."""
+    lower = upper = None
+    for part in spec.replace("torch", "").split(","):
+        part = part.strip()
+        if part.startswith(">="):
+            lower = tuple(int(x) for x in part[2:].split("."))
+        elif part.startswith("<"):
+            upper = tuple(int(x) for x in part[1:].split("."))
+    return lower, upper
+
+
+def _has_matching_torch(
+    flag: str, url: str, torch_spec: str, timeout: float = 15
+) -> bool:
+    """Check whether the index/repo at *url* has a torch wheel matching *torch_spec*."""
+    lower, upper = _parse_spec_bounds(torch_spec)
+    if lower is None or upper is None:
+        return False
+
+    page_url = url.rstrip("/") + "/torch/" if flag == "--index-url" else url
+    try:
+        html = (
+            urlopen(Request(page_url), timeout=timeout)
+            .read()
+            .decode("utf-8", errors="replace")
+        )
     except (URLError, OSError, ValueError):
         return False
+
+    for m in _WHEEL_VER_RE.finditer(html):
+        ver_str = m.group(1).replace("%2B", "+")
+        ver = _parse_version_tuple(ver_str)
+        if ver is not None and lower <= ver < upper:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -166,13 +211,12 @@ def main() -> None:
                 break
     else:
         for flag, url in sources:
-            probe = url.rstrip("/") + "/"
-            print(f"  probing {probe} ...", end=" ", file=sys.stderr, flush=True)
-            if _url_exists(probe):
+            print(f"  probing {url} ...", end=" ", file=sys.stderr, flush=True)
+            if _has_matching_torch(flag, url, TORCH_SPEC):
                 print("ok", file=sys.stderr)
                 chosen_flag, chosen_url = flag, url
                 break
-            print("not found", file=sys.stderr)
+            print("no matching version", file=sys.stderr)
 
     if chosen_url is None:
         raise SystemExit(f"error: no PyTorch wheel source found for ROCm {raw_ver}")
