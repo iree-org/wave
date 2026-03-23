@@ -213,12 +213,14 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
         block,
         wave_shape=wave_shape,
         b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
     )
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
     options.wave_runtime = True
+    options.dump_intermediates = "intermediates"
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
@@ -243,7 +245,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     mode = "dynamic" if dynamic else "static"
     print(
         f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
