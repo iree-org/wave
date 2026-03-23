@@ -117,7 +117,7 @@ def WaveASM_ArithReadFirstLaneOp : ArithPseudoOp<"readfirstlane"> {
   let description = [{
     Reads the value from the first active lane of a VGPR and produces an SGPR.
     For i64, legalization splits into two v_readfirstlane_b32 ops.
-    If the source is already an SGPR, legalization replaces with a copy.
+    If the source is already an SGPR, legalization elides the op.
   }];
   let arguments = (ins WaveASM_AnyOperand:$src);
   let results = (outs WaveASM_AnyReg:$dst);
