@@ -78,6 +78,30 @@ waveasm.program @regalloc_pack_store target = #waveasm.target<#waveasm.gfx942, 5
   waveasm.s_endpgm
 }
 
+// CHECK-LABEL: waveasm.program @regalloc_pack_input_post_use
+waveasm.program @regalloc_pack_input_post_use target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  // Test: Pack input used independently after the pack op.
+  // The pack result's live range must extend to cover the input's post-pack use,
+  // otherwise the allocator could reuse the register prematurely.
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %imm0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %lo = waveasm.v_mov_b32 %imm0 : !waveasm.imm<0> -> !waveasm.vreg
+  %hi = waveasm.v_mov_b32 %imm0 : !waveasm.imm<0> -> !waveasm.vreg
+
+  // CHECK: waveasm.pack {{.*}} -> !waveasm.pvreg<[[BASE:[0-9]+]], 2>
+  %packed = waveasm.pack %lo, %hi : (!waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<2>
+
+  waveasm.buffer_store_dwordx2 %packed, %srd, %voff : !waveasm.vreg<2>, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+
+  // %lo is used again after the pack. The pack result's live range must cover
+  // this point so that %lo's physical register (BASE+0) is not reallocated.
+  // CHECK: waveasm.buffer_store_dword {{.*}} : !waveasm.pvreg<[[BASE]]>,
+  waveasm.buffer_store_dword %lo, %srd, %voff : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+  waveasm.s_endpgm
+}
+
 // CHECK-LABEL: waveasm.program @regalloc_extract_of_pack
 waveasm.program @regalloc_extract_of_pack target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   // Test: Extract from pack result gets correct sub-register.

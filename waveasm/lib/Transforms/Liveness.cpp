@@ -486,9 +486,10 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // already gets a correct contiguous allocation via allocRange, but pack
   // inputs would otherwise get independent allocations to arbitrary registers.
   //
-  // Fix: extend the pack result's live range backwards to cover input defs,
-  // then remove pack inputs from the allocation worklists entirely. A
-  // post-pass in LinearScanPass assigns input[i].physReg = result.physReg + i.
+  // Fix: extend the pack result's live range to cover the full lifetime of
+  // all inputs (both defs and uses), then remove pack inputs from the
+  // allocation worklists entirely. A post-pass in LinearScanPass assigns
+  // input[i].physReg = result.physReg + i.
   program.walk([&](PackOp packOp) {
     Value packResult = packOp.getResult();
     auto resultIt = info.ranges.find(packResult);
@@ -496,11 +497,15 @@ LivenessInfo computeLiveness(ProgramOp program) {
            "pack result must have a live range");
 
     for (Value input : packOp.getElements()) {
-      // Extend the pack result's range start to cover this input's def.
+      // Extend the pack result's range to cover this input's full lifetime.
+      // Inputs may have independent uses after the pack op, so we must
+      // extend both start and end to avoid missing those uses.
       auto inputIt = info.ranges.find(input);
       if (inputIt != info.ranges.end()) {
         resultIt->second.start =
             std::min(resultIt->second.start, inputIt->second.start);
+        resultIt->second.end =
+            std::max(resultIt->second.end, inputIt->second.end);
         // Remove from ranges so it won't enter the allocator.
         info.ranges.erase(inputIt);
       }
