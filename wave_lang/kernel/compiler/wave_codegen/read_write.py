@@ -365,6 +365,11 @@ def _valid_bytes_buffer(elem_type: IrType) -> int:
     return ans
 
 
+def _symbolic_total_bytes_expr(elem_type: IrType, symbolic_shape: tuple):
+    """Return a sympy expression for total bytes: prod(shape) * elem_bytes."""
+    return sympy.prod(s for s in symbolic_shape) * _elem_bytes(elem_type)
+
+
 def _compute_total_valid_bytes(
     elem_type: IrType,
     symbolic_shape: tuple,
@@ -378,14 +383,12 @@ def _compute_total_valid_bytes(
     returned by ``_valid_bytes_buffer``.
     """
     if use_real_bounds and symbolic_shape is not None:
-        # Use _elem_bytes to avoid zero total_bytes for sub-byte types (e.g. mxfp4).
-        elem_bytes = _elem_bytes(elem_type)
-        total_elements = subs_idxc(sympy.prod(s for s in symbolic_shape))
+        total_bytes_expr = _symbolic_total_bytes_expr(elem_type, symbolic_shape)
+        total_elements = subs_idxc(total_bytes_expr)
         if isinstance(total_elements, (int, float)) or (
             hasattr(total_elements, "is_number") and total_elements.is_number
         ):
-            total_bytes = int(total_elements) * elem_bytes
-            return min(total_bytes, _valid_bytes_buffer(elem_type))
+            return min(int(total_elements), _valid_bytes_buffer(elem_type))
     return _valid_bytes_buffer(elem_type)
 
 
@@ -471,17 +474,22 @@ def _compute_valid_bytes(
 
     if use_real_bounds:
         hw_max = _valid_bytes_buffer(elem_type)
-        if total_bytes == hw_max and symbolic_shape is not None:
-            elem_bytes = _elem_bytes(elem_type)
-            total_bytes_expr = sympy.prod(s for s in symbolic_shape) * elem_bytes
+        if total_bytes == hw_max:
+            # _compute_total_valid_bytes returned hw_max because the symbolic
+            # shape contains dynamic (unsubstituted) symbols. Compute the
+            # real total bytes at runtime and clamp to hw_max.
+            total_bytes_expr = _symbolic_total_bytes_expr(elem_type, symbolic_shape)
             subs_map = add_emitter_subs(emitter)
             real_valid_index = gen_sympy_index(subs_map, total_bytes_expr)
             total_val = arith_d.index_cast(uint64, real_valid_index)
+            hw_max_val = arith_d.constant(uint64, get_constant_attr(hw_max, uint64))
+            total_val = arith_d.minui(total_val, hw_max_val)
         else:
             total_val = arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
         metadata = memref_d.extract_strided_metadata(ptr)
         offset_elements = metadata[1]
         offset_bytes = arith_d.index_cast(uint64, offset_elements)
+        # Use _elem_bytes to avoid zero offset_bytes for sub-byte types (e.g. mxfp4).
         elem_bytes_val = arith_d.constant(
             uint64, get_constant_attr(_elem_bytes(elem_type), uint64)
         )
