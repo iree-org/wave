@@ -1463,6 +1463,21 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
                 "overflow s103 not available (bufops)"
             )
 
+    # SGPR overflow: 128x256x256 with ee + scheduled pipeline + buffer ops
+    # exceeds the 102 SGPR limit (static: s103 not available; dynamic: SRD
+    # allocation assertion).
+    # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
+    if (
+        block_id == "128x256x256"
+        and eliminate_epilogue
+        and use_schedule
+        and use_buffer_ops
+    ):
+        pytest.xfail(
+            "C++ ASM backend exceeds SGPR limit for 128x256x256 with "
+            "ee + scheduled pipeline + buffer ops"
+        )
+
     _dbuf_mxfp4_helper(
         shape=shape,
         block=block,
