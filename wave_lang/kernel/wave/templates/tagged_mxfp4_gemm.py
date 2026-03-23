@@ -149,6 +149,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     b_preshuffled: bool = False,
     reorder_workgroups: bool = False,
     group_size_n=32,
+    output_dtype=tkl.f32,
 ):
     """Shared implementation: preshuffle scales only, or scales + B data.
 
@@ -262,7 +263,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -285,6 +286,9 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
                 a_reg, a_scale_reg, b_reg, b_scale_reg, acc, tag="scaled_mma"
             )
             return acc
+
+        if output_dtype == tkl.bf16:
+            repeat = tkw.cast(repeat, tkl.bf16)
 
         tkw.write(repeat, c)
 
@@ -361,6 +365,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     b_address_space: tkl.AddressSpace | None = None,
+    output_dtype=tkl.f32,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
@@ -387,6 +392,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         a_address_space,
         b_address_space,
         b_preshuffled=True,
+        output_dtype=output_dtype,
     )
 
 
