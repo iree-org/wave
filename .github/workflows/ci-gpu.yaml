@@ -324,6 +324,11 @@ jobs:
           cd cmake_build
           cmake --build . --target check-water
 
+      - name: Build docs
+        run: |
+          cd cmake_build
+          cmake --build . --target mlir-doc
+
 
   check_water_changes:
     name: Check for water/ changes

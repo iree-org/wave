@@ -20,4 +20,4 @@ add_mlir_doc(NormalFormInterfaces NormalFormAttrInterfaces Dialects/ -gen-attr-i
 
 add_dependencies(mlir-headers MLIRNormalFormIncGen)
 
-add_mlir_doc(NormalForm NormalForm Dialects/ -gen-dialect-doc -dialect normalform)
+add_mlir_doc(NormalFormOps NormalForm Dialects/ -gen-dialect-doc -dialect normalform)
