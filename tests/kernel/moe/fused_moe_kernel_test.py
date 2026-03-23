@@ -26,6 +26,7 @@ from wave_lang.kernel.wave.templates.moe import (
     get_topk_kernel,
     compile_moe_align_kernels,
     moe_align_block_size,
+    get_fused_silu_block_space_kernel,
 )
 import torch.nn.functional as F
 
@@ -152,6 +153,10 @@ def get_wave_moe_scatter(m, k, num_blocks, block_size, pad_value):
     return _compile_kernel(
         *get_moe_scatter_kernel(m, k, num_blocks, block_size, pad_value)
     )
+
+
+def get_wave_fused_silu_block_space(num_blocks, m, n, dtype):
+    return _compile_kernel(*get_fused_silu_block_space_kernel(num_blocks, m, n, dtype))
 
 
 def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
@@ -296,6 +301,137 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     return final_out, gemm1_out, silu_and_mul_out
 
 
+def tkw_moe_fused_silu(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
+    """
+    MoE pipeline with Scatter1 + SiLU + Gather2 fused into a single kernel.
+
+    Replaces the three-kernel sequence:
+        scatter1(c_scratch → gemm1_out)
+        silu_and_mul(gemm1_out → silu_out)
+        gather2(silu_out → a2_scratch)
+    with a single fused kernel that applies SiLU directly in block/slot space:
+        fused_silu_block_space(c_scratch → a2_scratch)
+
+    No sorted_ids lookup is needed in the fused kernel because scatter and
+    gather use the same sorted_ids mapping — they cancel each other out.
+    """
+    max_num_tokens_padded = score.numel() + num_experts * (block_size - 1)
+    max_num_m_blocks = -(max_num_tokens_padded // -block_size)
+
+    # Top-k routing
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    topk_weights = torch.zeros((num_tokens, topk), dtype=torch.float32, device="cuda")
+    topk_ids = torch.zeros((num_tokens, topk), dtype=torch.int32, device="cuda")
+    topk_kernel = get_wave_topk_kernel(num_tokens, num_experts, topk, tkl.f32)
+    topk_kernel(score, topk_weights, topk_ids)
+    topk_weights = topk_weights.view(-1)
+    topk_ids = topk_ids.view(-1)
+
+    # Block alignment: histogram → pad+cumsum → expert_ids → sorted_ids
+    numel = num_tokens * topk
+    align_kernels = compile_moe_align_kernels(
+        numel,
+        num_experts,
+        block_size,
+        max_num_tokens_padded,
+        max_num_m_blocks,
+    )
+    expert_ids, sorted_ids, *_ = moe_align_block_size(
+        topk_ids.to(torch.int32),
+        num_experts,
+        block_size,
+        max_num_tokens_padded,
+        max_num_m_blocks,
+        compiled_kernels=align_kernels,
+    )
+    num_blocks = expert_ids.shape[0]
+
+    # Replicate input tokens for each selected expert
+    m, k = a.shape
+    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+    pad_value = m * topk
+
+    # Pad sorted_ids to num_blocks * block_size
+    total_elems = num_blocks * block_size
+    if sorted_ids.shape[0] < total_elems:
+        sorted_ids_wave = torch.full(
+            (total_elems,), pad_value, dtype=torch.int32, device=a.device
+        )
+        sorted_ids_wave[: sorted_ids.shape[0]] = sorted_ids
+    else:
+        sorted_ids_wave = sorted_ids[:total_elems].contiguous()
+
+    gather_dummy = torch.empty(total_elems, dtype=torch.int32, device=a.device)
+
+    # GEMM1: gather → batched GEMM (a @ w1.T)
+    a_scratch = torch.zeros(
+        num_blocks, m * topk, k, dtype=torch.float16, device=a.device
+    )
+    gather1 = get_wave_moe_gather(m * topk, k, num_blocks, block_size, pad_value)
+    gather1(sorted_ids_wave, a, a_scratch, gather_dummy)
+    torch.cuda.synchronize()
+
+    c_scratch = torch.zeros(
+        num_blocks, m * topk, w1.shape[1], dtype=torch.float32, device=a.device
+    )
+    gemm1 = get_wave_moe_gemm_only(
+        m * topk,
+        w1.shape[1],
+        k,
+        w1.shape[0],
+        num_blocks,
+        MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+        f16,
+    )
+    gemm1(a_scratch, w1, expert_ids, c_scratch)
+    torch.cuda.synchronize()
+
+    # Fused: SiLU applied in block/slot space (replaces scatter1 + silu + gather2)
+    # c_scratch: [num_blocks, m*topk, 2n] f32 → a2_scratch: [num_blocks, m*topk, n] f16
+    a2_scratch = torch.zeros(
+        num_blocks, m * topk, w1.shape[1] // 2, dtype=torch.float16, device=a.device
+    )
+    fused_silu = get_wave_fused_silu_block_space(
+        num_blocks, m * topk, w1.shape[1] // 2, tkl.f32
+    )
+    fused_silu(c_scratch, a2_scratch)
+    torch.cuda.synchronize()
+
+    # GEMM2: batched GEMM (silu_out @ w2.T) → scatter
+    gemm2_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
+    c2_scratch = torch.zeros(
+        num_blocks, m * topk, w2.shape[1], dtype=torch.float32, device=a.device
+    )
+    gemm2 = get_wave_moe_gemm_only(
+        m * topk,
+        w2.shape[1],
+        w1.shape[1] // 2,
+        w2.shape[0],
+        num_blocks,
+        MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+        f16,
+    )
+    gemm2(a2_scratch, w2, expert_ids, c2_scratch)
+    torch.cuda.synchronize()
+
+    scatter2 = get_wave_moe_scatter(
+        m * topk, w2.shape[1], num_blocks, block_size, pad_value
+    )
+    scatter2(sorted_ids_wave, c2_scratch, gemm2_out, gather_dummy)
+    torch.cuda.synchronize()
+
+    # Weighted reduce sum across experts
+    reshape_out = gemm2_out.view(m, -1, w2.shape[1])
+    final_out = torch.zeros(m, w2.shape[1], dtype=torch.float32, device=a.device)
+    reduce_sum = get_wave_reduce_sum_kernel(
+        reshape_out.shape[0], reshape_out.shape[1], reshape_out.shape[2], tkl.f32
+    )
+    reduce_sum(reshape_out, topk_weights.view(m, -1), final_out)
+    torch.cuda.synchronize()
+
+    return final_out
+
+
 num_tokens_values = [32, 64]
 n_values = [64, 128]
 k_values = [128, 256]
@@ -363,4 +499,52 @@ def test_fused_moe(
         rtol=5e-2,
         atol=2.0 * (k / 128),
         msg="Final output mismatch",
+    )
+
+
+@pytest.mark.skipif(get_arch_family() != "RDNA", reason="Requires RDNA4 GPU (gfx120x)")
+@pytest.mark.parametrize("num_tokens", num_tokens_values)
+@pytest.mark.parametrize("n", n_values)
+@pytest.mark.parametrize("k", k_values)
+@pytest.mark.parametrize("num_experts", num_experts_values)
+@pytest.mark.parametrize("topk", top_ks)
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("block_size", block_size_values)
+def test_fused_moe_silu_fusion(
+    num_tokens: int,
+    n: int,
+    k: int,
+    num_experts: int,
+    topk: int,
+    dtype: DataType,
+    block_size: int,
+):
+    """
+    Tests the fused Scatter1+SiLU+Gather2 kernel against the reference.
+
+    The fused kernel applies SiLU directly in block/slot space, eliminating
+    three kernel launches and two large intermediate buffers compared to the
+    unfused pipeline.  Only the final output is compared (intermediate
+    gemm1_out and silu_out tensors are not produced by this path).
+    """
+    torch.manual_seed(0)
+    device = "cuda"
+
+    a = torch.randn(num_tokens, k, dtype=dtype, device=device)
+    w1 = torch.randn(num_experts, 2 * n, k, dtype=dtype, device=device)
+    w2 = torch.randn(num_experts, k, n, dtype=dtype, device=device)
+    score = torch.rand((num_tokens, num_experts), dtype=dtype, device=device)
+
+    ref_output, _, _ = torch_ref_moe(a, w1, w2, score.clone(), topk)
+    tkw_output = tkw_moe_fused_silu(
+        a, w1, w2, score.clone(), topk, num_experts, block_size, num_tokens
+    )
+
+    # Same tolerance as the original test
+    torch.testing.assert_close(
+        tkw_output,
+        ref_output,
+        rtol=5e-2,
+        atol=2.0 * (k / 128),
+        msg="Fused SiLU final output mismatch",
     )

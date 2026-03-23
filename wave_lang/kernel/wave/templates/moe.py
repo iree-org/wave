@@ -1053,6 +1053,128 @@ def get_moe_scatter_kernel(
 
 
 # ---------------------------------------------------------------------------
+# Fused Scatter1 + SiLU + Gather2 kernel (in block/slot space)
+# ---------------------------------------------------------------------------
+def get_fused_silu_block_space_kernel(
+    num_blocks: int,
+    m: int,
+    n: int,
+    datatype: DataType,
+):
+    """
+    Fused kernel replacing Scatter1 + SiLU&Mul + Gather2.
+
+    Operates entirely in block/slot space, eliminating the round-trip through
+    token space (scatter → token space → gather).  Because scatter and gather
+    use the same sorted_ids mapping, applying the computation directly in
+    block/slot space gives identical results with fewer kernel launches and
+    no large intermediate buffers (gemm1_out and silu_and_mul_out).
+
+    Given:
+      c_back  : [NUM_BLOCKS, M, TWO_N]  -- GEMM1 output (float32, gate+up)
+      a_out   : [NUM_BLOCKS, M, N]      -- output buffer for GEMM2 (float16)
+
+    For each (block, slot):
+      gate = c_back[block, slot, :n]
+      up   = c_back[block, slot, n:2n]
+      silu = sigmoid(gate) * gate * up
+      a_out[block, slot, :n] = silu.to(f16)
+
+    Args:
+        num_blocks: Total number of expert blocks.
+        m: Per-block slot count (typically m = num_tokens * topk; only
+           the first block_size slots per block are valid but the full
+           m-sized buffer is used by the GEMM kernel).
+        n: Output dimension per expert (half of w1.shape[1]).
+        datatype: Input data type (f32 — GEMM1 writes f32 to c_back).
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    TWO_N = tkl.sym.TWO_N
+    NUM_BLOCKS = sym.NUM_BLOCKS
+
+    wave_size = 32
+    BLOCK_M = 1
+    BLOCK_N = 32
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N, NUM_BLOCKS: 1},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(NUM_BLOCKS, 1, 2)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(NUM_BLOCKS, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.dynamic_val(0)
+
+    # Read gate portion: c_back[block, row, col] where col = tid (0..n-1)
+    x1_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={NUM_BLOCKS: WORKGROUP_2, M: i, TWO_N: k},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={TWO_N: j},
+    )
+
+    # Read up portion: c_back[block, row, col+n] where col = tid (n..2n-1)
+    x2_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={NUM_BLOCKS: WORKGROUP_2, M: i, TWO_N: k + N},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={TWO_N: j},
+    )
+
+    # Write: a_out[block, row, col]
+    a_out_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={NUM_BLOCKS: WORKGROUP_2, M: i, N: j},
+    )
+
+    @tkw.wave(constraints)
+    def fused_silu_block_space(
+        c_back: tkl.Memory[NUM_BLOCKS, M, TWO_N, ADDRESS_SPACE, datatype],
+        a_out: tkl.Memory[NUM_BLOCKS, M, N, GLOBAL_ADDRESS_SPACE, f16],
+    ):
+        # Global column index for this thread
+        tid = tkw.scalar(THREAD_0 + WORKGROUP_0 * wave_size, tkl.i32)
+
+        # Read gate (first half of 2n)
+        x1_reg = tkw.read(c_back, mapping=x1_read_map, mapping_dynamic_vals=(tid,))
+
+        # SiLU: sigmoid(x) * x
+        cst_m1 = tkw.Register[M, N, datatype](-1.0)
+        cst_1 = tkw.Register[M, N, datatype](1.0)
+        exp_out = tkw.exp(x1_reg * cst_m1)
+        sigmoid = cst_1 / (cst_1 + exp_out)
+        silu = sigmoid * x1_reg
+
+        # Read up (second half of 2n) and multiply
+        x2_reg = tkw.read(c_back, mapping=x2_read_map, mapping_dynamic_vals=(tid,))
+        res = silu * x2_reg
+
+        # Write result cast to f16 into a_out
+        tkw.write(res, a_out, mapping=a_out_write_map)
+
+    hyperparams = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        NUM_BLOCKS: num_blocks,
+        M: m,
+        N: n,
+        TWO_N: 2 * n,
+    }
+
+    return fused_silu_block_space, hyperparams
+
+
+# ---------------------------------------------------------------------------
 # Helper: compile a Wave kernel with default settings
 # ---------------------------------------------------------------------------
 def _compile_wave_kernel(kernel_fn, hyperparams, **compile_kwargs):
