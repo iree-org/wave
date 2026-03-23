@@ -454,18 +454,18 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
   Value baseOff = st.lookupBaseOffset(basePtr);
   if (baseOff && srdOp) {
     int64_t N = srdOp.getIndex();
-    auto *mlirCtx = builder.getContext();
+    MLIRContext *mlirCtx = builder.getContext();
 
     // Make the offset scalar, preserving width (i32 or i64).
     // ArithReadFirstLaneOp is a no-op if already SGPR and legalizes to
     // v_readfirstlane_b32 (or a pair for i64) otherwise.
     int64_t width = getRegSize(baseOff.getType());
-    auto scalarTy = ctx.createSRegType(width, width);
+    SRegType scalarTy = ctx.createSRegType(width, width);
     Value offScalar =
         ArithReadFirstLaneOp::create(builder, loc, scalarTy, baseOff);
 
     // Split into lo/hi 32-bit halves for the 64-bit SRD base add.
-    auto sregTy = ctx.createSRegType();
+    SRegType sregTy = ctx.createSRegType();
     Value offLo = ArithTruncOp::create(builder, loc, sregTy, offScalar);
     Value offHi;
     if (width > 1)
@@ -476,10 +476,10 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     // Add to SRD base. SRDs are pinned to physical registers, so
     // the base adjustment uses register-pinned ops (same as the
     // s_and_b32/s_mov_b32 patches above).
-    auto base0Type = PSRegType::get(mlirCtx, N, 1);
-    auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
-    auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
-    auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
+    PSRegType base0Type = PSRegType::get(mlirCtx, N, 1);
+    PSRegType base1Type = PSRegType::get(mlirCtx, N + 1, 1);
+    Value base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
+    Value base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
     S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, offLo);
     S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, offHi);
   }
