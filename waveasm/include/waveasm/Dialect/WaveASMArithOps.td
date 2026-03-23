@@ -112,6 +112,18 @@ def WaveASM_ArithSelectOp : ArithPseudoOp<"select"> {
 // Type Conversion
 //===----------------------------------------------------------------------===//
 
+def WaveASM_ArithReadFirstLaneOp : ArithPseudoOp<"readfirstlane"> {
+  let summary = "Generic VGPR to SGPR lane read (legalized to v_readfirstlane_b32)";
+  let description = [{
+    Reads the value from the first active lane of a VGPR and produces an SGPR.
+    For i64, legalization splits into two v_readfirstlane_b32 ops.
+    If the source is already an SGPR, legalization replaces with a copy.
+  }];
+  let arguments = (ins WaveASM_AnyOperand:$src);
+  let results = (outs WaveASM_AnyReg:$dst);
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+}
+
 def WaveASM_ArithTruncOp : ArithPseudoOp<"trunc"> {
   let summary = "Generic integer truncation (e.g., i64 -> i32)";
   let description = [{

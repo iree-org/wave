@@ -448,15 +448,34 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
   st.mapBufferRsrc(op.getResult(), *srdVal);
 
-  // If bare-pointer GEPs accumulated an offset before make.buffer.rsrc,
-  // seed the GEP map so buffer GEPs chain naturally via lookupGEP.
-  // Truncate from 64-bit pointer arithmetic to 32-bit buffer voffset.
+  // If bare-pointer GEPs accumulated a byte offset before make.buffer.rsrc,
+  // fold it into the SRD base address (64-bit SALU add to SRD[0:1]).
+  // This keeps voffset starting at 0 from the adjusted base.
   Value baseOff = st.lookupBaseOffset(basePtr);
-  if (baseOff) {
-    Type vregTy = isVGPRType(baseOff.getType()) ? (Type)ctx.createVRegType()
-                                                : (Type)ctx.createSRegType();
-    Value truncated = ArithTruncOp::create(builder, loc, vregTy, baseOff);
-    st.mapGEP(op.getResult(), {*srdVal, truncated});
+  if (baseOff && srdOp) {
+    int64_t N = srdOp.getIndex();
+    auto *mlirCtx = builder.getContext();
+
+    // Make the offset scalar. ArithReadFirstLaneOp is a no-op if already SGPR
+    // and legalizes to v_readfirstlane_b32 (or a pair for i64) otherwise.
+    auto sregTy = ctx.createSRegType();
+    Value offScalar =
+        ArithReadFirstLaneOp::create(builder, loc, sregTy, baseOff);
+
+    // Truncate to 32-bit byte offset for the SRD base add.
+    // Bare-pointer byte offsets fit in 32 bits for practical buffer sizes.
+    Value off32 = ArithTruncOp::create(builder, loc, sregTy, offScalar);
+
+    // Add to SRD base. SRDs are pinned to physical registers, so
+    // the base adjustment uses register-pinned ops (same as the
+    // s_and_b32/s_mov_b32 patches above).
+    auto base0Type = PSRegType::get(mlirCtx, N, 1);
+    auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
+    auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
+    auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
+    S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, off32);
+    auto zeroImm = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+    S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, zeroImm);
   }
 
   return success();

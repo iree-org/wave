@@ -8,19 +8,19 @@
 // SRD word 1 patched.
 // CHECK: waveasm.raw "s_and_b32
 
-// Seeded bare-pointer offset truncated from 64-bit to 32-bit voffset.
-// CHECK: [[BASE:%.*]] = waveasm.arith.trunc
+// Bare-pointer offset folded into SRD base via readfirstlane + s_add_u32.
+// CHECK: waveasm.arith.readfirstlane
+// CHECK: waveasm.arith.trunc
+// CHECK: waveasm.s_add_u32
+// CHECK: waveasm.s_addc_u32
 
-// First buffer GEP: truncated base + tid (truncated).
+// Buffer GEP voffset starts at 0: tid (truncated) + col_bytes (truncated).
 // CHECK: [[TID:%.*]] = waveasm.arith.trunc
-// CHECK: [[OFF0:%.*]] = waveasm.v_add_u32 [[BASE]], [[TID]]
-
-// Chained buffer GEP: off0 + col_bytes (truncated).
 // CHECK: [[COL:%.*]] = waveasm.arith.trunc
-// CHECK: [[OFF1:%.*]] = waveasm.v_add_u32 [[OFF0]], [[COL]]
+// CHECK: [[OFF:%.*]] = waveasm.v_add_u32 [[TID]], [[COL]]
 
-// Load uses the final chained offset.
-// CHECK: waveasm.buffer_load_dword %{{.*}}, [[OFF1]], %{{.*}}
+// Load uses the chained voffset (no bare-pointer component).
+// CHECK: waveasm.buffer_load_dword %{{.*}}, [[OFF]], %{{.*}}
 // CHECK: waveasm.s_endpgm
 
 gpu.module @gpu_module {
