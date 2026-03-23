@@ -450,9 +450,14 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
   // If bare-pointer GEPs accumulated an offset before make.buffer.rsrc,
   // seed the GEP map so buffer GEPs chain naturally via lookupGEP.
+  // Truncate from 64-bit pointer arithmetic to 32-bit buffer voffset.
   Value baseOff = st.lookupBaseOffset(basePtr);
-  if (baseOff)
-    st.mapGEP(op.getResult(), {*srdVal, baseOff});
+  if (baseOff) {
+    Type vregTy = isVGPRType(baseOff.getType()) ? (Type)ctx.createVRegType()
+                                                : (Type)ctx.createSRegType();
+    Value truncated = ArithTruncOp::create(builder, loc, vregTy, baseOff);
+    st.mapGEP(op.getResult(), {*srdVal, truncated});
+  }
 
   return success();
 }

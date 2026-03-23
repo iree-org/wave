@@ -8,12 +8,14 @@
 // SRD word 1 stride bits cleared, flags patched from make.buffer.rsrc.
 // CHECK: waveasm.raw "s_and_b32
 // CHECK: waveasm.raw "s_mov_b32 s{{[0-9]+}}, 0x27000"
-// Buffer GEP offset added with 32-bit v_add_u32.
+// Base offset truncated to 32-bit voffset, then buffer GEP chains with v_add_u32.
+// CHECK: waveasm.arith.trunc
 // CHECK: waveasm.v_add_u32
 // CHECK: waveasm.buffer_load_ushort
 // CHECK: waveasm.arith.add
 // CHECK: waveasm.raw "s_and_b32
 // CHECK: waveasm.raw "s_mov_b32 s{{[0-9]+}}, 0x27000"
+// CHECK: waveasm.arith.trunc
 // CHECK: waveasm.v_add_u32
 // CHECK: waveasm.buffer_store_short
 // CHECK: waveasm.s_endpgm
