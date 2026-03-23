@@ -470,15 +470,22 @@ def _compute_valid_bytes(
     uint64 = IntegerType.get_signless(64)
 
     if use_real_bounds:
+        hw_max = _valid_bytes_buffer(elem_type)
+        if total_bytes == hw_max and symbolic_shape is not None:
+            elem_bytes = _elem_bytes(elem_type)
+            total_bytes_expr = sympy.prod(s for s in symbolic_shape) * elem_bytes
+            subs_map = add_emitter_subs(emitter)
+            real_valid_index = gen_sympy_index(subs_map, total_bytes_expr)
+            total_val = arith_d.index_cast(uint64, real_valid_index)
+        else:
+            total_val = arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
         metadata = memref_d.extract_strided_metadata(ptr)
         offset_elements = metadata[1]
         offset_bytes = arith_d.index_cast(uint64, offset_elements)
-        # Use _elem_bytes to avoid zero offset_bytes for sub-byte types (e.g. mxfp4).
         elem_bytes_val = arith_d.constant(
             uint64, get_constant_attr(_elem_bytes(elem_type), uint64)
         )
         offset_bytes = arith_d.muli(offset_bytes, elem_bytes_val)
-        total_val = arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
         return arith_d.subi(total_val, offset_bytes)
 
     return arith_d.constant(uint64, get_constant_attr(total_bytes, uint64))
