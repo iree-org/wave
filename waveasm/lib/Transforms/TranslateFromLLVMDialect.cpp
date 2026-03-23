@@ -448,11 +448,11 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
   st.mapBufferRsrc(op.getResult(), *srdVal);
 
-  // Propagate any base offset from bare-pointer GEPs so buffer GEPs
-  // can add it to their voffset.
+  // If bare-pointer GEPs accumulated an offset before make.buffer.rsrc,
+  // seed the GEP map so buffer GEPs chain naturally via lookupGEP.
   Value baseOff = st.lookupBaseOffset(basePtr);
   if (baseOff)
-    st.setBaseOffset(op.getResult(), baseOff);
+    st.mapGEP(op.getResult(), {*srdVal, baseOff});
 
   return success();
 }
@@ -507,28 +507,24 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   }
 
   // Buffer GEP (ptr<7>): decompose into (SRD, voffset).
-  auto srd = st.lookupSRD(base);
+  // Check gepMap first -- covers both chained buffer GEPs and
+  // make.buffer.rsrc entries seeded with a bare-pointer base offset.
+  if (std::optional<BufferPtrInfo> baseGEP = st.lookupGEP(base)) {
+    auto vregTy = ctx.createVRegType();
+    Value sum =
+        V_ADD_U32::create(builder, loc, vregTy, baseGEP->voffset, newOffset);
+    st.mapGEP(op.getResult(), {baseGEP->srd, sum});
+    return success();
+  }
+
+  // First buffer GEP directly on make.buffer.rsrc (no bare-pointer offset).
+  Value srd = st.lookupSRD(base);
   if (srd) {
-    // Check if the make.buffer.rsrc had a base offset from bare-pointer GEPs.
-    Value baseOff = st.lookupBaseOffset(base);
-    if (baseOff) {
-      auto vregTy = ctx.createVRegType();
-      newOffset = V_ADD_U32::create(builder, loc, vregTy, baseOff, newOffset);
-    }
     st.mapGEP(op.getResult(), {srd, newOffset});
     return success();
   }
 
-  std::optional<BufferPtrInfo> baseGEP = st.lookupGEP(base);
-  if (!baseGEP)
-    return op->emitOpError("GEP base is not a tracked buffer resource");
-
-  // Chain: add this offset to the base GEP's offset.
-  auto vregTy = ctx.createVRegType();
-  auto sum =
-      V_ADD_U32::create(builder, loc, vregTy, baseGEP->voffset, newOffset);
-  st.mapGEP(op.getResult(), {baseGEP->srd, sum});
-  return success();
+  return op->emitOpError("GEP base is not a tracked buffer resource");
 }
 
 /// Compute buffer load/store size from the LLVM element type.
