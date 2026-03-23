@@ -8,11 +8,12 @@
 // SRD word 1 patched.
 // CHECK: waveasm.raw "s_and_b32
 
-// Bare-pointer offset folded into SRD base via readfirstlane + s_add_u32.
+// Bare-pointer offset folded into SRD base via readfirstlane + 64-bit add.
 // CHECK: waveasm.arith.readfirstlane
-// CHECK: waveasm.arith.trunc
-// CHECK: waveasm.s_add_u32
-// CHECK: waveasm.s_addc_u32
+// CHECK: [[OFF_LO:%.*]] = waveasm.arith.trunc
+// CHECK: [[OFF_HI:%.*]] = waveasm.extract %{{.*}}[1]
+// CHECK: waveasm.s_add_u32 %{{.*}}, [[OFF_LO]]
+// CHECK: waveasm.s_addc_u32 %{{.*}}, [[OFF_HI]]
 
 // Buffer GEP voffset starts at 0: tid (truncated) + col_bytes (truncated).
 // CHECK: [[TID:%.*]] = waveasm.arith.trunc

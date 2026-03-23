@@ -456,15 +456,22 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     int64_t N = srdOp.getIndex();
     auto *mlirCtx = builder.getContext();
 
-    // Make the offset scalar. ArithReadFirstLaneOp is a no-op if already SGPR
-    // and legalizes to v_readfirstlane_b32 (or a pair for i64) otherwise.
-    auto sregTy = ctx.createSRegType();
+    // Make the offset scalar, preserving width (i32 or i64).
+    // ArithReadFirstLaneOp is a no-op if already SGPR and legalizes to
+    // v_readfirstlane_b32 (or a pair for i64) otherwise.
+    int64_t width = getRegSize(baseOff.getType());
+    auto scalarTy = ctx.createSRegType(width, width);
     Value offScalar =
-        ArithReadFirstLaneOp::create(builder, loc, sregTy, baseOff);
+        ArithReadFirstLaneOp::create(builder, loc, scalarTy, baseOff);
 
-    // Truncate to 32-bit byte offset for the SRD base add.
-    // Bare-pointer byte offsets fit in 32 bits for practical buffer sizes.
-    Value off32 = ArithTruncOp::create(builder, loc, sregTy, offScalar);
+    // Split into lo/hi 32-bit halves for the 64-bit SRD base add.
+    auto sregTy = ctx.createSRegType();
+    Value offLo = ArithTruncOp::create(builder, loc, sregTy, offScalar);
+    Value offHi;
+    if (width > 1)
+      offHi = ExtractOp::create(builder, loc, sregTy, offScalar, 1);
+    else
+      offHi = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
 
     // Add to SRD base. SRDs are pinned to physical registers, so
     // the base adjustment uses register-pinned ops (same as the
@@ -473,9 +480,8 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
     auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
     auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
-    S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, off32);
-    auto zeroImm = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
-    S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, zeroImm);
+    S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, offLo);
+    S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, offHi);
   }
 
   return success();
