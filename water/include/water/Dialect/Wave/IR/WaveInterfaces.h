@@ -236,7 +236,6 @@ public:
       llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
       EmitErrorFn errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     return detail::propagateReductionIndexExprsForward(
         concrete.getOperands().getTypes(), concrete.getResult().getType(),
         operandExprs, resultExprs, errs);
@@ -246,7 +245,6 @@ public:
       llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs, EmitErrorFn errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
-    wave::WaveSymbolAttr axis = concrete.getReducedSymbol();
     return detail::propagateReductionIndexExprsBackward(
         concrete.getOperands().getTypes(), operandExprs, resultExprs, errs);
   }

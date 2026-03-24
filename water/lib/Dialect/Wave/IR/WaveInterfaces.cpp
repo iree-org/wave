@@ -485,8 +485,8 @@ FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsForward(
   // Forward propagation is identity only for symbols that are present.
   return identityIndexExprsPropagate(
              operandExprs[0].keepOnlySymbols(targetTensorType.getShape()),
-             resultExprs, operandTypes, "reduced value", "result", emitError) |
-         identityIndexExprsPropagate(operandExprs[1], resultExprs, operandTypes,
+             resultExprs, resultType, "reduced value", "result", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], resultExprs, resultType,
                                      "init", "result", emitError);
 }
 
