@@ -671,30 +671,9 @@ public:
   }
 
   /// Check if this is a multi-wave kernel (more than 64 threads per workgroup)
-  /// Multi-wave means workgroup_size_y > 1 or workgroup_size_z > 1
-  /// (We assume wave size of 64 and workgroup_size_x is always a multiple of
-  /// 64)
   bool isMultiWaveKernel() const {
-    // Get workgroup_size attribute (using const-safe accessor)
-    mlir::ArrayAttr workgroupSizeAttr =
-        program->getAttrOfType<mlir::ArrayAttr>("workgroup_size");
-
-    if (!workgroupSizeAttr || workgroupSizeAttr.size() < 2)
-      return false;
-
-    int64_t wgY = 1, wgZ = 1;
-    if (auto intAttr =
-            llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[1])) {
-      wgY = intAttr.getInt();
-    }
-    if (workgroupSizeAttr.size() >= 3) {
-      if (auto intAttr =
-              llvm::dyn_cast<mlir::IntegerAttr>(workgroupSizeAttr[2])) {
-        wgZ = intAttr.getInt();
-      }
-    }
-    // Multi-wave if y > 1 or z > 1 (matching Python abi.py convention)
-    return wgY > 1 || wgZ > 1;
+    auto [wgX, wgY, wgZ] = getWorkgroupSize();
+    return (wgX * wgY * wgZ) > 64;
   }
 
   /// Get workgroup size as (x, y, z) tuple
