@@ -626,11 +626,17 @@ public:
 
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
+  IndexExprsLatticeStorage(IndexExprsLatticeStorage &&value) = default;
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
+                           mlir::DictionaryAttr vectorShape);
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+                           llvm::DenseMap<mlir::StringAttr, int32_t> priorities,
                            mlir::DictionaryAttr vectorShape);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
+  IndexExprsLatticeStorage &
+  operator=(IndexExprsLatticeStorage &&other) = default;
 
   bool operator==(const IndexExprsLatticeStorage &other) const;
   bool operator!=(const IndexExprsLatticeStorage &other) const;
@@ -645,11 +651,13 @@ public:
   // specified or not, or null if the lattice instance is a top or a bottom.
   mlir::DictionaryAttr getConcreteValue() const;
 
-  // Return the priority of this lattice instance containing a concrete value,
-  // assert otherwise.
-  int32_t getPriority() const {
-    assert(getConcreteValue() && "no priority for lattice top/bottom");
-    return priority;
+  // Return the priority for a specific key, defaulting to kLowestPriority.
+  int32_t getPriorityForKey(mlir::StringAttr key) const;
+
+  // Return the per-key priorities map. Asserts on non-concrete values.
+  const llvm::DenseMap<mlir::StringAttr, int32_t> &getPriorities() const {
+    assert(getConcreteValue() && "no priorities for lattice top/bottom");
+    return priorities;
   }
 
   // Returns the vector shape stored in the lattice instance, or null if the
@@ -706,9 +714,10 @@ private:
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
-  // Priority of this value. Specific values with higher priority override
-  // values with lower priority in joins.
-  int32_t priority;
+  // Per-key priorities. Each symbol in the dictionary has its own priority.
+  // Higher-priority entries override lower-priority entries in joins; entries
+  // with equal priorities are structurally merged.
+  llvm::DenseMap<mlir::StringAttr, int32_t> priorities;
 
   // The vector shape associated with this lattice value. This is a dictionary
   // mapping symbol names to vector dimension sizes. Two concrete lattice values

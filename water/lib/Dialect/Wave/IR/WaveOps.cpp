@@ -2457,10 +2457,17 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
   // carried over from the initial Python prototype.
   auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
     if (lattice.isBottom() || lattice.isTop() ||
-        lattice.getPriority() < IndexExprsLatticeStorage::kMmaPriority)
+        llvm::any_of(llvm::make_second_range(lattice.getPriorities()),
+                     [](int32_t pri) {
+                       return pri < IndexExprsLatticeStorage::kMmaPriority;
+                     }))
       return lattice;
+    // Make a copy of the priorities map.
+    llvm::DenseMap<mlir::StringAttr, int32_t> capped = lattice.getPriorities();
+    for (auto &[key, pri] : capped)
+      pri = std::min(pri, IndexExprsLatticeStorage::kMmaPriority);
     return IndexExprsLatticeStorage(lattice.getConcreteValue(),
-                                    IndexExprsLatticeStorage::kMmaPriority,
+                                    std::move(capped),
                                     lattice.getVectorShape());
   };
   IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
@@ -2985,9 +2992,10 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
         NamedAttribute(StringAttr::get(ctx, srcSymbol.getName()), newMapping));
   }
 
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
-                                  inputLattice.getPriority(),
-                                  inputLattice.getVectorShape());
+  return IndexExprsLatticeStorage(
+      DictionaryAttr::get(ctx, permutedMappings),
+      llvm::DenseMap<StringAttr, int32_t>(inputLattice.getPriorities()),
+      inputLattice.getVectorShape());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(

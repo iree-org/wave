@@ -1293,3 +1293,160 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %result : !wave.tensor<[@N] of f32, <register>>
   }
 }
+
+// -----
+
+// Per-key priority: when two operands have different per-key priorities,
+// each key independently takes the higher-priority mapping.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  // CHECK-LABEL: @per_key_priority_independent_keys
+  func.func @per_key_priority_independent_keys(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Operand 0 has M at priority 3 and N at priority 1.
+    // Operand 1 has M at priority 1 and N at priority 3.
+    // Result should pick M from operand 0 and N from operand 1.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [{M = 3 : i32, N = 1 : i32}, {
+         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }],
+      [{M = 1 : i32, N = 3 : i32}, {
+         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 1, 1)>,
+         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+      }]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Per-key priority: a low-priority key can be overridden by backward
+// propagation from a higher-priority source without affecting the high-priority
+// key already present.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @per_key_priority_backward_override
+  func.func @per_key_priority_backward_override(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>,
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Read result: M at pri=3 (high), N at pri=0 (low).
+    // N should be overridden by backward propagation from write.
+    // CHECK: wave.read
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    %a_reg = wave.read %a {wave_test.override_result_index = [
+      [{M = 3 : i32, N = 0 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }]
+    ]} : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    %sum = wave.add %a_reg, %b : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    // Write: M at pri=1 (write default), N at pri=3.
+    // N (pri=3) overrides read's N (pri=0) via backpropagation.
+    // M (pri=1) does NOT override read's M (pri=3).
+    // CHECK: wave.write
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    wave.write %sum, %output {wave_test.override_operand_index = [
+      unit,
+      [{M = 1 : i32, N = 3 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 50, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+      }]
+    ]} : !wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Per-key priority: same priority, same expression for some keys but different
+// for others - the differing key should cause a conflict.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  func.func @per_key_same_priority_partial_conflict(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // M matches between operands, but N differs - should conflict.
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
+       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+       N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    }], [1, {
+       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+       N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+    }]]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Per-key priority: higher priority for one key should override even when the
+// other key would conflict at equal priority. The conflicting key is resolved
+// by priority, not by structural merge.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  // CHECK-LABEL: @per_key_priority_resolves_conflict
+  func.func @per_key_priority_resolves_conflict(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Operand 0: M at pri=1 with T0*10, N at pri=1 with T0*20.
+    // Operand 1: M at pri=3 with T0*30, N at pri=3 with T0*40.
+    // Higher priority wins for both keys, no structural merge conflict.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
+       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>,
+       N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+    }], [3, {
+       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>,
+       N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }]]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}

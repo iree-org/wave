@@ -8,6 +8,7 @@
 #define WATER_DIALECT_WAVE_TRANSFORMS_DATAFLOWANALYSES_H
 
 #include "water/Dialect/Wave/Transforms/Utils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FunctionExtras.h"
 
 namespace llvm {
@@ -16,6 +17,7 @@ struct LogicalResult;
 
 namespace mlir {
 class DataFlowSolver;
+class StringAttr;
 class SymbolTableCollection;
 class Operation;
 class Value;
@@ -23,9 +25,10 @@ class DictionaryAttr;
 } // namespace mlir
 
 namespace wave {
-using SetIndexLatticeFn =
-    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr, int32_t priority,
-                            mlir::DictionaryAttr vectorShape)>;
+using SetIndexLatticeFn = llvm::function_ref<void(
+    mlir::Value, mlir::DictionaryAttr,
+    llvm::DenseMap<mlir::StringAttr, int32_t> priorities,
+    mlir::DictionaryAttr vectorShape)>;
 using OverrideInitializationFn = llvm::function_ref<llvm::LogicalResult(
     mlir::Operation *, SetIndexLatticeFn)>;
 
