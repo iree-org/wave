@@ -61,8 +61,12 @@ overrideInitialization(Operation *top,
           } else {
             // [dict, vectorShape]
             indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[0]);
-            if (!llvm::isa<UnitAttr>(arrayAttr[1]))
+            if (!llvm::isa<UnitAttr>(arrayAttr[1])) {
               vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
+              if (!vectorShape)
+                return op->emitError()
+                       << "expected vector shape to be a DictionaryAttr";
+            }
           }
         } else if (arrayAttr.size() == 3) {
           // [priority, dict, vectorShape]
@@ -82,9 +86,10 @@ overrideInitialization(Operation *top,
             return !llvm::isa<wave::WaveIndexMappingAttr>(attr.getValue());
           })) {
         return op->emitError()
-               << "expected " << attributeName
-               << " to be an array of "
-                  "dictionaries with WaveIndexMappingAttr or UnitAttr values";
+               << "expected each element of " << attributeName
+               << " to be either a DictionaryAttr or an array "
+                  "[priority?, indexExprs, vectorShape?], where indexExprs is "
+                  "a DictionaryAttr whose values are WaveIndexMappingAttr";
       }
 
       setIndexForValue(value, indexExprs, priority, vectorShape);

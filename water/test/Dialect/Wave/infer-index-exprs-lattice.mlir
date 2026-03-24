@@ -1062,6 +1062,38 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @mma_lhs_vs_implied_vector_shape(
+    %lhs: !wave.tensor<[@M, @K] of f16>,
+    %rhs: !wave.tensor<[@N, @K] of f16>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                vector_shapes = {M = 16, N = 16, K = 16}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (64)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (64)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 128}>
+  } {
+    %lhs_bad = wave.read %lhs {wave_test.override_result_index = [[3, {
+      K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>,
+      M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0 mod 16 + WG0 * 64, 1, 1)>
+    }, {M = 42, K = 42}]]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+
+    // expected-error @below {{conflict for LHS vector shape when propagating from implied by MMA kind lattice}}
+    // expected-note @below {{original LHS lattice}}
+    // expected-note @below {{implied by MMA kind lattice}}
+    %r = wave.mma %lhs_bad, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+         -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @mma_lhs_vs_implied(
     %lhs: !wave.tensor<[@M, @K] of f16>,
     %rhs: !wave.tensor<[@N, @K] of f16>,

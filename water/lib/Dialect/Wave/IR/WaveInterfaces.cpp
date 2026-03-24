@@ -854,27 +854,6 @@ DictionaryAttr wave::IndexExprsLatticeStorage::getVectorShape() const {
   return vectorShape;
 }
 
-bool wave::IndexExprsLatticeStorage::hasVectorShapeConflict(
-    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs) {
-  // No conflict if either is bottom or top.
-  if (lhs.isBottom() || lhs.isTop() || rhs.isBottom() || rhs.isTop())
-    return false;
-
-  // No conflict if either has no vector shape.
-  DictionaryAttr lhsShape = lhs.getVectorShape();
-  DictionaryAttr rhsShape = rhs.getVectorShape();
-  if (!lhsShape || !rhsShape)
-    return false;
-
-  // If shapes have different values for the same symbol, there is a conflict.
-  for (const NamedAttribute &lhsAttr : lhsShape) {
-    Attribute rhsValue = rhsShape.get(lhsAttr.getName());
-    if (rhsValue && lhsAttr.getValue() != rhsValue)
-      return true;
-  }
-  return false;
-}
-
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
   IndexExprsLatticeStorage result;
   result.value.setPointer(nullptr);
@@ -1261,10 +1240,15 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
       lhs.getContext(), allSymbols, *joinedStart, *joinedStep, *joinedStride);
 }
 
-static DictionaryAttr
-getJoinedVectorShape(DictionaryAttr lhs, DictionaryAttr rhs,
-                     int32_t lhsPriority, int32_t rhsPriority,
-                     const llvm::StringSet<> &ignoredRhsSymbolNames) {
+// Returns a vector shape with the higher priority. If priorities are equal,
+// returns a vector shape with (a) unique entries from LHS and RHS and (b)
+// entries that are equal between LHS and RHS. If there are entries with the
+// same symbol and different values, returns nullptr indicating the failure to
+// join (reaching top).
+static DictionaryAttr getJoinedVectorShape(DictionaryAttr lhs,
+                                           DictionaryAttr rhs,
+                                           int32_t lhsPriority,
+                                           int32_t rhsPriority) {
   if (lhsPriority > rhsPriority)
     return lhs;
   if (rhsPriority > lhsPriority)
@@ -1287,18 +1271,35 @@ getJoinedVectorShape(DictionaryAttr lhs, DictionaryAttr rhs,
   }
 
   for (const NamedAttribute &attr : rhs) {
-    if (ignoredRhsSymbolNames.contains(attr.getName().getValue()))
-      continue;
     if (lhs) {
       Attribute lhsValue = lhs.get(attr.getName());
-      if (lhsValue && lhsValue != attr.getValue())
-        return nullptr;
-      continue;
+      if (lhsValue) {
+        if (lhsValue != attr.getValue())
+          return nullptr;
+        continue;
+      }
     }
     joinedVectorShapeEntries.push_back(attr);
   }
 
   return DictionaryAttr::get(lhs.getContext(), joinedVectorShapeEntries);
+}
+
+FailureOr<DictionaryAttr> wave::IndexExprsLatticeStorage::getJoinedVectorShape(
+    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs) {
+  if (lhs.isBottom() && rhs.isBottom())
+    return DictionaryAttr();
+  if (lhs.isTop() || rhs.isTop())
+    return failure();
+  if (lhs.isBottom())
+    return rhs.getVectorShape();
+  if (rhs.isBottom())
+    return lhs.getVectorShape();
+  if (DictionaryAttr result =
+          ::getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
+                                 lhs.getPriority(), rhs.getPriority()))
+    return result;
+  return failure();
 }
 
 wave::IndexExprsLatticeStorage
@@ -1350,8 +1351,8 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   }
 
   DictionaryAttr joinedVectorShape =
-      getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
-                           lhs.getPriority(), rhs.getPriority(), {});
+      ::getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
+                             lhs.getPriority(), rhs.getPriority());
   if (!joinedVectorShape && (lhs.getVectorShape() || rhs.getVectorShape()))
     return IndexExprsLatticeStorage::top();
 
