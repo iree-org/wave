@@ -56,6 +56,11 @@ mlir::ParseResult parseWaveIndexDict(mlir::OpAsmParser &parser,
 void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
                         mlir::ArrayAttr arr);
 
+mlir::ParseResult parseWaveVectorShapeDictList(mlir::OpAsmParser &parser,
+                                               mlir::ArrayAttr &out);
+void printWaveVectorShapeDictList(mlir::OpAsmPrinter &printer,
+                                  mlir::Operation *op, mlir::ArrayAttr arr);
+
 //-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------

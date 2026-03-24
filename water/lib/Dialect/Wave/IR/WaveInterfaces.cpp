@@ -41,11 +41,59 @@ wave::WaveHyperparameterAttr wave::getHyperparameters(Operation *op) {
 //-----------------------------------------------------------------------------
 
 LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
-  // The attribute is optional.
+  // Expected number of per-value index / vector_shape slots (same convention as
+  // the `index` attribute).
+  size_t expectedSlotCount = 0;
+  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+    llvm::SmallVector<Value> values;
+    iface.getIndexExprValuesAndDescriptions(values);
+    expectedSlotCount = values.size();
+  } else {
+    expectedSlotCount = op->getNumResults();
+  }
+
+  auto verifyVectorShapeArray = [&](ArrayAttr vsArr) -> LogicalResult {
+    if (vsArr.size() != expectedSlotCount)
+      return op->emitError("'vector_shape' attribute length (")
+             << vsArr.size() << ") does not match the number of per-value "
+             << "slots (" << expectedSlotCount << ")";
+    for (Attribute nestedAttr : vsArr) {
+      auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
+      if (!dict)
+        return op->emitError(
+            "'vector_shape' array elements must be dictionaries");
+      for (NamedAttribute na : dict) {
+        auto intAttr = dyn_cast<IntegerAttr>(na.getValue());
+        if (!intAttr)
+          return op->emitError("vector_shape entry ")
+                 << na.getName() << " must be an integer attribute";
+        if (!intAttr.getType().isSignlessInteger(64))
+          return op->emitError("vector_shape entry ")
+                 << na.getName()
+                 << " must be a 64-bit signless integer attribute, got "
+                 << intAttr.getType();
+      }
+    }
+    return success();
+  };
+
+  if (Attribute vsAttr = op->getAttr(WaveDialect::kVectorShapeAttrName)) {
+    auto vsArr = dyn_cast<ArrayAttr>(vsAttr);
+    if (!vsArr)
+      return op->emitError(
+          "'vector_shape' attribute must be an array of dictionaries");
+    if (failed(verifyVectorShapeArray(vsArr)))
+      return failure();
+  }
+
+  // The index attribute is optional.
   Attribute attribute =
       op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName);
-  if (!attribute)
+  if (!attribute) {
+    // `vector_shape` without `index` is still validated above against slot
+    // count.
     return success();
+  }
 
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
@@ -159,24 +207,21 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // getIndexExprValuesAndDescriptions. Otherwise, default to the number of op
   // results.
 
-  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
-    llvm::SmallVector<Value> values;
-    iface.getIndexExprValuesAndDescriptions(values);
-    if (values.size() != arr.size()) {
-      return op->emitError()
-             << WaveDialect::kIndexWaveExprListAttrName << " attribute length ("
-             << arr.size() << ") does not match the number of index expression "
-             << "values (" << values.size() << ")";
-    }
-  } else {
-    SmallVector<Value> values;
-    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
-    if (values.size() != arr.size()) {
-      return op->emitError() << "index attribute length (" << arr.size()
-                             << ") does not match the number of op results ("
-                             << values.size() << ")";
-    }
+  if (arr.size() != expectedSlotCount) {
+    return op->emitError() << WaveDialect::kIndexWaveExprListAttrName
+                           << " attribute length (" << arr.size()
+                           << ") does not match the number of per-value index "
+                           << "slots (" << expectedSlotCount << ")";
   }
+
+  if (Attribute vsAttr = op->getAttr(WaveDialect::kVectorShapeAttrName)) {
+    auto vsArr = cast<ArrayAttr>(vsAttr);
+    if (vsArr.size() != arr.size())
+      return op->emitError("'vector_shape' attribute length (")
+             << vsArr.size() << ") does not match 'index' attribute length ("
+             << arr.size() << ")";
+  }
+
   return success();
 }
 
@@ -241,6 +286,68 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
   printer.getStream() << "[";
   llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
     printOne(llvm::cast<DictionaryAttr>(a));
+  });
+  printer.getStream() << "]";
+}
+
+// ODS custom directive: parseWaveVectorShapeDictList /
+// printWaveVectorShapeDictList
+ParseResult wave::parseWaveVectorShapeDictList(OpAsmParser &parser,
+                                               ArrayAttr &out) {
+  auto parseSingleDict = [&](DictionaryAttr &dictOut) -> ParseResult {
+    SmallVector<NamedAttribute, 4> entries;
+    if (parser.parseLBrace())
+      return failure();
+    auto parseEntry = [&]() -> ParseResult {
+      StringRef symbolName;
+      if (parser.parseKeyword(&symbolName) || parser.parseColon())
+        return failure();
+      Attribute value;
+      if (failed(parser.parseAttribute(value)))
+        return failure();
+      auto intAttr = dyn_cast<IntegerAttr>(value);
+      if (!intAttr || !intAttr.getType().isSignlessInteger(64))
+        return parser.emitError(parser.getCurrentLocation())
+               << "expected 64-bit signless integer attribute for "
+                  "vector_shape entry";
+      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
+                           value);
+      return success();
+    };
+    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
+      return failure();
+    dictOut = parser.getBuilder().getDictionaryAttr(entries);
+    return success();
+  };
+
+  SmallVector<Attribute> dicts;
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
+                                     [&]() -> ParseResult {
+                                       DictionaryAttr dict;
+                                       if (failed(parseSingleDict(dict)))
+                                         return failure();
+                                       dicts.push_back(dict);
+                                       return success();
+                                     }))
+    return failure();
+  out = parser.getBuilder().getArrayAttr(dicts);
+  return success();
+}
+
+void wave::printWaveVectorShapeDictList(OpAsmPrinter &printer, Operation *op,
+                                        ArrayAttr arr) {
+  auto printOne = [&](DictionaryAttr dict) {
+    printer.getStream() << "{";
+    llvm::interleaveComma(
+        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
+          printer.getStream() << namedAttr.getName().getValue() << " : ";
+          printer.printAttribute(namedAttr.getValue());
+        });
+    printer.getStream() << "}";
+  };
+  printer.getStream() << "[";
+  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
+    printOne(cast<DictionaryAttr>(a));
   });
   printer.getStream() << "]";
 }

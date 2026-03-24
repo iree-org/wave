@@ -46,6 +46,9 @@ def WaveDialect : Dialect {
     // Name of the inherent attribute for op index expressions;
     const static constexpr ::llvm::StringLiteral kIndexWaveExprListAttrName = "index";
 
+    // Name of the inherent attribute for op vector shape.
+    const static constexpr ::llvm::StringLiteral kVectorShapeAttrName = "vector_shape";
+
     // Name of the attribute specifying the number of elements per thread.
     const static constexpr ::llvm::StringLiteral kElementsPerThreadAttrName =
         "wave.elements_per_thread";

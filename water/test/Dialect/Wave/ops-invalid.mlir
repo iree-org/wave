@@ -555,7 +555,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_length_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>) {
-    // expected-error @below {{index attribute length (0) does not match the number of index expression values (1)}}
+    // expected-error @below {{index attribute length (0) does not match the number of per-value index slots (1)}}
     %0 = wave.read %mem index [] : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
@@ -566,7 +566,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @read_index_multiple_dicts(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
-    // expected-error @below {{index attribute length (2) does not match the number of index expression values (1)}}
+    // expected-error @below {{index attribute length (2) does not match the number of per-value index slots (1)}}
     %0 = wave.read %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}, {M : <[] -> (<NULL>, 4, <NULL>)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
@@ -1259,7 +1259,27 @@ func.func @reshape_logical_slice_too_large(%arg0: vector<8xf32>) {
 // -----
 
 func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of f32>) {
-  // expected-error @below {{index attribute length (2) does not match the number of op results (1)}}
+  // expected-error @below {{index attribute length (2) does not match the number of per-value index slots (1)}}
   %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] {index = [{}, {}]} : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return
+}
+
+// -----
+
+func.func @vector_shape_entry_must_be_i64(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i32}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
+}
+
+// -----
+
+func.func @vector_shape_entry_index_type_rejected(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : index}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
 }

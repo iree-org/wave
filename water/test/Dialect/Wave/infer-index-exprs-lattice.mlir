@@ -1144,10 +1144,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: vector_shape [{M : 4 : i64}]
     // The vectorShape should be preserved and match.
     %result = wave.add %a, %b {wave_test.override_operand_index = [
-      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i32}],
-      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i32}]
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i64}],
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i64}]
     ]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
@@ -1173,9 +1174,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.add
     // CHECK-SAME: index
     // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: vector_shape [{M : 8 : i64}]
     // The vectorShape from operand 0 should be preserved.
     %result = wave.add %a, %b {wave_test.override_operand_index = [
-      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 8 : i32}],
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 8 : i64}],
       {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}
     ]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
@@ -1200,8 +1202,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // expected-note @below {{operand #0 lattice:}}
     // expected-note @below {{operand #1 lattice:}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [
-      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i32}],
-      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 8 : i32}]
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i64}],
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 8 : i64}]
     ]}
     : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
     return %result : !wave.tensor<[@M] of f32>
@@ -1448,5 +1450,60 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     }]]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Overriding result lattice without specifying vector shape results in an error.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_forward } {
+  func.func @mma_missing_result_vector_shape(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<
+        threads_per_wave = 64,
+        waves_per_block = [2, 3, 4],
+        mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+        vector_shapes = {M = 16 : i64, N = 16 : i64, K = 16 : i64}>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64}>
+  } {
+    // expected-error @below {{missing vector shape for result}}
+    %m = wave.mma %a, %b, %c {
+      kind = #wave.mma_kind<f32_16x16x16_f16>,
+      wave_test.override_result_index = [[1, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+      }]]
+    } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %m : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+
+// -----
+
+// The test infer pass writes `vector_shape` from lattice storage (via overrides).
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @pass_emits_vector_shape
+  func.func @pass_emits_vector_shape(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128}>
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: vector_shape [{M : 7 : i64}]
+    %result = wave.add %a, %b {wave_test.override_result_index = [[{
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {M = 7 : i64}]]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
   }
 }

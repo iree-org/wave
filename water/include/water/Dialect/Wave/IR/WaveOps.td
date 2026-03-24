@@ -40,10 +40,13 @@ def WaveMemoryType : Type<Or<[WaveTensorInMemory.predicate, AnyMemRef.predicate]
 class WaveOp<string mnemonic, list<Trait> traits = []>
     : Op<WaveDialect, mnemonic, !listconcat(traits, [HasWaveIndexMapping])> {
   dag commonArguments = (ins
-    Arg<OptionalAttr<DictArrayAttr>, "Index expression">:$index
+    Arg<OptionalAttr<DictArrayAttr>, "Index expression">:$index,
+    Arg<OptionalAttr<DictArrayAttr>, "Per-value vector shape dictionaries">:$vector_shape
   );
 
-  string commonArgumentsSyntax = "( `index` custom<WaveIndexDict>($index)^ )?";
+  string commonArgumentsSyntax =
+      "( `index` custom<WaveIndexDict>($index)^ )?"
+      "( `vector_shape` custom<WaveVectorShapeDictList>($vector_shape)^ )?";
 }
 
 //-----------------------------------------------------------------------------

@@ -27,6 +27,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <functional>
 #include <type_traits>
 
 using namespace mlir;
@@ -1983,6 +1984,32 @@ wave::addWaveIndexExprsAnalyses(DataFlowSolver &solver,
   return delayedErrorEmitterInfo;
 }
 
+/// If any slot has a vector shape, every slot must have one; otherwise emit an
+/// error. Empty shape dictionaries are not used as placeholders on the IR.
+static LogicalResult collectPerValueVectorShapeAttrs(
+    Operation *op, llvm::ArrayRef<wave::IndexExprsLatticeStorage> slots,
+    llvm::function_ref<void(llvm::raw_ostream &, unsigned)> describeSlot,
+    llvm::SmallVectorImpl<Attribute> &shapeDicts) {
+  bool anyPresent =
+      llvm::any_of(slots, [](const wave::IndexExprsLatticeStorage &l) {
+        return l.getVectorShape() != nullptr;
+      });
+  if (!anyPresent)
+    return success();
+  shapeDicts.reserve(shapeDicts.size() + slots.size());
+  for (const auto [i, lat] : llvm::enumerate(slots)) {
+    DictionaryAttr vs = lat.getVectorShape();
+    if (!vs) {
+      llvm::SmallString<64> buf;
+      llvm::raw_svector_ostream os(buf);
+      describeSlot(os, i);
+      return op->emitError() << "missing vector shape for " << buf.str();
+    }
+    shapeDicts.push_back(vs);
+  }
+  return success();
+}
+
 LogicalResult wave::setWaveIndexExprAnalysisResults(
     Operation *top, const DataFlowSolver &solver,
     const DelayedErrorEmitterInfo &delayedErrorInfo) {
@@ -2057,8 +2084,19 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
                   indexExprs)))
             return WalkResult::interrupt();
 
+          MLIRContext *ctx = iface->getContext();
+          SmallVector<wave::IndexExprsLatticeStorage> mmaSlots =
+              llvm::to_vector(operandLattices);
+          mmaSlots.push_back(getLatticeValue(mma.getResult()));
+          SmallVector<Attribute> shapeDicts;
+          if (failed(collectPerValueVectorShapeAttrs(
+                  mma, mmaSlots, descriptionGenerator, shapeDicts)))
+            return WalkResult::interrupt();
           iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                         ArrayAttr::get(iface->getContext(), indexExprs));
+                         ArrayAttr::get(ctx, indexExprs));
+          if (!shapeDicts.empty())
+            iface->setAttr(wave::WaveDialect::kVectorShapeAttrName,
+                           ArrayAttr::get(ctx, shapeDicts));
           return WalkResult::advance();
         }
 
@@ -2087,8 +2125,19 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         }
         // Only set the index expressions if there were no failures.
         if (!hadFailures) {
+          MLIRContext *ctx = iface->getContext();
+          SmallVector<wave::IndexExprsLatticeStorage> slots =
+              llvm::map_to_vector(valuesForIndexExpr,
+                                  [&](Value v) { return getLatticeValue(v); });
+          SmallVector<Attribute> shapeDicts;
+          if (failed(collectPerValueVectorShapeAttrs(
+                  iface, slots, descriptionGenerator, shapeDicts)))
+            return WalkResult::interrupt();
           iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                         ArrayAttr::get(iface->getContext(), indexExprs));
+                         ArrayAttr::get(ctx, indexExprs));
+          if (!shapeDicts.empty())
+            iface->setAttr(wave::WaveDialect::kVectorShapeAttrName,
+                           ArrayAttr::get(ctx, shapeDicts));
         }
 
         return WalkResult::advance();

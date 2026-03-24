@@ -83,6 +83,16 @@ func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B
   return %1 : !wave.tensor<[@A, @B] of bf16>
 }
 
+// CHECK-LABEL: @vector_shape_roundtrip
+func.func @vector_shape_roundtrip(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // CHECK: wave.add
+  // CHECK-SAME: vector_shape [{A : 4 : i64, B : 2 : i64}]
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i64, B : 2 : i64}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
+}
+
 // CHECK-LABEL: @binary
 func.func @binary(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<any of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.add
