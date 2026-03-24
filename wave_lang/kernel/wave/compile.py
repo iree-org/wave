@@ -589,6 +589,13 @@ def build_graph_passes(
                 options.minimize_shared_allocs,
             ),
         ]
+    if options.coalesce_epilogue_stores:
+        from .coalesce_epilogue_stores import coalesce_epilogue_stores
+
+        graph_passes.append(
+            partial(coalesce_epilogue_stores, trace, launchable.constraints)
+        )
+
     graph_passes += [
         partial(
             add_shared_memory_barriers,
@@ -602,6 +609,9 @@ def build_graph_passes(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
+    ]
+
+    graph_passes += [
         partial(
             generate_bounds_exprs,
             trace,

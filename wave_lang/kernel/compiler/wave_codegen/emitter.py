@@ -105,9 +105,6 @@ class WaveEmitter:
         self.dynamic_symbols = self.options.dynamic_symbols
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
-        self.epilogue_lds_writes: list[dict] = []
-        self.epilogue_lds_alloc: Optional[Value] = None
-        self.epilogue_global_store_info: Optional[dict] = None
 
     def emit_program_invariants(self):
         grid = self.grid
@@ -269,10 +266,6 @@ class WaveEmitter:
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
-            if self.epilogue_lds_writes:
-                from .read_write import _emit_coalesced_epilogue_stores
-
-                _emit_coalesced_epilogue_stores(self)
 
         return func
 
