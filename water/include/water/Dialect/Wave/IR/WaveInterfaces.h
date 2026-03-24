@@ -626,17 +626,14 @@ public:
 
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
-  IndexExprsLatticeStorage(IndexExprsLatticeStorage &&value) = default;
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
                            mlir::DictionaryAttr vectorShape);
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
-                           llvm::DenseMap<mlir::StringAttr, int32_t> priorities,
+                           mlir::DictionaryAttr priorities,
                            mlir::DictionaryAttr vectorShape);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
-  IndexExprsLatticeStorage &
-  operator=(IndexExprsLatticeStorage &&other) = default;
 
   bool operator==(const IndexExprsLatticeStorage &other) const;
   bool operator!=(const IndexExprsLatticeStorage &other) const;
@@ -654,8 +651,9 @@ public:
   // Return the priority for a specific key, defaulting to kLowestPriority.
   int32_t getPriorityForKey(mlir::StringAttr key) const;
 
-  // Return the per-key priorities map. Asserts on non-concrete values.
-  const llvm::DenseMap<mlir::StringAttr, int32_t> &getPriorities() const {
+  // Return the per-key priorities as a DictionaryAttr mapping StringAttr keys
+  // to IntegerAttr values. Asserts on non-concrete values.
+  mlir::DictionaryAttr getPriorities() const {
     assert(getConcreteValue() && "no priorities for lattice top/bottom");
     return priorities;
   }
@@ -714,10 +712,12 @@ private:
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
-  // Per-key priorities. Each symbol in the dictionary has its own priority.
+  // Per-key priorities as a DictionaryAttr mapping symbol names to IntegerAttr
+  // priority values. Each symbol in the dictionary has its own priority.
   // Higher-priority entries override lower-priority entries in joins; entries
-  // with equal priorities are structurally merged.
-  llvm::DenseMap<mlir::StringAttr, int32_t> priorities;
+  // with equal priorities are structurally merged. Using DictionaryAttr avoids
+  // per-instance heap allocation since attrs are interned.
+  mlir::DictionaryAttr priorities;
 
   // The vector shape associated with this lattice value. This is a dictionary
   // mapping symbol names to vector dimension sizes. Two concrete lattice values

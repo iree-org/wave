@@ -2456,18 +2456,29 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
   // conflict in this case, don't propagate. This is a questionable design
   // carried over from the initial Python prototype.
   auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
-    if (lattice.isBottom() || lattice.isTop() ||
-        llvm::any_of(llvm::make_second_range(lattice.getPriorities()),
-                     [](int32_t pri) {
-                       return pri < IndexExprsLatticeStorage::kMmaPriority;
-                     }))
+    if (lattice.isBottom() || lattice.isTop())
       return lattice;
-    // Make a copy of the priorities map.
-    llvm::DenseMap<mlir::StringAttr, int32_t> capped = lattice.getPriorities();
-    for (auto &[key, pri] : capped)
-      pri = std::min(pri, IndexExprsLatticeStorage::kMmaPriority);
+    DictionaryAttr priorityDict = lattice.getPriorities();
+    bool needsCapping =
+        priorityDict && llvm::any_of(priorityDict, [](NamedAttribute na) {
+          return llvm::cast<IntegerAttr>(na.getValue()).getInt() >
+                 IndexExprsLatticeStorage::kMmaPriority;
+        });
+    if (!needsCapping)
+      return lattice;
+    MLIRContext *ctx = priorityDict.getContext();
+    IntegerType i32 = IntegerType::get(ctx, 32);
+    SmallVector<NamedAttribute> capped;
+    capped.reserve(priorityDict.size());
+    for (NamedAttribute na : priorityDict) {
+      int32_t priority = llvm::cast<IntegerAttr>(na.getValue()).getInt();
+      capped.emplace_back(
+          na.getName(),
+          IntegerAttr::get(
+              i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
+    }
     return IndexExprsLatticeStorage(lattice.getConcreteValue(),
-                                    std::move(capped),
+                                    DictionaryAttr::get(ctx, capped),
                                     lattice.getVectorShape());
   };
   IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
@@ -2992,10 +3003,9 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
         NamedAttribute(StringAttr::get(ctx, srcSymbol.getName()), newMapping));
   }
 
-  return IndexExprsLatticeStorage(
-      DictionaryAttr::get(ctx, permutedMappings),
-      llvm::DenseMap<StringAttr, int32_t>(inputLattice.getPriorities()),
-      inputLattice.getVectorShape());
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
+                                  inputLattice.getPriorities(),
+                                  inputLattice.getVectorShape());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(

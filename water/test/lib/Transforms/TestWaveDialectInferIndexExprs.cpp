@@ -38,8 +38,7 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr, llvm::DenseMap<StringAttr, int32_t>(),
-                         nullptr);
+        setIndexForValue(value, nullptr, DictionaryAttr(), nullptr);
         continue;
       }
 
@@ -54,24 +53,27 @@ overrideInitialization(Operation *top,
       // 6. ArrayAttr [priorityDict, indexExprs, vectorShape] - per-key
       //    priorities, dict, and vectorShape
       DictionaryAttr indexExprs = nullptr;
-      llvm::DenseMap<StringAttr, int32_t> priorities;
+      DictionaryAttr prioritiesDict = nullptr;
       bool hasPriorities = false;
       DictionaryAttr vectorShape = nullptr;
+      MLIRContext *ctx = op->getContext();
 
       auto setUniformPriority = [&](int32_t priority) {
         hasPriorities = true;
         if (indexExprs) {
+          IntegerType i32 = IntegerType::get(ctx, 32);
+          IntegerAttr priAttr = IntegerAttr::get(i32, priority);
+          SmallVector<NamedAttribute> entries;
+          entries.reserve(indexExprs.size());
           for (NamedAttribute na : indexExprs)
-            priorities[na.getName()] = priority;
+            entries.emplace_back(na.getName(), priAttr);
+          prioritiesDict = DictionaryAttr::get(ctx, entries);
         }
       };
 
       auto setPerKeyPriorities = [&](DictionaryAttr priDict) {
         hasPriorities = true;
-        for (NamedAttribute na : priDict) {
-          if (auto intAttr = llvm::dyn_cast<IntegerAttr>(na.getValue()))
-            priorities[na.getName()] = intAttr.getInt();
-        }
+        prioritiesDict = priDict;
       };
 
       if (auto arrayAttr = llvm::dyn_cast<ArrayAttr>(attr)) {
@@ -135,7 +137,7 @@ overrideInitialization(Operation *top,
       if (!hasPriorities)
         setUniformPriority(wave::IndexExprsLatticeStorage::kLowestPriority);
 
-      setIndexForValue(value, indexExprs, std::move(priorities), vectorShape);
+      setIndexForValue(value, indexExprs, prioritiesDict, vectorShape);
     }
     return success();
   };
