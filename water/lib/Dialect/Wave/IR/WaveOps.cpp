@@ -982,7 +982,7 @@ static void mixInThreadIndependentConstraints(
     Operation *where, uint64_t threadsPerWave, RangeT &&indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
-    llvm::SmallVector<NamedAttribute> &symbolMappings) {
+    llvm::SmallVectorImpl<NamedAttribute> &symbolMappings) {
 
   static_assert(
       std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
@@ -1113,7 +1113,7 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
 
 LogicalResult wave::detail::buildThreadIndependentIndexMappings(
     Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
-    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings) {
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings) {
   auto tensorType = dyn_cast<wave::WaveTensorType>(type);
   if (!tensorType)
     return failure();

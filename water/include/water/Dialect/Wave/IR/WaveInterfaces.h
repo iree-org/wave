@@ -761,7 +761,7 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
 llvm::LogicalResult buildThreadIndependentIndexMappings(
     mlir::Operation *op, mlir::Type type,
     const IndexExprsAnalysisInit &initObject,
-    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings);
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings);
 
 // Create a new vector shape dictionary attribute with only the provided symbols
 // present.

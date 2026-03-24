@@ -1401,7 +1401,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @wrong_type_gracefull_failure(
+  func.func @wrong_type_graceful_failure(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
   ) -> vector<4xf32> attributes {
