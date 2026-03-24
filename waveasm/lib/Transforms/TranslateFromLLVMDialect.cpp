@@ -453,7 +453,7 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
   // This keeps voffset starting at 0 from the adjusted base.
   Value baseOff = st.lookupBaseOffset(basePtr);
   if (baseOff && srdOp) {
-    int64_t N = srdOp.getIndex();
+    int64_t srdBase = srdOp.getIndex();
     MLIRContext *mlirCtx = builder.getContext();
 
     // Make the offset scalar, preserving width (i32 or i64).
@@ -476,10 +476,11 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     // Add to SRD base. SRDs are pinned to physical registers, so
     // the base adjustment uses register-pinned ops (same as the
     // s_and_b32/s_mov_b32 patches above).
-    PSRegType base0Type = PSRegType::get(mlirCtx, N, 1);
-    PSRegType base1Type = PSRegType::get(mlirCtx, N + 1, 1);
-    Value base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
-    Value base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
+    PSRegType base0Type = PSRegType::get(mlirCtx, srdBase, 1);
+    PSRegType base1Type = PSRegType::get(mlirCtx, srdBase + 1, 1);
+    Value base0 = PrecoloredSRegOp::create(builder, loc, base0Type, srdBase, 1);
+    Value base1 =
+        PrecoloredSRegOp::create(builder, loc, base1Type, srdBase + 1, 1);
     S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, offLo);
     S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, offHi);
   }

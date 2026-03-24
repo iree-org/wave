@@ -673,7 +673,8 @@ static LogicalResult legalizeReadFirstLane(ArithReadFirstLaneOp op,
 
   int64_t width = getRegWidth(src);
   if (width == 1) {
-    auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+    SRegType sregTy = SRegType::get(builder.getContext(), /*size=*/1,
+                                    /*alignment=*/1);
     Value lane = V_READFIRSTLANE_B32::create(builder, loc, sregTy, src);
     op.replaceAllUsesWith(lane);
     op.erase();
@@ -682,10 +683,12 @@ static LogicalResult legalizeReadFirstLane(ArithReadFirstLaneOp op,
 
   if (width == 2) {
     auto [lo, hi] = splitI64(src, builder, loc);
-    auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+    SRegType sregTy = SRegType::get(builder.getContext(), /*size=*/1,
+                                    /*alignment=*/1);
     Value loS = V_READFIRSTLANE_B32::create(builder, loc, sregTy, lo);
     Value hiS = V_READFIRSTLANE_B32::create(builder, loc, sregTy, hi);
-    auto sregPairTy = SRegType::get(builder.getContext(), 2, 2);
+    SRegType sregPairTy = SRegType::get(builder.getContext(), /*size=*/2,
+                                        /*alignment=*/2);
     Value packed =
         PackOp::create(builder, loc, sregPairTy, ValueRange{loS, hiS});
     op.replaceAllUsesWith(packed);
