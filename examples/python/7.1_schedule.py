@@ -200,7 +200,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False, shape=(1024, 1024, 8192), block=(192, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -220,7 +220,8 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
     options.wave_runtime = True
-    options.dump_intermediates = "intermediates"
+    options.coalesce_epilogue_stores = True
+    options.dump_intermediates = "build/intermediates/caolesce_epi"
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
@@ -244,6 +245,12 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
+
+    with open(
+        "build/intermediates/caolesce_epi/gemm_mxfp4_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds.mlir",
+        "w",
+    ) as f:
+        f.write(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     mode = "dynamic" if dynamic else "static"

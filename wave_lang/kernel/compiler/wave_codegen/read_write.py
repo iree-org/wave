@@ -14,6 +14,7 @@ import torch.fx as fx
 from wave_lang.kernel.wave.utils.graph_utils import propagate_loop_carried_vars
 from wave_lang.support.ir_imports import (
     Attribute,
+    BF16Type,
     DenseElementsAttr,
     IndexType,
     InsertionPoint,
@@ -31,6 +32,7 @@ from wave_lang.support.ir_imports import (
     gpu_d,
     llvm_d,
     memref_d,
+    rocdl_d,
     vector_d,
 )
 from .ir_utils import (
@@ -75,7 +77,7 @@ from .emitter import (
     get_type_or_element_type,
     handle_op,
 )
-from ...wave.constraints import TilingConstraint
+from ...wave.constraints import TilingConstraint, WorkgroupConstraint
 
 
 def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:
@@ -1143,7 +1145,30 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     )
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
-    if use_llvm_store:
+
+    is_global_mem = kb_dest.type.memory_space is None
+    is_bf16 = isinstance(element_type, BF16Type)
+    use_coalesced = (
+        emitter.options.coalesce_epilogue_stores
+        and is_bf16
+        and is_global_mem
+        and not use_llvm_store
+    )
+
+    if use_coalesced:
+        _handle_coalesced_write(
+            emitter,
+            insert_vector,
+            kb_dest,
+            output_shape,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            elements_per_thread,
+            get_custom(memory),
+            index,
+        )
+    elif use_llvm_store:
         _create_llvm_read_write(
             kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
         )
@@ -1162,6 +1187,237 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             node_index=index,
         )
+
+
+MAX_LDS_BYTES = 49120
+COALESCED_STORE_WIDTH = 8
+
+
+def _get_tile_dims(emitter: WaveEmitter, output_shape: tuple) -> tuple[int, int]:
+    """Get tile (block) dimensions from WorkgroupConstraint."""
+    tile_sizes = {}
+    for c in emitter.constraints:
+        if isinstance(c, WorkgroupConstraint):
+            tile_sizes[c.dim] = int(subs_idxc(c.tile_size))
+    tile_m = tile_sizes.get(output_shape[0], int(subs_idxc(output_shape[0])))
+    tile_n = tile_sizes.get(output_shape[1], int(subs_idxc(output_shape[1])))
+    return tile_m, tile_n
+
+
+def _handle_coalesced_write(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    mem: Value,
+    output_shape: tuple,
+    start_indices: tuple,
+    start_indices_wg: tuple,
+    start_indices_th: tuple,
+    elements_per_thread: int,
+    memory: CustomOp,
+    node_index: dict,
+):
+    """Record bf16 values and their positions for deferred LDS-transpose
+    wide stores. All actual MLIR emission happens in finalization."""
+    bf16_type = BF16Type.get()
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+
+    if emitter.epilogue_global_store_info is None:
+        idx_context = IndexingContext.current()
+        tile_m, tile_n = _get_tile_dims(emitter, output_shape)
+        total_elems = tile_m * tile_n
+
+        chunk_rows = min(tile_m, MAX_LDS_BYTES // (tile_n * 2))
+        chunk_rows = (chunk_rows // 16) * 16
+
+        stride_values = strides_from_symbolic_shape(
+            idx_context, output_shape, allow_mixed_shapes=True
+        )
+        if emitter.options.dynamic_strides:
+            strides = _get_strides_from_memref(mem)
+        else:
+            strides = [
+                gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values
+            ]
+
+        linear_mem, _ = _linearize_memref(
+            mem, start_indices_wg, [0] * len(start_indices_th), strides
+        )
+        valid_bytes = _compute_valid_bytes(mem, bf16_type, None, emitter)
+        global_buf = _cast_buffer_and_encode_stride(
+            linear_mem, strides, bf16_type, valid_bytes
+        )
+
+        emitter.epilogue_global_store_info = {
+            "global_buf": global_buf,
+            "strides": strides,
+            "tile_m": tile_m,
+            "tile_n": tile_n,
+            "chunk_rows": chunk_rows,
+        }
+
+    row_th = start_indices_th[0]
+    col_th = start_indices_th[1]
+
+    for i in range(elements_per_thread):
+        if elements_per_thread == 1:
+            single_vec = insert_vector
+            cur_row = row_th
+            cur_col = col_th
+        else:
+            elem = vector_d.extract(
+                insert_vector, static_position=[i], dynamic_position=[]
+            )
+            single_vec = vector_d.broadcast(VectorType.get([1], bf16_type), elem)
+            row_offset = arith_d.constant(IndexType.get(), i)
+            cur_row = arith_d.addi(row_th, row_offset, overflow_flags=overflow_flags)
+            cur_col = col_th
+
+        emitter.epilogue_lds_writes.append(
+            {"value": single_vec, "row": cur_row, "col": cur_col}
+        )
+
+
+def _emit_coalesced_epilogue_stores(emitter: WaveEmitter):
+    """Emit LDS writes, barrier, LDS read-back, and wide global stores.
+    Processes in row-chunks to fit within LDS limits."""
+    bf16_type = BF16Type.get()
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw
+    address_space = Attribute.parse("#gpu.address_space<workgroup>")
+    info = emitter.epilogue_global_store_info
+    tile_m = info["tile_m"]
+    tile_n = info["tile_n"]
+    chunk_rows = info["chunk_rows"]
+    global_buf = info["global_buf"]
+    global_stride = info["strides"][0]
+    writes = emitter.epilogue_lds_writes
+
+    lds_elems = chunk_rows * tile_n
+    lds_alloc_elems = lds_elems + COALESCED_STORE_WIDTH
+    lds_type = MemRefType.get([lds_alloc_elems], bf16_type, None, address_space)
+    lds_buf = memref_d.alloc(lds_type, [], [])
+
+    hw = emitter.hardware_constraint
+    threads_per_block_x = int(subs_idxc(hw.threads_per_block[0]))
+    threads_per_block_y = int(subs_idxc(hw.threads_per_block[1]))
+    num_threads = threads_per_block_x * threads_per_block_y
+
+    wide_vec_type = VectorType.get([COALESCED_STORE_WIDTH], bf16_type)
+    num_chunks = (tile_m + chunk_rows - 1) // chunk_rows
+
+    flat_tid_y = arith_d.muli(
+        emitter.thread_ids[1],
+        arith_d.constant(IndexType.get(), threads_per_block_x),
+        overflow_flags=overflow_flags,
+    )
+    flat_tid = arith_d.addi(
+        emitter.thread_ids[0], flat_tid_y, overflow_flags=overflow_flags
+    )
+
+    tile_n_val = arith_d.constant(IndexType.get(), tile_n)
+    width_val = arith_d.constant(IndexType.get(), COALESCED_STORE_WIDTH)
+
+    for chunk_idx in range(num_chunks):
+        chunk_start = chunk_idx * chunk_rows
+        chunk_end = min(chunk_start + chunk_rows, tile_m)
+        actual_rows = chunk_end - chunk_start
+        chunk_elems = actual_rows * tile_n
+
+        chunk_start_val = arith_d.constant(IndexType.get(), chunk_start)
+        chunk_end_val = arith_d.constant(IndexType.get(), chunk_end)
+
+        for w in writes:
+            row = w["row"]
+            col = w["col"]
+            value = w["value"]
+
+            in_chunk = arith_d.cmpi(arith_d.CmpIPredicate.uge, row, chunk_start_val)
+            below_end = arith_d.cmpi(arith_d.CmpIPredicate.ult, row, chunk_end_val)
+            in_range = arith_d.andi(in_chunk, below_end)
+
+            local_row = arith_d.subi(row, chunk_start_val)
+            lds_offset = arith_d.muli(
+                local_row, tile_n_val, overflow_flags=overflow_flags
+            )
+            lds_offset = arith_d.addi(lds_offset, col, overflow_flags=overflow_flags)
+            oob_lds = arith_d.constant(IndexType.get(), lds_elems)
+            selected_lds = arith_d.select(in_range, lds_offset, oob_lds)
+            vector_d.store(value, lds_buf, [selected_lds])
+
+        rocdl_d.s_barrier()
+
+        stores_total = chunk_elems // COALESCED_STORE_WIDTH
+        stores_per_thread = stores_total // num_threads
+
+        chunk_start_row_val = arith_d.constant(IndexType.get(), chunk_start)
+
+        base_store_idx = arith_d.muli(
+            flat_tid,
+            arith_d.constant(IndexType.get(), stores_per_thread),
+            overflow_flags=overflow_flags,
+        )
+
+        for s in range(stores_per_thread):
+            store_idx = arith_d.addi(
+                base_store_idx,
+                arith_d.constant(IndexType.get(), s),
+                overflow_flags=overflow_flags,
+            )
+            lds_read_offset = arith_d.muli(
+                store_idx, width_val, overflow_flags=overflow_flags
+            )
+            wide_vec = vector_d.load(wide_vec_type, lds_buf, [lds_read_offset])
+
+            row_in_chunk = arith_d.divui(lds_read_offset, tile_n_val)
+            col = arith_d.remui(lds_read_offset, tile_n_val)
+            row = arith_d.addi(
+                row_in_chunk, chunk_start_row_val, overflow_flags=overflow_flags
+            )
+            global_offset = arith_d.muli(
+                row, global_stride, overflow_flags=overflow_flags
+            )
+            global_offset = arith_d.addi(
+                global_offset, col, overflow_flags=overflow_flags
+            )
+            vector_d.store(wide_vec, global_buf, [global_offset])
+
+        remainder = stores_total % num_threads
+        if remainder > 0:
+            extra_store_idx = arith_d.addi(
+                arith_d.constant(IndexType.get(), stores_per_thread * num_threads),
+                flat_tid,
+                overflow_flags=overflow_flags,
+            )
+            extra_lds_offset = arith_d.muli(
+                extra_store_idx, width_val, overflow_flags=overflow_flags
+            )
+
+            bound_val = arith_d.constant(IndexType.get(), stores_total)
+            in_bounds = arith_d.cmpi(
+                arith_d.CmpIPredicate.ult, extra_store_idx, bound_val
+            )
+            oob_offset = arith_d.constant(
+                IndexType.get(), _get_out_of_bounds_index(bf16_type)
+            )
+
+            selected_lds_r = arith_d.select(in_bounds, extra_lds_offset, oob_offset)
+            wide_vec = vector_d.load(wide_vec_type, lds_buf, [selected_lds_r])
+
+            row_in_chunk = arith_d.divui(extra_lds_offset, tile_n_val)
+            col = arith_d.remui(extra_lds_offset, tile_n_val)
+            row = arith_d.addi(
+                row_in_chunk, chunk_start_row_val, overflow_flags=overflow_flags
+            )
+            global_offset = arith_d.muli(
+                row, global_stride, overflow_flags=overflow_flags
+            )
+            global_offset = arith_d.addi(
+                global_offset, col, overflow_flags=overflow_flags
+            )
+            selected_global = arith_d.select(in_bounds, global_offset, oob_offset)
+            vector_d.store(wide_vec, global_buf, [selected_global])
+
+        if chunk_idx < num_chunks - 1:
+            rocdl_d.s_barrier()
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:

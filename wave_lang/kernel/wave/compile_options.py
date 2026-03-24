@@ -103,6 +103,7 @@ class WaveCompileOptions:
     use_bound_check: bool = False
     specialize: bool = False
     eliminate_epilogue: bool = False
+    coalesce_epilogue_stores: bool = False
 
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop
