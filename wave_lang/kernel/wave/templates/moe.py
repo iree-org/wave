@@ -352,12 +352,15 @@ def get_moe_gemm_only_kernel(
         tkw.write(gemm_compute, c_back, mapping=c_back_write_map)
 
     block_m = min(m, 64)
+    # BLOCK_N=128 gives ~1.7x speedup over 32 on RDNA4 by doubling N-tile
+    # reuse per wave. Cap at n to avoid overflowing the N dimension.
+    block_n = min(n, 128)
     hyperparams: dict[str | IndexSymbol, Any] = {
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: block_m,
-        BLOCK_N: 32,
+        BLOCK_N: block_n,
         BLOCK_K: 32,
         M: m,
         N: n,

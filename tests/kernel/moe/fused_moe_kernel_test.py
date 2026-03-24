@@ -18,15 +18,17 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.lang import DataType
 from wave_lang.kernel._support.dtype import f16
 from wave_lang.kernel.wave.templates.moe import (
-    get_moe_gemm_only_kernel,
+    compile_moe_align_kernels,
+    get_fused_silu_block_space_kernel,
     get_moe_gather_kernel,
-    get_moe_scatter_kernel,
+    get_moe_gemm_only_kernel,
+    get_moe_histogram_kernel,
+    get_moe_pad_cumsum_kernel,
     get_moe_reduce_sum_kernel,
+    get_moe_scatter_kernel,
     get_silu_and_mul_kernel,
     get_topk_kernel,
-    compile_moe_align_kernels,
     moe_align_block_size,
-    get_fused_silu_block_space_kernel,
 )
 import torch.nn.functional as F
 
@@ -432,6 +434,169 @@ def tkw_moe_fused_silu(a, w1, w2, score, topk, num_experts, block_size, num_toke
     return final_out
 
 
+_SKIP_RDNA = pytest.mark.skipif(
+    get_arch_family() != "RDNA", reason="Requires RDNA4 GPU (gfx120x)"
+)
+
+# ---------------------------------------------------------------------------
+# Unit tests — smallest kernels first
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_RDNA
+def test_moe_histogram():
+    # numel must be >= HIST_BLOCK (32) to avoid partial-workgroup OOB reads.
+    # 32 elements: each of 4 experts appears exactly 8 times.
+    topk_ids = torch.tensor([0, 1, 2, 3] * 8, dtype=torch.int32, device="cuda")
+    expert_counts = torch.zeros(4, dtype=torch.int32, device="cuda")
+    dummy = torch.empty(32, dtype=torch.int32, device="cuda")
+    _compile_kernel(*get_moe_histogram_kernel(32, 4))(topk_ids, expert_counts, dummy)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(
+        expert_counts, torch.tensor([8, 8, 8, 8], dtype=torch.int32, device="cuda")
+    )
+
+
+@_SKIP_RDNA
+def test_moe_pad_cumsum():
+    expert_counts = torch.tensor([3, 2, 5, 1], dtype=torch.int32, device="cuda")
+    padded = torch.zeros(4, dtype=torch.int32, device="cuda")
+    cumsum = torch.zeros(4, dtype=torch.int32, device="cuda")
+    cum_excl = torch.zeros(4, dtype=torch.int32, device="cuda")
+    dummy = torch.empty(4, dtype=torch.int32, device="cuda")
+    _compile_kernel(*get_moe_pad_cumsum_kernel(4, 4))(
+        expert_counts, padded, cumsum, cum_excl, dummy
+    )
+    torch.cuda.synchronize()
+    torch.testing.assert_close(
+        padded, torch.tensor([4, 4, 8, 4], dtype=torch.int32, device="cuda")
+    )
+    torch.testing.assert_close(
+        cumsum, torch.tensor([4, 8, 16, 20], dtype=torch.int32, device="cuda")
+    )
+    torch.testing.assert_close(
+        cum_excl, torch.tensor([0, 4, 8, 16], dtype=torch.int32, device="cuda")
+    )
+
+
+@_SKIP_RDNA
+def test_moe_silu_and_mul():
+    m, n = 8, 32
+    x = torch.randn(m, 2 * n, dtype=torch.float32, device="cuda")
+    out = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    get_wave_silu_and_mul_kernel(m, n, tkl.f32)(x, out)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, F.silu(x[:, :n]) * x[:, n:], rtol=1e-3, atol=1e-3)
+
+
+@_SKIP_RDNA
+def test_fused_silu_block_space():
+    num_blocks, m, n = 4, 8, 32
+    c_back = torch.randn(num_blocks, m, 2 * n, dtype=torch.float32, device="cuda")
+    a_out = torch.zeros(num_blocks, m, n, dtype=torch.float16, device="cuda")
+    get_wave_fused_silu_block_space(num_blocks, m, n, tkl.f32)(c_back, a_out)
+    torch.cuda.synchronize()
+    ref = (F.silu(c_back[..., :n]) * c_back[..., n:]).half()
+    torch.testing.assert_close(a_out, ref, rtol=1e-2, atol=1e-2)
+
+
+@_SKIP_RDNA
+def test_moe_gather():
+    m, k, num_blocks, block_size = 8, 64, 2, 4
+    pad_value = m
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    sorted_ids = torch.tensor(
+        [0, 2, 4, 1, 3, 5, m, m], dtype=torch.int32, device="cuda"
+    )
+    a_back = torch.zeros(num_blocks, m, k, dtype=torch.float16, device="cuda")
+    dummy = torch.empty(num_blocks * block_size, dtype=torch.int32, device="cuda")
+    get_wave_moe_gather(m, k, num_blocks, block_size, pad_value)(
+        sorted_ids, a, a_back, dummy
+    )
+    torch.cuda.synchronize()
+    ids = sorted_ids.tolist()
+    for blk in range(num_blocks):
+        for slot in range(block_size):
+            idx = ids[blk * block_size + slot]
+            if idx < pad_value:
+                torch.testing.assert_close(a_back[blk, slot], a[idx])
+
+
+@_SKIP_RDNA
+def test_moe_scatter():
+    m, k, num_blocks, block_size = 8, 64, 2, 4
+    pad_value = m
+    c_back = torch.randn(num_blocks, m, k, dtype=torch.float32, device="cuda")
+    sorted_ids = torch.tensor(
+        [0, 2, 4, 1, 3, 5, m, m], dtype=torch.int32, device="cuda"
+    )
+    output = torch.zeros(m, k, dtype=torch.float32, device="cuda")
+    dummy = torch.empty(num_blocks * block_size, dtype=torch.int32, device="cuda")
+    get_wave_moe_scatter(m, k, num_blocks, block_size, pad_value)(
+        sorted_ids, c_back, output, dummy
+    )
+    torch.cuda.synchronize()
+    ids = sorted_ids.tolist()
+    for blk in range(num_blocks):
+        for slot in range(block_size):
+            idx = ids[blk * block_size + slot]
+            if idx < pad_value:
+                torch.testing.assert_close(output[idx], c_back[blk, slot])
+
+
+@_SKIP_RDNA
+def test_moe_gemm_only():
+    m, n, k, e, num_blocks = 32, 64, 64, 2, 2
+    a_back = torch.randn(num_blocks, m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(e, n, k, dtype=torch.float16, device="cuda")
+    expert_ids = torch.zeros(num_blocks, dtype=torch.int32, device="cuda")
+    c_back = torch.zeros(num_blocks, m, n, dtype=torch.float32, device="cuda")
+    get_wave_moe_gemm_only(
+        m, n, k, e, num_blocks, MMAType.RDNA4_WAVE32_F32_16x16x16_F16, f16
+    )(a_back, b, expert_ids, c_back)
+    torch.cuda.synchronize()
+    for blk in range(num_blocks):
+        ref = a_back[blk].float() @ b[expert_ids[blk].item()].float().T
+        torch.testing.assert_close(c_back[blk, :m], ref, rtol=2e-2, atol=2e-2)
+
+
+@_SKIP_RDNA
+def test_moe_reduce_sum():
+    b, topk, d = 4, 2, 32
+    a = torch.randn(b, topk, d, dtype=torch.float32, device="cuda")
+    weights = torch.rand(b, topk, dtype=torch.float32, device="cuda")
+    c = torch.zeros(b, d, dtype=torch.float32, device="cuda")
+    get_wave_reduce_sum_kernel(b, topk, d, tkl.f32)(a, weights, c)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(
+        c, (a * weights.unsqueeze(-1)).sum(dim=1), rtol=1e-3, atol=1e-3
+    )
+
+
+@_SKIP_RDNA
+def test_moe_align_block_size():
+    num_experts, block_size = 4, 4
+    # 16 tokens × topk=2 = 32 elements (>= HIST_BLOCK=32): each expert gets 8.
+    topk_ids = torch.tensor([0, 1, 2, 3] * 8, dtype=torch.int32, device="cuda")
+    numel = topk_ids.numel()
+    max_np = numel + num_experts * (block_size - 1)
+    max_nb = -(max_np // -block_size)
+    aks = compile_moe_align_kernels(numel, num_experts, block_size, max_np, max_nb)
+    expert_ids_out, sorted_ids_out, expert_counts, *_ = moe_align_block_size(
+        topk_ids, num_experts, block_size, max_np, max_nb, compiled_kernels=aks
+    )
+    torch.testing.assert_close(
+        expert_counts,
+        torch.full((num_experts,), 8, dtype=torch.int32, device="cuda"),
+    )
+    valid = sorted_ids_out[sorted_ids_out < numel]
+    assert valid.numel() == numel, "sorted_ids should contain all token indices"
+
+
+# ---------------------------------------------------------------------------
+# Integration test parameters
+# ---------------------------------------------------------------------------
+
 num_tokens_values = [32, 64]
 n_values = [64, 128]
 k_values = [128, 256]
@@ -441,7 +606,7 @@ dtypes = [torch.float16]
 block_size_values = [4]
 
 
-@pytest.mark.skipif(get_arch_family() != "RDNA", reason="Requires RDNA4 GPU (gfx120x)")
+@_SKIP_RDNA
 @pytest.mark.parametrize("num_tokens", num_tokens_values)
 @pytest.mark.parametrize("n", n_values)
 @pytest.mark.parametrize("k", k_values)
@@ -502,7 +667,7 @@ def test_fused_moe(
     )
 
 
-@pytest.mark.skipif(get_arch_family() != "RDNA", reason="Requires RDNA4 GPU (gfx120x)")
+@_SKIP_RDNA
 @pytest.mark.parametrize("num_tokens", num_tokens_values)
 @pytest.mark.parametrize("n", n_values)
 @pytest.mark.parametrize("k", k_values)
