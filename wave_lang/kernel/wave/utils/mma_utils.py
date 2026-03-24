@@ -138,8 +138,9 @@ def get_mma_dimensional_mapping(
         if isinstance(custom, ScaledMMA):
             mapping[custom][k_scale] = MMAOperand.K
 
-        if hardware_constraint.vector_shapes:
-            custom.vector_shapes.update(hardware_constraint.vector_shapes)
+        for key, value in (hardware_constraint.vector_shapes or {}).items():
+            if key not in custom.vector_shapes:
+                custom.vector_shapes[key] = value
         custom.reduction_dim = k
 
         # Since expansion proceeds bottom-up, we set the vector shapes

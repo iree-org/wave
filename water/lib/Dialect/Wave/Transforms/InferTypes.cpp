@@ -1341,8 +1341,8 @@ public:
     for (auto &&[parent, attr] : constraints) {
       wave::WaveHyperparameterAttr hyperparams =
           wave::getHyperparameters(parent);
-      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
-                                                             attr, hyperparams);
+      auto initObject =
+          wave::IndexExprsAnalysisInit::create(parent, attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
       WalkResult walkResult = parent->walk([&](Operation *op) -> WalkResult {
@@ -1669,8 +1669,8 @@ public:
     for (auto &&[parent, attr] : constraints) {
       wave::WaveHyperparameterAttr hyperparams =
           wave::getHyperparameters(parent);
-      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
-                                                             attr, hyperparams);
+      auto initObject =
+          wave::IndexExprsAnalysisInit::create(parent, attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
 
@@ -1986,10 +1986,72 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         };
 
         SmallVector<Value> valuesForIndexExpr;
+        SmallVector<Attribute> indexExprs;
+
+        // Special case for MMA operations. We always set their index attribute
+        // to whatever is implied by the MMA kind regardless of the values
+        // inferred for operands because MMAs must retain their specific index
+        // expressions.
+        // TODO: this shouldn't strictly necessary in a purely MLIR flow and is
+        // kept for Python compatibility.
         std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
             iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
-        SmallVector<Attribute> indexExprs;
         indexExprs.reserve(valuesForIndexExpr.size());
+        if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation())) {
+          SmallVector<wave::IndexExprsLatticeStorage> operandLattices;
+          operandLattices.resize(3, wave::IndexExprsLatticeStorage::bottom());
+          wave::EmitDelayedErrorFn delayedError;
+          Attribute constraints;
+          // TODO(#1049): this is not ideal, especially when combined with
+          // getting hyperparameters below, we could just have a double walk
+          // with a kernel operation first if we had one, or even do a
+          // per-kernel pass.
+          for (Operation *parent = mma->getParentOp(); parent && !constraints;
+               parent = parent->getParentOp()) {
+            constraints = parent->getAttrOfType<ArrayAttr>(
+                wave::WaveDialect::kWaveConstraintsAttrName);
+          }
+          if (!constraints) {
+            mma->emitError("constraints not found");
+            return WalkResult::interrupt();
+          }
+          FailureOr<wave::IndexExprsAnalysisInit> init =
+              wave::IndexExprsAnalysisInit::create(
+                  mma, constraints, wave::getHyperparameters(mma));
+          if (failed(init)) {
+            return WalkResult::interrupt();
+          }
+          if (failed(mma.initializeIndexExprsBackward(
+                  operandLattices, *init, [&]() { return mma->emitError(); },
+                  delayedError))) {
+            if (delayedError) {
+              InFlightDiagnostic diag = mma->emitError();
+              delayedError(diag);
+            }
+            return WalkResult::interrupt();
+          }
+
+          for (auto &&[i, lattice] : llvm::enumerate(operandLattices)) {
+            SmallString<32> description;
+            llvm::raw_svector_ostream os(description);
+            descriptionGenerator(os, i);
+            [[maybe_unused]] LogicalResult logicalResult =
+                detail::checkAndAppendIndexExpr(mma->getLoc(), lattice,
+                                                description, indexExprs);
+            assert(succeeded(logicalResult) &&
+                   "failed to append implied index expression, it must not be "
+                   "bottom/top");
+          }
+          if (failed(detail::checkAndAppendIndexExpr(
+                  mma->getLoc(), getLatticeValue(mma.getResult()), "mma result",
+                  indexExprs)))
+            return WalkResult::interrupt();
+
+          iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                         ArrayAttr::get(iface->getContext(), indexExprs));
+          return WalkResult::advance();
+        }
+
         for (auto &&[i, value] : llvm::enumerate(valuesForIndexExpr)) {
           llvm::SmallString<32> description;
           llvm::raw_svector_ostream os(description);

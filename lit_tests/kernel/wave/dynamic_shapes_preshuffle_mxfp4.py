@@ -101,22 +101,26 @@ def test_dynamic_preshuffle_b_mxfp4_eliminate_epilogue():
     # 2. No scf.if guard — simplification proves it always satisfied.
     # CHECK-NOT: scf.if
 
-    # 3. Pipelined loop steps by 2 (unroll factor 2, no epilogue to peel off).
+    # 3. Dynamic valid bytes: runtime total clamped to hw SRD limit
+    #    (appears in prologue, before the loop).
+    # CHECK: arith.minui %{{.*}}, %c2147483646_i64 : i64
+
+    # 4. Pipelined loop steps by 2 (unroll factor 2, no epilogue to peel off).
     # CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c2
 
-    # 4. Loop carries vector iter_args (epilogue folded in).
+    # 5. Loop carries vector iter_args (epilogue folded in).
     # CHECK-SAME: vector<4xf32>
 
-    # 5. OOB guard: arith.select chooses real validBytes vs 0 for out-of-range
-    #    iterations, so the hardware returns zeros on OOB loads.
-    # CHECK: arith.select %{{.*}}, %c2147483646_i64, %c0_i64 : i64
+    # 6. OOB guard: arith.select chooses clamped validBytes vs 0 for
+    #    out-of-range iterations, so the hardware returns zeros on OOB loads.
+    # CHECK: arith.select %{{.*}}, %{{.*}}, %c0_i64 : i64
 
-    # 6. fat_raw_buffer_cast uses the dynamically selected validBytes.
+    # 7. fat_raw_buffer_cast uses the dynamically selected validBytes.
     # CHECK: amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}})
 
-    # 7. scaled_mfma inside the pipelined loop.
+    # 8. scaled_mfma inside the pipelined loop.
     # CHECK: amdgpu.scaled_mfma
 
-    # 8. Loop body ends; no epilogue mfma between loop end and scf.yield.
+    # 9. Loop body ends; no epilogue mfma between loop end and scf.yield.
     # CHECK: scf.yield
     # CHECK-NEXT: }

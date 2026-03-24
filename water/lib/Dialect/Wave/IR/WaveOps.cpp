@@ -462,169 +462,20 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   return ChangeResult::Change;
 }
 
-// Update index expressions of the result of the MMA operation.
+// No propagation through MMA. The index expressions remain the same as set by
+// initialization since MMAs require very specific index expressions. If there
+// is a conflict with operands that were propagated from another MMA (other
+// operations have lower priority), it will be resolved in a separate pass after
+// the analysis completes.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-  if (!resultType)
-    return updateIfChanged(resultExprs[0],
-                           wave::IndexExprsLatticeStorage::top());
-
-  // Join LHS (ignoring M symbol), RHS, and accumulator lattices into result.
-  unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  wave::IndexExprsLatticeStorage resultLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  // LHS: ignore M symbol since it has different indexing in LHS vs result.
-  if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    Attribute mSymbol = lhsType.getShape().drop_back().back();
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
-  }
-
-  // RHS: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getRhs().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[rhsOperandNumber]);
-  }
-
-  // Accumulator: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getAccumulator().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[accumulatorOperandNumber]);
-  }
-
-  resultLattice = resultLattice.keepOnlySymbols(resultType.getShape());
-  wave::IndexExprsLatticeStorage newResultLattice =
-      wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
-
-  if (newResultLattice.isTop() && !resultExprs[0].isTop()) {
-    InFlightDiagnostic diag =
-        emitError()
-        << "conflict when propagating forward to the result lattice in MmaOp";
-    diag.attachNote() << "Result lattice: " << resultExprs[0];
-    diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-    diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-    diag.attachNote() << "Accumulator lattice: "
-                      << operandExprs[accumulatorOperandNumber];
-    return diag;
-  }
-
-  return updateIfChanged(resultExprs[0], newResultLattice);
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
-
-// Update index expressions of the operands of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  const unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  const unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  const unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  // Create separate lattices for operands (ignoring M symbol from results)
-  // and accumulator (with all symbols).
-  wave::IndexExprsLatticeStorage operandLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-  wave::IndexExprsLatticeStorage accumulatorLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  for (const wave::IndexExprsLatticeStorage &resultExpr : resultExprs) {
-    auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-    if (!resultType)
-      continue;
-
-    // For LHS/RHS operands, ignore M symbol.
-    Attribute mSymbol = resultType.getShape().drop_back().back();
-    operandLattice = wave::IndexExprsLatticeStorage::join(
-        operandLattice, resultExpr, {mSymbol});
-
-    // For accumulator, use all symbols.
-    accumulatorLattice =
-        wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
-  }
-
-  ChangeResult changeResult = ChangeResult::NoChange;
-
-  // Propagate to LHS (operand 0).
-  if (auto lhsType = llvm::dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(lhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[lhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[lhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to LHS from result in MmaOp";
-      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[lhsOperandNumber]) {
-      operandExprs[lhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to RHS (operand 1).
-  if (auto rhsType = llvm::dyn_cast<wave::WaveTensorType>(getRhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(rhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[rhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[rhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to RHS from result in MmaOp";
-      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[rhsOperandNumber]) {
-      operandExprs[rhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to accumulator (operand 2).
-  if (auto accType =
-          llvm::dyn_cast<wave::WaveTensorType>(getAccumulator().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        accumulatorLattice.keepOnlySymbols(accType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(
-            operandExprs[accumulatorOperandNumber], filtered);
-
-    if (newLattice.isTop() && !operandExprs[accumulatorOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to accumulator from result in MmaOp";
-      diag.attachNote() << "accumulator lattice: "
-                        << operandExprs[accumulatorOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[accumulatorOperandNumber]) {
-      operandExprs[accumulatorOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  return changeResult;
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
 
 // Check if the given type is one of the allowed types provided as template
@@ -1172,14 +1023,21 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "MMA result",
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), symbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority),
+          DictionaryAttr::get(getContext(), symbolMappings), priority),
       "implied by MMA kind", emitError);
 }
 
@@ -1248,18 +1106,24 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
         return attr.getName() != mSymbol.getName();
       });
 
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), lhsSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              DictionaryAttr::get(getContext(), lhsSymbolMappings), priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), rhsSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              DictionaryAttr::get(getContext(), rhsSymbolMappings), priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1267,7 +1131,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
           "accumulator",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              priority),
           "implied by MMA kind", emitError)))
     return failure();
   return success();
@@ -2432,15 +2296,26 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  auto joined =
-      IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
-
-  // XXX: if sideways propagation would result in a new conflict, don't
-  // propagate. This is a questionable design carried over from the initial
-  // Python prototype.
-  if (joined.isTop() && !(operandExprs[0].isTop() || operandExprs[1].isTop())) {
+  // XXX: If both are propagating from MMAs, temporarily assume equal priority
+  // (ignore order of MMAs). If sideways propagation would result in a new
+  // conflict in this case, don't propagate. This is a questionable design
+  // carried over from the initial Python prototype.
+  auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
+    if (lattice.isBottom() || lattice.isTop() ||
+        lattice.getPriority() < IndexExprsLatticeStorage::kMmaPriority)
+      return lattice;
+    return IndexExprsLatticeStorage(lattice.getConcreteValue(),
+                                    IndexExprsLatticeStorage::kMmaPriority);
+  };
+  IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
+  IndexExprsLatticeStorage rhs = forceMmaPriority(operandExprs[1]);
+  auto joined = IndexExprsLatticeStorage::join(lhs, rhs);
+  if (joined.isTop() && !(lhs.isTop() || rhs.isTop())) {
     return ChangeResult::NoChange;
   }
+
+  // Re-join with the original expressions to get the right priority.
+  joined = IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
 
   ChangeResult changeResult = ChangeResult::NoChange;
   if (operandExprs[0] != joined) {

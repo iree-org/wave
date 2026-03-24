@@ -9,114 +9,6 @@
 //
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @simple_mma(
-    %lhs: !wave.tensor<[@M, @K] of f16>,
-    %rhs: !wave.tensor<[@N, @K] of f16>,
-    %acc: !wave.tensor<[@M, @N] of f32>
-  ) -> !wave.tensor<[@M, @N] of f32> attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]
-  } {
-    %lhs_override = wave.read %lhs { wave_test.override_result_index = [[3, {
-        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    }]]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
-    // expected-error @below {{conflict when propagating forward to the result lattice in MmaOp}}
-    // expected-note @below {{Result lattice}}
-    // expected-note @below {{LHS lattice}}
-    // expected-note @below {{RHS lattice}}
-    // expected-note @below {{Accumulator lattice}}
-    %r = wave.mma %lhs_override, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
-         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
-         -> !wave.tensor<[@M, @N] of f32>
-    return %r : !wave.tensor<[@M, @N] of f32>
-  }
-}
-
-// -----
-
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @simple_mma(
-    %lhs: !wave.tensor<[@M, @K] of f16>,
-    %rhs: !wave.tensor<[@N, @K] of f16>,
-    %acc: !wave.tensor<[@M, @N] of f32>
-  ) -> !wave.tensor<[@M, @N] of f32> attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]
-  } {
-    // expected-error @below {{conflict for LHS index expression when propagating from implied by MMA kind lattice}}
-    // expected-note @below {{implied by MMA kind lattice}}
-    // expected-note @below {{original LHS lattice}}
-    %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
-      wave_test.override_result_index = [[3,
-        {K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}
-      ]]
-    }
-         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
-         -> !wave.tensor<[@M, @N] of f32>
-    return %r : !wave.tensor<[@M, @N] of f32>
-  }
-}
-
-// -----
-
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @simple_mma(
-    %lhs: !wave.tensor<[@M, @K] of f16>,
-    %rhs: !wave.tensor<[@N, @K] of f16>,
-    %acc: !wave.tensor<[@M, @N] of f32>
-  ) -> !wave.tensor<[@M, @N] of f32> attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]
-  } {
-    // expected-error @below {{conflict when propagating to RHS from result in MmaOp}}
-    // expected-note @below {{RHS lattice}}
-    // expected-note @below {{result lattice}}
-    %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
-      wave_test.override_operand_index = [
-        unit,
-        [3, {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}]
-      ]
-    }
-         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
-         -> !wave.tensor<[@M, @N] of f32>
-    return %r : !wave.tensor<[@M, @N] of f32>
-  }
-}
-
-// -----
-
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @simple_mma(
-    %lhs: !wave.tensor<[@M, @K] of f16>,
-    %rhs: !wave.tensor<[@N, @K] of f16>,
-    %acc: !wave.tensor<[@M, @N] of f32>
-  ) -> !wave.tensor<[@M, @N] of f32> attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]
-  } {
-    // expected-error @below {{conflict when propagating to accumulator from result in MmaOp}}
-    // expected-note @below {{accumulator lattice}}
-    // expected-note @below {{result lattice}}
-    %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
-      wave_test.override_operand_index = [
-        unit,
-        unit,
-        [3, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>}]
-      ]
-    }
-         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
-         -> !wave.tensor<[@M, @N] of f32>
-    return %r : !wave.tensor<[@M, @N] of f32>
-  }
-}
-
-// -----
-
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @add_then_mul(
     %a: !wave.tensor<[@M, @K] of f16>,
     %b: !wave.tensor<[@M, @K] of f16>,
@@ -1124,7 +1016,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // Override the value-to-store operand with the index expression implied by
     // write to avoid sideways propagation. This will hit an error during
-    // initializaiton rather than during propagation.
+    // initialization rather than during propagation.
     // expected-error @below {{conflict for memory index expression when propagating from implied by write operation lattice}}
     // expected-note @below {{original memory lattice}}
     // expected-note @below {{implied by write operation lattice}}
@@ -1161,6 +1053,38 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // expected-note @below {{original LHS lattice}}
     // expected-note @below {{implied by MMA kind lattice}}
     %r = wave.mma %lhs_bad, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+         -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @mma_lhs_vs_implied(
+    %lhs: !wave.tensor<[@M, @K] of f16>,
+    %rhs: !wave.tensor<[@N, @K] of f16>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                vector_shapes = {M = 16, N = 16, K = 16}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (64)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (64)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 128}>
+  } {
+    // Forcibly setting the result lattice to top to check index attribute generation.
+    // This triggers an additional error because reaching top through the normal process
+    // would have been reported earlier and would have aborted the inference before
+    // reaching this point.
+    // expected-error @below {{conflict detected in index expressions for mma result}}
+    // expected-note @below {{PLEASE REPORT}}
+    %r = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>,
+      wave_test.override_result_index = ["<top>"]
+    }
          : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
          -> !wave.tensor<[@M, @N] of f32>
     return %r : !wave.tensor<[@M, @N] of f32>

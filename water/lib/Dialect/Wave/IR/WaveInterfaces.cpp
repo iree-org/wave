@@ -878,13 +878,18 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
 }
 
 llvm::FailureOr<wave::IndexExprsAnalysisInit>
-wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
+wave::IndexExprsAnalysisInit::create(Operation *parent,
+                                     Attribute constraintsAttr,
                                      wave::WaveHyperparameterAttr hyperparams) {
+  Location loc = parent->getLoc();
   wave::IndexExprsAnalysisInit initObject;
   initObject.hardwareConstraint =
       parseWaveConstraints(loc, constraintsAttr, initObject.symbolConstraints);
   if (initObject.hardwareConstraint == nullptr)
     return llvm::failure();
+
+  parent->walk(
+      [&](Operation *op) { initObject.deterministicOpOrder.push_back(op); });
 
   // If waves_per_block is explicitly provided, copy it to storage. Note that we
   // have verified they match the result of dividing block tiles with wave tiles
@@ -1206,9 +1211,9 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
       lhs.getContext(), allSymbols, *joinedStart, *joinedStep, *joinedStride);
 }
 
-wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
-    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
-    llvm::ArrayRef<Attribute> ignoredRhsSymbols) {
+wave::IndexExprsLatticeStorage
+wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
+                                     const IndexExprsLatticeStorage &rhs) {
   if (lhs == rhs)
     return lhs;
 
@@ -1216,30 +1221,9 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
   if (lhs.isTop() || rhs.isTop())
     return top();
 
-  // Only named symbols may be ignored.
-  llvm::StringSet<> ignoredRhsSymbolNames;
-  for (Attribute attr : ignoredRhsSymbols) {
-    auto symbolAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(attr);
-    if (!symbolAttr)
-      continue;
-    ignoredRhsSymbolNames.insert(symbolAttr.getName());
-  }
-
-  // Even if LHS is bottom, we still need to filter out ignored symbols.
-  if (lhs.isBottom()) {
-    if (ignoredRhsSymbols.empty() || rhs.isBottom())
-      return rhs;
-
-    llvm::SmallVector<NamedAttribute> filtered = llvm::filter_to_vector(
-        rhs.getConcreteValue(), [&](NamedAttribute namedAttr) {
-          return !ignoredRhsSymbolNames.contains(
-              namedAttr.getName().getValue());
-        });
-    return IndexExprsLatticeStorage(
-        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered),
-        rhs.getPriority());
-  }
-
+  // Bottom is neutral.
+  if (lhs.isBottom())
+    return rhs;
   if (rhs.isBottom())
     return lhs;
 
@@ -1253,9 +1237,6 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     result[namedAttr.getName()] = namedAttr.getValue();
   }
   for (NamedAttribute namedAttr : rhsValue) {
-    if (ignoredRhsSymbolNames.contains(namedAttr.getName().getValue()))
-      continue;
-
     // If the mapping for the symbol doesn't exist in the result yet, just take
     // it from the RHS.
     auto [it, inserted] =
