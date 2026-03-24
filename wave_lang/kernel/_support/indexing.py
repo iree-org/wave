@@ -1,5 +1,6 @@
 from __future__ import annotations  # Needed to defer IndexSequence type evaluation
 import copy
+import warnings
 from abc import ABC
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional, Type, TypeVar, Union
@@ -84,8 +85,8 @@ def subs_idxc(
 
 
 def _resolve_chained_subs(
-    subs: dict[IndexSymbol, int | IndexSymbol],
-) -> dict[IndexSymbol, int | IndexSymbol]:
+    subs: dict[IndexSymbol, int | IndexExpr],
+) -> dict[IndexSymbol, int | IndexExpr]:
     """Resolve chained dependencies in a substitution dictionary.
 
     When a substitution dict has ``{K: 8192, K_SCALE: K // 32}``, a single
@@ -100,7 +101,7 @@ def _resolve_chained_subs(
     never modified.
     """
     all_keys = set(subs.keys())
-    resolved: dict = {}
+    resolved: dict[IndexSymbol, int | IndexExpr] = {}
     pending = dict(subs)
 
     while pending:
@@ -109,7 +110,7 @@ def _resolve_chained_subs(
             if not isinstance(val, sympy.Basic):
                 ready.append(key)
                 continue
-            deps = (val.free_symbols & all_keys) - {key} - set(resolved.keys())
+            deps = (val.free_symbols & all_keys) - {key} - resolved.keys()
             if not deps:
                 ready.append(key)
 
@@ -123,16 +124,16 @@ def _resolve_chained_subs(
             resolved[key] = val
 
     if pending:
-        import warnings
         cycle_keys = sorted(str(k) for k in pending.keys())
         warnings.warn(
             f"_resolve_chained_subs: circular dependency among"
             f" {cycle_keys} — substitution may be incomplete",
-            stacklevel=2,
+            stacklevel=3,
         )
+        pre_cycle = dict(resolved)
         for key, val in pending.items():
-            if isinstance(val, sympy.Basic) and resolved:
-                val = piecewise_aware_subs(val, resolved)
+            if isinstance(val, sympy.Basic) and pre_cycle:
+                val = piecewise_aware_subs(val, pre_cycle)
             resolved[key] = val
 
     return resolved

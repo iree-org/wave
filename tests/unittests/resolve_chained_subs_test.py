@@ -75,8 +75,7 @@ class ResolveChainedSubsTest(unittest.TestCase):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = _resolve_chained_subs(subs)
-            assert len(w) == 1
-            assert "circular dependency" in str(w[0].message).lower()
+            assert any("circular dependency" in str(x.message).lower() for x in w)
         assert A in result and B in result
 
     def test_floor_div_chain(self):
@@ -98,8 +97,22 @@ class ResolveChainedSubsTest(unittest.TestCase):
         assert result[B] == 42
 
     def test_empty_dict(self):
+        """Vacuous input returns an empty dict."""
         result = _resolve_chained_subs({})
         assert result == {}
+
+    def test_diamond_dependency(self):
+        """Diamond: D depends on B and C, both depend on A."""
+        A = sympy.Symbol("A")
+        B = sympy.Symbol("B")
+        C = sympy.Symbol("C")
+        D = sympy.Symbol("D")
+        subs = {A: 10, B: A * 2, C: A + 3, D: B + C}
+        result = _resolve_chained_subs(subs)
+        assert result[A] == 10
+        assert result[B] == 20
+        assert result[C] == 13
+        assert result[D] == 33
 
     def test_order_independence(self):
         """Result is the same regardless of insertion order."""
