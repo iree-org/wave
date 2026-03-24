@@ -14,7 +14,9 @@ import torch.fx as fx
 from wave_lang.kernel.wave.utils.graph_utils import propagate_loop_carried_vars
 from wave_lang.support.ir_imports import (
     Attribute,
+    BF16Type,
     DenseElementsAttr,
+    F32Type,
     IndexType,
     InsertionPoint,
     IntegerAttr,
@@ -1143,6 +1145,9 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     )
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
+
+    is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+    is_bf16 = isinstance(element_type, BF16Type)
     if use_llvm_store:
         _create_llvm_read_write(
             kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
@@ -1162,6 +1167,48 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             node_index=index,
         )
+
+
+def _write_permlane_packed_bf16_to_lds(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    mem: Value,
+    start_indices_th: tuple,
+    memory: CustomOp,
+):
+    """Gather 8 consecutive columns via gpu.shuffle XOR offsets 1-7,
+    construct vector<8xbf16>, write ds_write_b128 to row-major LDS.
+    Only lanes aligned to 8 (col % 8 == 0) write."""
+    bf16_type = BF16Type.get()
+    f32_type = F32Type.get()
+    i32_type = IntegerType.get_signless(32)
+    v8bf16_type = VectorType.get([8], bf16_type)
+
+    elem = vector_d.extract(insert_vector, static_position=[0], dynamic_position=[])
+    own_f32 = arith_d.extf(f32_type, elem)
+    width_64 = arith_d.constant(i32_type, 64)
+
+    all_bf16 = [elem]
+    for xor_offset in range(1, 8):
+        off = arith_d.constant(i32_type, xor_offset)
+        neighbor_f32, _ = gpu_d.shuffle(own_f32, off, width_64, gpu_d.ShuffleMode.XOR)
+        all_bf16.append(arith_d.truncf(bf16_type, neighbor_f32))
+
+    wide_vec = vector_d.from_elements(v8bf16_type, all_bf16)
+
+    lds_offset = start_indices_th[0]
+
+    lane_id = emitter.thread_ids[0]
+    lane_in_wave = arith_d.remui(lane_id, arith_d.constant(IndexType.get(), 64))
+    is_aligned_8 = arith_d.cmpi(
+        arith_d.CmpIPredicate.eq,
+        arith_d.remui(lane_in_wave, arith_d.constant(IndexType.get(), 8)),
+        arith_d.constant(IndexType.get(), 0),
+    )
+
+    oob = arith_d.constant(IndexType.get(), mem.type.shape[0] - 8)
+    selected_offset = arith_d.select(is_aligned_8, lds_offset, oob)
+    vector_d.store(wide_vec, mem, [selected_offset])
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
