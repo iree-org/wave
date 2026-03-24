@@ -545,10 +545,10 @@ private:
 
 public:
   // Create an initialization object from the constraints attribute, report
-  // errors as diagnostics at the given location. The hyperparameters are
+  // errors as diagnostics at the parent location. The hyperparameters are
   // used for computing waves_per_block from wave constraints.
   static llvm::FailureOr<IndexExprsAnalysisInit>
-  create(mlir::Location loc, mlir::Attribute constraintsAttr,
+  create(mlir::Operation *parent, mlir::Attribute constraintsAttr,
          wave::WaveHyperparameterAttr hyperparams = nullptr);
 
   // Hardware constraint.
@@ -561,6 +561,12 @@ public:
   // Waves-per-block extracted from the hardware constraint or computed from
   // wave constraints. Always stored here, even if copied from an attribute.
   llvm::SmallVector<unsigned, 3> wavesPerBlock;
+
+  // Ordered list of operations, they will be given decreasing priorities to
+  // avoid conflicts.
+  // XXX: this is an attempt to replicate accidental behavior in pywave and
+  // needs to be replaced with a more principled reconciliation mechanism.
+  llvm::SmallVector<mlir::Operation *> deterministicOpOrder;
 };
 
 // Lattice for propagating index expressions across wave dialect operations.

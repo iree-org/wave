@@ -1023,14 +1023,21 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "MMA result",
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), symbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority),
+          DictionaryAttr::get(getContext(), symbolMappings), priority),
       "implied by MMA kind", emitError);
 }
 
@@ -1099,18 +1106,24 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
         return attr.getName() != mSymbol.getName();
       });
 
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), lhsSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              DictionaryAttr::get(getContext(), lhsSymbolMappings), priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
-              DictionaryAttr::get(getContext(), rhsSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              DictionaryAttr::get(getContext(), rhsSymbolMappings), priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1118,7 +1131,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
           "accumulator",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-              wave::IndexExprsLatticeStorage::kMmaPriority),
+              priority),
           "implied by MMA kind", emitError)))
     return failure();
   return success();
@@ -2283,15 +2296,26 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  auto joined =
-      IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
-
-  // XXX: if sideways propagation would result in a new conflict, don't
-  // propagate. This is a questionable design carried over from the initial
-  // Python prototype.
-  if (joined.isTop() && !(operandExprs[0].isTop() || operandExprs[1].isTop())) {
+  // XXX: If both are propagating from MMAs, temporarily assume equal priority
+  // (ignore order of MMAs). If sideways propagation would result in a new
+  // conflict in this case, don't propagate. This is a questionable design
+  // carried over from the initial Python prototype.
+  auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
+    if (lattice.isBottom() || lattice.isTop() ||
+        lattice.getPriority() < IndexExprsLatticeStorage::kMmaPriority)
+      return lattice;
+    return IndexExprsLatticeStorage(lattice.getConcreteValue(),
+                                    IndexExprsLatticeStorage::kMmaPriority);
+  };
+  IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
+  IndexExprsLatticeStorage rhs = forceMmaPriority(operandExprs[1]);
+  auto joined = IndexExprsLatticeStorage::join(lhs, rhs);
+  if (joined.isTop() && !(lhs.isTop() || rhs.isTop())) {
     return ChangeResult::NoChange;
   }
+
+  // Re-join with the original expressions to get the right priority.
+  joined = IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
 
   ChangeResult changeResult = ChangeResult::NoChange;
   if (operandExprs[0] != joined) {

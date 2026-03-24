@@ -1016,7 +1016,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // Override the value-to-store operand with the index expression implied by
     // write to avoid sideways propagation. This will hit an error during
-    // initializaiton rather than during propagation.
+    // initialization rather than during propagation.
     // expected-error @below {{conflict for memory index expression when propagating from implied by write operation lattice}}
     // expected-note @below {{original memory lattice}}
     // expected-note @below {{implied by write operation lattice}}

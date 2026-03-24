@@ -1341,8 +1341,8 @@ public:
     for (auto &&[parent, attr] : constraints) {
       wave::WaveHyperparameterAttr hyperparams =
           wave::getHyperparameters(parent);
-      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
-                                                             attr, hyperparams);
+      auto initObject =
+          wave::IndexExprsAnalysisInit::create(parent, attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
       WalkResult walkResult = parent->walk([&](Operation *op) -> WalkResult {
@@ -1669,8 +1669,8 @@ public:
     for (auto &&[parent, attr] : constraints) {
       wave::WaveHyperparameterAttr hyperparams =
           wave::getHyperparameters(parent);
-      auto initObject = wave::IndexExprsAnalysisInit::create(parent->getLoc(),
-                                                             attr, hyperparams);
+      auto initObject =
+          wave::IndexExprsAnalysisInit::create(parent, attr, hyperparams);
       if (llvm::failed(initObject))
         return llvm::failure();
 
@@ -1987,7 +1987,6 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
 
         SmallVector<Value> valuesForIndexExpr;
         SmallVector<Attribute> indexExprs;
-        indexExprs.reserve(valuesForIndexExpr.size());
 
         // Special case for MMA operations. We always set their index attribute
         // to whatever is implied by the MMA kind regardless of the values
@@ -1997,6 +1996,7 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         // kept for Python compatibility.
         std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
             iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
+        indexExprs.reserve(valuesForIndexExpr.size());
         if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation())) {
           SmallVector<wave::IndexExprsLatticeStorage> operandLattices;
           operandLattices.resize(3, wave::IndexExprsLatticeStorage::bottom());
@@ -2011,13 +2011,19 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             constraints = parent->getAttrOfType<ArrayAttr>(
                 wave::WaveDialect::kWaveConstraintsAttrName);
           }
-          assert(constraints && "constraints not found");
+          if (!constraints) {
+            mma->emitError("constraints not found");
+            return WalkResult::interrupt();
+          }
+          FailureOr<wave::IndexExprsAnalysisInit> init =
+              wave::IndexExprsAnalysisInit::create(
+                  mma, constraints, wave::getHyperparameters(mma));
+          if (failed(init)) {
+            return WalkResult::interrupt();
+          }
           if (failed(mma.initializeIndexExprsBackward(
-                  operandLattices,
-                  *wave::IndexExprsAnalysisInit::create(
-                      mma->getLoc(), constraints,
-                      wave::getHyperparameters(mma)),
-                  [&]() { return mma->emitError(); }, delayedError))) {
+                  operandLattices, *init, [&]() { return mma->emitError(); },
+                  delayedError))) {
             if (delayedError) {
               InFlightDiagnostic diag = mma->emitError();
               delayedError(diag);
@@ -2025,13 +2031,13 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             return WalkResult::interrupt();
           }
 
-          for (unsigned i = 0, e = operandLattices.size(); i < e; ++i) {
+          for (auto &&[i, lattice] : llvm::enumerate(operandLattices)) {
             SmallString<32> description;
             llvm::raw_svector_ostream os(description);
             descriptionGenerator(os, i);
             [[maybe_unused]] LogicalResult logicalResult =
-                detail::checkAndAppendIndexExpr(
-                    mma->getLoc(), operandLattices[i], description, indexExprs);
+                detail::checkAndAppendIndexExpr(mma->getLoc(), lattice,
+                                                description, indexExprs);
             assert(succeeded(logicalResult) &&
                    "failed to append implied index expression, it must not be "
                    "bottom/top");

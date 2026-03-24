@@ -360,8 +360,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %b: !wave.tensor<[@N, @K] of f16>,
     %c1: !wave.tensor<[@M, @N] of f32>,
     %d: !wave.tensor<[@M, @K] of f16>,
-    %e: !wave.tensor<[@N, @K] of f16>,
-    %c2: !wave.tensor<[@M, @N] of f32>
+    %e: !wave.tensor<[@K, @N] of f16>,
+    %c2: !wave.tensor<[@M, @K] of f32>
   ) attributes {
     wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64,
@@ -389,28 +389,36 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
 
-    // Second MMA operation using result from first MMA as accumulator
+    // Cast should have index expressions from the earlier mma because it is
+    // given higher priority.
+    // CHECK: wave.cast
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %result1_casted = wave.cast %result1
+      : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
+
+    // Second MMA operation using result from first MMA as operand.
     // The index expressions should be independently initialized for this MMA,
-    // not propagated from %result1
+    // not propagated from %result1_casted
     // CHECK: wave.mma
     // LHS
     // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // CHECK: }, {
     // RHS
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: }, {
     // Accumulator (using %result1 from first MMA)
     // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: }, {
     // Result (matches the accumulator)
     // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    %result2 = wave.mma %d, %e, %result1 {kind = #wave.mma_kind<f32_16x16x16_f16>}
-      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
-      -> !wave.tensor<[@M, @N] of f32>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %result2 = wave.mma %result1_casted, %e, %c2 {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @N] of f16>, !wave.tensor<[@K, @N] of f16>, !wave.tensor<[@M, @K] of f32>)
+      -> !wave.tensor<[@M, @K] of f32>
 
     return
   }

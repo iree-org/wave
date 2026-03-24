@@ -878,13 +878,18 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
 }
 
 llvm::FailureOr<wave::IndexExprsAnalysisInit>
-wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
+wave::IndexExprsAnalysisInit::create(Operation *parent,
+                                     Attribute constraintsAttr,
                                      wave::WaveHyperparameterAttr hyperparams) {
+  Location loc = parent->getLoc();
   wave::IndexExprsAnalysisInit initObject;
   initObject.hardwareConstraint =
       parseWaveConstraints(loc, constraintsAttr, initObject.symbolConstraints);
   if (initObject.hardwareConstraint == nullptr)
     return llvm::failure();
+
+  parent->walk(
+      [&](Operation *op) { initObject.deterministicOpOrder.push_back(op); });
 
   // If waves_per_block is explicitly provided, copy it to storage. Note that we
   // have verified they match the result of dividing block tiles with wave tiles
