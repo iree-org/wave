@@ -619,9 +619,8 @@ public:
   static IndexExprsLatticeStorage bottom();
 
   // Join two lattice instances and return the result.
-  static IndexExprsLatticeStorage
-  join(const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
-       llvm::ArrayRef<mlir::Attribute> ignoredRhsSymbols = {});
+  static IndexExprsLatticeStorage join(const IndexExprsLatticeStorage &lhs,
+                                       const IndexExprsLatticeStorage &rhs);
 
   // XXX: backward analysis calls `meet` instead of `join`, but it isn't related
   // to the direction of the analysis. Just defer to join.
