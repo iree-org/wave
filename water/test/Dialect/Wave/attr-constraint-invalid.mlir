@@ -9,12 +9,20 @@ func.func private @test_num_dimensions_mismatch1() attributes { wave.constraints
 
 // -----
 
-// expected-error @below {{"M" is not an IntegerAttr: "BLOCK_M"}}
+// expected-error @below {{vector_shapes entry 'M' must be an i64 integer value, got "BLOCK_M"}}
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
                                            waves_per_block = [1, 1, 1],
                                            mma_type = #wave.mma_kind<f32_16x16x16_f16>,
                                            vector_shapes = {M = "BLOCK_M", N = 64}>
 func.func private @test_num_dimensions_mismatch2() attributes { wave.constraints = [#hw_constraint] }
+
+// -----
+
+// expected-error @below {{vector_shapes entry 'M' must be an i64 integer value, got 1 : i32}}
+#hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
+                                           waves_per_block = [1, 1, 1],
+                                           vector_shapes = {M = 1 : i32, N = 64}>
+func.func private @test_vector_shapes_non_i64() attributes { wave.constraints = [#hw_constraint] }
 
 // -----
 
