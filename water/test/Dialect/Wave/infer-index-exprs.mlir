@@ -1355,14 +1355,15 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // on rank-0 tensors.
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  // CHECK: @write_rank0_tensor
+  // CHECK-LABEL: @write_rank0_tensor
   func.func @write_rank0_tensor(
     %src: !wave.tensor<[] of f32>,
     %dst: !wave.tensor<[] of f32>
   ) attributes {
     wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
-        mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64}>
+                                mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                vector_shapes = {M = 4 : i64}>
     ]
   } {
     // CHECK: wave.write
@@ -1396,6 +1397,28 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return
   }
 }
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @wrong_type_gracefull_failure(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> vector<4xf32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error@below {{failed to infer index expressions for result #0}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i32}],
+      [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>}, {M = 4 : i32}]
+    ]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> vector<4xf32>
+    return %result : vector<4xf32>
+  }
+}
+
 
 // -----
 

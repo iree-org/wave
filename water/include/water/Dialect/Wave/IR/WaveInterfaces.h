@@ -749,7 +749,7 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
 // template that needs access to specific ops, which we don't want in
 // interfaces.
 // TODO: move all the index expr logic to one file and avoid this spreadout.
-void buildThreadIndependentIndexMappings(
+llvm::LogicalResult buildThreadIndependentIndexMappings(
     mlir::Operation *op, mlir::Type type,
     const IndexExprsAnalysisInit &initObject,
     llvm::SmallVector<mlir::NamedAttribute> &symbolMappings);

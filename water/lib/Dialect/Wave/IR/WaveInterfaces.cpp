@@ -542,17 +542,17 @@ static void initializeIndexExprsWithThreadIndependentConstraints(
     Operation *op, Type type, wave::IndexExprsLatticeStorage &storage,
     const wave::IndexExprsAnalysisInit &initObject) {
   llvm::SmallVector<mlir::NamedAttribute> symbolMappings;
-  wave::detail::buildThreadIndependentIndexMappings(op, type, initObject,
-                                                    symbolMappings);
-  if (symbolMappings.empty())
+  if (failed(wave::detail::buildThreadIndependentIndexMappings(
+          op, type, initObject, symbolMappings)))
     return;
 
+  auto tensorType = cast<wave::WaveTensorType>(type);
   storage.unsafeSet(wave::IndexExprsLatticeStorage(
       DictionaryAttr::get(op->getContext(), symbolMappings),
       wave::IndexExprsLatticeStorage::kLowestPriority,
       wave::detail::filterVectorShape(
           initObject.hardwareConstraint.getVectorShapes(),
-          cast<wave::WaveTensorType>(type).getShape())));
+          tensorType.getShape())));
 }
 
 LogicalResult wave::detail::defaultInitializeIndexExprsForward(
