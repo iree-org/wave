@@ -64,36 +64,36 @@ def test_topk():
     # CHECK-DAG: %[[C64_I32:.*]] = arith.constant 64 : i32
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 
-    # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 64], strides: [64, 1] : memref<f16> to memref<32x64xf16, strided<[64, 1]>>
+    # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>
 
-    # Check for read operation
-    # CHECK: %[[LOADED:.*]] = vector.load %[[INPUT]]
+    # Check for read operation (single linear index)
+    # CHECK: %[[LOADED:.*]] = vector.load %[[INPUT]][%{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<1xf16>
 
     # Check for thread index broadcast for self_index
     # CHECK: %[[THREAD_IDX_I32:.*]] = arith.index_cast %[[THREAD_ID]] : index to i32
     # CHECK: %[[IDX_VEC:.*]] = vector.broadcast %[[THREAD_IDX_I32]] : i32 to vector<1xi32>
 
     # First topk iteration - intrawave reduction with butterfly shuffle
-    # CHECK: gpu.shuffle  xor {{.*}}, %[[C1_I32]], %[[C64_I32]] : vector<1xf16>
-    # CHECK: gpu.shuffle  xor {{.*}}, %[[C1_I32]], %[[C64_I32]] : vector<1xi32>
+    # CHECK: gpu.shuffle xor {{.*}}, %[[C1_I32]], %[[C64_I32]] : vector<1xf16>
+    # CHECK: gpu.shuffle xor {{.*}}, %[[C1_I32]], %[[C64_I32]] : vector<1xi32>
     # CHECK: arith.cmpf ogt{{.*}} : vector<1xf16>
     # CHECK: arith.select{{.*}} : vector<1xi1>, vector<1xf16>
     # CHECK: arith.select{{.*}} : vector<1xi1>, vector<1xi32>
 
     # More shuffle stages (log2(64) = 6 stages with strides 1,2,4,8,16,32)
-    # CHECK: gpu.shuffle  xor {{.*}}, %{{.*}}, %[[C64_I32]] : vector<1xf16>
+    # CHECK: gpu.shuffle xor {{.*}}, %{{.*}}, %[[C64_I32]] : vector<1xf16>
     # CHECK: arith.cmpf ogt{{.*}} : vector<1xf16>
     # CHECK: arith.select
 
     # Broadcast the final index to all threads
-    # CHECK: gpu.shuffle  idx {{.*}}, %[[C0_I32]], %[[C64_I32]] : vector<1xi32>
+    # CHECK: gpu.shuffle idx {{.*}}, %[[C0_I32]], %[[C64_I32]] : vector<1xi32>
 
     # Masking: Check for equality to found max index and replace with -inf
     # CHECK: %[[IS_MAX_IDX:.*]] = arith.cmpi eq{{.*}} : vector<1xi32>
     # CHECK: %[[MASKED:.*]] = arith.select %[[IS_MAX_IDX]], %[[NEG_INF]]{{.*}} : vector<1xi1>, vector<1xf16>
 
     # Second topk iteration (K=2, so we do this twice)
-    # CHECK: gpu.shuffle  xor {{.*}} : vector<1xf16>
+    # CHECK: gpu.shuffle xor {{.*}} : vector<1xf16>
     # CHECK: arith.cmpf ogt{{.*}} : vector<1xf16>
     # CHECK: arith.select{{.*}} : vector<1xi1>, vector<1xf16>
 

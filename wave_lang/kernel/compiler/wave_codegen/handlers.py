@@ -2203,6 +2203,9 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
+    if LINEAR_INDEX in index_exprs:
+        return
+
     fast_dim, size = get_largest_index_and_size(index_exprs)
 
     i64_type = IntegerType.get_signless(64)
@@ -2265,9 +2268,14 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
 
         if mask_bounds:
             # If read/write op has mask bounds only check index which is outside of mask bounds.
-            bound_expr = sympy.And(
-                *(index[dim].start < bound for dim, bound in mask_bounds.items())
-            )
+            # After flatten_read_indices, mask_bounds may use expression keys
+            # that don't appear as dimension keys in the (now flattened) index.
+            conditions = [
+                index[dim].start < bound
+                for dim, bound in mask_bounds.items()
+                if dim in index
+            ]
+            bound_expr = sympy.And(*conditions) if conditions else True
         else:
             bound_expr = True
 
