@@ -87,8 +87,6 @@ def test_read_write():
         tkw.write(res, b)
 
     read_write = wave_compile(get_wave_compile_options(canonicalize=True), read_write)
-    with open("read_write.mlir", "w") as f:
-        f.write(read_write.asm)
     print(read_write.asm)
 
     # CHECK-LABEL:    test_read_write
