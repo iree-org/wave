@@ -180,16 +180,12 @@ void TranslationContext::emitSRDPrologue() {
     srdIndexMap[pendingSRDs[i].memref] = newSrdBase;
   }
 
-  // Update nextSwizzleSRDIndex to start after all regular SRDs AND any
-  // overflow scalar arg slots (for args that exceed the 16-SGPR preload limit).
-  int64_t afterLastSrd = srdStartIndex + pendingSRDs.size() * 4;
+  // Count overflow scalar args (those that exceed the 16-SGPR preload limit).
   int64_t numOverflowScalars = 0;
   for (const auto &pending : pendingScalarArgs) {
     if (2 + pending.argIndex * 2 >= 16)
       ++numOverflowScalars;
   }
-  int64_t afterOverflow = afterLastSrd + numOverflowScalars * 2;
-  nextSwizzleSRDIndex = (afterOverflow + 3) & ~3; // Align to 4
 
   // Emit comment for prologue
   CommentOp::create(builder, loc, "SRD setup prologue");
@@ -293,11 +289,8 @@ void TranslationContext::emitSRDPrologue() {
                       /*expcnt=*/IntegerAttr{});
 
     // Step 5: Copy from preload locations to SRD positions and fill
-    // size/stride. Must use RawOp: S_MOV_B64/S_MOV_B32 are Pure (SALUUnaryOp)
-    // and write to physical registers with no SSA consumer, so CSE/DCE
-    // eliminates them.
-    // TODO: Replace with typed ops once regalloc supports contiguous
-    // allocation constraints for PackOp inputs.
+    // size/stride. Use typed ops targeting precolored registers with
+    // DCEProtectOp to prevent elimination of Pure ops.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -306,21 +299,29 @@ void TranslationContext::emitSRDPrologue() {
       auto srdType = createSRegType(4, 4);
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
-      // Copy base address with s_mov_b64
-      std::string movB64Str = "s_mov_b64 s[" + std::to_string(srdBase) + ":" +
-                              std::to_string(srdBase + 1) + "], s[" +
-                              std::to_string(preloadBase) + ":" +
-                              std::to_string(preloadBase + 1) + "]";
-      RawOp::create(builder, loc, movB64Str);
+      // Copy base address with s_mov_b64.
+      auto preloadType = createSRegType(2, preloadBase);
+      auto preloadSrc =
+          PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase, 2);
+      auto dstB64Type = PSRegType::get(builder.getContext(), srdBase, 2);
+      auto movB64 = S_MOV_B64::create(builder, loc, dstB64Type, preloadSrc);
+      DCEProtectOp::create(builder, loc, movB64);
 
+      // Set num_records (word 2).
       int64_t clampedSize = std::min(pending.bufferSize, kMaxNumRecords32);
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(clampedSize);
-      RawOp::create(builder, loc, movSizeStr);
+      auto sizeImm = createImmType(clampedSize);
+      auto sizeVal = ConstantOp::create(builder, loc, sizeImm, clampedSize);
+      auto dstW2Type = PSRegType::get(builder.getContext(), srdBase + 2, 1);
+      auto movSize = S_MOV_B32::create(builder, loc, dstW2Type, sizeVal);
+      DCEProtectOp::create(builder, loc, movSize);
 
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) +
-                                 ", 0x" + llvm::utohexstr(kSRDStrideSwizzle);
-      RawOp::create(builder, loc, movStrideStr);
+      // Set stride/swizzle (word 3).
+      auto strideImm = createImmType(kSRDStrideSwizzle);
+      auto strideVal =
+          ConstantOp::create(builder, loc, strideImm, kSRDStrideSwizzle);
+      auto dstW3Type = PSRegType::get(builder.getContext(), srdBase + 3, 1);
+      auto movStride = S_MOV_B32::create(builder, loc, dstW3Type, strideVal);
+      DCEProtectOp::create(builder, loc, movStride);
 
       mapper.mapValue(pending.memref, srdReg);
     }
@@ -399,7 +400,7 @@ void TranslationContext::emitSRDPrologue() {
                       /*expcnt=*/IntegerAttr{});
 
     // Step 3: Fill SRD[2:3] with size and stride.
-    // Must use RawOp: Pure S_MOV_B32 to physical registers gets DCE'd.
+    // Use typed ops targeting precolored registers with DCEProtectOp.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -407,14 +408,21 @@ void TranslationContext::emitSRDPrologue() {
       auto srdType = createSRegType(4, 4);
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
+      // Set num_records (word 2).
       int64_t clampedSize = std::min(pending.bufferSize, kMaxNumRecords32);
-      std::string movSizeStr = "s_mov_b32 s" + std::to_string(srdBase + 2) +
-                               ", 0x" + llvm::utohexstr(clampedSize);
-      RawOp::create(builder, loc, movSizeStr);
+      auto sizeImm = createImmType(clampedSize);
+      auto sizeVal = ConstantOp::create(builder, loc, sizeImm, clampedSize);
+      auto dstW2Type = PSRegType::get(builder.getContext(), srdBase + 2, 1);
+      auto movSize = S_MOV_B32::create(builder, loc, dstW2Type, sizeVal);
+      DCEProtectOp::create(builder, loc, movSize);
 
-      std::string movStrideStr = "s_mov_b32 s" + std::to_string(srdBase + 3) +
-                                 ", 0x" + llvm::utohexstr(kSRDStrideSwizzle);
-      RawOp::create(builder, loc, movStrideStr);
+      // Set stride/swizzle (word 3).
+      auto strideImm = createImmType(kSRDStrideSwizzle);
+      auto strideVal =
+          ConstantOp::create(builder, loc, strideImm, kSRDStrideSwizzle);
+      auto dstW3Type = PSRegType::get(builder.getContext(), srdBase + 3, 1);
+      auto movStride = S_MOV_B32::create(builder, loc, dstW3Type, strideVal);
+      DCEProtectOp::create(builder, loc, movStride);
 
       mapper.mapValue(pending.memref, srdReg);
     }
@@ -446,6 +454,17 @@ std::optional<int64_t> TranslationContext::getSRDIndex(Value memref) const {
 
 void TranslationContext::setSRDIndex(Value memref, int64_t srdBaseIndex) {
   srdIndexMap[memref] = srdBaseIndex;
+}
+
+std::optional<Value> TranslationContext::getSRDValue(Value memref) const {
+  auto it = srdValueMap.find(memref);
+  if (it != srdValueMap.end())
+    return it->second;
+  return std::nullopt;
+}
+
+void TranslationContext::setSRDValue(Value memref, Value srd) {
+  srdValueMap[memref] = srd;
 }
 
 int64_t TranslationContext::getNextSRDIndex() {
@@ -570,6 +589,8 @@ VOffsetResult computeVOffsetFromIndices(MemRefType memrefType,
 
 Value lookupSRD(Value memref, TranslationContext &ctx, Location loc) {
   auto &builder = ctx.getBuilder();
+  if (auto srdVal = ctx.getSRDValue(memref))
+    return *srdVal;
   if (auto srdIdx = ctx.getSRDIndex(memref)) {
     auto sregType = ctx.createSRegType(4, 4);
     return PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
@@ -584,83 +605,66 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
                             Value memref, TranslationContext &ctx,
                             Location loc) {
   auto &builder = ctx.getBuilder();
-  auto *mlirCtx = builder.getContext();
+  auto sregTy = ctx.createSRegType();
 
-  int64_t N = ctx.getNextSwizzleSRDIndex();
-  assert(N + 4 < 108 && "SRD allocation exceeds SGPR limit");
+  // Extract base address words from the source SRD.
+  auto srcSrdType = ctx.createSRegType(4, 4);
+  auto srcSrd =
+      PrecoloredSRegOp::create(builder, loc, srcSrdType, adj.srcSrdBase, 4);
+  Value srcWord0 = ExtractOp::create(builder, loc, sregTy, srcSrd, 0);
+  Value srcWord1 = ExtractOp::create(builder, loc, sregTy, srcSrd, 1);
 
-  // Copy source SRD base to new SRD.
-  // Must use RawOp: S_MOV_B64 is Pure (SALUUnaryOp) and writes to a
-  // physical register with no SSA consumer, so CSE/DCE eliminates it.
-  std::string copyBase = "s_mov_b64 s[" + std::to_string(N) + ":" +
-                         std::to_string(N + 1) + "], s[" +
-                         std::to_string(adj.srcSrdBase) + ":" +
-                         std::to_string(adj.srcSrdBase + 1) + "]";
-  RawOp::create(builder, loc, copyBase);
-
-  // Get element offset -> SGPR via v_readfirstlane_b32 (or s_mov_b32 if
-  // already scalar).  Pinned to s[N+3].
+  // Get element offset as SGPR.
   Value offsetVal = adj.elementOffset;
-  auto tmpType = PSRegType::get(mlirCtx, N + 3, 1);
-  if (isVGPRType(offsetVal.getType())) {
-    offsetVal = V_READFIRSTLANE_B32::create(builder, loc, tmpType, offsetVal);
-  } else {
-    offsetVal = S_MOV_B32::create(builder, loc, tmpType, offsetVal);
-  }
+  if (isVGPRType(offsetVal.getType()))
+    offsetVal = V_READFIRSTLANE_B32::create(builder, loc, sregTy, offsetVal);
+  else
+    offsetVal = S_MOV_B32::create(builder, loc, sregTy, offsetVal);
 
   // 64-bit byte offset = element_offset * elementBytes.
-  // byteOffHi -> s[N+2], byteOffLo -> s[N+4] (dedicated temp).
-  // Using s[N+4] for byteOffLo avoids aliasing with offsetVal at s[N+3],
-  // which would corrupt the high-half multiply if reordered.
   auto elemSizeImm = ConstantOp::create(
       builder, loc, ctx.createImmType(adj.elementBytes), adj.elementBytes);
-  auto hiType = PSRegType::get(mlirCtx, N + 2, 1);
-  auto loType = PSRegType::get(mlirCtx, N + 4, 1);
   auto byteOffHi =
-      S_MUL_HI_I32::create(builder, loc, hiType, offsetVal, elemSizeImm);
+      S_MUL_HI_I32::create(builder, loc, sregTy, offsetVal, elemSizeImm);
   auto byteOffLo =
-      S_MUL_I32::create(builder, loc, loType, offsetVal, elemSizeImm);
+      S_MUL_I32::create(builder, loc, sregTy, offsetVal, elemSizeImm);
 
   // Adjust SRD base: s_add_u32 (sets SCC) + s_addc_u32 (reads SCC).
-  // Non-Pure S_ADD_U32/S_ADDC_U32 anchor the chain and prevent DCE.
-  auto sccType = ctx.createSRegType();
-  auto base0Type = PSRegType::get(mlirCtx, N, 1);
-  auto base1Type = PSRegType::get(mlirCtx, N + 1, 1);
-  auto base0 = PrecoloredSRegOp::create(builder, loc, base0Type, N, 1);
-  auto base1 = PrecoloredSRegOp::create(builder, loc, base1Type, N + 1, 1);
-  S_ADD_U32::create(builder, loc, base0Type, sccType, base0, byteOffLo);
-  S_ADDC_U32::create(builder, loc, base1Type, sccType, base1, byteOffHi);
+  auto sccTy = ctx.createSRegType();
+  Value adjWord0 =
+      S_ADD_U32::create(builder, loc, sregTy, sccTy, srcWord0, byteOffLo)
+          .getDst();
+  Value adjWord1 =
+      S_ADDC_U32::create(builder, loc, sregTy, sccTy, srcWord1, byteOffHi)
+          .getDst();
 
-  // Set num_records: prefer the override from fat_raw_buffer_cast's
-  // validBytes (gives tight OOB protection for epilogue elimination),
-  // falling back to the source SRD's buffer size.
+  // Build word 2 (num_records).
+  Value word2;
   if (adj.numRecordsOverride) {
-    auto numRecType = PSRegType::get(mlirCtx, N + 2, 1);
     Value nrVal = adj.numRecordsOverride;
-    if (isVGPRType(nrVal.getType())) {
-      auto result =
-          V_READFIRSTLANE_B32::create(builder, loc, numRecType, nrVal);
-      DCEProtectOp::create(builder, loc, result);
-    } else {
-      auto sccType = ctx.createSRegType();
-      auto zeroImm = ctx.createImmType(0);
-      auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-      S_ADD_U32::create(builder, loc, numRecType, sccType, nrVal, zeroConst);
-    }
+    if (isVGPRType(nrVal.getType()))
+      word2 = V_READFIRSTLANE_B32::create(builder, loc, sregTy, nrVal);
+    else
+      word2 = S_MOV_B32::create(builder, loc, sregTy, nrVal);
   } else {
     int64_t bufferSize = ctx.getBufferSizeForSRD(adj.srcSrdBase);
     int64_t clampedSize = std::min(bufferSize, kMaxNumRecords32);
-    std::string movSize = "s_mov_b32 s" + std::to_string(N + 2) + ", 0x" +
-                          llvm::utohexstr(clampedSize);
-    RawOp::create(builder, loc, movSize);
+    auto sizeImm = ctx.createImmType(clampedSize);
+    auto sizeVal = ConstantOp::create(builder, loc, sizeImm, clampedSize);
+    word2 = S_MOV_B32::create(builder, loc, sregTy, sizeVal);
   }
-  std::string movStride = "s_mov_b32 s" + std::to_string(N + 3) + ", 0x" +
-                          llvm::utohexstr(kSRDStrideSwizzle);
-  RawOp::create(builder, loc, movStride);
 
+  // Build word 3 (stride/swizzle flags).
+  auto strideImm = ctx.createImmType(kSRDStrideSwizzle);
+  auto strideVal =
+      ConstantOp::create(builder, loc, strideImm, kSRDStrideSwizzle);
+  Value word3 = S_MOV_B32::create(builder, loc, sregTy, strideVal);
+
+  // Pack into a 4-wide SGPR SRD.
   auto srdType = ctx.createSRegType(4, 4);
-  auto srd = PrecoloredSRegOp::create(builder, loc, srdType, N, 4);
-  ctx.setSRDIndex(memref, N);
+  auto srd = PackOp::create(builder, loc, srdType,
+                            ValueRange{adjWord0, adjWord1, word2, word3});
+  ctx.setSRDValue(memref, srd);
   ctx.clearPendingSRDBaseAdjust(memref);
   return srd;
 }

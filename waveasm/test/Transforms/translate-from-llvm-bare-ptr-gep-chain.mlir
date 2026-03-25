@@ -5,8 +5,9 @@
 
 // CHECK: waveasm.program @test__waveasm
 
-// SRD word 1 patched.
-// CHECK: waveasm.raw "s_and_b32
+// SRD words extracted, word 1 patched via typed ops + PackOp.
+// CHECK: waveasm.extract
+// CHECK: waveasm.s_and_b32
 
 // Bare-pointer offset folded into SRD base via readfirstlane + 64-bit add.
 // CHECK: waveasm.arith.readfirstlane
@@ -14,6 +15,7 @@
 // CHECK: [[OFF_HI:%.*]] = waveasm.extract %{{.*}}[1]
 // CHECK: waveasm.s_add_u32 %{{.*}}, [[OFF_LO]]
 // CHECK: waveasm.s_addc_u32 %{{.*}}, [[OFF_HI]]
+// CHECK: waveasm.pack
 
 // Buffer GEP voffset starts at 0: tid (truncated) + col_bytes (truncated).
 // CHECK: [[TID:%.*]] = waveasm.arith.trunc

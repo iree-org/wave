@@ -365,47 +365,14 @@ public:
   /// Set SRD base index for a memref
   void setSRDIndex(mlir::Value memref, int64_t srdBaseIndex);
 
+  /// Get the SRD SSA value for a memref (from PackOp-based construction).
+  std::optional<mlir::Value> getSRDValue(mlir::Value memref) const;
+
+  /// Set SRD SSA value for a memref.
+  void setSRDValue(mlir::Value memref, mlir::Value srd);
+
   /// Get next available SRD index
   int64_t getNextSRDIndex();
-
-  /// Get the first SGPR index that is free after all SRDs (both regular and
-  /// swizzle). This accounts for the actual number of kernel arguments and SRD
-  /// layout. Used by loop counter allocation to avoid conflicting with SRD
-  /// registers.
-  int64_t getFirstFreeSgprAfterSRDs() const {
-    int64_t maxSrdEnd = 32; // Default fallback
-    // Consider regular SRDs
-    for (const auto &pending : pendingSRDs) {
-      int64_t srdEnd = pending.srdBaseIndex + 4; // Each SRD is 4 SGPRs
-      maxSrdEnd = std::max(maxSrdEnd, srdEnd);
-    }
-    // Also consider swizzle SRDs (nextSwizzleSRDIndex tracks the next free
-    // slot after all allocated swizzle SRDs)
-    maxSrdEnd = std::max(maxSrdEnd, nextSwizzleSRDIndex);
-    // Align to 4 for good measure
-    return (maxSrdEnd + 3) & ~3;
-  }
-
-  /// Get next available swizzle SRD index (for cache swizzle SRDs and
-  /// per-workgroup SRD base adjustments).
-  /// These are allocated after all regular SRDs, computed in emitSRDPrologue().
-  /// Each allocation reserves 5 SGPRs: s[N..N+3] for the SRD quad plus
-  /// s[N+4] as a temporary for the multiply low-half result.
-  int64_t getNextSwizzleSRDIndex() {
-    if (nextSwizzleSRDIndex < 0) {
-      int64_t maxSrdEnd = 24;
-      for (const auto &pending : pendingSRDs) {
-        int64_t srdEnd = pending.srdBaseIndex + 4;
-        maxSrdEnd = std::max(maxSrdEnd, srdEnd);
-      }
-      nextSwizzleSRDIndex = (maxSrdEnd + 3) & ~3; // Align to 4
-    }
-    int64_t idx = nextSwizzleSRDIndex;
-    // 4 SRD SGPRs + 1 temp for byteOffLo, padded to next 4-aligned index
-    // (SRD buffer descriptors require 4-SGPR alignment on AMDGCN).
-    nextSwizzleSRDIndex = (idx + 5 + 3) & ~3;
-    return idx;
-  }
 
   /// Update buffer size for a pending SRD (called when we see reinterpret_cast)
   void updateSRDBufferSize(mlir::Value memref, int64_t bufferSize);
@@ -740,6 +707,8 @@ private:
   llvm::DenseMap<mlir::Value, SRDInfo> srdMap;
   llvm::DenseMap<mlir::Value, int64_t>
       srdIndexMap; // memref -> SRD SGPR base index
+  llvm::DenseMap<mlir::Value, mlir::Value>
+      srdValueMap; // memref -> SRD SSA value (PackOp-based)
   llvm::DenseMap<mlir::Value, llvm::SmallVector<mlir::Value, 4>>
       splitResultsMap; // originalValue -> split results
   llvm::DenseMap<mlir::Value, int64_t>
@@ -759,8 +728,6 @@ private:
   llvm::StringMap<mlir::Value> exprCache;
   int64_t nextSRDIndex =
       -1; // Will be computed lazily, starts after user+system SGPRs
-  int64_t nextSwizzleSRDIndex =
-      -1; // Will be computed in emitSRDPrologue(), after all regular SRDs
   int64_t totalLDSSize = 0; // Total LDS allocation size in bytes
   // Running byte offset for typed LDS allocations (pattern b in
   // handleMemRefAlloc). Reset implicitly: a fresh TranslationContext is

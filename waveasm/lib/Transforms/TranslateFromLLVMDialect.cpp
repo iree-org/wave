@@ -421,68 +421,63 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
   // The prologue used s_mov_b64 to copy the 64-bit pointer into SRD[0:1].
   // This corrupts SRD word 1 bits [31:16] (stride/swizzle) with pointer bits.
   // Also, the prologue hardcodes SRD[3]=0x20000 but make.buffer.rsrc may
-  // want different flags. Patch both now that we know the actual values.
-  auto srdOp = dyn_cast<PrecoloredSRegOp>(srdVal->getDefiningOp());
-  if (srdOp) {
-    int64_t srdBase = srdOp.getIndex();
+  // want different flags. Rebuild the SRD with corrected words via PackOp.
+  bool needsPatch = (srdVal->getDefiningOp() != nullptr);
+  if (needsPatch) {
+    SRegType sregTy = ctx.createSRegType();
 
-    // TODO: Replace RawOp with typed S_AND_B32/S_MOV_B32 ops. Blocked on
-    // regalloc supporting contiguous allocation constraints for PackOp
-    // inputs, so SRD sub-registers can be addressed without hardcoded
-    // register strings.
+    // Extract individual SRD words from the source.
+    Value word0 = ExtractOp::create(builder, loc, sregTy, *srdVal, 0);
+    Value word1 = ExtractOp::create(builder, loc, sregTy, *srdVal, 1);
+    Value word2 = ExtractOp::create(builder, loc, sregTy, *srdVal, 2);
+    Value word3 = ExtractOp::create(builder, loc, sregTy, *srdVal, 3);
 
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
-    std::string andStr = "s_and_b32 s" + std::to_string(srdBase + 1) + ", s" +
-                         std::to_string(srdBase + 1) + ", 0x" +
-                         llvm::utohexstr(kSRDWord1BaseMask);
-    RawOp::create(builder, loc, andStr);
+    auto maskImm = ctx.createImmType(kSRDWord1BaseMask);
+    auto maskVal = ConstantOp::create(builder, loc, maskImm, kSRDWord1BaseMask);
+    word1 = S_AND_B32::create(builder, loc, sregTy, word1, maskVal);
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
     auto flags = getConstantIntValue(op.getFlags());
     if (flags && *flags != kSRDDefaultFlags) {
-      std::string movFlags = "s_mov_b32 s" + std::to_string(srdBase + 3) +
-                             ", 0x" + llvm::utohexstr(*flags);
-      RawOp::create(builder, loc, movFlags);
+      auto flagsImm = ctx.createImmType(*flags);
+      auto flagsVal = ConstantOp::create(builder, loc, flagsImm, *flags);
+      word3 = S_MOV_B32::create(builder, loc, sregTy, flagsVal);
     }
-  }
 
-  st.mapBufferRsrc(op.getResult(), *srdVal);
+    // If bare-pointer GEPs accumulated a byte offset before make.buffer.rsrc,
+    // fold it into the SRD base address (64-bit SALU add to SRD[0:1]).
+    Value baseOff = st.lookupBaseOffset(basePtr);
+    if (baseOff) {
+      // Make the offset scalar, preserving width (i32 or i64).
+      int64_t width = getRegSize(baseOff.getType());
+      SRegType scalarTy = ctx.createSRegType(width, width);
+      Value offScalar =
+          ArithReadFirstLaneOp::create(builder, loc, scalarTy, baseOff);
 
-  // If bare-pointer GEPs accumulated a byte offset before make.buffer.rsrc,
-  // fold it into the SRD base address (64-bit SALU add to SRD[0:1]).
-  // This keeps voffset starting at 0 from the adjusted base.
-  Value baseOff = st.lookupBaseOffset(basePtr);
-  if (baseOff && srdOp) {
-    int64_t srdBase = srdOp.getIndex();
-    MLIRContext *mlirCtx = builder.getContext();
+      // Split into lo/hi 32-bit halves for the 64-bit SRD base add.
+      Value offLo = ArithTruncOp::create(builder, loc, sregTy, offScalar);
+      Value offHi;
+      if (width > 1)
+        offHi = ExtractOp::create(builder, loc, sregTy, offScalar, 1);
+      else
+        offHi = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
 
-    // Make the offset scalar, preserving width (i32 or i64).
-    // ArithReadFirstLaneOp is a no-op if already SGPR and legalizes to
-    // v_readfirstlane_b32 (or a pair for i64) otherwise.
-    int64_t width = getRegSize(baseOff.getType());
-    SRegType scalarTy = ctx.createSRegType(width, width);
-    Value offScalar =
-        ArithReadFirstLaneOp::create(builder, loc, scalarTy, baseOff);
+      // Adjust base: S_ADD_U32 sets SCC, S_ADDC_U32 reads it.
+      SRegType sccTy = ctx.createSRegType();
+      word0 =
+          S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo).getDst();
+      word1 = S_ADDC_U32::create(builder, loc, sregTy, sccTy, word1, offHi)
+                  .getDst();
+    }
 
-    // Split into lo/hi 32-bit halves for the 64-bit SRD base add.
-    SRegType sregTy = ctx.createSRegType();
-    Value offLo = ArithTruncOp::create(builder, loc, sregTy, offScalar);
-    Value offHi;
-    if (width > 1)
-      offHi = ExtractOp::create(builder, loc, sregTy, offScalar, 1);
-    else
-      offHi = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
-
-    // Add to SRD base. SRDs are pinned to physical registers, so
-    // the base adjustment uses register-pinned ops (same as the
-    // s_and_b32/s_mov_b32 patches above).
-    PSRegType base0Type = PSRegType::get(mlirCtx, srdBase, 1);
-    PSRegType base1Type = PSRegType::get(mlirCtx, srdBase + 1, 1);
-    Value base0 = PrecoloredSRegOp::create(builder, loc, base0Type, srdBase, 1);
-    Value base1 =
-        PrecoloredSRegOp::create(builder, loc, base1Type, srdBase + 1, 1);
-    S_ADD_U32::create(builder, loc, base0Type, sregTy, base0, offLo);
-    S_ADDC_U32::create(builder, loc, base1Type, sregTy, base1, offHi);
+    // Pack into a 4-wide SGPR SRD.
+    auto srdType = ctx.createSRegType(4, 4);
+    Value newSrd = PackOp::create(builder, loc, srdType,
+                                  ValueRange{word0, word1, word2, word3});
+    st.mapBufferRsrc(op.getResult(), newSrd);
+  } else {
+    st.mapBufferRsrc(op.getResult(), *srdVal);
   }
 
   return success();

@@ -28,18 +28,21 @@ module {
       // sN, sM) rather than using 0xFFFFFFFF which would make sentinel offsets
       // in-bounds.
       //
-      // Swizzle SRD construction sequence:
-      //   s_mov_b32 (copy base lo from source SRD)
+      // Swizzle SRD construction via typed ops + PackOp:
+      //   extract source SRD words
+      //   s_mov_b32 (copy base lo)
       //   s_and_b32 + s_or_b32 (set swizzle bits in base hi)
-      //   s_mov_b32 (copy num_records from source SRD -- NOT a constant)
-      //   s_mov_b32 (stride word)
+      //   s_mov_b32 (copy num_records from source -- NOT a constant)
+      //   s_mov_b32 (flags constant)
+      //   pack into 4-wide SGPR
       //
-      // CHECK: s_mov_b32 s{{[0-9]+}}, s{{[0-9]+}}
-      // CHECK: s_and_b32
-      // CHECK: s_or_b32
-      // CHECK: s_mov_b32 s[[NR:[0-9]+]], s{{[0-9]+}}
-      // CHECK-NOT: s_mov_b32 s[[NR]], 0x{{[fF]+}}
-      // CHECK: s_mov_b32 s{{[0-9]+}}, 0x27000
+      // CHECK: waveasm.extract
+      // CHECK: waveasm.s_mov_b32
+      // CHECK: waveasm.s_and_b32
+      // CHECK: waveasm.s_or_b32
+      // CHECK: waveasm.s_mov_b32 %{{.*}} : !waveasm.sreg -> !waveasm.sreg
+      // CHECK: waveasm.s_mov_b32 %{{.*}} : !waveasm.imm
+      // CHECK: waveasm.pack
       %buf = amdgpu.fat_raw_buffer_cast %src
           validBytes(%valid) cacheSwizzleStride(%stride) resetOffset
           : memref<?xf16>
