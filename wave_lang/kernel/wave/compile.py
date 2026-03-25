@@ -543,6 +543,15 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    graph_passes += [
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        ),
+    ]
+
     # Schedule the iterate ops.
     scheduling_type = options.schedule
     use_scheduling_barriers = options.use_scheduling_barriers
@@ -607,29 +616,6 @@ def build_graph_passes(
             trace,
             launchable.constraints,
             launchable.reordering_constraints,
-        ),
-        *(
-            [
-                partial(
-                    flatten_read_indices,
-                    trace,
-                    launchable.constraints,
-                    options,
-                )
-            ]
-            if options.linearize_reads and not options.use_water_backend
-            else []
-        ),
-        partial(
-            merge_contiguous_reads,
-            trace,
-            launchable.constraints,
-            options.target,
-        ),
-        *(
-            [partial(annotate_iv_strides, trace, launchable.constraints)]
-            if options.linearize_reads
-            else []
         ),
     ]
 
