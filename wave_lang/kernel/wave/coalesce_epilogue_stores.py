@@ -204,6 +204,7 @@ def coalesce_epilogue_stores(
                 lds_write.type = Memory[
                     (sympy.Integer(lds_elems),), SHARED_ADDRESS_SPACE, tkl.bf16
                 ]
+                lds_write._shuffle_xor_pack = True
                 all_lds_write_nodes.append(lds_write)
 
             barrier = SharedMemoryBarrier().add_to_graph(root_graph)

@@ -1148,6 +1148,13 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
     is_bf16 = isinstance(element_type, BF16Type)
+
+    if is_shared and is_bf16 and getattr(node, "_shuffle_xor_pack", False):
+        _write_shuffle_xor16_b128_to_lds(
+            emitter, insert_vector, kb_dest, start_indices_th
+        )
+        return
+
     if use_llvm_store:
         _create_llvm_read_write(
             kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
@@ -1167,6 +1174,65 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             node_index=index,
         )
+
+
+def _write_shuffle_xor16_b128_to_lds(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    mem: Value,
+    start_indices_th: tuple,
+):
+    """Combine own 4 bf16 with partner lane's 4 bf16 via shuffle XOR 16,
+    producing a vector<4xi32> (8 packed bf16) written as ds_write_b128.
+
+    MMA accumulator layout (F32_16x16x128_F8F6F4) gives each thread 4
+    consecutive M values. Lanes are grouped by 16: lanes 0-15 own M=0-3,
+    lanes 16-31 own M=4-7, etc. Shuffle XOR 16 exchanges between paired
+    groups, giving each lane 8 consecutive M values.
+
+    Both lane halves write: the lower half uses [own, partner] ordering,
+    the upper half uses [partner, own] with an adjusted address, so both
+    produce identical data at the same LDS location.
+    """
+    bf16_type = BF16Type.get()
+    i32_type = IntegerType.get_signless(32)
+    v2i32_type = VectorType.get([2], i32_type)
+    v4i32_type = VectorType.get([4], i32_type)
+    v8bf16_type = VectorType.get([8], bf16_type)
+    idx_type = IndexType.get()
+
+    i32_vec = vector_d.bitcast(v2i32_type, insert_vector)
+    own_0 = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
+    own_1 = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
+
+    offset_16 = arith_d.constant(i32_type, 16)
+    width_64 = arith_d.constant(i32_type, 64)
+    partner_0, _ = gpu_d.shuffle(own_0, offset_16, width_64, gpu_d.ShuffleMode.XOR)
+    partner_1, _ = gpu_d.shuffle(own_1, offset_16, width_64, gpu_d.ShuffleMode.XOR)
+
+    lane_id = emitter.thread_ids[0]
+    lane_in_wave = arith_d.remui(lane_id, arith_d.constant(idx_type, 64))
+    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
+    is_lower = arith_d.cmpi(
+        arith_d.CmpIPredicate.ult,
+        half_pos,
+        arith_d.constant(idx_type, 16),
+    )
+
+    v0 = arith_d.select(is_lower, own_0, partner_0)
+    v1 = arith_d.select(is_lower, own_1, partner_1)
+    v2 = arith_d.select(is_lower, partner_0, own_0)
+    v3 = arith_d.select(is_lower, partner_1, own_1)
+
+    wide_i32 = vector_d.from_elements(v4i32_type, [v0, v1, v2, v3])
+    wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
+
+    lds_offset = start_indices_th[0]
+    four_elems = arith_d.constant(idx_type, 4)
+    adjusted_offset = arith_d.subi(lds_offset, four_elems)
+    final_offset = arith_d.select(is_lower, lds_offset, adjusted_offset)
+
+    vector_d.store(wide_vec, mem, [final_offset])
 
 
 def _write_permlane_packed_bf16_to_lds(
