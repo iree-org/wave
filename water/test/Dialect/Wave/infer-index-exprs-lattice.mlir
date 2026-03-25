@@ -1501,8 +1501,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // M matches between operands, but N differs - should conflict.
-    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
-    // expected-note @below {{operand #0 lattice}}
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice}}
     // expected-note @below {{operand #1 lattice}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,

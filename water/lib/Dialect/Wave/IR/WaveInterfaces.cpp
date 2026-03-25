@@ -1792,8 +1792,12 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
     llvm::StringRef fromName, llvm::StringRef toName,
     wave::EmitErrorFn emitError) {
   ChangeResult changeResult = ChangeResult::NoChange;
-  for (auto &&[toNum, toLattice] : llvm::enumerate(to)) {
+  for (auto &&[toNum, toLattice, toType] : llvm::enumerate(to, toTypes)) {
     if (toLattice.isTop())
+      continue;
+
+    auto toTensorType = dyn_cast<WaveTensorType>(toType);
+    if (!toTensorType)
       continue;
 
     for (auto &&[fromNum, fromLattice] : llvm::enumerate(from)) {
@@ -1805,6 +1809,7 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
       if (fromLattice.isTop()) {
         fromTop = true;
         toLattice = IndexExprsLatticeStorage::top();
+        changeResult = ChangeResult::Change;
         break;
       }
 
@@ -1822,10 +1827,8 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
           IndexExprsLatticeStorage::join(toLattice, fromLattice);
       if (joined.isTop() && !fromTop) {
         bool isVectorShapeConflict =
-            !getJoinedVectorShape(
-                toLattice.getVectorShape(), fromLattice.getVectorShape(),
-                toLattice.getPriority(), fromLattice.getPriority(),
-                llvm::StringSet<>()) &&
+            failed(IndexExprsLatticeStorage::getJoinedVectorShape(
+                toLattice, fromLattice)) &&
             toLattice.getVectorShape() && fromLattice.getVectorShape();
         InFlightDiagnostic diag =
             emitError() << "conflict when propagating "
@@ -1838,6 +1841,7 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
                           << " lattice: " << fromLattice;
         return diag;
       }
+      joined = joined.keepOnlySymbols(toTensorType.getShape());
       if (joined != toLattice) {
         changeResult = ChangeResult::Change;
         toLattice = joined;
