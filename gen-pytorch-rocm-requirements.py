@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
 PYTORCH_INDEX = "https://download.pytorch.org/whl/rocm{ver}"
@@ -107,7 +108,7 @@ def _version_candidates(raw: str) -> list[str]:
 # URL probing
 # ---------------------------------------------------------------------------
 
-_WHEEL_VER_RE = re.compile(r"torch-(\d+[0-9.]*(?:%2B[^-]*|(?:\+[^-]*))?)-")
+_WHEEL_VER_RE = re.compile(r'torch-(\d+(?:[.]\d+)*(?:\+[^-"\'/<\s]+)?)')
 
 
 def _parse_version_tuple(ver_str: str) -> tuple[int, ...] | None:
@@ -154,8 +155,10 @@ def _has_matching_torch(
     except (URLError, OSError, ValueError):
         return False
 
+    html = unquote(html)
+
     for m in _WHEEL_VER_RE.finditer(html):
-        ver_str = m.group(1).replace("%2B", "+")
+        ver_str = m.group(1)
         ver = _parse_version_tuple(ver_str)
         if ver is not None and lower <= ver < upper:
             return True
