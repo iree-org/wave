@@ -103,7 +103,15 @@ class WaveCompileOptions:
     use_bound_check: bool = False
     specialize: bool = False
     eliminate_epilogue: bool = False
+
     coalesce_epilogue_stores: bool = False
+    # Max LDS bytes the epilogue coalescing pass may allocate for staging.
+    # Cannot be auto-derived from graph allocations because
+    # minimize_shared_allocs aliases overlapping buffers at runtime,
+    # so graph-level totals overestimate actual LDS usage.
+    # TODO: Derive automatically after minimize_shared_allocs resolves
+    # aliasing, or query the post-aliasing LDS footprint from the backend.
+    epilogue_lds_budget: int = 49152
 
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop

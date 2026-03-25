@@ -593,7 +593,12 @@ def build_graph_passes(
         from .coalesce_epilogue_stores import coalesce_epilogue_stores
 
         graph_passes.append(
-            partial(coalesce_epilogue_stores, trace, launchable.constraints)
+            partial(
+                coalesce_epilogue_stores,
+                trace,
+                launchable.constraints,
+                options.epilogue_lds_budget,
+            )
         )
 
     graph_passes += [

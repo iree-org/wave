@@ -16,7 +16,6 @@ from wave_lang.support.ir_imports import (
     Attribute,
     BF16Type,
     DenseElementsAttr,
-    F32Type,
     IndexType,
     InsertionPoint,
     IntegerAttr,
@@ -33,6 +32,7 @@ from wave_lang.support.ir_imports import (
     gpu_d,
     llvm_d,
     memref_d,
+    rocdl_d,
     vector_d,
 )
 from .ir_utils import (
@@ -1149,6 +1149,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
     is_bf16 = isinstance(element_type, BF16Type)
 
+    # TODO: Replace _shuffle_xor_pack with a formal Write node attribute.
     if is_shared and is_bf16 and getattr(node, "_shuffle_xor_pack", False):
         _write_shuffle_xor16_b128_to_lds(
             emitter, insert_vector, kb_dest, start_indices_th
@@ -1205,10 +1206,11 @@ def _write_shuffle_xor16_b128_to_lds(
     own_0 = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
     own_1 = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
 
-    offset_16 = arith_d.constant(i32_type, 16)
-    width_64 = arith_d.constant(i32_type, 64)
-    partner_0, _ = gpu_d.shuffle(own_0, offset_16, width_64, gpu_d.ShuffleMode.XOR)
-    partner_1, _ = gpu_d.shuffle(own_1, offset_16, width_64, gpu_d.ShuffleMode.XOR)
+    swap_result_type = llvm_d.StructType.get_literal([i32_type, i32_type])
+    swap_0 = rocdl_d.permlane16_swap(swap_result_type, own_0, own_0, False, False)
+    partner_0 = llvm_d.extractvalue(i32_type, swap_0, [0])
+    swap_1 = rocdl_d.permlane16_swap(swap_result_type, own_1, own_1, False, False)
+    partner_1 = llvm_d.extractvalue(i32_type, swap_1, [0])
 
     lane_id = emitter.thread_ids[0]
     lane_in_wave = arith_d.remui(lane_id, arith_d.constant(idx_type, 64))
@@ -1232,49 +1234,11 @@ def _write_shuffle_xor16_b128_to_lds(
     adjusted_offset = arith_d.subi(lds_offset, four_elems)
     final_offset = arith_d.select(is_lower, lds_offset, adjusted_offset)
 
+    # Both lane halves (lower and upper within each 32-lane group) write
+    # identical data to the same LDS address, so half the ds_write_b128
+    # instructions are redundant.
+    # TODO: Mask out the upper half to cut LDS write traffic in half.
     vector_d.store(wide_vec, mem, [final_offset])
-
-
-def _write_permlane_packed_bf16_to_lds(
-    emitter: WaveEmitter,
-    insert_vector: Value,
-    mem: Value,
-    start_indices_th: tuple,
-    memory: CustomOp,
-):
-    """Gather 8 consecutive columns via gpu.shuffle XOR offsets 1-7,
-    construct vector<8xbf16>, write ds_write_b128 to row-major LDS.
-    Only lanes aligned to 8 (col % 8 == 0) write."""
-    bf16_type = BF16Type.get()
-    f32_type = F32Type.get()
-    i32_type = IntegerType.get_signless(32)
-    v8bf16_type = VectorType.get([8], bf16_type)
-
-    elem = vector_d.extract(insert_vector, static_position=[0], dynamic_position=[])
-    own_f32 = arith_d.extf(f32_type, elem)
-    width_64 = arith_d.constant(i32_type, 64)
-
-    all_bf16 = [elem]
-    for xor_offset in range(1, 8):
-        off = arith_d.constant(i32_type, xor_offset)
-        neighbor_f32, _ = gpu_d.shuffle(own_f32, off, width_64, gpu_d.ShuffleMode.XOR)
-        all_bf16.append(arith_d.truncf(bf16_type, neighbor_f32))
-
-    wide_vec = vector_d.from_elements(v8bf16_type, all_bf16)
-
-    lds_offset = start_indices_th[0]
-
-    lane_id = emitter.thread_ids[0]
-    lane_in_wave = arith_d.remui(lane_id, arith_d.constant(IndexType.get(), 64))
-    is_aligned_8 = arith_d.cmpi(
-        arith_d.CmpIPredicate.eq,
-        arith_d.remui(lane_in_wave, arith_d.constant(IndexType.get(), 8)),
-        arith_d.constant(IndexType.get(), 0),
-    )
-
-    oob = arith_d.constant(IndexType.get(), mem.type.shape[0] - 8)
-    selected_offset = arith_d.select(is_aligned_8, lds_offset, oob)
-    vector_d.store(wide_vec, mem, [selected_offset])
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
