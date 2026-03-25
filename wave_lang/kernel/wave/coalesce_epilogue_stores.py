@@ -172,6 +172,7 @@ def coalesce_epilogue_stores(
 
             for w_node in epilogue_writes:
                 w = get_custom(w_node)
+                write_ept = int(subs_idxc(w.elements_per_thread))
                 idx = w_node.index
                 m_idx_start = (
                     idx[m_sym].start
@@ -196,9 +197,9 @@ def coalesce_epilogue_stores(
                 )
 
                 lds_write = Write(
-                    w.register_, lds_alloc, elements_per_thread=1
+                    w.register_, lds_alloc, elements_per_thread=write_ept
                 ).add_to_graph(root_graph)
-                lds_write.index = {LDS_DIM: IndexSequence(in_chunk, 1, 1)}
+                lds_write.index = {LDS_DIM: IndexSequence(in_chunk, write_ept, 1)}
                 lds_write.location = w.location
                 lds_write.type = Memory[
                     (sympy.Integer(lds_elems),), SHARED_ADDRESS_SPACE, tkl.bf16
