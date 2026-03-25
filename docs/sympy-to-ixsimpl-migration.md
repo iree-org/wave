@@ -38,7 +38,9 @@ Source: `ixsimpl/_ixsimpl.pyi`, `ixsimpl/__init__.py`, `ixsimpl/sympy_conv.py`.
 | `.simplify(assumptions=)` | Simplification with assumption constraints |
 | `.expand()` | Expression expansion |
 | `.to_c()` | C code generation |
-| `.free_symbols` | Free symbol set (Python-level, on `Expr` subclass) |
+| `.free_symbols` | Free symbol set (cached property on `Expr` subclass) |
+| `.has(sym)` | True if `sym` appears in the expression tree (replaces `sympy_expr.has()`) |
+| `.eval(env)` | Evaluate with concrete values (replaces `expr.subs(dict)` + `int()`) |
 | `.is_error` / `.is_parse_error` / `.is_domain_error` | Error detection |
 | Arithmetic operators | `+`, `-`, `*`, `/`, `>=`, `>`, `<=`, `<`, `==`, `!=` |
 
@@ -50,13 +52,14 @@ Source: `ixsimpl/_ixsimpl.pyi`, `ixsimpl/__init__.py`, `ixsimpl/sympy_conv.py`.
 | `ctx.true_()` / `ctx.false_()` | Boolean constants |
 | `ctx.eq(a, b)` / `ctx.ne(a, b)` | Equality/inequality nodes |
 | `ctx.parse(input)` | Parse expression from string |
+| `ctx.check(expr, assumptions=)` | Entailment query: returns `True`/`False`/`None` (replaces some `sympy.solve` uses) |
 | `ctx.simplify_batch(exprs, assumptions=)` | Batch simplification |
 | `ctx.errors` / `ctx.clear_errors()` | Error reporting |
 | `ctx.stats()` / `ctx.stats_reset()` | Performance stats |
 
 ### Free functions
-`floor`, `ceil`, `mod`, `max_`, `min_`, `xor_`, `and_`, `or_`, `not_`, `pw`,
-`same_node`
+`floor`, `ceil`, `mod`, `max_`, `min_`, `abs_`, `xor_`, `and_`, `or_`, `not_`,
+`pw`, `same_node`, `lambdify`
 
 ### Sympy conversion layer (`ixsimpl.sympy_conv`)
 `from_sympy(ctx, expr)`, `to_sympy(expr, symbols=, xor_fn=)`,
@@ -79,50 +82,54 @@ name. `Abs` is the only notable missing conversion (emulable via piecewise).
 | Category | Sympy API Used | ixsimpl Equivalent | Actual Gap |
 |----------|---------------|-------------------|------------|
 | **Symbol creation** | `sympy.Symbol(name, integer=True, nonneg=True)` | `ctx.sym(name)` + `extract_assumptions` | **Soft.** ixsimpl symbols carry no assumptions intrinsically; assumptions are passed separately to `simplify()`. Wave would need to track assumptions in a side table or always extract from sympy symbols during conversion. |
-| **Expression construction** | `Add`, `Mul`, `Pow`, `Integer`, `Rational`, `Mod(evaluate=False)`, `floor`, `ceiling`, `Min`, `Max`, `Abs`, `Piecewise` | Arithmetic ops, `ctx.int_()`, `ctx.rat()`, `floor`, `ceil`, `mod`, `max_`, `min_`, `pw` | **Soft.** Missing: `Abs` (emulate via `pw`), `evaluate=False` (ixsimpl does not eagerly evaluate, so not needed). `Pow` must be expanded to repeated multiplication (already done in `from_sympy`). |
+| **Expression construction** | `Add`, `Mul`, `Pow`, `Integer`, `Rational`, `Mod(evaluate=False)`, `floor`, `ceiling`, `Min`, `Max`, `Abs`, `Piecewise` | Arithmetic ops, `ctx.int_()`, `ctx.rat()`, `floor`, `ceil`, `mod`, `max_`, `min_`, `abs_`, `pw` | **None.** `Abs` via `abs_()` (piecewise under the hood). `evaluate=False` not needed (ixsimpl does not eagerly evaluate). `Pow` expanded to repeated multiplication (already done in `from_sympy`). |
 | **Piecewise / conditionals** | `sympy.Piecewise((val, cond), ...)` | `pw(*branches)`, `.pw_ncases`, `.pw_value(i)`, `.pw_cond(i)` | **None.** Full piecewise support. The `piecewise_aware_subs()` workaround in indexing.py exists only because sympy's `.subs()` triggers expensive boolean simplification on Piecewise -- ixsimpl's `.subs()` does not have this problem. |
-| **Structural inspection** | `isinstance(expr, sympy.X)`, `.is_number`, `.is_Atom`, `.args`, `.func` | `.tag` (tag-based dispatch), `.nchildren`, `.children`, `.child(i)`, specialized accessors | **Soft.** `isinstance` dispatch maps to `expr.tag == ixsimpl.ADD` etc. Specialized accessors (`.add_nterms`, `.mul_nfactors`) give richer decomposition than sympy's flat `.args`. Missing: `.is_number` (check `tag == INT or tag == RAT`), `.has()` (walk tree or check `free_symbols`). |
+| **Structural inspection** | `isinstance(expr, sympy.X)`, `.is_number`, `.is_Atom`, `.args`, `.func` | `.tag` (tag-based dispatch), `.nchildren`, `.children`, `.child(i)`, `.has()`, specialized accessors | **None.** `isinstance` dispatch maps to `expr.tag == ixsimpl.ADD` etc. `.has()` is native. `.is_number` maps to `tag in (INT, RAT)`. Specialized accessors (`.add_nterms`, `.mul_nfactors`) give richer decomposition than sympy's flat `.args`. |
 | **Substitution** | `.subs()`, `.xreplace()`, `.replace(pred, fn)` | `.subs(target, repl)`, `.subs(mapping)` | **Soft.** Direct substitution is supported. Missing: `.replace(pred, fn)` (predicate-based bottom-up rewrite). Used in `_custom_simplify_once` for 4 transform passes. Would need a Python-level tree walker. |
-| **Free symbol inspection** | `.free_symbols`, `.has(sym)` | `.free_symbols` (Python `Expr` class) | **None.** Already implemented as a cached property on the Python `Expr` subclass. `.has()` can be trivially derived. |
+| **Free symbol inspection** | `.free_symbols`, `.has(sym)` | `.free_symbols` (cached property), `.has(sym)` | **None.** Both are native on the `Expr` class. |
 | **Expression decomposition** | `.as_ordered_terms()`, `.as_numer_denom()` | `.add_nterms`/`.add_term(i)`/`.add_term_coeff(i)`, `.rat_num`/`.rat_den` | **Soft.** Add decomposition is richer in ixsimpl (coefficient + terms). Numer/denom split is only used for Rational nodes (`.rat_num`/`.rat_den`). |
-| **Numeric probing** | `sympy.lambdify()` with custom modules | None | **Hard gap.** `lambdify` compiles sympy expressions to fast Python callables. Would need either an ixsimpl evaluator or a custom tree walker. `.to_c()` could potentially be used with ctypes but that is overkill. |
+| **Numeric probing** | `sympy.lambdify()` with custom modules | `ixsimpl.lambdify()`, `Expr.eval(env)` | **None.** `lambdify` is a near drop-in replacement (uses `.subs()` + constant folding). `Expr.eval(env)` handles single-point evaluation. No custom `modules` parameter needed -- ixsimpl handles floor/Mod/etc natively. |
 | **Affine conversion** | Sympy -> MLIR AffineExpr pipeline | None (but `.tag`-based walk is possible) | **Soft.** The converter does a structural walk over the expression tree. This maps directly to ixsimpl's `.tag` + `.child(i)` API. The walk structure would be nearly identical. |
-| **Constraint solving** | `sympy.solve()`, `sympy.Eq()` | `ctx.eq()` for construction, no solver | **Hard gap.** `sympy.solve()` used in 2 places (`assumptions.py`, `general_utils.py`). No ixsimpl equivalent. These are niche uses. |
-| **Codegen / printing** | `lambdastr()` for grid dim lambdas | `.to_c()` | **Soft.** `.to_c()` generates C code from expressions. `lambdastr()` generates Python code. Different targets, but the need is similar. Grid lambdas could use `.to_c()` + compile, or a Python eval walker. |
+| **Constraint solving** | `sympy.solve()`, `sympy.Eq()` | `ctx.eq()`, `ctx.check(expr, assumptions=)` | **None.** The sole `sympy.solve()` call is `evaluate_with_assumptions()` in `general_utils.py`, which checks whether an inequality is entailed/contradicted by a set of constraints -- returning `True`/`False`/`None`. This maps directly to `ctx.check(expr, assumptions=)`. |
+| **Codegen / printing** | `lambdastr()` for grid dim lambdas | `ixsimpl.lambdify()`, `.to_c()` | **None.** `ixsimpl.lambdify()` replaces the `lambdastr()` + `eval()` pattern directly. `.to_c()` available for C codegen if needed. |
 | **Type system** | `sympy.Integer`, `sympy.Rational`, `.is_Integer`, `.is_Rational` | `tag == INT`, `tag == RAT`, `.rat_num`, `.rat_den` | **None.** Tag-based dispatch replaces isinstance checks. |
 
 ### Summary of gaps
 
 **Hard gaps** (no ixsimpl equivalent):
-1. `sympy.solve()` -- constraint solver (2 call sites, niche)
-2. `sympy.lambdify()` -- compiled expression evaluator (numeric probing)
-3. `.replace(pred, fn)` -- predicate-based rewriting (4 transforms in
+1. `.replace(pred, fn)` -- predicate-based bottom-up rewriting (4 transforms in
    `_custom_simplify_once`, but these exist only as fallback when ixsimpl
-   conversion fails, so they may become dead code as coverage improves)
+   conversion fails, so they may become dead code as coverage improves).
 
 **Soft gaps** (ixsimpl has the feature, integration work needed):
-4. Symbol assumptions -- tracked separately, not on the symbol node
-5. `Abs` conversion -- emulate via `pw(x, x >= 0, -x, ctx.true_())`
-6. Affine converter -- structural walk needs porting from sympy isinstance to
-   ixsimpl tag dispatch
-7. Grid lambda codegen -- `lambdastr` -> `.to_c()` or Python eval walker
+2. Symbol assumptions -- tracked separately, not on the symbol node.
+3. Affine converter -- structural walk needs porting from sympy isinstance to
+   ixsimpl tag dispatch.
 
 **No gap** (ready to use):
-8. Piecewise construction and inspection
-9. Free symbol inspection
-10. Substitution (direct mapping; predicate-based `.replace` excluded)
-11. Structural inspection via `.tag` and accessors
-12. Expression decomposition (add terms, mul factors, rational parts)
+5. Piecewise construction and inspection (`pw`, `.pw_*` accessors).
+6. Free symbol inspection (`.free_symbols`, `.has()`).
+7. Substitution (`.subs()`; predicate-based `.replace` excluded).
+8. Structural inspection (`.tag`, `.nchildren`, `.children`, `.child(i)`).
+9. Expression decomposition (`.add_*`, `.mul_*`, `.rat_*` accessors).
+10. Numeric probing and evaluation (`lambdify()`, `.eval()`).
+11. Absolute value (`abs_()`).
+12. Entailment queries (`ctx.check()` -- replaces `sympy.solve` in
+    `evaluate_with_assumptions`).
+13. Codegen (`lambdify()`, `.to_c()`).
 
 ## Migration Strategy
 
-ixsimpl is not just a simplifier -- it provides symbol creation, expression
-construction, structural inspection, substitution, free symbol queries,
-piecewise, expansion, and C codegen. The only true hard gaps vs sympy are
-`sympy.solve()` (2 call sites) and `lambdify()` (numeric probing).
+ixsimpl covers every sympy feature used in Wave: symbol creation, expression
+construction, structural inspection (`.tag` + accessors), substitution, free
+symbol queries, piecewise, evaluation (`lambdify`, `.eval()`), entailment
+checking (`ctx.check()`), expansion, and C codegen. The sole `sympy.solve()`
+call is an entailment check that maps directly to `ctx.check()`. The only
+remaining hard gap is `.replace(pred, fn)` (predicate-based rewriting), which
+lives in the sympy fallback path and may become dead code.
 
-**Recommended end state: ixsimpl as the primary expression IR, sympy as a
-thin compatibility layer retained only for `solve()` and `lambdify()`.**
+**Recommended end state: ixsimpl as the sole expression IR. Sympy removed
+entirely as a runtime dependency.**
 
 ### Incremental phases
 
@@ -296,25 +303,19 @@ caught by FileCheck.
 
 ## Phase 6: Remove sympy from hot paths
 
-**Goal:** Compiler passes operate on ixsimpl `Expr` natively. Sympy is only
-used for:
-- `sympy.solve()` (2 call sites in `assumptions.py`, `general_utils.py`)
-- `sympy.lambdify()` (numeric probing in `symbol_utils.py`)
-- Legacy test assertions that compare sympy expressions
+**Goal:** Compiler passes operate on ixsimpl `Expr` natively. Sympy is removed
+as a runtime dependency.
 
 **What this means:**
 - `IndexExpr` type alias changes from `sympy.Expr` to `ixsimpl.Expr`.
 - Symbol creation via `ctx.sym()` instead of `sympy.Symbol()`.
 - Expression construction via ixsimpl operators and free functions.
 - Substitution via `.subs()`.
+- Numeric probing via `ixsimpl.lambdify()` and `Expr.eval()`.
+- Entailment queries via `ctx.check()` (replaces `evaluate_with_assumptions`).
 - No more `piecewise_aware_subs()` workaround.
 - No more `evaluate=False` on Mod/floor (ixsimpl does not eagerly evaluate).
-
-**The 2 remaining sympy uses:**
-- `sympy.solve()`: Convert ixsimpl -> sympy at the call site, solve, convert
-  back. This is 2 call sites total.
-- `lambdify()`: Either keep the sympy conversion for probing, or write a simple
-  Python evaluator that walks ixsimpl tags. The latter is ~50 lines.
+- No more sympy bug workarounds (#28744, floor/ceil evaluation bugs).
 
 **Risk:** High but contained. This is the "flip the switch" phase. Every
 preceding phase must be complete and validated.
