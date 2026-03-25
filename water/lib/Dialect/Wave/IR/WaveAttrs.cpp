@@ -511,7 +511,7 @@ WaveHyperparameterAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                DictionaryAttr mapping) {
   for (NamedAttribute attr : mapping) {
     if (!isI64IntegerAttr(attr.getValue()))
-      return emitError() << "hyperparameter '" << attr.getName()
+      return emitError() << "hyperparameter '" << attr.getName().getValue()
                          << "' must be an i64 integer value, got "
                          << attr.getValue();
   }
@@ -737,7 +737,7 @@ LogicalResult HardwareConstraintAttr::verify(
     for (NamedAttribute attr : vectorShapes) {
       // TODO: verify that attr.getName() is a valid WaveSymbol
       if (!isI64IntegerAttr(attr.getValue()))
-        return emitError() << "vector_shapes entry '" << attr.getName()
+        return emitError() << "vector_shapes entry '" << attr.getName().getValue()
                            << "' must be an i64 integer value, got "
                            << attr.getValue();
     }
