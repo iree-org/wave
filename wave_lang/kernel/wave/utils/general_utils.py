@@ -20,6 +20,7 @@ import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ...lang.global_symbols import *
+from ...lang.global_symbols import LINEAR_INDEX
 from ...ops.wave_ops import (
     Allocate,
     CustomOp,
@@ -131,6 +132,16 @@ def delinearize_index(
             nd_index.append(sympy.floor(index / product) % size)
         product *= size
     return nd_index[::-1]
+
+
+def is_flattened_index(index: dict) -> bool:
+    """Check if an index dict uses a pre-flattened LINEAR_INDEX key."""
+    return LINEAR_INDEX in index
+
+
+def get_flat_offset(index: dict) -> IndexExpr:
+    """Return the flat physical offset from a flattened index."""
+    return index[LINEAR_INDEX].start
 
 
 def get_hardware_vector_size(

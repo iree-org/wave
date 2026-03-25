@@ -81,15 +81,16 @@ def test_bounds_check():
     # CHECK:            %[[C227:.*]] = arith.constant 227 : index
     # CHECK:            %[[D0:.*]] = affine.apply #map()[%block_id_y]
 
-    #                   Mask check
-    # CHECK:            %[[D1:.*]] = arith.cmpi slt, %[[D0]], %[[C227]] : index
+    #                   N per-element mask (fastest dim gets iota)
+    # CHECK:            arith.cmpi slt, {{.*}}, {{.*}} : vector<16xindex>
 
-    # CHECK:            %[[D2:.*]] = affine.apply #map1()[%thread_id_x, %block_id_x]
+    # CHECK:            %[[D2:.*]] = affine.apply #map{{.*}}()[%thread_id_x, %block_id_x]
 
-    #                   Mask check
+    #                   M scalar mask
     # CHECK:            %[[D3:.*]] = arith.cmpi slt, %[[D2]], %[[C227]] : index
 
     #                   Bounds check
+    # CHECK:            %[[D1:.*]] = arith.cmpi slt, %[[D0]], %[[C227]] : index
     # CHECK:            %[[D4:.*]] = arith.cmpi sge, %[[D0]], %[[C227]] : index
     # CHECK:            %[[D5:.*]] = arith.cmpi sge, %[[D2]], %[[C227]] : index
     # CHECK:            %[[D6:.*]] = arith.ori %[[D4]], %[[D5]] : i1
