@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 PYTORCH_INDEX = "https://download.pytorch.org/whl/rocm{ver}"
 AMD_FIND_LINKS = "https://repo.radeon.com/rocm/manylinux/rocm-rel-{ver}/"
 
-TORCH_SPEC = "torch>=2.6,<2.9"
+TORCH_SPEC = "torch>=2.6,<2.10"
 
 # ---------------------------------------------------------------------------
 # ROCm version detection
