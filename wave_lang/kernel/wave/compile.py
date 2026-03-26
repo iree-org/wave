@@ -617,6 +617,12 @@ def build_graph_passes(
             launchable.constraints,
             launchable.reordering_constraints,
         ),
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        ),
     ]
 
     if options.use_bound_check:
