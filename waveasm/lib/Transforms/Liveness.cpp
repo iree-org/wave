@@ -498,21 +498,18 @@ LivenessInfo computeLiveness(ProgramOp program) {
            "pack result must have a live range");
 
     for (auto [idx, input] : llvm::enumerate(packOp.getElements())) {
-      auto inputIt = info.ranges.find(input);
-      if (inputIt != info.ranges.end() && !claimedPackInputs.contains(input)) {
-        // First PackOp to claim this input: extend the pack result's range
-        // to cover the input's full lifetime, then remove from the
-        // allocator worklist.
-        resultIt->second.start =
-            std::min(resultIt->second.start, inputIt->second.start);
-        resultIt->second.end =
-            std::max(resultIt->second.end, inputIt->second.end);
-        info.ranges.erase(inputIt);
-        claimedPackInputs.insert(input);
-      } else if (claimedPackInputs.contains(input)) {
-        // Duplicate: same value used by another PackOp slot or repeated
-        // within this PackOp. A single SSA value can only occupy one
-        // physical register, so insert a copy to create a distinct value.
+      bool isExtract = input.getDefiningOp<ExtractOp>() != nullptr;
+      bool isDuplicate = claimedPackInputs.contains(input);
+
+      if (isDuplicate || isExtract) {
+        // Insert a copy for:
+        // - Duplicate inputs: same value claimed by another PackOp slot or
+        //   repeated within this PackOp. A single SSA value can only occupy
+        //   one physical register.
+        // - ExtractOp inputs: ExtractOp is non-emitting and aliases
+        //   source[offset]. The PackOp post-pass assigns input[i] =
+        //   result_base + i, which may differ from the extract's physical
+        //   register. Without a copy, the SRD word is silently wrong.
         OpBuilder builder(packOp);
         Value copy;
         if (isSGPRType(input.getType()))
@@ -522,6 +519,28 @@ LivenessInfo computeLiveness(ProgramOp program) {
           copy = V_MOV_B32::create(builder, packOp.getLoc(), input.getType(),
                                    input);
         packOp.setOperand(idx, copy);
+
+        // If this is a first-seen extract, also remove its range from the
+        // allocator worklist (the ExtractOp walk in LinearScanPass will
+        // assign the correct physReg based on the source vector).
+        auto inputIt = info.ranges.find(input);
+        if (!isDuplicate && inputIt != info.ranges.end()) {
+          info.ranges.erase(inputIt);
+          claimedPackInputs.insert(input);
+        }
+      } else {
+        auto inputIt = info.ranges.find(input);
+        if (inputIt != info.ranges.end()) {
+          // First PackOp to claim this input: extend the pack result's range
+          // to cover the input's full lifetime, then remove from the
+          // allocator worklist.
+          resultIt->second.start =
+              std::min(resultIt->second.start, inputIt->second.start);
+          resultIt->second.end =
+              std::max(resultIt->second.end, inputIt->second.end);
+          info.ranges.erase(inputIt);
+          claimedPackInputs.insert(input);
+        }
       }
     }
   });
