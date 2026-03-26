@@ -1142,6 +1142,7 @@ def _dbuf_mxfp4_helper(
     wave_shape=None,
     reorder_workgroups=None,
     eliminate_epilogue=False,
+    linearize_reads=True,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1224,6 +1225,7 @@ def _dbuf_mxfp4_helper(
     options.wave_runtime = True
     options.compile_to_mlir = False
     options.use_buffer_ops = use_buffer_ops
+    options.linearize_reads = linearize_reads
     options = set_default_run_config(options)
 
     M = tkl.sym.M
@@ -1478,6 +1480,15 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             "ee + scheduled pipeline + buffer ops"
         )
 
+    # Linearized reads increase VGPR pressure beyond the 256-register limit
+    # for 256x224x256 with dynamic dims + buffer ops (unscheduled).
+    skip_linearize = (
+        block_id == "256x224x256"
+        and dynamic_dims
+        and use_buffer_ops
+        and not use_schedule
+    )
+
     _dbuf_mxfp4_helper(
         shape=shape,
         block=block,
@@ -1491,6 +1502,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         output_dtype=output_dtype,
         wave_shape=wave_shape,
         eliminate_epilogue=eliminate_epilogue,
+        linearize_reads=not skip_linearize,
     )
 
 
