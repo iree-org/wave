@@ -292,7 +292,8 @@ LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
       if (idx >= numElems)
         break;
 
-      auto elemMapped = ctx.getMapper().getMapped(fromElemsOp.getElements()[idx]);
+      auto elemMapped =
+          ctx.getMapper().getMapped(fromElemsOp.getElements()[idx]);
       if (!elemMapped) {
         return op->emitError("element ") << idx << " not mapped";
       }
@@ -308,8 +309,7 @@ LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
       } else {
         int64_t bitOffset = e * elemBitWidth;
         auto shiftImm = ctx.createImmType(bitOffset);
-        auto shiftConst =
-            ConstantOp::create(builder, loc, shiftImm, bitOffset);
+        auto shiftConst = ConstantOp::create(builder, loc, shiftImm, bitOffset);
         auto vregType = ctx.createVRegType(1, 1);
         Value shifted =
             V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, elem);
@@ -322,7 +322,8 @@ LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
   if (dwordValues.size() == 1) {
     ctx.getMapper().mapValue(fromElemsOp.getDest(), dwordValues[0]);
   } else {
-    auto packedType = ctx.createVRegType(numDwords, numDwords > 1 ? numDwords : 1);
+    auto packedType =
+        ctx.createVRegType(numDwords, numDwords > 1 ? numDwords : 1);
     auto packResult = PackOp::create(builder, loc, packedType, dwordValues);
     ctx.getMapper().mapValue(fromElemsOp.getDest(), packResult);
   }

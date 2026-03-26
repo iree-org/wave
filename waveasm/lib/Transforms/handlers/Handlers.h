@@ -186,7 +186,7 @@ mlir::LogicalResult handleMemRefAtomicRMW(mlir::Operation *op,
 mlir::LogicalResult handleReadFirstLane(mlir::Operation *op,
                                         TranslationContext &ctx);
 mlir::LogicalResult handleROCDLSchedBarrier(mlir::Operation *op,
-                                             TranslationContext &ctx);
+                                            TranslationContext &ctx);
 mlir::LogicalResult handleSWaitcnt(mlir::Operation *op,
                                    TranslationContext &ctx);
 
