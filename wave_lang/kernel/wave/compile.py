@@ -541,8 +541,41 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    graph_passes.append(
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        )
+    )
+
     # Schedule the iterate ops.
     scheduling_type = options.schedule
+    use_scheduling_barriers = options.use_scheduling_barriers
+    if options.schedule == SchedulingType.MANUAL:
+        graph_passes.append(
+            partial(
+                launchable.run_manual_schedule,
+                trace,
+                launchable.constraints,
+                schedule,
+                use_scheduling_barriers,
+            ),
+        )
+    else:
+        graph_passes.append(
+            partial(
+                schedule_graph,
+                trace,
+                launchable.constraints,
+                use_scheduling_barriers,
+                scheduling_type,
+                options.override_schedule,
+                options.dump_schedule,
+                options.multi_buffer_count,
+            )
+        )
 
     graph_passes.append(
         partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
@@ -582,12 +615,6 @@ def build_graph_passes(
             launchable.constraints,
             launchable.reordering_constraints,
         ),
-        partial(
-            merge_contiguous_reads,
-            trace,
-            launchable.constraints,
-            options.target,
-        ),
     ]
 
     if options.use_bound_check:
@@ -604,31 +631,6 @@ def build_graph_passes(
             enforce_locations=options.enforce_locations,
         )
     )
-
-    use_scheduling_barriers = options.use_scheduling_barriers
-    if options.schedule == SchedulingType.MANUAL:
-        graph_passes.append(
-            partial(
-                launchable.run_manual_schedule,
-                trace,
-                launchable.constraints,
-                schedule,
-                use_scheduling_barriers,
-            ),
-        )
-    else:
-        graph_passes.append(
-            partial(
-                schedule_graph,
-                trace,
-                launchable.constraints,
-                use_scheduling_barriers,
-                scheduling_type,
-                options.override_schedule,
-                options.dump_schedule,
-                options.multi_buffer_count,
-            )
-        )
 
     raw_graph_passes = [raw_graph_pass(graph_pass) for graph_pass in graph_passes]
     return wrap_graph_passes_with_region_adapters(trace, raw_graph_passes)

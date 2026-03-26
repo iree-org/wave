@@ -12,6 +12,7 @@ from ..utils.general_utils import (
     propagate_loop_carried_vars,
 )
 from ...ops.wave_ops import (
+    ExtractSlice,
     GatherToLDS,
     GetResult,
     IterArg,
@@ -329,6 +330,29 @@ def compute_multi_buffer_count(
             )
 
     return result
+
+
+def propagate_scheduling_parameters_to_extract_slices(graph: fx.Graph):
+    """
+    After merge_contiguous_reads, wide Reads produce ExtractSlice nodes
+    that sit between the staged Read and its staged consumers (e.g. Bitcast).
+    These bridge nodes need the same scheduling_parameters as their source
+    so that liveness analysis correctly identifies cross-stage dependencies
+    and creates rotating registers for them.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for node in graph.nodes:
+            custom = get_custom(node)
+            if custom.scheduling_parameters is not None:
+                continue
+            if not isinstance(custom, ExtractSlice):
+                continue
+            source_custom = get_custom(custom.register_)
+            if source_custom.scheduling_parameters is not None:
+                custom.scheduling_parameters = dict(source_custom.scheduling_parameters)
+                changed = True
 
 
 def partition_graph_by_stage(
