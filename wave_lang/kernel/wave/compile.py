@@ -608,7 +608,11 @@ def build_graph_passes(
             launchable.constraints,
             launchable.reordering_constraints,
         ),
-        partial(flatten_read_indices, trace, launchable.constraints),
+        *(
+            [partial(flatten_read_indices, trace, launchable.constraints)]
+            if options.linearize_reads
+            else []
+        ),
         partial(
             merge_contiguous_reads,
             trace,

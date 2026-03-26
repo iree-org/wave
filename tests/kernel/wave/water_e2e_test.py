@@ -51,6 +51,7 @@ def _run_matmul_water_e2e(minimize_shared_allocs: bool):
     options_mlir = WaveCompileOptions(
         subs=hyperparams,
         compile_to_mlir=True,
+        linearize_reads=False,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
         minimize_shared_allocs=minimize_shared_allocs,
@@ -125,6 +126,7 @@ def test_attention_water():
     options_mlir = WaveCompileOptions(
         subs=hyperparams,
         compile_to_mlir=True,
+        linearize_reads=False,
         # TODO(#982): this pass creates IR that appears malformed, though pywave
         # manages to execute it.
         enable_mark_hardware_transpose_candidates=False,
