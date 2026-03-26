@@ -806,6 +806,8 @@ def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=N
     wide_custom.index = wide_index
     if hasattr(tag_source, "vector_shapes"):
         wide_read.vector_shapes = deepcopy(tag_source.vector_shapes)
+    if hasattr(tag_source, "expanded_dims") and tag_source.expanded_dims is not None:
+        wide_read.expanded_dims = deepcopy(tag_source.expanded_dims)
     if mask_expr is not None:
         wide_read.precomputed_mask_expr = mask_expr
     propagate_tag(tag_source, wide_read)
@@ -831,6 +833,8 @@ def _emit_extract_slice(
     extract_custom.index = deepcopy(orig_custom.index)
     if hasattr(orig_node, "vector_shapes"):
         extract_custom.vector_shapes = deepcopy(orig_node.vector_shapes)
+    if hasattr(orig_node, "expanded_dims") and orig_node.expanded_dims is not None:
+        extract.expanded_dims = deepcopy(orig_node.expanded_dims)
     propagate_tag(orig_node, extract)
     return extract
 
