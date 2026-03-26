@@ -217,7 +217,14 @@ private:
         }
       }
 
-      // Check for Trans -> non-Trans VALU forwarding hazard (gfx940+).
+      // Transcendental instructions (v_rcp_f32, v_rsq_f32, etc.) have a
+      // one-cycle forwarding hazard when a non-Trans VALU immediately
+      // consumes the result. Insert s_nop 0 to cover the required wait
+      // state. See LLVM GCNHazardRecognizer::checkVALUHazards,
+      // TransDefWaitstates = 1.
+      // The consumer must be a non-Trans VALU; Trans can forward to Trans
+      // without penalty. See LLVM GCNHazardRecognizer::checkVALUHazards,
+      // guard: !SIInstrInfo::isTRANS(*VALU).
       if (isVALUOp(op) && !isTransOp(op) && i > 0) {
         Operation *pred = nullptr;
         for (size_t j = i; j > 0; --j) {
