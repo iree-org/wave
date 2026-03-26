@@ -34,7 +34,7 @@ from ..._support.indexing import IndexingContext, IndexSequence
 from ..._support.tracing import CapturedTrace
 from ...compiler.utils import strides_from_symbolic_shape
 from ...lang.global_symbols import LINEAR_INDEX, SHARED_ADDRESS_SPACE
-from ...ops.wave_ops import Read, get_custom
+from ...ops.wave_ops import MemoryAccessFlags, Read, get_custom
 from ..assumptions import get_divisibility_subs
 from ..constraints import Constraint
 from ..utils.general_utils import (
@@ -50,13 +50,21 @@ from ..utils.mapping_utils import (
 from ..utils.symbol_utils import subs_idxc
 
 
-def _convert_bounds(bounds, index, ept, symbolic_shape, symbolic_dims):
+def _convert_bounds(bounds, index, phys_starts, ept, symbolic_shape, symbolic_dims):
     """Convert per-dim bounds to expression-keyed form.
 
-    Uses the original per-dimension start expressions from *index*
-    as the keys for the converted bounds.  For the innermost (fastest)
-    dimension, ``iota(ept)`` is added so the mask is per-element; for
-    all other dimensions the start is scalar and gets broadcast.
+    Uses the *physical* per-dimension start expressions (post-mapping)
+    as the keys for the converted bounds so the mask correctly checks
+    the physical coordinate against the bound.  For the innermost
+    (fastest) dimension, ``iota(ept)`` is added so the mask is
+    per-element; for all other dimensions the start is scalar and
+    gets broadcast.
+
+    Falls back to the original (pre-mapping) index for dimensions whose
+    physical start contains dynamic-val symbols (``$dynamic_val``),
+    because those symbols are only resolvable through the mapping's
+    dynamic_val_indices at codegen time, and the mapping is cleared
+    after flattening.
 
     Returns ``None`` if there are no applicable bounds.
     """
@@ -67,9 +75,15 @@ def _convert_bounds(bounds, index, ept, symbolic_shape, symbolic_dims):
     for dim, bound in bounds.items():
         if dim not in symbolic_dims:
             continue
-        dim_start = (
-            index[dim].start if isinstance(index[dim], IndexSequence) else index[dim]
-        )
+        phys = phys_starts[dim]
+        if any("dynamic_val" in str(s) for s in sympy.sympify(phys).free_symbols):
+            dim_start = (
+                index[dim].start
+                if isinstance(index[dim], IndexSequence)
+                else index[dim]
+            )
+        else:
+            dim_start = phys
         if dim == fastest_dim:
             dim_start = dim_start + idxc.iota(ept)
         new_bounds[dim_start] = bound
@@ -113,11 +127,16 @@ def _linearize_to_flat(
     index,
     symbolic_shape,
     symbolic_dims,
+    stride_shape,
     div_fwd,
     div_bwd,
     idxc,
 ):
     """Compute the flat LINEAR_INDEX start for *index* given *mapping*.
+
+    *stride_shape* is the shape used for computing memory strides.  It
+    equals the physical_layout shape when a MemoryLayout is present,
+    otherwise it is the same as *symbolic_shape*.
 
     Returns ``(flat_start, new_bounds_or_None)`` or ``None`` when the
     index cannot be flattened.
@@ -129,7 +148,7 @@ def _linearize_to_flat(
         return None
 
     mem_strides = list(
-        strides_from_symbolic_shape(idxc, symbolic_shape, allow_mixed_shapes=True)
+        strides_from_symbolic_shape(idxc, stride_shape, allow_mixed_shapes=True)
     )
 
     if has_mapping:
@@ -180,15 +199,28 @@ def flatten_read_indices(
         if _is_shared_memory(mem_node):
             continue
 
+        if custom.flags != MemoryAccessFlags.NONE:
+            continue
+
         memory = get_custom(mem_node)
         symbolic_shape = memory.type.symbolic_shape
         symbolic_dims = [infer_dim(d) for d in symbolic_shape]
+
+        layout = getattr(memory.type, "physical_layout", None)
+        stride_shape = layout.shape if layout is not None else symbolic_shape
+
+        phys_starts = _get_physical_starts(
+            mapping, index, symbolic_shape, symbolic_dims
+        )
+        if phys_starts is None:
+            continue
 
         flat_start = _linearize_to_flat(
             mapping,
             index,
             symbolic_shape,
             symbolic_dims,
+            stride_shape,
             div_fwd,
             div_bwd,
             idxc,
@@ -204,6 +236,7 @@ def flatten_read_indices(
             new_bounds = _convert_bounds(
                 bounds,
                 index,
+                phys_starts,
                 ept_val,
                 symbolic_shape,
                 symbolic_dims,
