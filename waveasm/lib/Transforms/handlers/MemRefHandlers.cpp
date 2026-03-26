@@ -232,8 +232,8 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
     ctx.getMapper().mapValue(loadOp.getResult(), readOp.getResult(0));
   } else {
     // Global load
-    auto [voffset, instOffset] = computeVOffsetFromIndices(
-        memrefType, loadOp.getIndices(), ctx, loc);
+    auto [voffset, instOffset] =
+        computeVOffsetFromIndices(memrefType, loadOp.getIndices(), ctx, loc);
     Value srd = lookupSRD(loadOp.getMemref(), ctx, loc);
 
     auto zeroImm = builder.getType<ImmType>(0);
@@ -243,17 +243,17 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
 
     Operation *loadInstr;
     if (elemBytes <= 1) {
-      loadInstr = BUFFER_LOAD_UBYTE::create(
-          builder, loc, TypeRange{vregType}, srd, voffset, zeroConst,
-          instOffset);
+      loadInstr =
+          BUFFER_LOAD_UBYTE::create(builder, loc, TypeRange{vregType}, srd,
+                                    voffset, zeroConst, instOffset);
     } else if (elemBytes <= 2) {
-      loadInstr = BUFFER_LOAD_USHORT::create(
-          builder, loc, TypeRange{vregType}, srd, voffset, zeroConst,
-          instOffset);
+      loadInstr =
+          BUFFER_LOAD_USHORT::create(builder, loc, TypeRange{vregType}, srd,
+                                     voffset, zeroConst, instOffset);
     } else {
-      loadInstr = BUFFER_LOAD_DWORD::create(
-          builder, loc, TypeRange{vregType}, srd, voffset, zeroConst,
-          instOffset);
+      loadInstr =
+          BUFFER_LOAD_DWORD::create(builder, loc, TypeRange{vregType}, srd,
+                                    voffset, zeroConst, instOffset);
     }
     ctx.getMapper().mapValue(loadOp.getResult(), loadInstr->getResult(0));
   }
@@ -290,8 +290,8 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
     DS_WRITE_B32::create(builder, loc, *data, vaddr);
   } else {
     // Global store
-    auto [voffset, instOffset] = computeVOffsetFromIndices(
-        memrefType, storeOp.getIndices(), ctx, loc);
+    auto [voffset, instOffset] =
+        computeVOffsetFromIndices(memrefType, storeOp.getIndices(), ctx, loc);
     Value srd = lookupSRD(storeOp.getMemref(), ctx, loc);
 
     BUFFER_STORE_DWORD::create(builder, loc, *data, srd, voffset, instOffset);
