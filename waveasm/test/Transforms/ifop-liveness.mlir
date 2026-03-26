@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --disable-pass-verifier --waveasm-linear-scan %s | FileCheck %s
 //
 // Test that IfOp results are properly tied to their yield operands via
 // the liveness analysis (Pass 3c).  Without tied classes, the allocator

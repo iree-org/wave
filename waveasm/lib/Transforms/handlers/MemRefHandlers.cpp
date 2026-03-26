@@ -62,7 +62,7 @@ LogicalResult handleMemRefAlloc(Operation *op, TranslationContext &ctx) {
         numElements *= dim;
       }
     }
-    int64_t elementBytes = (memrefType.getElementTypeBitWidth() + 7) / 8;
+    int64_t elementBytes = getElementBytes(memrefType.getElementType());
     int64_t allocSize = numElements * elementBytes;
 
     // Track the total LDS size for the kernel descriptor
@@ -140,9 +140,7 @@ LogicalResult handleMemRefReinterpretCast(Operation *op,
       // ops are emitted inline at the first buffer_store that uses this SRD,
       // so they survive DCE (their results are immediately consumed).
       auto memrefType = cast<MemRefType>(castOp.getResult().getType());
-      int64_t elementBytes = memrefType.getElementTypeBitWidth() / 8;
-      if (elementBytes == 0)
-        elementBytes = 1;
+      int64_t elementBytes = getElementBytes(memrefType.getElementType());
       // Pass the source SRD SSA value to maintain liveness across the
       // kernel, preventing the register allocator from overwriting the
       // kernel-arg SRD registers.
@@ -248,8 +246,7 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
     auto zeroImm = builder.getType<ImmType>(0);
     auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
 
-    Type elemType = memrefType.getElementType();
-    int64_t elemBytes = (elemType.getIntOrFloatBitWidth() + 7) / 8;
+    int64_t elemBytes = getElementBytes(memrefType.getElementType());
 
     Operation *loadInstr;
     if (elemBytes <= 1) {

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate %s | FileCheck %s
 //
 // Test: rocdl.sched.barrier handler emits waveasm.raw "s_sched_barrier".
 

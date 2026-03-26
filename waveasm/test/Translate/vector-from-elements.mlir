@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --target=gfx942 %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --target=gfx942 %s | FileCheck %s
 //
 // Test: vector.from_elements handler packs scalar elements into VGPR dwords.
 
