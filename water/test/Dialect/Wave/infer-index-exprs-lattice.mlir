@@ -1572,6 +1572,187 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
+// Backward propagation from an elementwise operation should not modify
+// the MMA result's index expressions, even when the elementwise result
+// has a higher priority lattice.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @no_backward_into_mma_from_elementwise
+  func.func @no_backward_into_mma_from_elementwise(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %d: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.mma
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+      -> !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    %add = wave.add %mma, %d {wave_test.override_result_index = [
+      [100, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Backward propagation from a permute operation should not modify
+// the MMA result's index expressions.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @no_backward_into_mma_from_permute
+  func.func @no_backward_into_mma_from_permute(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.mma
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+      -> !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.permute
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    %permuted = wave.permute %mma {wave_test.override_result_index = [
+      [100, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@N, @M] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Backward propagation from a write operation should not modify
+// the MMA result's index expressions.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @no_backward_into_mma_from_write
+  func.func @no_backward_into_mma_from_write(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %output: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.mma
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK: }, {
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+      -> !wave.tensor<[@M, @N] of f32>
+
+    // The write's memory operand has a high-priority override with different
+    // expressions. Sideways propagation within the write should not modify the
+    // MMA result (the value-to-store).
+    // CHECK: wave.write
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    wave.write %mma, %output {wave_test.override_operand_index = [
+      unit,
+      [100, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : !wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
+// Backward propagation from a yield operation in a loop should not modify
+// the MMA result's index expressions. The iterate's result gets a high-priority
+// lattice from a downstream add; that lattice flows back through the yield but
+// should not reach the MMA result.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @no_backward_into_mma_from_yield
+  func.func @no_backward_into_mma_from_yield(
+    %a: !wave.tensor<[@M, @K] of f16>,
+    %b: !wave.tensor<[@N, @K] of f16>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %d: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.iterate
+    %result = wave.iterate @K iter_args(%c) {
+    ^bb0(%acc: !wave.tensor<[@M, @N] of f32>):
+      // CHECK: wave.mma
+      // CHECK: }, {
+      // CHECK: }, {
+      // CHECK: }, {
+      // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+      // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+      %mma = wave.mma %a, %b, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+        : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
+        -> !wave.tensor<[@M, @N] of f32>
+
+      wave.yield %mma : !wave.tensor<[@M, @N] of f32>
+    } : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    // High-priority override on the iterate result's downstream use.
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    %add = wave.add %result, %d {wave_test.override_result_index = [
+      [100, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
+
+// -----
+
 // Overriding result lattice without specifying vector shape results in an error.
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_forward } {
   func.func @mma_missing_result_vector_shape(

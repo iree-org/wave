@@ -575,13 +575,13 @@ bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
 }
 
 FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsForward(
-    TypeRange operandTypes, Type resultType,
+    TypeRange operandTypes, Value result,
     llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
     llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
     EmitErrorFn emitError) {
-  auto targetTensorType = dyn_cast<WaveTensorType>(resultType);
+  auto targetTensorType = dyn_cast<WaveTensorType>(result.getType());
   if (!targetTensorType) {
-    emitError() << "expected result tensor type, got " << resultType;
+    emitError() << "expected result tensor type, got " << result.getType();
     return failure();
   }
 
@@ -596,19 +596,19 @@ FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsForward(
   // Forward propagation is identity only for symbols that are present.
   return identityIndexExprsPropagate(
              operandExprs[0].keepOnlySymbols(targetTensorType.getShape()),
-             resultExprs, resultType, "reduced value", "result", emitError) |
-         identityIndexExprsPropagate(operandExprs[1], resultExprs, resultType,
+             resultExprs, result, "reduced value", "result", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], resultExprs, result,
                                      "init", "result", emitError);
 }
 
 FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsBackward(
-    TypeRange operandTypes,
+    ValueRange operands,
     llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
     EmitErrorFn emitError) {
-  auto initTensorType = dyn_cast<WaveTensorType>(operandTypes[1]);
+  auto initTensorType = dyn_cast<WaveTensorType>(operands[1].getType());
   if (!initTensorType) {
-    emitError() << "expected init tensor type, got " << operandTypes[1];
+    emitError() << "expected init tensor type, got " << operands[1].getType();
     return failure();
   }
   if (operandExprs.size() != 2) {
@@ -621,14 +621,13 @@ FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsBackward(
   // expressions for symbols present in both target and source, but additional
   // propagation from the op defining the operand is needed to cover reduction
   // dimensions. Backward propagation to the init is full identity.
-  return identityIndexExprsPropagate(resultExprs[0], operandExprs, operandTypes,
+  return identityIndexExprsPropagate(resultExprs[0], operandExprs, operands,
                                      "result", "operands", emitError) |
          identityIndexExprsPropagate(
              operandExprs[0].keepOnlySymbols(initTensorType.getShape()),
-             operandExprs[1], operandTypes[1], "operand", "init", emitError) |
+             operandExprs[1], operands[1], "operand", "init", emitError) |
          identityIndexExprsPropagate(operandExprs[1], operandExprs[0],
-                                     operandTypes[0], "init", "operand",
-                                     emitError);
+                                     operands[0], "init", "operand", emitError);
 }
 
 //-----------------------------------------------------------------------------
@@ -1753,51 +1752,18 @@ llvm::operator<<(llvm::raw_ostream &os,
   return os;
 }
 
-// Heuristic to stop index expression propagation Currently, it stops
-// propagation of index expressions if they don't cover all non-unit dimension
-// of the "to" vector shape.
-// XXX: this is carried over lhs the python prototype and is not principled.
-bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
-                               const wave::IndexExprsLatticeStorage &to) {
-  if (from.isBottom() || from.isTop() || !from.getVectorShape() || to.isTop() ||
-      to.isBottom())
-    return true;
-
-  SmallVector<StringAttr> nonBatchDims = llvm::map_to_vector(
-      llvm::make_filter_range(
-          from.getVectorShape(),
-          [](const NamedAttribute &attr) {
-            return cast<IntegerAttr>(attr.getValue()).getValue().sgt(1);
-          }),
-      [](NamedAttribute attr) { return attr.getName(); });
-  SmallVector<StringAttr> toKeys = llvm::map_to_vector(
-      to.getConcreteValue(),
-      [](const NamedAttribute &attr) { return attr.getName(); });
-  if ((toKeys.size() < nonBatchDims.size() &&
-       !llvm::all_of(toKeys,
-                     [&](StringAttr key) {
-                       return llvm::is_contained(nonBatchDims, key);
-                     })) ||
-      !llvm::all_of(nonBatchDims, [&](StringAttr key) {
-        return llvm::is_contained(toKeys, key);
-      })) {
-    return false;
-  }
-  return true;
-}
-
 llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
     llvm::ArrayRef<IndexExprsLatticeStorage> from,
-    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, TypeRange toTypes,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, ValueRange toValues,
     llvm::StringRef fromName, llvm::StringRef toName,
     wave::EmitErrorFn emitError) {
   ChangeResult changeResult = ChangeResult::NoChange;
-  for (auto &&[toNum, toLattice, toType] : llvm::enumerate(to, toTypes)) {
+  for (auto &&[toNum, toLattice, toValue] : llvm::enumerate(to, toValues)) {
     if (toLattice.isTop())
       continue;
 
-    auto toTensorType = dyn_cast<WaveTensorType>(toType);
-    if (!toTensorType)
+    auto toTensorType = dyn_cast<WaveTensorType>(toValue.getType());
+    if (!toTensorType || !toTensorType.getFullySpecified())
       continue;
 
     for (auto &&[fromNum, fromLattice] : llvm::enumerate(from)) {
@@ -1816,7 +1782,8 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
       // XXX: a more efficient way would have been to join all "from" lattices
       // first, and then join that into each "to" lattice. But this heuristic
       // would not work in that case.
-      if (!shouldPropagateIndexExprs(fromLattice, toLattice)) {
+      if (!wave::detail::shouldPropagateIndexExprs(fromLattice, toLattice,
+                                                   toValue)) {
         LLVM_DEBUG(LDBG() << "not propagating index expressions from "
                           << fromName << " #" << fromNum << " to " << toName
                           << " #" << toNum << "\n";);

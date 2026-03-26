@@ -958,7 +958,6 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-// Test broadcast propagates index expressions (identity propagation).
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @broadcast_index_exprs
   func.func @broadcast_index_exprs(
@@ -974,10 +973,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
-    // Broadcast the MMA result from [@M, @N] to [@M, @N, @P] - should propagate M and N's index exprs.
+    // Propagation-stopper heuristic prevents propagation from above because the
+    // broadcast contains a dimension @P not included in the source vector shape.
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>]
+    // CHECK-DAG: M : <[] -> (0, 1, 1)>
+    // CHECK-DAG: N : <[] -> (0, 1, 1)>
     %broadcasted = wave.broadcast %mma
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
@@ -1012,9 +1012,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // @M and @N get index exprs from mma1 (forward propagation).
     // @P gets index expr from mma2 via the add operation (backward propagation).
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>]
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>]
+    // CHECK-DAG: M : <[] -> (0, 1, 1)>
+    // CHECK-DAG: N : <[] -> (0, 1, 1)>
+    // CHECK-DAG: P : <[] -> (0, 1, 1)>
     %broadcasted = wave.broadcast %mma1
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 

@@ -1758,6 +1758,13 @@ public:
       // in the function.
       // TODO: expose it upstream and use.
       addDependency(blockArgLattice, getProgramPointAfter(iterateOp));
+
+      if (!wave::detail::shouldPropagateIndexExprs(blockArgLattice->getValue(),
+                                                   lattice->getValue(),
+                                                   opOperand.get())) {
+        return;
+      }
+
       LDBG() << "propagating backwards from block argument #" << position
              << " to op operand " << PrintNoRegions(iterateOp);
       LDBG() << "block argument lattice: " << *blockArgLattice;
@@ -1782,6 +1789,13 @@ public:
       // TODO: expose it upstream and use.
       addDependency(const_cast<IndexExprsLattice *>(resultLattice),
                     getProgramPointAfter(yieldOp));
+
+      if (!wave::detail::shouldPropagateIndexExprs(resultLattice->getValue(),
+                                                   lattice->getValue(),
+                                                   opOperand.get())) {
+        return;
+      }
+
       LDBG() << "propagating backwards from region-carrying op result #"
              << position << " to terminator operand " << yieldOp;
       LDBG() << "result lattice: " << *resultLattice;

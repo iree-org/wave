@@ -1111,6 +1111,53 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
   return success();
 }
 
+// Heuristic to stop index expression propagation Currently, it stops
+// propagation of index expressions if they don't cover all non-unit dimension
+// of the "to" vector shape.
+// XXX: this is carried over lhs the python prototype and is not principled.
+bool wave::detail::shouldPropagateIndexExprs(
+    const wave::IndexExprsLatticeStorage &from,
+    const wave::IndexExprsLatticeStorage &to, Value toValue) {
+  if (from.isBottom() || from.isTop() || !from.getVectorShape() || to.isTop() ||
+      to.isBottom())
+    return true;
+
+  if (toValue.getDefiningOp<wave::MmaOp>())
+    return false;
+
+  auto toType = cast<WaveTensorType>(toValue.getType());
+  ArrayRef<wave::WaveSymbolAttr> toShape = toType.getShape();
+  if (!llvm::all_of(toShape, [&](wave::WaveSymbolAttr symbol) {
+        return llvm::find_if(from.getVectorShape(), [&](NamedAttribute attr) {
+                 return attr.getName() == symbol.getName();
+               }) != from.getVectorShape().end();
+      })) {
+    return false;
+  }
+
+  SmallVector<StringAttr> nonBatchDims = llvm::map_to_vector(
+      llvm::make_filter_range(
+          from.getVectorShape(),
+          [](const NamedAttribute &attr) {
+            return cast<IntegerAttr>(attr.getValue()).getValue().sgt(1);
+          }),
+      [](NamedAttribute attr) { return attr.getName(); });
+  SmallVector<StringAttr> toKeys = llvm::map_to_vector(
+      to.getConcreteValue(),
+      [](const NamedAttribute &attr) { return attr.getName(); });
+  if ((toKeys.size() < nonBatchDims.size() &&
+       !llvm::all_of(toKeys,
+                     [&](StringAttr key) {
+                       return llvm::is_contained(nonBatchDims, key);
+                     })) ||
+      !llvm::all_of(nonBatchDims, [&](StringAttr key) {
+        return llvm::is_contained(toKeys, key);
+      })) {
+    return false;
+  }
+  return true;
+}
+
 LogicalResult wave::detail::buildThreadIndependentIndexMappings(
     Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
     llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings) {
@@ -2491,13 +2538,20 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
   // Re-join with the original expressions to get the right priority.
   joined = IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
 
+  unsigned valueToStoreOperandNumber =
+      getValueToStoreMutable().getOperandNumber();
+  unsigned memoryOperandNumber = getMemoryMutable().getOperandNumber();
   ChangeResult changeResult = ChangeResult::NoChange;
-  if (operandExprs[0] != joined) {
-    operandExprs[0] = joined;
+  if (operandExprs[valueToStoreOperandNumber] != joined &&
+      wave::detail::shouldPropagateIndexExprs(
+          operandExprs[valueToStoreOperandNumber], joined, getValueToStore())) {
+    operandExprs[valueToStoreOperandNumber] = joined;
     changeResult = ChangeResult::Change;
   }
-  if (operandExprs[1] != joined) {
-    operandExprs[1] = joined;
+  if (operandExprs[memoryOperandNumber] != joined &&
+      wave::detail::shouldPropagateIndexExprs(operandExprs[memoryOperandNumber],
+                                              joined, getMemory())) {
+    operandExprs[memoryOperandNumber] = joined;
     changeResult = ChangeResult::Change;
   }
   return changeResult;
@@ -2775,9 +2829,9 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsForward(
   // present in the source to the result and make sure they are joined with
   // those. Additional propagation backward from the result users will be needed
   // to cover all symbols.
-  return detail::identityIndexExprsPropagate(
-      operandIndexExprs, resultIndexExprs, getResult().getType(), "operand",
-      "result", emitError);
+  return detail::identityIndexExprsPropagate(operandIndexExprs,
+                                             resultIndexExprs, getResult(),
+                                             "operand", "result", emitError);
 }
 
 FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
@@ -2793,7 +2847,7 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
   // Backward propagation is identity only for symbols that are present
   return detail::identityIndexExprsPropagate(
       resultIndexExprs[0].keepOnlySymbols(sourceTensorType.getShape()),
-      operandIndexExprs, sourceTensorType, "result", "operand", emitError);
+      operandIndexExprs, getSource(), "result", "operand", emitError);
 }
 
 LogicalResult wave::BroadcastOp::verify() {
@@ -3054,6 +3108,11 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
   auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
   if (!resultType || !resultType.getFullySpecified())
     return ChangeResult::NoChange;
+
+  if (!wave::detail::shouldPropagateIndexExprs(resultExprs[0], operandExprs[0],
+                                               getValue())) {
+    return ChangeResult::NoChange;
+  }
 
   ArrayRef<WaveSymbolAttr> resultShape = resultType.getShape();
   ArrayRef<WaveSymbolAttr> srcShape = inputType.getShape();

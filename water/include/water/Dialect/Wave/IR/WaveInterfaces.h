@@ -137,13 +137,13 @@ bool isReductionTypeInferenceComplete(mlir::Value input, mlir::Value init,
                                       mlir::Value result);
 
 llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsForward(
-    mlir::TypeRange operandTypes, mlir::Type resultType,
+    mlir::TypeRange operandTypes, mlir::Value result,
     llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
     llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
     EmitErrorFn emitError);
 
 llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsBackward(
-    mlir::TypeRange operandTypes,
+    mlir::ValueRange operands,
     llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
     EmitErrorFn emitError);
@@ -242,8 +242,8 @@ public:
       EmitErrorFn errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     return detail::propagateReductionIndexExprsForward(
-        concrete.getOperands().getTypes(), concrete.getResult().getType(),
-        operandExprs, resultExprs, errs);
+        concrete.getOperands().getTypes(), concrete.getResult(), operandExprs,
+        resultExprs, errs);
   }
 
   llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsBackward(
@@ -251,7 +251,7 @@ public:
       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs, EmitErrorFn errs) {
     auto concrete = llvm::cast<OpTy>(this->getOperation());
     return detail::propagateReductionIndexExprsBackward(
-        concrete.getOperands().getTypes(), operandExprs, resultExprs, errs);
+        concrete.getOperands(), operandExprs, resultExprs, errs);
   }
 };
 
@@ -753,9 +753,29 @@ namespace detail {
 llvm::FailureOr<mlir::ChangeResult>
 identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::MutableArrayRef<IndexExprsLatticeStorage> to,
-                            mlir::TypeRange toTypes, llvm::StringRef fromName,
+                            mlir::ValueRange toValues, llvm::StringRef fromName,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
+
+// Heuristic to stop index expression propagation. It stops
+// propagation of index expressions if any of the following conditions is met:
+//   (1) the propagation would happen to the result of the MMA op;
+//   (2) any of the symbols in the shape of the "to" _value_ are not present in
+//   the "from" vector shape; (3) there are dimensions in the "to" index
+//   expression don't correspond to non-unit entires in the "from" vector shape
+//   (when there are less "to" dimensions than entries in the "from" vector
+//   shape); (4) there are non-unit entries in the "vector" shape that don't
+//   correspond to a "to" index expression (when there are less entires in the
+//   "from" vector shape).
+// XXX: conditions 2-4 are carried over from the python prototype and are not
+// principled.
+//
+// Defined in WaveOps.cpp to uss specific op names, which we don't want in
+// interfaces.
+// TODO: move all the index expr logic to one file and avoid this spreadout.
+bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
+                               const wave::IndexExprsLatticeStorage &to,
+                               mlir::Value toValue);
 
 // Build thread-independent index mapping for a single tensor type and append to
 // symbolMappings. Used by identity and reduction index expr initialization.
@@ -817,7 +837,7 @@ public:
       llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
       wave::EmitErrorFn emitError) {
     return wave::detail::identityIndexExprsPropagate(
-        operandExprs, resultExprs, this->getOperation()->getResultTypes(),
+        operandExprs, resultExprs, this->getOperation()->getResults(),
         "operand", "result", emitError);
   }
 
@@ -827,7 +847,7 @@ public:
       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
       wave::EmitErrorFn emitError) {
     return wave::detail::identityIndexExprsPropagate(
-        resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
+        resultExprs, operandExprs, this->getOperation()->getOperands(),
         "result", "operand", emitError);
   }
 };
