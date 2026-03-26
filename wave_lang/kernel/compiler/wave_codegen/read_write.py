@@ -1149,10 +1149,17 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
     is_bf16 = isinstance(element_type, BF16Type)
 
-    # TODO: Replace _shuffle_xor_pack with a formal Write node attribute.
-    if is_shared and is_bf16 and getattr(node, "_shuffle_xor_pack", False):
-        _write_shuffle_xor16_b128_to_lds(
-            emitter, insert_vector, kb_dest, start_indices_th
+    if not is_shared and is_bf16 and getattr(node, "_permlane_pack_global", False):
+        _write_permlane_pack_to_global(
+            emitter,
+            insert_vector,
+            kb_dest,
+            output_shape,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            get_custom(memory),
+            index,
         )
         return
 
@@ -1177,68 +1184,113 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
-def _write_shuffle_xor16_b128_to_lds(
+def _write_permlane_pack_to_global(
     emitter: WaveEmitter,
     insert_vector: Value,
-    mem: Value,
+    kb_dest: Value,
+    output_shape: tuple,
+    start_indices: tuple,
+    start_indices_wg: tuple,
     start_indices_th: tuple,
+    memory_custom,
+    index: dict,
 ):
-    """Combine own 4 bf16 with partner lane's 4 bf16 via shuffle XOR 16,
-    producing a vector<4xi32> (8 packed bf16) written as ds_write_b128.
+    """Pack two lanes' bf16 values via permlane16_swap for wide global stores.
 
     MMA accumulator layout (F32_16x16x128_F8F6F4) gives each thread 4
-    consecutive M values. Lanes are grouped by 16: lanes 0-15 own M=0-3,
-    lanes 16-31 own M=4-7, etc. Shuffle XOR 16 exchanges between paired
-    groups, giving each lane 8 consecutive M values.
+    consecutive M values.  Lanes are grouped by 16: lanes 0-15 own M=0-3,
+    lanes 16-31 own M=4-7, etc.  ``v_permlane16_swap_b32`` exchanges data
+    between paired groups, giving each lane 8 consecutive M values that
+    can be written as a single ``buffer_store_dwordx4`` (128 bits).
 
-    Both lane halves write: the lower half uses [own, partner] ordering,
-    the upper half uses [partner, own] with an adjusted address, so both
-    produce identical data at the same LDS location.
+    Both lane halves produce identical data at the same address (benign
+    duplicate store):
+
+      - Lower half (lanes 0-15 in each 32-lane group):
+        data = [own, partner], address = thread's original M index.
+      - Upper half (lanes 16-31):
+        data = [partner, own], address = original M index - 4.
+
+    This dual-write avoids divergent control flow (no scf.if / exec
+    masking needed).  The buffer descriptor's ``valid_bytes`` handles
+    out-of-bounds suppression for dynamic shapes.
+
+    Precondition: M must be the innermost (last) memory dimension with
+    stride 1 (i.e. transpose_output=True, shape [N, M]).
     """
     bf16_type = BF16Type.get()
     i32_type = IntegerType.get_signless(32)
+    idx_type = IndexType.get()
     v2i32_type = VectorType.get([2], i32_type)
     v4i32_type = VectorType.get([4], i32_type)
     v8bf16_type = VectorType.get([8], bf16_type)
-    idx_type = IndexType.get()
 
+    # Bitcast 4 x bf16 -> 2 x i32 so permlane16_swap can operate on dwords.
     i32_vec = vector_d.bitcast(v2i32_type, insert_vector)
-    own_0 = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
-    own_1 = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
+    own_lo = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
+    own_hi = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
 
-    swap_result_type = llvm_d.StructType.get_literal([i32_type, i32_type])
-    swap_0 = rocdl_d.permlane16_swap(swap_result_type, own_0, own_0, False, False)
-    partner_0 = llvm_d.extractvalue(i32_type, swap_0, [0])
-    swap_1 = rocdl_d.permlane16_swap(swap_result_type, own_1, own_1, False, False)
-    partner_1 = llvm_d.extractvalue(i32_type, swap_1, [0])
-
-    lane_id = emitter.thread_ids[0]
-    lane_in_wave = arith_d.remui(lane_id, arith_d.constant(idx_type, 64))
-    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
-    is_lower = arith_d.cmpi(
-        arith_d.CmpIPredicate.ult,
-        half_pos,
-        arith_d.constant(idx_type, 16),
+    # Exchange dwords with the partner lane 16 positions apart.
+    swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
+    partner_lo = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_lo, own_lo, False, False), [0]
+    )
+    partner_hi = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_hi, own_hi, False, False), [0]
     )
 
-    v0 = arith_d.select(is_lower, own_0, partner_0)
-    v1 = arith_d.select(is_lower, own_1, partner_1)
-    v2 = arith_d.select(is_lower, partner_0, own_0)
-    v3 = arith_d.select(is_lower, partner_1, own_1)
+    # Classify this lane as lower (0-15) or upper (16-31) within each
+    # 32-lane half-wave.
+    lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
+    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
+    is_lower = arith_d.cmpi(
+        arith_d.CmpIPredicate.ult, half_pos, arith_d.constant(idx_type, 16)
+    )
 
-    wide_i32 = vector_d.from_elements(v4i32_type, [v0, v1, v2, v3])
+    # Both halves build identical 8-bf16 vectors, but in complementary
+    # order so they land at the same memory address:
+    #   lower: [own_lo, own_hi, partner_lo, partner_hi]   @ M
+    #   upper: [partner_lo, partner_hi, own_lo, own_hi]    @ M - 4
+    d0 = arith_d.select(is_lower, own_lo, partner_lo)
+    d1 = arith_d.select(is_lower, own_hi, partner_hi)
+    d2 = arith_d.select(is_lower, partner_lo, own_lo)
+    d3 = arith_d.select(is_lower, partner_hi, own_hi)
+
+    wide_i32 = vector_d.from_elements(v4i32_type, [d0, d1, d2, d3])
     wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
 
-    lds_offset = start_indices_th[0]
-    four_elems = arith_d.constant(idx_type, 4)
-    adjusted_offset = arith_d.subi(lds_offset, four_elems)
-    final_offset = arith_d.select(is_lower, lds_offset, adjusted_offset)
+    # Adjust the M (last) dimension index for the upper half so both
+    # halves target the same 8-element span starting at the lower half's
+    # M base.  M is contiguous (stride 1), so subtracting 4 elements
+    # from the index subtracts 4 from the linearized element offset.
+    four = arith_d.constant(idx_type, 4)
 
-    # Both lane halves (lower and upper within each 32-lane group) write
-    # identical data to the same LDS address, so half the ds_write_b128
-    # instructions are redundant.
-    # TODO: Mask out the upper half to cut LDS write traffic in half.
-    vector_d.store(wide_vec, mem, [final_offset])
+    adj_th = list(start_indices_th)
+    adj_th[-1] = arith_d.select(is_lower, adj_th[-1], arith_d.subi(adj_th[-1], four))
+
+    adj_full = list(start_indices)
+    adj_full[-1] = arith_d.select(
+        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], four)
+    )
+
+    # mask=None: the buffer descriptor encodes valid_bytes for the full
+    # output buffer, so OOB stores at tile edges are silently dropped by
+    # hardware.  The original Write node's mask was sized for 4 elements,
+    # incompatible with our 8-element vector.
+    _create_vec_read_write(
+        emitter,
+        output_shape,
+        kb_dest,
+        wide_vec,
+        None,
+        tuple(adj_full),
+        start_indices_wg,
+        tuple(adj_th),
+        8,
+        memory_custom,
+        None,
+        node_index=index,
+    )
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
