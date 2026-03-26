@@ -367,11 +367,9 @@ LivenessInfo computeLiveness(ProgramOp program) {
       if (parentOp && isa<LoopOp>(parentOp)) {
         Block *body = blockArg.getOwner();
         Operation *terminator = body->getTerminator();
-        if (terminator) {
-          auto termIt = opToIdx.find(terminator);
-          if (termIt != opToIdx.end()) {
-            range.end = std::max(range.end, termIt->second);
-          }
+        auto termIt = opToIdx.find(terminator);
+        if (termIt != opToIdx.end()) {
+          range.end = std::max(range.end, termIt->second);
         }
 
         // Extend to the next sibling op after the LoopOp. This bridges
@@ -449,11 +447,9 @@ LivenessInfo computeLiveness(ProgramOp program) {
           for (Region &region : regionOp->getRegions()) {
             for (Block &block : region) {
               Operation *terminator = block.getTerminator();
-              if (terminator) {
-                auto termIt = opToIdx.find(terminator);
-                if (termIt != opToIdx.end()) {
-                  it->second.end = std::max(it->second.end, termIt->second);
-                }
+              auto termIt = opToIdx.find(terminator);
+              if (termIt != opToIdx.end()) {
+                it->second.end = std::max(it->second.end, termIt->second);
               }
             }
           }
@@ -687,16 +683,14 @@ LivenessInfo computeLiveness(ProgramOp program) {
       return;
 
     auto &thenBlock = ifOp.getThenBlock();
-    auto thenYield = dyn_cast<YieldOp>(thenBlock.getTerminator());
-    if (!thenYield)
-      return;
+    auto thenYield = cast<YieldOp>(thenBlock.getTerminator());
 
     YieldOp elseYield = nullptr;
     if (Block *elseBlock = ifOp.getElseBlock()) {
-      elseYield = dyn_cast<YieldOp>(elseBlock->getTerminator());
+      elseYield = cast<YieldOp>(elseBlock->getTerminator());
     }
 
-    for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+    for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
       Value ifResult = ifOp->getResult(i);
       auto resIt = info.ranges.find(ifResult);
       if (resIt == info.ranges.end())
@@ -705,12 +699,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
       llvm::SmallVector<Value> members;
       members.push_back(ifResult);
 
-      if (i < thenYield.getResults().size()) {
+      if (i < thenYield->getNumResults()) {
         Value thenVal = thenYield.getResults()[i];
         if (info.ranges.contains(thenVal))
           members.push_back(thenVal);
       }
-      if (elseYield && i < elseYield.getResults().size()) {
+      if (elseYield && i < elseYield->getNumResults()) {
         Value elseVal = elseYield.getResults()[i];
         if (info.ranges.contains(elseVal))
           members.push_back(elseVal);
@@ -764,12 +758,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
       //   ifResult  -> thenVal  (ifResult picks up thenVal's phys reg)
       //   elseVal   -> thenVal  (elseVal picks up thenVal's phys reg)
       Value thenVal;
-      if (i < thenYield.getResults().size()) {
+      if (i < thenYield->getNumResults()) {
         thenVal = thenYield.getResults()[i];
         if (info.ranges.contains(thenVal) && !tc.tiedPairs.contains(ifResult))
           tc.tiedPairs[ifResult] = thenVal;
       }
-      if (elseYield && i < elseYield.getResults().size()) {
+      if (elseYield && i < elseYield->getNumResults()) {
         Value elseVal = elseYield.getResults()[i];
         if (info.ranges.contains(elseVal) && !tc.tiedPairs.contains(elseVal)) {
           if (thenVal && info.ranges.contains(thenVal))

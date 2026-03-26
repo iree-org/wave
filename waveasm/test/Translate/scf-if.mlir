@@ -1,7 +1,6 @@
-// RUN: waveasm-translate --target=gfx942 %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --target=gfx942 %s | FileCheck %s
 //
-// Test: scf.if translation to waveasm.if, including result type propagation
-// from then-yield operands and else-branch type matching.
+// Test: scf.if translation to waveasm.if
 
 //===----------------------------------------------------------------------===//
 // Test 1: Simple if-then-else with computed results
@@ -18,7 +17,7 @@ module {
 
       %cond = arith.cmpi ult, %tid, %c10 : index
 
-      // CHECK: waveasm.if
+      // CHECK: = waveasm.if {{.*}} -> !waveasm.vreg {
       // CHECK:   waveasm.yield
       // CHECK: } else {
       // CHECK:   waveasm.yield
@@ -53,7 +52,7 @@ module {
 
       // CHECK: waveasm.loop
       %result = scf.for %i = %c0 to %c4 step %c1 iter_args(%acc = %c0) -> index {
-        // CHECK: waveasm.if
+        // CHECK: = waveasm.if {{.*}} -> !waveasm.vreg {
         %step = scf.if %cond -> index {
           %v = arith.addi %acc, %c1 : index
           scf.yield %v : index

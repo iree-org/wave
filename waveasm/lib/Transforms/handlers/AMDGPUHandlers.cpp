@@ -1301,16 +1301,13 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
 }
 
 LogicalResult handleROCDLSchedBarrier(Operation *op, TranslationContext &ctx) {
+  auto schedBarrierOp = cast<ROCDL::SchedBarrier>(op);
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
 
-  int32_t mask = 0;
-  if (auto maskAttr = op->getAttrOfType<IntegerAttr>("mask")) {
-    mask = maskAttr.getInt();
-  }
+  int32_t mask = schedBarrierOp.getMask();
 
-  RawOp::create(builder, loc,
-                "s_sched_barrier 0x" + llvm::utohexstr(mask));
+  RawOp::create(builder, loc, "s_sched_barrier 0x" + llvm::utohexstr(mask));
   return success();
 }
 

@@ -1,4 +1,4 @@
-// RUN: waveasm-translate --target=gfx942 %s 2>&1 | FileCheck %s
+// RUN: waveasm-translate --target=gfx942 %s | FileCheck %s
 //
 // Test: memref.load handler emits subdword buffer loads (UBYTE, USHORT)
 // for sub-32-bit element types.
