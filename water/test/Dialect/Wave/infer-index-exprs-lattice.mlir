@@ -1211,60 +1211,96 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-// Tests for shouldPropagateIndexExprs (propagation stopper): when the
-// destination lattice has a vector shape, join from a source is skipped
-// unless the source's index keys cover every non-unit dimension of that shape.
-// Forward: destination is the result lattice; backward: destination is each
-// operand lattice.
+//
+// shouldPropagateIndexExprs tests
+//
+// shouldPropagateIndexExprs(from, to) (WaveInterfaces.cpp) returns false when
+// the destination lattice's concrete index keys omit some non-unit dimension
+// from the source lattice's vector shape; identityIndexExprsPropagate then
+// skips the join for that edge instead of driving the lattice to top.
+//
 
-// Operand #0 only maps M while the result vector shape has two non-unit dims;
-// a deliberately conflicting M on operand #0 is not joined, so operand #1
-// supplies the consistent {M, K} mapping. Without this rule, this would have
-// led to a conflict.
+// Forward skip: reciprocal A produces a result with vecShape {M=4, K=4}
+// (K is extra, absent from the 1D tensor shape [@M]). Reciprocal B's result
+// has only M in its concrete keys (since the tensor is 1D). Forward propagation
+// from A.result to B.result: from.vecShape non-unit = {M, K}, to keys = {M},
+// K is missing => shouldPropagateIndexExprs returns false => skip.
+// B.result keeps M = T0 * 32 from its override, never gets T0 * 99 from A.
+
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
-  // CHECK-LABEL: @propagation_stopper_forward_partial_operand
-  func.func @propagation_stopper_forward_partial_operand(
-    %a: !wave.tensor<[@M, @K] of f16>,
-    %b: !wave.tensor<[@M, @K] of f16>
-  ) -> !wave.tensor<[@M, @K] of f16> attributes {
+  // CHECK-LABEL: @propagation_skip_forward
+  func.func @propagation_skip_forward(
+    %a: !wave.tensor<[@M] of f16>
+  ) -> !wave.tensor<[@M] of f16> attributes {
     wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // CHECK: wave.add
-    // CHECK: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>
-    // CHECK: override
-    %result = wave.add %a, %b {
+    // CHECK: wave.reciprocal
+    // CHECK-SAME: T0 * 99
+    %t = wave.reciprocal %a {
       wave_test.override_result_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (<NULL>, <NULL>, <NULL>)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (<NULL>, <NULL>, <NULL>)>},
-         {M = 4 : i32, K = 4 : i32}]
-      ],
-      wave_test.override_operand_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}],
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}]
+        [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
+         {M = 4 : i64, K = 4 : i64}]
       ]
-    } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
-    return %result : !wave.tensor<[@M, @K] of f16>
+    } : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M] of f16>
+    // CHECK: wave.reciprocal
+    // CHECK-SAME: T0 * 32
+    // CHECK-NOT: T0 * 99
+    %r = wave.reciprocal %t {
+      wave_test.override_result_index = [
+        [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>},
+         {M = 4 : i64}]
+      ]
+    } : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M] of f16>
+    return %r : !wave.tensor<[@M] of f16>
   }
 }
 
 // -----
 
-// Backward: result lattice only maps M while operands have vector shapes with
-// two non-unit dims; propagating result into operands is skipped. Without the
-// heuristic, this would have resulted in a conflict. Note that we need the
-// additional unary operands because the index value attached to the operation
-// corresponds to results, so we need operations to check for index values of
-// essentially "wave.add" operands.
+// Forward propagation through broadcast: same source lattice as above (vecShape
+// {M=4, K=4}), but the broadcast result is 2D [@M, @K] so its concrete keys
+// include both M and K. shouldPropagateIndexExprs finds all non-unit dims
+// covered and returns true, so M = T0 * 99 propagates into the broadcast
+// result.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
+  // CHECK-LABEL: @propagation_through_broadcast
+  func.func @propagation_through_broadcast(
+    %a: !wave.tensor<[@M] of f16>
+  ) -> !wave.tensor<[@M, @K] of f16> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.reciprocal
+    // CHECK-SAME: T0 * 99
+    %t = wave.reciprocal %a {
+      wave_test.override_result_index = [
+        [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
+         {M = 4 : i64, K = 4 : i64}]
+      ]
+    } : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M] of f16>
+    // CHECK: wave.broadcast
+    // CHECK-SAME: T0 * 99
+    %r = wave.broadcast %t
+      : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    return %r : !wave.tensor<[@M, @K] of f16>
+  }
+}
+
+// -----
+
+// Backward skip: reciprocal operands have M-only concrete keys with vecShape
+// {M=4, K=4}. The add result has both M and K as non-unit dims in its vecShape.
+// Backward propagation from the add result into each reciprocal operand:
+// from.vecShape non-unit = {M, K}, to keys = {M}, K missing => skip.
+// Reciprocals keep M = T0 * 32; the add result retains M = T0 * 99.
+
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes {wave_test.disable_forward} {
-  // CHECK-LABEL: @propagation_stopper_backward_partial_result
-  func.func @propagation_stopper_backward_partial_result(
+  // CHECK-LABEL: @propagation_skip_backward_partial_operand
+  func.func @propagation_skip_backward_partial_operand(
     %a: !wave.tensor<[@M, @K] of f16>,
     %b: !wave.tensor<[@M, @K] of f16>
   ) -> !wave.tensor<[@M, @K] of f16> attributes {
@@ -1273,35 +1309,18 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.reciprocal
-    // CHECK-SAME: index
-    // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK: wave.reciprocal
-    // CHECK-SAME: index
     // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
     %a_rp = wave.reciprocal %a {
       wave_test.override_operand_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}]
+        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>},
+         {M = 4 : i64, K = 4 : i64}]
       ]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
-    %b_rp = wave.reciprocal %b {
-      wave_test.override_operand_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}]
-      ]} : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
-    %result = wave.add %a_rp, %b_rp {
-      wave_test.override_operand_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}],
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
-          K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}]
-      ],
+    // CHECK: wave.add
+    // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    %result = wave.add %a_rp, %a_rp {
       wave_test.override_result_index = [
         [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
-         {M = 4 : i32, K = 4 : i32}]
+         {M = 4 : i64, K = 4 : i64}]
       ]
     } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     return %result : !wave.tensor<[@M, @K] of f16>

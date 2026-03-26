@@ -1816,7 +1816,7 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
       // XXX: a more efficient way would have been to join all "from" lattices
       // first, and then join that into each "to" lattice. But this heuristic
       // would not work in that case.
-      if (!shouldPropagateIndexExprs(toLattice, fromLattice)) {
+      if (!shouldPropagateIndexExprs(fromLattice, toLattice)) {
         LLVM_DEBUG(LDBG() << "not propagating index expressions from "
                           << fromName << " #" << fromNum << " to " << toName
                           << " #" << toNum << "\n";);
