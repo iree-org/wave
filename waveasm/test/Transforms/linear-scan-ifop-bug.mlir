@@ -12,7 +12,7 @@
 
 // CHECK-LABEL: waveasm.program @if_yield_type_mismatch
 // CHECK:       waveasm.if
-// CHECK:         waveasm.yield {{.*}} : !waveasm.pvreg<3>
+// CHECK:         waveasm.yield {{.*}} : !waveasm.pvreg<2>
 // CHECK:       } else {
 // CHECK:         waveasm.yield {{.*}} : !waveasm.pvreg<1>
 
@@ -46,7 +46,7 @@ waveasm.program @if_yield_type_mismatch
 // CHECK-LABEL: waveasm.program @if_in_loop_type_mismatch
 // CHECK:       waveasm.loop
 // CHECK:         waveasm.if
-// CHECK:           waveasm.yield {{.*}} : !waveasm.pvreg<3>
+// CHECK:           waveasm.yield {{.*}} : !waveasm.pvreg<2>
 // CHECK:         } else {
 // CHECK:           waveasm.yield {{.*}} : !waveasm.pvreg<1>
 

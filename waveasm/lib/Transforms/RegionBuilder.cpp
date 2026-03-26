@@ -339,6 +339,12 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
   if (isa<ImmType>(conditionValue.getType())) {
     auto sregType = ctx.createSRegType();
     conditionValue = S_MOV_B32::create(builder, loc, sregType, conditionValue);
+  } else if (isVGPRType(conditionValue.getType())) {
+    // waveasm.if is a scalar control-flow op, so conditions must be uniform.
+    // If a VGPR reaches here, read lane 0 into an SGPR for the branch.
+    auto sregType = ctx.createSRegType();
+    conditionValue =
+        V_READFIRSTLANE_B32::create(builder, loc, sregType, conditionValue);
   }
 
   // Infer result types by peeking at what the then region will yield
