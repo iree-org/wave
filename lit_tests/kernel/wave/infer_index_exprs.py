@@ -19,7 +19,6 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.templates.vanilla_attention import (
     get_vanilla_attention_kernel,
 )
-from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
 
 def _get_matrix_add_kernel():
@@ -291,17 +290,13 @@ def testAttention():
         dynamic_dims=False,
     )
 
-    options_mlir = WaveCompileOptions(
+    options = WaveCompileOptions(
         subs=hyperparams,
         run_bench=False,
         check_water_analysis=True,
         compile_to_mlir=True,
-        # TODO(#982): this pass creates IR that appears malformed, though pywave
-        # manages to execute it.
-        # enable_mark_hardware_transpose_candidates=False,
     )
-    options_mlir = set_default_run_config(options_mlir)
-    compiled_kernel = wave_compile(options_mlir, attention)
+    compiled_kernel = wave_compile(options, attention)
     assert compiled_kernel is not None
 
 
