@@ -490,24 +490,38 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // all inputs (both defs and uses), then remove pack inputs from the
   // allocation worklists entirely. A post-pass in LinearScanPass assigns
   // input[i].physReg = result.physReg + i.
+  llvm::DenseSet<Value> claimedPackInputs;
   program.walk([&](PackOp packOp) {
     Value packResult = packOp.getResult();
     auto resultIt = info.ranges.find(packResult);
     assert(resultIt != info.ranges.end() &&
            "pack result must have a live range");
 
-    for (Value input : packOp.getElements()) {
-      // Extend the pack result's range to cover this input's full lifetime.
-      // Inputs may have independent uses after the pack op, so we must
-      // extend both start and end to avoid missing those uses.
+    for (auto [idx, input] : llvm::enumerate(packOp.getElements())) {
       auto inputIt = info.ranges.find(input);
-      if (inputIt != info.ranges.end()) {
+      if (inputIt != info.ranges.end() && !claimedPackInputs.contains(input)) {
+        // First PackOp to claim this input: extend the pack result's range
+        // to cover the input's full lifetime, then remove from the
+        // allocator worklist.
         resultIt->second.start =
             std::min(resultIt->second.start, inputIt->second.start);
         resultIt->second.end =
             std::max(resultIt->second.end, inputIt->second.end);
-        // Remove from ranges so it won't enter the allocator.
         info.ranges.erase(inputIt);
+        claimedPackInputs.insert(input);
+      } else if (claimedPackInputs.contains(input)) {
+        // Duplicate: same value used by another PackOp slot or repeated
+        // within this PackOp. A single SSA value can only occupy one
+        // physical register, so insert a copy to create a distinct value.
+        OpBuilder builder(packOp);
+        Value copy;
+        if (isSGPRType(input.getType()))
+          copy = S_MOV_B32::create(builder, packOp.getLoc(), input.getType(),
+                                   input);
+        else
+          copy = V_MOV_B32::create(builder, packOp.getLoc(), input.getType(),
+                                   input);
+        packOp.setOperand(idx, copy);
       }
     }
   });

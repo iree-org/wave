@@ -1600,21 +1600,10 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // Get SRD for this memref - look up from binding or use tracked SRD
     Value srd;
 
-    // Check for pending per-workgroup SRD base adjustment (from linearized
-    // reinterpret_cast for >4GB output buffers). Emitted inline here so the
-    // SALU ops survive DCE — their results go straight into the precolored
-    // SRD that is immediately consumed by buffer_store.
     if (auto *adj = ctx.getPendingSRDBaseAdjust(storeOp.getBase())) {
       srd = emitSRDBaseAdjustment(*adj, storeOp.getBase(), ctx, loc);
-    } else if (auto srdIdx = ctx.getSRDIndex(storeOp.getBase())) {
-      auto sregType = ctx.createSRegType(4, 4);
-      srd = PrecoloredSRegOp::create(builder, loc, sregType, *srdIdx, 4);
-    } else if (auto mapped = ctx.getMapper().getMapped(storeOp.getBase())) {
-      srd = *mapped;
     } else {
-      // Fallback to default SRD at s[8:11]
-      auto sregType = ctx.createSRegType(4, 4);
-      srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+      srd = lookupSRD(storeOp.getBase(), ctx, loc);
     }
 
     // Check if the source value has split results from a corresponding load
