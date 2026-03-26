@@ -143,8 +143,15 @@ LogicalResult handleMemRefReinterpretCast(Operation *op,
       int64_t elementBytes = memrefType.getElementTypeBitWidth() / 8;
       if (elementBytes == 0)
         elementBytes = 1;
+      // Pass the source SRD SSA value to maintain liveness across the
+      // kernel, preventing the register allocator from overwriting the
+      // kernel-arg SRD registers.
+      Value srcSrdValue;
+      if (auto src = ctx.getMapper().getMapped(castOp.getSource()))
+        srcSrdValue = *src;
       ctx.setPendingSRDBaseAdjust(castOp.getResult(), *offsetMapped, srcSrdBase,
-                                  elementBytes);
+                                  elementBytes, /*numRecordsOverride=*/{},
+                                  srcSrdValue);
     }
 
     // Both passes: map result to source SRD and update buffer size
@@ -354,7 +361,8 @@ LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx) {
 
   if (auto *adj = ctx.getPendingSRDBaseAdjust(castOp.getSource())) {
     ctx.setPendingSRDBaseAdjust(castOp.getResult(), adj->elementOffset,
-                                adj->srcSrdBase, adj->elementBytes);
+                                adj->srcSrdBase, adj->elementBytes,
+                                adj->numRecordsOverride, adj->srcSrdValue);
   }
 
   if (auto ldsOffset = ctx.getLDSBaseOffset(castOp.getSource())) {

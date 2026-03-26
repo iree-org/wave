@@ -548,7 +548,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
       }
       ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
                                   adj->srcSrdBase, adj->elementBytes,
-                                  numRecordsOverride);
+                                  numRecordsOverride, adj->srcSrdValue);
     }
     return success();
   }

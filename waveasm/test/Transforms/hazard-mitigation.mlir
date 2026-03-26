@@ -168,3 +168,111 @@ waveasm.program @trans_trans_no_hazard target = #waveasm.target<#waveasm.gfx942,
 
   waveasm.s_endpgm
 }
+
+// -----------------------------------------------------------------------
+// Post-regalloc hazard detection tests.
+// After register allocation, different SSA values may share the same
+// physical VGPR.  The hazard checker must compare physical register
+// indices, not just SSA value identity.
+// -----------------------------------------------------------------------
+
+// Test: Different SSA values at the same physical VGPR.
+// The VALU writes to pvreg<12> via one SSA value; v_readfirstlane reads
+// pvreg<12> via a different SSA value.  The hazard must still be detected.
+// CHECK-LABEL: waveasm.program @phys_reg_alias_hazard
+waveasm.program @phys_reg_alias_hazard target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
+  %v12 = waveasm.precolored.vreg 12 : !waveasm.pvreg<12>
+  %v26 = waveasm.precolored.vreg 26 : !waveasm.pvreg<26>
+  %imm12 = waveasm.constant 12 : !waveasm.imm<12>
+
+  // VALU writes to pvreg<12> (result is a new SSA value, not %v12).
+  // CHECK: waveasm.v_lshlrev_b32
+  %shifted = waveasm.v_lshlrev_b32 %imm12, %v26 : !waveasm.imm<12>, !waveasm.pvreg<26> -> !waveasm.pvreg<12>
+
+  // v_readfirstlane reads %v12 -- same physical register, different SSA value.
+  // CHECK-NEXT: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v12 : !waveasm.pvreg<12> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// -----------------------------------------------------------------------
+// Non-emitting ops between VALU and v_readfirstlane.
+// Ops like extract, constant, and precolored.sreg do not produce assembly
+// instructions.  The hazard checker must look past them to find the
+// nearest real predecessor.
+// -----------------------------------------------------------------------
+
+// Test: Extract ops between VALU write and v_readfirstlane read.
+// CHECK-LABEL: waveasm.program @non_emitting_extract_hazard
+waveasm.program @non_emitting_extract_hazard target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
+  %v26 = waveasm.precolored.vreg 26 : !waveasm.pvreg<26>
+  %s24 = waveasm.precolored.sreg 24, 4 : !waveasm.psreg<24, 4>
+  %imm12 = waveasm.constant 12 : !waveasm.imm<12>
+
+  // VALU writes to pvreg<12>.
+  // CHECK: waveasm.v_lshlrev_b32
+  %shifted = waveasm.v_lshlrev_b32 %imm12, %v26 : !waveasm.imm<12>, !waveasm.pvreg<26> -> !waveasm.pvreg<12>
+
+  // Non-emitting extract ops (no assembly emitted).
+  %w0 = waveasm.extract %s24[0] : !waveasm.psreg<24, 4> -> !waveasm.psreg<24>
+  %w1 = waveasm.extract %s24[1] : !waveasm.psreg<24, 4> -> !waveasm.psreg<25>
+
+  // v_readfirstlane reads the VALU result.  Despite the intervening
+  // extracts, a NOP is required because no real instruction separates
+  // the VALU write from the readfirstlane.
+  // CHECK: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %shifted : !waveasm.pvreg<12> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: Both issues combined -- alias + non-emitting gap.
+// CHECK-LABEL: waveasm.program @alias_through_non_emitting
+waveasm.program @alias_through_non_emitting target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
+  %v12 = waveasm.precolored.vreg 12 : !waveasm.pvreg<12>
+  %v26 = waveasm.precolored.vreg 26 : !waveasm.pvreg<26>
+  %s24 = waveasm.precolored.sreg 24, 4 : !waveasm.psreg<24, 4>
+  %imm12 = waveasm.constant 12 : !waveasm.imm<12>
+
+  // VALU writes to pvreg<12>.
+  // CHECK: waveasm.v_lshlrev_b32
+  %shifted = waveasm.v_lshlrev_b32 %imm12, %v26 : !waveasm.imm<12>, !waveasm.pvreg<26> -> !waveasm.pvreg<12>
+
+  // Non-emitting ops in between.
+  %w0 = waveasm.extract %s24[0] : !waveasm.psreg<24, 4> -> !waveasm.psreg<24>
+  %w1 = waveasm.extract %s24[1] : !waveasm.psreg<24, 4> -> !waveasm.psreg<25>
+
+  // v_readfirstlane reads pvreg<12> via a different SSA value (%v12)
+  // through non-emitting ops.
+  // CHECK: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v12 : !waveasm.pvreg<12> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: A real instruction between VALU and v_readfirstlane -- no NOP needed.
+// CHECK-LABEL: waveasm.program @real_instruction_gap_no_hazard
+waveasm.program @real_instruction_gap_no_hazard target = #waveasm.target<#waveasm.gfx950, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %v12 = waveasm.precolored.vreg 12 : !waveasm.pvreg<12>
+  %imm12 = waveasm.constant 12 : !waveasm.imm<12>
+
+  // VALU writes to pvreg<12>.
+  %shifted = waveasm.v_lshlrev_b32 %imm12, %v0 : !waveasm.imm<12>, !waveasm.pvreg<0> -> !waveasm.pvreg<12>
+
+  // A real emitting instruction provides the needed delay.
+  // CHECK: waveasm.v_add_u32
+  %gap = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<2>
+
+  // No NOP needed because v_add_u32 provided the delay.
+  // CHECK-NOT: waveasm.s_nop
+  // CHECK: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v12 : !waveasm.pvreg<12> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}

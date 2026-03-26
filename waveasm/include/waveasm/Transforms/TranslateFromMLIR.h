@@ -529,13 +529,19 @@ public:
     // the MLIR specifies a tighter validBytes (e.g. for epilogue
     // elimination OOB protection on direct buffer loads).
     mlir::Value numRecordsOverride;
+    // SSA value of the source (kernel-arg) SRD from the prologue.
+    // Keeps the SRD live in the register allocator so its physical
+    // registers are not reused between the prologue and the adjustment
+    // point.
+    mlir::Value srcSrdValue;
   };
 
   void setPendingSRDBaseAdjust(mlir::Value memref, mlir::Value elemOffset,
                                int64_t srcSrdBase, int64_t elementBytes,
-                               mlir::Value numRecordsOverride = {}) {
+                               mlir::Value numRecordsOverride = {},
+                               mlir::Value srcSrdValue = {}) {
     pendingSRDBaseAdjustMap[memref] = {elemOffset, srcSrdBase, elementBytes,
-                                       numRecordsOverride};
+                                       numRecordsOverride, srcSrdValue};
   }
 
   /// Get a pending SRD base adjustment (returns nullptr if none)

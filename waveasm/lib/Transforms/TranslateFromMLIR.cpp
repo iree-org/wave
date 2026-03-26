@@ -227,6 +227,10 @@ void TranslationContext::emitSRDPrologue() {
         PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
     // Load all kernel args (pointers and scalars) into preload positions.
+    // Capture SSA results so S_MOV_B64 ops below can reference them,
+    // keeping the loads live and preventing the register allocator from
+    // aliasing their destination registers.
+    llvm::DenseMap<size_t, Value> argLoadResults;
     for (size_t i = 0; i < numPreloadedArgs; ++i) {
       int64_t loadBase = 2 + i * 2;
       if (loadBase >= 16)
@@ -237,8 +241,9 @@ void TranslationContext::emitSRDPrologue() {
       auto offsetImm = builder.getType<ImmType>(kernargOffset);
       auto offsetConst =
           ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
-                             offsetConst);
+      auto loadOp = S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType},
+                                           kernargBase, offsetConst);
+      argLoadResults[i] = loadOp->getResult(0);
     }
 
     // Overflow scalar args: loaded after the aligned entry point below.
@@ -291,6 +296,8 @@ void TranslationContext::emitSRDPrologue() {
     // Step 5: Copy from preload locations to SRD positions and fill
     // size/stride. Use typed ops targeting precolored registers with
     // DCEProtectOp to prevent elimination of Pure ops.
+    // When we have a captured S_LOAD_DWORDX2 result for this arg, use it
+    // directly as the S_MOV_B64 source to maintain the SSA def-use chain.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -300,9 +307,15 @@ void TranslationContext::emitSRDPrologue() {
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       // Copy base address with s_mov_b64.
-      auto preloadType = createSRegType(2, preloadBase);
-      auto preloadSrc =
-          PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase, 2);
+      Value preloadSrc;
+      auto loadIt = argLoadResults.find(pending.argIndex);
+      if (preloadBase < 16 && loadIt != argLoadResults.end()) {
+        preloadSrc = loadIt->second;
+      } else {
+        auto preloadType = createSRegType(2, preloadBase);
+        preloadSrc =
+            PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase, 2);
+      }
       auto dstB64Type = PSRegType::get(builder.getContext(), srdBase, 2);
       auto movB64 = S_MOV_B64::create(builder, loc, dstB64Type, preloadSrc);
       DCEProtectOp::create(builder, loc, movB64);
@@ -608,9 +621,17 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
   auto sregTy = ctx.createSRegType();
 
   // Extract base address words from the source SRD.
-  auto srcSrdType = ctx.createSRegType(4, 4);
-  auto srcSrd =
-      PrecoloredSRegOp::create(builder, loc, srcSrdType, adj.srcSrdBase, 4);
+  // Prefer the SSA value captured from the prologue to maintain a def-use
+  // chain, which prevents the register allocator from reusing the
+  // kernel-arg SRD registers between the prologue and this adjustment.
+  Value srcSrd;
+  if (adj.srcSrdValue) {
+    srcSrd = adj.srcSrdValue;
+  } else {
+    auto srcSrdType = ctx.createSRegType(4, 4);
+    srcSrd =
+        PrecoloredSRegOp::create(builder, loc, srcSrdType, adj.srcSrdBase, 4);
+  }
   Value srcWord0 = ExtractOp::create(builder, loc, sregTy, srcSrd, 0);
   Value srcWord1 = ExtractOp::create(builder, loc, sregTy, srcSrd, 1);
 
