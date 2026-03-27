@@ -405,6 +405,32 @@ def _attach_attributes(
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveSymbolMappingAttr.get(bounds)
 
+    if getattr(node, "vector_shapes", None):
+        if not isinstance(node, MMA):
+            op.attributes["vector_shape"] = ir.ArrayAttr.get(
+                [_convert_vector_shapes(node.vector_shapes)]
+            )
+        else:
+            # MMA needs exactly 4 vector_shape entries: lhs, rhs, acc, result.
+            vector_shape_entries = []
+            if lhs_vector_shapes := getattr(node.lhs, "vector_shapes", None):
+                vector_shape_entries.append(_convert_vector_shapes(lhs_vector_shapes))
+            if rhs_vector_shapes := getattr(node.rhs, "vector_shapes", None):
+                assert len(vector_shape_entries) == 1, "MMA missing LHS vector shapes."
+                vector_shape_entries.append(_convert_vector_shapes(rhs_vector_shapes))
+            if acc_vector_shapes := getattr(node.acc, "vector_shapes", None):
+                assert len(vector_shape_entries) == 2, f"MMA missing RHS vector shapes."
+                vector_shape_entries.append(_convert_vector_shapes(acc_vector_shapes))
+            if result_vector_shapes := getattr(node, "vector_shapes", None):
+                assert len(vector_shape_entries) == 3, "MMA missing ACC vector shapes."
+                vector_shape_entries.append(
+                    _convert_vector_shapes(result_vector_shapes)
+                )
+            assert (
+                len(vector_shape_entries) == 4 or len(vector_shape_entries) == 0
+            ), f"MMA needs exactly 4 vector_shape entries or none, got {len(vector_shape_entries)}, missing result shapes?."
+            op.attributes["vector_shape"] = ir.ArrayAttr.get(vector_shape_entries)
+
     if water_id := getattr(node.fx_node, "_water_id", None):
         op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)
         if known_ids is not None:
@@ -590,6 +616,38 @@ def _emit_ops_from_graph(
                     )
                 return mlir_operands
 
+            def attach_get_result_attr(
+                iterate_op: IterateOp,
+                position: int,
+                name: str,
+                attr: ir.Attribute,
+                *,
+                prepend: bool,
+            ):
+                current_attribute = (
+                    iterate_op.attributes[name]
+                    if name in iterate_op.attributes
+                    else None
+                )
+                # When prepend=True, slot 0 is reserved for the iterate's
+                # own entry (already set by _attach_attributes).  Result
+                # entries occupy slots 1..N.
+                effective_position = (position + 1) if prepend else position
+                total_slots = len(iterate_op.results) + (1 if prepend else 0)
+                if current_attribute is None:
+                    attribute_list = [ir.UnitAttr.get()] * total_slots
+                elif (
+                    isinstance(current_attribute, ir.ArrayAttr)
+                    and len(current_attribute) < total_slots
+                ):
+                    attribute_list = list(current_attribute) + [ir.UnitAttr.get()] * (
+                        total_slots - len(current_attribute)
+                    )
+                else:
+                    attribute_list = list(current_attribute)
+                attribute_list[effective_position] = attr
+                iterate_op.attributes[name] = ir.ArrayAttr.get(attribute_list)
+
             if isinstance(node, GetResult):
                 if node.res_idx >= len(value_map[node.value]):
                     raise RuntimeError(
@@ -598,29 +656,34 @@ def _emit_ops_from_graph(
                     )
                 value_map[fx_node] = (value_map[node.value][node.res_idx],)
 
-                # Attach IDs of `get_result` to the loop instead so we can recover them
-                # later because `get_result` doesn't exist in the dialect. Only do so when
-                # there are some results.
-                if known_ids is not None and len(value_map[node.value]) > 0:
+                # Attach IDs and vector_shapes of `get_result` to the loop
+                # instead so we can recover them later because `get_result`
+                # doesn't exist in the dialect. Only do so when there are some
+                # results.
+                if len(value_map[node.value]) > 0:
                     iterate_op = get_single_mapped_value(fx_node).owner
-                    water_id = getattr(fx_node, "_water_id", None)
-                    if water_id is None:
-                        raise RuntimeError(
-                            f"Water id requested for 'get_result' but not specified: {node}"
+                    if vector_shapes := getattr(fx_node, "vector_shapes", None):
+                        attach_get_result_attr(
+                            iterate_op,
+                            node.res_idx,
+                            "vector_shape",
+                            _convert_vector_shapes(vector_shapes),
+                            prepend=True,
                         )
-                    known_ids.add(water_id)
-                    current_attribute = (
-                        iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME]
-                        if _INTERNAL_RESULT_WATER_IRS_ATTR_NAME in iterate_op.attributes
-                        else ir.ArrayAttr.get(
-                            [ir.UnitAttr.get()] * len(iterate_op.results)
+                    if known_ids is not None:
+                        water_id = getattr(fx_node, "_water_id", None)
+                        if water_id is None:
+                            raise RuntimeError(
+                                f"Water id requested for 'get_result' but not specified: {node}"
+                            )
+                        known_ids.add(water_id)
+                        attach_get_result_attr(
+                            iterate_op,
+                            node.res_idx,
+                            _INTERNAL_RESULT_WATER_IRS_ATTR_NAME,
+                            ir.StringAttr.get(water_id),
+                            prepend=False,
                         )
-                    )
-                    attribute_list = list(current_attribute)
-                    attribute_list[node.res_idx] = ir.StringAttr.get(water_id)
-                    iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME] = (
-                        ir.ArrayAttr.get(attribute_list)
-                    )
 
                 # additional handling for this op is not needed, skip rest
                 continue
