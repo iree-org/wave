@@ -54,6 +54,7 @@ from ..region_canonicalization import RegionFormat, requires_region_format
 from .classes import Failure, Result, Success
 from .symbol_utils import (
     collect_allowed_induction_symbols,
+    ixs_simplify,
     strip_out_of_scope_induction_symbols,
     subs_idxc,
 )
@@ -213,11 +214,11 @@ def _check_expr_equivalent(
     if isinstance(lhs, int) and isinstance(rhs, int):
         return Success() if lhs == rhs else Failure(f"int mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, sympy.Basic) and isinstance(rhs, sympy.Basic):
-        if sympy.simplify(lhs - rhs) == 0:
+        if ixs_simplify(lhs - rhs) == 0:
             return Success()
         return Failure(f"symbolic expr mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, (int, sympy.Basic)) and isinstance(rhs, (int, sympy.Basic)):
-        if sympy.simplify(sympy.sympify(lhs) - sympy.sympify(rhs)) == 0:
+        if ixs_simplify(sympy.sympify(lhs) - sympy.sympify(rhs)) == 0:
             return Success()
         return Failure(f"expr mismatch: {lhs} vs {rhs}")
     raise ValueError(f"Unsupported expression types: {type(lhs)} vs {type(rhs)}")
@@ -276,9 +277,9 @@ def _sympy_equiv(a: sympy.Basic, b: sympy.Basic) -> bool:
     if a == b:
         return True
     if isinstance(a, sympy.Rel) and type(a) is type(b):
-        return sympy.simplify((a.lhs - a.rhs) - (b.lhs - b.rhs)) == 0
+        return ixs_simplify((a.lhs - a.rhs) - (b.lhs - b.rhs)) == 0
     try:
-        return sympy.simplify(a - b) == 0
+        return ixs_simplify(a - b) == 0
     except TypeError:
         return False
 

@@ -1170,8 +1170,30 @@ def WaveASM_CommentOp : WAVEASMOp<"comment"> {
 
 def WaveASM_RawOp : WAVEASMOp<"raw"> {
   let summary = "Emit raw assembly text";
-  let arguments = (ins StrAttr:$text);
-  let assemblyFormat = "$text attr-dict";
+  let description = [{
+    Embeds a raw assembly string directly into the output.  Because the
+    register allocator cannot see implicit register references inside the
+    text, callers that read physical registers should populate the
+    corresponding `*_reads` attribute so the allocator can reserve them.
+  }];
+  let arguments = (ins StrAttr:$text,
+                       OptionalAttr<DenseI64ArrayAttr>:$sreg_reads,
+                       OptionalAttr<DenseI64ArrayAttr>:$vreg_reads,
+                       OptionalAttr<DenseI64ArrayAttr>:$areg_reads);
+  let builders = [
+    // Text-only convenience builder (no register annotations).
+    OpBuilder<(ins "::llvm::StringRef":$text), [{
+      build($_builder, $_state, text,
+            /*sreg_reads=*/nullptr,
+            /*vreg_reads=*/nullptr,
+            /*areg_reads=*/nullptr);
+    }]>,
+  ];
+  let assemblyFormat = "$text"
+    "(`sreg_reads` `=` $sreg_reads^)?"
+    "(`vreg_reads` `=` $vreg_reads^)?"
+    "(`areg_reads` `=` $areg_reads^)?"
+    "attr-dict";
 }
 
 #endif // WaveASM_DIALECT_WAVEASMOPS
