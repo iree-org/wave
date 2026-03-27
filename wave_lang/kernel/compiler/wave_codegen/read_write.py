@@ -60,7 +60,13 @@ from ...ops.wave_ops import (
     read_meets_hw_transpose_requirements,
     MemoryAccessFlags,
 )
-from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
+from ...wave.utils.general_utils import (
+    get_fastest_index,
+    get_flat_offset,
+    infer_dim,
+    is_flattened_index,
+    linearize_index,
+)
 from ...wave.utils.mapping_utils import transform_index_on_mapping
 from ...wave.utils.symbol_utils import safe_subs, simplify
 from .emitter import (
@@ -182,16 +188,23 @@ def _build_mask(
         return None
 
     idxc = IndexingContext.current()
-    fastest_dim = get_fastest_index(index)
-    last_dim = list(index)[fastest_dim]
-    new_index = {k: _get_start_index(v) for k, v in index.items()}
 
-    new_index[last_dim] = new_index[last_dim] + idxc.iota(elements_per_thread)
+    conditions = []
+    for key, bound in bounds.items():
+        if isinstance(key, IndexSymbol) and key in index:
+            # Legacy per-dim bound: look up start, add iota to fastest dim.
+            fastest_dim = get_fastest_index(index)
+            last_dim = list(index)[fastest_dim]
+            start = _get_start_index(index[key])
+            if key == last_dim:
+                start = start + idxc.iota(elements_per_thread)
+            conditions.append(start < bound)
+        else:
+            # Expression-keyed bound (from flattened index).
+            # Iota is already embedded in the key expression.
+            conditions.append(key < bound)
 
-    mask_expr = functools.reduce(
-        lambda a, b: sympy.And(a, b),
-        (new_index[dim] < bound for dim, bound in bounds.items()),
-    )
+    mask_expr = functools.reduce(sympy.And, conditions)
     mask = gen_sympy_index(add_emitter_subs(emitter, dynamic_values), mask_expr)
 
     mask_vec_type = VectorType.get([elements_per_thread], IntegerType.get_signless(1))
@@ -1045,6 +1058,28 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
         index = transformed_index
     else:
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
+
+    # Flattened index fast path: the address is a single scalar offset.
+    if is_flattened_index(index):
+        flat_expr = get_flat_offset(index)
+        subs = add_emitter_subs(emitter)
+        flat_val = gen_sympy_index(subs, flat_expr)
+        is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+        if is_shared:
+            mem = _linearize_shared_mem(kb_src)
+        else:
+            kb_type = MemRefType(kb_src.type)
+            phys_strides, _ = kb_type.get_strides_and_offset()
+            strides_vals = [arith_d.constant(IndexType.get(), s) for s in phys_strides]
+            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(phys_strides)
+            mem, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
+        if mask is not None:
+            zero_vec = _get_splat_const(vector_type, 0)
+            result = vector_d.maskedload(vector_type, mem, [flat_val], mask, zero_vec)
+        else:
+            result = vector_d.load(vector_type, mem, [flat_val])
+        emitter.bind_node_proxy(node, IRProxyValue(result))
+        return
 
     is_global = get_custom(memory).type.address_space != SHARED_ADDRESS_SPACE
     use_llvm_load = flags != MemoryAccessFlags.NONE
