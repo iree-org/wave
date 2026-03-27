@@ -869,6 +869,7 @@ def should_update_index(
     source_vector_shapes: dict[IndexSymbol, int],
     symbolic_constraints: list[SymbolicAlias],
 ):
+    return True
     # Get symbolic shape without any aliased variables.
     aliased_dims = [x.source for x in symbolic_constraints]
 
