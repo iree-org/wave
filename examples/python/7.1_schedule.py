@@ -60,7 +60,13 @@ def _run_mxfp_gemm(gemm, shape):
 
 
 def _run_mxfp_gemm_preshuffle(
-    gemm, shape, all=False, only_scale=False, only_b=False, output_dtype=torch.float32
+    gemm,
+    shape,
+    all=False,
+    only_scale=False,
+    only_b=False,
+    output_dtype=torch.float32,
+    transpose_output=False,
 ):
     """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference.
 
@@ -68,30 +74,31 @@ def _run_mxfp_gemm_preshuffle(
       all        - shuffle a_scale (x_scales), b_scale (w_scales), and b (w_t)
       only_scale - shuffle a_scale (x_scales) and b_scale (w_scales) only
       only_b     - shuffle b_scale (w_scales) only
+
+    When transpose_output is True, the kernel writes C^T [N, M] instead of C [M, N].
     """
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     w_t = w.T.contiguous()
 
-    # Apply b (w_t) preshuffle only when all=True
     w_t_ps = b_preshuffle(w_t) if all else w_t
 
-    # Apply a_scale shuffle when all=True or only_scale=True
     x_scales_ps = e8m0_shuffle(x_scales) if (all or only_scale) else x_scales
 
-    # Apply b_scale shuffle when all=True, only_scale=True, or only_b=True
     w_scales_ps = e8m0_shuffle(w_scales) if (all or only_scale or only_b) else w_scales
 
     x, w_t_ps = x.cuda(), w_t_ps.cuda()
     x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
-    out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
+    if transpose_output:
+        out = torch.zeros(w_t_ps.shape[0], x.shape[0], dtype=output_dtype).cuda()
+    else:
+        out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
 
     gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
-    torch.testing.assert_close(
-        torch_out, out.cpu(), check_dtype=False, check_device=False
-    )
+    result = out.T.contiguous().cpu() if transpose_output else out.cpu()
+    torch.testing.assert_close(torch_out, result, check_dtype=False, check_device=False)
 
 
 def _get_8wave_shape_from_block(block):
@@ -200,7 +207,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False, shape=(1792, 5376, 4096), block=(256, 192, 256), dynamic=True
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -213,25 +220,49 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
         block,
         wave_shape=wave_shape,
         b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
+        transpose_output=True,
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = False
+    options.minimize_shared_allocs = True
     options.linearize_shared_access = True
+    options.wave_runtime = True
+    options.coalesce_epilogue_stores = True
+    options.dump_intermediates = "build/intermediates/caolesce_epi"
 
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
             del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
-        use_stagger=True, shape=shape
+        use_stagger=True, shape=shape, block=block
     )
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    options.subs[UNROLL_FACTOR] = 2
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
 
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    with open(
+        "build/intermediates/caolesce_epi/gemm_mxfp4_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds.mlir",
+        "w",
+    ) as f:
+        f.write(gemm.asm)
+
+    _run_mxfp_gemm_preshuffle(
+        gemm, shape, all=True, output_dtype=torch.bfloat16, transpose_output=True
+    )
     mode = "dynamic" if dynamic else "static"
     print(
         f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"

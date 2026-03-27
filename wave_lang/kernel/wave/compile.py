@@ -533,6 +533,12 @@ def build_graph_passes(
         partial(partition_ops_with_gpr_offsets, trace, launchable.constraints),
         partial(partition_strided_operators, trace, launchable.constraints),
         partial(remove_chained_extractslice, trace),
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        ),
     ]
 
     graph_passes += [
@@ -587,6 +593,11 @@ def build_graph_passes(
                 options.minimize_shared_allocs,
             ),
         ]
+    if options.coalesce_epilogue_stores:
+        from .coalesce_epilogue_stores import coalesce_epilogue_stores
+
+        graph_passes.append(partial(coalesce_epilogue_stores, trace))
+
     graph_passes += [
         partial(
             add_shared_memory_barriers,
@@ -600,6 +611,9 @@ def build_graph_passes(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
         ),
+    ]
+
+    graph_passes += [
         partial(
             generate_bounds_exprs,
             trace,
