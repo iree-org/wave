@@ -133,6 +133,7 @@ def convert_first_eliminate_cndmask(asm_text):
     lines = asm_text.split("\n")
     out = []
     tile_count = 0
+    vcc_emitted = False
     i = 0
 
     while i < len(lines):
@@ -216,6 +217,9 @@ def convert_first_eliminate_cndmask(asm_text):
             # Preserved lines (lane mask, offset select, addr comp, SRD)
             # must come first so v244 and v253 are set before we use them.
             out.extend(preserved)
+            if not vcc_emitted:
+                out.append("  v_cmp_ne_u32 vcc, v244, 0")
+                vcc_emitted = True
             out.extend(
                 [
                     f"  v_accvgpr_read_b32 v0, a{a0}",
@@ -224,23 +228,16 @@ def convert_first_eliminate_cndmask(asm_text):
                     f"  v_accvgpr_read_b32 v0, a{a2}",
                     f"  v_accvgpr_read_b32 v1, a{a3}",
                     f"  v_cvt_pk_bf16_f32 v3, v0, v1",
+                    "  v_mov_b32 v8, v2",
+                    "  v_mov_b32 v9, v3",
                     "s_nop 1",
                     "    v_permlane16_swap_b32 v4, v2",
                     "s_nop 1",
                     "    v_permlane16_swap_b32 v5, v3",
-                    f"  v_accvgpr_read_b32 v0, a{a0}",
-                    f"  v_accvgpr_read_b32 v1, a{a1}",
-                    f"  v_cvt_pk_bf16_f32 v2, v0, v1",
-                    f"  v_accvgpr_read_b32 v0, a{a2}",
-                    f"  v_accvgpr_read_b32 v1, a{a3}",
-                    f"  v_cvt_pk_bf16_f32 v3, v0, v1",
-                    "  v_cmp_ne_u32 vcc, v244, 0",
-                    "  v_cndmask_b32 v0, v4, v2",
-                    "  v_cndmask_b32 v1, v5, v3",
-                    "  v_cndmask_b32 v6, v2, v4",
-                    "  v_cndmask_b32 v7, v3, v5",
-                    "  v_mov_b32 v2, v6",
-                    "  v_mov_b32 v3, v7",
+                    "  v_cndmask_b32 v0, v4, v8",
+                    "  v_cndmask_b32 v1, v5, v9",
+                    "  v_cndmask_b32 v2, v8, v4",
+                    "  v_cndmask_b32 v3, v9, v5",
                     "  v_lshlrev_b32 v245, 1, v253",
                     f"  buffer_store_dwordx4 v[0:3], v245, {srd}, 0 offen",
                 ]
@@ -252,9 +249,6 @@ def convert_first_eliminate_cndmask(asm_text):
         out.append(lines[i])
         i += 1
 
-    print(
-        f"[convert_first] Transformed {tile_count} tiles: eliminated cndmask, merged to dwordx4"
-    )
     return "\n".join(out)
 
 
@@ -562,10 +556,6 @@ def bpermute_masked_epilogue_transform(asm_text):
         out.append(lines[i])
         i += 1
 
-    print(
-        f"[bpermute_masked] Transformed {tile_count} tiles: "
-        f"exec-masked stores eliminate duplicate writes"
-    )
     return "\n".join(out)
 
 
@@ -760,10 +750,6 @@ def bpermute_pipelined_epilogue_transform(asm_text):
         out.append(lines[i])
         i += 1
 
-    print(
-        f"[bpermute_pipelined] Transformed {tile_count} tiles: "
-        f"software-pipelined bpermute with exec-masked stores"
-    )
     return "\n".join(out)
 
 
@@ -785,42 +771,37 @@ def _run_mxfp_gemm(gemm, shape):
 def _run_mxfp_gemm_preshuffle(
     gemm,
     shape,
-    all=False,
-    only_scale=False,
-    only_b=False,
     output_dtype=torch.float32,
-    transpose_output=False,
+    swap_inputs=False,
+    **kwargs,
 ):
-    """Run compiled GEMM kernel with preshuffled B and B_scale, verify against reference.
+    """Run compiled GEMM kernel, verify against reference.
 
-    Shuffling is applied based on the flags:
-      all        - shuffle a_scale (x_scales), b_scale (w_scales), and b (w_t)
-      only_scale - shuffle a_scale (x_scales) and b_scale (w_scales) only
-      only_b     - shuffle b_scale (w_scales) only
-
-    When transpose_output is True, the kernel writes C^T [N, M] instead of C [M, N].
+    When swap_inputs is True, the kernel computes C^T = B x A^T (with A=X, B=W)
+    and writes C [M, N] directly via transpose_output + coalesced epilogue.
+    When swap_inputs is False (baseline), uses standard input order.
     """
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
 
     w_t = w.T.contiguous()
 
-    w_t_ps = b_preshuffle(w_t) if all else w_t
-
-    x_scales_ps = e8m0_shuffle(x_scales) if (all or only_scale) else x_scales
-
-    w_scales_ps = e8m0_shuffle(w_scales) if (all or only_scale or only_b) else w_scales
-
-    x, w_t_ps = x.cuda(), w_t_ps.cuda()
-    x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
-    if transpose_output:
-        out = torch.zeros(w_t_ps.shape[0], x.shape[0], dtype=output_dtype).cuda()
+    if swap_inputs:
+        kern_a = w_t.cuda()
+        kern_a_scale = e8m0_shuffle(w_scales).cuda()
+        kern_b = b_preshuffle(x).cuda()
+        kern_b_scale = e8m0_shuffle(x_scales).cuda()
+        out = torch.zeros(shape[0], shape[1], dtype=output_dtype).cuda()
+        gemm(kern_a, kern_a_scale, kern_b, kern_b_scale, out)
+        result = out.cpu()
     else:
-        out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
-
-    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
-
-    result = out.T.contiguous().cpu() if transpose_output else out.cpu()
+        kern_a = x.cuda()
+        kern_b = b_preshuffle(w_t).cuda()
+        kern_a_scale = e8m0_shuffle(x_scales).cuda()
+        kern_b_scale = e8m0_shuffle(w_scales).cuda()
+        out = torch.zeros(shape[0], shape[1], dtype=output_dtype).cuda()
+        gemm(kern_a, kern_a_scale, kern_b, kern_b_scale, out)
+        result = out.cpu()
 
     if os.environ.get("WAVE_DEBUG_COMPARE"):
         ref = torch_out.to(torch.float32).cpu()
@@ -1441,7 +1422,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm_bf16_cvt_first(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(
-        gemm, shape, all=True, output_dtype=torch.bfloat16, transpose_output=True
+        gemm, shape, output_dtype=torch.bfloat16, swap_inputs=True
     )
     print("MXFP GEMM bf16 convert-first epilogue (WaveASM backend) test passed!")
 
@@ -1525,7 +1506,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm_bf16_lds_epilogue(
     gemm = wave_compile(options, gemm, schedule)
 
     _run_mxfp_gemm_preshuffle(
-        gemm, shape, all=True, output_dtype=torch.bfloat16, transpose_output=True
+        gemm, shape, output_dtype=torch.bfloat16, swap_inputs=True
     )
     print("MXFP GEMM bf16 pipelined bpermute epilogue (WaveASM backend) test passed!")
 
@@ -1539,15 +1520,21 @@ def _compile_bf16_kernel(
     lds_epilogue=False,
     bpermute_masked=False,
     bpermute_pipelined=False,
+    swap_inputs=False,
     transpose_only=False,
 ):
-    """Compile a bf16 kernel once (M,N,K dynamic). Returns (kernel, transpose_output)."""
+    """Compile a bf16 kernel once (M,N,K dynamic). Returns (kernel, mode_str).
+
+    mode_str is one of: False (baseline), True (transpose), "swap" (input swap).
+    """
     shape_placeholder = (block[0] * 4, block[1] * 4, block[2] * 4)
     use_transpose = (
         coalesce
         or lds_epilogue
         or bpermute_masked
         or bpermute_pipelined
+        or swap_inputs
+        or convert_first
         or transpose_only
     )
     kwargs = dict(
@@ -1568,16 +1555,25 @@ def _compile_bf16_kernel(
     options.use_wave_asm_backend = True
     options.wave_runtime = True
     options.eliminate_epilogue = True
-    if coalesce or lds_epilogue or bpermute_masked or bpermute_pipelined:
+    if (
+        coalesce
+        or lds_epilogue
+        or bpermute_masked
+        or bpermute_pipelined
+        or swap_inputs
+        or convert_first
+    ):
         options.coalesce_epilogue_stores = True
     if bpermute_pipelined:
         options.asm_transform = bpermute_pipelined_epilogue_transform
+    elif convert_first:
+        options.asm_transform = convert_first_eliminate_cndmask
+    elif swap_inputs:
+        options.asm_transform = bpermute_masked_epilogue_transform
     elif bpermute_masked:
         options.asm_transform = bpermute_masked_epilogue_transform
     elif lds_epilogue:
         options.asm_transform = lds_epilogue_transform
-    elif convert_first:
-        options.asm_transform = convert_first_eliminate_cndmask
     elif dwordx4:
         options.asm_transform = coalesce_buffer_stores_dwordx4
     schedule = get_mxfp4_asymmetric_schedule(
@@ -1585,32 +1581,36 @@ def _compile_bf16_kernel(
         is_bscale_shuffled=True,
     )
     options = set_default_run_config(options)
-    return wave_compile(options, gemm, schedule), use_transpose
+    mode = "swap" if swap_inputs else use_transpose
+    return wave_compile(options, gemm, schedule), mode
 
 
-def _time_kernel(gemm, shape, transpose_output, warmup=2, iters=5):
+def _time_kernel(gemm, shape, warmup=2, iters=5, swap_inputs=False, **kwargs):
     """Time a compiled GEMM kernel on the given shape. Returns median us."""
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
     w_t = w.T.contiguous()
-    w_t_ps = b_preshuffle(w_t)
-    x_scales_ps = e8m0_shuffle(x_scales)
-    w_scales_ps = e8m0_shuffle(w_scales)
-    x, w_t_ps = x.cuda(), w_t_ps.cuda()
-    x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
-    if transpose_output:
-        out = torch.zeros(w_t_ps.shape[0], x.shape[0], dtype=torch.bfloat16).cuda()
+
+    if swap_inputs:
+        kern_a = w_t.cuda()
+        kern_a_scale = e8m0_shuffle(w_scales).cuda()
+        kern_b = b_preshuffle(x).cuda()
+        kern_b_scale = e8m0_shuffle(x_scales).cuda()
     else:
-        out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.bfloat16).cuda()
+        kern_a = x.cuda()
+        kern_b = b_preshuffle(w_t).cuda()
+        kern_a_scale = e8m0_shuffle(x_scales).cuda()
+        kern_b_scale = e8m0_shuffle(w_scales).cuda()
+    out = torch.zeros(shape[0], shape[1], dtype=torch.bfloat16).cuda()
 
     for _ in range(warmup):
-        gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+        gemm(kern_a, kern_a_scale, kern_b, kern_b_scale, out)
     torch.cuda.synchronize()
 
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     for i in range(iters):
         start_events[i].record()
-        gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+        gemm(kern_a, kern_a_scale, kern_b, kern_b_scale, out)
         end_events[i].record()
     torch.cuda.synchronize()
 
