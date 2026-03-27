@@ -51,6 +51,7 @@ from ..common.utils import (
     require_cdna_3_or_4,
     require_rdna4,
     require_e2e,
+    require_water_and_ee,
 )
 
 require_cache = pytest.mark.skipif(
@@ -872,3 +873,87 @@ def testAsmBackendCache(tmp_path):
     assert kernel2.gpu_binary_path.endswith(
         ".hsaco"
     ), "Expected .hsaco extension for cached kernel"
+
+
+@require_e2e
+@require_cache
+@require_water_and_ee
+def testWaterBackendCache(tmp_path):
+    """Test that Water backend object file caching works correctly."""
+
+    reset_cache_manager(tmp_path)
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = 256
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        ),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 1),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 0),
+        tkw.WaveConstraint(M, BLOCK_M),
+        tkw.WaveConstraint(N, BLOCK_N),
+    ]
+
+    @tkw.wave(constraints)
+    def simple_copy(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        tkw.write(res, b)
+
+    hyperparams = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        M: 16,
+        N: 256,
+    }
+
+    cache_manager = get_cache_manager()
+
+    options = WaveCompileOptions(
+        subs=copy.deepcopy(hyperparams),
+        canonicalize=True,
+        use_water_backend=True,
+    )
+    options = set_default_run_config(options)
+
+    # Before compilation, nothing in cache.
+    assert len(cache_manager.session_cache) == 0, "Expected empty cache at start."
+
+    # First compilation -- cache miss, should produce and store an object file.
+    kernel1 = wave_compile(options, simple_copy)
+
+    assert (
+        cache_manager.cache_misses == 1 and cache_manager.cache_hits == 0
+    ), "Expected first compilation to be a cache miss."
+    assert len(cache_manager.session_cache) == 1, "Expected one entry in session cache."
+
+    # Verify object file was written to cache directory.
+    kernel_hash = options.kernel_hash
+    obj_path = tmp_path / kernel_hash / (kernel_hash + ".o")
+    assert obj_path.exists(), f"Expected object file at {obj_path}."
+    assert obj_path.stat().st_size > 0, "Object file should not be empty."
+
+    a = device_randn(16, 256, dtype=torch.float16)
+    b = device_zeros(16, 256, dtype=torch.float16)
+    kernel1(a, b)
+    assert_close(a, b)
+
+    # Second compilation -- cache hit, should load from object file.
+    b2 = device_zeros(16, 256, dtype=torch.float16)
+    kernel2 = wave_compile(options, simple_copy)
+
+    assert (
+        cache_manager.cache_misses == 1 and cache_manager.cache_hits == 1
+    ), "Expected second compilation to be a cache hit."
+
+    kernel2(a, b2)
+    assert_close(a, b2)
