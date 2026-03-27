@@ -22,27 +22,6 @@
 
 using namespace mlir;
 
-llvm::LogicalResult wave::collectWaveConstraints(
-    Operation *top, llvm::DenseMap<Operation *, Attribute> &constraints) {
-  auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
-  auto walkResult = top->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (auto attr = op->getAttrOfType<ArrayAttr>(
-            wave::WaveDialect::kWaveConstraintsAttrName)) {
-      constraints[op] = attr;
-      return WalkResult::skip();
-    }
-    if (op->getDialect() == waveDialect) {
-      op->emitError()
-          << "wave dialect operation without constraints on an ancestor";
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  if (walkResult.wasInterrupted())
-    return llvm::failure();
-  return llvm::success();
-}
-
 llvm::LogicalResult
 wave::setNormalFormPassPostcondition(ArrayRef<wave::WaveNormalForm> forms,
                                      Operation *root, bool preserve) {

@@ -5,10 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
-#include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
-#include "water/Dialect/Wave/Transforms/Utils.h"
 
 #define DEBUG_TYPE "wave-propagate-defaults-from-constraints"
 
