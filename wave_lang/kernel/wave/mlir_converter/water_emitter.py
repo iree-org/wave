@@ -412,13 +412,18 @@ def _attach_attributes(
             )
         else:
             # MMA needs exactly 4 vector_shape entries: lhs, rhs, acc, result.
+            # Look through the captures that do not have vector shapes
+            # themselves.
             vector_shape_entries = []
-            if lhs_vector_shapes := getattr(node.lhs, "vector_shapes", None):
+            lhs = NestedRegionOp.capture_source(node.lhs)
+            rhs = NestedRegionOp.capture_source(node.rhs)
+            acc = NestedRegionOp.capture_source(node.acc)
+            if lhs_vector_shapes := getattr(lhs, "vector_shapes", None):
                 vector_shape_entries.append(_convert_vector_shapes(lhs_vector_shapes))
-            if rhs_vector_shapes := getattr(node.rhs, "vector_shapes", None):
+            if rhs_vector_shapes := getattr(rhs, "vector_shapes", None):
                 assert len(vector_shape_entries) == 1, "MMA missing LHS vector shapes."
                 vector_shape_entries.append(_convert_vector_shapes(rhs_vector_shapes))
-            if acc_vector_shapes := getattr(node.acc, "vector_shapes", None):
+            if acc_vector_shapes := getattr(acc, "vector_shapes", None):
                 assert len(vector_shape_entries) == 2, f"MMA missing RHS vector shapes."
                 vector_shape_entries.append(_convert_vector_shapes(acc_vector_shapes))
             if result_vector_shapes := getattr(node, "vector_shapes", None):
