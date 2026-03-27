@@ -1465,9 +1465,9 @@ def _write_permlane_pack_to_global(
 
     # Emit 4 stores of vector<2xbf16> (= buffer_store_dword each).
     # Each pair of f32 values is packed into one bf16 dword by
-    # v_cvt_pk_bf16_f32.  Using 2-element stores avoids the multi-dword
-    # PackOp, which the register allocator cannot handle (it does not
-    # insert copies for PackOp operands).
+    # v_cvt_pk_bf16_f32.  A peephole pass in the assembly emitter
+    # merges consecutive dword stores with sequential offsets into
+    # wider stores (dwordx2 / dwordx4).
     all_vals = s_lo + s_hi
     for pair_idx in range(4):
         pair_f32 = vector_d.from_elements(

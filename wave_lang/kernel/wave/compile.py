@@ -1213,6 +1213,21 @@ def wave_compile(
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
 
+            asm_transform = getattr(options, "asm_transform", None)
+            if callable(asm_transform):
+                asm = asm_transform(asm)
+                if options.dump_intermediates:
+                    import os as _os
+
+                    _os.makedirs(options.dump_intermediates, exist_ok=True)
+                    with open(
+                        _os.path.join(
+                            options.dump_intermediates, "gemm_transformed.rocmasm"
+                        ),
+                        "w",
+                    ) as _f:
+                        _f.write(asm)
+
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
         elif options.use_water_backend:

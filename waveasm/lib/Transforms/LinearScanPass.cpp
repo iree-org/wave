@@ -433,6 +433,36 @@ private:
       }
     });
 
+    // Insert V_MOV_B32 copies for PackOp operands so that data lands in
+    // the consecutive physical registers expected by wide stores
+    // (buffer_store_dwordx4 etc.).  PackOp is a no-op in assembly; the
+    // copies materialise the packing at runtime.
+    program.walk([&](PackOp packOp) {
+      auto resultType = dyn_cast<PVRegType>(packOp.getResult().getType());
+      if (!resultType || resultType.getSize() <= 1)
+        return;
+
+      int64_t baseReg = resultType.getIndex();
+      int64_t width = resultType.getSize();
+      OpBuilder copyBuilder(packOp);
+      auto loc = packOp.getLoc();
+      auto *ctx = packOp->getContext();
+
+      for (int64_t i = 0;
+           i < width && i < static_cast<int64_t>(packOp.getNumOperands());
+           ++i) {
+        auto srcType = dyn_cast<PVRegType>(packOp.getOperand(i).getType());
+        if (!srcType)
+          continue;
+        int64_t srcReg = srcType.getIndex();
+        int64_t tgtReg = baseReg + i;
+        if (srcReg == tgtReg)
+          continue;
+        auto tgtPVReg = PVRegType::get(ctx, tgtReg, 1);
+        V_MOV_B32::create(copyBuilder, loc, tgtPVReg, packOp.getOperand(i));
+      }
+    });
+
     // Update block arguments and result types for region-based control flow.
     // After the walk above, operation results inside loop/if bodies have
     // physical register types, but block arguments and the parent op's
