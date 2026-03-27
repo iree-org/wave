@@ -18,6 +18,7 @@ Usage:
 """
 
 import linecache
+import os
 import subprocess
 import sys
 import threading
@@ -234,11 +235,19 @@ def _start_emitter(script_name: str) -> subprocess.Popen[bytes]:
     child = Path(__file__).with_name(script_name)
     if not child.exists():
         raise RuntimeError(f"Emitter helper not found: {child}")
+    # Forward sys.path to the subprocess so dill can unpickle objects whose
+    # modules live in paths added at runtime (e.g. pytest's test directories).
+    env = os.environ.copy()
+    extra = os.pathsep.join(p for p in sys.path if p)
+    if extra:
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{extra}{os.pathsep}{existing}" if existing else extra
     # Stderr is inherited from the parent so it is captured automatically.
     return subprocess.Popen(
         [sys.executable, str(child)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+        env=env,
     )
 
 

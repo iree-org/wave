@@ -2146,6 +2146,12 @@ class ScaledMMA(MMABase):
 
     @property
     def lhs_scale_index(self) -> dict[IndexSymbol, IndexSequence]:
+        # Use the lhs_scale node's own index (post resolve_scaled_indices) which
+        # has the correct scaled size (e.g. size=1 for K/32).  The emitter
+        # will remap the key from K to K32 via _remap_scaled_index_keys.
+        lhs_scale_node = get_custom(self.lhs_scale)
+        if lhs_scale_node is not None and lhs_scale_node.index:
+            return dict(lhs_scale_node.index)
         operand_map = {
             MMA_LHS: 0,
             MMA_RHS: 0,
@@ -2170,6 +2176,12 @@ class ScaledMMA(MMABase):
 
     @property
     def rhs_scale_index(self) -> dict[IndexSymbol, IndexSequence]:
+        # Use the rhs_scale node's own index (post resolve_scaled_indices) which
+        # has the correct scaled size (e.g. size=1 for K/32).  The emitter
+        # will remap the key from K to K32 via _remap_scaled_index_keys.
+        rhs_scale_node = get_custom(self.rhs_scale)
+        if rhs_scale_node is not None and rhs_scale_node.index:
+            return dict(rhs_scale_node.index)
         operand_map = {
             MMA_LHS: 0,
             MMA_RHS: 0,

@@ -242,6 +242,7 @@ def test_scaled_mma_mxfp4_water_e2e():
         wave_dialect_mlir, diagnostics, _ = emitter.emit_wave_dialect(
             trace, kernel_constraints, options_mlir
         )
+    assert len(diagnostics) == 0, f"Should have no error diagnostics, got: {diagnostics}"
 
     # Step 2: Lower through Water middle-end
     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)

@@ -364,6 +364,28 @@ def _convert_sympy_expr_to_affine_map(
     )
 
 
+def _remap_scaled_index_keys(
+    index: dict[IndexSymbol, IndexSequence], shape: list[sympy.Expr]
+) -> dict[sympy.Expr, IndexSequence]:
+    """Remap base symbol keys in an index dict to scaled expressions from shape.
+
+    The Water verifier requires index dict key names to match the dimension
+    names in the op's result type.  For scaled dims (e.g. K/2 → "K2", K/32 →
+    "K32") the Python index analysis stores the base symbol key (K), so we
+    remap it to the scaled expression using the provided shape.
+    """
+    base_to_scaled = {
+        s: expr
+        for expr in shape
+        if not expr.is_Symbol
+        for s in expr.free_symbols
+        if s != expr
+    }
+    if not base_to_scaled:
+        return index
+    return {base_to_scaled.get(dim, dim): seq for dim, seq in index.items()}
+
+
 def _build_index_mapping_dict(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
@@ -391,7 +413,7 @@ def _build_index_mapping_dict(
         symbol_attrs = [
             symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
         ]
-        index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
+        index_mappings[_derived_dim_clean_name(dim)] = wave.WaveIndexMappingAttr.get(
             symbol_attrs, start, size, stride
         )
     return ir.DictAttr.get(index_mappings)
@@ -440,9 +462,11 @@ def _attach_attributes(
                     _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
                 )
             if lhs_scale_index := getattr(node, "lhs_scale_index", None):
+                lhs_scale_shape = getattr(node.lhs_scale_type, "symbolic_shape", [])
                 dict_attrs.append(
                     _build_index_mapping_dict(
-                        lhs_scale_index, allowed_induction_symbols
+                        _remap_scaled_index_keys(lhs_scale_index, lhs_scale_shape),
+                        allowed_induction_symbols,
                     )
                 )
             if rhs_index := getattr(node, "rhs_index", None):
@@ -450,9 +474,11 @@ def _attach_attributes(
                     _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
                 )
             if rhs_scale_index := getattr(node, "rhs_scale_index", None):
+                rhs_scale_shape = getattr(node.rhs_scale_type, "symbolic_shape", [])
                 dict_attrs.append(
                     _build_index_mapping_dict(
-                        rhs_scale_index, allowed_induction_symbols
+                        _remap_scaled_index_keys(rhs_scale_index, rhs_scale_shape),
+                        allowed_induction_symbols,
                     )
                 )
             if acc_index := getattr(node, "acc_index", None):
@@ -464,8 +490,10 @@ def _attach_attributes(
                 dict_attrs.append(acc_attr)
                 dict_attrs.append(acc_attr)
         else:
+            result_shape = getattr(getattr(node, "type", None), "symbolic_shape", [])
+            index = _remap_scaled_index_keys(node.index, result_shape)
             dict_attrs.append(
-                _build_index_mapping_dict(node.index, allowed_induction_symbols)
+                _build_index_mapping_dict(index, allowed_induction_symbols)
             )
 
         op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
