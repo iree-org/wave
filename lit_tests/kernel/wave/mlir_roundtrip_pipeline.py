@@ -228,13 +228,6 @@ def attention_progressive_roundtrip():
     # See: https://github.com/iree-org/wave/issues/1019
     expected_failures = frozenset(
         {
-            "set_node_indices",
-            "reorder_workgroups",
-            "expand_graph",
-            "set_post_expansion_indices",
-            "remove_chained_getresult",
-            "decompose_vmma_ops",
-            "decompose_dot_mma",
             "hoist_loop_invariant_ops",
             "tensor_load_to_shared",
             "multicast",
