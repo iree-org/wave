@@ -271,4 +271,63 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
   return success();
 }
 
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
+  auto fromElemsOp = cast<vector::FromElementsOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto resultType = fromElemsOp.getDest().getType();
+  auto elemType = resultType.getElementType();
+  int64_t elemBitWidth = elemType.getIntOrFloatBitWidth();
+  int64_t numElems = resultType.getNumElements();
+  int64_t totalBits = numElems * elemBitWidth;
+  int64_t numDwords = (totalBits + 31) / 32;
+  int64_t elemsPerDword = 32 / elemBitWidth;
+
+  SmallVector<Value> dwordValues;
+  for (int64_t d = 0; d < numDwords; ++d) {
+    Value packed;
+    for (int64_t e = 0; e < elemsPerDword; ++e) {
+      int64_t idx = d * elemsPerDword + e;
+      if (idx >= numElems)
+        break;
+
+      auto elemMapped =
+          ctx.getMapper().getMapped(fromElemsOp.getElements()[idx]);
+      if (!elemMapped) {
+        return op->emitError("element ") << idx << " not mapped";
+      }
+      Value elem = *elemMapped;
+
+      if (e == 0) {
+        if (isa<ImmType>(elem.getType())) {
+          auto vregType = ctx.createVRegType(1, 1);
+          packed = V_MOV_B32::create(builder, loc, vregType, elem);
+        } else {
+          packed = elem;
+        }
+      } else {
+        int64_t bitOffset = e * elemBitWidth;
+        auto shiftImm = ctx.createImmType(bitOffset);
+        auto shiftConst = ConstantOp::create(builder, loc, shiftImm, bitOffset);
+        auto vregType = ctx.createVRegType(1, 1);
+        Value shifted =
+            V_LSHLREV_B32::create(builder, loc, vregType, shiftConst, elem);
+        packed = V_OR_B32::create(builder, loc, vregType, packed, shifted);
+      }
+    }
+    dwordValues.push_back(packed);
+  }
+
+  if (dwordValues.size() == 1) {
+    ctx.getMapper().mapValue(fromElemsOp.getDest(), dwordValues[0]);
+  } else {
+    auto packedType =
+        ctx.createVRegType(numDwords, numDwords > 1 ? numDwords : 1);
+    auto packResult = PackOp::create(builder, loc, packedType, dwordValues);
+    ctx.getMapper().mapValue(fromElemsOp.getDest(), packResult);
+  }
+  return success();
+}
+
 } // namespace waveasm

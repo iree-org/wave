@@ -1300,6 +1300,17 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleROCDLSchedBarrier(Operation *op, TranslationContext &ctx) {
+  auto schedBarrierOp = cast<ROCDL::SchedBarrier>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  int32_t mask = schedBarrierOp.getMask();
+
+  RawOp::create(builder, loc, "s_sched_barrier 0x" + llvm::utohexstr(mask));
+  return success();
+}
+
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx) {
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();

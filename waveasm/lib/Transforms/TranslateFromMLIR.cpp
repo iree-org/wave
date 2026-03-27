@@ -791,6 +791,7 @@ LogicalResult handleVectorFma(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorReduction(Operation *op, TranslationContext &ctx);
 LogicalResult handleVectorExtractStridedSlice(Operation *op,
                                               TranslationContext &ctx);
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx);
 
 } // namespace waveasm
 
@@ -1849,6 +1850,7 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx);
 LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
+LogicalResult handleROCDLSchedBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
@@ -1996,6 +1998,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(vector::TransferWriteOp, handleVectorTransferWrite);
   REGISTER_HANDLER(vector::FMAOp, handleVectorFma);
   REGISTER_HANDLER(vector::ReductionOp, handleVectorReduction);
+  REGISTER_HANDLER(vector::FromElementsOp, handleVectorFromElements);
 
   // AMDGPU dialect
   REGISTER_HANDLER(amdgpu::LDSBarrierOp, handleAMDGPULdsBarrier);
@@ -2012,6 +2015,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(ROCDL::ReadfirstlaneOp, handleReadFirstLane);
   REGISTER_HANDLER(ROCDL::SBarrierOp, handleROCDLSBarrier);
   REGISTER_HANDLER(ROCDL::SetPrioOp, handleROCDLSetPrio);
+  REGISTER_HANDLER(ROCDL::SchedBarrier, handleROCDLSchedBarrier);
   REGISTER_HANDLER(ROCDL::SWaitcntOp, handleSWaitcnt);
 
   // IREE/Stream dialect (unregistered operations)
