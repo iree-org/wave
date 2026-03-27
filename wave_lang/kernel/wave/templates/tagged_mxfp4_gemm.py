@@ -149,6 +149,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     b_preshuffled: bool = False,
     reorder_workgroups: bool = False,
     group_size_n=32,
+    output_dtype=tkl.f32,
 ):
     """Shared implementation: preshuffle scales only, or scales + B data.
 
@@ -178,6 +179,19 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / wave_shape[0])]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / wave_shape[1])]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    # Divisibility assumptions for M, N, K (no effect for static shapes).
+    constraints += [tkw.Assumption(Eq(M % 32, 0))]
+    constraints += [tkw.Assumption(Eq(N % 32, 0))]
+    constraints += [tkw.Assumption(Eq(K % 256, 0))]
+
+    # Include assumption that K is divisible by BLOCK_K to allow gather_to_shared ops to omit masking predicates.
+    constraints += [tkw.Assumption(Eq(K % BLOCK_K, 0))]
+    constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
+    constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
+
+    # K is always large enough for software pipelining.
+    constraints += [tkw.Assumption(K > BLOCK_K * 6)]
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
@@ -249,7 +263,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         a_scale: tkl.Memory[M, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, B_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, C_ADDRESS_SPACE, tkl.f32],
+        c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -273,6 +287,9 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
             )
             return acc
 
+        if output_dtype == tkl.bf16:
+            repeat = tkw.cast(repeat, tkl.bf16)
+
         tkw.write(repeat, c)
 
     hyperparams = {
@@ -290,7 +307,7 @@ def _get_tagged_mxfp4_gemm_preshuffle_scales_impl(
         M: shape[0],
         N: shape[1],
         K: shape[2],
-        K_SCALE_SHUFFLED: (((shape[2] // 32) + 7) // 8) * 8,
+        K_SCALE_SHUFFLED: (((K // 32) + 7) // 8) * 8,
     }
     if b_preshuffled:
         hyperparams[K_PACKED] = K // 2
@@ -348,6 +365,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
     mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
     a_address_space: tkl.AddressSpace = SHARED_ADDRESS_SPACE,
     b_address_space: tkl.AddressSpace | None = None,
+    output_dtype=tkl.f32,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
@@ -374,6 +392,7 @@ def get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         a_address_space,
         b_address_space,
         b_preshuffled=True,
+        output_dtype=output_dtype,
     )
 
 
