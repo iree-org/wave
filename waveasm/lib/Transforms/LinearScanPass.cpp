@@ -135,10 +135,99 @@ private:
   /// Get the accumulator operand from an MFMA op using the interface.
   /// Returns nullptr if the operation is not an MFMA.
   Value getMFMAAccumulator(Operation *op) {
-    if (auto mfmaOp = dyn_cast<MFMAOpInterface>(op)) {
+    if (auto mfmaOp = dyn_cast<MFMAOpInterface>(op))
       return mfmaOp.getAcc();
-    }
     return nullptr;
+  }
+
+  /// Scratch VGPR index used for cross-class spill reloads.
+  static constexpr int64_t kSpillScratchVGPR = 14;
+
+  /// Insert spill/reload ops for cross-class evictions.
+  ///
+  /// For each VGPR->AGPR spill:
+  ///   - After the victim's def:  v_accvgpr_write_b32 vSRC, aDST
+  ///   - Before each use:         v_accvgpr_read_b32  aSRC -> vSCRATCH
+  ///     and rewrite the use to consume the reload result.
+  ///
+  /// The ops are created with physical register types so the subsequent
+  /// type transformation pass does not need to touch them.
+  LogicalResult insertSpillReloads(ProgramOp program,
+                                   ArrayRef<SpillRecord> spills,
+                                   PhysicalMapping &mapping) {
+    // Build a lookup from victim Value -> SpillRecord.
+    llvm::DenseMap<Value, const SpillRecord *> spillMap;
+    for (const SpillRecord &sr : spills)
+      spillMap[sr.victim] = &sr;
+
+    MLIRContext *ctx = program.getContext();
+
+    // For each spill, create a precolored AGPR value to use as the
+    // source/destination in read/write ops.  This gives us an SSA handle
+    // to thread through the spill ops.
+    //
+    // We insert a PrecoloredARegOp at program entry to materialise the
+    // AGPR "slot". It does not generate any assembly; it just provides
+    // an SSA value with the right physical type for the dialect ops.
+    llvm::DenseMap<Value, Value> spillSlots; // victim -> AGPR SSA value
+    {
+      OpBuilder entryBuilder(ctx);
+      Block &entry = program.getBodyBlock();
+      entryBuilder.setInsertionPointToStart(&entry);
+      for (const SpillRecord &sr : spills) {
+        auto physARegType = PARegType::get(ctx, sr.targetPhysReg, 1);
+        Value slot = PrecoloredARegOp::create(entryBuilder, program.getLoc(),
+                                              physARegType, sr.targetPhysReg,
+                                              /*size=*/1);
+        spillSlots[sr.victim] = slot;
+      }
+    }
+
+    // Collect all ops in program order.
+    llvm::SmallVector<Operation *> ops;
+    collectOpsRecursive(program.getBodyBlock(), ops);
+
+    for (Operation *op : ops) {
+      // --- Insert spills after defs. ---
+      for (Value result : op->getResults()) {
+        auto it = spillMap.find(result);
+        if (it == spillMap.end())
+          continue;
+        const SpillRecord &sr = *it->second;
+        if (sr.sourceClass == RegClass::VGPR &&
+            sr.targetClass == RegClass::AGPR) {
+          OpBuilder builder(ctx);
+          builder.setInsertionPointAfter(op);
+          Value slot = spillSlots[sr.victim];
+          V_ACCVGPR_WRITE_B32::create(builder, op->getLoc(), result, slot);
+        }
+      }
+
+      // --- Insert reloads before uses. ---
+      for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+        Value operand = op->getOperand(i);
+        auto it = spillMap.find(operand);
+        if (it == spillMap.end())
+          continue;
+        const SpillRecord &sr = *it->second;
+        if (sr.sourceClass == RegClass::VGPR &&
+            sr.targetClass == RegClass::AGPR) {
+          OpBuilder builder(op);
+          auto scratchType = PVRegType::get(ctx, kSpillScratchVGPR, 1);
+          Value slot = spillSlots[sr.victim];
+          Value reloaded = V_ACCVGPR_READ_B32::create(builder, op->getLoc(),
+                                                      scratchType, slot);
+          op->setOperand(i, reloaded);
+        }
+      }
+    }
+
+    // Update the mapping for spilled values: the victim VGPR is no longer
+    // live; its uses have been rewritten to read from the scratch VGPR.
+    // The original mapping (victim -> sourcePhysReg) is left as-is for the
+    // type transformation to assign the correct PVRegType to the def site.
+
+    return success();
   }
 
   LogicalResult processProgram(ProgramOp program) {
@@ -157,6 +246,11 @@ private:
     // v_mul_lo_u32 don't support large literal operands, so the emitter
     // generates v_mov_b32 v15, <literal> before such instructions.
     reservedVGPRs.insert(15);
+
+    // Reserve v14 as scratch VGPR for cross-class spill reloads.
+    // When a VGPR is spilled to an AGPR, reloads use v_accvgpr_read_b32
+    // into this scratch before the consuming instruction.
+    reservedVGPRs.insert(14);
 
     // Note: ABI SGPRs (kernarg ptr, preload regs, workgroup IDs, SRDs) are
     // reserved via PrecoloredSRegOp ops emitted during translation. The
@@ -246,13 +340,12 @@ private:
       allocator.addTiedOperand(result, acc);
     }
 
-    // Run allocation
+    // Run allocation.
     auto result = allocator.allocate(program);
-    if (failed(result)) {
+    if (failed(result))
       return failure();
-    }
 
-    auto [mapping, stats] = *result;
+    auto &[mapping, stats, spills] = *result;
 
     // Handle waveasm.extract ops: result = source[offset].
     // Set the extract result's physical register = source's physReg + offset.
@@ -288,6 +381,16 @@ private:
     });
     if (packResult.wasInterrupted())
       return failure();
+
+    // Insert cross-class spill/reload ops for any evicted values.
+    // For each spill record (e.g. VGPR -> AGPR):
+    //   - After the victim's def: v_accvgpr_write_b32 aX, vY  (spill)
+    //   - Before each use:        v_accvgpr_read_b32  v14, aX (reload)
+    //     and rewrite the use to consume v14 instead of vY.
+    if (!spills.empty()) {
+      if (failed(insertSpillReloads(program, spills, mapping)))
+        return failure();
+    }
 
     // Transform the IR: replace virtual register types with physical types
     OpBuilder builder(program.getContext());

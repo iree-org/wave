@@ -20,6 +20,22 @@
 namespace waveasm {
 
 //===----------------------------------------------------------------------===//
+// Spill Record
+//===----------------------------------------------------------------------===//
+
+/// Records a cross-class spill decision made during register allocation.
+/// The victim value is evicted from its original register class into the
+/// alternate class (e.g. VGPR -> AGPR). The pass uses these records to
+/// insert spill/reload ops after allocation completes.
+struct SpillRecord {
+  mlir::Value victim;    ///< The SSA value being spilled.
+  int64_t sourcePhysReg; ///< Physical register freed in original class.
+  int64_t targetPhysReg; ///< Physical register allocated in target class.
+  RegClass sourceClass;  ///< Original register class (e.g. VGPR).
+  RegClass targetClass;  ///< Target register class (e.g. AGPR).
+};
+
+//===----------------------------------------------------------------------===//
 // Allocation Statistics
 //===----------------------------------------------------------------------===//
 
@@ -168,6 +184,9 @@ public:
     }
   }
 
+  /// Check if the pool has at least one free register.
+  bool hasFree() const { return !freeList.empty(); }
+
   /// Get peak usage
   int64_t getPeakUsage() const { return peak; }
 
@@ -216,11 +235,17 @@ public:
     tiedOperands[result] = operand;
   }
 
-  /// Run allocation on a kernel program
-  /// Returns the physical mapping and statistics, or failure if allocation
-  /// fails
-  mlir::FailureOr<std::pair<PhysicalMapping, AllocationStats>>
-  allocate(ProgramOp program);
+  /// Result bundle returned by allocate().
+  struct AllocResult {
+    PhysicalMapping mapping;
+    AllocationStats stats;
+    llvm::SmallVector<SpillRecord> spills;
+  };
+
+  /// Run allocation on a kernel program.
+  /// Returns the physical mapping, statistics, and any cross-class spill
+  /// records, or failure if allocation fails.
+  mlir::FailureOr<AllocResult> allocate(ProgramOp program);
 
 private:
   /// Process active ranges, expiring those that end before currentPoint
