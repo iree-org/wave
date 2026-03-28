@@ -252,7 +252,7 @@ def test_gemm():
     # CHECK-NEXT: read(memory=b, elements_per_thread=8,
     # CHECK-SAME: index={N: $WG1*BLOCK_N + BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64) : 1 : 1, K: ARGK*BLOCK_K + 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: write(register_=read_40, memory=allocate_1, elements_per_thread=8,
-    # CHECK-SMAE: index={N: BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64) : 1 : 1, K: 8*(Mod($T0, 8)) : 8 : 1})
+    # CHECK-SAME: index={N: BLOCK_N/2 + Mod(16*$T1 + 32*$T2 + floor($T0/8) + 32, 64) : 1 : 1, K: 8*(Mod($T0, 8)) : 8 : 1})
     # CHECK-NEXT: shared_memory_barrier
     # CHECK-NEXT: read(memory=allocate_1, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, _write_dependency=[write_20, write_21], index={N: BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-NEXT: read(memory=allocate_1, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, _write_dependency=[write_20, write_21], index={N: BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
@@ -341,7 +341,7 @@ def test_materialized_shape_padding():
     # CHECK:          func.func @gemm
     # CHECK:            %{{.*}} = arith.constant dense<17> : vector<8xindex>
     # CHECK:            %{{.*}} = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7]> : vector<8xindex>
-    # CHECK:            %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}], %{{.*}}, %{{.*}}: memref<16x17xf16, strided<[17, 1]>>, vector<8xi1>, vector<8xf16> into vector<8xf16>
+    # CHECK:            %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}], %{{.*}}, %{{.*}} : memref<{{.*}}xf16, strided<[1]>>, vector<8xi1>, vector<8xf16> into vector<8xf16>
 
 
 if __name__ == "__main__":

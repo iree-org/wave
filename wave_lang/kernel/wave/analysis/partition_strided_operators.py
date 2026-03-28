@@ -481,10 +481,13 @@ def _get_physical_start(
     for each dimension so that contiguity (A_r(k) = B + o_r + k) can
     be verified.
 
+    For reads with a flattened LINEAR_INDEX, returns the flat offset directly.
     For reads with a non-identity mapping, applies the mapping to get physical
     coordinates. For identity-mapped reads (mapping=None), reads the start
     offsets directly from the index.
     """
+    if LINEAR_INDEX in custom.index:
+        return {LINEAR_INDEX: custom.index[LINEAR_INDEX].start}
     if custom.mapping is not None and not custom.has_identity_mapping():
         physical = _get_read_transform_info(custom, symbolic_shape).transformed_index
         if not all(dim in physical for dim in symbolic_dims):
@@ -809,6 +812,14 @@ def _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr=N
     return wide_read
 
 
+def _emit_wide_read_linear(
+    anchor_custom, min_offset, wide_ept, anchor_stride, tag_source, mask_expr=None
+):
+    """Create a merged Read for LINEAR_INDEX reads."""
+    wide_index = {LINEAR_INDEX: IndexSequence(min_offset, wide_ept, anchor_stride)}
+    return _emit_wide_read(anchor_custom, wide_index, wide_ept, tag_source, mask_expr)
+
+
 def _emit_extract_slice(
     wide_read, offset, size, orig_custom, orig_node, symbolic_shape
 ):
@@ -939,14 +950,22 @@ def _do_merge(
     if not _check_lowering_ok(new_ept, lo_custom.type.dtype, hw_constraint):
         return False
     with lo_custom.graph.inserting_before(lo_node):
-        new_index = {
-            dim: IndexSequence(
-                lo_phys[dim],
-                new_ept if dim == merge_dim else 1,
-                1,
-            )
-            for dim in symbolic_dims
-        }
+        if LINEAR_INDEX in symbolic_dims:
+            anchor_seq = lo_custom.index[LINEAR_INDEX]
+            new_index = {
+                LINEAR_INDEX: IndexSequence(
+                    lo_phys[LINEAR_INDEX], new_ept, anchor_seq.stride
+                )
+            }
+        else:
+            new_index = {
+                dim: IndexSequence(
+                    lo_phys[dim],
+                    new_ept if dim == merge_dim else 1,
+                    1,
+                )
+                for dim in symbolic_dims
+            }
         merged_read = _emit_wide_read(
             lo_custom, new_index, new_ept, lo_node, mask_expr=wide_mask
         )
@@ -1267,12 +1286,15 @@ def _is_fastpath_eligible(custom: Read) -> bool:
     The fast path assumes reads that are consecutive in the fastest
     physical dimension also have consecutive flat offsets.  This holds
     for mapped reads (where transform_index_on_mapping already produced
-    physical coordinates) but not necessarily for identity/unmapped reads
-    in multi-dimensional tensors with stride > 1.
+    physical coordinates) and for LINEAR_INDEX reads (pre-linearized),
+    but not necessarily for identity/unmapped reads in multi-dimensional
+    tensors with stride > 1.
 
     Those reads are left to the iterative pairwise path which handles
     arbitrary stride patterns via per-dim delta verification.
     """
+    if LINEAR_INDEX in custom.index:
+        return True
     if custom.mapping is None or custom.has_identity_mapping():
         return False
     return True
@@ -1444,10 +1466,18 @@ def _wide_group_merge_fastpath(
         earliest_node = min((e.node for e in entries), key=lambda n: node_position[n])
 
         with get_custom(earliest_node).graph.inserting_before(earliest_node):
-            wide_index = {}
-            for dim_idx, dim in enumerate(symbolic_dims):
-                size = wide_ept if dim_idx == len(symbolic_dims) - 1 else 1
-                wide_index[dim] = IndexSequence(base_phys[dim], size, 1)
+            if LINEAR_INDEX in symbolic_dims:
+                anchor_seq = anchor_info.custom.index[LINEAR_INDEX]
+                wide_index = {
+                    LINEAR_INDEX: IndexSequence(
+                        base_phys[LINEAR_INDEX], wide_ept, anchor_seq.stride
+                    )
+                }
+            else:
+                wide_index = {}
+                for dim_idx, dim in enumerate(symbolic_dims):
+                    size = wide_ept if dim_idx == len(symbolic_dims) - 1 else 1
+                    wide_index[dim] = IndexSequence(base_phys[dim], size, 1)
 
             wide_read = _emit_wide_read(
                 anchor_info.custom,
@@ -1517,22 +1547,43 @@ def _wide_merge_fastpath_pass(
             phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
             if phys_start is None:
                 continue
-            flat_offset = sum(
-                phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
-            )
-            read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
+            if LINEAR_INDEX in phys_start:
+                flat_offset = phys_start[LINEAR_INDEX]
+                read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
+            else:
+                flat_offset = sum(
+                    phys_start[dim] * stride
+                    for dim, stride in zip(symbolic_dims, strides)
+                )
+                read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
 
         if len(read_infos) < 2:
             continue
 
-        _wide_group_merge_fastpath(
-            read_infos,
-            ept,
-            symbolic_dims,
-            symbolic_shape,
-            hw_constraint,
-            divisibility_fwd=divisibility_fwd,
-        )
+        # Split into LINEAR_INDEX reads and N-D reads, handle separately.
+        linear_infos = [ri for ri in read_infos if LINEAR_INDEX in ri.phys_start]
+        nd_infos = [ri for ri in read_infos if LINEAR_INDEX not in ri.phys_start]
+
+        if len(linear_infos) >= 2:
+            linear_dims = [LINEAR_INDEX]
+            _wide_group_merge_fastpath(
+                linear_infos,
+                ept,
+                linear_dims,
+                symbolic_shape,
+                hw_constraint,
+                divisibility_fwd=divisibility_fwd,
+            )
+
+        if len(nd_infos) >= 2:
+            _wide_group_merge_fastpath(
+                nd_infos,
+                ept,
+                symbolic_dims,
+                symbolic_shape,
+                hw_constraint,
+                divisibility_fwd=divisibility_fwd,
+            )
 
 
 def _pairwise_merge(
@@ -1706,24 +1757,45 @@ def _merge_contiguous_reads_once(
             phys_start = _get_physical_start(custom, symbolic_shape, symbolic_dims)
             if phys_start is None:
                 continue
-            flat_offset = sum(
-                phys_start[dim] * stride for dim, stride in zip(symbolic_dims, strides)
-            )
+            if LINEAR_INDEX in phys_start:
+                flat_offset = phys_start[LINEAR_INDEX]
+            else:
+                flat_offset = sum(
+                    phys_start[dim] * stride
+                    for dim, stride in zip(symbolic_dims, strides)
+                )
             read_infos.append(ReadInfo(flat_offset, phys_start, custom, node))
 
-        merged, did_merge = _pairwise_merge(
-            read_infos,
-            ept,
-            symbolic_dims,
-            symbolic_shape,
-            hw_constraint,
-            divisibility_fwd=divisibility_fwd,
-        )
-        merged_any |= did_merge
+        # Split into LINEAR_INDEX reads and N-D reads.
+        linear_infos = [ri for ri in read_infos if LINEAR_INDEX in ri.phys_start]
+        nd_infos = [ri for ri in read_infos if LINEAR_INDEX not in ri.phys_start]
 
-        if ept == 1 and len(read_infos) >= 2:
+        if len(linear_infos) >= 2:
+            linear_dims = [LINEAR_INDEX]
+            merged, did_merge = _pairwise_merge(
+                linear_infos,
+                ept,
+                linear_dims,
+                symbolic_shape,
+                hw_constraint,
+                divisibility_fwd=divisibility_fwd,
+            )
+            merged_any |= did_merge
+
+        if len(nd_infos) >= 2:
+            merged, did_merge = _pairwise_merge(
+                nd_infos,
+                ept,
+                symbolic_dims,
+                symbolic_shape,
+                hw_constraint,
+                divisibility_fwd=divisibility_fwd,
+            )
+            merged_any |= did_merge
+
+        if ept == 1 and len(nd_infos) >= 2:
             merged_any |= _multiway_coalesce(
-                read_infos,
+                nd_infos,
                 merged,
                 reads,
                 symbolic_dims,

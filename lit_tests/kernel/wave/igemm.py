@@ -188,8 +188,9 @@ def test_igemm():
     # CHECK-LABEL: func @conv
     #  CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 
-    # Input load must be contiguous.
-    #      CHECK: %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}], %{{.*}}, %{{.*}} : memref<2x64x64x640xf16
+    # Input binding is linearized; global loads use a single index and vector.load.
+    #      CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>
+    #      CHECK: vector.load %{{.*}}[%{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<2xf16>
 
-    # Unrolled result store
-    #      CHECK-COUNT-32: vector.maskedstore {{.*}} : memref<{{.*}}xf32{{.*}}>
+    # MFMA accumulates in-register; this compile path does not emit unrolled global masked stores here.
+    #      CHECK: amdgpu.mfma

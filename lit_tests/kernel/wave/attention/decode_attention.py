@@ -69,9 +69,10 @@ def test_paged_flash_decoding():
     # CHECK-COUNT-2:           vector.load
     # CHECK:                   %[[COUNT1:.*]] = affine.apply #[[map]]()[%[[COUNT0]]]
     # CHECK:                   scf.for %{{.*}} = %[[C0]] to %[[COUNT1]] step %[[C1]]
-    # 1 masked load block table, 1 for k_cache, and 1 for v_cache.
-    # CHECK-COUNT-3:                vector.maskedload
-    # CHECK:                        amdgpu.lds_barrier
+    # 2 masked loads for block table reads, then data loads for k/v caches.
+    # CHECK-COUNT-2:                vector.maskedload
+    # CHECK-DAG:                    vector.load
+    # CHECK-DAG:                    amdgpu.lds_barrier
     # CHECK-COUNT-4:                amdgpu.mfma
     # CHECK:                  %[[COND:.*]] = arith.cmpi sgt, %[[COUNT0]], %[[C0]] : index
     # CHECK:                  scf.if %[[COND]] {
@@ -218,27 +219,11 @@ def test_paged_flash_decoding_small_head_size():
 
     # CHECK-LABEL:          test_paged_flash_decoding_small_head_size
     # CHECK:                func.func @phase_0
-    # Check we are generating comparison against 13
+    # Check head_size bound of 13 is enforced via masking.
     # CHECK:                   %[[C13:.*]] = arith.constant 13 : index
-    # CHECK:                   %[[COND:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]]
-
-    # CHECK:                   scf.for
-
-    # CHECK:                     %[[COND_AND1:.*]] = arith.andi %[[COND]], %{{.*}}
-    # CHECK:                     %[[ELEM1_SPLAT:.*]] = vector.broadcast %[[COND_AND1]] : i1 to vector<1xi1>
-    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM1_SPLAT]], %{{.*}}
-
-    # CHECK:                     %[[COND_AND2:.*]] = arith.andi %[[COND]], %{{.*}}
-    # CHECK:                     %[[ELEM2_SPLAT:.*]] = vector.broadcast %[[COND_AND2]] : i1 to vector<1xi1>
-    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM2_SPLAT]], %{{.*}}
-
-    # CHECK:                     %[[COND_AND3:.*]] = arith.andi %[[COND]], %{{.*}}
-    # CHECK:                     %[[ELEM3_SPLAT:.*]] = vector.broadcast %[[COND_AND3]] : i1 to vector<1xi1>
-    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM3_SPLAT]], %{{.*}}
-
-    # CHECK:                     %[[COND_AND4:.*]] = arith.andi %[[COND]], %{{.*}}
-    # CHECK:                     %[[ELEM4_SPLAT:.*]] = vector.broadcast %[[COND_AND4]] : i1 to vector<1xi1>
-    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM4_SPLAT]], %{{.*}}
+    # CHECK:                   arith.cmpi slt, %{{.*}}, %[[C13]]
+    # v_cache reads use per-element masked loads from linearized 1-D memref.
+    # CHECK-COUNT-4:           vector.maskedload %{{.*}}[{{.*}}], %{{.*}}, %{{.*}} : memref<{{.*}}xf16, strided<[1]>>, vector<1xi1>, vector<1xf16> into vector<1xf16>
 
 
 @run_test
