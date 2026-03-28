@@ -16,6 +16,7 @@
 //   - memref.load - emit ds_read or buffer_load
 //   - memref.store - emit ds_write or buffer_store
 //   - memref.cast - pass through source mapping
+//   - memref.extract_strided_metadata - expose base, offset, sizes, strides
 //
 //===----------------------------------------------------------------------===//
 
@@ -233,26 +234,23 @@ LogicalResult handleMemRefLoad(Operation *op, TranslationContext &ctx) {
     auto readOp = DS_READ_B32::create(builder, loc, TypeRange{vregType}, vaddr);
     ctx.getMapper().mapValue(loadOp.getResult(), readOp.getResult(0));
   } else {
-    // Global load
-    auto sregType = ctx.createSRegType(4, 4);
-    auto srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+    // Global load — use the same SRD lookup and voffset computation as
+    // vector.load so that fat_raw_buffer memrefs get the correct adjusted SRD.
+    auto [voffset, instOffset] = computeVOffsetFromIndices(
+        memrefType, loadOp.getIndices(), ctx, loc, loadOp.getMemref());
 
-    Value voffset;
-    if (!loadOp.getIndices().empty()) {
-      if (auto mapped = ctx.getMapper().getMapped(loadOp.getIndices()[0])) {
-        voffset = *mapped;
-      }
-    }
-    if (!voffset) {
-      auto immType = ctx.createImmType(0);
-      voffset = ConstantOp::create(builder, loc, immType, 0);
+    Value srd;
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(loadOp.getMemref())) {
+      srd = emitSRDBaseAdjustment(*adj, loadOp.getMemref(), ctx, loc);
+    } else {
+      srd = lookupSRD(loadOp.getMemref(), ctx, loc);
     }
 
-    auto zeroImm = builder.getType<ImmType>(0);
-    auto zeroConst = ConstantOp::create(builder, loc, zeroImm, 0);
-    auto loadInstr = BUFFER_LOAD_DWORD::create(
-        builder, loc, TypeRange{vregType}, srd, voffset, zeroConst);
-    ctx.getMapper().mapValue(loadOp.getResult(), loadInstr.getResult(0));
+    int64_t elemBytes = getElementBytes(memrefType.getElementType());
+    auto loadResults =
+        emitBufferLoads(srd, voffset, instOffset, elemBytes, ctx, loc);
+    if (!loadResults.empty())
+      ctx.getMapper().mapValue(loadOp.getResult(), loadResults[0]);
   }
 
   return success();
@@ -286,48 +284,18 @@ LogicalResult handleMemRefStore(Operation *op, TranslationContext &ctx) {
 
     DS_WRITE_B32::create(builder, loc, *data, vaddr);
   } else {
-    // Global store
-    auto sregType = ctx.createSRegType(4, 4);
-    auto srd = PrecoloredSRegOp::create(builder, loc, sregType, 8, 4);
+    // Global store — use proper SRD lookup and voffset computation.
+    auto [voffset, instOffset] = computeVOffsetFromIndices(
+        memrefType, storeOp.getIndices(), ctx, loc, storeOp.getMemref());
 
-    Value voffset;
-    if (!storeOp.getIndices().empty()) {
-      if (auto mapped = ctx.getMapper().getMapped(storeOp.getIndices()[0])) {
-        voffset = *mapped;
-      }
-    }
-    if (!voffset) {
-      auto immType = ctx.createImmType(0);
-      voffset = ConstantOp::create(builder, loc, immType, 0);
+    Value srd;
+    if (auto *adj = ctx.getPendingSRDBaseAdjust(storeOp.getMemref())) {
+      srd = emitSRDBaseAdjustment(*adj, storeOp.getMemref(), ctx, loc);
+    } else {
+      srd = lookupSRD(storeOp.getMemref(), ctx, loc);
     }
 
-    BUFFER_STORE_DWORD::create(builder, loc, *data, srd, voffset);
-  }
-
-  return success();
-}
-
-/// Handle memref.extract_strided_metadata - extract offset from SRD adjustment.
-/// Results: (base_buffer, offset, sizes..., strides...).
-/// The offset is needed by eliminate_epilogue's _compute_valid_bytes to clamp
-/// the SRD NUM_RECORDS field so OOB loads in extended iterations return zero.
-LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
-                                                 TranslationContext &ctx) {
-  auto metaOp = cast<memref::ExtractStridedMetadataOp>(op);
-  Value source = metaOp.getSource();
-
-  auto *adj = ctx.getPendingSRDBaseAdjust(source);
-  if (!adj) {
-    if (auto castOp = source.getDefiningOp<memref::CastOp>())
-      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
-  }
-
-  if (auto src = ctx.getMapper().getMapped(source))
-    ctx.getMapper().mapValue(metaOp.getBaseBuffer(), *src);
-
-  if (adj) {
-    Value offsetResult = metaOp.getOffset();
-    ctx.getMapper().mapValue(offsetResult, adj->elementOffset);
+    BUFFER_STORE_DWORD::create(builder, loc, *data, srd, voffset, instOffset);
   }
 
   return success();
@@ -359,6 +327,83 @@ LogicalResult handleMemRefCast(Operation *op, TranslationContext &ctx) {
 
   if (auto ldsOffset = ctx.getLDSBaseOffset(castOp.getSource())) {
     ctx.setLDSBaseOffset(castOp.getResult(), *ldsOffset);
+  }
+
+  return success();
+}
+
+/// Handle memref.extract_strided_metadata - expose the base buffer, offset,
+/// sizes, and strides of a strided memref as individual SSA values.
+///
+/// Results: (base_buffer, offset, sizes..., strides...)
+///
+/// For the waveasm backend, the critical results are the dynamic strides
+/// (tracked via setDynamicStride on the source reinterpret_cast). We map
+/// each result to the appropriate value so that downstream arithmetic
+/// (arith.muli with the stride, etc.) can resolve its operands.
+LogicalResult handleMemRefExtractStridedMetadata(Operation *op,
+                                                 TranslationContext &ctx) {
+  auto metadataOp = cast<memref::ExtractStridedMetadataOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  Value source = metadataOp.getSource();
+  auto sourceType = cast<MemRefType>(source.getType());
+
+  // Result #0: base_buffer — map to the same underlying buffer as the source.
+  if (auto src = ctx.getMapper().getMapped(source)) {
+    ctx.getMapper().mapValue(metadataOp.getBaseBuffer(), *src);
+  }
+
+  // Get static strides and offset from the source memref type.
+  SmallVector<int64_t, 4> staticStrides;
+  int64_t staticOffset;
+  bool hasStridesAndOffset =
+      succeeded(sourceType.getStridesAndOffset(staticStrides, staticOffset));
+
+  // Result #1: offset — prefer SRD adjustment offset (needed by epilogue
+  // elimination's _compute_valid_bytes), then fall back to static offset.
+  auto *adj = ctx.getPendingSRDBaseAdjust(source);
+  if (!adj) {
+    if (auto castOp = source.getDefiningOp<memref::CastOp>())
+      adj = ctx.getPendingSRDBaseAdjust(castOp.getSource());
+  }
+  if (adj) {
+    ctx.getMapper().mapValue(metadataOp.getOffset(), adj->elementOffset);
+  } else if (hasStridesAndOffset && staticOffset != ShapedType::kDynamic) {
+    auto immType = ctx.createImmType(staticOffset);
+    auto offsetVal = ConstantOp::create(builder, loc, immType, staticOffset);
+    ctx.getMapper().mapValue(metadataOp.getOffset(), offsetVal);
+  }
+
+  // Results #2..#(2+rank-1): sizes — map static sizes to constants,
+  // dynamic sizes to their mapped source values.
+  auto sizes = metadataOp.getSizes();
+  auto shape = sourceType.getShape();
+  for (unsigned i = 0; i < sizes.size(); ++i) {
+    if (i < shape.size() && shape[i] != ShapedType::kDynamic) {
+      auto immType = ctx.createImmType(shape[i]);
+      auto sizeVal = ConstantOp::create(builder, loc, immType, shape[i]);
+      ctx.getMapper().mapValue(sizes[i], sizeVal);
+    }
+  }
+
+  // Results #(2+rank)..#(2+2*rank-1): strides — the critical part.
+  // For dynamic strides, retrieve the value already tracked by
+  // handleMemRefReinterpretCast via getDynamicStride.
+  // For static strides, create immediate constants.
+  auto strides = metadataOp.getStrides();
+  for (unsigned i = 0; i < strides.size(); ++i) {
+    if (hasStridesAndOffset && i < staticStrides.size()) {
+      if (staticStrides[i] != ShapedType::kDynamic) {
+        auto immType = ctx.createImmType(staticStrides[i]);
+        auto strideVal =
+            ConstantOp::create(builder, loc, immType, staticStrides[i]);
+        ctx.getMapper().mapValue(strides[i], strideVal);
+      } else if (auto dynStride = ctx.getDynamicStride(source, i)) {
+        ctx.getMapper().mapValue(strides[i], *dynStride);
+      }
+    }
   }
 
   return success();

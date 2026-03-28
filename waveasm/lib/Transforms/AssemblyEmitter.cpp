@@ -341,9 +341,12 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
 
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
   return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
-      .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
-            PrecoloredSRegOp, PrecoloredARegOp, ConstantOp, PackOp, ExtractOp,
+      .Case<ProgramOp, LabelOp, CommentOp, PrecoloredVRegOp, PrecoloredSRegOp,
+            PrecoloredARegOp, ConstantOp, PackOp, ExtractOp,
             DCEProtectOp>([](auto) { return std::nullopt; })
+      .Case<RawOp>([&](RawOp rawOp) -> std::optional<std::string> {
+        return generateRaw(rawOp);
+      })
 
       .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
         std::optional<int64_t> vmcnt, lgkmcnt, expcnt;
@@ -1054,6 +1057,8 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   });
   peakVGPRs = std::max(peakVGPRs, int64_t(1));
   peakSGPRs = std::max(peakSGPRs, int64_t(2));
+  if (auto minSgprs = program->getAttrOfType<IntegerAttr>("min_sgprs"))
+    peakSGPRs = std::max(peakSGPRs, minSgprs.getInt());
 
   for (Operation &op : program.getBodyBlock()) {
     if (auto labelOp = dyn_cast<LabelOp>(op)) {
