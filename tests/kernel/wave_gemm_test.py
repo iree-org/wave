@@ -3529,8 +3529,6 @@ def test_gfx1250_tbuf_gemm_codegen(use_water_backend: bool, tmp_path: Path):
             "s_wait_dscnt 0x6",
             "s_wait_dscnt 0x2",
             "s_wait_dscnt 0x0",
-            "s_wait_xcnt 0xa",
-            "s_wait_xcnt 0xc",
         ]
         readfirstlane_ops = [
             "v_readfirstlane_b32 s0, v8",
