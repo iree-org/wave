@@ -81,10 +81,10 @@ def get_use(
     alloc: fx.Node, live_interval: LiveInterval, match_sort_key: int
 ) -> fx.Node:
     users = _get_propagated_users(alloc)
-    matches = [x for x in users if x._sort_key == live_interval.start]
-    if len(matches) != 1:
+    matches = [x for x in users if x._sort_key == match_sort_key]
+    if len(matches) < 1:
         raise ValueError(
-            f"Expected 1 match for {alloc} and {match_sort_key}, got {len(matches)}"
+            f"Expected at least 1 match for {alloc} and {match_sort_key}, got 0"
         )
     return matches[0]
 

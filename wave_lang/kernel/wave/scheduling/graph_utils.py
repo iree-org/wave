@@ -369,6 +369,8 @@ def get_scheduling_weight(node: fx.Node) -> EdgeWeight:
             weight = EdgeWeight(0, delay_table[Operation.MMA])
         case IterArg():
             weight = EdgeWeight(1, 0)
+        case ExtractSlice():
+            return get_scheduling_weight(custom_node.register_)
         case (
             CastOp()
             | BitcastOp()

@@ -541,6 +541,15 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    graph_passes.append(
+        partial(
+            merge_contiguous_reads,
+            trace,
+            launchable.constraints,
+            options.target,
+        )
+    )
+
     # Schedule the iterate ops.
     scheduling_type = options.schedule
     use_scheduling_barriers = options.use_scheduling_barriers

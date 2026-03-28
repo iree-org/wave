@@ -18,6 +18,7 @@ from ...ops.wave_ops import (
     CastOp,
     CustomOp,
     Extract,
+    ExtractSlice,
     GatherToLDS,
     IterArg,
     MMABase,
@@ -130,6 +131,8 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
         return Operation.GLOBAL_TO_SHARED
     elif isinstance(custom, MMABase):
         return Operation.MMA
+    elif isinstance(custom, ExtractSlice):
+        return get_custom_operation_type(get_custom(custom.register_))
     elif isinstance(custom, SCHEDULING_NOOPS + (Output,)):
         return Operation.NOOP
     elif isinstance(custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp)):
@@ -168,6 +171,11 @@ def annotate_resource_usage(
             custom.rrt = resource_reservation_table[Operation.SHUFFLE]
         elif isinstance(custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp)):
             custom.rrt = resource_reservation_table[Operation.VALU]
+        elif isinstance(custom, ExtractSlice):
+            op_type = get_custom_operation_type(custom)
+            custom.rrt = resource_reservation_table.get(
+                op_type, resource_reservation_table[Operation.NOOP]
+            )
         elif isinstance(custom, SCHEDULING_NOOPS):
             if isinstance(custom, IterArg):
                 iter_args.append(node)
