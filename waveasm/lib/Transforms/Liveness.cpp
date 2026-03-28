@@ -31,44 +31,36 @@ static bool isSwapPatternIterArg(Value iterArg, Block &bodyBlock, unsigned i) {
   return false;
 }
 
-/// Detect a write-after-read (WAR) hazard between a buffer_load iter_arg
-/// and the block_arg it feeds back into.
+/// Detect a write-after-read (WAR) hazard between an iter_arg and the
+/// block_arg it feeds back into.
 ///
-/// In pipelined schedules, next-iteration loads can be interleaved with
-/// MFMAs that still consume the current iteration's block_arg.  If the
-/// allocator ties them to the same register, the MFMA silently reads the
-/// new load value instead of the old one.
+/// If the iter_arg is defined at a point where the block_arg still has
+/// subsequent uses, tying them to the same physical register would let
+/// the in-place update clobber a value that later instructions still need.
 ///
-/// For single-element loads (buffer_load_ubyte/sbyte/ushort/sshort), the
-/// block_arg is consumed indirectly through vector.bitcast / vector.extract
-/// that share the same physical register.  The direct use-point check
-/// misses these transitive uses, so we unconditionally flag them.
-static bool hasBufferLoadWARHazard(Value iterArg, Value blockArg,
-                                   const LivenessInfo &info) {
+/// This is critical for unrolled loops where CSE can merge an
+/// affine.apply result (e.g. arg8+2 for a bounds check) with the IV
+/// increment (also arg8+2 for step=2).  After merging, the single
+/// S_ADD_U32 is placed in the middle of the body; if it shares a
+/// register with the IV block_arg, the second unrolled copy's use of
+/// the original IV reads the wrong value.
+static bool hasWARHazard(Value iterArg, Value blockArg,
+                         const LivenessInfo &info) {
   if (isa<BlockArgument>(iterArg))
     return false;
   auto *defOp = iterArg.getDefiningOp();
   if (!defOp)
     return false;
-  auto opName = defOp->getName().getStringRef();
-  if (!opName.contains("buffer_load") || opName.contains("_lds"))
-    return false;
 
-  // Single-element loads: unconditionally untie (transitive uses hidden).
-  if (opName.contains("_ubyte") || opName.contains("_sbyte") ||
-      opName.contains("_ushort") || opName.contains("_sshort")) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  WAR hazard (single-element load): " << opName << "\n");
-    return true;
-  }
-
-  // Multi-register loads: check for def/use overlap.
+  // Check for def/use overlap: if the iter_arg is defined at a point
+  // where block_arg still has subsequent uses, tying them creates a
+  // WAR hazard.
   auto iterDefIt = info.defPoints.find(iterArg);
   auto baUseIt = info.usePoints.find(blockArg);
   if (iterDefIt != info.defPoints.end() && baUseIt != info.usePoints.end()) {
-    int64_t loadDef = iterDefIt->second;
+    int64_t iterDef = iterDefIt->second;
     for (int64_t usePoint : baUseIt->second) {
-      if (usePoint >= loadDef)
+      if (usePoint > iterDef)
         return true;
     }
   }
@@ -588,11 +580,11 @@ LivenessInfo computeLiveness(ProgramOp program) {
 
       // Condition iter_arg -> block arg.
       // Skip swap patterns and WAR hazards so the allocator keeps them
-      // in separate registers (see hasBufferLoadWARHazard).
+      // in separate registers (see hasWARHazard).
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
         bool skip = isSwapPatternIterArg(iterArg, bodyBlock, i) ||
-                    hasBufferLoadWARHazard(iterArg, blockArg, info);
+                    hasWARHazard(iterArg, blockArg, info);
         if (!skip && info.ranges.contains(iterArg))
           members.push_back(iterArg);
       }
@@ -644,7 +636,7 @@ LivenessInfo computeLiveness(ProgramOp program) {
       if (i < condOp.getIterArgs().size()) {
         Value iterArg = condOp.getIterArgs()[i];
         bool skip = isSwapPatternIterArg(iterArg, bodyBlock, i) ||
-                    hasBufferLoadWARHazard(iterArg, blockArg, info);
+                    hasWARHazard(iterArg, blockArg, info);
         if (!skip && info.ranges.contains(iterArg) &&
             !tc.tiedPairs.contains(iterArg))
           tc.tiedPairs[iterArg] = blockArg;
@@ -668,11 +660,19 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   }
 
-  // Sort by (start, end) for linear scan
+  // Sort by (start, -size, -alignment, -end) for linear scan.
+  // At the same start point, allocate larger and more constrained ranges
+  // first to reduce fragmentation — a 16-wide aligned range has very few
+  // valid slots, so giving it priority prevents smaller ranges from
+  // blocking its only valid position.
   auto sortByStart = [](const LiveRange &a, const LiveRange &b) {
     if (a.start != b.start)
       return a.start < b.start;
-    return a.end < b.end;
+    if (a.size != b.size)
+      return a.size > b.size;
+    if (a.alignment != b.alignment)
+      return a.alignment > b.alignment;
+    return a.end > b.end;
   };
 
   llvm::sort(info.vregRanges, sortByStart);
@@ -683,6 +683,11 @@ LivenessInfo computeLiveness(ProgramOp program) {
   info.maxVRegPressure = computeMaxPressure(info.vregRanges, info.tiedClasses);
   info.maxSRegPressure = computeMaxPressure(info.sregRanges, info.tiedClasses);
   info.maxARegPressure = computeMaxPressure(info.aregRanges, info.tiedClasses);
+
+  // Dump detailed pressure breakdown for debugging.
+  dumpPeakPressureInfo(info, ops, RegClass::VGPR);
+  dumpPeakPressureInfo(info, ops, RegClass::SGPR);
+  dumpPeakPressureInfo(info, ops, RegClass::AGPR);
 
   return info;
 }

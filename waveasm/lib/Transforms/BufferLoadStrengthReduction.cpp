@@ -616,6 +616,53 @@ static void applyStrengthReduction(LoopOp loopOp) {
   loopOp.erase();
 }
 
+// Peephole: when a buffer_load has voffset = V_ADD_U32(vgpr, sgpr) and
+// soffset = 0, fold the SGPR addend into soffset. This avoids a VALU
+// instruction per load by using the hardware scalar offset field.
+static void peepholeSoffsetFold(Operation *root) {
+  root->walk([&](Operation *op) {
+    if (!isBufferLoad(op) && !isBufferLoadLDS(op))
+      return;
+    if (op->getNumOperands() < 3)
+      return;
+
+    unsigned soffsetIdx = 2;
+    auto soffsetConst = getConstantValue(op->getOperand(soffsetIdx));
+    if (!soffsetConst || *soffsetConst != 0)
+      return;
+
+    unsigned voffsetIdx = getVoffsetIdx(op);
+    Value voffset = op->getOperand(voffsetIdx);
+    auto addOp = voffset.getDefiningOp<V_ADD_U32>();
+    if (!addOp)
+      return;
+
+    Value src0 = addOp.getSrc0();
+    Value src1 = addOp.getSrc1();
+    Value vgprPart = nullptr;
+    Value sgprPart = nullptr;
+
+    if (isVGPRType(src0.getType()) && isSGPRType(src1.getType())) {
+      vgprPart = src0;
+      sgprPart = src1;
+    } else if (isSGPRType(src0.getType()) && isVGPRType(src1.getType())) {
+      vgprPart = src1;
+      sgprPart = src0;
+    }
+    if (!vgprPart || !sgprPart)
+      return;
+
+    // Only fold if the V_ADD_U32 is used exclusively by buffer_loads.
+    for (Operation *user : addOp->getUsers()) {
+      if (!isBufferLoad(user) && !isBufferLoadLDS(user))
+        return;
+    }
+
+    op->setOperand(voffsetIdx, vgprPart);
+    op->setOperand(soffsetIdx, sgprPart);
+  });
+}
+
 struct BufferLoadStrengthReductionPass
     : public waveasm::impl::WAVEASMBufferLoadStrengthReductionBase<
           BufferLoadStrengthReductionPass> {
@@ -628,6 +675,7 @@ struct BufferLoadStrengthReductionPass
     module->walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
     for (auto loopOp : loops)
       applyStrengthReduction(loopOp);
+    peepholeSoffsetFold(module);
   }
 };
 

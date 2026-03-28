@@ -389,8 +389,7 @@ public:
   /// Get next available swizzle SRD index (for cache swizzle SRDs and
   /// per-workgroup SRD base adjustments).
   /// These are allocated after all regular SRDs, computed in emitSRDPrologue().
-  /// Each allocation reserves 5 SGPRs: s[N..N+3] for the SRD quad plus
-  /// s[N+4] as a temporary for the multiply low-half result.
+  /// Each allocation reserves 4 SGPRs: s[N..N+3] for the SRD quad.
   int64_t getNextSwizzleSRDIndex() {
     if (nextSwizzleSRDIndex < 0) {
       int64_t maxSrdEnd = 24;
@@ -401,9 +400,8 @@ public:
       nextSwizzleSRDIndex = (maxSrdEnd + 3) & ~3; // Align to 4
     }
     int64_t idx = nextSwizzleSRDIndex;
-    // 4 SRD SGPRs + 1 temp for byteOffLo, padded to next 4-aligned index
-    // (SRD buffer descriptors require 4-SGPR alignment on AMDGCN).
-    nextSwizzleSRDIndex = (idx + 5 + 3) & ~3;
+    // SRD buffer descriptors require 4-SGPR alignment on AMDGCN.
+    nextSwizzleSRDIndex = idx + 4;
     return idx;
   }
 

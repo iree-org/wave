@@ -70,15 +70,25 @@ static void insertActiveRange(llvm::SmallVectorImpl<ActiveRange> &active,
   active.insert(insertPos, newRange);
 }
 
-/// Try to allocate a physical register from the pool.
-/// Returns the allocated register index, or std::nullopt on failure.
+/// Try to allocate a physical register from the pool (lowest-first).
 static std::optional<int64_t> tryAllocate(RegPool &pool, int64_t size,
                                           int64_t alignment) {
   int64_t physReg =
       (size == 1) ? pool.allocSingle() : pool.allocRange(size, alignment);
-  if (physReg < 0) {
+  if (physReg < 0)
     return std::nullopt;
-  }
+  return physReg;
+}
+
+/// Try to allocate from the top of a capped region (highest-first).
+static std::optional<int64_t> tryAllocateFromTop(RegPool &pool, int64_t size,
+                                                 int64_t alignment,
+                                                 int64_t ceiling) {
+  int64_t physReg = (size == 1)
+                        ? pool.allocSingleFromTop(ceiling)
+                        : pool.allocRangeFromTop(size, alignment, ceiling);
+  if (physReg < 0)
+    return std::nullopt;
   return physReg;
 }
 
@@ -167,8 +177,31 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
       }
     }
 
-    // Allocate physical register(s) from the pool
-    physReg = tryAllocate(pool, range.size, range.alignment);
+    // For VGPRs with size > 1 (dwordx2/x4), allocate long-lived ranges
+    // from the top of the expected register usage and short-lived ranges
+    // from the bottom. This separates interleaved buffer_load (long-lived
+    // prefetch) and ds_read (short-lived consumed) destinations into
+    // contiguous regions, reducing fragmentation and peak VGPR count.
+    // The ceiling is maxPressure (peak simultaneous VGPRs from liveness),
+    // not maxRegs (512), to avoid allocating into the AGPR region.
+    bool useBidirectional =
+        pool.getRegClass() == RegClass::VGPR && range.size > 1;
+    if (useBidirectional) {
+      int64_t rangeLength = range.end - range.start;
+      // Ranges in the top 10% by length get allocated from the top.
+      // This targets buffer_load prefetch values (which span almost the
+      // entire loop body) while leaving ds_read values (consumed within
+      // one half) at the bottom.
+      int64_t maxEnd = ranges.back().end;
+      int64_t threshold = (maxEnd * 3) / 4;
+      if (rangeLength > threshold)
+        physReg = tryAllocateFromTop(pool, range.size, range.alignment,
+                                     maxPressure);
+      else
+        physReg = tryAllocate(pool, range.size, range.alignment);
+    }
+    if (!physReg)
+      physReg = tryAllocate(pool, range.size, range.alignment);
 
     if (!physReg) {
       return program.emitOpError()

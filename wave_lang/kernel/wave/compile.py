@@ -37,6 +37,7 @@ from .analysis.index_sequence_analysis import (
     set_node_indices_water_checked,
     set_post_expansion_indices,
 )
+from .analysis.annotate_iv_strides import annotate_iv_strides
 from .analysis.partition_strided_operators import (
     merge_contiguous_reads,
     partition_gather_like_ops,
@@ -606,6 +607,7 @@ def build_graph_passes(
             launchable.constraints,
             launchable.reordering_constraints,
         ),
+        partial(annotate_iv_strides, trace, launchable.constraints),
         partial(
             merge_contiguous_reads,
             trace,
@@ -1341,17 +1343,16 @@ def _generate_asm_code(mb, options):
         threads_per_wave = 64
         waves_in_m = wg[0] // threads_per_wave
         waves_in_n = wg[1]
-        # TODO: improve Ticketing logic (better latency-covering heuristics,
-        # smarter coalescing) so ticketed waitcnt can be always-on without
-        # a performance hit, removing this wave-shape conditional.
-        use_ticketed_waitcnt = waves_in_m >= 2 and waves_in_n >= 2
+        use_ticketed_waitcnt = False 
         waitcnt_flag = (
             "--waveasm-insert-waitcnt"
             if use_ticketed_waitcnt
             else "--waveasm-insert-waitcnt=ticketed-waitcnt=false"
         )
         tail_passes = [
+            "--waveasm-scc-verifier",
             "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+            "--waveasm-vgpr-compaction",
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",

@@ -11,6 +11,7 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 #include "waveasm/Transforms/Liveness.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -66,126 +67,148 @@ public:
 // Register Pool
 //===----------------------------------------------------------------------===//
 
-/// Pool of available physical registers
+/// Pool of available physical registers.
+/// Uses a BitVector for O(1) per-register operations and cache-friendly
+/// scanning. Typical GPU register files (256 VGPRs, 102 SGPRs, 256 AGPRs)
+/// fit in a few 64-bit words.
 class RegPool {
 public:
   RegPool(RegClass regClass, int64_t maxRegs,
           const llvm::DenseSet<int64_t> &reserved)
-      : regClass(regClass), maxRegs(maxRegs) {
-    // Initialize free list with all non-reserved registers
-    for (int64_t i = 0; i < maxRegs; ++i) {
-      if (!reserved.contains(i)) {
-        freeList.push_back(i);
-      }
+      : regClass(regClass), maxRegs(maxRegs), free(maxRegs, true) {
+    for (int64_t r : reserved) {
+      if (r >= 0 && r < maxRegs)
+        free.reset(r);
     }
   }
 
-  /// Check if a register is currently in the free list
+  /// O(1) free-check via bit test.
   bool isFree(int64_t reg) const {
-    return std::find(freeList.begin(), freeList.end(), reg) != freeList.end();
+    return reg >= 0 && reg < maxRegs && free.test(reg);
   }
 
-  /// Reserve a specific register (for precoloring)
+  /// Reserve a specific register range (for precoloring / re-reservation).
   void reserve(int64_t reg, int64_t size) {
     for (int64_t i = 0; i < size; ++i) {
       int64_t r = reg + i;
-      auto it = std::find(freeList.begin(), freeList.end(), r);
-      if (it != freeList.end()) {
-        freeList.erase(it);
-        allocated.insert(r);
+      if (r < maxRegs && free.test(r)) {
+        free.reset(r);
+        ++currentUsage;
       }
     }
     updatePeak();
   }
 
-  /// Allocate a single register
-  /// Returns -1 if allocation fails
+  /// Allocate the lowest-numbered free register.
+  /// Returns -1 if no register is available.
   int64_t allocSingle() {
-    if (freeList.empty())
+    int idx = free.find_first();
+    if (idx < 0)
       return -1;
-
-    int64_t reg = freeList.front();
-    freeList.erase(freeList.begin());
-    allocated.insert(reg);
+    free.reset(idx);
+    ++currentUsage;
     updatePeak();
-    return reg;
+    return idx;
   }
 
-  /// Allocate a contiguous range of registers with alignment
-  /// Returns base register index, or -1 if allocation fails
+  /// Allocate a contiguous range of registers with the given alignment.
+  /// Scans by alignment stride for O(maxRegs/alignment) candidate checks.
+  /// Returns base register index, or -1 if allocation fails.
   int64_t allocRange(int64_t size, int64_t alignment) {
     if (size <= 0)
       return -1;
 
-    llvm::DenseSet<int64_t> freeSet(freeList.begin(), freeList.end());
-
-    for (int64_t candidate : freeList) {
-      // Check alignment
-      if (candidate % alignment != 0)
-        continue;
-
-      // Check if all registers in range are free
+    for (int64_t c = 0; c + size <= maxRegs; c += alignment) {
       bool allFree = true;
-      for (int64_t offset = 0; offset < size; ++offset) {
-        int64_t reg = candidate + offset;
-        if (reg >= maxRegs || !freeSet.contains(reg)) {
+      for (int64_t o = 0; o < size; ++o) {
+        if (!free.test(c + o)) {
           allFree = false;
           break;
         }
       }
-
       if (allFree) {
-        // Allocate the range
-        for (int64_t offset = 0; offset < size; ++offset) {
-          int64_t reg = candidate + offset;
-          freeList.erase(std::find(freeList.begin(), freeList.end(), reg));
-          allocated.insert(reg);
-        }
+        for (int64_t o = 0; o < size; ++o)
+          free.reset(c + o);
+        currentUsage += size;
         updatePeak();
-        return candidate;
+        return c;
       }
     }
-
-    return -1; // Allocation failed
+    return -1;
   }
 
-  /// Free a single register
+  /// Allocate the highest-numbered free register below ceiling.
+  int64_t allocSingleFromTop(int64_t ceiling = -1) {
+    int64_t cap = (ceiling > 0 && ceiling <= maxRegs) ? ceiling : maxRegs;
+    // Scan from cap-1 downward for the first free register.
+    for (int64_t i = cap - 1; i >= 0; --i) {
+      if (free.test(i)) {
+        free.reset(i);
+        ++currentUsage;
+        updatePeak();
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /// Allocate a contiguous range from the top of a capped region.
+  /// Scans from `ceiling` downward to pack long-lived values at the top
+  /// of the USED range, not the top of the entire register file.
+  int64_t allocRangeFromTop(int64_t size, int64_t alignment,
+                            int64_t ceiling = -1) {
+    if (size <= 0)
+      return -1;
+
+    int64_t cap = (ceiling > 0 && ceiling <= maxRegs) ? ceiling : maxRegs;
+    int64_t highestBase = ((cap - size) / alignment) * alignment;
+    for (int64_t c = highestBase; c >= 0; c -= alignment) {
+      bool allFree = true;
+      for (int64_t o = 0; o < size; ++o) {
+        if (!free.test(c + o)) {
+          allFree = false;
+          break;
+        }
+      }
+      if (allFree) {
+        for (int64_t o = 0; o < size; ++o)
+          free.reset(c + o);
+        currentUsage += size;
+        updatePeak();
+        return c;
+      }
+    }
+    return -1;
+  }
+
+  /// Free a single register back to the pool.
   void freeSingle(int64_t reg) {
-    if (!allocated.contains(reg))
+    if (reg < 0 || reg >= maxRegs || free.test(reg))
       return;
-
-    allocated.erase(reg);
-
-    // Insert in sorted order
-    auto it = std::lower_bound(freeList.begin(), freeList.end(), reg);
-    freeList.insert(it, reg);
+    free.set(reg);
+    --currentUsage;
   }
 
-  /// Free a range of registers
+  /// Free a contiguous range of registers.
   void freeRange(int64_t base, int64_t size) {
     for (int64_t offset = 0; offset < size; ++offset) {
       freeSingle(base + offset);
     }
   }
 
-  /// Get peak usage
   int64_t getPeakUsage() const { return peak; }
 
-  /// Get current usage
-  int64_t getCurrentUsage() const { return allocated.size(); }
+  int64_t getCurrentUsage() const { return currentUsage; }
 
-  /// Get register class
   RegClass getRegClass() const { return regClass; }
 
 private:
-  void updatePeak() {
-    peak = std::max(peak, static_cast<int64_t>(allocated.size()));
-  }
+  void updatePeak() { peak = std::max(peak, currentUsage); }
 
   RegClass regClass;
   int64_t maxRegs;
-  llvm::SmallVector<int64_t> freeList; // Sorted
-  llvm::DenseSet<int64_t> allocated;
+  llvm::BitVector free;
+  int64_t currentUsage = 0;
   int64_t peak = 0;
 };
 
