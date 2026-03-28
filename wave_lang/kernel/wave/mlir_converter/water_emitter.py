@@ -78,6 +78,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Read,
     ReduceOp as Reduce,
     Reshape,
+    ScaledMMA,
     SelfIndex,
     SelectOp as Select,
     SharedMemoryBarrier,
@@ -127,6 +128,7 @@ try:
         MulOp,
         ReadOp,
         RegisterOp,
+        ScaledMmaOp,
         SelectOp,
         SelfIndexOp,
         ShuffleOp,
@@ -180,6 +182,7 @@ WAVE_OP_CONSTRUCTORS = {
     "exp2": Exp2Op,
     "read": ReadOp,
     "register": RegisterOp,
+    "scaled_mma": ScaledMmaOp,
     "shuffle": ShuffleOp,
     "iterate": IterateOp,
     "output": YieldOp,
@@ -361,6 +364,28 @@ def _convert_sympy_expr_to_affine_map(
     )
 
 
+def _remap_scaled_index_keys(
+    index: dict[IndexSymbol, IndexSequence], shape: list[sympy.Expr]
+) -> dict[sympy.Expr, IndexSequence]:
+    """Remap base symbol keys in an index dict to scaled expressions from shape.
+
+    The Water verifier requires index dict key names to match the dimension
+    names in the op's result type.  For scaled dims (e.g. K/2 → "K2", K/32 →
+    "K32") the Python index analysis stores the base symbol key (K), so we
+    remap it to the scaled expression using the provided shape.
+    """
+    base_to_scaled = {
+        s: expr
+        for expr in shape
+        if not expr.is_Symbol
+        for s in expr.free_symbols
+        if s != expr
+    }
+    if not base_to_scaled:
+        return index
+    return {base_to_scaled.get(dim, dim): seq for dim, seq in index.items()}
+
+
 def _build_index_mapping_dict(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
@@ -388,7 +413,7 @@ def _build_index_mapping_dict(
         symbol_attrs = [
             symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
         ]
-        index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
+        index_mappings[_derived_dim_clean_name(dim)] = wave.WaveIndexMappingAttr.get(
             symbol_attrs, start, size, stride
         )
     return ir.DictAttr.get(index_mappings)
@@ -425,9 +450,50 @@ def _attach_attributes(
                 # result, since MMA result type == acc type.
                 dict_attrs.append(acc_attr)
                 dict_attrs.append(acc_attr)
+        elif isinstance(node, ScaledMMA):
+            # ScaledMMA needs exactly 6 index entries (lhs, lhs_scale, rhs, rhs_scale, acc, result) to
+            # match ScaledMmaOp::getIndexExprValuesAndDescriptions which serializes
+            # operandExprs + resultExprs.  The Python-side index sequence
+            # analysis only tracks 5 (lhs, lhs_scale, rhs, rhs_scale, acc), so we emit acc_index
+            # twice: once for the accumulator operand and once for the
+            # result (ScaledMMA result type == acc type).
+            if lhs_index := getattr(node, "lhs_index", None):
+                dict_attrs.append(
+                    _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
+                )
+            if lhs_scale_index := getattr(node, "lhs_scale_index", None):
+                lhs_scale_shape = getattr(node.lhs_scale_type, "symbolic_shape", [])
+                dict_attrs.append(
+                    _build_index_mapping_dict(
+                        _remap_scaled_index_keys(lhs_scale_index, lhs_scale_shape),
+                        allowed_induction_symbols,
+                    )
+                )
+            if rhs_index := getattr(node, "rhs_index", None):
+                dict_attrs.append(
+                    _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
+                )
+            if rhs_scale_index := getattr(node, "rhs_scale_index", None):
+                rhs_scale_shape = getattr(node.rhs_scale_type, "symbolic_shape", [])
+                dict_attrs.append(
+                    _build_index_mapping_dict(
+                        _remap_scaled_index_keys(rhs_scale_index, rhs_scale_shape),
+                        allowed_induction_symbols,
+                    )
+                )
+            if acc_index := getattr(node, "acc_index", None):
+                acc_attr = _build_index_mapping_dict(
+                    acc_index, allowed_induction_symbols
+                )
+                # Append acc_index for both the accumulator operand and the
+                # result, since MMA result type == acc type.
+                dict_attrs.append(acc_attr)
+                dict_attrs.append(acc_attr)
         else:
+            result_shape = getattr(getattr(node, "type", None), "symbolic_shape", [])
+            index = _remap_scaled_index_keys(node.index, result_shape)
             dict_attrs.append(
-                _build_index_mapping_dict(node.index, allowed_induction_symbols)
+                _build_index_mapping_dict(index, allowed_induction_symbols)
             )
 
         op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
@@ -490,6 +556,13 @@ def _convert_to_wave_expr_list_tuple(
     ]
 
     return WaveExprListAttr.get(symbol_attrs, multi_result_map)
+
+
+def _parse_mma_kind(mma_type, ctx: ir.Context) -> ir.Attribute | None:
+    """Parse an MMA type into an MLIR WaveMmaKindAttr, or None if mma_type is None."""
+    if mma_type is None:
+        return None
+    return ir.Attribute.parse(f"#wave.mma_kind<{mma_type.name.lower()}>", context=ctx)
 
 
 def _convert_vector_shapes(
@@ -787,13 +860,12 @@ def _emit_ops_from_graph(
                         # create YieldOp
                         YieldOp([get_single_mapped_value(output) for output in outputs])
                 elif isinstance(node, MMA):
-                    mma_kind = (
-                        ir.Attribute.parse(
-                            f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
-                        )
-                        if node.mma_type is not None
-                        else None
+                    mma_kind = _parse_mma_kind(node.mma_type, ctx)
+                    mlir_op = op_builder(
+                        result_type, *create_mlir_operands(), kind=mma_kind
                     )
+                elif isinstance(node, ScaledMMA):
+                    mma_kind = _parse_mma_kind(node.mma_type, ctx)
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )

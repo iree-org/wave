@@ -24,7 +24,7 @@ import numpy as np
 import torch.fx as fx
 from typing_extensions import Self
 
-from .._support.dtype import DataType, i1, i32
+from .._support.dtype import DataType, i1, i32, f4e2m1fn
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import CapturedLocation, capture_location
 from .._support.regions import RegionGraph
@@ -2127,6 +2127,12 @@ class ScaledMMA(MMABase):
         return indices
 
     @property
+    def _is_fp4(self) -> bool:
+        lhs_dtype = self.lhs_type.dtype if self.lhs_type else None
+        rhs_dtype = self.rhs_type.dtype if self.rhs_type else None
+        return lhs_dtype == rhs_dtype and lhs_dtype == f4e2m1fn
+
+    @property
     def lhs_index(self) -> dict[IndexSymbol, IndexSequence]:
         operand_map = {
             MMA_LHS: 1,
@@ -2134,17 +2140,25 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.lhs_type.symbolic_shape)
 
     @property
     def lhs_scale_index(self) -> dict[IndexSymbol, IndexSequence]:
+        # Use the lhs_scale node's own index (post resolve_scaled_indices) which
+        # has the correct scaled size (e.g. size=1 for K/32).  The emitter
+        # will remap the key from K to K32 via _remap_scaled_index_keys.
+        lhs_scale_node = get_custom(self.lhs_scale)
+        if lhs_scale_node is not None and lhs_scale_node.index:
+            return dict(lhs_scale_node.index)
         operand_map = {
             MMA_LHS: 0,
             MMA_RHS: 0,
             MMA_ACC: 0,
             MMA_LHS_SCALE: 1,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.lhs_scale_type.symbolic_shape)
 
@@ -2156,17 +2170,25 @@ class ScaledMMA(MMABase):
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.rhs_type.symbolic_shape)
 
     @property
     def rhs_scale_index(self) -> dict[IndexSymbol, IndexSequence]:
+        # Use the rhs_scale node's own index (post resolve_scaled_indices) which
+        # has the correct scaled size (e.g. size=1 for K/32).  The emitter
+        # will remap the key from K to K32 via _remap_scaled_index_keys.
+        rhs_scale_node = get_custom(self.rhs_scale)
+        if rhs_scale_node is not None and rhs_scale_node.index:
+            return dict(rhs_scale_node.index)
         operand_map = {
             MMA_LHS: 0,
             MMA_RHS: 0,
             MMA_ACC: 0,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 1,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         return self.operand_index(operand_map, self.rhs_scale_type.symbolic_shape)
 
@@ -2178,6 +2200,7 @@ class ScaledMMA(MMABase):
             MMA_ACC: 1,
             MMA_LHS_SCALE: 0,
             MMA_RHS_SCALE: 0,
+            MMA_SCALE_FP4: self._is_fp4,
         }
         if self.acc_type is None or self.index is None:
             return None
@@ -3465,7 +3488,7 @@ class BitcastOp(CustomOp, ABC):
 
     @property
     def scale_factor(self):
-        src_width = self.arg.type.dtype.bitwidth()
+        src_width = get_custom(self.arg).type.dtype.bitwidth()
         dst_width = self.dtype.bitwidth()
         if src_width % dst_width != 0:
             raise NotImplementedError(
