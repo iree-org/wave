@@ -30,6 +30,7 @@ Usage:
 
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -159,10 +160,12 @@ class WaveASMCompiler:
         target: str = "gfx942",
         codeobj: str = "5",
         keep_temp_files: bool = False,
+        print_pass_times: bool = False,
     ):
         self.target = target
         self.codeobj = codeobj
         self.keep_temp_files = keep_temp_files
+        self.print_pass_times = print_pass_times
         self.waveasm_translate = get_waveasm_translate_path()
         self.clang = get_clang_path()
         self._temp_dir = None
@@ -229,6 +232,9 @@ class WaveASMCompiler:
                 ]
             )
 
+        if self.print_pass_times:
+            cmd.append("--mlir-timing")
+
         cmd.append(str(mlir_file))
 
         try:
@@ -241,6 +247,10 @@ class WaveASMCompiler:
 
             if result.returncode != 0:
                 return False, result.stderr, result.stderr
+
+            # Print timing report from stderr when requested.
+            if self.print_pass_times and result.stderr:
+                print(result.stderr, file=sys.stderr)
 
             # The output is printed to stdout.
             asm_text = result.stdout
