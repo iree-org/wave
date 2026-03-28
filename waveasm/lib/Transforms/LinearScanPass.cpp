@@ -155,6 +155,18 @@ private:
   LogicalResult insertSpillReloads(ProgramOp program,
                                    ArrayRef<SpillRecord> spills,
                                    PhysicalMapping &mapping) {
+    // Validate that all spills use the implemented VGPR -> AGPR direction.
+    // SGPR -> VGPR and AGPR -> VGPR are wired in the allocator but not yet
+    // supported by the spill insertion logic.
+    for (const SpillRecord &sr : spills) {
+      if (sr.sourceClass != RegClass::VGPR ||
+          sr.targetClass != RegClass::AGPR) {
+        return program.emitOpError()
+               << "unsupported spill direction: only VGPR -> AGPR is "
+                  "currently implemented";
+      }
+    }
+
     // Build a lookup from victim Value -> SpillRecord.
     llvm::DenseMap<Value, const SpillRecord *> spillMap;
     for (const SpillRecord &sr : spills)
@@ -167,7 +179,7 @@ private:
     // to thread through the spill ops.
     //
     // We insert a PrecoloredARegOp at program entry to materialise the
-    // AGPR "slot". It does not generate any assembly; it just provides
+    // AGPR "slot".  It does not generate any assembly; it just provides
     // an SSA value with the right physical type for the dialect ops.
     llvm::DenseMap<Value, Value> spillSlots; // victim -> AGPR SSA value
     {
@@ -175,9 +187,9 @@ private:
       Block &entry = program.getBodyBlock();
       entryBuilder.setInsertionPointToStart(&entry);
       for (const SpillRecord &sr : spills) {
-        auto physARegType = PARegType::get(ctx, sr.targetPhysReg, 1);
+        auto physType = PARegType::get(ctx, sr.targetPhysReg, 1);
         Value slot = PrecoloredARegOp::create(entryBuilder, program.getLoc(),
-                                              physARegType, sr.targetPhysReg,
+                                              physType, sr.targetPhysReg,
                                               /*size=*/1);
         spillSlots[sr.victim] = slot;
       }
@@ -194,13 +206,10 @@ private:
         if (it == spillMap.end())
           continue;
         const SpillRecord &sr = *it->second;
-        if (sr.sourceClass == RegClass::VGPR &&
-            sr.targetClass == RegClass::AGPR) {
-          OpBuilder builder(ctx);
-          builder.setInsertionPointAfter(op);
-          Value slot = spillSlots[sr.victim];
-          V_ACCVGPR_WRITE_B32::create(builder, op->getLoc(), result, slot);
-        }
+        OpBuilder builder(ctx);
+        builder.setInsertionPointAfter(op);
+        Value slot = spillSlots[sr.victim];
+        V_ACCVGPR_WRITE_B32::create(builder, op->getLoc(), result, slot);
       }
 
       // --- Insert reloads before uses. ---
@@ -209,23 +218,14 @@ private:
         auto it = spillMap.find(operand);
         if (it == spillMap.end())
           continue;
-        const SpillRecord &sr = *it->second;
-        if (sr.sourceClass == RegClass::VGPR &&
-            sr.targetClass == RegClass::AGPR) {
-          OpBuilder builder(op);
-          auto scratchType = PVRegType::get(ctx, kSpillScratchVGPR, 1);
-          Value slot = spillSlots[sr.victim];
-          Value reloaded = V_ACCVGPR_READ_B32::create(builder, op->getLoc(),
-                                                      scratchType, slot);
-          op->setOperand(i, reloaded);
-        }
+        OpBuilder builder(op);
+        auto scratchType = PVRegType::get(ctx, kSpillScratchVGPR, 1);
+        Value slot = spillSlots[operand];
+        Value reloaded = V_ACCVGPR_READ_B32::create(builder, op->getLoc(),
+                                                    scratchType, slot);
+        op->setOperand(i, reloaded);
       }
     }
-
-    // Update the mapping for spilled values: the victim VGPR is no longer
-    // live; its uses have been rewritten to read from the scratch VGPR.
-    // The original mapping (victim -> sourcePhysReg) is left as-is for the
-    // type transformation to assign the correct PVRegType to the def site.
 
     return success();
   }

@@ -300,19 +300,19 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
     return failure();
   stats.peakVGPRs = vgprPool.getPeakUsage();
 
-  // Step 6: Allocate SGPRs. On failure, evict to spare VGPRs.
-  if (failed(allocateRegClass(liveness.sregRanges, sgprPool, mapping, stats,
-                              tiedOperands, precoloredValues, "SGPR", program,
-                              maxSGPRs, liveness.maxSRegPressure, &vgprPool,
-                              &spills, &liveness)))
+  // Step 6: Allocate SGPRs (no cross-class spilling yet).
+  if (failed(allocateRegClass(
+          liveness.sregRanges, sgprPool, mapping, stats, tiedOperands,
+          precoloredValues, "SGPR", program, maxSGPRs, liveness.maxSRegPressure,
+          /*altPool=*/nullptr, /*spills=*/nullptr, &liveness)))
     return failure();
   stats.peakSGPRs = sgprPool.getPeakUsage();
 
-  // Step 7: Allocate AGPRs. On failure, evict to spare VGPRs.
-  if (failed(allocateRegClass(liveness.aregRanges, agprPool, mapping, stats,
-                              tiedOperands, precoloredValues, "AGPR", program,
-                              maxAGPRs, liveness.maxARegPressure, &vgprPool,
-                              &spills, &liveness)))
+  // Step 7: Allocate AGPRs (no cross-class spilling yet).
+  if (failed(allocateRegClass(
+          liveness.aregRanges, agprPool, mapping, stats, tiedOperands,
+          precoloredValues, "AGPR", program, maxAGPRs, liveness.maxARegPressure,
+          /*altPool=*/nullptr, /*spills=*/nullptr, &liveness)))
     return failure();
   stats.peakAGPRs = agprPool.getPeakUsage();
 
