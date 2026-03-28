@@ -94,6 +94,30 @@ def _run_mxfp_gemm_preshuffle(
     )
 
 
+def _run_mxfp_gemm_preshuffle_transposed(gemm, shape, output_dtype=torch.float32):
+    """Run transposed GEMM: C^T[N,M] = B[N,K] * A[M,K]^T.
+    MFMA left operand ("A" role) = weight B.
+    MFMA right operand ("B" role, transposed by HW) = activation A.
+    Activation A is preshuffled (it's now in the "B" role).
+    The kernel stores C^T[N,M] in row-major layout. We transpose the
+    output before comparing with the reference C[M,N].
+    """
+    M_orig, N_orig, K = shape
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+    w_t = w.T.contiguous()  # [N, K/2] - new "A" (left MFMA operand)
+    x_ps = b_preshuffle(x)  # [M, K/2] - new "B" (preshuffled, right operand)
+    w_scales_ps = e8m0_shuffle(w_scales)  # new "A" scale [N, K/32]
+    x_scales_ps = e8m0_shuffle(x_scales)  # new "B" scale [M, K/32]
+    w_t, x_ps = w_t.cuda(), x_ps.cuda()
+    w_scales_ps, x_scales_ps = w_scales_ps.cuda(), x_scales_ps.cuda()
+    out = torch.zeros(N_orig, M_orig, dtype=output_dtype).cuda()
+    gemm(w_t, w_scales_ps, x_ps, x_scales_ps, out)
+    torch.testing.assert_close(
+        torch_out, out.T.cpu(), check_dtype=False, check_device=False
+    )
+
+
 def _get_8wave_shape_from_block(block):
     """Choose an 8-wave shape (4x2 or 2x4) from block M/N dims.
 
@@ -166,7 +190,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
-    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
+    is_debug=False, shape=(6144, 8192, 8192), block=(192, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -209,7 +233,6 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     """
 
     mlir_256x192 = """
-
         #map = affine_map<()[s0] -> (s0 ceildiv 256)>
         #map1 = affine_map<()[s0] -> (s0 ceildiv 192)>
         #map2 = affine_map<()[s0] -> (s0 floordiv 32)>
@@ -1190,30 +1213,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
                 %253 = amdgpu.scaled_mfma 16x16x128 (%163[3] * %195) * (%164[2] * %205) + %252 : vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf32>
                 %254 = amdgpu.scaled_mfma 16x16x128 (%163[1] * %194) * (%164[1] * %206) + %162#23 : vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf32>
                 %255 = amdgpu.scaled_mfma 16x16x128 (%163[3] * %195) * (%164[3] * %207) + %254 : vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<4xf32>
-                %256 = arith.truncf %209 : vector<4xf32> to vector<4xbf16>
-                %257 = arith.truncf %211 : vector<4xf32> to vector<4xbf16>
-                %258 = arith.truncf %213 : vector<4xf32> to vector<4xbf16>
-                %259 = arith.truncf %215 : vector<4xf32> to vector<4xbf16>
-                %260 = arith.truncf %217 : vector<4xf32> to vector<4xbf16>
-                %261 = arith.truncf %219 : vector<4xf32> to vector<4xbf16>
-                %262 = arith.truncf %221 : vector<4xf32> to vector<4xbf16>
-                %263 = arith.truncf %223 : vector<4xf32> to vector<4xbf16>
-                %264 = arith.truncf %225 : vector<4xf32> to vector<4xbf16>
-                %265 = arith.truncf %227 : vector<4xf32> to vector<4xbf16>
-                %266 = arith.truncf %229 : vector<4xf32> to vector<4xbf16>
-                %267 = arith.truncf %231 : vector<4xf32> to vector<4xbf16>
-                %268 = arith.truncf %233 : vector<4xf32> to vector<4xbf16>
-                %269 = arith.truncf %235 : vector<4xf32> to vector<4xbf16>
-                %270 = arith.truncf %237 : vector<4xf32> to vector<4xbf16>
-                %271 = arith.truncf %239 : vector<4xf32> to vector<4xbf16>
-                %272 = arith.truncf %241 : vector<4xf32> to vector<4xbf16>
-                %273 = arith.truncf %243 : vector<4xf32> to vector<4xbf16>
-                %274 = arith.truncf %245 : vector<4xf32> to vector<4xbf16>
-                %275 = arith.truncf %247 : vector<4xf32> to vector<4xbf16>
-                %276 = arith.truncf %249 : vector<4xf32> to vector<4xbf16>
-                %277 = arith.truncf %251 : vector<4xf32> to vector<4xbf16>
-                %278 = arith.truncf %253 : vector<4xf32> to vector<4xbf16>
-                %279 = arith.truncf %255 : vector<4xf32> to vector<4xbf16>
+
                 %ep_shuffle_offset = arith.constant 1 : i32
                 %ep_shuffle_width = arith.constant 64 : i32
                 %ep_one = arith.constant 1 : index
@@ -2156,7 +2156,6 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
             return %20 : !hal.buffer_view
         }
         }
-
     """
     wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
@@ -2173,7 +2172,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.wave_runtime = True
     options.dump_intermediates = "intermediates_256x192_shuffle2"
     # options.print_ir_after = "all"
-    options.override_mlir = mlir_256x192
+    # options.override_mlir = mlir_256x192
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
@@ -2200,6 +2199,68 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     mode = "dynamic" if dynamic else "static"
     print(
         f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
+    )
+
+
+def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_transposed(
+    is_debug=False, shape=(8192, 6144, 8192), block=(256, 192, 256), dynamic=True
+):
+    """Transposed MXFP4 GEMM: computes C^T = B * A^T instead of C = A * B^T.
+
+    By transposing the computation, MFMA output elements become contiguous
+    along the row-major axis, enabling dwordx4 (128-bit) stores to global
+    memory instead of dword (32-bit) stores.
+
+    The MFMA left operand ("A" role) is the weight matrix B.
+    The MFMA right operand ("B" role) is the activation matrix A.
+    Activation A is preshuffled (since it is now in the "B" role).
+    A&B scales are preshuffled and read from global memory directly to VGPRs.
+    """
+    M_orig, N_orig, K = shape
+    shape_t = (N_orig, M_orig, K)
+    block_t = (block[1], block[0], block[2])
+
+    wave_shape = _get_8wave_shape_from_block(block_t)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
+        shape_t,
+        block_t,
+        wave_shape=wave_shape,
+        b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
+    )
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = False
+    options.linearize_shared_access = True
+    options.wave_runtime = True
+    options.dump_intermediates = "intermediates_transposed"
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+    schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
+        use_stagger=True, shape=shape_t, block=block_t
+    )
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    options.subs[UNROLL_FACTOR] = 2
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
+
+    _run_mxfp_gemm_preshuffle_transposed(gemm, shape, output_dtype=torch.bfloat16)
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM transposed (C^T=B*A^T) 8-wave ping pong B->LDS ({mode}) test passed!"
     )
 
 
