@@ -279,3 +279,173 @@ waveasm.program @real_instruction_gap_no_hazard target = #waveasm.target<#waveas
 
   waveasm.s_endpgm
 }
+
+// -----------------------------------------------------------------------
+// Region boundary tests.
+// The backward scan must not cross region boundaries. Structured
+// control flow ops (waveasm.if, waveasm.loop) are not in the
+// isNonEmittingOp list, so they act as barriers.
+// -----------------------------------------------------------------------
+
+// Test: VALU before an if, v_readfirstlane inside the if body.
+// The waveasm.if op sits between them and acts as a barrier, so the
+// backward scan stops there and does not see the VALU.
+// CHECK-LABEL: waveasm.program @region_boundary_blocks_hazard_scan
+waveasm.program @region_boundary_blocks_hazard_scan target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %cond = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  // VALU writes pvreg<2>.
+  // CHECK: waveasm.v_add_u32
+  %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<2>
+
+  // waveasm.if is an emitting op -- the backward scan stops here.
+  // CHECK: waveasm.if
+  waveasm.if %cond : !waveasm.psreg<0> {
+    // No s_nop needed: the scan sees waveasm.if as the predecessor,
+    // not the v_add_u32 above.
+    // CHECK-NOT: waveasm.s_nop
+    // CHECK: waveasm.v_readfirstlane_b32
+    %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+    waveasm.yield
+  }
+
+  waveasm.s_endpgm
+}
+
+// Test: VALU inside an if body, v_readfirstlane after the if.
+// The backward scan looks into the region to find the last emitting op.
+// CHECK-LABEL: waveasm.program @region_exit_hazard
+waveasm.program @region_exit_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %cond = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  // CHECK: waveasm.if
+  waveasm.if %cond : !waveasm.psreg<0> {
+    // VALU writes pvreg<0> -- same register that readfirstlane reads.
+    %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
+    waveasm.yield
+  }
+
+  // The scan skips yield and sees v_add_u32 as the predecessor.
+  // CHECK: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: if/else -- VALU in the else branch, readfirstlane after the if.
+// The flattened list has the else branch last, so the scan finds its VALU.
+// CHECK-LABEL: waveasm.program @if_else_exit_hazard
+waveasm.program @if_else_exit_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %cond = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  waveasm.if %cond : !waveasm.psreg<0> {
+    // Then branch: SALU only, no VGPR hazard.
+    %s = waveasm.s_mov_b32 %cond : !waveasm.psreg<0> -> !waveasm.sreg
+    waveasm.yield
+  } else {
+    // Else branch: VALU writes pvreg<0>.
+    // CHECK: waveasm.v_add_u32
+    %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
+    waveasm.yield
+  }
+
+  // The scan finds v_add_u32 from the else branch.
+  // CHECK: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: if/else -- VALU only in the then branch (not the else).
+// The flattened scan only sees the else branch (last in the list) and
+// finds s_mov_b32 -- not a VALU, so no hazard is inserted.
+// This is accidentally safe: when the then-path is taken, the implicit
+// s_branch (skip else) provides the required 1-cycle gap. But the pass
+// does not model implicit branches -- it gets the right answer for the
+// wrong reason.
+// FIXME: for correctness the scan should check all if/else exit paths.
+// CHECK-LABEL: waveasm.program @if_else_then_only_valu
+waveasm.program @if_else_then_only_valu target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %cond = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  waveasm.if %cond : !waveasm.psreg<0> {
+    // Then branch: VALU writes pvreg<0>.
+    %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
+    waveasm.yield
+  } else {
+    // Else branch: SALU only.
+    %s = waveasm.s_mov_b32 %cond : !waveasm.psreg<0> -> !waveasm.sreg
+    waveasm.yield
+  }
+
+  // The scan finds s_mov_b32 from the else branch -- not a VALU.
+  // Safe in practice due to the implicit branch after the then body.
+  // CHECK-NOT: waveasm.s_nop
+  // CHECK: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: VALU inside a loop body, readfirstlane after the loop.
+// The condition op (emits s_cbranch) sits between them, acting as a
+// real instruction gap. No hazard needed.
+// CHECK-LABEL: waveasm.program @loop_exit_no_hazard
+waveasm.program @loop_exit_no_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %limit = waveasm.constant 4 : !waveasm.imm<4>
+  %init = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+
+  // CHECK: waveasm.loop
+  %final = waveasm.loop(%i = %init) : (!waveasm.sreg) -> (!waveasm.sreg) {
+    // VALU writes pvreg<0>.
+    %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
+    %cond = waveasm.s_cmp_lt_u32 %i, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%i) : !waveasm.sreg
+  }
+
+  // condition (s_cbranch) is the last emitting op -- not a VALU.
+  // CHECK-NOT: waveasm.s_nop
+  // CHECK: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}
+
+// Test: nested if -- VALU in the inner if, readfirstlane after the outer if.
+// The scan skips both yields and finds the VALU.
+// CHECK-LABEL: waveasm.program @nested_if_exit_hazard
+waveasm.program @nested_if_exit_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %cond = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
+
+  // CHECK: waveasm.if
+  waveasm.if %cond : !waveasm.psreg<0> {
+    waveasm.if %cond : !waveasm.psreg<0> {
+      // VALU in the innermost if.
+      %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
+      waveasm.yield
+    }
+    waveasm.yield
+  }
+
+  // The scan skips both yields and finds v_add_u32.
+  // CHECK: waveasm.s_nop 0
+  // CHECK-NEXT: waveasm.v_readfirstlane_b32
+  %scalar = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
+
+  waveasm.s_endpgm
+}

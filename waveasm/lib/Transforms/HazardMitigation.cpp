@@ -84,7 +84,22 @@ bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 // so new non-emitting ops are covered automatically.
 bool isNonEmittingOp(Operation *op) {
   return isa<ExtractOp, PackOp, PrecoloredSRegOp, PrecoloredVRegOp, ConstantOp,
-             DCEProtectOp>(op);
+             DCEProtectOp, YieldOp>(op);
+}
+
+/// Walk backwards from position `start` in the flattened op list, skipping
+/// non-emitting ops, and return the nearest emitting predecessor.
+/// Because collectOpsRecursive flattens region bodies into the list,
+/// this naturally looks through region boundaries -- yield/condition
+/// terminators are non-emitting, so the scan skips them and finds the
+/// last real instruction inside the region.
+Operation *findPrecedingEmittingOp(ArrayRef<Operation *> ops, size_t start) {
+  for (size_t j = start; j > 0; --j) {
+    Operation *candidate = ops[j - 1];
+    if (!isNonEmittingOp(candidate))
+      return candidate;
+  }
+  return nullptr;
 }
 
 /// Check if an operation is a transcendental instruction (uses the Trans
@@ -184,19 +199,9 @@ private:
       Operation *op = ops[i];
 
       if (isReadfirstlaneOp(op)) {
-        // Walk backwards to find the nearest emitting predecessor.
-        Operation *pred = nullptr;
-        for (size_t j = i; j > 0; --j) {
-          Operation *candidate = ops[j - 1];
-          if (!isNonEmittingOp(candidate)) {
-            pred = candidate;
-            break;
-          }
-        }
-        if (pred && isVALUOp(pred)) {
-          if (hasVGPRConflict(pred, op))
-            insertionPoints.push_back(op);
-        }
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isVALUOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
       }
 
       // Transcendental instructions (v_rcp_f32, v_rsq_f32, etc.) have a
@@ -208,18 +213,9 @@ private:
       // without penalty. See LLVM GCNHazardRecognizer::checkVALUHazards,
       // guard: !SIInstrInfo::isTRANS(*VALU).
       if (isVALUOp(op) && !isTransOp(op) && i > 0) {
-        Operation *pred = nullptr;
-        for (size_t j = i; j > 0; --j) {
-          Operation *candidate = ops[j - 1];
-          if (!isNonEmittingOp(candidate)) {
-            pred = candidate;
-            break;
-          }
-        }
-        if (pred && isTransOp(pred)) {
-          if (hasVGPRConflict(pred, op))
-            insertionPoints.push_back(op);
-        }
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isTransOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
       }
     }
 
