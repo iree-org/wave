@@ -460,7 +460,7 @@ def water_waveasm_lowering_pipeline(
         "--waveasm-memory-offset-opt",
         "--canonicalize",
         "--waveasm-scoped-cse",
-        "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+        "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
         "--waveasm-insert-waitcnt=ticketed-waitcnt=true",
         f"--waveasm-hazard-mitigation=target={target_chip}",
         f"--waveasm-gpu-module-to-binary=target={target_chip} lld-path={lld_path}",
