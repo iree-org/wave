@@ -276,6 +276,11 @@ private:
         return WalkResult::interrupt();
       }
       for (auto [i, input] : llvm::enumerate(packOp.getElements())) {
+#ifndef NDEBUG
+        for (unsigned j = 0; j < i; ++j)
+          assert(packOp.getElements()[j] != input &&
+                 "duplicate pack input survived liveness copy insertion");
+#endif
         mapping.setPhysReg(input, resultPhysReg + static_cast<int64_t>(i));
       }
       return WalkResult::advance();
