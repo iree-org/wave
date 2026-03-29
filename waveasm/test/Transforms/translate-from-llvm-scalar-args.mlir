@@ -4,10 +4,12 @@
 // legalization pass will lower to concrete SALU/VALU ops.
 
 // CHECK: waveasm.program @test__waveasm
-// Pointer arg gets SRD setup.
+// Pointer arg gets SRD setup with typed ops.
 // CHECK: waveasm.precolored.sreg [[SRD:[0-9]+]], 4
-// CHECK: waveasm.raw "s_mov_b32
-// CHECK: waveasm.raw "s_mov_b32
+// CHECK: waveasm.s_mov_b32
+// CHECK: waveasm.dce_protect
+// CHECK: waveasm.s_mov_b32
+// CHECK: waveasm.dce_protect
 // Scalar arg mapped to preloaded SGPR pair, sext/cmp emitted as pseudo-ops.
 // CHECK: waveasm.precolored.sreg [[PAIR:[0-9]+]], 2
 // CHECK: waveasm.arith.sext

@@ -349,28 +349,65 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
-/// Emit the SRD NUM_RECORDS field (word 2) from the validBytes operand.
-/// Static constants emit s_mov_b32; dynamic values (e.g. from arith.select
-/// for the branchless g2s guard) go through v_readfirstlane_b32 + s_add_u32
-/// (non-Pure to avoid DCE). Falls back to hardware maximum if absent.
-static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
-                              Operation *op, TranslationContext &ctx) {
+/// Create a constant SGPR value: ConstantOp + S_MOV_B32.
+static Value buildSrdConstantWord(OpBuilder &builder, Location loc,
+                                  TranslationContext &ctx, int64_t value) {
+  auto sregTy = ctx.createSRegType();
+  auto imm = ctx.createImmType(value);
+  auto immVal = ConstantOp::create(builder, loc, imm, value);
+  return S_MOV_B32::create(builder, loc, sregTy, immVal);
+}
+
+/// Build the SRD NUM_RECORDS field (word 2) as a free-register SSA value.
+/// Used by PackOp-based SRD construction. Returns an SGPR value suitable
+/// for feeding into PackOp.
+static Value buildSrdWord2(OpBuilder &builder, Location loc, Operation *op,
+                           TranslationContext &ctx) {
   auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
   Value validBytesVal = castOp.getValidBytes();
 
   if (validBytesVal) {
     if (auto constVal = getArithConstantValue(validBytesVal)) {
       int64_t clamped = std::min(*constVal, (int64_t)0xFFFFFFFF);
-      std::string mov = "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0x" +
-                        llvm::utohexstr(clamped);
-      RawOp::create(builder, loc, mov);
+      return buildSrdConstantWord(builder, loc, ctx, clamped);
+    }
+
+    auto mapped = ctx.getMapper().getMapped(validBytesVal);
+    if (mapped) {
+      Value src = *mapped;
+      auto sregTy = ctx.createSRegType();
+      if (isVGPRType(src.getType()))
+        return V_READFIRSTLANE_B32::create(builder, loc, sregTy, src);
+      return S_MOV_B32::create(builder, loc, sregTy, src);
+    }
+  }
+
+  return buildSrdConstantWord(builder, loc, ctx, 0xFFFFFFFF);
+}
+
+/// Patch the SRD NUM_RECORDS field (word 2) in place at a known physical
+/// register. Used for the suppress-swizzle path where we modify an existing
+/// prologue SRD without allocating a new one.
+static void patchSrdWord2InPlace(OpBuilder &builder, Location loc,
+                                 int64_t srdBase, Operation *op,
+                                 TranslationContext &ctx) {
+  auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
+  Value validBytesVal = castOp.getValidBytes();
+  auto dstType = PSRegType::get(builder.getContext(), srdBase + 2, 1);
+
+  if (validBytesVal) {
+    if (auto constVal = getArithConstantValue(validBytesVal)) {
+      int64_t clamped = std::min(*constVal, (int64_t)0xFFFFFFFF);
+      auto imm = ctx.createImmType(clamped);
+      auto immVal = ConstantOp::create(builder, loc, imm, clamped);
+      auto result = S_MOV_B32::create(builder, loc, dstType, immVal);
+      DCEProtectOp::create(builder, loc, result);
       return;
     }
 
     auto mapped = ctx.getMapper().getMapped(validBytesVal);
     if (mapped) {
       Value src = *mapped;
-      auto dstType = PSRegType::get(builder.getContext(), srdBase + 2, 1);
       if (isVGPRType(src.getType())) {
         auto result = V_READFIRSTLANE_B32::create(builder, loc, dstType, src);
         DCEProtectOp::create(builder, loc, result);
@@ -384,9 +421,10 @@ static void emitSrdNumRecords(OpBuilder &builder, Location loc, int64_t srdBase,
     }
   }
 
-  std::string mov =
-      "s_mov_b32 s" + std::to_string(srdBase + 2) + ", 0xFFFFFFFF";
-  RawOp::create(builder, loc, mov);
+  auto imm = ctx.createImmType(0xFFFFFFFF);
+  auto immVal = ConstantOp::create(builder, loc, imm, 0xFFFFFFFF);
+  auto result = S_MOV_B32::create(builder, loc, dstType, immVal);
+  DCEProtectOp::create(builder, loc, result);
 }
 
 LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
@@ -493,6 +531,9 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // allocating a new SRD (which would risk SGPR overflow).
   if (suppressWord3Swizzle) {
     if (hasNonMaxValidBytes && !adj) {
+      // Try to patch word 2 in place for prologue SRDs (known physical
+      // register base). For PackOp-built SRDs (SRegType, no physical
+      // index), fall through to the full rebuild path below.
       int64_t srdBase = -1;
       if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType()))
         srdBase = psreg.getIndex();
@@ -500,24 +541,27 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
         if (defOp->getName().getStringRef() == "waveasm.precolored.sreg")
           if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index"))
             srdBase = indexAttr.getInt();
-      if (srdBase >= 0)
-        emitSrdNumRecords(builder, loc, srdBase, op, ctx);
-    }
-    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
-    if (adj) {
-      // When hasNonMaxValidBytes, propagate the validBytes so that
-      // emitSRDBaseAdjustment sets a tight NUM_RECORDS instead of
-      // the default 0x7FFFFFFE.
-      Value numRecordsOverride;
-      if (hasNonMaxValidBytes && validBytesVal) {
-        if (auto mapped = ctx.getMapper().getMapped(validBytesVal))
-          numRecordsOverride = *mapped;
+      if (srdBase >= 0) {
+        patchSrdWord2InPlace(builder, loc, srdBase, op, ctx);
+        ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+        return success();
       }
-      ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
-                                  adj->srcSrdBase, adj->elementBytes,
-                                  numRecordsOverride);
+      // PackOp SRD -- fall through to full rebuild which handles
+      // suppressWord3Swizzle via the word1/word3 conditionals.
+    } else {
+      ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+      if (adj) {
+        Value numRecordsOverride;
+        if (hasNonMaxValidBytes && validBytesVal) {
+          if (auto mapped = ctx.getMapper().getMapped(validBytesVal))
+            numRecordsOverride = *mapped;
+        }
+        ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
+                                    adj->srcSrdBase, adj->elementBytes,
+                                    numRecordsOverride, adj->srcSrdValue);
+      }
+      return success();
     }
-    return success();
   }
 
   if (!hasCacheSwizzle && !hasNonMaxValidBytes) {
@@ -525,97 +569,114 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     return success();
   }
 
-  int64_t srcSrdBase = -1;
+  // Resolve the source SRD as an SSA value. Prefer previously-built
+  // PackOp SRD, then index-based lookup, then mapped precolored value.
+  Value srcSrd;
 
-  // When we have a pending SRD base adjustment, use its source SRD base
-  // (the prologue-allocated SRD) rather than trying to extract from the
-  // mapped value (which is the pre-linearization memref, not an SRD).
-  if (adj) {
-    srcSrdBase = adj->srcSrdBase;
+  // Prefer previously-built SRD value (from PackOp construction).
+  if (auto srcSrdVal = ctx.getSRDValue(op->getOperand(0))) {
+    srcSrd = *srcSrdVal;
   }
 
-  // Prefer previously-built swizzle SRD over the kernel-arg SRD, since
-  // the kernel-arg register may be repurposed as a loop counter.
-  if (srcSrdBase < 0) {
-    if (auto srcSrdIdx = ctx.getSRDIndex(op->getOperand(0))) {
-      srcSrdBase = *srcSrdIdx;
+  if (!srcSrd) {
+    int64_t srcSrdBase = -1;
+
+    // When we have a pending SRD base adjustment, use its source SRD base
+    // (the prologue-allocated SRD).
+    if (adj)
+      srcSrdBase = adj->srcSrdBase;
+
+    // Prefer previously-built swizzle SRD over the kernel-arg SRD, since
+    // the kernel-arg register may be repurposed as a loop counter.
+    if (srcSrdBase < 0) {
+      if (auto srcSrdIdx = ctx.getSRDIndex(op->getOperand(0)))
+        srcSrdBase = *srcSrdIdx;
+    }
+
+    if (srcSrdBase < 0) {
+      if (auto defOp = srcMapped->getDefiningOp())
+        if (defOp->getName().getStringRef() == "waveasm.precolored.sreg")
+          if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index"))
+            srcSrdBase = indexAttr.getInt();
+    }
+
+    if (srcSrdBase < 0) {
+      if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType()))
+        srcSrdBase = psreg.getIndex();
+    }
+
+    if (srcSrdBase >= 0) {
+      auto srcSrdType = ctx.createSRegType(4, 4);
+      srcSrd =
+          PrecoloredSRegOp::create(builder, loc, srcSrdType, srcSrdBase, 4);
     }
   }
 
-  if (srcSrdBase < 0) {
-    if (auto defOp = srcMapped->getDefiningOp()) {
-      if (defOp->getName().getStringRef() == "waveasm.precolored.sreg") {
-        if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index")) {
-          srcSrdBase = indexAttr.getInt();
-        }
-      }
+  // If all lookups failed but srcMapped is already a 4-wide SRD (e.g.
+  // a PackOp result from a prior fat_raw_buffer_cast), use it directly.
+  if (!srcSrd) {
+    if (auto sregTy = dyn_cast<SRegType>(srcMapped->getType())) {
+      if (sregTy.getSize() == 4)
+        srcSrd = *srcMapped;
     }
   }
 
-  if (srcSrdBase < 0) {
-    if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType())) {
-      srcSrdBase = psreg.getIndex();
-    }
-  }
-
-  if (srcSrdBase < 0) {
+  if (!srcSrd) {
     ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
     return success();
   }
 
-  int64_t newSrdBase = ctx.getNextSwizzleSRDIndex();
+  // Extract individual SRD words from the source.
+  auto sregTy = ctx.createSRegType();
+  Value srcWord0 = ExtractOp::create(builder, loc, sregTy, srcSrd, 0);
+  Value srcWord1 = ExtractOp::create(builder, loc, sregTy, srcSrd, 1);
+  Value srcWord2 = ExtractOp::create(builder, loc, sregTy, srcSrd, 2);
 
-  std::string mov0 = "s_mov_b32 s" + std::to_string(newSrdBase) + ", s" +
-                     std::to_string(srcSrdBase);
-  RawOp::create(builder, loc, mov0);
+  // Word 0: copy base address lo.
+  Value word0 = S_MOV_B32::create(builder, loc, sregTy, srcWord0);
 
+  // Word 1: optionally apply cache swizzle stride.
+  Value word1;
   if (hasCacheSwizzle && !suppressWord3Swizzle) {
     int64_t srdWord1Bits = static_cast<int64_t>(swizzleStride | 0x4000) << 16;
-    std::string and1 = "s_and_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                       std::to_string(srcSrdBase + 1) + ", 0xffff";
-    RawOp::create(builder, loc, and1);
-
-    std::string or1 = "s_or_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                      std::to_string(newSrdBase + 1) + ", 0x" +
-                      llvm::utohexstr(srdWord1Bits);
-    RawOp::create(builder, loc, or1);
+    auto maskImm = ctx.createImmType(0xffff);
+    auto maskVal = ConstantOp::create(builder, loc, maskImm, 0xffff);
+    Value cleared = S_AND_B32::create(builder, loc, sregTy, srcWord1, maskVal);
+    auto swizzleImm = ctx.createImmType(srdWord1Bits);
+    auto swizzleVal =
+        ConstantOp::create(builder, loc, swizzleImm, srdWord1Bits);
+    word1 = S_OR_B32::create(builder, loc, sregTy, cleared, swizzleVal);
   } else {
-    std::string mov1 = "s_mov_b32 s" + std::to_string(newSrdBase + 1) + ", s" +
-                       std::to_string(srcSrdBase + 1);
-    RawOp::create(builder, loc, mov1);
+    word1 = S_MOV_B32::create(builder, loc, sregTy, srcWord1);
   }
 
+  // Word 2: num_records.
+  Value word2;
   if (hasNonMaxValidBytes) {
-    // EE path: the MLIR provides a dynamic or non-max validBytes
-    // (e.g. from arith.select for the branchless g2s guard).
-    emitSrdNumRecords(builder, loc, newSrdBase, op, ctx);
+    word2 = buildSrdWord2(builder, loc, op, ctx);
   } else {
-    // Copy num_records from the source SRD so that sentinel byte offsets
-    // (0x7FFFFFFF) remain OOB.  On GFX9, OOB buffer loads silently return
-    // zero -- they do NOT fault.  Using 0xFFFFFFFF would make sentinel
-    // offsets in-bounds, causing the hardware to access unmapped memory.
-    std::string mov2 = "s_mov_b32 s" + std::to_string(newSrdBase + 2) + ", s" +
-                       std::to_string(srcSrdBase + 2);
-    RawOp::create(builder, loc, mov2);
+    // Copy num_records from source SRD so sentinel offsets remain OOB.
+    word2 = S_MOV_B32::create(builder, loc, sregTy, srcWord2);
   }
 
-  uint64_t word3 =
+  // Word 3: flags.
+  uint64_t word3Flags =
       (hasCacheSwizzle && !suppressWord3Swizzle) ? 0x27000 : 0x20000;
-  std::string mov3 = "s_mov_b32 s" + std::to_string(newSrdBase + 3) + ", 0x" +
-                     llvm::utohexstr(word3);
-  RawOp::create(builder, loc, mov3);
+  Value word3 = buildSrdConstantWord(builder, loc, ctx, word3Flags);
 
+  // Pack into a 4-wide SGPR SRD.
   auto srdType = ctx.createSRegType(4, 4);
-  auto newSrd = PrecoloredSRegOp::create(builder, loc, srdType, newSrdBase, 4);
+  auto newSrd = PackOp::create(builder, loc, srdType,
+                               ValueRange{word0, word1, word2, word3});
   ctx.getMapper().mapValue(op->getResult(0), newSrd);
   if (!suppressWord3Swizzle)
     ctx.setCacheSwizzleStride(op->getResult(0), swizzleStride);
 
-  // Record the SRD index for the SOURCE memref so that subsequent
-  // fat_raw_buffer_cast ops on the same source (e.g. inside the loop
-  // body) copy from this stable SRD rather than from the kernel-arg
-  // SRD whose register may be repurposed as a loop counter.
-  ctx.setSRDIndex(op->getOperand(0), newSrdBase);
+  // Record the SRD value for the SOURCE memref so that subsequent
+  // fat_raw_buffer_cast ops on the same source copy from this stable
+  // SRD rather than from the kernel-arg SRD whose register may be
+  // repurposed as a loop counter.
+  ctx.setSRDValue(op->getOperand(0), newSrd);
 
   return success();
 }

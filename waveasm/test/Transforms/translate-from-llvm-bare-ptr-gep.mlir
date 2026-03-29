@@ -5,24 +5,28 @@
 // CHECK: waveasm.program @test__waveasm
 // Bare-pointer offset accumulated with 64-bit arith.add.
 // CHECK: waveasm.arith.add
-// SRD word 1 stride bits cleared, flags patched from make.buffer.rsrc.
-// CHECK: waveasm.raw "s_and_b32
-// CHECK: waveasm.raw "s_mov_b32 s{{[0-9]+}}, 0x27000"
+// SRD word 1 stride bits cleared, flags patched via typed ops + PackOp.
+// CHECK: waveasm.extract
+// CHECK: waveasm.s_and_b32
+// CHECK: waveasm.s_mov_b32
 // Bare-pointer offset folded into SRD base via readfirstlane + s_add_u32.
 // CHECK: waveasm.arith.readfirstlane
 // CHECK: waveasm.arith.trunc
 // CHECK: waveasm.s_add_u32
 // CHECK: waveasm.s_addc_u32
+// CHECK: waveasm.pack
 // Buffer GEP voffset starts at 0 (only element offset).
 // CHECK: waveasm.buffer_load_ushort
 // Same pattern for the store SRD.
 // CHECK: waveasm.arith.add
-// CHECK: waveasm.raw "s_and_b32
-// CHECK: waveasm.raw "s_mov_b32 s{{[0-9]+}}, 0x27000"
+// CHECK: waveasm.extract
+// CHECK: waveasm.s_and_b32
+// CHECK: waveasm.s_mov_b32
 // CHECK: waveasm.arith.readfirstlane
 // CHECK: waveasm.arith.trunc
 // CHECK: waveasm.s_add_u32
 // CHECK: waveasm.s_addc_u32
+// CHECK: waveasm.pack
 // CHECK: waveasm.buffer_store_short
 // CHECK: waveasm.s_endpgm
 

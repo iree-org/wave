@@ -77,6 +77,31 @@ bool isVALUOp(Operation *op) {
 /// Check if an operation is v_readfirstlane
 bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 
+/// Check if an operation does NOT emit an assembly instruction.
+/// These ops are lowered to register aliases or eliminated entirely,
+/// so they don't create real inter-instruction delays.
+// TODO: replace this with an OpTrait or OpInterface (e.g. NonEmitting)
+// so new non-emitting ops are covered automatically.
+bool isNonEmittingOp(Operation *op) {
+  return isa<ExtractOp, PackOp, PrecoloredSRegOp, PrecoloredVRegOp, ConstantOp,
+             DCEProtectOp, YieldOp>(op);
+}
+
+/// Walk backwards from position `start` in the flattened op list, skipping
+/// non-emitting ops, and return the nearest emitting predecessor.
+/// Because collectOpsRecursive flattens region bodies into the list,
+/// this naturally looks through region boundaries -- yield/condition
+/// terminators are non-emitting, so the scan skips them and finds the
+/// last real instruction inside the region.
+Operation *findPrecedingEmittingOp(ArrayRef<Operation *> ops, size_t start) {
+  for (size_t j = start; j > 0; --j) {
+    Operation *candidate = ops[j - 1];
+    if (!isNonEmittingOp(candidate))
+      return candidate;
+  }
+  return nullptr;
+}
+
 /// Check if an operation is a transcendental instruction (uses the Trans
 /// pipeline which has different latency characteristics from the main VALU).
 bool isTransOp(Operation *op) {
@@ -84,38 +109,26 @@ bool isTransOp(Operation *op) {
              V_EXP_F32, V_LOG_F32, V_SIN_F32, V_COS_F32>(op);
 }
 
-/// Get the set of VGPRs written by an operation
-llvm::DenseSet<Value> getVGPRDefs(Operation *op) {
-  llvm::DenseSet<Value> defs;
-  for (Value result : op->getResults()) {
-    Type ty = result.getType();
-    // Check if it's a VGPR type
-    if (isa<VRegType, PVRegType>(ty)) {
-      defs.insert(result);
+/// Check if `producer` writes a VGPR that `consumer` reads.
+/// Both sets are tiny (1-3 elements each -- one VALU result, two-three
+/// operands), so a plain nested loop beats any set/hashing overhead.
+///
+/// After register allocation all VGPRs should be PVRegType; virtual
+/// VRegType pairs can only conflict via SSA identity since they carry
+/// no physical index.
+bool hasVGPRConflict(Operation *producer, Operation *consumer) {
+  for (Value def : producer->getResults()) {
+    auto defPVReg = dyn_cast<PVRegType>(def.getType());
+    if (!defPVReg && !isa<VRegType>(def.getType()))
+      continue;
+    for (Value use : consumer->getOperands()) {
+      if (use == def)
+        return true;
+      if (defPVReg)
+        if (auto usePVReg = dyn_cast<PVRegType>(use.getType()))
+          if (usePVReg.getIndex() == defPVReg.getIndex())
+            return true;
     }
-  }
-  return defs;
-}
-
-/// Get the set of VGPRs read by an operation
-llvm::DenseSet<Value> getVGPRUses(Operation *op) {
-  llvm::DenseSet<Value> uses;
-  for (Value operand : op->getOperands()) {
-    Type ty = operand.getType();
-    // Check if it's a VGPR type
-    if (isa<VRegType, PVRegType>(ty)) {
-      uses.insert(operand);
-    }
-  }
-  return uses;
-}
-
-/// Check if two value sets have any intersection
-bool hasIntersection(const llvm::DenseSet<Value> &a,
-                     const llvm::DenseSet<Value> &b) {
-  for (Value v : a) {
-    if (b.contains(v))
-      return true;
   }
   return false;
 }
@@ -176,26 +189,21 @@ private:
     llvm::SmallVector<Operation *> ops;
     collectOpsRecursive(program.getBodyBlock(), ops);
 
-    // Scan for hazards and collect insertion points
+    // Scan for hazards and collect insertion points.
+    // Non-emitting ops (constants, extracts, precolored refs) don't produce
+    // assembly instructions, so we look past them to find the preceding
+    // emitting instruction that would actually be adjacent in the output.
     llvm::SmallVector<Operation *> insertionPoints;
 
-    for (size_t i = 0; i + 1 < ops.size(); ++i) {
-      Operation *current = ops[i];
-      Operation *next = ops[i + 1];
+    for (size_t i = 0; i < ops.size(); ++i) {
+      Operation *op = ops[i];
 
-      // Check for VALU → v_readfirstlane hazard
-      if (isVALUOp(current) && isReadfirstlaneOp(next)) {
-        // Get VGPRs written by current and read by next
-        auto defs = getVGPRDefs(current);
-        auto uses = getVGPRUses(next);
-
-        // If there's an intersection, we have a hazard
-        if (hasIntersection(defs, uses)) {
-          insertionPoints.push_back(next);
-        }
+      if (isReadfirstlaneOp(op)) {
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isVALUOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
       }
 
-      // Check for Trans -> non-Trans VALU forwarding hazard (gfx940+).
       // Transcendental instructions (v_rcp_f32, v_rsq_f32, etc.) have a
       // one-cycle forwarding hazard when a non-Trans VALU immediately
       // consumes the result. Insert s_nop 0 to cover the required wait
@@ -204,12 +212,10 @@ private:
       // The consumer must be a non-Trans VALU; Trans can forward to Trans
       // without penalty. See LLVM GCNHazardRecognizer::checkVALUHazards,
       // guard: !SIInstrInfo::isTRANS(*VALU).
-      if (isTransOp(current) && isVALUOp(next) && !isTransOp(next)) {
-        auto defs = getVGPRDefs(current);
-        auto uses = getVGPRUses(next);
-        if (hasIntersection(defs, uses)) {
-          insertionPoints.push_back(next);
-        }
+      if (isVALUOp(op) && !isTransOp(op) && i > 0) {
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isTransOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
       }
     }
 

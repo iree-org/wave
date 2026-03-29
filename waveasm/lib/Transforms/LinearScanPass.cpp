@@ -275,13 +275,12 @@ private:
             "pack result has no physical register; cannot assign inputs");
         return WalkResult::interrupt();
       }
-      llvm::DenseSet<Value> seen;
       for (auto [i, input] : llvm::enumerate(packOp.getElements())) {
-        if (!seen.insert(input).second) {
-          packOp.emitError("duplicate pack input at index ")
-              << i << "; each input must be a distinct value";
-          return WalkResult::interrupt();
-        }
+#ifndef NDEBUG
+        for (unsigned j = 0; j < i; ++j)
+          assert(packOp.getElements()[j] != input &&
+                 "duplicate pack input survived liveness copy insertion");
+#endif
         mapping.setPhysReg(input, resultPhysReg + static_cast<int64_t>(i));
       }
       return WalkResult::advance();
