@@ -464,6 +464,9 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
         offHi = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
 
       // Adjust base: S_ADD_U32 sets SCC, S_ADDC_U32 reads it.
+      // TODO: thread the SCC result from S_ADD_U32 into S_ADDC_U32 as an
+      // explicit operand. Currently S_ADDC_U32 has no SCC input in TableGen,
+      // so the carry dependency is only enforced by emission ordering.
       SRegType sccTy = ctx.createSRegType();
       word0 =
           S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo).getDst();

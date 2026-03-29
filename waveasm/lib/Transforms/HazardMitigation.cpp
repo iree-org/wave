@@ -80,6 +80,8 @@ bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 /// Check if an operation does NOT emit an assembly instruction.
 /// These ops are lowered to register aliases or eliminated entirely,
 /// so they don't create real inter-instruction delays.
+// TODO: replace this with an OpTrait or OpInterface (e.g. NonEmitting)
+// so new non-emitting ops are covered automatically.
 bool isNonEmittingOp(Operation *op) {
   return isa<ExtractOp, PackOp, PrecoloredSRegOp, PrecoloredVRegOp, ConstantOp,
              DCEProtectOp>(op);
@@ -116,6 +118,13 @@ llvm::DenseSet<Value> getVGPRUses(Operation *op) {
 /// After register allocation, different SSA values can share the same
 /// physical register, so we compare physical indices when available and
 /// fall back to SSA identity for virtual registers.
+///
+/// Note: this pass runs after register allocation, so all VGPRs should
+/// be PVRegType. A VRegType def/use pair can only conflict via SSA
+/// identity (same Value), since virtual registers carry no physical
+/// index to compare. Mixed VRegType-vs-PVRegType pairs are likewise
+/// handled by the SSA identity check -- there is no physical index to
+/// compare on the virtual side.
 bool hasVGPRConflict(const llvm::DenseSet<Value> &defs,
                      const llvm::DenseSet<Value> &uses) {
   for (Value d : defs) {

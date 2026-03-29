@@ -4,21 +4,23 @@
 // - VALU -> v_readfirstlane hazard (gfx940+)
 // - Trans -> non-Trans VALU forwarding hazard (gfx940+)
 
+// Physical-register conflict: VALU writes pvreg<2>, readfirstlane reads it.
+// This is the realistic post-regalloc form.
 // CHECK-LABEL: waveasm.program @valu_readfirstlane_hazard
 waveasm.program @valu_readfirstlane_hazard target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
-  // Define input registers
+  // Define input registers.
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
 
-  // VALU instruction that writes to a VGPR
+  // VALU instruction that writes to a VGPR.
   // CHECK: waveasm.v_add_u32
-  %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.vreg
+  %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<2>
 
   // The hazard pass should insert s_nop between VALU and v_readfirstlane
-  // when the same VGPR is written then immediately read
+  // when the same VGPR is written then immediately read.
   // CHECK-NEXT: waveasm.s_nop 0
   // CHECK-NEXT: waveasm.v_readfirstlane_b32
-  %scalar = waveasm.v_readfirstlane_b32 %sum : !waveasm.vreg -> !waveasm.sreg
+  %scalar = waveasm.v_readfirstlane_b32 %sum : !waveasm.pvreg<2> -> !waveasm.sreg
 
   // CHECK: waveasm.s_endpgm
   waveasm.s_endpgm
@@ -44,7 +46,8 @@ waveasm.program @no_hazard_different_vgpr target = #waveasm.target<#waveasm.gfx9
   waveasm.s_endpgm
 }
 
-// Test case: gfx1250 should also need hazard mitigation
+// SSA-identity conflict: VALU writes vreg (virtual), readfirstlane reads the
+// same SSA value. Tests the fallback path for pre-regalloc or mixed-type IR.
 // CHECK-LABEL: waveasm.program @gfx1250_hazard
 waveasm.program @gfx1250_hazard target = #waveasm.target<#waveasm.gfx1250, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
