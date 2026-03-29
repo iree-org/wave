@@ -8,8 +8,9 @@
 // Hazard Mitigation Pass - Insert s_nop instructions for hardware hazards
 //
 // This pass handles hardware-specific hazards that require NOP insertion:
-// - VALU → v_readfirstlane hazard (gfx940+)
-// - Trans → non-Trans VALU forwarding hazard (gfx940+)
+// - VALU -> v_readfirstlane hazard (gfx940+)
+// - Trans -> non-Trans VALU forwarding hazard (gfx940+)
+// - v_accvgpr_read_b32 -> VALU RAW hazard (gfx940+)
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMAttrs.h"
@@ -74,8 +75,11 @@ bool isVALUOp(Operation *op) {
   return true;
 }
 
-/// Check if an operation is v_readfirstlane
+/// Check if an operation is v_readfirstlane.
 bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
+
+/// Check if an operation is v_accvgpr_read_b32 (AGPR -> VGPR move).
+bool isAccVgprReadOp(Operation *op) { return isa<V_ACCVGPR_READ_B32>(op); }
 
 /// Check if an operation is a transcendental instruction (uses the Trans
 /// pipeline which has different latency characteristics from the main VALU).
@@ -210,6 +214,17 @@ private:
         if (hasIntersection(defs, uses)) {
           insertionPoints.push_back(next);
         }
+      }
+
+      // Check for v_accvgpr_read_b32 -> VALU RAW hazard (gfx940+).
+      // On GFX950 the VGPR destination of v_accvgpr_read_b32 is not
+      // immediately available; a VALU that consumes it in the next cycle
+      // reads stale data.  Insert s_nop 0 to cover the 1-cycle wait.
+      if (isAccVgprReadOp(current) && isVALUOp(next)) {
+        auto defs = getVGPRDefs(current);
+        auto uses = getVGPRUses(next);
+        if (hasIntersection(defs, uses))
+          insertionPoints.push_back(next);
       }
     }
 

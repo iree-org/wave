@@ -86,25 +86,70 @@ static std::optional<int64_t> tryAllocate(RegPool &pool, int64_t size,
 // Register Class Allocation
 //===----------------------------------------------------------------------===//
 
-/// Allocate registers for a single register class (VGPR or SGPR).
+/// Find the best eviction candidate from the active list.
+/// Prefers untied, size-1 ranges with the fewest use sites.
+/// Among equal-cost candidates, picks the longest remaining range.
+/// Returns the index into `active`, or -1 if no candidate is found.
+static int64_t
+findEvictionCandidate(const llvm::SmallVectorImpl<ActiveRange> &active,
+                      const llvm::DenseMap<Value, Value> &tiedOperands,
+                      const LivenessInfo *liveness, int64_t currentPoint) {
+  int64_t bestIdx = -1;
+  int64_t bestUseCount = std::numeric_limits<int64_t>::max();
+  int64_t bestLength = -1;
+
+  for (int64_t i = 0, e = active.size(); i < e; ++i) {
+    const ActiveRange &ar = active[i];
+    // Only spill size-1 values.
+    if (ar.range.size != 1)
+      continue;
+    // Do not spill tied values.
+    if (ar.range.isTied() || tiedOperands.contains(ar.range.reg))
+      continue;
+    // Must still be alive past the current point.
+    if (ar.endPoint <= currentPoint)
+      continue;
+
+    int64_t useCount = 0;
+    if (liveness) {
+      auto it = liveness->usePoints.find(ar.range.reg);
+      if (it != liveness->usePoints.end())
+        useCount = it->second.size();
+    }
+    int64_t length = ar.endPoint - currentPoint;
+
+    // Prefer fewer uses; break ties with longer remaining range
+    // (evicting a long range frees the register for more time).
+    if (useCount < bestUseCount ||
+        (useCount == bestUseCount && length > bestLength)) {
+      bestIdx = i;
+      bestUseCount = useCount;
+      bestLength = length;
+    }
+  }
+  return bestIdx;
+}
+
+/// Allocate registers for a single register class.
 /// This is the core linear scan algorithm, parameterized by register class.
-static LogicalResult
-allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
-                 PhysicalMapping &mapping, AllocationStats &stats,
-                 const llvm::DenseMap<Value, Value> &tiedOperands,
-                 const llvm::DenseMap<Value, int64_t> &precoloredValues,
-                 llvm::StringRef regClassName, ProgramOp program,
-                 int64_t maxRegs, int64_t maxPressure) {
+/// When allocation fails and `altPool` is provided, the allocator evicts an
+/// active range to the alternate register class before giving up.
+static LogicalResult allocateRegClass(
+    ArrayRef<LiveRange> ranges, RegPool &pool, PhysicalMapping &mapping,
+    AllocationStats &stats, const llvm::DenseMap<Value, Value> &tiedOperands,
+    const llvm::DenseMap<Value, int64_t> &precoloredValues,
+    llvm::StringRef regClassName, ProgramOp program, int64_t maxRegs,
+    int64_t maxPressure, RegPool *altPool,
+    llvm::SmallVectorImpl<SpillRecord> *spills, const LivenessInfo *liveness) {
 
   llvm::SmallVector<ActiveRange> active;
 
   for (const LiveRange &range : ranges) {
-    // Skip precolored values - they're already mapped
-    if (precoloredValues.contains(range.reg)) {
+    // Skip precolored values - they're already mapped.
+    if (precoloredValues.contains(range.reg))
       continue;
-    }
 
-    // Expire finished ranges, returning registers to the pool
+    // Expire finished ranges, returning registers to the pool.
     expireRanges(active, range.start, pool, stats);
 
     std::optional<int64_t> physReg;
@@ -121,20 +166,13 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
           mapping.valueToPhysReg[range.reg] = *physReg;
 
           // Extend the physical register's lifetime to cover the tied result.
-          // The tied-to operand may have a shorter lifetime (e.g., %55 ends
-          // at op2), but the tied result (%56) may live longer (used in
-          // iteration 2). Without this extension, the physical register would
-          // be freed too early when the tied-to operand expires.
           bool foundInActive = false;
           for (size_t i = 0; i < active.size(); ++i) {
             if (active[i].physReg == *physReg) {
               foundInActive = true;
               if (range.end > active[i].endPoint) {
-                // Update end point and re-sort the affected portion
                 active[i].endPoint = range.end;
                 active[i].range = range;
-                // Re-sort: since we only increased one element's key,
-                // bubble it forward to maintain sorted order by endPoint
                 while (i + 1 < active.size() &&
                        active[i].endPoint > active[i + 1].endPoint) {
                   std::swap(active[i], active[i + 1]);
@@ -146,13 +184,6 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
           }
 
           if (!foundInActive) {
-            // Two cases reach here:
-            // (a) Precolored tying (MFMA): the tied-to value is precolored
-            //     and was never in the active list. Its physReg is already
-            //     reserved in the pool. pool.reserve is a safe no-op.
-            // (b) Loop boundary: the tied-to virtual value expired from
-            //     active and its registers were returned to the pool.
-            //     The physReg MUST still be free (not re-allocated).
             bool tiedToPrecolored = precoloredValues.contains(tiedTo);
             assert((tiedToPrecolored || pool.isFree(*physReg)) &&
                    "Tied register was re-allocated before re-reservation");
@@ -163,12 +194,38 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
           stats.rangesAllocated++;
           continue;
         }
-        // If tied-to not yet allocated, fall through to normal allocation
+        // If tied-to not yet allocated, fall through to normal allocation.
       }
     }
 
-    // Allocate physical register(s) from the pool
+    // Allocate physical register(s) from the pool.
     physReg = tryAllocate(pool, range.size, range.alignment);
+
+    // Cross-class eviction: if allocation failed and an alternate pool is
+    // available, evict the best candidate from the active list into the
+    // alternate class, freeing its register for the incoming range.
+    if (!physReg && altPool && altPool->hasFree() && spills) {
+      int64_t victimIdx =
+          findEvictionCandidate(active, tiedOperands, liveness, range.start);
+      if (victimIdx >= 0) {
+        ActiveRange victim = active[victimIdx];
+        // Allocate a register in the alternate class for the victim.
+        int64_t altReg = altPool->allocSingle();
+        if (altReg >= 0) {
+          // Free the victim's register back to the primary pool.
+          pool.freeRange(victim.physReg, victim.range.size);
+          active.erase(active.begin() + victimIdx);
+
+          // Record the spill for later op insertion.
+          spills->push_back(SpillRecord{victim.range.reg, victim.physReg,
+                                        altReg, pool.getRegClass(),
+                                        altPool->getRegClass()});
+
+          // Retry allocation for the incoming range.
+          physReg = tryAllocate(pool, range.size, range.alignment);
+        }
+      }
+    }
 
     if (!physReg) {
       return program.emitOpError()
@@ -177,10 +234,10 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
              << ", limit: " << maxRegs;
     }
 
-    // Record mapping: Value -> physical register
+    // Record mapping: Value -> physical register.
     mapping.valueToPhysReg[range.reg] = *physReg;
 
-    // Add to active list, maintaining sorted order by end point
+    // Add to active list, maintaining sorted order by end point.
     insertActiveRange(active, {range.end, range, *physReg});
 
     stats.rangesAllocated++;
@@ -193,40 +250,35 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
 // Main Allocation Algorithm (Pure SSA)
 //===----------------------------------------------------------------------===//
 
-FailureOr<std::pair<PhysicalMapping, AllocationStats>>
+FailureOr<LinearScanRegAlloc::AllocResult>
 LinearScanRegAlloc::allocate(ProgramOp program) {
   PhysicalMapping mapping;
   AllocationStats stats;
+  llvm::SmallVector<SpillRecord> spills;
 
-  // Step 1: Validate SSA
-  if (failed(validateSSA(program))) {
+  // Step 1: Validate SSA.
+  if (failed(validateSSA(program)))
     return program.emitOpError() << "SSA validation failed before allocation";
-  }
 
-  // Step 2: Compute liveness (builds tied equivalence classes)
+  // Step 2: Compute liveness (builds tied equivalence classes).
   LivenessInfo liveness = computeLiveness(program);
 
   // Merge loop tied pairs from liveness into the allocator's tiedOperands.
-  // The liveness analysis builds TiedValueClasses with a tiedPairs map
-  // that captures loop block_arg/init_arg/iter_arg/result relationships.
-  // MFMA ties were added externally via addTiedOperand() and are already
-  // in tiedOperands; loop ties come from liveness and are merged here.
   for (const auto &[result, operand] : liveness.tiedClasses.tiedPairs) {
-    if (!tiedOperands.contains(result)) {
+    if (!tiedOperands.contains(result))
       tiedOperands[result] = operand;
-    }
   }
 
   stats.totalVRegs = liveness.vregRanges.size();
   stats.totalSRegs = liveness.sregRanges.size();
   stats.totalARegs = liveness.aregRanges.size();
 
-  // Step 3: Create register pools with reserved registers
+  // Step 3: Create register pools with reserved registers.
   RegPool vgprPool(RegClass::VGPR, maxVGPRs, reservedVGPRs);
   RegPool sgprPool(RegClass::SGPR, maxSGPRs, reservedSGPRs);
   RegPool agprPool(RegClass::AGPR, maxAGPRs, reservedAGPRs);
 
-  // Step 4: Handle precolored values (from ABI args like tid, kernarg)
+  // Step 4: Handle precolored values (from ABI args like tid, kernarg).
   for (const auto &[value, physIdx] : precoloredValues) {
     if (isVGPRType(value.getType())) {
       mapping.valueToPhysReg[value] = physIdx;
@@ -240,29 +292,29 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
     }
   }
 
-  // Step 5: Allocate VGPRs using linear scan
+  // Step 5: Allocate VGPRs. On failure, evict to spare AGPRs.
   if (failed(allocateRegClass(liveness.vregRanges, vgprPool, mapping, stats,
                               tiedOperands, precoloredValues, "VGPR", program,
-                              maxVGPRs, liveness.maxVRegPressure))) {
+                              maxVGPRs, liveness.maxVRegPressure, &agprPool,
+                              &spills, &liveness)))
     return failure();
-  }
   stats.peakVGPRs = vgprPool.getPeakUsage();
 
-  // Step 6: Allocate SGPRs using linear scan
-  if (failed(allocateRegClass(liveness.sregRanges, sgprPool, mapping, stats,
-                              tiedOperands, precoloredValues, "SGPR", program,
-                              maxSGPRs, liveness.maxSRegPressure))) {
+  // Step 6: Allocate SGPRs (no cross-class spilling yet).
+  if (failed(allocateRegClass(
+          liveness.sregRanges, sgprPool, mapping, stats, tiedOperands,
+          precoloredValues, "SGPR", program, maxSGPRs, liveness.maxSRegPressure,
+          /*altPool=*/nullptr, /*spills=*/nullptr, &liveness)))
     return failure();
-  }
   stats.peakSGPRs = sgprPool.getPeakUsage();
 
-  // Step 7: Allocate AGPRs using linear scan
-  if (failed(allocateRegClass(liveness.aregRanges, agprPool, mapping, stats,
-                              tiedOperands, precoloredValues, "AGPR", program,
-                              maxAGPRs, liveness.maxARegPressure))) {
+  // Step 7: Allocate AGPRs (no cross-class spilling yet).
+  if (failed(allocateRegClass(
+          liveness.aregRanges, agprPool, mapping, stats, tiedOperands,
+          precoloredValues, "AGPR", program, maxAGPRs, liveness.maxARegPressure,
+          /*altPool=*/nullptr, /*spills=*/nullptr, &liveness)))
     return failure();
-  }
   stats.peakAGPRs = agprPool.getPeakUsage();
 
-  return std::make_pair(mapping, stats);
+  return AllocResult{std::move(mapping), stats, std::move(spills)};
 }
