@@ -531,6 +531,9 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // allocating a new SRD (which would risk SGPR overflow).
   if (suppressWord3Swizzle) {
     if (hasNonMaxValidBytes && !adj) {
+      // Try to patch word 2 in place for prologue SRDs (known physical
+      // register base). For PackOp-built SRDs (SRegType, no physical
+      // index), fall through to the full rebuild path below.
       int64_t srdBase = -1;
       if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType()))
         srdBase = psreg.getIndex();
@@ -538,24 +541,27 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
         if (defOp->getName().getStringRef() == "waveasm.precolored.sreg")
           if (auto indexAttr = defOp->getAttrOfType<IntegerAttr>("index"))
             srdBase = indexAttr.getInt();
-      if (srdBase >= 0)
+      if (srdBase >= 0) {
         patchSrdWord2InPlace(builder, loc, srdBase, op, ctx);
-    }
-    ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
-    if (adj) {
-      // When hasNonMaxValidBytes, propagate the validBytes so that
-      // emitSRDBaseAdjustment sets a tight NUM_RECORDS instead of
-      // the default 0x7FFFFFFE.
-      Value numRecordsOverride;
-      if (hasNonMaxValidBytes && validBytesVal) {
-        if (auto mapped = ctx.getMapper().getMapped(validBytesVal))
-          numRecordsOverride = *mapped;
+        ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+        return success();
       }
-      ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
-                                  adj->srcSrdBase, adj->elementBytes,
-                                  numRecordsOverride, adj->srcSrdValue);
+      // PackOp SRD -- fall through to full rebuild which handles
+      // suppressWord3Swizzle via the word1/word3 conditionals.
+    } else {
+      ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
+      if (adj) {
+        Value numRecordsOverride;
+        if (hasNonMaxValidBytes && validBytesVal) {
+          if (auto mapped = ctx.getMapper().getMapped(validBytesVal))
+            numRecordsOverride = *mapped;
+        }
+        ctx.setPendingSRDBaseAdjust(op->getResult(0), adj->elementOffset,
+                                    adj->srcSrdBase, adj->elementBytes,
+                                    numRecordsOverride, adj->srcSrdValue);
+      }
+      return success();
     }
-    return success();
   }
 
   if (!hasCacheSwizzle && !hasNonMaxValidBytes) {
@@ -603,6 +609,15 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
       auto srcSrdType = ctx.createSRegType(4, 4);
       srcSrd =
           PrecoloredSRegOp::create(builder, loc, srcSrdType, srcSrdBase, 4);
+    }
+  }
+
+  // If all lookups failed but srcMapped is already a 4-wide SRD (e.g.
+  // a PackOp result from a prior fat_raw_buffer_cast), use it directly.
+  if (!srcSrd) {
+    if (auto sregTy = dyn_cast<SRegType>(srcMapped->getType())) {
+      if (sregTy.getSize() == 4)
+        srcSrd = *srcMapped;
     }
   }
 
