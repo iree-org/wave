@@ -94,50 +94,25 @@ bool isTransOp(Operation *op) {
              V_EXP_F32, V_LOG_F32, V_SIN_F32, V_COS_F32>(op);
 }
 
-/// Get the set of VGPRs written by an operation (SSA values).
-llvm::DenseSet<Value> getVGPRDefs(Operation *op) {
-  llvm::DenseSet<Value> defs;
-  for (Value result : op->getResults()) {
-    if (isa<VRegType, PVRegType>(result.getType()))
-      defs.insert(result);
-  }
-  return defs;
-}
-
-/// Get the set of VGPRs read by an operation (SSA values).
-llvm::DenseSet<Value> getVGPRUses(Operation *op) {
-  llvm::DenseSet<Value> uses;
-  for (Value operand : op->getOperands()) {
-    if (isa<VRegType, PVRegType>(operand.getType()))
-      uses.insert(operand);
-  }
-  return uses;
-}
-
-/// Check if a VALU def set and a VALU use set have a conflicting VGPR.
-/// After register allocation, different SSA values can share the same
-/// physical register, so we compare physical indices when available and
-/// fall back to SSA identity for virtual registers.
+/// Check if `producer` writes a VGPR that `consumer` reads.
+/// Both sets are tiny (1-3 elements each -- one VALU result, two-three
+/// operands), so a plain nested loop beats any set/hashing overhead.
 ///
-/// Note: this pass runs after register allocation, so all VGPRs should
-/// be PVRegType. A VRegType def/use pair can only conflict via SSA
-/// identity (same Value), since virtual registers carry no physical
-/// index to compare. Mixed VRegType-vs-PVRegType pairs are likewise
-/// handled by the SSA identity check -- there is no physical index to
-/// compare on the virtual side.
-bool hasVGPRConflict(const llvm::DenseSet<Value> &defs,
-                     const llvm::DenseSet<Value> &uses) {
-  for (Value d : defs) {
-    if (uses.contains(d))
-      return true;
-    if (auto pdReg = dyn_cast<PVRegType>(d.getType())) {
-      int64_t dIdx = pdReg.getIndex();
-      for (Value u : uses) {
-        if (auto puReg = dyn_cast<PVRegType>(u.getType())) {
-          if (puReg.getIndex() == dIdx)
+/// After register allocation all VGPRs should be PVRegType; virtual
+/// VRegType pairs can only conflict via SSA identity since they carry
+/// no physical index.
+bool hasVGPRConflict(Operation *producer, Operation *consumer) {
+  for (Value def : producer->getResults()) {
+    auto defPVReg = dyn_cast<PVRegType>(def.getType());
+    if (!defPVReg && !isa<VRegType>(def.getType()))
+      continue;
+    for (Value use : consumer->getOperands()) {
+      if (use == def)
+        return true;
+      if (defPVReg)
+        if (auto usePVReg = dyn_cast<PVRegType>(use.getType()))
+          if (usePVReg.getIndex() == defPVReg.getIndex())
             return true;
-        }
-      }
     }
   }
   return false;
@@ -219,9 +194,7 @@ private:
           }
         }
         if (pred && isVALUOp(pred)) {
-          auto defs = getVGPRDefs(pred);
-          auto uses = getVGPRUses(op);
-          if (hasVGPRConflict(defs, uses))
+          if (hasVGPRConflict(pred, op))
             insertionPoints.push_back(op);
         }
       }
@@ -244,9 +217,7 @@ private:
           }
         }
         if (pred && isTransOp(pred)) {
-          auto defs = getVGPRDefs(pred);
-          auto uses = getVGPRUses(op);
-          if (hasVGPRConflict(defs, uses))
+          if (hasVGPRConflict(pred, op))
             insertionPoints.push_back(op);
         }
       }
