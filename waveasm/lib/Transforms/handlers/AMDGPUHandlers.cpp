@@ -349,6 +349,15 @@ LogicalResult handleAMDGPUScaledMfma(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+/// Create a constant SGPR value: ConstantOp + S_MOV_B32.
+static Value buildSrdConstantWord(OpBuilder &builder, Location loc,
+                                  TranslationContext &ctx, int64_t value) {
+  auto sregTy = ctx.createSRegType();
+  auto imm = ctx.createImmType(value);
+  auto immVal = ConstantOp::create(builder, loc, imm, value);
+  return S_MOV_B32::create(builder, loc, sregTy, immVal);
+}
+
 /// Build the SRD NUM_RECORDS field (word 2) as a free-register SSA value.
 /// Used by PackOp-based SRD construction. Returns an SGPR value suitable
 /// for feeding into PackOp.
@@ -356,28 +365,24 @@ static Value buildSrdWord2(OpBuilder &builder, Location loc, Operation *op,
                            TranslationContext &ctx) {
   auto castOp = cast<amdgpu::FatRawBufferCastOp>(op);
   Value validBytesVal = castOp.getValidBytes();
-  auto sregTy = ctx.createSRegType();
 
   if (validBytesVal) {
     if (auto constVal = getArithConstantValue(validBytesVal)) {
       int64_t clamped = std::min(*constVal, (int64_t)0xFFFFFFFF);
-      auto imm = ctx.createImmType(clamped);
-      auto immVal = ConstantOp::create(builder, loc, imm, clamped);
-      return S_MOV_B32::create(builder, loc, sregTy, immVal);
+      return buildSrdConstantWord(builder, loc, ctx, clamped);
     }
 
     auto mapped = ctx.getMapper().getMapped(validBytesVal);
     if (mapped) {
       Value src = *mapped;
+      auto sregTy = ctx.createSRegType();
       if (isVGPRType(src.getType()))
         return V_READFIRSTLANE_B32::create(builder, loc, sregTy, src);
       return S_MOV_B32::create(builder, loc, sregTy, src);
     }
   }
 
-  auto imm = ctx.createImmType(0xFFFFFFFF);
-  auto immVal = ConstantOp::create(builder, loc, imm, 0xFFFFFFFF);
-  return S_MOV_B32::create(builder, loc, sregTy, immVal);
+  return buildSrdConstantWord(builder, loc, ctx, 0xFFFFFFFF);
 }
 
 /// Patch the SRD NUM_RECORDS field (word 2) in place at a known physical
@@ -642,9 +647,7 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // Word 3: flags.
   uint64_t word3Flags =
       (hasCacheSwizzle && !suppressWord3Swizzle) ? 0x27000 : 0x20000;
-  auto flagsImm = ctx.createImmType(word3Flags);
-  auto flagsVal = ConstantOp::create(builder, loc, flagsImm, word3Flags);
-  Value word3 = S_MOV_B32::create(builder, loc, sregTy, flagsVal);
+  Value word3 = buildSrdConstantWord(builder, loc, ctx, word3Flags);
 
   // Pack into a 4-wide SGPR SRD.
   auto srdType = ctx.createSRegType(4, 4);
