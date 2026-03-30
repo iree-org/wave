@@ -344,7 +344,10 @@ def _check_payloads_equivalent(
 
     # Dict comparison
     if isinstance(lhs, dict) and isinstance(rhs, dict):
-        if all(isinstance(k, IndexSymbol) for k in lhs.keys()):
+        if all(
+            (isinstance(k, IndexSymbol) and isinstance(v, IndexSequence))
+            for k, v in lhs.items()
+        ):
             return _check_index_mapping_equivalent(lhs, rhs, subs)
         if lhs.keys() != rhs.keys():
             return Failure(f"dict keys mismatch: {lhs.keys()} vs {rhs.keys()}")
@@ -584,7 +587,9 @@ def _check_nodes_equivalent(
                     lhs_val, rhs_val, subs, node_map
                 )
             ):
-                return Failure(f"attr '{attr_name}' mismatch: {check_result.error}")
+                return Failure(
+                    f"attr '{attr_name}' mismatch: {check_result.error} on {lhs_custom}"
+                )
 
     # implicit_captures (compare=False) may differ in order (makeIsolated
     # can reorder) or length (the source trace may have pruned dead
@@ -831,7 +836,7 @@ def _check_graphs_equivalent(
     else:
         # Root graph: match placeholders by order, then compare the rest.
         if len(lhs_nodes) != len(rhs_nodes):
-            return Failure("node count mismatch")
+            return Failure(f"node count mismatch: {len(lhs_nodes)} vs {len(rhs_nodes)}")
         result = _match_root_placeholders(
             lhs_nodes, rhs_nodes, lhs_trace, rhs_trace, subs, node_map
         )
