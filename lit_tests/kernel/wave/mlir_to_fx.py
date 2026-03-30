@@ -88,7 +88,7 @@ def _assert_roundtrip(
     assert (
         stop_before is None or stop_after is None
     ), "stop_before and stop_after are mutually exclusive"
-    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+    options = WaveCompileOptions(linearize_reads=False, subs=subs, compile_to_mlir=True)
     with IndexingContext() as idxc:
         # The indexing context is usually initialized by wave_compile.
         # To enable running graph passes manually, we initialize it here.
@@ -302,6 +302,7 @@ def mlir_to_fx_pipelined_gemm_roundtrip():
     subs.update(get_default_scheduling_params())
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         schedule=SchedulingType.PREFETCH,  # Enable software pipelining
@@ -383,7 +384,7 @@ def mlir_to_fx_unspecified_address_space():
         wave.write(repeat, c)
 
     subs = {M: 128, N: 128, K: 16, BLOCK_M: 16, BLOCK_N: 16, BLOCK_K: 16}
-    options = WaveCompileOptions(subs=subs, compile_to_mlir=True)
+    options = WaveCompileOptions(linearize_reads=False, subs=subs, compile_to_mlir=True)
 
     compiled_kernel = wave_compile(options, matmul_for_addr_test)
     trace = compiled_kernel.get_compiled_graph()

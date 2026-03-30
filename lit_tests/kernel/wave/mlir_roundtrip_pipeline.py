@@ -196,6 +196,7 @@ def gemm_progressive_roundtrip():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
     )
@@ -226,6 +227,7 @@ def attention_progressive_roundtrip():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
     )

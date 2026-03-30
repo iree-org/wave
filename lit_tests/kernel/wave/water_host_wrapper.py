@@ -53,6 +53,7 @@ def get_wave_compile_options(
             del bindings[sym]
 
     return WaveCompileOptions(
+        linearize_reads=False,
         subs=bindings,
         canonicalize=canonicalize,
         dynamic_symbols=dynamic_symbols,

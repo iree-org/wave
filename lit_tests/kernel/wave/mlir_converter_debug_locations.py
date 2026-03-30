@@ -85,6 +85,7 @@ def mlir_converter_location():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(
@@ -201,6 +202,7 @@ def mlir_converter_location_iterate():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(

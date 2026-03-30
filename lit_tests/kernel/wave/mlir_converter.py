@@ -81,6 +81,7 @@ def _get_dummy_trace_options_and_constraints() -> (
     tuple[CapturedTrace, WaveCompileOptions, list[Constraint]]
 ):
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
         compile_to_mlir=True,
     )
@@ -185,6 +186,7 @@ def vector_shapes_symbol_not_in_subs():
     # Use a symbol only in vector_shapes so compilation succeeds but emit_wave_dialect hits the check.
     VEC_M = tkl.sym.VEC_M
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
         compile_to_mlir=True,
     )
@@ -269,6 +271,7 @@ def mlir_converter_matrix_add():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -395,6 +398,7 @@ def mlir_converter_broadcast():
         wave.write(broadcasted, b)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64, N: 256, BLOCK_N: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -430,6 +434,7 @@ def mlir_converter_self_index():
         wave.write(idx, a)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -476,6 +481,7 @@ def mlir_converter_select():
         wave.write(res, d)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -533,6 +539,7 @@ def mlir_converter_implicit_broadcast():
         wave.write(sel_result, out)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={
             ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
             M: 128,
@@ -624,6 +631,7 @@ def multi_result_handling():
         tkw.write(r1, c)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={
             M: 64,
             N: 64,
@@ -695,6 +703,7 @@ def mlir_converter_reshape():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -759,6 +768,7 @@ def mlir_converter_sum():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -841,6 +851,7 @@ def mlir_converter_apply_expr():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -922,6 +933,7 @@ def mlir_converter_apply_expr_combinators():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1029,6 +1041,7 @@ def mlir_converter_emit_wave_dialect_loop_implicit_capture():
         K: 32,
     }
     options_loop = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs_loop,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1120,6 +1133,7 @@ def mlir_converter_matmul():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1309,6 +1323,7 @@ def mlir_converter_attention():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1438,6 +1453,7 @@ def mlir_converter_mixed_memory_spaces():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1492,6 +1508,7 @@ def mlir_converter_invalid_non_int_hyperparameter():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1557,6 +1574,7 @@ def mlir_converter_permute():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1655,6 +1673,7 @@ def mlir_converter_read_with_mapping():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1751,6 +1770,7 @@ def mlir_converter_write_with_mapping():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1813,6 +1833,7 @@ def mlir_converter_attention_pre_infer_types():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
     )
