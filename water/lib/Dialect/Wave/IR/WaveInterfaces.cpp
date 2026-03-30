@@ -1052,7 +1052,9 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
     DictionaryAttr concreteValue, int32_t priority, DictionaryAttr vectorShape)
-    : value(concreteValue, kSpecificTypeState), vectorShape(vectorShape) {
+    : value(concreteValue, kSpecificTypeState), vectorShape(vectorShape),
+      sourceVectorShape(priority == kLowestPriority ? nullptr : vectorShape),
+      sourceVectorShapePriority(priority) {
   MLIRContext *ctx = concreteValue.getContext();
   IntegerType i32 = IntegerType::get(ctx, 32);
   IntegerAttr priAttr = IntegerAttr::get(i32, priority);
@@ -1067,12 +1069,23 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
     DictionaryAttr concreteValue, DictionaryAttr priorities,
     DictionaryAttr vectorShape)
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
-      vectorShape(vectorShape) {}
+      vectorShape(vectorShape), sourceVectorShape(vectorShape) {
+  if (priorities) {
+    for (NamedAttribute na : priorities)
+      sourceVectorShapePriority =
+          std::max(sourceVectorShapePriority,
+                   (int32_t)llvm::cast<IntegerAttr>(na.getValue()).getInt());
+  }
+  if (sourceVectorShapePriority == kLowestPriority)
+    sourceVectorShape = nullptr;
+}
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
   return value == other.value && priorities == other.priorities &&
-         vectorShape == other.vectorShape;
+         vectorShape == other.vectorShape &&
+         sourceVectorShape == other.sourceVectorShape &&
+         sourceVectorShapePriority == other.sourceVectorShapePriority;
 }
 
 bool wave::IndexExprsLatticeStorage::operator!=(
@@ -1098,6 +1111,25 @@ DictionaryAttr wave::IndexExprsLatticeStorage::getVectorShape() const {
   if (value.getInt() != kSpecificTypeState)
     return nullptr;
   return vectorShape;
+}
+
+DictionaryAttr wave::IndexExprsLatticeStorage::getSourceVectorShape() const {
+  if (value.getInt() != kSpecificTypeState)
+    return nullptr;
+  return sourceVectorShape;
+}
+
+int32_t wave::IndexExprsLatticeStorage::getSourceVectorShapePriority() const {
+  return sourceVectorShapePriority;
+}
+
+wave::IndexExprsLatticeStorage
+wave::IndexExprsLatticeStorage::withSourceVectorShape(DictionaryAttr shape,
+                                                      int32_t priority) const {
+  IndexExprsLatticeStorage copy = *this;
+  copy.sourceVectorShape = shape;
+  copy.sourceVectorShapePriority = priority;
+  return copy;
 }
 
 int32_t
@@ -1635,12 +1667,48 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   if (!joinedVectorShape && (lhs.getVectorShape() || rhs.getVectorShape()))
     return IndexExprsLatticeStorage::top();
 
+  // Join source vector shapes using priority: higher priority wins. If
+  // priorities are equal, two different values cause top; two identical values
+  // join cleanly.
+  DictionaryAttr joinedSourceVectorShape;
+  int32_t joinedSourceVectorShapePriority = 0;
+  {
+    DictionaryAttr lhsSVS = lhs.getSourceVectorShape();
+    DictionaryAttr rhsSVS = rhs.getSourceVectorShape();
+    int32_t lhsPri = lhs.getSourceVectorShapePriority();
+    int32_t rhsPri = rhs.getSourceVectorShapePriority();
+
+    if (!lhsSVS && !rhsSVS) {
+      // Both absent: nothing to do.
+    } else if (!lhsSVS) {
+      joinedSourceVectorShape = rhsSVS;
+      joinedSourceVectorShapePriority = rhsPri;
+    } else if (!rhsSVS) {
+      joinedSourceVectorShape = lhsSVS;
+      joinedSourceVectorShapePriority = lhsPri;
+    } else if (lhsPri > rhsPri) {
+      joinedSourceVectorShape = lhsSVS;
+      joinedSourceVectorShapePriority = lhsPri;
+    } else if (rhsPri > lhsPri) {
+      joinedSourceVectorShape = rhsSVS;
+      joinedSourceVectorShapePriority = rhsPri;
+    } else {
+      // Equal priorities: identical values join cleanly, different go to top.
+      if (lhsSVS == rhsSVS) {
+        joinedSourceVectorShape = lhsSVS;
+        joinedSourceVectorShapePriority = lhsPri;
+      } else {
+        return IndexExprsLatticeStorage::top();
+      }
+    }
+  }
+
   SmallVector<NamedAttribute> priEntries;
   priEntries.reserve(resultPriorities.size());
   for (auto &[key, pri] : resultPriorities)
     priEntries.emplace_back(key, IntegerAttr::get(i32, pri));
 
-  return IndexExprsLatticeStorage(
+  IndexExprsLatticeStorage joined(
       DictionaryAttr::get(ctx, llvm::map_to_vector(result,
                                                    [](auto &&pair) {
                                                      return NamedAttribute(
@@ -1648,6 +1716,9 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
                                                          pair.second);
                                                    })),
       DictionaryAttr::get(ctx, priEntries), joinedVectorShape);
+  joined.sourceVectorShape = joinedSourceVectorShape;
+  joined.sourceVectorShapePriority = joinedSourceVectorShapePriority;
+  return joined;
 }
 
 wave::IndexExprsLatticeStorage
@@ -1689,9 +1760,12 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
         attr.getName(),
         IntegerAttr::get(i32, getPriorityForKey(attr.getName())));
 
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, filtered),
+  IndexExprsLatticeStorage result(DictionaryAttr::get(ctx, filtered),
                                   DictionaryAttr::get(ctx, filteredPriorities),
                                   filteredVectorShape);
+  result.sourceVectorShape = sourceVectorShape;
+  result.sourceVectorShapePriority = sourceVectorShapePriority;
+  return result;
 }
 
 wave::IndexExprsLatticeStorage
@@ -1711,8 +1785,11 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         }
         return NamedAttribute(attr.getName(), value);
       });
-  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated),
+  IndexExprsLatticeStorage result(DictionaryAttr::get(ctx, updated),
                                   getPriorities(), getVectorShape());
+  result.sourceVectorShape = sourceVectorShape;
+  result.sourceVectorShapePriority = sourceVectorShapePriority;
+  return result;
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
@@ -1733,6 +1810,9 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
     os << "}] " << getConcreteValue();
     if (DictionaryAttr shape = getVectorShape())
       os << " vectorShape: " << shape;
+    if (DictionaryAttr svs = getSourceVectorShape())
+      os << " sourceVectorShape(pri=" << getSourceVectorShapePriority()
+         << "): " << svs;
   }
 }
 

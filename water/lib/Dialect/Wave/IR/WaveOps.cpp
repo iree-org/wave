@@ -30,6 +30,9 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "wave-ops"
 
 using namespace mlir;
 using namespace wave;
@@ -1184,50 +1187,60 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
   return success();
 }
 
-// Heuristic to stop index expression propagation Currently, it stops
-// propagation of index expressions if they don't cover all non-unit dimension
-// of the "to" vector shape.
-// XXX: this is carried over lhs the python prototype and is not principled.
 bool wave::detail::shouldPropagateIndexExprs(
     const wave::IndexExprsLatticeStorage &from,
     const wave::IndexExprsLatticeStorage &to, Value toValue) {
-  if (from.isBottom() || from.isTop() || !from.getVectorShape() || to.isTop() ||
+  DictionaryAttr sourceVectorShapes = from.getSourceVectorShape();
+  if (from.isBottom() || from.isTop() || !sourceVectorShapes || to.isTop() ||
       to.isBottom())
     return true;
 
-  if (toValue.getDefiningOp<wave::MmaOp>())
+  if (toValue.getDefiningOp<wave::MmaOp>()) {
+    LLVM_DEBUG(LDBG() << "skipping update to mma");
     return false;
+  }
 
   auto toType = cast<WaveTensorType>(toValue.getType());
   ArrayRef<wave::WaveSymbolAttr> toShape = toType.getShape();
-  if (!llvm::all_of(toShape, [&](wave::WaveSymbolAttr symbol) {
-        return llvm::find_if(from.getVectorShape(), [&](NamedAttribute attr) {
-                 return attr.getName() == symbol.getName();
-               }) != from.getVectorShape().end();
+  if (from.getSourceVectorShapePriority() > 0 &&
+      !llvm::all_of(toShape, [&](wave::WaveSymbolAttr symbol) {
+        return sourceVectorShapes.get(symbol.getName()) != nullptr;
       })) {
+    LLVM_DEBUG(LDBG() << "skipping update to " << toValue
+                      << " because source vector shape does not include all "
+                         "target dimensions");
     return false;
   }
 
-  SmallVector<StringAttr> nonBatchDims = llvm::map_to_vector(
-      llvm::make_filter_range(
-          from.getVectorShape(),
-          [](const NamedAttribute &attr) {
-            return cast<IntegerAttr>(attr.getValue()).getValue().sgt(1);
-          }),
-      [](NamedAttribute attr) { return attr.getName(); });
+  SmallVector<StringAttr> nonBatchDims;
+  for (WaveSymbolAttr attr :
+       cast<wave::WaveTensorType>(toValue.getType()).getShape()) {
+    if (sourceVectorShapes.get(attr.getName()) != nullptr &&
+        llvm::cast<IntegerAttr>(sourceVectorShapes.get(attr.getName()))
+                .getValue()
+                .getSExtValue() > 1) {
+      nonBatchDims.push_back(
+          StringAttr::get(attr.getContext(), attr.getName()));
+    }
+  }
+
   SmallVector<StringAttr> toKeys = llvm::map_to_vector(
       to.getConcreteValue(),
       [](const NamedAttribute &attr) { return attr.getName(); });
+  auto isSubset = [](ArrayRef<StringAttr> subset,
+                     ArrayRef<StringAttr> superset) {
+    return llvm::all_of(subset, [&](StringAttr name) {
+      return llvm::is_contained(superset, name);
+    });
+  };
   if ((toKeys.size() < nonBatchDims.size() &&
-       !llvm::all_of(toKeys,
-                     [&](StringAttr key) {
-                       return llvm::is_contained(nonBatchDims, key);
-                     })) ||
-      !llvm::all_of(nonBatchDims, [&](StringAttr key) {
-        return llvm::is_contained(toKeys, key);
-      })) {
+       !isSubset(toKeys, nonBatchDims)) ||
+      !isSubset(nonBatchDims, toKeys)) {
+    LLVM_DEBUG(LDBG() << "skipping update to " << toValue
+                      << " because of the subset condition");
     return false;
   }
+
   return true;
 }
 
@@ -1285,6 +1298,12 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
+  wave::WaveSymbolAttr kSymbol =
+      cast<wave::WaveTensorType>(getLhs().getType()).getShape().back();
+  auto sourceVectorShape = getMmaVectorShape(
+      getLoc(), *mmaKind, mSymbol, nSymbol, kSymbol, /*kScaledSymbol=*/nullptr,
+      indexingSymbols.drop_back(2),
+      initObject.hardwareConstraint.getVectorShapes(), nullptr);
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "MMA result",
       wave::IndexExprsLatticeStorage(
@@ -1293,7 +1312,8 @@ LogicalResult MmaOp::initializeIndexExprsForward(
                             /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
                             /*batchSymbols=*/indexingSymbols.drop_back(2),
                             initObject.hardwareConstraint.getVectorShapes(),
-                            /*delayedErrorEmitter=*/nullptr)),
+                            /*delayedErrorEmitter=*/nullptr))
+          .withSourceVectorShape(sourceVectorShape, priority),
       "implied by MMA kind", emitError);
 }
 
@@ -1374,6 +1394,9 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                      std::distance(llvm::find(orderedMmas, getOperation()),
                                    orderedMmas.end()) -
                      1;
+  auto sourceVectorShape = getMmaVectorShape(
+      getLoc(), *mmaKind, mSymbol, nSymbol, kSymbol, /*kScaledSymbol=*/nullptr,
+      batchSymbols, initObject.hardwareConstraint.getVectorShapes(), nullptr);
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
@@ -1382,7 +1405,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                 /*nSymbol=*/nullptr, kSymbol,
                                 /*kScaleSymbol=*/nullptr, batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
-                                &delayedErrorEmitter)),
+                                &delayedErrorEmitter))
+              .withSourceVectorShape(sourceVectorShape, priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1393,7 +1417,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                 /*mSymbol=*/nullptr, nSymbol, kSymbol,
                                 /*kScaleSymbol=*/nullptr, batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
-                                &delayedErrorEmitter)),
+                                &delayedErrorEmitter))
+              .withSourceVectorShape(sourceVectorShape, priority),
           "implied by MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1406,7 +1431,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                 /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
                                 batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
-                                &delayedErrorEmitter)),
+                                &delayedErrorEmitter))
+              .withSourceVectorShape(sourceVectorShape, priority),
           "implied by MMA kind", emitError)))
     return failure();
   return success();
@@ -3078,9 +3104,13 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
           IntegerAttr::get(
               i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
     }
-    return IndexExprsLatticeStorage(lattice.getConcreteValue(),
+    IndexExprsLatticeStorage result(lattice.getConcreteValue(),
                                     DictionaryAttr::get(ctx, capped),
                                     lattice.getVectorShape());
+    return result.withSourceVectorShape(
+        lattice.getSourceVectorShape(),
+        std::min(lattice.getSourceVectorShapePriority(),
+                 IndexExprsLatticeStorage::kMmaPriority));
   };
   IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
   IndexExprsLatticeStorage rhs = forceMmaPriority(operandExprs[1]);
@@ -3965,7 +3995,9 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
 
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
                                   inputLattice.getPriorities(),
-                                  inputLattice.getVectorShape());
+                                  inputLattice.getVectorShape())
+      .withSourceVectorShape(inputLattice.getSourceVectorShape(),
+                             inputLattice.getSourceVectorShapePriority());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(

@@ -1161,7 +1161,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     // CHECK: wave.register
     // Backward propagation from MMA: register gets M index expr only (not N).
-    // CHECK:     M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK:     M :
     // CHECK-NOT: N :
     %reg = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
 

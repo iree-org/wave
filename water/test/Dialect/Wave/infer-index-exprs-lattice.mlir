@@ -1211,29 +1211,20 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-//
-// shouldPropagateIndexExprs tests
-//
-// shouldPropagateIndexExprs(from, to) (WaveInterfaces.cpp) returns false when
-// the destination lattice's concrete index keys omit some non-unit dimension
-// from the source lattice's vector shape; identityIndexExprsPropagate then
-// skips the join for that edge instead of driving the lattice to top.
-//
-
-// Forward skip: reciprocal A produces a result with vecShape {M=4, K=4}
-// (K is extra, absent from the 1D tensor shape [@M]). Reciprocal B's result
-// has only M in its concrete keys (since the tensor is 1D). Forward propagation
-// from A.result to B.result: from.vecShape non-unit = {M, K}, to keys = {M},
-// K is missing => shouldPropagateIndexExprs returns false => skip.
+// Forward skip: reciprocal A produces a result with sourceVectorShape {M=4}
+// (priority 1). Reciprocal B's result type is 2D [@M, @K], but the source
+// vector shape from A only covers M, not K. Since
+// from.getSourceVectorShapePriority() > 0 and toShape [@M, @K] has K not
+// covered by sourceVS {M=4}, shouldPropagateIndexExprs returns false => skip.
 // B.result keeps M = T0 * 32 from its override, never gets T0 * 99 from A.
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes { wave_test.disable_backward } {
   // CHECK-LABEL: @propagation_skip_forward
   func.func @propagation_skip_forward(
-    %a: !wave.tensor<[@M] of f16>
-  ) -> !wave.tensor<[@M] of f16> attributes {
+    %a: !wave.tensor<[@M, @K] of f16>
+  ) -> !wave.tensor<[@M, @K] of f16> attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4, K = 4}>
     ]
   } {
     // CHECK: wave.reciprocal
@@ -1241,9 +1232,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %t = wave.reciprocal %a {
       wave_test.override_result_index = [
         [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
-         {M = 4 : i64, K = 4 : i64}]
+         {M = 4 : i64}]
       ]
-    } : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M] of f16>
+    } : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     // CHECK: wave.reciprocal
     // CHECK-SAME: T0 * 32
     // CHECK-NOT: T0 * 99
@@ -1252,8 +1243,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
         [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>},
          {M = 4 : i64}]
       ]
-    } : (!wave.tensor<[@M] of f16>) -> !wave.tensor<[@M] of f16>
-    return %r : !wave.tensor<[@M] of f16>
+    } : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
+    return %r : !wave.tensor<[@M, @K] of f16>
   }
 }
 
@@ -1292,11 +1283,13 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-// Backward skip: reciprocal operands have M-only concrete keys with vecShape
-// {M=4, K=4}. The add result has both M and K as non-unit dims in its vecShape.
-// Backward propagation from the add result into each reciprocal operand:
-// from.vecShape non-unit = {M, K}, to keys = {M}, K missing => skip.
-// Reciprocals keep M = T0 * 32; the add result retains M = T0 * 99.
+// Backward skip: the add result has sourceVectorShape {M=4} (priority 1).
+// Backward propagation reaches the reciprocal result, which then attempts
+// backward propagation to the reciprocal operand. The operand type is [@M, @K],
+// but sourceVS from the add only covers M, not K. Since
+// from.getSourceVectorShapePriority() > 0 and toShape [@M, @K] has K not
+// covered by sourceVS {M=4}, shouldPropagateIndexExprs returns false => skip.
+// Reciprocal operand keeps M = T0 * 32; the add result retains M = T0 * 99.
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes {wave_test.disable_forward} {
   // CHECK-LABEL: @propagation_skip_backward_partial_operand
@@ -1319,8 +1312,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK-SAME: M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
     %result = wave.add %a_rp, %a_rp {
       wave_test.override_result_index = [
-        [{M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
-         {M = 4 : i64, K = 4 : i64}]
+        [1, {M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>},
+         {M = 4 : i64}]
       ]
     } : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16>
     return %result : !wave.tensor<[@M, @K] of f16>
@@ -2091,5 +2084,185 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
             !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
             !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// sourceVectorShape: two operands with the same vector shape {M=16, N=16}
+// and same priority should join cleanly.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @source_non_batch_dims_same_dims_same_priority
+  func.func @source_non_batch_dims_same_dims_same_priority(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Both operands have sourceVectorShape {M=16, N=16}, priority 3.
+    // Same priority, same shape -> should join cleanly without conflict.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [3, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}],
+      [3, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// sourceVectorShape: two operands with different source vector shapes and same
+// sourceVectorShapePriority should cause a conflict (top).
+// Per-key priorities differ so the joinable vector shapes merge successfully,
+// but sourceVectorShapePriority = max(per-key priorities) is the same for both.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @source_non_batch_dims_different_dims_same_priority(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Operand 0: sourceVectorShape {M=16, N=16}, sourceVectorShapePriority=5
+    // Operand 1: sourceVectorShape {M=16, N=0}, sourceVectorShapePriority=5
+    // Per-key vector shape join succeeds (higher priority wins for each key)
+    // but sourceVectorShapes differ at equal priority 5 -> conflict.
+    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-note @below {{original result lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [{M = 3 : i32, N = 5 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}],
+      [{M = 5 : i32, N = 3 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 0 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// sourceVectorShape: two operands with different source vector shapes but
+// different sourceVectorShapePriority should resolve by picking the higher one.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @source_non_batch_dims_different_dims_different_priority
+  func.func @source_non_batch_dims_different_dims_different_priority(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Operand 0: sourceVectorShape {M=16, N=16}, sourceVectorShapePriority=5
+    // Operand 1: sourceVectorShape {M=16, N=0}, sourceVectorShapePriority=3
+    // Per-key vector shape join succeeds (M=16 match, N: pri 5>3 -> lhs wins).
+    // sourceVectorShapePriority 5>3 -> no conflict, picks operand 0.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [{M = 5 : i32, N = 5 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}],
+      [{M = 3 : i32, N = 3 : i32}, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 0 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// sourceVectorShape: one operand has a source vector shape, the other doesn't
+// (no vectorShape). Should propagate the one that has it.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @source_non_batch_dims_one_present_one_absent
+  func.func @source_non_batch_dims_one_present_one_absent(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Operand 0 has no vectorShape -> no sourceVectorShape.
+    // Operand 1 has vectorShape {M=16, N=16} -> sourceVectorShape set.
+    // Should join cleanly, picking operand 1's sourceVectorShape.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [1, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }],
+      [1, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// sourceVectorShape: two operands with identical vector shapes containing only
+// batch dims (values <= 1) should join cleanly.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @source_non_batch_dims_all_batch
+  func.func @source_non_batch_dims_all_batch(
+    %a: !wave.tensor<[@M, @N] of f32>,
+    %b: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // Both operands have sourceVectorShape {M=0, N=0} with same priority.
+    // Identical shapes -> should join cleanly.
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    %result = wave.add %a, %b {wave_test.override_operand_index = [
+      [3, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 0 : i64, N = 0 : i64}],
+      [3, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+      }, {M = 0 : i64, N = 0 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %result : !wave.tensor<[@M, @N] of f32>
   }
 }

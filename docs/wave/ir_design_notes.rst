@@ -161,17 +161,25 @@ causing propagation conflicts. Furthermore, MMA operations have additional
 priority between themselves following the walk order in IR post-order traversal,
 earlier MMA operations have higher priority.
 
+**Both** implement a heuristic that avoids propagating index expressions based
+on the vector shape of the *operation from which the index expression originally
+propagates*. In MLIR, this requires two additional fields in the lattice object.
+Propagation is skipped if that source vector shape doesn't cover all symbolic
+dimensions of the value the lattice is about to be propagated to. It is also
+skipped if any of the symbols already present in the index expression for the
+target value (which is normally initialized from the target's value shape)
+corresponds to a unit dimension in the source vector shape. Note that a
+dimension may be missing from the source vector shape, though it would require
+it to be somehow present in the index expression to start with. This heuristic
+is poorly principled and undocumented. It may have been intended to (1) avoid
+propagating expressions outside of loops since the loop induction variable would
+be missing and (2) prioritize index expressions that affect more dimensions. It
+is unfortunately needed to avoid conflicts in attention kernels. A more robust
+solution would require comprehensive re-layout insertion.
+
 This complexity is entirely due to backwards compatibility with Python and
 should be entirely reworked towards a sound and consistent layout propagation
 dataflow analysis.
-
-**Both** implement a heuristic that avoids propagating index expressions if they
-don't cover non-unit dimensions of the vector shape, all such dimensions if the
-rank of the index expression dictionary is larger, or a subset thereof if it is
-smaller (but the dictionary must not contain other expressions). This heuristic
-is based on some notion of "completeness" of the index expressions, but is
-practically needed to avoid conflicts in attention kernels. A more robust
-solution would require comprehensive re-layout insertion.
 
 IndexMapping
 ------------

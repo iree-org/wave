@@ -617,10 +617,21 @@ public:
 
 // Lattice for propagating index expressions across wave dialect operations.
 // In addition to the bottom and top states, it can represent a concrete state
-// manifested as a dictionary attribute mapping symbol names to index mappings.
-// The JOIN function is defined similarly to other lattices with special
-// handling for combining thread-dependent and thread-independent index
-// expressions.
+// including:
+//   - a dictionary attribute mapping symbol names to index mappings;
+//   - a dictionary attribute mapping symbol names to vector shapes;
+//   - a priority for each symbol;
+//   - a separate, "source" vector shape and priority referring to the operation
+//     where the lattice initially originated.
+// Source vector shape is ignored for the lowest-priority entries, typically
+// default-constructed, since they don't originate from any "meaningful"
+// operation such as Mma or Write.
+//
+// XXX: the latter is required for compatibility with the python prototype and
+// its propagation heuristic, it must be revised towards a more principled
+// approach.
+// TODO: consider using a single dictionary attribute with one entry per symbol
+// rather than separate ones for the three fields.
 class IndexExprsLatticeStorage {
 public:
   // Priorities for specific operations that may be used.
@@ -667,6 +678,19 @@ public:
   // Returns the vector shape stored in the lattice instance, or null if the
   // lattice instance is a top or a bottom or has no vector shape set.
   mlir::DictionaryAttr getVectorShape() const;
+
+  // Returns the source vector shape stored in this lattice, or null if unset
+  // or lattice is top/bottom. This is the vector shape from the originating
+  // operation, propagated independently from the per-key-joined `vectorShape`.
+  mlir::DictionaryAttr getSourceVectorShape() const;
+
+  // Returns the priority associated with the source vector shape.
+  int32_t getSourceVectorShapePriority() const;
+
+  // Return a copy of this lattice value with the given source vector shape and
+  // priority, leaving all other fields unchanged.
+  IndexExprsLatticeStorage withSourceVectorShape(mlir::DictionaryAttr shape,
+                                                 int32_t priority) const;
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -731,6 +755,16 @@ private:
   // result in top.
   mlir::DictionaryAttr vectorShape;
 
+  // The vector shape from the originating operation, propagated as a unit with
+  // its own priority independently from the per-key-joined `vectorShape` field.
+  // During join, the higher-priority value wins. If priorities are equal, two
+  // different values cause the lattice to reach top while two identical values
+  // join cleanly.
+  mlir::DictionaryAttr sourceVectorShape;
+
+  // Priority associated with `sourceVectorShape`.
+  int32_t sourceVectorShapePriority = 0;
+
   // State flags.
   constexpr static unsigned kUninitializedState = 0;
   constexpr static unsigned kSpecificTypeState = 1;
@@ -759,15 +793,21 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             wave::EmitErrorFn emitError);
 
 // Heuristic to stop index expression propagation. It stops
-// propagation of index expressions if any of the following conditions is met:
-//   (1) the propagation would happen to the result of the MMA op;
-//   (2) any of the symbols in the shape of the "to" _value_ are not present in
-//   the "from" vector shape; (3) there are dimensions in the "to" index
-//   expression don't correspond to non-unit entires in the "from" vector shape
-//   (when there are less "to" dimensions than entries in the "from" vector
-//   shape); (4) there are non-unit entries in the "vector" shape that don't
-//   correspond to a "to" index expression (when there are less entires in the
-//   "from" vector shape).
+// propagation of index expressions based
+// on the vector shape of the operation from which the index expression
+// originally propagates, stored in `sourceVectorShape` field of the lattice.
+// Propagation is skipped if:
+//
+//   1. Propagating towards an Mma operation.
+//   2. The source vector shape doesn't cover all symbolic dimensions of the
+//      value the lattice is about to be propagated to.
+//   3. Any of the symbols already present in the index expression for the
+//      target value (which is normally initialized from the target's value
+//      shape) corresponds to a unit dimension in the source vector shape. Note
+//      that a dimension may be missing from the source vector shape, though it
+//      would require it to be somehow present in the index expression to start
+//      with.
+//
 // XXX: conditions 2-4 are carried over from the python prototype and are not
 // principled.
 //
