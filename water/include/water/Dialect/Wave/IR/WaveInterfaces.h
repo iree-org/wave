@@ -792,21 +792,21 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
 
-// Heuristic to stop index expression propagation. It stops
-// propagation of index expressions based
-// on the vector shape of the operation from which the index expression
-// originally propagates, stored in `sourceVectorShape` field of the lattice.
-// Propagation is skipped if:
+// Heuristic to stop index expression propagation. It stops propagation of index
+// expressions based on the vector shape of the operation from which the index
+// expression originally propagates, stored in `sourceVectorShape` field of the
+// lattice. Propagation is skipped if:
 //
 //   1. Propagating towards an Mma operation.
 //   2. The source vector shape doesn't cover all symbolic dimensions of the
 //      value the lattice is about to be propagated to.
 //   3. Any of the symbols already present in the index expression for the
 //      target value (which is normally initialized from the target's value
-//      shape) corresponds to a unit dimension in the source vector shape. Note
-//      that a dimension may be missing from the source vector shape, though it
-//      would require it to be somehow present in the index expression to start
-//      with.
+//      shape) corresponds to a unit dimension in the source vector shape IF the
+//      rank is less than the number of such non-unit dimensions.
+//   4. Any of the non-unit dimensions in the source vector shape is not already
+//      included in the target value's index expression IF the rank is greater
+//      than or equal to the number of such dimensions.
 //
 // XXX: conditions 2-4 are carried over from the python prototype and are not
 // principled.

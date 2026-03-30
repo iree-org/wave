@@ -168,14 +168,15 @@ Propagation is skipped if that source vector shape doesn't cover all symbolic
 dimensions of the value the lattice is about to be propagated to. It is also
 skipped if any of the symbols already present in the index expression for the
 target value (which is normally initialized from the target's value shape)
-corresponds to a unit dimension in the source vector shape. Note that a
-dimension may be missing from the source vector shape, though it would require
-it to be somehow present in the index expression to start with. This heuristic
-is poorly principled and undocumented. It may have been intended to (1) avoid
-propagating expressions outside of loops since the loop induction variable would
-be missing and (2) prioritize index expressions that affect more dimensions. It
-is unfortunately needed to avoid conflicts in attention kernels. A more robust
-solution would require comprehensive re-layout insertion.
+corresponds to a unit dimension in the source vector shape if the rank is less
+than the number of such non-unit dimensions. Otherwise if any of the non-unit
+dimension in the source vector shape is not already included in the target
+value's index expression. This heuristic is poorly principled and undocumented.
+It may have been intended to (1) avoid propagating expressions outside of loops
+since the loop induction variable would be missing and (2) prioritize index
+expressions that affect more dimensions. It is unfortunately needed to avoid
+conflicts in attention kernels. A more robust solution would require
+comprehensive re-layout insertion.
 
 This complexity is entirely due to backwards compatibility with Python and
 should be entirely reworked towards a sound and consistent layout propagation
