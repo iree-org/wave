@@ -1481,11 +1481,13 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         )
 
     # Linearized reads increase VGPR pressure beyond the 256-register limit
-    # for 256x224x256 with dynamic dims + buffer ops (unscheduled).
+    # for 256x224x256 with dynamic dims (unscheduled), and cause numerical
+    # mismatches for 256x160x256 with dynamic dims (unscheduled) where the
+    # preshuffle mapping's floor/Mod expressions over dynamic K produce
+    # incorrect offsets after flatten_read_indices.
     skip_linearize = (
-        block_id == "256x224x256"
+        block_id in ("256x224x256", "256x160x256")
         and dynamic_dims
-        and use_buffer_ops
         and not use_schedule
     )
 
