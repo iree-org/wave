@@ -1134,12 +1134,15 @@ LogicalResult writeAssembly(ProgramOp program, const PhysicalMapping &mapping,
   }
 
   if (overflow) {
-    return program.emitError()
-           << "kernel '" << getKernelName(program)
-           << "' exceeds hardware register limit: " << detail.str()
-           << ". Register spilling is not supported; reduce register pressure "
-              "by optimizing the kernel (e.g., smaller tile sizes, fewer "
-              "unrolled iterations).";
+    InFlightDiagnostic diag =
+        program.emitError()
+        << "kernel '" << getKernelName(program)
+        << "' exceeds hardware register limit: " << detail.str();
+    diag.attachNote(program.getLoc())
+        << "Register spilling is not supported; reduce register pressure "
+           "by optimizing the kernel (e.g., smaller tile sizes, fewer "
+           "unrolled iterations).";
+    return diag;
   }
 
   for (const auto &line : lines) {

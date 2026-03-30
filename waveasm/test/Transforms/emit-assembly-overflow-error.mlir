@@ -7,10 +7,7 @@
 // This kernel has physical register indices beyond the gfx1250 target's
 // 256-VGPR limit (pvreg<260> is v260, which doesn't exist on gfx1250).
 
-// CHECK: error: kernel 'emit_overflow_test' exceeds hardware register limit
-// CHECK-SAME: VGPRs:
-// CHECK-SAME: used
-// CHECK-SAME: 256 limit
+// CHECK: error: kernel 'emit_overflow_test' exceeds hardware register limit: VGPRs: {{[0-9]+}} used, 256 limit{{$}}
 // CHECK-NOT: register index is out of range
 
 waveasm.program @emit_overflow_test

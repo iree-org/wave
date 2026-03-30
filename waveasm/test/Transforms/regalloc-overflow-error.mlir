@@ -7,8 +7,7 @@
 // This kernel deliberately creates many concurrent live vreg<4,4> values
 // (10 x 4 = 40 VGPRs minimum) against a 32-VGPR budget.
 
-// CHECK: error: Failed to allocate VGPR: kernel requires
-// CHECK-SAME: but only 32 are available
+// CHECK: error: Failed to allocate VGPR: kernel requires {{[0-9]+}} but only 32 are available{{$}}
 // CHECK-NOT: register index is out of range
 // CHECK-NOT: Failed to allocate
 
