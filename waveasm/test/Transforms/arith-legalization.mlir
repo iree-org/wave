@@ -157,9 +157,9 @@ waveasm.program @test_add_i64_salu
   // CHECK-DAG: [[A_HI:%.*]] = waveasm.precolored.sreg 1 : !waveasm.sreg
   // CHECK-DAG: [[B_LO:%.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
   // CHECK-DAG: [[B_HI:%.*]] = waveasm.precolored.sreg 3 : !waveasm.sreg
-  // Carry chain: s_add_u32 (lo) then s_addc_u32 (hi).
-  // CHECK: [[LO:%.*]], %{{.*}} = waveasm.s_add_u32 [[A_LO]], [[B_LO]]
-  // CHECK-NEXT: [[HI:%.*]], %{{.*}} = waveasm.s_addc_u32 [[A_HI]], [[B_HI]]
+  // Carry chain: s_add_u32 (lo) feeds SCC into s_addc_u32 (hi).
+  // CHECK: [[LO:%.*]], [[SCC:%.*]] = waveasm.s_add_u32 [[A_LO]], [[B_LO]]
+  // CHECK-NEXT: [[HI:%.*]], %{{.*}} = waveasm.s_addc_u32 [[A_HI]], [[B_HI]], [[SCC]]
   // CHECK: waveasm.pack [[LO]], [[HI]]
   %add = waveasm.arith.add %a, %b : (!waveasm.sreg<2, 2>, !waveasm.sreg<2, 2>) -> !waveasm.sreg<2, 2>
 

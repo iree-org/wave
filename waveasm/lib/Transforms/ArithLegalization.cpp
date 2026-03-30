@@ -186,7 +186,8 @@ static void legalizeAddI64(Value lhs, Value rhs, ArithAddOp op,
     auto addLo = S_ADD_U32::create(builder, loc, sregTy, sregTy, lhsLo, rhsLo);
     loResult = addLo.getDst();
     // s_addc_u32: hi + hi + carry in from SCC.
-    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sregTy, lhsHi, rhsHi);
+    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sregTy, lhsHi, rhsHi,
+                                    addLo.getScc());
     hiResult = addHi.getDst();
   }
 

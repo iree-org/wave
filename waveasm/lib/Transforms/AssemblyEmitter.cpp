@@ -858,21 +858,28 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           })
 
       // SALU arithmetic ops that set SCC: emit dst and operands, skip scc.
-      .Case<S_ADD_U32, S_ADDC_U32, S_ADD_I32, S_SUB_U32, S_SUB_I32>(
+      .Case<S_ADD_U32, S_ADD_I32, S_SUB_U32, S_SUB_I32>(
           [&](auto addOp) -> std::optional<std::string> {
             llvm::StringRef opName = addOp->getName().getStringRef();
             llvm::StringRef mnemonic = opName;
-            if (opName.starts_with("waveasm.")) {
+            if (opName.starts_with("waveasm."))
               mnemonic = opName.drop_front(8);
-            }
             llvm::SmallVector<std::string> operands;
-            // Only emit the first result (dst), not the second (scc)
+            // Only emit the first result (dst), not the second (scc).
             operands.push_back(resolveValue(addOp.getDst()));
-            for (Value operand : addOp->getOperands()) {
+            for (Value operand : addOp->getOperands())
               operands.push_back(resolveValue(operand));
-            }
             return formatter.format(mnemonic, operands);
           })
+
+      // S_ADDC_U32: emit dst, src0, src1. Skip scc result and scc_in operand.
+      .Case<S_ADDC_U32>([&](S_ADDC_U32 addcOp) -> std::optional<std::string> {
+        llvm::SmallVector<std::string> operands;
+        operands.push_back(resolveValue(addcOp.getDst()));
+        operands.push_back(resolveValue(addcOp.getSrc0()));
+        operands.push_back(resolveValue(addcOp.getSrc1()));
+        return formatter.format("s_addc_u32", operands);
+      })
 
       // V_CMP_* operations: write to VCC implicitly, need explicit vcc in asm.
       .Case<V_CMP_EQ_U32, V_CMP_NE_U32, V_CMP_LT_U32, V_CMP_LE_U32,

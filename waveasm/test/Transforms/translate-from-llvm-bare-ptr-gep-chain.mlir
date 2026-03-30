@@ -13,8 +13,8 @@
 // CHECK: waveasm.arith.readfirstlane
 // CHECK: [[OFF_LO:%.*]] = waveasm.arith.trunc
 // CHECK: [[OFF_HI:%.*]] = waveasm.extract %{{.*}}[1]
-// CHECK: waveasm.s_add_u32 %{{.*}}, [[OFF_LO]]
-// CHECK: waveasm.s_addc_u32 %{{.*}}, [[OFF_HI]]
+// CHECK: %{{.*}}, [[SCC:%.*]] = waveasm.s_add_u32 %{{.*}}, [[OFF_LO]]
+// CHECK: waveasm.s_addc_u32 %{{.*}}, [[OFF_HI]], [[SCC]]
 // CHECK: waveasm.pack
 
 // Buffer GEP voffset starts at 0: tid (truncated) + col_bytes (truncated).

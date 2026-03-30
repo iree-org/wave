@@ -99,18 +99,25 @@ class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Binary with carry/SCC: dst, scc = op(src0, src1)
-// s_add_u32 and s_addc_u32 set SCC (carry flag) as a side effect.
+// s_add_u32 sets SCC (carry flag) as a side effect.
 // We model SCC as an explicit sreg result so the verifier can prevent
 // reordering ops that corrupt the carry chain.
-// TODO: The scc result should be fed as an explicit operand to s_addc_u32
-// when used in an add-with-carry chain (s_add_u32 → s_addc_u32), creating
-// a true SSA dependency. Currently the chain is only enforced by emission
-// ordering, not by the SSA graph.
 class SALUBinaryWithCarryOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
   let results = (outs WaveASM_AnySGPR:$dst, WaveASM_AnySGPR:$scc);
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst) `,` type($scc)";
+}
+
+// SALU Binary with carry in and carry out: dst, scc = op(src0, src1, scc_in)
+// s_addc_u32 reads SCC as carry-in and sets SCC as carry-out.
+// The scc_in operand creates an explicit SSA dependency on the preceding
+// s_add_u32, ensuring the carry chain cannot be reordered.
+class SALUBinaryWithCarryInOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp], traits)> {
+  let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1, WaveASM_AnySGPR:$scc_in);
+  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_AnySGPR:$scc);
+  let assemblyFormat = "$src0 `,` $src1 `,` $scc_in attr-dict `:` type($src0) `,` type($src1) `,` type($scc_in) `->` type($dst) `,` type($scc)";
 }
 
 // SALU Compare: returns condition in SCC.
@@ -724,7 +731,8 @@ def WaveASM_S_SEXT_I32_I16 : SALUUnaryOp<"s_sext_i32_i16">;
 
 // Arithmetic with carry (sets SCC)
 def WaveASM_S_ADD_U32 : SALUBinaryWithCarryOp<"s_add_u32">;
-def WaveASM_S_ADDC_U32 : SALUBinaryWithCarryOp<"s_addc_u32">;
+// Add with carry-in: reads SCC from a preceding s_add_u32.
+def WaveASM_S_ADDC_U32 : SALUBinaryWithCarryInOp<"s_addc_u32">;
 def WaveASM_S_ADD_I32 : SALUBinaryWithCarryOp<"s_add_i32">;
 def WaveASM_S_SUB_U32 : SALUBinaryWithCarryOp<"s_sub_u32">;
 def WaveASM_S_SUB_I32 : SALUBinaryWithCarryOp<"s_sub_i32">;
