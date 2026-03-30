@@ -1775,88 +1775,6 @@ def test_gemm_pipelined_cpp_backend(
 
 
 # =============================================================================
-# Test: Compare C++ vs Python Backend
-# =============================================================================
-
-
-@pytest.mark.parametrize("shape", [(16, 16)])
-def test_compare_backends_copy_kernel(shape, compiler):
-    """Compare C++ and Python backend assembly output for copy kernel."""
-    skip_if_no_wave_lang()
-
-    import wave_lang.kernel.lang as tkl
-    import wave_lang.kernel.wave as tkw
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
-    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-
-    M = tkl.sym.M
-    N = tkl.sym.N
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    constraints = [
-        tkw.HardwareConstraint(
-            threads_per_wave=64,
-            vector_shapes={M: 16, N: 16},
-        ),
-        tkw.WorkgroupConstraint(M, 16, 0),
-        tkw.WorkgroupConstraint(N, 16, 1),
-        tkw.WaveConstraint(M, 16),
-        tkw.WaveConstraint(N, 16),
-    ]
-
-    @tkw.wave(constraints)
-    def copy_kernel(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-    ):
-        res = tkw.read(a)
-        tkw.write(res, b)
-
-    options = WaveCompileOptions(
-        subs={
-            M: shape[0],
-            N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-    )
-    options = set_default_run_config(options)
-
-    # Capture MLIR
-    mlir_text = capture_wave_mlir(options, copy_kernel)
-
-    # Compare backends
-    cpp_asm, python_asm = compare_with_python_backend(
-        mlir_text, target=get_target_arch()
-    )
-
-    # Basic sanity checks
-    assert "failed" not in cpp_asm.lower() or "failed" not in python_asm.lower()
-
-    # Count key instructions
-    def count_instructions(asm):
-        if "failed" in asm.lower():
-            return {}
-        lines = asm.split("\n")
-        return {
-            "buffer_load": sum(1 for l in lines if "buffer_load" in l),
-            "buffer_store": sum(1 for l in lines if "buffer_store" in l),
-            "s_waitcnt": sum(1 for l in lines if "s_waitcnt" in l),
-        }
-
-    cpp_stats = count_instructions(cpp_asm)
-    python_stats = count_instructions(python_asm)
-
-    # Both should have similar instruction counts
-    if cpp_stats and python_stats:
-        # Allow some variance but both should have the same load/store counts
-        assert cpp_stats["buffer_load"] > 0 or python_stats["buffer_load"] > 0
-
-
-# =============================================================================
 # Test: Split-K MXFP4 GEMM with bf16 atomic add (buffer_atomic_pk_add_bf16)
 # =============================================================================
 
@@ -1869,7 +1787,7 @@ def test_compare_backends_copy_kernel(shape, compiler):
     ],
 )
 def test_splitk_mxfp4_bf16_atomic_cpp_backend(
-    shape, num_splits, compiler, backend, dump_asm, tmp_path
+    shape, num_splits, compiler, dump_asm, tmp_path
 ):
     """End-to-end test for split-K MXFP4 GEMM with bf16 atomic accumulation.
 
@@ -1880,9 +1798,6 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
     """
     if not is_cdna4():
         pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
-
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -2002,9 +1917,6 @@ def test_splitk_mxfp4_bf16_asm_emission(
     if not is_cdna4():
         pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
 
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
-
     import wave_lang.kernel.lang as tkl
     from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
     from wave_lang.kernel.wave.compile import WaveCompileOptions
@@ -2087,7 +1999,7 @@ def test_splitk_mxfp4_bf16_asm_emission(
     ],
 )
 def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
-    shape, num_splits, compiler, backend, dump_asm, tmp_path
+    shape, num_splits, compiler, dump_asm, tmp_path
 ):
     """End-to-end test for split-K MXFP4 GEMM with preshuffled E8M0 scales.
 
@@ -2106,9 +2018,6 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     """
     if not is_cdna4():
         pytest.skip("MXFP4 with preshuffled scales requires gfx950+ (CDNA4)")
-
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import torch
     from torch.testing import assert_close
@@ -2222,7 +2131,7 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     ],
 )
 def test_splitk_mxfp4_f32_atomic_cpp_backend(
-    shape, num_splits, compiler, backend, dump_asm, tmp_path
+    shape, num_splits, compiler, dump_asm, tmp_path
 ):
     """End-to-end test for split-K MXFP4 GEMM with f32 atomic accumulation.
 
@@ -2231,9 +2140,6 @@ def test_splitk_mxfp4_f32_atomic_cpp_backend(
     """
     if not is_cdna4():
         pytest.skip("Split-K MXFP4 requires gfx950+ (CDNA4)")
-
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
 
     import math
 
@@ -2413,16 +2319,13 @@ def test_splitk_mxfp4_f32_atomic_cpp_backend(
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
 def test_bf16_gemm_cpp_backend(
-    shape, block_k, config, use_global_to_shared, compiler, backend, dump_asm, tmp_path
+    shape, block_k, config, use_global_to_shared, compiler, dump_asm, tmp_path
 ):
     """End-to-end test for GEMM with bf16 output (no split-K) using C++ ASM backend.
 
     Computes in f32 via MFMA, casts to bf16, then writes to global memory.
     Tests the arith.truncf (f32->bf16) + buffer_store path without atomics.
     """
-    skip_if_no_gpu()
-    skip_if_no_wave_lang()
-
     import torch
     from torch.testing import assert_close
 
@@ -2512,21 +2415,16 @@ def test_bf16_gemm_cpp_backend(
     g2s_str = "g2s" if use_global_to_shared else "no_g2s"
     test_id = f"bf16_gemm_{m}x{n}x{k}_bk{block_k}_{block_m}x{block_n}_{g2s_str}"
 
-    cpp_result = None
-    if backend in ("cpp", "both"):
-        cpp_result = compiler.compile_full(
-            kernel_info.mlir_text, kernel_info.workgroup_size
-        )
-        if not cpp_result.success:
-            pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
+    cpp_result = compiler.compile_full(
+        kernel_info.mlir_text, kernel_info.workgroup_size
+    )
+    if not cpp_result.success:
+        pytest.fail(f"C++ compilation failed: {cpp_result.error_message}")
 
     if dump_asm:
         (tmp_path / f"{test_id}_mlir.txt").write_text(kernel_info.mlir_text)
-        if cpp_result and cpp_result.asm_text:
+        if cpp_result.asm_text:
             (tmp_path / f"{test_id}_cpp.s").write_text(cpp_result.asm_text)
-
-    if cpp_result is None:
-        pytest.fail("No backend compiled successfully")
 
     binary_path = cpp_result.binary_path
     kernel_name = cpp_result.get_kernel_name() or kernel_info.kernel_name
