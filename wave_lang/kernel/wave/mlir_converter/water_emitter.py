@@ -458,22 +458,34 @@ def _attach_attributes(
         else:
             # MMA needs exactly 4 vector_shape entries: lhs, rhs, acc, result.
             vector_shape_entries = []
-            if lhs_vector_shapes := getattr(node.lhs, "vector_shapes", None):
-                vector_shape_entries.append(_convert_vector_shapes(lhs_vector_shapes))
-            if rhs_vector_shapes := getattr(node.rhs, "vector_shapes", None):
-                assert len(vector_shape_entries) == 1, "MMA missing LHS vector shapes."
-                vector_shape_entries.append(_convert_vector_shapes(rhs_vector_shapes))
-            if acc_vector_shapes := getattr(node.acc, "vector_shapes", None):
-                assert len(vector_shape_entries) == 2, f"MMA missing RHS vector shapes."
-                vector_shape_entries.append(_convert_vector_shapes(acc_vector_shapes))
-            if result_vector_shapes := getattr(node, "vector_shapes", None):
-                assert len(vector_shape_entries) == 3, "MMA missing ACC vector shapes."
-                vector_shape_entries.append(
-                    _convert_vector_shapes(result_vector_shapes)
+            lhs_vector_shapes = getattr(node.lhs, "vector_shapes", None)
+            rhs_vector_shapes = getattr(node.rhs, "vector_shapes", None)
+            acc_vector_shapes = getattr(node.acc, "vector_shapes", None)
+            result_vector_shapes = getattr(node, "vector_shapes", None)
+            some_vector_shapes = any(
+                [
+                    lhs_vector_shapes,
+                    rhs_vector_shapes,
+                    acc_vector_shapes,
+                    result_vector_shapes,
+                ]
+            )
+            if some_vector_shapes:
+                assert lhs_vector_shapes is not None, "MMA missing LHS vector shapes."
+                assert rhs_vector_shapes is not None, "MMA missing RHS vector shapes."
+                assert acc_vector_shapes is not None, "MMA missing ACC vector shapes."
+                assert (
+                    result_vector_shapes is not None
+                ), "MMA missing result vector shapes."
+                vector_shape_entries.extend(
+                    _convert_vector_shapes(x)
+                    for x in [
+                        lhs_vector_shapes,
+                        rhs_vector_shapes,
+                        acc_vector_shapes,
+                        result_vector_shapes,
+                    ]
                 )
-            assert (
-                len(vector_shape_entries) == 4 or len(vector_shape_entries) == 0
-            ), f"MMA needs exactly 4 vector_shape entries or none, got {len(vector_shape_entries)}, missing result shapes?."
             op.attributes["vector_shape"] = ir.ArrayAttr.get(vector_shape_entries)
 
     if water_id := getattr(node.fx_node, "_water_id", None):
