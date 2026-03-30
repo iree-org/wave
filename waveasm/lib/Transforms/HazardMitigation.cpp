@@ -80,11 +80,8 @@ bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 /// Check if an operation does NOT emit an assembly instruction.
 /// These ops are lowered to register aliases or eliminated entirely,
 /// so they don't create real inter-instruction delays.
-// TODO: replace this with an OpTrait or OpInterface (e.g. NonEmitting)
-// so new non-emitting ops are covered automatically.
 bool isNonEmittingOp(Operation *op) {
-  return isa<ExtractOp, PackOp, PrecoloredSRegOp, PrecoloredVRegOp, ConstantOp,
-             DCEProtectOp, YieldOp>(op);
+  return op->hasTrait<OpTrait::NonEmittingOp>();
 }
 
 /// Walk backwards from position `start` in the flattened op list, skipping

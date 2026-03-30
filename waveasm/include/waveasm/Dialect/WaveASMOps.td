@@ -305,7 +305,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
 // Precolored Register Definitions (ABI Registers)
 //===----------------------------------------------------------------------===//
 
-def WaveASM_PrecoloredVRegOp : WAVEASMOp<"precolored.vreg", [Pure]> {
+def WaveASM_PrecoloredVRegOp : WAVEASMOp<"precolored.vreg", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Define a precolored physical VGPR";
   let description = [{
     Defines a VGPR at a specific physical register index.
@@ -323,7 +323,7 @@ def WaveASM_PrecoloredVRegOp : WAVEASMOp<"precolored.vreg", [Pure]> {
   let assemblyFormat = "$index (`,` $size^)? attr-dict `:` type($result)";
 }
 
-def WaveASM_PrecoloredSRegOp : WAVEASMOp<"precolored.sreg", [Pure]> {
+def WaveASM_PrecoloredSRegOp : WAVEASMOp<"precolored.sreg", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Define a precolored physical SGPR";
   let description = [{
     Defines an SGPR at a specific physical register index.
@@ -341,7 +341,7 @@ def WaveASM_PrecoloredSRegOp : WAVEASMOp<"precolored.sreg", [Pure]> {
   let assemblyFormat = "$index (`,` $size^)? attr-dict `:` type($result)";
 }
 
-def WaveASM_PrecoloredARegOp : WAVEASMOp<"precolored.areg", [Pure]> {
+def WaveASM_PrecoloredARegOp : WAVEASMOp<"precolored.areg", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Define a precolored physical AGPR";
   let description = [{
     Defines an AGPR at a specific physical register index.
@@ -356,7 +356,7 @@ def WaveASM_PrecoloredARegOp : WAVEASMOp<"precolored.areg", [Pure]> {
 // Immediate Constant
 //===----------------------------------------------------------------------===//
 
-def WaveASM_ConstantOp : WAVEASMOp<"constant", [Pure]> {
+def WaveASM_ConstantOp : WAVEASMOp<"constant", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Create an immediate constant";
   let description = [{
     Creates an immediate constant value.
@@ -377,7 +377,7 @@ def WaveASM_ConstantOp : WAVEASMOp<"constant", [Pure]> {
 // Vector Pack/Extract Operations
 //===----------------------------------------------------------------------===//
 
-def WaveASM_PackOp : WAVEASMOp<"pack", [Pure]> {
+def WaveASM_PackOp : WAVEASMOp<"pack", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Pack multiple registers into a wider register";
   let description = [{
     Packs multiple registers into a wider register of the same register
@@ -395,7 +395,7 @@ def WaveASM_PackOp : WAVEASMOp<"pack", [Pure]> {
   let assemblyFormat = "$elements attr-dict `:` functional-type($elements, $result)";
 }
 
-def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
+def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure, WaveASM_NonEmittingOp]> {
   let summary = "Extract sub-register(s) from a wider register";
   let description = [{
     Extracts element(s) from a wider register at a given offset.
@@ -413,6 +413,26 @@ def WaveASM_ExtractOp : WAVEASMOp<"extract", [Pure]> {
   let arguments = (ins WaveASM_AnyReg:$vector, I64Attr:$index);
   let results = (outs WaveASM_AnyReg:$result);
   let assemblyFormat = "$vector `[` $index `]` attr-dict `:` type($vector) `->` type($result)";
+  let hasVerifier = 1;
+}
+
+def WaveASM_InsertOp : WAVEASMOp<"insert", [Pure, WaveASM_NonEmittingOp]> {
+  let summary = "Replace a sub-register in a wider register";
+  let description = [{
+    Returns a copy of the source register with a single slot replaced.
+    This is the dual of ExtractOp. Non-emitting: the register allocator
+    assigns the result to the same contiguous block as the source and
+    emits a single move for the replaced slot if needed.
+
+    Example:
+    ```mlir
+    %new_srd = waveasm.insert %word into %srd[2] : !waveasm.sreg, !waveasm.sreg<4, 4> -> !waveasm.sreg<4, 4>
+    ```
+  }];
+
+  let arguments = (ins WaveASM_AnyReg:$value, WaveASM_AnyReg:$vector, I64Attr:$index);
+  let results = (outs WaveASM_AnyReg:$result);
+  let assemblyFormat = "$value `into` $vector `[` $index `]` attr-dict `:` type($value) `,` type($vector) `->` type($result)";
   let hasVerifier = 1;
 }
 
@@ -1148,7 +1168,7 @@ def WaveASM_S_SETPRIO : WaveASM_CountedScalarOp<"s_setprio"> {
 // Misc/Utility Operations
 //===----------------------------------------------------------------------===//
 
-def WaveASM_DCEProtectOp : WAVEASMOp<"dce_protect"> {
+def WaveASM_DCEProtectOp : WAVEASMOp<"dce_protect", [WaveASM_NonEmittingOp]> {
   let summary = "Prevent DCE of a value written to a precolored register";
   let description = [{
     Dummy side-effecting op that keeps its operand alive through DCE.
@@ -1158,7 +1178,7 @@ def WaveASM_DCEProtectOp : WAVEASMOp<"dce_protect"> {
     Placing dce_protect on the result prevents this.  The op emits nothing
     in the final assembly.
   }];
-  let arguments = (ins WaveASM_AnySGPR:$val);
+  let arguments = (ins WaveASM_AnyReg:$val);
   let assemblyFormat = "$val attr-dict `:` type($val)";
 }
 

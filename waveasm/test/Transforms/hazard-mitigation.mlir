@@ -284,7 +284,7 @@ waveasm.program @real_instruction_gap_no_hazard target = #waveasm.target<#waveas
 // Region boundary tests.
 // The backward scan must not cross region boundaries. Structured
 // control flow ops (waveasm.if, waveasm.loop) are not in the
-// isNonEmittingOp list, so they act as barriers.
+// NonEmittingOp trait, so they act as barriers.
 // -----------------------------------------------------------------------
 
 // Test: VALU before an if, v_readfirstlane inside the if body.

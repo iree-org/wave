@@ -545,6 +545,51 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   });
 
+  // Pass 3a2: InsertOp pass -- treat insert result as an alias of the source
+  // vector, but keep the inserted value in the allocator worklist.
+  //
+  // waveasm.insert declares that the result is the same contiguous register
+  // block as the source with one element overwritten. The result aliases the
+  // source (removed from worklist), but the inserted value must get its own
+  // independent allocation. A post-pass in LinearScanPass emits a mov from
+  // the inserted value's physreg into source_physreg + index.
+  //
+  // Why not alias the inserted value to source[index]? Because that would
+  // clobber the source slot at the inserted value's def point, not at the
+  // InsertOp's position. Any use of the source between the def and the
+  // InsertOp would see the wrong value.
+  //
+  // Chained inserts (%b = insert into %a where %a = insert into %src) require
+  // walking the chain to find the root source that still has a live range,
+  // since intermediate results are already erased.
+  program.walk([&](InsertOp insertOp) {
+    Value insertResult = insertOp.getResult();
+
+    // Walk the InsertOp chain to find the root source with a live range.
+    Value source = insertOp.getVector();
+    auto sourceIt = info.ranges.find(source);
+    while (sourceIt == info.ranges.end()) {
+      auto defOp = source.getDefiningOp<InsertOp>();
+      if (!defOp)
+        return;
+      source = defOp.getVector();
+      sourceIt = info.ranges.find(source);
+    }
+
+    // Extend root source range to cover the insert result's lifetime.
+    auto resultIt = info.ranges.find(insertResult);
+    if (resultIt != info.ranges.end()) {
+      sourceIt->second.start =
+          std::min(sourceIt->second.start, resultIt->second.start);
+      sourceIt->second.end =
+          std::max(sourceIt->second.end, resultIt->second.end);
+      info.ranges.erase(resultIt);
+    }
+
+    // The inserted value stays in the worklist -- it gets its own allocation.
+    // LinearScanPass emits a mov at the InsertOp's position.
+  });
+
   // Pass 3b: Build tied equivalence classes for pressure de-duplication.
   //
   // LoopOp results, condition iter_args, and block args are all tied to the

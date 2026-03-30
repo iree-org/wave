@@ -11,8 +11,8 @@
 // index from srcMapped. PackOp results have SRegType (no physical index),
 // so the in-place patch was silently skipped, leaving num_records stale.
 //
-// After the fix, PackOp SRDs fall through to the full rebuild path which
-// builds a new SRD with correct num_records via buildSrdWord2.
+// After the fix, PackOp SRDs use InsertOp to replace word 2 (num_records)
+// in place without a full extract-all + rebuild.
 
 // CHECK-LABEL: waveasm.program @suppress_swizzle_packop_srd
 
@@ -49,10 +49,9 @@ module {
       // is the PackOp SRD). Only vector.load consumers (suppress=true),
       // non-max validBytes (8192) -> enters suppress-swizzle path.
       //
-      // With the fix, this falls through to the full rebuild and produces
-      // a new PackOp with tight num_records (8192).
+      // With InsertOp, only word 2 is replaced in the source SRD.
       // CHECK: waveasm.s_mov_b32 %{{.*}} : !waveasm.imm<8192>
-      // CHECK: waveasm.pack {{.*}} -> !waveasm.sreg<4, 4>
+      // CHECK: waveasm.insert %{{.*}} into %{{.*}}[2]
       %buf2 = amdgpu.fat_raw_buffer_cast %buf1
           validBytes(%valid_tight) cacheSwizzleStride(%stride) resetOffset
           : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>

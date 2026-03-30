@@ -255,6 +255,11 @@ def WaveASM_VMEMToLDSLoadOp : OpInterface<"VMEMToLDSLoadOpInterface"> {
   ];
 }
 
+// Trait for non-emitting operations (register aliases, eliminated entirely).
+// These ops do not produce assembly instructions and do not create real
+// inter-instruction delays. Used by hazard mitigation to skip over them.
+def WaveASM_NonEmittingOp : NativeOpTrait<"NonEmittingOp">;
+
 // Trait for memory operations (loads/stores)
 def WaveASM_MemoryOp : NativeOpTrait<"MemoryOp">;
 

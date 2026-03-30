@@ -32,6 +32,12 @@ class ArithmeticOp : public TraitBase<ConcreteType, ArithmeticOp> {};
 // WaveASMInterfaces.td. The interface provides getA(), getB(), getAcc(),
 // getDst(), and getTiedOperandIndex() methods for MFMA operations.
 
+/// Trait for non-emitting operations (register aliases, eliminated entirely).
+/// These ops do not produce assembly instructions and do not create real
+/// inter-instruction delays. Used by hazard mitigation to skip over them.
+template <typename ConcreteType>
+class NonEmittingOp : public TraitBase<ConcreteType, NonEmittingOp> {};
+
 /// Trait for memory operations (loads/stores).
 /// These are NOT eligible for CSE.
 template <typename ConcreteType>

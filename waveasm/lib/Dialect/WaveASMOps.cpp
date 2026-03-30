@@ -164,6 +164,45 @@ LogicalResult ExtractOp::verify() {
   return success();
 }
 
+LogicalResult InsertOp::verify() {
+  Type vectorType = getVector().getType();
+  Type valueType = getValue().getType();
+  Type resultType = getResult().getType();
+  int64_t index = getIndex();
+
+  if (index < 0)
+    return emitOpError() << "index must be non-negative, got " << index;
+
+  // Result must match the source vector type.
+  if (vectorType != resultType)
+    return emitOpError() << "result type " << resultType
+                         << " must match source type " << vectorType;
+
+  // Preserve register bank.
+  bool bankMismatch = false;
+  if (isSGPRType(vectorType) != isSGPRType(valueType))
+    bankMismatch = true;
+  else if (isAGPRType(vectorType) != isAGPRType(valueType))
+    bankMismatch = true;
+  if (bankMismatch)
+    return emitOpError()
+           << "inserted value register class must match source register class: "
+              "source "
+           << vectorType << ", value " << valueType;
+
+  int64_t vectorSize = getRegSize(vectorType);
+  int64_t valueSize = getRegSize(valueType);
+  if (valueSize > vectorSize)
+    return emitOpError() << "inserted value width (" << valueSize
+                         << ") exceeds source width (" << vectorSize << ")";
+  if (index > vectorSize - valueSize)
+    return emitOpError() << "insert range [" << index << ", "
+                         << (index + valueSize) << ") exceeds source width "
+                         << vectorSize;
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // VMEM Load Operation Verifiers
 //===----------------------------------------------------------------------===//

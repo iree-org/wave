@@ -341,9 +341,8 @@ KernelGenerator::emitScaledMFMA(Operation *scaledOp, llvm::StringRef mnemonic) {
 
 std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
   return llvm::TypeSwitch<Operation *, std::optional<std::string>>(op)
-      .Case<ProgramOp, LabelOp, CommentOp, RawOp, PrecoloredVRegOp,
-            PrecoloredSRegOp, PrecoloredARegOp, ConstantOp, PackOp, ExtractOp,
-            DCEProtectOp>([](auto) { return std::nullopt; })
+      .Case<ProgramOp, LabelOp, CommentOp, RawOp>(
+          [](auto) { return std::nullopt; })
 
       .Case<S_WAITCNT>([&](S_WAITCNT waitcntOp) {
         std::optional<int64_t> vmcnt, lgkmcnt, expcnt;
@@ -980,6 +979,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           })
 
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
+        // Register alias and bookkeeping ops covered by NonEmittingOp trait.
+        if (defaultOp->hasTrait<OpTrait::NonEmittingOp>())
+          return std::nullopt;
+
         llvm::StringRef opName = defaultOp->getName().getStringRef();
         llvm::StringRef mnemonic = opName;
         if (opName.starts_with("waveasm."))

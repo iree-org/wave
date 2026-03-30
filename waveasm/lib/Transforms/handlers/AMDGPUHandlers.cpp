@@ -531,9 +531,9 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
   // allocating a new SRD (which would risk SGPR overflow).
   if (suppressWord3Swizzle) {
     if (hasNonMaxValidBytes && !adj) {
-      // Try to patch word 2 in place for prologue SRDs (known physical
-      // register base). For PackOp-built SRDs (SRegType, no physical
-      // index), fall through to the full rebuild path below.
+      // Patch word 2 (NUM_RECORDS) in the source SRD. For prologue SRDs
+      // with known physical base, write directly. For PackOp-built SRDs,
+      // use InsertOp to replace the single word without a full rebuild.
       int64_t srdBase = -1;
       if (auto psreg = dyn_cast<PSRegType>(srcMapped->getType()))
         srdBase = psreg.getIndex();
@@ -546,8 +546,13 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
         ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
         return success();
       }
-      // PackOp SRD -- fall through to full rebuild which handles
-      // suppressWord3Swizzle via the word1/word3 conditionals.
+      // PackOp-built SRD: use InsertOp to replace word 2 in place.
+      Value newWord2 = buildSrdWord2(builder, loc, op, ctx);
+      auto srdType = srcMapped->getType();
+      Value updated =
+          InsertOp::create(builder, loc, srdType, newWord2, *srcMapped, 2);
+      ctx.getMapper().mapValue(op->getResult(0), updated);
+      return success();
     } else {
       ctx.getMapper().mapValue(op->getResult(0), *srcMapped);
       if (adj) {

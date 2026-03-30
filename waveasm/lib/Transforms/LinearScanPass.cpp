@@ -264,6 +264,51 @@ private:
                            sourcePhysReg + extractOp.getIndex());
     });
 
+    // Handle waveasm.insert ops: result aliases the source vector.
+    // Walk InsertOp chains to find the root source with a physical register.
+    // The inserted value was independently allocated; emit a mov into the
+    // target slot at the InsertOp's position.
+    WalkResult insertResult = program.walk([&](InsertOp insertOp) {
+      Value source = insertOp.getVector();
+      int64_t sourcePhysReg = getEffectivePhysReg(source, mapping);
+      while (sourcePhysReg < 0) {
+        auto defOp = source.getDefiningOp<InsertOp>();
+        if (!defOp)
+          break;
+        source = defOp.getVector();
+        sourcePhysReg = getEffectivePhysReg(source, mapping);
+      }
+      if (sourcePhysReg < 0)
+        return WalkResult::advance();
+      mapping.setPhysReg(insertOp.getResult(), sourcePhysReg);
+
+      // Emit a mov from the inserted value into the target slot.
+      int64_t targetSlot = sourcePhysReg + insertOp.getIndex();
+      int64_t valuePhysReg = getEffectivePhysReg(insertOp.getValue(), mapping);
+      // Skip the mov if the value is already at the target slot.
+      if (valuePhysReg == targetSlot)
+        return WalkResult::advance();
+      OpBuilder movBuilder(insertOp);
+      Value val = insertOp.getValue();
+      Location loc = insertOp.getLoc();
+      MLIRContext *ctx = movBuilder.getContext();
+      Value mov;
+      if (isSGPRType(val.getType())) {
+        auto dstType = PSRegType::get(ctx, targetSlot, 1);
+        mov = S_MOV_B32::create(movBuilder, loc, dstType, val);
+      } else if (isVGPRType(val.getType())) {
+        auto dstType = PVRegType::get(ctx, targetSlot, 1);
+        mov = V_MOV_B32::create(movBuilder, loc, dstType, val);
+      } else {
+        insertOp.emitError("insert with AGPR operands is not yet supported");
+        return WalkResult::interrupt();
+      }
+      DCEProtectOp::create(movBuilder, loc, mov);
+      return WalkResult::advance();
+    });
+    if (insertResult.wasInterrupted())
+      return failure();
+
     // Handle waveasm.pack ops: input[i] gets result's physReg + i.
     // Pack inputs were excluded from the allocation worklists during liveness
     // analysis, so they have no mapping yet. Assign them here from the pack

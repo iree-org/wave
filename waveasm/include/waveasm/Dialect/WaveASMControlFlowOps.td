@@ -139,6 +139,7 @@ def WaveASM_YieldOp : WAVEASMOp<"yield", [
     Pure,
     ReturnLike,
     Terminator,
+    WaveASM_NonEmittingOp,
     ParentOneOf<["IfOp", "ProgramOp"]>
   ]> {
   let summary = "Yield values from a region";
