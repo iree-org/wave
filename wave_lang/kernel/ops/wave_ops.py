@@ -2525,6 +2525,9 @@ class NestedRegionOp(CustomOp):
         # `Placeholder.add_to_graph` only creates the FX node; keep the type on
         # the FX node itself so later passes do not need to re-infer it.
         placeholder_node.type = outer_node.type
+        outer_custom = get_custom(outer_node)
+        if outer_custom.vector_shapes is not None:
+            placeholder_node.vector_shapes = dict(outer_custom.vector_shapes)
         placeholder_node.meta["lifted"] = outer_node
         return placeholder_node
 

@@ -266,6 +266,19 @@ def test_gemm_pipelined():
 
     # CHECK-NEXT: return None
 
+    # Verify that pipelined IterArg/GetResult nodes have vector_shapes.
+    pipelined_nodes = [
+        get_custom(n)
+        for n in trace.walk(lambda n: n)
+        if isinstance(get_custom(n), (IterArg, GetResult))
+    ]
+    all_have_vector_shapes = all(
+        n.vector_shapes is not None and len(n.vector_shapes) > 0
+        for n in pipelined_nodes
+    )
+    print(f"all_pipelined_nodes_have_vector_shapes: {all_have_vector_shapes}")
+    # CHECK: all_pipelined_nodes_have_vector_shapes: True
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)

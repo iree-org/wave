@@ -280,6 +280,9 @@ def _canonicalize_nested_region(region: NestedRegionOp, subgraph: fx.Graph) -> N
         anchor = canonical
         canonical.meta["lifted"] = source
         canonical.type = source.type
+        source_custom = get_custom(source)
+        if source_custom.vector_shapes is not None:
+            canonical.vector_shapes = dict(source_custom.vector_shapes)
 
         _replace_direct_capture_aliases(subgraph, source, canonical)
         for legacy_capture in legacy:

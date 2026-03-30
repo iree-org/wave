@@ -50,6 +50,12 @@ class PipelineStage(Enum):
     EPILOGUE = 2
 
 
+def _propagate_vector_shapes(source: CustomOp, target_node: fx.Node) -> None:
+    """Copy vector_shapes from source to target_node if present."""
+    if source.vector_shapes is not None:
+        target_node.vector_shapes = dict(source.vector_shapes)
+
+
 def update_index(
     index: dict[IndexSymbol, IndexSequence | IndexExpr],
     subs: dict[IndexSymbol, IndexSymbol],
@@ -309,6 +315,7 @@ def populate_kernel_outer_vars(
             iter_arg.type = custom.type
             iter_arg.index = custom.index
             iter_arg.iter_idx = counter
+            _propagate_vector_shapes(custom, iter_arg)
             counter += 1
             new_iter_args.append(iter_arg)
 
@@ -338,6 +345,7 @@ def populate_epilogue_outer_vars(
                 type=custom.type,
                 loc=pipelined_reduction.location,
             )
+            _propagate_vector_shapes(custom, result)
             counter += 1
             new_results.append(result)
 
@@ -497,12 +505,14 @@ def push_rotating_registers(
             if create_new_nodes:
                 mapped_stage = stage + len(registers) - i
                 mapped_iteration = arg_context.get_kernel_iteration(mapped_stage)
+                source = get_custom(node)
                 iter_arg = IterArg(f"rotating_reg_{count}").add_to_graph(
-                    graph, loc=get_custom(node).location
+                    graph, loc=source.location
                 )
-                iter_arg.type = get_custom(node).type
-                iter_arg.index = get_custom(node).index
+                iter_arg.type = source.type
+                iter_arg.index = source.index
                 iter_arg.iter_idx = iter_arg_count
+                _propagate_vector_shapes(source, iter_arg)
                 iter_arg_count += 1
                 new_registers.append(iter_arg)
                 mapped_value = iter_arg
@@ -581,9 +591,11 @@ def construct_kernel(
             iter_arg = IterArg(node.name).add_to_graph(
                 pipelined_reduction_graph, loc=get_custom(node).location
             )
-            iter_arg.type = get_custom(node).type
-            iter_arg.index = get_custom(node).index
-            iter_arg.iter_idx = get_custom(node).iter_idx
+            source = get_custom(node)
+            iter_arg.type = source.type
+            iter_arg.index = source.index
+            iter_arg.iter_idx = source.iter_idx
+            _propagate_vector_shapes(source, iter_arg)
             arg_context.map_arg_all(node, iter_arg)
 
         # Push the rotating registers into the argument context.
@@ -703,11 +715,13 @@ def construct_epilogue(
         with pipelined_reduction.graph.inserting_before(
             existing_get_results[-1].fx_node.next
         ):
+            source = get_custom(iter_args[i])
             result = GetResult(pipelined_reduction.fx_node, i).add_to_graph(
                 pipelined_reduction.graph,
-                type=iter_args[i].type,
+                type=source.type,
                 loc=pipelined_reduction.location,
             )
+            _propagate_vector_shapes(source, result)
             existing_get_results.append(get_custom(result))
             last_get_result = result
 
@@ -716,6 +730,8 @@ def construct_epilogue(
 
     for iter_arg, get_result in zip(iter_args, existing_get_results):
         arg_context.map_arg_all(iter_arg, get_result.fx_node)
+        if get_result.vector_shapes is None:
+            _propagate_vector_shapes(get_custom(iter_arg), get_result.fx_node)
 
     with pipelined_reduction.graph.inserting_before(last_get_result.next):
         # Add get result nodes for the rotating registers and update the
@@ -724,11 +740,13 @@ def construct_epilogue(
         offset = len(existing_get_results)
         flattened_rotating_registers = flatten_dict_values(rotating_registers)
         for i in range(len(flattened_rotating_registers)):
+            source = get_custom(flattened_rotating_registers[i])
             result = GetResult(pipelined_reduction.fx_node, i + offset).add_to_graph(
                 pipelined_reduction.graph,
-                type=flattened_rotating_registers[i].type,
+                type=source.type,
                 loc=pipelined_reduction.location,
             )
+            _propagate_vector_shapes(source, result)
             rotating_registers_get_results.append(result)
         rotating_registers = unflatten_dict_values(
             num_rotating_registers, rotating_registers_get_results
@@ -974,15 +992,20 @@ def construct_pipelined_loop(
         for i in range(len(iter_args)):
             if i not in existing_indices:
                 with pipelined_custom.graph.inserting_after(last_get_result):
+                    source = get_custom(iter_args[i])
                     result = GetResult(pipelined_reduction, i).add_to_graph(
                         pipelined_custom.graph,
-                        type=iter_args[i].type,
+                        type=source.type,
                         loc=pipelined_custom.location,
                     )
+                    _propagate_vector_shapes(source, result)
                     existing_get_results.append(get_custom(result))
                     last_get_result = result
         existing_get_results = sorted(existing_get_results, key=lambda x: x.res_idx)
-        final_results = [gr.fx_node for gr in existing_get_results]
+        for get_result, iter_arg in zip(existing_get_results, iter_args):
+            if get_result.vector_shapes is None:
+                _propagate_vector_shapes(get_custom(iter_arg), get_result.fx_node)
+        final_results = [get_result.fx_node for get_result in existing_get_results]
     else:
         # Construct epilogue.
         # The epilogue induction variables must account for the step size.
