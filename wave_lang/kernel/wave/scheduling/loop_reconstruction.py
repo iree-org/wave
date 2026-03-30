@@ -730,8 +730,15 @@ def construct_epilogue(
 
     for iter_arg, get_result in zip(iter_args, existing_get_results):
         arg_context.map_arg_all(iter_arg, get_result.fx_node)
+        iter_arg_custom = get_custom(iter_arg)
         if get_result.vector_shapes is None:
-            _propagate_vector_shapes(get_custom(iter_arg), get_result.fx_node)
+            _propagate_vector_shapes(iter_arg_custom, get_result.fx_node)
+        elif iter_arg_custom.vector_shapes is not None:
+            assert get_result.vector_shapes == iter_arg_custom.vector_shapes, (
+                f"GetResult {get_result.fx_node.name} has vector_shapes "
+                f"{get_result.vector_shapes} but corresponding IterArg has "
+                f"{iter_arg_custom.vector_shapes}"
+            )
 
     with pipelined_reduction.graph.inserting_before(last_get_result.next):
         # Add get result nodes for the rotating registers and update the
@@ -1003,8 +1010,15 @@ def construct_pipelined_loop(
                     last_get_result = result
         existing_get_results = sorted(existing_get_results, key=lambda x: x.res_idx)
         for get_result, iter_arg in zip(existing_get_results, iter_args):
+            iter_arg_custom = get_custom(iter_arg)
             if get_result.vector_shapes is None:
-                _propagate_vector_shapes(get_custom(iter_arg), get_result.fx_node)
+                _propagate_vector_shapes(iter_arg_custom, get_result.fx_node)
+            elif iter_arg_custom.vector_shapes is not None:
+                assert get_result.vector_shapes == iter_arg_custom.vector_shapes, (
+                    f"GetResult {get_result.fx_node.name} has vector_shapes "
+                    f"{get_result.vector_shapes} but corresponding IterArg has "
+                    f"{iter_arg_custom.vector_shapes}"
+                )
         final_results = [get_result.fx_node for get_result in existing_get_results]
     else:
         # Construct epilogue.
