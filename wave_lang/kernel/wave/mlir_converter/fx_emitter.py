@@ -366,7 +366,7 @@ def _convert_supported_attrs(
         - BOUNDS: dict[IndexSymbol, IndexExpr]
         - ELEMENTS_PER_THREAD: int
         - KIND: MMAType | ScaledMMAType
-        - VECTOR_SHAPES: dict[IndexSymbol, int]
+        - VECTOR_SHAPES: list[dict[IndexSymbol, int] | None]
         - WATER_INTERNAL_ID: str
     """
     attrs = op.attributes
