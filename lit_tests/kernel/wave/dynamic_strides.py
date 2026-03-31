@@ -32,19 +32,22 @@ def test_dynamic_strides_gemm():
     # Kernel func: 3 bindings + 3 index (stride) arguments (one leading stride per buffer).
     # CHECK: func.func @gemm(%{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: index, %{{.*}}: index, %{{.*}}: index)
 
-    # F32 output buffer keeps a 2-D view with dynamic leading stride (%arg5); this appears first in @gemm.
+    # All three buffers get 2-D views with dynamic leading strides (%arg3, %arg4, %arg5).
+    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg3, 1]
+    # CHECK-SAME: memref<f16> to memref<1024x1024xf16, strided<[?, 1]>>
+    # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg4, 1]
+    # CHECK-SAME: memref<f16> to memref<1024x1024xf16, strided<[?, 1]>>
     # CHECK: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1024, 1024], strides: [%arg5, 1]
     # CHECK-SAME: memref<f32> to memref<1024x1024xf32, strided<[?, 1]>>
 
-    # Input f16 bindings are linearized to 1-D; vector.load uses a single offset index.
-    # CHECK-COUNT-2: memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>
-    # CHECK: vector.load %reinterpret_cast_1{{.*}} : memref<1073741822xf16, strided<[1]>>, vector<8xf16>
-    # CHECK: vector.load %reinterpret_cast_2{{.*}} : memref<1073741822xf16, strided<[1]>>, vector<8xf16>
+    # Input f16 loads use 2-D indexing on the strided views.
+    # CHECK: vector.load %reinterpret_cast[{{.*}}] : memref<1024x1024xf16, strided<[?, 1]>>, vector<8xf16>
+    # CHECK: vector.load %reinterpret_cast_0[{{.*}}] : memref<1024x1024xf16, strided<[?, 1]>>, vector<8xf16>
 
     # Output is linearized using dynamic strides from extract_strided_metadata, then stored to 1D view.
-    # CHECK: memref.extract_strided_metadata %reinterpret_cast : memref<1024x1024xf32, strided<[?, 1]>>
+    # CHECK: memref.extract_strided_metadata %reinterpret_cast_1 : memref<1024x1024xf32, strided<[?, 1]>>
     # CHECK: memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [536870910], strides: [1]
     # CHECK: vector.store {{.*}} %reinterpret_cast_3{{.*}} : memref<536870910xf32, strided<[1], offset: ?>>
 
-    # Host dispatch still passes three stride indices (ABI); linearization elides %arg3/%arg4 from f16 reinterprets.
+    # Host dispatch passes three stride indices (ABI).
     # CHECK: flow.dispatch @gemm::@gemm[%arg3, %arg4, %arg5]
