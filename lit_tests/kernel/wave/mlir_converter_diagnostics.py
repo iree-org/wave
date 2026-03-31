@@ -216,7 +216,9 @@ def test_location_capture_stack_trace():
     # CHECK: ERROR: test error
     # CHECK: Traceback (Wave DSL source):
     # CHECK:   File "{{.*}}mlir_converter_diagnostics.py"
-    # CHECK:     @run_test
+    # Python >= 3.11 attributes the frame to the @run_test decorator line; Python < 3.11
+    # attributes it to the def line instead. Accept either.
+    # CHECK:     {{@run_test|def test_location_capture_stack_trace}}
     # CHECK:   File "{{.*}}mlir_converter_diagnostics.py"
     # CHECK:     diagnostics = compile_and_emit_diagnostics
     # CHECK:   File "{{.*}}mlir_converter_diagnostics.py"
