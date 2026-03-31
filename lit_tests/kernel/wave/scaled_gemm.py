@@ -794,7 +794,7 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     print(batched_gemm.asm)
 
     # This test checks the boundary condition for unaligned shapes (dynamic M with
-    # linearized global i8 and vector masked loads bounded by %arg6).
+    # linearized global reads using OOB-index-redirect bounded by %arg6).
 
     # CHECK-LABEL:  test_mxfp4_scaled_mma_unaligned_16x16x128
     # CHECK:        func.func @batched_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index) attributes {translation_info = #translation} {
@@ -805,8 +805,8 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:        %[[THREAD_ID_Y:.*]] = gpu.thread_id  y upper_bound 2
     # CHECK-DAG:        %{{.*}} = memref.alloc() : memref<{{.*}}xi8, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %{{.*}} = amdgpu.fat_raw_buffer_cast %{{.*}} : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK-DAG:        vector.maskedload %{{.*}}[%{{.*}}], %{{.*}}, %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
-    # CHECK-DAG:        vector.maskedload %{{.*}}[%{{.*}}], %{{.*}}, %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi1>, vector<4xi8> into vector<4xi8>
+    # CHECK-DAG:        arith.select %{{.*}}, %{{.*}}, %{{.*}} : index
+    # CHECK-DAG:        vector.load %{{.*}}[%{{.*}}] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
 
 
 @run_test

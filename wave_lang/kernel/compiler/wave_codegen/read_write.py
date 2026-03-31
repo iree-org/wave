@@ -1037,6 +1037,52 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 
             if mask is None:
                 result = vector_d.load(vector_type, lin_src, [total_offset])
+            elif buffer_ops_enabled:
+                oob_index_value = _get_out_of_bounds_index(element_type)
+                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+                mask_splat = _get_splat_input(mask)
+                if mask_splat is not None:
+                    selected_index = arith_d.select(mask_splat, total_offset, oob_index)
+                    result = vector_d.load(vector_type, lin_src, [selected_index])
+                else:
+                    uint32 = IntegerType.get_signless(32)
+                    offsets_vec_type = VectorType.get(
+                        vector_type.shape, IndexType.get()
+                    )
+                    vals = [
+                        IntegerAttr.get(IndexType.get(), v)
+                        for v in range(elements_per_thread)
+                    ]
+                    offsets_vec = arith_d.constant(
+                        offsets_vec_type,
+                        DenseElementsAttr.get(vals, offsets_vec_type),
+                    )
+                    oob_vec = vector_d.broadcast(offsets_vec_type, oob_index)
+                    uint32_vec_type = VectorType.get([elements_per_thread], uint32)
+                    base_broadcast = vector_d.broadcast(offsets_vec_type, total_offset)
+                    offsets_u32 = arith_d.index_cast(uint32_vec_type, offsets_vec)
+                    base_u32 = arith_d.index_cast(uint32_vec_type, base_broadcast)
+                    per_elem_offsets = arith_d.addi(base_u32, offsets_u32)
+                    per_elem_offsets = arith_d.index_cast(
+                        offsets_vec_type, per_elem_offsets
+                    )
+                    selected = arith_d.select(mask, per_elem_offsets, oob_vec)
+                    singlenumvec_type = VectorType.get([1], vector_type.element_type)
+                    elems = []
+                    for i in range(elements_per_thread):
+                        idx = vector_d.extract(
+                            selected,
+                            static_position=[i],
+                            dynamic_position=[],
+                        )
+                        elem = vector_d.load(singlenumvec_type, lin_src, indices=[idx])
+                        elem = vector_d.extract(
+                            elem,
+                            static_position=[0],
+                            dynamic_position=[],
+                        )
+                        elems.append(elem)
+                    result = vector_d.from_elements(vector_type, elems)
             else:
                 el_type = vector_type.element_type
                 zero = arith_d.constant(el_type, get_constant_attr(0, el_type))
