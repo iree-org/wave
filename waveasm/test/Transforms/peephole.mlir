@@ -437,3 +437,67 @@ waveasm.program @test_lds_soffset_vgpr_base target = #waveasm.target<#waveasm.gf
 
   waveasm.s_endpgm
 }
+
+//===----------------------------------------------------------------------===//
+// Test: Constant fold v_mul_lo_u32 with two constant operands
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_mul_const_fold
+waveasm.program @test_mul_const_fold target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %c3 = waveasm.constant 3 : !waveasm.imm<3>
+  %c7 = waveasm.constant 7 : !waveasm.imm<7>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+
+  // mul(3, 7) = 21, should be constant folded to v_mov_b32 of 21.
+  // CHECK-NOT: waveasm.v_mul_lo_u32
+  // CHECK: waveasm.constant 21
+  // CHECK: waveasm.v_mov_b32
+  %result = waveasm.v_mul_lo_u32 %c3, %c7 : !waveasm.imm<3>, !waveasm.imm<7> -> !waveasm.vreg
+
+  waveasm.buffer_store_dword %result, %srd, %voff : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Constant fold v_add_u32 with two constant operands
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_add_const_fold
+waveasm.program @test_add_const_fold target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %c10 = waveasm.constant 10 : !waveasm.imm<10>
+  %c20 = waveasm.constant 20 : !waveasm.imm<20>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+
+  // add(10, 20) = 30, should be constant folded.
+  // CHECK-NOT: waveasm.v_add_u32
+  // CHECK: waveasm.constant 30
+  // CHECK: waveasm.v_mov_b32
+  %result = waveasm.v_add_u32 %c10, %c20 : !waveasm.imm<10>, !waveasm.imm<20> -> !waveasm.vreg
+
+  waveasm.buffer_store_dword %result, %srd, %voff : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+  waveasm.s_endpgm
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Add zero elimination through v_mov_b32
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: waveasm.program @test_add_zero_through_mov
+waveasm.program @test_add_zero_through_mov target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
+  %src = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %c0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  // Zero moved through v_mov_b32 should still be recognized.
+  %zero_vreg = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
+
+  // add(zero_vreg, src) should be folded to src.
+  // CHECK-NOT: waveasm.v_add_u32
+  // CHECK: waveasm.buffer_store_dword
+  %result = waveasm.v_add_u32 %zero_vreg, %src : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
+
+  waveasm.buffer_store_dword %result, %srd, %src : !waveasm.vreg, !waveasm.psreg<0, 4>, !waveasm.pvreg<0>
+  waveasm.s_endpgm
+}
