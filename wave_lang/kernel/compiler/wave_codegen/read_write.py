@@ -536,6 +536,8 @@ def _compute_valid_bytes(
     elem_type: IrType,
     symbolic_shape: tuple,
     emitter: WaveEmitter,
+    *,
+    use_real_bounds_override: bool = False,
 ) -> Value:
     """Compute the SRD valid-bytes value for a buffer.
 
@@ -543,8 +545,15 @@ def _compute_valid_bytes(
     result is clamped to the real tensor size minus the memref offset so that
     OOB loads in the extended epilogue iterations return zero.  Otherwise
     falls back to the hardware maximum.
+
+    When *use_real_bounds_override* is True (e.g. for linearized reads whose
+    SRD base is at buffer start with offset 0), real bounds are always used
+    so that masked-off threads whose computed flat offsets exceed the actual
+    tensor size get caught by the SRD bounds check rather than faulting.
     """
-    use_real_bounds = emitter.options.eliminate_epilogue and symbolic_shape is not None
+    use_real_bounds = use_real_bounds_override or (
+        emitter.options.eliminate_epilogue and symbolic_shape is not None
+    )
     total_bytes = _compute_total_valid_bytes(elem_type, symbolic_shape, use_real_bounds)
     uint64 = IntegerType.get_signless(64)
 
@@ -995,6 +1004,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
                             element_type,
                             input_shape,
                             emitter,
+                            use_real_bounds_override=True,
                         )
                         lin_src = _cast_buffer_and_encode_stride(
                             lin_src,
@@ -1014,6 +1024,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
                         element_type,
                         input_shape,
                         emitter,
+                        use_real_bounds_override=True,
                     )
                     lin_src = _cast_buffer_and_encode_stride(
                         lin_src,
@@ -1530,7 +1541,11 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
                 valid_bytes_override
                 if valid_bytes_override is not None
                 else _compute_valid_bytes(
-                    lin_src, element_type, src_symbolic_shape, emitter
+                    lin_src,
+                    element_type,
+                    src_symbolic_shape,
+                    emitter,
+                    use_real_bounds_override=True,
                 )
             ),
         )
