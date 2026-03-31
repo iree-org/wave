@@ -989,8 +989,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
             bool m0IsSgpr = !isVGPRType(m0Val.getType());
             if (m0IsSgpr) {
               auto sregType = ctx.createSRegType();
-              m0Val = S_ADD_U32::create(builder, loc, sregType, sregType, m0Val,
-                                        totalConst)
+              m0Val = S_ADD_U32::create(builder, loc, sregType,
+                                        ctx.createSCCType(), m0Val, totalConst)
                           .getDst();
             } else {
               m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
@@ -1013,9 +1013,10 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
               bool rowIsSgpr = !isVGPRType(rowContrib.getType());
               if (m0IsSgpr && rowIsSgpr) {
                 auto sregType = ctx.createSRegType();
-                m0Val = S_ADD_U32::create(builder, loc, sregType, sregType,
-                                          m0Val, rowContrib)
-                            .getDst();
+                m0Val =
+                    S_ADD_U32::create(builder, loc, sregType,
+                                      ctx.createSCCType(), m0Val, rowContrib)
+                        .getDst();
               } else {
                 m0Val = convertToVgpr(m0Val);
                 rowContrib = convertToVgpr(rowContrib);
@@ -1033,8 +1034,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
             bool m0IsSgpr = m0Val && !isVGPRType(m0Val.getType());
             if (m0IsSgpr) {
               auto sregType = ctx.createSRegType();
-              m0Val = S_ADD_U32::create(builder, loc, sregType, sregType, m0Val,
-                                        colConst)
+              m0Val = S_ADD_U32::create(builder, loc, sregType,
+                                        ctx.createSCCType(), m0Val, colConst)
                           .getDst();
             } else if (m0Val) {
               m0Val = V_ADD_U32::create(builder, loc, ctx.createVRegType(),
@@ -1097,8 +1098,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
           bool m0IsSgpr = !isVGPRType(m0Val.getType());
           if (m0IsSgpr) {
             auto sregType = ctx.createSRegType();
-            m0Val = S_ADD_U32::create(builder, loc, sregType, sregType, m0Val,
-                                      baseConst)
+            m0Val = S_ADD_U32::create(builder, loc, sregType,
+                                      ctx.createSCCType(), m0Val, baseConst)
                         .getDst();
           } else {
             Value baseVgpr = V_MOV_B32::create(builder, loc,
