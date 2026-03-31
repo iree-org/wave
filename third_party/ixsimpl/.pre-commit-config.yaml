@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 ixsimpl contributors
+# SPDX-License-Identifier: Apache-2.0
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.6
+    hooks:
+      - id: clang-format
+        types_or: [c, c++]
+        exclude: ixsimpl_amalg\.c
+
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v5.1.1
+    hooks:
+      - id: reuse
+        exclude: '\.md$'
+
+# Sort file and library lists in CMake files.
+  -   repo: https://github.com/Hardcode84/3
+      rev: v0.3.0
+      hooks:
+      -   id: sort-cmake-lists
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [hypothesis, sympy, pytest]
+        args: [--strict]
+        types: [python]
+
+  - repo: local
+    hooks:
+      - id: amalgamate
+        name: regenerate ixsimpl_amalg.c
+        language: python
+        entry: python scripts/amalgamate.py
+        files: ^src/.*\.[ch]$
+        pass_filenames: false
+      - id: check-exports
+        name: check exported symbols
+        language: python
+        entry: python scripts/check_exports.py
+        files: ^(src/.*\.[ch]|include/ixsimpl\.h|ixsimpl_amalg\.c)$
+        pass_filenames: false

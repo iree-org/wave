@@ -70,7 +70,10 @@ Repository = "https://github.com/iree-org/wave/"
 Documentation = "https://wave.readthedocs.io/en/latest/"
 
 [tool.setuptools.packages.find]
-include = ["wave_lang", "wave_lang.*"]
+include = ["wave_lang", "wave_lang.*", "ixsimpl"]
+
+[tool.setuptools.package-dir]
+ixsimpl = "third_party/ixsimpl/bindings/python/ixsimpl"
 
 [[tool.setuptools-rust.ext-modules]]
 target = "aplp_lib"

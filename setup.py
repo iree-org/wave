@@ -84,10 +84,23 @@ def check_waveasm_install(build_dir: Path):
 
 class CMakeBuild(build_ext):
     def run(self) -> None:
-        for ext in self.extensions:
+        # Partition extensions: CMake ones are handled manually, plain C
+        # extensions go through the normal setuptools build_ext path.
+        cmake_exts = [e for e in self.extensions if isinstance(e, CMakeExtension)]
+        plain_exts = [e for e in self.extensions if not isinstance(e, CMakeExtension)]
+        for ext in cmake_exts:
             self.build_extension(ext)
+        if plain_exts:
+            saved = self.extensions
+            self.extensions = plain_exts
+            build_ext.run(self)
+            self.extensions = saved
 
-    def build_extension(self, ext: CMakeExtension) -> None:
+    def build_extension(self, ext) -> None:
+        if not isinstance(ext, CMakeExtension):
+            # Plain C extension -- delegate to default setuptools build.
+            super().build_extension(ext)
+            return
         # Get extension directory
         if ext.install_dir:
             # Use custom install directory relative to package root
@@ -285,6 +298,18 @@ class BuildCommand(distutils.command.build.build):
 
 ext_modules = [
     CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime"),
+    Extension(
+        "ixsimpl._ixsimpl",
+        sources=[
+            "third_party/ixsimpl/ixsimpl_amalg.c",
+            "third_party/ixsimpl/bindings/python/_ixsimpl.c",
+        ],
+        include_dirs=[
+            "third_party/ixsimpl/include",
+            "third_party/ixsimpl/src",
+        ],
+        define_macros=[("IXS_AMALGAMATED", "1")],
+    ),
 ]
 
 if BUILD_WATER and WATER_DIR:

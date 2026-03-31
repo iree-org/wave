@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 ixsimpl contributors
+# SPDX-License-Identifier: Apache-2.0
+[build-system]
+requires = ["hatchling>=1.24", "scikit-build-core~=0.12.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ixsimpl"
+version = "0.1.0"
+description = "Fast index expression simplifier for integer arithmetic"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-xdist",
+    "hypothesis",
+    "sympy",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["bindings/python/ixsimpl"]
+
+[tool.hatch.build.targets.wheel.hooks.scikit-build]
+experimental = true
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+cmake.define.USE_AMALGAMATION = "ON"
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-v -n auto"
+
+[[tool.mypy.overrides]]
+module = ["sympy", "sympy.*", "numpy", "numpy.*", "_ixsimpl", "pytest", "ixsimpl", "ixsimpl.*"]
+ignore_missing_imports = true
