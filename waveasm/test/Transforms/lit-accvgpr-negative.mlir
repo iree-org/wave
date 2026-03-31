@@ -13,4 +13,4 @@ waveasm.program @accvgpr_limit_fail target = #waveasm.target<#waveasm.gfx950, 5>
   waveasm.s_endpgm
 }
 
-// CHECK: Failed to allocate AGPR
+// CHECK: error: Failed to allocate AGPR: kernel requires {{[0-9]+}} but only 4 are available{{$}}

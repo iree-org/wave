@@ -20,6 +20,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "wave-interfaces"
 
 using namespace mlir;
 
@@ -41,11 +45,59 @@ wave::WaveHyperparameterAttr wave::getHyperparameters(Operation *op) {
 //-----------------------------------------------------------------------------
 
 LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
-  // The attribute is optional.
+  // Expected number of per-value index / vector_shape slots (same convention as
+  // the `index` attribute).
+  size_t expectedSlotCount = 0;
+  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+    llvm::SmallVector<Value> values;
+    iface.getIndexExprValuesAndDescriptions(values);
+    expectedSlotCount = values.size();
+  } else {
+    expectedSlotCount = op->getNumResults();
+  }
+
+  auto verifyVectorShapeArray = [&](ArrayAttr vsArr) -> LogicalResult {
+    if (vsArr.size() != expectedSlotCount)
+      return op->emitError("'vector_shape' attribute length (")
+             << vsArr.size() << ") does not match the number of per-value "
+             << "slots (" << expectedSlotCount << ")";
+    for (Attribute nestedAttr : vsArr) {
+      auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
+      if (!dict)
+        return op->emitError(
+            "'vector_shape' array elements must be dictionaries");
+      for (NamedAttribute na : dict) {
+        auto intAttr = dyn_cast<IntegerAttr>(na.getValue());
+        if (!intAttr)
+          return op->emitError("vector_shape entry ")
+                 << na.getName() << " must be an integer attribute";
+        if (!intAttr.getType().isSignlessInteger(64))
+          return op->emitError("vector_shape entry ")
+                 << na.getName()
+                 << " must be a 64-bit signless integer attribute, got "
+                 << intAttr.getType();
+      }
+    }
+    return success();
+  };
+
+  if (Attribute vsAttr = op->getAttr(WaveDialect::kVectorShapeAttrName)) {
+    auto vsArr = dyn_cast<ArrayAttr>(vsAttr);
+    if (!vsArr)
+      return op->emitError(
+          "'vector_shape' attribute must be an array of dictionaries");
+    if (failed(verifyVectorShapeArray(vsArr)))
+      return failure();
+  }
+
+  // The index attribute is optional.
   Attribute attribute =
       op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName);
-  if (!attribute)
+  if (!attribute) {
+    // `vector_shape` without `index` is still validated above against slot
+    // count.
     return success();
+  }
 
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
@@ -159,24 +211,21 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // getIndexExprValuesAndDescriptions. Otherwise, default to the number of op
   // results.
 
-  if (auto iface = dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
-    llvm::SmallVector<Value> values;
-    iface.getIndexExprValuesAndDescriptions(values);
-    if (values.size() != arr.size()) {
-      return op->emitError()
-             << WaveDialect::kIndexWaveExprListAttrName << " attribute length ("
-             << arr.size() << ") does not match the number of index expression "
-             << "values (" << values.size() << ")";
-    }
-  } else {
-    SmallVector<Value> values;
-    wave::detail::defaultGetIndexExprValuesAndDescriptions(op, values);
-    if (values.size() != arr.size()) {
-      return op->emitError() << "index attribute length (" << arr.size()
-                             << ") does not match the number of op results ("
-                             << values.size() << ")";
-    }
+  if (arr.size() != expectedSlotCount) {
+    return op->emitError() << WaveDialect::kIndexWaveExprListAttrName
+                           << " attribute length (" << arr.size()
+                           << ") does not match the number of per-value index "
+                           << "slots (" << expectedSlotCount << ")";
   }
+
+  if (Attribute vsAttr = op->getAttr(WaveDialect::kVectorShapeAttrName)) {
+    auto vsArr = cast<ArrayAttr>(vsAttr);
+    if (vsArr.size() != arr.size())
+      return op->emitError("'vector_shape' attribute length (")
+             << vsArr.size() << ") does not match 'index' attribute length ("
+             << arr.size() << ")";
+  }
+
   return success();
 }
 
@@ -241,6 +290,68 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
   printer.getStream() << "[";
   llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
     printOne(llvm::cast<DictionaryAttr>(a));
+  });
+  printer.getStream() << "]";
+}
+
+// ODS custom directive: parseWaveVectorShapeDictList /
+// printWaveVectorShapeDictList
+ParseResult wave::parseWaveVectorShapeDictList(OpAsmParser &parser,
+                                               ArrayAttr &out) {
+  auto parseSingleDict = [&](DictionaryAttr &dictOut) -> ParseResult {
+    SmallVector<NamedAttribute, 4> entries;
+    if (parser.parseLBrace())
+      return failure();
+    auto parseEntry = [&]() -> ParseResult {
+      StringRef symbolName;
+      if (parser.parseKeyword(&symbolName) || parser.parseColon())
+        return failure();
+      Attribute value;
+      if (failed(parser.parseAttribute(value)))
+        return failure();
+      auto intAttr = dyn_cast<IntegerAttr>(value);
+      if (!intAttr || !intAttr.getType().isSignlessInteger(64))
+        return parser.emitError(parser.getCurrentLocation())
+               << "expected 64-bit signless integer attribute for "
+                  "vector_shape entry";
+      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
+                           value);
+      return success();
+    };
+    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
+      return failure();
+    dictOut = parser.getBuilder().getDictionaryAttr(entries);
+    return success();
+  };
+
+  SmallVector<Attribute> dicts;
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
+                                     [&]() -> ParseResult {
+                                       DictionaryAttr dict;
+                                       if (failed(parseSingleDict(dict)))
+                                         return failure();
+                                       dicts.push_back(dict);
+                                       return success();
+                                     }))
+    return failure();
+  out = parser.getBuilder().getArrayAttr(dicts);
+  return success();
+}
+
+void wave::printWaveVectorShapeDictList(OpAsmPrinter &printer, Operation *op,
+                                        ArrayAttr arr) {
+  auto printOne = [&](DictionaryAttr dict) {
+    printer.getStream() << "{";
+    llvm::interleaveComma(
+        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
+          printer.getStream() << namedAttr.getName().getValue() << " : ";
+          printer.printAttribute(namedAttr.getValue());
+        });
+    printer.getStream() << "}";
+  };
+  printer.getStream() << "[";
+  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
+    printOne(cast<DictionaryAttr>(a));
   });
   printer.getStream() << "]";
 }
@@ -461,6 +572,146 @@ bool wave::detail::isReductionTypeInferenceComplete(Value input, Value init,
       llvm::ArrayRef<Value>{input, init, result}, [&](Value value) {
         return llvm::cast<WaveTensorType>(value.getType()).getFullySpecified();
       });
+}
+
+FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsForward(
+    TypeRange operandTypes, Value result,
+    llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError) {
+  auto targetTensorType = dyn_cast<WaveTensorType>(result.getType());
+  if (!targetTensorType) {
+    emitError() << "expected result tensor type, got " << result.getType();
+    return failure();
+  }
+
+  // Multiple operands appear after expansion, which requires index inference to
+  // work, so this is not expected to happen with correct pass pipeline setup.
+  if (operandExprs.size() != 2) {
+    emitError()
+        << "index inference not supported for reduction with multiple operands";
+    return failure();
+  }
+
+  // Forward propagation is identity only for symbols that are present.
+  return identityIndexExprsPropagate(
+             operandExprs[0].keepOnlySymbols(targetTensorType.getShape()),
+             resultExprs, result, "reduced value", "result", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], resultExprs, result,
+                                     "init", "result", emitError);
+}
+
+FailureOr<ChangeResult> wave::detail::propagateReductionIndexExprsBackward(
+    ValueRange operands,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError) {
+  auto initTensorType = dyn_cast<WaveTensorType>(operands[1].getType());
+  if (!initTensorType) {
+    emitError() << "expected init tensor type, got " << operands[1].getType();
+    return failure();
+  }
+  if (operandExprs.size() != 2) {
+    emitError()
+        << "index inference not supported for reduction with multiple operands";
+    return failure();
+  }
+
+  // Backward propagation to the reduced is identity: it will propagate
+  // expressions for symbols present in both target and source, but additional
+  // propagation from the op defining the operand is needed to cover reduction
+  // dimensions. Backward propagation to the init is full identity.
+  return identityIndexExprsPropagate(resultExprs[0], operandExprs, operands,
+                                     "result", "operands", emitError) |
+         identityIndexExprsPropagate(
+             operandExprs[0].keepOnlySymbols(initTensorType.getShape()),
+             operandExprs[1], operands[1], "operand", "init", emitError) |
+         identityIndexExprsPropagate(operandExprs[1], operandExprs[0],
+                                     operands[0], "init", "operand", emitError);
+}
+
+//-----------------------------------------------------------------------------
+// Index expr initialization
+//-----------------------------------------------------------------------------
+
+mlir::DictionaryAttr
+wave::detail::filterVectorShape(mlir::DictionaryAttr vectorShape,
+                                llvm::ArrayRef<wave::WaveSymbolAttr> symbols) {
+  if (!vectorShape)
+    return vectorShape;
+  llvm::SmallVector<NamedAttribute> filtered =
+      llvm::filter_to_vector(vectorShape, [&](NamedAttribute attr) {
+        return llvm::find_if(symbols, [&](wave::WaveSymbolAttr symbol) {
+                 return symbol.getName() == attr.getName().getValue();
+               }) != symbols.end();
+      });
+  return DictionaryAttr::get(vectorShape.getContext(), filtered);
+}
+
+static void initializeIndexExprsWithThreadIndependentConstraints(
+    Operation *op, Type type, wave::IndexExprsLatticeStorage &storage,
+    const wave::IndexExprsAnalysisInit &initObject) {
+  llvm::SmallVector<mlir::NamedAttribute> symbolMappings;
+  if (failed(wave::detail::buildThreadIndependentIndexMappings(
+          op, type, initObject, symbolMappings)))
+    return;
+
+  auto tensorType = cast<wave::WaveTensorType>(type);
+  storage.unsafeSet(wave::IndexExprsLatticeStorage(
+      DictionaryAttr::get(op->getContext(), symbolMappings),
+      wave::IndexExprsLatticeStorage::kLowestPriority,
+      wave::detail::filterVectorShape(
+          initObject.hardwareConstraint.getVectorShapes(),
+          tensorType.getShape())));
+}
+
+LogicalResult wave::detail::defaultInitializeIndexExprsForward(
+    WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    const wave::IndexExprsAnalysisInit &initObject,
+    wave::EmitErrorFn emitError) {
+  SmallVector<Value> indexedValues;
+  iface.getIndexExprValuesAndDescriptions(indexedValues);
+  for (Value value : indexedValues) {
+    auto opResult = dyn_cast<OpResult>(value);
+    if (!opResult || opResult.getOwner() != iface.getOperation())
+      continue;
+
+    initializeIndexExprsWithThreadIndependentConstraints(
+        iface, opResult.getType(), resultExprs[opResult.getResultNumber()],
+        initObject);
+  }
+  return success();
+}
+
+LogicalResult wave::detail::defaultInitializeIndexExprsBackward(
+    WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter) {
+  SmallVector<Value> indexedValues;
+  iface.getIndexExprValuesAndDescriptions(indexedValues);
+  for (Value value : indexedValues) {
+    auto opResult = dyn_cast<OpResult>(value);
+    if (opResult && opResult.getOwner() == iface.getOperation())
+      continue;
+
+    // A value may be used repeatedly as operand, make sure to update all
+    // corresponding operand expression even though they go to the same lattice
+    // after all.
+    [[maybe_unused]] bool updated = false;
+    for (unsigned i = 0, e = operandExprs.size(); i < e; ++i) {
+      if (iface->getOperand(i) != value)
+        continue;
+
+      initializeIndexExprsWithThreadIndependentConstraints(
+          iface, iface->getOperand(i).getType(), operandExprs[i], initObject);
+      updated = true;
+    }
+    assert(updated && "value declared in getIndexExprValuesAndDescriptions is "
+                      "neither op operand nor result");
+  }
+  return success();
 }
 
 //-----------------------------------------------------------------------------
@@ -797,15 +1048,31 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 //-----------------------------------------------------------------------------
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
-    : value(nullptr, kUninitializedState), priority(kLowestPriority) {}
+    : value(nullptr, kUninitializedState), vectorShape(nullptr) {}
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    DictionaryAttr concreteValue, int32_t priority)
-    : value(concreteValue, kSpecificTypeState), priority(priority) {}
+    DictionaryAttr concreteValue, int32_t priority, DictionaryAttr vectorShape)
+    : value(concreteValue, kSpecificTypeState), vectorShape(vectorShape) {
+  MLIRContext *ctx = concreteValue.getContext();
+  IntegerType i32 = IntegerType::get(ctx, 32);
+  IntegerAttr priAttr = IntegerAttr::get(i32, priority);
+  SmallVector<NamedAttribute> entries;
+  entries.reserve(concreteValue.size());
+  for (NamedAttribute attr : concreteValue)
+    entries.emplace_back(attr.getName(), priAttr);
+  priorities = DictionaryAttr::get(ctx, entries);
+}
+
+wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
+    DictionaryAttr concreteValue, DictionaryAttr priorities,
+    DictionaryAttr vectorShape)
+    : value(concreteValue, kSpecificTypeState), priorities(priorities),
+      vectorShape(vectorShape) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
-  return value == other.value && priority == other.priority;
+  return value == other.value && priorities == other.priorities &&
+         vectorShape == other.vectorShape;
 }
 
 bool wave::IndexExprsLatticeStorage::operator!=(
@@ -827,10 +1094,28 @@ DictionaryAttr wave::IndexExprsLatticeStorage::getConcreteValue() const {
   return llvm::cast<DictionaryAttr>(value.getPointer());
 }
 
+DictionaryAttr wave::IndexExprsLatticeStorage::getVectorShape() const {
+  if (value.getInt() != kSpecificTypeState)
+    return nullptr;
+  return vectorShape;
+}
+
+int32_t
+wave::IndexExprsLatticeStorage::getPriorityForKey(StringAttr key) const {
+  assert(getConcreteValue() && "no priority for lattice top/bottom");
+  if (!priorities)
+    return kLowestPriority;
+  Attribute val = priorities.get(key);
+  if (!val)
+    return kLowestPriority;
+  return llvm::cast<IntegerAttr>(val).getInt();
+}
+
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
   IndexExprsLatticeStorage result;
   result.value.setPointer(nullptr);
   result.value.setInt(kUndecidableState);
+  result.vectorShape = nullptr;
   return result;
 }
 
@@ -838,6 +1123,7 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::bottom() {
   IndexExprsLatticeStorage result;
   result.value.setPointer(nullptr);
   result.value.setInt(kUninitializedState);
+  result.vectorShape = nullptr;
   return result;
 }
 
@@ -878,13 +1164,18 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
 }
 
 llvm::FailureOr<wave::IndexExprsAnalysisInit>
-wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr,
+wave::IndexExprsAnalysisInit::create(Operation *parent,
+                                     Attribute constraintsAttr,
                                      wave::WaveHyperparameterAttr hyperparams) {
+  Location loc = parent->getLoc();
   wave::IndexExprsAnalysisInit initObject;
   initObject.hardwareConstraint =
       parseWaveConstraints(loc, constraintsAttr, initObject.symbolConstraints);
   if (initObject.hardwareConstraint == nullptr)
     return llvm::failure();
+
+  parent->walk(
+      [&](Operation *op) { initObject.deterministicOpOrder.push_back(op); });
 
   // If waves_per_block is explicitly provided, copy it to storage. Note that we
   // have verified they match the result of dividing block tiles with wave tiles
@@ -1206,9 +1497,82 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
       lhs.getContext(), allSymbols, *joinedStart, *joinedStep, *joinedStride);
 }
 
-wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
-    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
-    llvm::ArrayRef<Attribute> ignoredRhsSymbols) {
+// Returns a joined vector shape using per-key priorities. For each key, the
+// higher-priority entry wins. If priorities are equal and values differ,
+// returns nullptr indicating the failure to join (reaching top).
+static DictionaryAttr getJoinedVectorShape(DictionaryAttr lhs,
+                                           DictionaryAttr rhs,
+                                           DictionaryAttr lhsPriorities,
+                                           DictionaryAttr rhsPriorities) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+
+  if (lhs == rhs)
+    return lhs;
+
+  auto getPriority = [](DictionaryAttr map, StringAttr key) -> int32_t {
+    if (!map)
+      return wave::IndexExprsLatticeStorage::kLowestPriority;
+    Attribute val = map.get(key);
+    if (!val)
+      return wave::IndexExprsLatticeStorage::kLowestPriority;
+    return llvm::cast<IntegerAttr>(val).getInt();
+  };
+
+  SmallVector<NamedAttribute> joinedVectorShapeEntries;
+  joinedVectorShapeEntries.reserve(lhs.size() + rhs.size());
+
+  llvm::DenseSet<StringAttr> visited;
+  for (const NamedAttribute &attr : lhs) {
+    visited.insert(attr.getName());
+    Attribute rhsValue = rhs.get(attr.getName());
+    if (!rhsValue) {
+      joinedVectorShapeEntries.push_back(attr);
+      continue;
+    }
+    int32_t lhsPriority = getPriority(lhsPriorities, attr.getName());
+    int32_t rhsPriority = getPriority(rhsPriorities, attr.getName());
+    if (lhsPriority > rhsPriority) {
+      joinedVectorShapeEntries.push_back(attr);
+    } else if (rhsPriority > lhsPriority) {
+      joinedVectorShapeEntries.emplace_back(attr.getName(), rhsValue);
+    } else {
+      if (attr.getValue() != rhsValue)
+        return nullptr;
+      joinedVectorShapeEntries.push_back(attr);
+    }
+  }
+
+  for (const NamedAttribute &attr : rhs) {
+    if (!visited.contains(attr.getName()))
+      joinedVectorShapeEntries.push_back(attr);
+  }
+
+  return DictionaryAttr::get(lhs.getContext(), joinedVectorShapeEntries);
+}
+
+FailureOr<DictionaryAttr> wave::IndexExprsLatticeStorage::getJoinedVectorShape(
+    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs) {
+  if (lhs.isBottom() && rhs.isBottom())
+    return DictionaryAttr();
+  if (lhs.isTop() || rhs.isTop())
+    return failure();
+  if (lhs.isBottom())
+    return rhs.getVectorShape();
+  if (rhs.isBottom())
+    return lhs.getVectorShape();
+  if (DictionaryAttr result =
+          ::getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
+                                 lhs.getPriorities(), rhs.getPriorities()))
+    return result;
+  return failure();
+}
+
+wave::IndexExprsLatticeStorage
+wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
+                                     const IndexExprsLatticeStorage &rhs) {
   if (lhs == rhs)
     return lhs;
 
@@ -1216,67 +1580,66 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
   if (lhs.isTop() || rhs.isTop())
     return top();
 
-  // Only named symbols may be ignored.
-  llvm::StringSet<> ignoredRhsSymbolNames;
-  for (Attribute attr : ignoredRhsSymbols) {
-    auto symbolAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(attr);
-    if (!symbolAttr)
-      continue;
-    ignoredRhsSymbolNames.insert(symbolAttr.getName());
-  }
-
-  // Even if LHS is bottom, we still need to filter out ignored symbols.
-  if (lhs.isBottom()) {
-    if (ignoredRhsSymbols.empty() || rhs.isBottom())
-      return rhs;
-
-    llvm::SmallVector<NamedAttribute> filtered = llvm::filter_to_vector(
-        rhs.getConcreteValue(), [&](NamedAttribute namedAttr) {
-          return !ignoredRhsSymbolNames.contains(
-              namedAttr.getName().getValue());
-        });
-    return IndexExprsLatticeStorage(
-        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered),
-        rhs.getPriority());
-  }
-
+  // Bottom is neutral.
+  if (lhs.isBottom())
+    return rhs;
   if (rhs.isBottom())
     return lhs;
 
   MLIRContext *ctx = lhs.getConcreteValue().getContext();
-  DictionaryAttr lhsValue = lhs.getConcreteValue();
-  DictionaryAttr rhsValue = rhs.getConcreteValue();
+  DictionaryAttr lhsDict = lhs.getConcreteValue();
+  DictionaryAttr rhsDict = rhs.getConcreteValue();
 
-  // Join specific values per symbol.
+  // Join specific values per symbol using per-key priorities.
+  IntegerType i32 = IntegerType::get(ctx, 32);
   llvm::DenseMap<StringAttr, Attribute> result;
-  for (NamedAttribute namedAttr : lhsValue) {
+  llvm::DenseMap<StringAttr, int32_t> resultPriorities;
+  for (NamedAttribute namedAttr : lhsDict) {
     result[namedAttr.getName()] = namedAttr.getValue();
+    resultPriorities[namedAttr.getName()] =
+        lhs.getPriorityForKey(namedAttr.getName());
   }
-  for (NamedAttribute namedAttr : rhsValue) {
-    if (ignoredRhsSymbolNames.contains(namedAttr.getName().getValue()))
-      continue;
+  for (NamedAttribute namedAttr : rhsDict) {
+    StringAttr key = namedAttr.getName();
+    int32_t rhsPriority = rhs.getPriorityForKey(key);
 
-    // If the mapping for the symbol doesn't exist in the result yet, just take
-    // it from the RHS.
-    auto [it, inserted] =
-        result.try_emplace(namedAttr.getName(), namedAttr.getValue());
-    if (inserted)
+    auto [it, inserted] = result.try_emplace(key, namedAttr.getValue());
+    if (inserted) {
+      resultPriorities[key] = rhsPriority;
       continue;
+    }
+
+    int32_t lhsPriority = lhs.getPriorityForKey(key);
 
     // The symbol has a mapping on both LHS and RHS, join them.
-    auto lhsValue = llvm::cast<wave::WaveIndexMappingAttr>(it->getSecond());
-    auto rhsValue =
+    auto lhsMapping = llvm::cast<wave::WaveIndexMappingAttr>(it->getSecond());
+    auto rhsMapping =
         llvm::cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
-    if (lhsValue == rhsValue)
+    if (lhsMapping == rhsMapping) {
+      resultPriorities[key] = std::max(lhsPriority, rhsPriority);
       continue;
+    }
 
     wave::WaveIndexMappingAttr joinedMapping = getIndexExprsJoinMappings(
-        lhsValue, rhsValue, lhs.getPriority(), rhs.getPriority());
+        lhsMapping, rhsMapping, lhsPriority, rhsPriority);
     if (!joinedMapping)
       return IndexExprsLatticeStorage::top();
 
-    result[namedAttr.getName()] = joinedMapping;
+    result[key] = joinedMapping;
+    resultPriorities[key] = std::max(lhsPriority, rhsPriority);
   }
+
+  DictionaryAttr joinedVectorShape =
+      ::getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
+                             lhs.getPriorities(), rhs.getPriorities());
+  if (!joinedVectorShape && (lhs.getVectorShape() || rhs.getVectorShape()))
+    return IndexExprsLatticeStorage::top();
+
+  SmallVector<NamedAttribute> priEntries;
+  priEntries.reserve(resultPriorities.size());
+  for (auto &[key, pri] : resultPriorities)
+    priEntries.emplace_back(key, IntegerAttr::get(i32, pri));
+
   return IndexExprsLatticeStorage(
       DictionaryAttr::get(ctx, llvm::map_to_vector(result,
                                                    [](auto &&pair) {
@@ -1284,7 +1647,7 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
                                                          pair.first,
                                                          pair.second);
                                                    })),
-      std::max(lhs.getPriority(), rhs.getPriority()));
+      DictionaryAttr::get(ctx, priEntries), joinedVectorShape);
 }
 
 wave::IndexExprsLatticeStorage
@@ -1311,13 +1674,24 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
       llvm::filter_to_vector(getConcreteValue(), [&](NamedAttribute attr) {
         return symbolNames.contains(attr.getName().getValue());
       });
+  DictionaryAttr filteredVectorShape =
+      detail::filterVectorShape(getVectorShape(), symbols);
 
   if (filtered.empty())
     return bottom();
 
-  return IndexExprsLatticeStorage(
-      DictionaryAttr::get(getConcreteValue().getContext(), filtered),
-      getPriority());
+  MLIRContext *ctx = getConcreteValue().getContext();
+  IntegerType i32 = IntegerType::get(ctx, 32);
+  SmallVector<NamedAttribute> filteredPriorities;
+  filteredPriorities.reserve(filtered.size());
+  for (const NamedAttribute &attr : filtered)
+    filteredPriorities.emplace_back(
+        attr.getName(),
+        IntegerAttr::get(i32, getPriorityForKey(attr.getName())));
+
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, filtered),
+                                  DictionaryAttr::get(ctx, filteredPriorities),
+                                  filteredVectorShape);
 }
 
 wave::IndexExprsLatticeStorage
@@ -1338,7 +1712,7 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         return NamedAttribute(attr.getName(), value);
       });
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated),
-                                  getPriority());
+                                  getPriorities(), getVectorShape());
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
@@ -1347,7 +1721,18 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   } else if (isTop()) {
     os << "<top>";
   } else {
-    os << "[pri: " << getPriority() << "] " << getConcreteValue();
+    os << "[pri: {";
+    bool first = true;
+    for (NamedAttribute attr : getConcreteValue()) {
+      if (!first)
+        os << ", ";
+      first = false;
+      os << attr.getName().getValue() << "="
+         << getPriorityForKey(attr.getName());
+    }
+    os << "}] " << getConcreteValue();
+    if (DictionaryAttr shape = getVectorShape())
+      os << " vectorShape: " << shape;
   }
 }
 
@@ -1369,70 +1754,68 @@ llvm::operator<<(llvm::raw_ostream &os,
 
 llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
     llvm::ArrayRef<IndexExprsLatticeStorage> from,
-    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, TypeRange toTypes,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, ValueRange toValues,
     llvm::StringRef fromName, llvm::StringRef toName,
     wave::EmitErrorFn emitError) {
-  // Join all "from" lattices.
-  IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::bottom();
-  bool fromTop = false;
-  for (const IndexExprsLatticeStorage &fromLattice : from) {
-    // If one of the from lattices reached the top, no need to keep joining, the
-    // result is known to be top.
-    if (fromLattice.isTop()) {
-      fromTop = true;
-      joined = IndexExprsLatticeStorage::top();
-      break;
-    }
-    joined = IndexExprsLatticeStorage::join(joined, fromLattice);
-  }
-
-  // Report if joining non-top "from" lattices reached the top as this is
-  // indicative of a "sideways" conflict.
-  if (joined.isTop() && !fromTop) {
-    InFlightDiagnostic diag = emitError()
-                              << "incompatible " << fromName << " lattices"
-                              << " when propagating from those to " << toName;
-    for (auto &&[i, fromLattice] : llvm::enumerate(from)) {
-      diag.attachNote() << fromName << " #" << i << " lattice: " << fromLattice;
-    }
-    return diag;
-  }
-
-  // Propagate to all "to" lattices.
   ChangeResult changeResult = ChangeResult::NoChange;
-  for (auto &&[i, toLattice] : llvm::enumerate(to)) {
-    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(toTypes[i]);
-    if (!tensorType) {
-      toLattice = IndexExprsLatticeStorage::top();
+  for (auto &&[toNum, toLattice, toValue] : llvm::enumerate(to, toValues)) {
+    if (toLattice.isTop())
       continue;
-    }
-    IndexExprsLatticeStorage filtered =
-        joined.keepOnlySymbols(tensorType.getShape());
-    IndexExprsLatticeStorage newLattice =
-        IndexExprsLatticeStorage::join(toLattice, filtered);
 
-    // Report an error only when the lattice moved to the top state, which is
-    // indicative of a conflict, not when it was in the top state to start with.
-    // Also avoid reporting errors when joined lattice is in the top state: it
-    // is either reported above or it means the conflict was found elsewhere and
-    // we are just propagating it.
-    if (newLattice.isTop() && !toLattice.isTop() && !filtered.isTop()) {
-      InFlightDiagnostic diag =
-          emitError() << "conflict when propagating index expressions from "
-                      << fromName << " to " << toName << " #" << i;
-      diag.attachNote() << "original " << toName << " lattice: " << toLattice;
-      for (auto &&[j, fromLattice] : llvm::enumerate(from)) {
-        diag.attachNote() << fromName << " #" << j
-                          << " lattice: " << fromLattice;
+    auto toTensorType = dyn_cast<WaveTensorType>(toValue.getType());
+    if (!toTensorType || !toTensorType.getFullySpecified())
+      continue;
+
+    for (auto &&[fromNum, fromLattice] : llvm::enumerate(from)) {
+      bool fromTop = false;
+
+      // If one of the from lattices reached the top, no need to keep joining,
+      // the result is known to be top. The error will have been reported
+      // already, no need to repeat it.
+      if (fromLattice.isTop()) {
+        fromTop = true;
+        toLattice = IndexExprsLatticeStorage::top();
+        changeResult = ChangeResult::Change;
+        break;
       }
-      return diag;
-    }
 
-    if (newLattice != toLattice) {
-      changeResult = ChangeResult::Change;
-      toLattice = newLattice;
+      // XXX: a more efficient way would have been to join all "from" lattices
+      // first, and then join that into each "to" lattice. But this heuristic
+      // would not work in that case.
+      if (!wave::detail::shouldPropagateIndexExprs(fromLattice, toLattice,
+                                                   toValue)) {
+        LLVM_DEBUG(LDBG() << "not propagating index expressions from "
+                          << fromName << " #" << fromNum << " to " << toName
+                          << " #" << toNum << "\n";);
+        continue;
+      }
+
+      IndexExprsLatticeStorage joined =
+          IndexExprsLatticeStorage::join(toLattice, fromLattice);
+      if (joined.isTop() && !fromTop) {
+        bool isVectorShapeConflict =
+            failed(IndexExprsLatticeStorage::getJoinedVectorShape(
+                toLattice, fromLattice)) &&
+            toLattice.getVectorShape() && fromLattice.getVectorShape();
+        InFlightDiagnostic diag =
+            emitError() << "conflict when propagating "
+                        << (isVectorShapeConflict ? "vector shapes"
+                                                  : "index expressions")
+                        << " from " << fromName << " #" << fromNum << " to "
+                        << toName << " #" << toNum;
+        diag.attachNote() << "original " << toName << " lattice: " << toLattice;
+        diag.attachNote() << fromName << " #" << fromNum
+                          << " lattice: " << fromLattice;
+        return diag;
+      }
+      joined = joined.keepOnlySymbols(toTensorType.getShape());
+      if (joined != toLattice) {
+        changeResult = ChangeResult::Change;
+        toLattice = joined;
+      }
     }
   }
+
   return changeResult;
 }
 

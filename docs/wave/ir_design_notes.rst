@@ -89,8 +89,8 @@ are represented.  As a result, the MLIR-imported trace may list more
 captures than the source trace.
 
 
-Index Expressions and Index Sequence Analysis
----------------------------------------------
+Index Expressions
+-----------------
 
 Index expressions describe how elements of a tensor are distributed across
 multiple workitems (threads) and workgroups (blocks), as well as across multiple
@@ -129,6 +129,49 @@ called `ordered_syms`, which needs to be revised. Index expressions are lattice
 objects attached to a value by a dataflow analysis, but they may be attached to
 operations similarly to Python for verification purposes.
 
+Index Sequence analysis
+-----------------------
+
+Index sequence analysis determines index expressions for relevant objects.
+
+**In Python**, index "sequences" are associated with an operation and are
+typically reflective of the operation's result. For MMAs, the sequence contains
+piecewise expressions with the condition indicating whether the piece
+corresponds to the accumulator *operand* (or identically the result) or the
+LHS/RHS operands.
+
+The process is driven by a naive pseudo-dataflow analysis that traverses the
+transitive sources of operation's operands (backward slice) and the transitive
+users of operation's results (forward slice) in a greedy manner. Depending on
+the presence of MMA operations or Reduction operations, different logic is used
+to determine the index expressions with no fallback. That is, if the MMA
+operations are present, the logic specific to Reduction operations is never
+triggered. This may lead to operations missing index expressions.
+
+**in MLIR**, index expressions are a property of a *value* indicating how it is
+distributed across workgroups, workitems and copies of the operation (instances)
+that appear after the expansion process. For compatibility, they may be
+reflected in the ``index`` attribute of an operation.
+
+The process is a combined forward and backward dataflow analysis sharing a
+lattice. To reflect Python behavior, it is using a priority mechanism based on
+the "source" of the index expression -- MMA, Reduction or Write, in order --
+with higher-priority expressions overriding lower-priority ones instead of
+causing propagation conflicts. Furthermore, MMA operations have additional
+priority between themselves following the walk order in IR post-order traversal,
+earlier MMA operations have higher priority.
+
+This complexity is entirely due to backwards compatibility with Python and
+should be entirely reworked towards a sound and consistent layout propagation
+dataflow analysis.
+
+**Both** implement a heuristic that avoids propagating index expressions if they
+don't cover non-unit dimensions of the vector shape, all such dimensions if the
+rank of the index expression dictionary is larger, or a subset thereof if it is
+smaller (but the dictionary must not contain other expressions). This heuristic
+is based on some notion of "completeness" of the index expressions, but is
+practically needed to avoid conflicts in attention kernels. A more robust
+solution would require comprehensive re-layout insertion.
 
 IndexMapping
 ------------

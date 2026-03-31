@@ -56,9 +56,18 @@ mlir::ParseResult parseWaveIndexDict(mlir::OpAsmParser &parser,
 void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
                         mlir::ArrayAttr arr);
 
+mlir::ParseResult parseWaveVectorShapeDictList(mlir::OpAsmParser &parser,
+                                               mlir::ArrayAttr &out);
+void printWaveVectorShapeDictList(mlir::OpAsmPrinter &printer,
+                                  mlir::Operation *op, mlir::ArrayAttr arr);
+
 //-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------
+
+class IndexExprsLatticeStorage;
+class IndexExprsAnalysisInit;
+class WaveInferIndexExprsOpInterface;
 
 namespace detail {
 // Propagate shape information from `from` tensor types to `to` tensor types.
@@ -126,6 +135,18 @@ llvm::FailureOr<mlir::ChangeResult> propagateReductionTypesBackward(
 // operation is complete, i.e., all values have fully specified types.
 bool isReductionTypeInferenceComplete(mlir::Value input, mlir::Value init,
                                       mlir::Value result);
+
+llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsForward(
+    mlir::TypeRange operandTypes, mlir::Value result,
+    llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError);
+
+llvm::FailureOr<mlir::ChangeResult> propagateReductionIndexExprsBackward(
+    mlir::ValueRange operands,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
+    EmitErrorFn emitError);
 
 // Check whether the `from` and `to` tensor types have reconcilable shapes and
 // and print error messages to `errs` otherwise. The error message uses `toName`
@@ -207,6 +228,30 @@ public:
                                                  concrete.getResult()))
       concrete.removeAxisAttr();
     return llvm::success();
+  }
+};
+
+template <typename OpTy>
+class ReductionIndexExprsInferenceOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy,
+                                      ReductionIndexExprsInferenceOpTrait> {
+public:
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsForward(
+      llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+      EmitErrorFn errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    return detail::propagateReductionIndexExprsForward(
+        concrete.getOperands().getTypes(), concrete.getResult(), operandExprs,
+        resultExprs, errs);
+  }
+
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsBackward(
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs, EmitErrorFn errs) {
+    auto concrete = llvm::cast<OpTy>(this->getOperation());
+    return detail::propagateReductionIndexExprsBackward(
+        concrete.getOperands(), operandExprs, resultExprs, errs);
   }
 };
 
@@ -545,10 +590,10 @@ private:
 
 public:
   // Create an initialization object from the constraints attribute, report
-  // errors as diagnostics at the given location. The hyperparameters are
+  // errors as diagnostics at the parent location. The hyperparameters are
   // used for computing waves_per_block from wave constraints.
   static llvm::FailureOr<IndexExprsAnalysisInit>
-  create(mlir::Location loc, mlir::Attribute constraintsAttr,
+  create(mlir::Operation *parent, mlir::Attribute constraintsAttr,
          wave::WaveHyperparameterAttr hyperparams = nullptr);
 
   // Hardware constraint.
@@ -561,6 +606,12 @@ public:
   // Waves-per-block extracted from the hardware constraint or computed from
   // wave constraints. Always stored here, even if copied from an attribute.
   llvm::SmallVector<unsigned, 3> wavesPerBlock;
+
+  // Ordered list of operations, they will be given decreasing priorities to
+  // avoid conflicts.
+  // XXX: this is an attempt to replicate accidental behavior in pywave and
+  // needs to be replaced with a more principled reconciliation mechanism.
+  llvm::SmallVector<mlir::Operation *> deterministicOpOrder;
 };
 
 // Lattice for propagating index expressions across wave dialect operations.
@@ -580,8 +631,11 @@ public:
 
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
+                           mlir::DictionaryAttr vectorShape);
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
-                           int32_t priority);
+                           mlir::DictionaryAttr priorities,
+                           mlir::DictionaryAttr vectorShape);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
@@ -599,12 +653,19 @@ public:
   // specified or not, or null if the lattice instance is a top or a bottom.
   mlir::DictionaryAttr getConcreteValue() const;
 
-  // Return the priority of this lattice instance containing a concrete value,
-  // assert otherwise.
-  int32_t getPriority() const {
-    assert(getConcreteValue() && "no priority for lattice top/bottom");
-    return priority;
+  // Return the priority for a specific key, defaulting to kLowestPriority.
+  int32_t getPriorityForKey(mlir::StringAttr key) const;
+
+  // Return the per-key priorities as a DictionaryAttr mapping StringAttr keys
+  // to IntegerAttr values. Asserts on non-concrete values.
+  mlir::DictionaryAttr getPriorities() const {
+    assert(getConcreteValue() && "no priorities for lattice top/bottom");
+    return priorities;
   }
+
+  // Returns the vector shape stored in the lattice instance, or null if the
+  // lattice instance is a top or a bottom or has no vector shape set.
+  mlir::DictionaryAttr getVectorShape() const;
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -612,10 +673,15 @@ public:
   // Return the bottom lattice instance.
   static IndexExprsLatticeStorage bottom();
 
+  // Return the join of vector shapes if present in two lattices, null if both
+  // vector shapes are absent or failure if there is a conflict.
+  static llvm::FailureOr<mlir::DictionaryAttr>
+  getJoinedVectorShape(const IndexExprsLatticeStorage &lhs,
+                       const IndexExprsLatticeStorage &rhs);
+
   // Join two lattice instances and return the result.
-  static IndexExprsLatticeStorage
-  join(const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
-       llvm::ArrayRef<mlir::Attribute> ignoredRhsSymbols = {});
+  static IndexExprsLatticeStorage join(const IndexExprsLatticeStorage &lhs,
+                                       const IndexExprsLatticeStorage &rhs);
 
   // XXX: backward analysis calls `meet` instead of `join`, but it isn't related
   // to the direction of the analysis. Just defer to join.
@@ -651,9 +717,18 @@ private:
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
-  // Priority of this value. Specific values with higher priority override
-  // values with lower priority in joins.
-  int32_t priority;
+  // Per-key priorities as a DictionaryAttr mapping symbol names to IntegerAttr
+  // priority values. Each symbol in the dictionary has its own priority.
+  // Higher-priority entries override lower-priority entries in joins; entries
+  // with equal priorities are structurally merged. Using DictionaryAttr avoids
+  // per-instance heap allocation since attrs are interned.
+  mlir::DictionaryAttr priorities;
+
+  // The vector shape associated with this lattice value. This is a dictionary
+  // mapping symbol names to vector dimension sizes. Two concrete lattice values
+  // with different vector shapes and equal priority cannot be joined and will
+  // result in top.
+  mlir::DictionaryAttr vectorShape;
 
   // State flags.
   constexpr static unsigned kUninitializedState = 0;
@@ -678,9 +753,60 @@ namespace detail {
 llvm::FailureOr<mlir::ChangeResult>
 identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::MutableArrayRef<IndexExprsLatticeStorage> to,
-                            mlir::TypeRange toTypes, llvm::StringRef fromName,
+                            mlir::ValueRange toValues, llvm::StringRef fromName,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
+
+// Heuristic to stop index expression propagation. It stops
+// propagation of index expressions if any of the following conditions is met:
+//   (1) the propagation would happen to the result of the MMA op;
+//   (2) any of the symbols in the shape of the "to" _value_ are not present in
+//   the "from" vector shape; (3) there are dimensions in the "to" index
+//   expression don't correspond to non-unit entires in the "from" vector shape
+//   (when there are less "to" dimensions than entries in the "from" vector
+//   shape); (4) there are non-unit entries in the "vector" shape that don't
+//   correspond to a "to" index expression (when there are less entires in the
+//   "from" vector shape).
+// XXX: conditions 2-4 are carried over from the python prototype and are not
+// principled.
+//
+// Defined in WaveOps.cpp to uss specific op names, which we don't want in
+// interfaces.
+// TODO: move all the index expr logic to one file and avoid this spreadout.
+bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
+                               const wave::IndexExprsLatticeStorage &to,
+                               mlir::Value toValue);
+
+// Build thread-independent index mapping for a single tensor type and append to
+// symbolMappings. Used by identity and reduction index expr initialization.
+// Defined in WaveOps.cpp to use mixInThreadIndependentConstraints function
+// template that needs access to specific ops, which we don't want in
+// interfaces.
+// TODO: move all the index expr logic to one file and avoid this spreadout.
+llvm::LogicalResult buildThreadIndependentIndexMappings(
+    mlir::Operation *op, mlir::Type type,
+    const IndexExprsAnalysisInit &initObject,
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings);
+
+// Create a new vector shape dictionary attribute with only the provided symbols
+// present.
+mlir::DictionaryAttr
+filterVectorShape(mlir::DictionaryAttr vectorShape,
+                  llvm::ArrayRef<wave::WaveSymbolAttr> symbols);
+
+// Default implementation for interface: initialize index expressions with
+// thread-independent constraints for all values returned by
+// getIndexExprValuesAndDescriptions. Forward analysis initializes results,
+// backward analysis initializes operands.
+llvm::LogicalResult defaultInitializeIndexExprsForward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError);
+llvm::LogicalResult defaultInitializeIndexExprsBackward(
+    wave::WaveInferIndexExprsOpInterface iface,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
+    wave::EmitDelayedErrorFn &delayedErrorEmitter);
 
 // Check the index expressions is a concrete value rather lattice top/bottom and
 // append it to the indexExprs list. If it is lattice top/bottom, report an
@@ -711,7 +837,7 @@ public:
       llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
       wave::EmitErrorFn emitError) {
     return wave::detail::identityIndexExprsPropagate(
-        operandExprs, resultExprs, this->getOperation()->getResultTypes(),
+        operandExprs, resultExprs, this->getOperation()->getResults(),
         "operand", "result", emitError);
   }
 
@@ -721,7 +847,7 @@ public:
       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
       wave::EmitErrorFn emitError) {
     return wave::detail::identityIndexExprsPropagate(
-        resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
+        resultExprs, operandExprs, this->getOperation()->getOperands(),
         "result", "operand", emitError);
   }
 };

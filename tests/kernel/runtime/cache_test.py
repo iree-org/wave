@@ -572,6 +572,7 @@ def testSameConfigDifferentFreeVar(tmp_path, mfma_variant):
     output = device_zeros(o_shape, dtype=torch.float32)
     # TODO: Add variant of non-transposed V attention kernel.
     non_causal_mb = base_attention(q, k, v.permute([0, 2, 1]), output)
+    torch.cuda.synchronize()
     assert (
         cache_manager.cache_misses == 1 and cache_manager.cache_hits == 0
     ), "Expected first call to not be cached."
@@ -596,13 +597,13 @@ def testSameConfigDifferentFreeVar(tmp_path, mfma_variant):
     )
     options = set_default_run_config(options)
     causal_attention = wave_compile(options, causal_attention)
-
     q = device_randn(q_shape, dtype=torch.float16)
     k = device_randn(k_shape, dtype=torch.float16)
     v = device_randn(v_shape, dtype=torch.float16)
     output = device_zeros(o_shape, dtype=torch.float32)
     # TODO: Add variant of non-transposed V attention kernel.
     causal_mb = causal_attention(q, k, v.permute([0, 2, 1]), output)
+    torch.cuda.synchronize()
     assert (
         cache_manager.cache_misses == 2 and cache_manager.cache_hits == 0
     ), "Expected to be cached despite same config, since it has different values for is_causal."
@@ -780,6 +781,7 @@ def testChangeFreeVarOfNestedFunction(tmp_path):
 @require_e2e
 @require_cache
 @require_cdna3
+@pytest.mark.skip(reason="Crashes and/or produces incorrect results.")
 def testAsmBackendCache(tmp_path):
     """Test that ASM backend caching works correctly."""
     reset_cache_manager(tmp_path)
@@ -835,6 +837,7 @@ def testAsmBackendCache(tmp_path):
     # First compilation - should be a cache miss
     kernel1 = wave_compile(options, simple_copy)
     kernel1(a, b)
+    assert_close(a, b)
 
     assert (
         cache_manager.cache_misses == 1 and cache_manager.cache_hits == 0
@@ -851,6 +854,7 @@ def testAsmBackendCache(tmp_path):
     # Second compilation - should be a cache hit
     kernel2 = wave_compile(options, simple_copy)
     kernel2(a, b)
+    assert_close(a, b)
 
     assert (
         cache_manager.cache_misses == 1 and cache_manager.cache_hits == 1

@@ -486,14 +486,77 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
 std::optional<int64_t>
 WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   DictionaryAttr mapping = getMapping();
-  Attribute attr = mapping.get(symbolName);
-  if (!attr)
+  llvm::StringMap<int64_t> resolved;
+
+  // Iterative worklist: each entry is a symbol name still to resolve.
+  // When we pop a name whose dependencies are all resolved we can evaluate
+  // its expression; otherwise we push it back followed by its unresolved
+  // dependencies (topological-sort style).
+  llvm::SmallVector<StringRef> worklist({symbolName});
+
+  while (!worklist.empty()) {
+    StringRef name = worklist.back();
+
+    if (resolved.contains(name)) {
+      worklist.pop_back();
+      continue;
+    }
+
+    Attribute attr = mapping.get(name);
+    if (!attr)
+      return std::nullopt;
+
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+      resolved[name] = intAttr.getInt();
+      worklist.pop_back();
+      continue;
+    }
+
+    auto exprList = cast<WaveExprListAttr>(attr);
+
+    // Push unresolved dependencies so they get processed first.
+    bool pushedDeps = false;
+    for (Attribute symAttr : exprList.getSymbols()) {
+      StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
+      if (!resolved.contains(dep)) {
+        worklist.push_back(dep);
+        pushedDeps = true;
+      }
+    }
+
+    if (pushedDeps)
+      continue;
+
+    // All deps resolved -- evaluate the affine expression.
+    AffineMap map = exprList.getMap();
+    llvm::SmallVector<AffineExpr> replacements;
+    replacements.reserve(map.getNumSymbols());
+    for (Attribute symAttr : exprList.getSymbols()) {
+      int64_t val = resolved[cast<WaveSymbolAttr>(symAttr).getName()];
+      replacements.push_back(getAffineConstantExpr(val, mapping.getContext()));
+    }
+
+    AffineExpr result = map.getResult(0).replaceSymbols(replacements);
+    result = simplifyAffineExpr(result, map.getNumDims(), map.getNumSymbols());
+    auto constExpr = dyn_cast<AffineConstantExpr>(result);
+    if (!constExpr)
+      return std::nullopt;
+
+    resolved[name] = constExpr.getValue();
+    worklist.pop_back();
+  }
+
+  auto it = resolved.find(symbolName);
+  if (it == resolved.end())
     return std::nullopt;
+  return it->second;
+}
 
-  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
-    return intAttr.getInt();
-
-  return std::nullopt;
+int64_t
+WaveHyperparameterAttr::getKnownSymbolValue(StringRef symbolName) const {
+  std::optional<int64_t> value = getSymbolValue(symbolName);
+  assert(value && "expected symbol to exist and be resolvable");
+  return *value;
 }
 
 bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
@@ -1032,88 +1095,81 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
     function_ref<InFlightDiagnostic()> emitError, Operation *op) const {
   WaveNormalForm form = getValue();
 
-  // No normal form required.
-  if (form == wave::WaveNormalForm::None)
+  switch (form) {
+  case wave::WaveNormalForm::FunctionBoundarySpecified: {
+    auto func = llvm::dyn_cast<FunctionOpInterface>(op);
+    if (!func)
+      return llvm::success();
+    constexpr llvm::StringLiteral kMessage =
+        "normal form requires tensor types to be fully specified at "
+        "function boundaries";
+    if (llvm::failed(verifyTypesFullySpecified(
+            /*loc*/ std::nullopt, func.getArgumentTypes(), kMessage)))
+      return emitError() << kMessage;
+    if (llvm::failed(verifyTypesFullySpecified(
+            /*loc*/ std::nullopt, func->getResultTypes(), kMessage)))
+      return emitError() << kMessage;
     return llvm::success();
-
-  if (auto func = llvm::dyn_cast<FunctionOpInterface>(op)) {
-    if (wave::bitEnumContainsAll(
-            form, wave::WaveNormalForm::FunctionBoundarySpecified)) {
-      constexpr llvm::StringLiteral kMessage =
-          "normal form requires tensor types to be fully specified at "
-          "function boundaries";
-      if (llvm::failed(verifyTypesFullySpecified(
-              /*loc*/ std::nullopt, func.getArgumentTypes(), kMessage)))
-        return emitError() << kMessage;
-
-      if (llvm::failed(verifyTypesFullySpecified(
-              /*loc*/ std::nullopt, func->getResultTypes(), kMessage)))
-        return emitError() << kMessage;
-    }
   }
-
-  if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::OpTypesSpecified)) {
+  case wave::WaveNormalForm::OpTypesSpecified: {
     constexpr llvm::StringLiteral kMessage =
         "normal form requires tensor types to be fully specified";
     if (llvm::failed(visitOpRelatedTypes(op, verifyTypesFullySpecified,
                                          kMessage,
-                                         /*emitDiagnostics*/ false))) {
+                                         /*emitDiagnostics*/ false)))
       return emitError() << kMessage;
-    }
+    return llvm::success();
   }
-
-  if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::MemoryOnlyTypes)) {
+  case wave::WaveNormalForm::MemoryOnlyTypes: {
     constexpr llvm::StringLiteral kMessage =
         "normal form requires tensor types to have only memory address spaces "
         "(elements per thread propagation missing?)";
     if (llvm::failed(visitOpRelatedTypes(op, verifyMemoryOnlyAddressSpaces,
                                          kMessage,
-                                         /*emitDiagnostics*/ false))) {
+                                         /*emitDiagnostics*/ false)))
       return emitError() << kMessage;
-    }
+    return llvm::success();
   }
+  case wave::WaveNormalForm::IndexExprsSpecified: {
+    if (!op->hasTrait<wave::HasWaveIndexMapping>() ||
+        op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName))
+      return llvm::success();
 
-  if (wave::bitEnumContainsAll(form,
-                               wave::WaveNormalForm::IndexExprsSpecified)) {
-    if (op->hasTrait<wave::HasWaveIndexMapping>() &&
-        !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
-      // Only require index expressions for read/write ops, or ops with
-      // WaveTensorType operands/results. Vector-only ops (after
-      // elements-per-thread propagation) don't need index expressions.
-      bool hasWaveTensor = llvm::any_of(op->getOperandTypes(),
-                                        llvm::IsaPred<wave::WaveTensorType>) ||
-                           llvm::any_of(op->getResultTypes(),
-                                        llvm::IsaPred<wave::WaveTensorType>);
-      bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
+    bool hasWaveTensor =
+        llvm::any_of(op->getOperandTypes(),
+                     llvm::IsaPred<wave::WaveTensorType>) ||
+        llvm::any_of(op->getResultTypes(), llvm::IsaPred<wave::WaveTensorType>);
+    bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
 
-      // Parent allocations (byte buffers for combined shared memory) don't
-      // need index expressions. They are never accessed directly by read/write
-      // operations - only child AllocateOps reference them as a parent buffer.
-      // A parent allocation has no operands (no parent buffer to view into).
-      bool isParentAllocation =
-          llvm::isa<wave::AllocateOp>(op) && op->getNumOperands() == 0;
+    // Parent allocations (byte buffers for combined shared memory) don't
+    // need index expressions. They are never accessed directly by read/write
+    // operations - only child AllocateOps reference them as a parent buffer.
+    // A parent allocation has no operands (no parent buffer to view into).
+    bool isParentAllocation =
+        llvm::isa<wave::AllocateOp>(op) && op->getNumOperands() == 0;
 
-      if ((!hasWaveTensor && !isMemoryAccessOp) || isParentAllocation)
-        return llvm::success();
+    if ((!hasWaveTensor && !isMemoryAccessOp) || isParentAllocation)
+      return llvm::success();
 
-      if (isMemoryAccessOp)
-        return emitError() << "missing index expressions on memory access "
-                              "operation, required by normal form";
+    if (isMemoryAccessOp)
+      return emitError() << "missing index expressions on memory access "
+                            "operation, required by normal form";
 
-      return emitError() << "missing index expressions on operation with "
-                            "WaveTensorType operand/result, required by "
-                            "normal form";
-    }
+    return emitError() << "missing index expressions on operation with "
+                          "WaveTensorType operand/result, required by "
+                          "normal form";
   }
-
-  if (wave::bitEnumContainsAll(form,
-                               wave::WaveNormalForm::ResolvedAllocations)) {
-    if (auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op)) {
-      if (!llvm::isa<MemRefType>(allocOp.getResult().getType()))
-        return emitError() << "normal form requires all wave.allocate "
-                              "operations to have memref result type";
-    }
+  case wave::WaveNormalForm::ResolvedAllocations: {
+    auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op);
+    if (!allocOp)
+      return llvm::success();
+    if (!llvm::isa<MemRefType>(allocOp.getResult().getType()))
+      return emitError() << "normal form requires all wave.allocate "
+                            "operations to have memref result type";
+    return llvm::success();
   }
-
-  return llvm::success();
+  case wave::WaveNormalForm::OrderedSymsSpecified:
+    return llvm::success();
+  }
+  llvm_unreachable("unhandled normal form");
 }

@@ -513,3 +513,133 @@ class TestConvertIndexMappingArrayToSympy:
             (1, ~index_symbol(MMA_ACC_SYMBOL_NAME)),
             (16, index_symbol(MMA_ACC_SYMBOL_NAME)),
         )
+
+    def test_mma_op_with_two_batch_dimensions(self):
+        """Batched MMA: b1 and b2 appear on lhs/rhs/acc/result; M still piecewise."""
+        m_sym = wave.WaveSymbolAttr.get("M")
+        n_sym = wave.WaveSymbolAttr.get("N")
+        k_sym = wave.WaveSymbolAttr.get("K")
+        b1_sym = wave.WaveSymbolAttr.get("b1")
+        b2_sym = wave.WaveSymbolAttr.get("b2")
+
+        s0 = ir.AffineSymbolExpr.get(0)
+        c16 = ir.AffineConstantExpr.get(16)
+        c8 = ir.AffineConstantExpr.get(8)
+        c4 = ir.AffineConstantExpr.get(4)
+        c1 = ir.AffineConstantExpr.get(1)
+
+        b1_mapping = wave.WaveIndexMappingAttr.get(
+            [b1_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c8]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+        b2_mapping = wave.WaveIndexMappingAttr.get(
+            [b2_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c4]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+
+        lhs_m_mapping = wave.WaveIndexMappingAttr.get(
+            [m_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c16]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+        lhs_k_mapping = wave.WaveIndexMappingAttr.get(
+            [k_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c16]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+
+        rhs_n_mapping = wave.WaveIndexMappingAttr.get(
+            [n_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c16]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+        rhs_k_mapping = wave.WaveIndexMappingAttr.get(
+            [k_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c16]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+
+        acc_m_mapping = wave.WaveIndexMappingAttr.get(
+            [m_sym],
+            ir.AffineMap.get(0, 1, [c16 - s0]),
+            ir.AffineMap.get(0, 1, [c1]),
+            ir.AffineMap.get(0, 1, [c16]),
+        )
+        acc_n_mapping = wave.WaveIndexMappingAttr.get(
+            [n_sym],
+            ir.AffineMap.get(0, 1, [s0]),
+            ir.AffineMap.get(0, 1, [c16]),
+            ir.AffineMap.get(0, 1, [c1]),
+        )
+
+        lhs_dict = ir.DictAttr.get(
+            {
+                "b1": b1_mapping,
+                "b2": b2_mapping,
+                "M": lhs_m_mapping,
+                "K": lhs_k_mapping,
+            }
+        )
+        rhs_dict = ir.DictAttr.get(
+            {
+                "b1": b1_mapping,
+                "b2": b2_mapping,
+                "N": rhs_n_mapping,
+                "K": rhs_k_mapping,
+            }
+        )
+        acc_dict = ir.DictAttr.get(
+            {
+                "b1": b1_mapping,
+                "b2": b2_mapping,
+                "M": acc_m_mapping,
+                "N": acc_n_mapping,
+            }
+        )
+        result_dict = ir.DictAttr.get(
+            {
+                "b1": b1_mapping,
+                "b2": b2_mapping,
+                "M": acc_m_mapping,
+                "N": acc_n_mapping,
+            }
+        )
+
+        array_attr = ir.ArrayAttr.get([lhs_dict, rhs_dict, acc_dict, result_dict])
+        dummy_mma_op = ir.Operation.create("wave.mma", loc=ir.Location.unknown())
+        result = convert_index_mapping_array_to_sympy(dummy_mma_op, array_attr)
+
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {
+            index_symbol("b1"),
+            index_symbol("b2"),
+            index_symbol("M"),
+            index_symbol("N"),
+            index_symbol("K"),
+        }
+
+        assert result[index_symbol("b1")] == IndexSequence(sym.b1, 8, 1)
+        assert result[index_symbol("b2")] == IndexSequence(sym.b2, 4, 1)
+
+        m_seq = result[index_symbol("M")]
+        assert isinstance(m_seq.start, sympy.Piecewise)
+        assert m_seq.start == sympy.Piecewise(
+            (sym.M, ~index_symbol(MMA_ACC_SYMBOL_NAME)),
+            (sympy.sympify(16 - sym.M), index_symbol(MMA_ACC_SYMBOL_NAME)),
+        )
+        assert m_seq.size == sympy.Piecewise(
+            (16, ~index_symbol(MMA_ACC_SYMBOL_NAME)),
+            (1, index_symbol(MMA_ACC_SYMBOL_NAME)),
+        )
+        assert m_seq.stride == sympy.Piecewise(
+            (1, ~index_symbol(MMA_ACC_SYMBOL_NAME)),
+            (16, index_symbol(MMA_ACC_SYMBOL_NAME)),
+        )

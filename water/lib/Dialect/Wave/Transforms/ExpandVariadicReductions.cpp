@@ -41,9 +41,10 @@ struct ExpandVariadicReduction : public OpRewritePattern<ReductionOp> {
     Value acc = op.getInit();
     Value result;
     for (Value input : inputs) {
-      auto newOp = ReductionOp::create(
-          rewriter, op.getLoc(), op.getResult().getType(), input, acc,
-          op.getScopeAttr(), op.getAxisAttr(), op.getIndexAttr());
+      auto newOp =
+          ReductionOp::create(rewriter, op.getLoc(), op.getResult().getType(),
+                              input, acc, op.getScopeAttr(), op.getAxisAttr(),
+                              op.getIndexAttr(), op.getVectorShapeAttr());
       result = newOp.getResult();
       acc = result;
     }

@@ -36,7 +36,7 @@ jobs:
           - name: linux-mi325
             version: "3.11"
             runs-on: linux-mi325-1gpu-ossci-iree-org
-            pytorch_requirements: "pytorch-rocm-requirements.txt"
+            pytorch_requirements: "gen-rocm"
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 60
     env:
@@ -74,7 +74,12 @@ jobs:
           # from non default locations first. Additionally, installing
           # cpu/rocm-specific pytorch wheels first avoids installing
           # unnecessary libraries included in default pytorch.
-          pip install --no-compile -r ${{ matrix.pytorch_requirements }}
+          if [ "${{ matrix.pytorch_requirements }}" = "gen-rocm" ]; then
+            ./gen-pytorch-rocm-requirements.py -o /tmp/pytorch-rocm-requirements.txt
+            pip install --no-compile -r /tmp/pytorch-rocm-requirements.txt
+          else
+            pip install --no-compile -r ${{ matrix.pytorch_requirements }}
+          fi
           pip install --no-cache-dir -r requirements-iree-pinned.txt
           pip install -e ".[dev]"
 

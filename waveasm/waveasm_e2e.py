@@ -211,7 +211,7 @@ class WaveASMCompiler:
             "--canonicalize",  # Clean up dead instructions from offset opt.
             "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
-            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",  # Register allocation.
+            "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",  # Register allocation.
             f"--waveasm-insert-waitcnt=ticketed-waitcnt={ticketed}",  # Insert waits.
             f"--waveasm-hazard-mitigation=target={self.target}",  # Handle hazards.
             "--emit-assembly",

@@ -49,7 +49,7 @@ func.func @mma_1d(%lhs: !wave.tensor<[@A] of f16>, %rhs: !wave.tensor<[@B] of f1
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @mma_3d_mismatch(%a: !wave.tensor<[@M, @K, @B] of f16>,
                              %b: !wave.tensor<[@N, @K, @B] of f16>,
                              %c: !wave.tensor<[@M, @N, @B] of f32>) {
@@ -473,6 +473,11 @@ func.func @child_alloc_with_tail_padding() {
 
 // -----
 
+// expected-error @below {{hyperparameter "A" must either be an integer or an expr_list}}
+module attributes { wave.hyperparameters = #wave.hyperparameters<{A = "hello"}> } {}
+
+// -----
+
 module attributes { wave.hyperparameters = #wave.hyperparameters<{}> } {
   // expected-error @below {{defines hyperparameters when its ancestor already had}}
   // expected-note @above {{ancestor}}
@@ -515,7 +520,7 @@ module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42, C = 43
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_key_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128}>}  {
     // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
@@ -538,7 +543,7 @@ func.func @read_element_type_mismatch(%mem: memref<64x64xf16, #gpu.address_space
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_value_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 256}>}  {
     // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
@@ -553,9 +558,9 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @index_length_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>) {
-    // expected-error @below {{index attribute length (0) does not match the number of index expression values (1)}}
+    // expected-error @below {{index attribute length (0) does not match the number of per-value index slots (1)}}
     %0 = wave.read %mem index [] : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
   }
@@ -563,10 +568,10 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @read_index_multiple_dicts(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
-    // expected-error @below {{index attribute length (2) does not match the number of index expression values (1)}}
+    // expected-error @below {{index attribute length (2) does not match the number of per-value index slots (1)}}
     %0 = wave.read %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}, {M : <[] -> (<NULL>, 4, <NULL>)>}]
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
     return
@@ -575,7 +580,7 @@ normalform.module [#wave.normal_form<full_types>] {
 
 // -----
 
-normalform.module [#wave.normal_form<full_types>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @elements_per_thread_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}
@@ -1259,7 +1264,110 @@ func.func @reshape_logical_slice_too_large(%arg0: vector<8xf32>) {
 // -----
 
 func.func @extract_index_attr_length_mismatch(%source: !wave.tensor<[@A, @B] of f32>) {
-  // expected-error @below {{index attribute length (2) does not match the number of op results (1)}}
+  // expected-error @below {{index attribute length (2) does not match the number of per-value index slots (1)}}
   %0 = wave.extract %source[#wave.expr_list<[] -> (2)>] {index = [{}, {}]} : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A] of f32>
   return
+}
+
+// -----
+
+func.func @bitcast_rank0(%v: !wave.tensor<[] of f32, <register>>) {
+  // expected-error @below {{'wave.bitcast' op rank-0 wave tensors are not supported in bitcast}}
+  wave.bitcast %v : !wave.tensor<[] of f32, <register>> to !wave.tensor<[] of i8, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_rank_mismatch(%v: !wave.tensor<[@A, @B] of i8, <register>>) {
+  // expected-error @below {{'wave.bitcast' op rank of input (2) must match rank of result (3)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8, <register>> to !wave.tensor<[@A, @B, @C] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_non_scaled_dim_mismatch(%v: !wave.tensor<[@A, @B] of i8, <register>>) {
+  // No hyperparameters, so no scaled dimension is detected.  All dimensions
+  // are verified as non-scaled and the first mismatch is reported.
+  // expected-error @below {{expected input dimension #0 (#wave.symbol<"A">) to match result dimension #0 (#wave.symbol<"C">)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8, <register>> to !wave.tensor<[@C, @D] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_indivisible_bitwidths(%v: !wave.tensor<[@A, @B] of i8>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{A = 16, C = 32, B = #wave.expr_list<[#wave.symbol<"C">] -> (C ceildiv 2)>}>} {
+  // expected-error @below {{larger element bitwidth (8) must be evenly divisible by the smaller (6)}}
+  wave.bitcast %v : !wave.tensor<[@A, @B] of i8> to !wave.tensor<[@A, @C] of f6E2M3FN>
+  return
+}
+
+// -----
+
+func.func @bitcast_vector_total_bits(%v: vector<8xf32>) {
+  // expected-error @below {{'wave.bitcast' op total bit count must be preserved}}
+  wave.bitcast %v : vector<8xf32> to vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @bitcast_vector_indivisible(%v: vector<3xi8>) {
+  // expected-error @below {{'wave.bitcast' op larger element bitwidth (8) must be evenly divisible by the smaller (6)}}
+  wave.bitcast %v : vector<3xi8> to vector<4xf6E2M3FN>
+  return
+}
+
+// -----
+
+func.func @bitcast_hyper_invalid(%v: !wave.tensor<[@M, @N] of i8, <register>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 16, K = 16}>} {
+  // All hyperparameters are plain integers, so no scaled dimension is found
+  // and the differing symbol at dim #1 is reported as a non-scaled mismatch.
+  // expected-error @below {{expected input dimension #1 (#wave.symbol<"N">) to match result dimension #1 (#wave.symbol<"K">)}}
+  wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_no_scaled_dim(%v: !wave.tensor<[@M, @N] of i8, <register>>) {
+  // expected-error @below {{'wave.bitcast' op element bitwidths differ (8 vs 4) but no scaled dimension was found}}
+  wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @N] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @bitcast_multiple_scaled_dims(%v: !wave.tensor<[@M2, @N2] of i8, <register>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{
+      M = 64, N = 128,
+      M2 = #wave.expr_list<[#wave.symbol<"M">] -> (M ceildiv 2)>,
+      N2 = #wave.expr_list<[#wave.symbol<"N">] -> (N ceildiv 2)>,
+      K = 32}>} {
+  // expected-error @below {{'wave.bitcast' op expected at most one scaled dimension (backed by an expr_list hyperparameter), but found 2}}
+  wave.bitcast %v : !wave.tensor<[@M2, @N2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return
+}
+
+// -----
+
+func.func @vector_shape_entry_must_be_i64(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i32}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
+}
+
+// -----
+
+func.func @vector_shape_entry_index_type_rejected(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : index}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
 }

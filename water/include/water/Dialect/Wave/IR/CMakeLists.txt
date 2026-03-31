@@ -35,4 +35,7 @@ add_dependencies(MLIRWaveIncGen MLIRWaveTypesIncGen)
 
 add_dependencies(mlir-headers MLIRWaveIncGen)
 
-add_mlir_doc(Wave Wave Dialects/ -gen-dialect-doc -dialect wave)
+add_mlir_doc(WaveAttrs WaveAttrs Dialects/ -gen-attrdef-doc)
+add_mlir_doc(WaveAttrs WaveAttrEnums Dialects/ -gen-enum-doc)
+add_mlir_doc(WaveOps Wave Dialects/ -gen-dialect-doc -dialect wave)
+add_mlir_doc(WaveTypes WaveTypes Dialects/ -gen-typedef-doc)

@@ -603,7 +603,7 @@ def compile_cpp_backend(
             "--canonicalize",  # Clean up dead instructions from offset opt.
             "--waveasm-scoped-cse",  # Re-deduplicate after offset folding.
             "--waveasm-loop-address-promotion",
-            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+            "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
             "--waveasm-insert-waitcnt",
             f"--waveasm-hazard-mitigation=target={target}",
             "--emit-assembly",

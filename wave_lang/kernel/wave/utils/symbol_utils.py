@@ -63,39 +63,76 @@ _LAMBDIFY_MODULES = {
 ####################################################################
 
 
-@lru_cache(maxsize=1024)
-def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
+def expr_bounds(
+    expr: sympy.Expr,
+    symbol_bounds: dict[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]] | None = None,
+) -> tuple[sympy.Expr, sympy.Expr] | None:
     """Compute (lo, hi) bounds for a sympy expression via interval arithmetic.
 
-    Free symbols are assumed to be non-negative integers (hardware indices).
-    Returns (lo, hi) or None if bounds cannot be determined.
+    When *symbol_bounds* is provided, symbols found in the dict use those
+    concrete ranges instead of the default [0, oo) assumption.  This
+    enables tighter results for tile-level expressions with known iterator
+    ranges.
+
+    Free symbols not in *symbol_bounds* are assumed to be non-negative
+    integers (hardware indices).  Returns (lo, hi) or None if bounds
+    cannot be determined.
     """
+    hashable = (
+        tuple(sorted(symbol_bounds.items(), key=lambda kv: str(kv[0])))
+        if symbol_bounds
+        else None
+    )
+    return _expr_bounds_cached(expr, hashable)
+
+
+@lru_cache(maxsize=1024)
+def _expr_bounds_cached(
+    expr: sympy.Expr,
+    symbol_bounds_tuple: tuple | None = None,
+) -> tuple[sympy.Expr, sympy.Expr] | None:
+    """Cached implementation of expr_bounds.
+
+    Takes *symbol_bounds* as a hashable tuple of (symbol, (lo, hi)) pairs.
+    """
+    sb = dict(symbol_bounds_tuple) if symbol_bounds_tuple else None
+
     if expr.is_Integer or expr.is_Rational:
         return (expr, expr)
     if expr.is_Symbol:
+        if sb and expr in sb:
+            return sb[expr]
         return (sympy.Integer(0), sympy.oo) if expr.is_nonnegative else None
     if isinstance(expr, sympy.Mod):
         p, q = expr.args
         if q.is_positive and q.is_number:
-            p_bounds = expr_bounds(p)
-            if p_bounds and p_bounds[0] >= 0 and p_bounds[1] < q:
-                return p_bounds
+            p_b = _expr_bounds_cached(p, symbol_bounds_tuple)
+            try:
+                if p_b and p_b[0] >= 0 and p_b[1] < q:
+                    return p_b
+            except TypeError:
+                pass  # Symbolic comparison -- fall through to default.
             return (sympy.Integer(0), q - 1)
+        # Symbolic modulus: Mod(p, q) is in [0, q-1] when q > 0.
+        # Use the upper bound of q as a conservative ceiling.
+        q_b = _expr_bounds_cached(q, symbol_bounds_tuple)
+        if q_b and q_b[0].is_positive:
+            return (sympy.Integer(0), q_b[1] - 1)
         return None
     if isinstance(expr, sympy.floor):
-        inner_bounds = expr_bounds(expr.args[0])
-        if inner_bounds:
-            return (sympy.floor(inner_bounds[0]), sympy.floor(inner_bounds[1]))
+        inner_b = _expr_bounds_cached(expr.args[0], symbol_bounds_tuple)
+        if inner_b:
+            return (sympy.floor(inner_b[0]), sympy.floor(inner_b[1]))
         return None
     if isinstance(expr, sympy.Add):
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [_expr_bounds_cached(a, symbol_bounds_tuple) for a in expr.args]
         if all(b is not None for b in bounds):
             return (sum(b[0] for b in bounds), sum(b[1] for b in bounds))
         return None
     if isinstance(expr, sympy.Mul):
         if not expr.args:
             return (sympy.Integer(1), sympy.Integer(1))
-        bounds = [expr_bounds(a) for a in expr.args]
+        bounds = [_expr_bounds_cached(a, symbol_bounds_tuple) for a in expr.args]
         if all(b is not None for b in bounds):
             # Bail out if any bound is infinite (0 * oo = NaN).
             if any(sympy.oo in b or -sympy.oo in b for b in bounds):
@@ -103,16 +140,124 @@ def expr_bounds(expr: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr] | None:
             lo, hi = bounds[0]
             for b in bounds[1:]:
                 corners = [lo * b[0], lo * b[1], hi * b[0], hi * b[1]]
-                lo, hi = min(corners), max(corners)
+                try:
+                    lo, hi = min(corners), max(corners)
+                except TypeError:
+                    return None
             return (lo, hi)
         return None
     return None
 
 
+def _is_provably_divisible(term: sympy.Expr, divisor: sympy.Expr) -> bool:
+    """Check if *term* is provably an integer multiple of *divisor*.
+
+    Works for both constant and symbolic divisors.  For a compound divisor
+    like ``c * D`` (numeric ``c``, symbolic ``D``), the check decomposes:
+    term must contain ``D`` as a factor and its numeric coefficient must be
+    divisible by ``c``.
+    """
+    if term.is_zero:
+        return True
+    if divisor.is_number and divisor.is_nonzero:
+        # Constant divisor: check if term has divisor as a factor.
+        if term.is_number:
+            return term.is_integer and (term % divisor == 0)
+        # term = coeff * rest: check if coeff is divisible.
+        if isinstance(term, sympy.Mul):
+            for arg in term.args:
+                if arg.is_number and arg.is_integer and (arg % divisor == 0):
+                    return True
+        return False
+    # Decompose the divisor into numeric and symbolic parts.
+    # E.g. 8*floor(...) -> (8, floor(...))
+    div_coeff, div_sym = _split_coeff(divisor)
+    if div_coeff.is_zero:
+        return False
+
+    if isinstance(term, sympy.Mul):
+        # Check if term contains div_sym as a multiplicative factor
+        # (possibly nested inside a sub-Mul), and the remaining numeric
+        # coefficient is divisible by div_coeff.
+        term_coeff, term_sym_factors = _split_coeff(term)
+        # Flatten symbolic factors.
+        sym_factors = (
+            list(term_sym_factors.args)
+            if isinstance(term_sym_factors, sympy.Mul)
+            else [term_sym_factors]
+        )
+        if _contains_factor(sym_factors, div_sym):
+            if div_coeff == 1 or (term_coeff % div_coeff == 0):
+                return True
+    return term == divisor
+
+
+def _split_coeff(expr: sympy.Expr) -> tuple[sympy.Integer, sympy.Expr]:
+    """Split *expr* into ``(numeric_coeff, symbolic_rest)``."""
+    if expr.is_number:
+        return (expr, sympy.Integer(1))
+    if isinstance(expr, sympy.Mul):
+        coeff = sympy.Integer(1)
+        sym_parts: list[sympy.Expr] = []
+        for arg in expr.args:
+            if arg.is_number and arg.is_integer:
+                coeff *= arg
+            else:
+                sym_parts.append(arg)
+        sym = sympy.Mul(*sym_parts) if sym_parts else sympy.Integer(1)
+        return (coeff, sym)
+    return (sympy.Integer(1), expr)
+
+
+def _contains_factor(factors: list[sympy.Expr], target: sympy.Expr) -> bool:
+    """Check if *target* appears as a factor in *factors* (possibly nested)."""
+    for f in factors:
+        if f == target:
+            return True
+        # target might be inside a nested Mul.
+        if isinstance(f, sympy.Mul) and target in f.args:
+            return True
+    return False
+
+
+def split_sum_by_divisibility(
+    expr: sympy.Expr, divisor: sympy.Expr
+) -> tuple[sympy.Expr, sympy.Expr] | None:
+    """Split *expr* into ``(quotient, remainder)`` such that
+    ``expr == quotient * divisor + remainder`` and every additive term in
+    ``remainder`` is NOT a proven multiple of *divisor*.
+
+    Returns ``None`` if no term is provably divisible (nothing to split).
+    """
+    terms = expr.as_ordered_terms() if isinstance(expr, sympy.Add) else [expr]
+    quot_terms: list[sympy.Expr] = []
+    rem_terms: list[sympy.Expr] = []
+    for t in terms:
+        if _is_provably_divisible(t, divisor):
+            # t = something * divisor, extract the quotient contribution.
+            q = sympy.cancel(t / divisor)
+            quot_terms.append(q)
+        else:
+            rem_terms.append(t)
+    if not quot_terms:
+        return None
+    quotient = sympy.Add(*quot_terms) if quot_terms else sympy.Integer(0)
+    remainder = sympy.Add(*rem_terms) if rem_terms else sympy.Integer(0)
+    return (quotient, remainder)
+
+
 def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
     """Apply custom algebraic simplifications that sympy misses.
 
-    Two rewrites that sympy.simplify does not perform:
+    Three rewrites that sympy.simplify does not perform:
+
+    ``transform_floor_div``: factor out D-multiples from floor division.
+    ``floor((A*D + B) / D)  ->  A + floor(B/D)``
+    (and ``-> A`` when B is bounded in ``[0, D)``)
+
+    ``transform_mod_div``: drop D-multiple terms from Mod.
+    ``Mod(A*D + B, D)  ->  Mod(B, D)``
+    (and ``-> B`` when B is bounded in ``[0, D)``)
 
     ``transform_mod``: pull a small constant addend out of Mod when every
     other term is a multiple of the modulus divisor.
@@ -213,6 +358,57 @@ def _custom_simplify_once(expr: sympy.Expr) -> sympy.Expr:
             terms.append(arg)
         return sympy.floor(sum(terms))
 
+    def transform_floor_div(expr):
+        """``floor((A*D + B) / D)  ->  A + floor(B/D)``."""
+        if not isinstance(expr, sympy.floor):
+            return None
+        inner = expr.args[0]
+        # Match pattern: inner = numerator / divisor (sympy represents as
+        # numerator * divisor^(-1), i.e. a Mul with a Pow(..., -1) factor).
+        numer, denom = inner.as_numer_denom()
+        if denom == 1:
+            return None
+        result = split_sum_by_divisibility(numer, denom)
+        if result is None:
+            return None
+        quotient, remainder = result
+        if remainder.is_zero:
+            return quotient
+        # Check if remainder is bounded in [0, denom).
+        rem_bounds = expr_bounds(remainder)
+        if rem_bounds and rem_bounds[0] >= 0 and rem_bounds[1] != sympy.oo:
+            try:
+                if rem_bounds[1] < denom:
+                    return quotient
+            except TypeError:
+                pass  # Symbolic comparison — can't determine.
+        return quotient + sympy.floor(remainder / denom)
+
+    def transform_mod_div(expr):
+        """``Mod(A*D + B, D)  ->  Mod(B, D)``."""
+        if not isinstance(expr, sympy.Mod):
+            return None
+        p, q = expr.args
+        result = split_sum_by_divisibility(p, q)
+        if result is None:
+            return None
+        _quotient, remainder = result
+        if remainder.is_zero:
+            return sympy.Integer(0)
+        # Check if remainder is bounded in [0, q) — then Mod is identity.
+        rem_bounds = expr_bounds(remainder)
+        if rem_bounds and rem_bounds[0] >= 0 and rem_bounds[1] != sympy.oo:
+            try:
+                if rem_bounds[1] < q:
+                    return remainder
+            except TypeError:
+                pass  # Symbolic comparison — can't determine.
+        return sympy.Mod(remainder, q, evaluate=False)
+
+    expr = expr.replace(
+        lambda e: transform_floor_div(e) is not None, transform_floor_div
+    )
+    expr = expr.replace(lambda e: transform_mod_div(e) is not None, transform_mod_div)
     expr = expr.replace(lambda e: transform_mod(e) is not None, transform_mod)
     expr = expr.replace(lambda e: transform_floor(e) is not None, transform_floor)
     return expr

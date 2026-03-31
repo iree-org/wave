@@ -158,6 +158,18 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with ValueError."
 
+    # Hyperparameters with expr_list values for derived symbols.
+    s0 = ir.AffineSymbolExpr.get(0)
+    k_div_2_map = ir.AffineMap.get(
+        0, 1, [ir.AffineExpr.get_ceil_div(s0, ir.AffineExpr.get_constant(2))]
+    )
+    k_div_2_expr = wave.WaveExprListAttr.get(
+        [wave.WaveSymbolAttr.get("K")], k_div_2_map
+    )
+    # CHECK: #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
+    hyper_with_expr = wave.WaveHyperparameterAttr.get({"K": 128, "K2": k_div_2_expr})
+    print(hyper_with_expr)
+
     # CHECK: #wave.address_space<shared>
     addr_attr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Shared)
     print(addr_attr)
@@ -309,17 +321,17 @@ with ir.Context() as ctx:
     # CHECK: M
     print(M.name)
 
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     symbol_attrs = [
         wave.WaveSymbolAttr.get("M"),
         wave.WaveSymbolAttr.get("BLOCK_M"),
     ]
     s0 = ir.AffineSymbolExpr.get(0)
     s1 = ir.AffineSymbolExpr.get(1)
-    expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_floor_div(s0, s1)])
+    expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_ceil_div(s0, s1)])
     expr_attr = wave.WaveExprListAttr.get(symbol_attrs, expr_map)
     print(expr_attr)
-    # CHECK: ()[s0, s1] -> (s0 floordiv s1)
+    # CHECK: ()[s0, s1] -> (s0 ceildiv s1)
     print(expr_attr.map)
 
     # CHECK: #wave.expr_list<[] -> (512)>
@@ -370,63 +382,62 @@ with ir.Context() as ctx:
     # CHECK: [2, 2, 1]
     print(hardware_constr_3.waves_per_block)
 
-    # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, device_dim = 0>
+    # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, device_dim = 0>
     device_constr = wave.DeviceConstraintAttr.get(
         dim="M", tile_size=expr_attr, device_dim=0
     )
     print(device_constr)
     # CHECK: #wave.symbol<"M">
     print(device_constr.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(device_constr.tile_size)
     # CHECK: 0
     print(device_constr.device_dim)
 
-    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
+    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, workgroup_dim = <x>>
     wg_constr = wave.WorkgroupConstraintAttr.get(
         dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
     )
     print(wg_constr)
 
-    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
+    # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
     wg_constr_1 = wave.WorkgroupConstraintAttr.get(
         dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x, primary=False
     )
     print(wg_constr_1)
     # CHECK: #wave.symbol<"M">
     print(wg_constr_1.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(wg_constr_1.tile_size)
     # CHECK: #wave.workgroup_dim<x>
     print(wg_constr_1.workgroup_dim)
     # CHECK: False
     print(wg_constr_1.primary)
 
-    # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
+    # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>>
     wg_constr_2 = wave.WaveConstraintAttr.get(dim="M", tile_size=expr_attr)
     print(wg_constr_2)
     # CHECK: #wave.symbol<"M">
     print(wg_constr_2.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(wg_constr_2.tile_size)
 
-    # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
+    # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>>
     tiling_constr = wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr)
     print(tiling_constr)
     # CHECK: #wave.symbol<"M">
     print(tiling_constr.dim)
-    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+    # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M ceildiv BLOCK_M)>
     print(tiling_constr.tile_size)
 
-    # CHECK: #wave.normal_form<none>
-    normal_form_attr = wave.WaveNormalFormAttr.get(wave.WaveNormalForm.None_)
+    # CHECK: #wave.normal_form<full_func_boundary>
+    normal_form_attr = wave.WaveNormalFormAttr.get(
+        wave.WaveNormalForm.FunctionBoundarySpecified
+    )
     print(normal_form_attr)
 
-    # CHECK: WaveNormalForm.None_
+    # CHECK: WaveNormalForm.FunctionBoundarySpecified
     print(normal_form_attr.value)
-
-    # CHECK: #wave.normal_form<full_func_boundary>
-    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.FunctionBoundarySpecified))
 
     # CHECK: #wave.normal_form<full_op_types>
     print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OpTypesSpecified))
@@ -437,8 +448,11 @@ with ir.Context() as ctx:
     # CHECK: #wave.normal_form<memory_only_types>
     print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.MemoryOnlyTypes))
 
-    # CHECK: #wave.normal_form<full_types>
-    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.AllTypesSpecified))
+    # CHECK: #wave.normal_form<resolved_allocations>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.ResolvedAllocations))
+
+    # CHECK: #wave.normal_form<ordered_syms>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OrderedSymsSpecified))
 
     try:
         wave.WaveNormalFormAttr.get(100)
@@ -473,6 +487,67 @@ module attributes {transform.with_named_sequence} {
     # CHECK: normalform.module
     # CHECK-SAME: #wave.normal_form<
     print(payload_module)
+
+    # ---------------------------------------------------------------
+    # Test BitcastOp Python bindings
+    # ---------------------------------------------------------------
+
+    loc = ir.Location.unknown()
+
+    M_sym = wave.WaveSymbolAttr.get("M")
+    # CHECK: #wave.symbol<"M">
+    print(M_sym)
+    K_sym = wave.WaveSymbolAttr.get("K")
+    # CHECK: #wave.symbol<"K">
+    print(K_sym)
+    K_half_sym = wave.WaveSymbolAttr.get("K2")
+    # CHECK: #wave.symbol<"K2">
+    print(K_half_sym)
+    K_scale_sym = wave.WaveSymbolAttr.get("K32")
+    # CHECK: #wave.symbol<"K32">
+    print(K_scale_sym)
+    N_sym = wave.WaveSymbolAttr.get("N")
+    # CHECK: #wave.symbol<"N">
+    print(N_sym)
+    reg_addr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Register)
+    # CHECK: #wave.address_space<register>
+    print(reg_addr)
+
+    i8_type = wave.WaveTensorType.get(
+        [M_sym, K_half_sym], True, ir.IntegerType.get_signless(8), reg_addr
+    )
+    # CHECK: !wave.tensor<[@M, @K2] of i8, <register>>
+    print(i8_type)
+    f4_type = wave.WaveTensorType.get(
+        [M_sym, K_sym], True, ir.Type.parse("f4E2M1FN"), reg_addr
+    )
+    # CHECK: !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    print(f4_type)
+    f8e8m0_type = wave.WaveTensorType.get(
+        [M_sym, K_scale_sym], True, ir.Type.parse("f8E8M0FNU"), reg_addr
+    )
+    # CHECK: !wave.tensor<[@M, @K32] of f8E8M0FNU, <register>>
+    print(f8e8m0_type)
+    f32_acc_type = wave.WaveTensorType.get(
+        [M_sym, N_sym], True, ir.F32Type.get(), reg_addr
+    )
+    # CHECK: !wave.tensor<[@M, @N] of f32, <register>>
+    print(f32_acc_type)
+
+    bitcast_test_module = ir.Module.parse(
+        """
+func.func @bitcast_test(%arg0: !wave.tensor<[@M, @K2] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
+  %0 = wave.bitcast %arg0 : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+}
+"""
+    )
+    # CHECK: wave.bitcast
+    # CHECK-SAME: !wave.tensor<[@M, @K2] of i8, <register>>
+    # CHECK-SAME: to
+    # CHECK-SAME: !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    print(bitcast_test_module)
 
 
 # CHECK: wave_ok

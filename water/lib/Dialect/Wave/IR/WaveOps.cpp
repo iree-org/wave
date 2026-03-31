@@ -462,169 +462,20 @@ updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
   return ChangeResult::Change;
 }
 
-// Update index expressions of the result of the MMA operation.
+// No propagation through MMA. The index expressions remain the same as set by
+// initialization since MMAs require very specific index expressions. If there
+// is a conflict with operands that were propagated from another MMA (other
+// operations have lower priority), it will be resolved in a separate pass after
+// the analysis completes.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-  if (!resultType)
-    return updateIfChanged(resultExprs[0],
-                           wave::IndexExprsLatticeStorage::top());
-
-  // Join LHS (ignoring M symbol), RHS, and accumulator lattices into result.
-  unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  wave::IndexExprsLatticeStorage resultLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  // LHS: ignore M symbol since it has different indexing in LHS vs result.
-  if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    Attribute mSymbol = lhsType.getShape().drop_back().back();
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
-  }
-
-  // RHS: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getRhs().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[rhsOperandNumber]);
-  }
-
-  // Accumulator: propagate all symbols.
-  if (llvm::isa<wave::WaveTensorType>(getAccumulator().getType())) {
-    resultLattice = wave::IndexExprsLatticeStorage::join(
-        resultLattice, operandExprs[accumulatorOperandNumber]);
-  }
-
-  resultLattice = resultLattice.keepOnlySymbols(resultType.getShape());
-  wave::IndexExprsLatticeStorage newResultLattice =
-      wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
-
-  if (newResultLattice.isTop() && !resultExprs[0].isTop()) {
-    InFlightDiagnostic diag =
-        emitError()
-        << "conflict when propagating forward to the result lattice in MmaOp";
-    diag.attachNote() << "Result lattice: " << resultExprs[0];
-    diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-    diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-    diag.attachNote() << "Accumulator lattice: "
-                      << operandExprs[accumulatorOperandNumber];
-    return diag;
-  }
-
-  return updateIfChanged(resultExprs[0], newResultLattice);
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
-
-// Update index expressions of the operands of the MMA operation.
 llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
-    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
-    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
-    wave::EmitErrorFn emitError) {
-  const unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
-  const unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
-  const unsigned accumulatorOperandNumber =
-      getAccumulatorMutable().getOperandNumber();
-
-  // Create separate lattices for operands (ignoring M symbol from results)
-  // and accumulator (with all symbols).
-  wave::IndexExprsLatticeStorage operandLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-  wave::IndexExprsLatticeStorage accumulatorLattice =
-      wave::IndexExprsLatticeStorage::bottom();
-
-  for (const wave::IndexExprsLatticeStorage &resultExpr : resultExprs) {
-    auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
-    if (!resultType)
-      continue;
-
-    // For LHS/RHS operands, ignore M symbol.
-    Attribute mSymbol = resultType.getShape().drop_back().back();
-    operandLattice = wave::IndexExprsLatticeStorage::join(
-        operandLattice, resultExpr, {mSymbol});
-
-    // For accumulator, use all symbols.
-    accumulatorLattice =
-        wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
-  }
-
-  ChangeResult changeResult = ChangeResult::NoChange;
-
-  // Propagate to LHS (operand 0).
-  if (auto lhsType = llvm::dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(lhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[lhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[lhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to LHS from result in MmaOp";
-      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[lhsOperandNumber]) {
-      operandExprs[lhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to RHS (operand 1).
-  if (auto rhsType = llvm::dyn_cast<wave::WaveTensorType>(getRhs().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        operandLattice.keepOnlySymbols(rhsType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(operandExprs[rhsOperandNumber],
-                                             filtered);
-
-    if (newLattice.isTop() && !operandExprs[rhsOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to RHS from result in MmaOp";
-      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[rhsOperandNumber]) {
-      operandExprs[rhsOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  // Propagate to accumulator (operand 2).
-  if (auto accType =
-          llvm::dyn_cast<wave::WaveTensorType>(getAccumulator().getType())) {
-    wave::IndexExprsLatticeStorage filtered =
-        accumulatorLattice.keepOnlySymbols(accType.getShape());
-    wave::IndexExprsLatticeStorage newLattice =
-        wave::IndexExprsLatticeStorage::join(
-            operandExprs[accumulatorOperandNumber], filtered);
-
-    if (newLattice.isTop() && !operandExprs[accumulatorOperandNumber].isTop()) {
-      InFlightDiagnostic diag =
-          emitError()
-          << "conflict when propagating to accumulator from result in MmaOp";
-      diag.attachNote() << "accumulator lattice: "
-                        << operandExprs[accumulatorOperandNumber];
-      diag.attachNote() << "result lattice: " << resultExprs[0];
-      return diag;
-    }
-
-    if (newLattice != operandExprs[accumulatorOperandNumber]) {
-      operandExprs[accumulatorOperandNumber] = newLattice;
-      changeResult = ChangeResult::Change;
-    }
-  }
-
-  return changeResult;
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage>,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage>, wave::EmitErrorFn) {
+  return ChangeResult::NoChange;
 }
 
 // Check if the given type is one of the allowed types provided as template
@@ -861,6 +712,118 @@ void MmaSingleIndexExprBuilder::populate(
 }
 } // namespace
 
+// Get the attribute representing the vector shape implied by the given MMA
+// operation kind for its M, N, K dimensions.
+static DictionaryAttr getMmaVectorShape(
+    Location loc, wave::WaveMmaKind kind, wave::WaveSymbolAttr mSymbol,
+    wave::WaveSymbolAttr nSymbol, wave::WaveSymbolAttr kSymbol,
+    ArrayRef<wave::WaveSymbolAttr> batchSymbols, DictionaryAttr hwVectorShape,
+    wave::EmitDelayedErrorFn *delayedErrorEmitter) {
+  int m, n, k;
+  switch (kind) {
+  case wave::WaveMmaKind::F32_16x16x16_F16:
+  case wave::WaveMmaKind::I32_16x16x16_I8:
+    m = 16;
+    n = 16;
+    k = 16;
+    break;
+  case wave::WaveMmaKind::F32_32x32x8_F16:
+  case wave::WaveMmaKind::I32_32x32x8_I8:
+    m = 32;
+    n = 32;
+    k = 8;
+    break;
+  case wave::WaveMmaKind::F32_16x16x32_F8:
+  case wave::WaveMmaKind::F32_16x16x32_BF16:
+  case wave::WaveMmaKind::F32_16x16x32_F16:
+  case wave::WaveMmaKind::F32_16x16x32_K8_F16:
+  case wave::WaveMmaKind::I32_16x16x32_I8:
+  case wave::WaveMmaKind::F32_16x16x32_K4_F8:
+    m = 16;
+    n = 16;
+    k = 32;
+    break;
+  case wave::WaveMmaKind::F32_32x32x16_F8:
+  case wave::WaveMmaKind::F32_32x32x16_BF16:
+  case wave::WaveMmaKind::F32_32x32x16_F16:
+  case wave::WaveMmaKind::F32_32x32x16_K8_F16:
+  case wave::WaveMmaKind::I32_32x32x16_I8:
+  case wave::WaveMmaKind::F32_32x32x16_K4_F8:
+    m = 32;
+    n = 32;
+    k = 16;
+    break;
+  default:
+    return nullptr;
+  }
+
+  MLIRContext *ctx = loc->getContext();
+  auto iAttr = [&](int64_t value) {
+    return IntegerAttr::get(IntegerType::get(ctx, 64), value);
+  };
+  SmallVector<NamedAttribute> attributes;
+  if (mSymbol)
+    attributes.emplace_back(mSymbol.getName(), iAttr(m));
+  if (nSymbol)
+    attributes.emplace_back(nSymbol.getName(), iAttr(n));
+  if (kSymbol)
+    attributes.emplace_back(kSymbol.getName(), iAttr(k));
+
+  if (hwVectorShape) {
+    for (NamedAttribute attr : hwVectorShape) {
+      if (mSymbol && attr.getName() == mSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != m) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [mSymbol, m,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << mSymbol << " to " << m
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (nSymbol && attr.getName() == nSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != n) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [nSymbol, n,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << nSymbol << " to " << n
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (kSymbol && attr.getName() == kSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != k) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [kSymbol, k,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << kSymbol << " to " << k
+                 << " implied by the MMA operation";
+          };
+        }
+        continue;
+      }
+      if (llvm::any_of(batchSymbols, [&](wave::WaveSymbolAttr symbol) {
+            return symbol.getName() == attr.getName();
+          })) {
+        attributes.push_back(attr);
+      }
+    }
+  }
+
+  return DictionaryAttr::get(ctx, attributes);
+}
+
 // Populate `attributes` with index expressions for the symbols associated with
 // M, N, K dimensions of the given MMA operation kind provided the configuration
 // of wavefronts in the workgroup. Any symbol may be omitted as long as at least
@@ -1019,7 +982,7 @@ static void mixInThreadIndependentConstraints(
     Operation *where, uint64_t threadsPerWave, RangeT &&indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
-    llvm::SmallVector<NamedAttribute> &symbolMappings) {
+    llvm::SmallVectorImpl<NamedAttribute> &symbolMappings) {
 
   static_assert(
       std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
@@ -1106,6 +1069,109 @@ static void mixInThreadIndependentConstraints(
   }
 }
 
+// Joins the given lattice with another lattice in place and handles conflicts.
+// If the lattice is already top, or the join result does not change the
+// lattice, the function returns success. If joining produces top (i.e., an
+// undecidable or conflicting result) that differs from the original, an error
+// is emitted using the provided emitError function.
+static LogicalResult
+joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
+                             StringRef latticeName,
+                             const wave::IndexExprsLatticeStorage &other,
+                             StringRef otherName, wave::EmitErrorFn emitError) {
+  if (lattice.isTop())
+    return success();
+
+  IndexExprsLatticeStorage joined =
+      IndexExprsLatticeStorage::join(lattice, other);
+  if (joined == lattice)
+    return success();
+  // When newly reached top, report an error.
+  if (joined.isTop() && !other.isTop()) {
+    bool isVectorShapeConflict =
+        failed(IndexExprsLatticeStorage::getJoinedVectorShape(lattice, other));
+    InFlightDiagnostic diag =
+        emitError() << "conflict for " << latticeName
+                    << (isVectorShapeConflict ? " vector shape"
+                                              : " index expression")
+                    << " when propagating from " << otherName << " lattice";
+    diag.attachNote() << "original " << latticeName << " lattice: " << lattice;
+    diag.attachNote() << otherName << " lattice: " << other;
+    return diag;
+  }
+
+#ifndef NDEBUG
+  assert(IndexExprsLatticeStorage::join(joined, lattice) == joined &&
+         "join should not move the lattice backward");
+  assert(IndexExprsLatticeStorage::join(joined, other) == joined &&
+         "join should not move the lattice forward");
+#endif
+
+  lattice.unsafeSet(joined);
+  return success();
+}
+
+// Heuristic to stop index expression propagation Currently, it stops
+// propagation of index expressions if they don't cover all non-unit dimension
+// of the "to" vector shape.
+// XXX: this is carried over lhs the python prototype and is not principled.
+bool wave::detail::shouldPropagateIndexExprs(
+    const wave::IndexExprsLatticeStorage &from,
+    const wave::IndexExprsLatticeStorage &to, Value toValue) {
+  if (from.isBottom() || from.isTop() || !from.getVectorShape() || to.isTop() ||
+      to.isBottom())
+    return true;
+
+  if (toValue.getDefiningOp<wave::MmaOp>())
+    return false;
+
+  auto toType = cast<WaveTensorType>(toValue.getType());
+  ArrayRef<wave::WaveSymbolAttr> toShape = toType.getShape();
+  if (!llvm::all_of(toShape, [&](wave::WaveSymbolAttr symbol) {
+        return llvm::find_if(from.getVectorShape(), [&](NamedAttribute attr) {
+                 return attr.getName() == symbol.getName();
+               }) != from.getVectorShape().end();
+      })) {
+    return false;
+  }
+
+  SmallVector<StringAttr> nonBatchDims = llvm::map_to_vector(
+      llvm::make_filter_range(
+          from.getVectorShape(),
+          [](const NamedAttribute &attr) {
+            return cast<IntegerAttr>(attr.getValue()).getValue().sgt(1);
+          }),
+      [](NamedAttribute attr) { return attr.getName(); });
+  SmallVector<StringAttr> toKeys = llvm::map_to_vector(
+      to.getConcreteValue(),
+      [](const NamedAttribute &attr) { return attr.getName(); });
+  if ((toKeys.size() < nonBatchDims.size() &&
+       !llvm::all_of(toKeys,
+                     [&](StringAttr key) {
+                       return llvm::is_contained(nonBatchDims, key);
+                     })) ||
+      !llvm::all_of(nonBatchDims, [&](StringAttr key) {
+        return llvm::is_contained(toKeys, key);
+      })) {
+    return false;
+  }
+  return true;
+}
+
+LogicalResult wave::detail::buildThreadIndependentIndexMappings(
+    Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings) {
+  auto tensorType = dyn_cast<wave::WaveTensorType>(type);
+  if (!tensorType)
+    return failure();
+
+  ArrayRef<wave::WaveSymbolAttr> indexingSymbols = tensorType.getShape();
+  mixInThreadIndependentConstraints(
+      op, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
+      initObject.symbolConstraints, symbolMappings);
+  return success();
+}
+
 // Initialize the index expression lattices for the result of the MMA operation.
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
@@ -1134,14 +1200,27 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
-      DictionaryAttr::get(getContext(), symbolMappings),
-      wave::IndexExprsLatticeStorage::kMmaPriority));
-
-  return llvm::success();
+  return joinIndexExprsLatticeInPlace(
+      resultExprs[0], "MMA result",
+      wave::IndexExprsLatticeStorage(
+          DictionaryAttr::get(getContext(), symbolMappings), priority,
+          getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                            /*kSymbol=*/nullptr,
+                            /*batchSymbols=*/indexingSymbols.drop_back(2),
+                            initObject.hardwareConstraint.getVectorShapes(),
+                            /*delayedErrorEmitter=*/nullptr)),
+      "implied by MMA kind", emitError);
 }
 
 // Initialize the index expression lattices for the operands of the MMA
@@ -1209,19 +1288,48 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
         return attr.getName() != mSymbol.getName();
       });
 
-  operandExprs[getLhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), lhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getRhsMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), rhsSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  operandExprs[getAccumulatorMutable().getOperandNumber()] =
-      wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-          wave::IndexExprsLatticeStorage::kMmaPriority);
-  return llvm::success();
+  // Set the priority based on the order of operations: earlier MMAs have higher
+  // priority.
+  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
+                                             llvm::IsaPred<MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedMmas, getOperation()),
+                                   orderedMmas.end()) -
+                     1;
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getLhsMutable().getOperandNumber()], "LHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), lhsSymbolMappings), priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
+                                /*nSymbol=*/nullptr, kSymbol, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getRhsMutable().getOperandNumber()], "RHS",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), rhsSymbolMappings), priority,
+              getMmaVectorShape(getLoc(), *mmaKind,
+                                /*mSymbol=*/nullptr, nSymbol, kSymbol,
+                                batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getAccumulatorMutable().getOperandNumber()],
+          "accumulator",
+          wave::IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+              priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                                /*kSymbol=*/nullptr, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
+          "implied by MMA kind", emitError)))
+    return failure();
+  return success();
 }
 
 // Special case for MMA where we also want to have index expressions
@@ -2358,12 +2466,28 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       tensorType.getShape(), initObject.symbolConstraints, indexMappings);
-  operandExprs[getValueToStoreMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
-  operandExprs[getMemoryMutable().getOperandNumber()] =
-      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
-                               IndexExprsLatticeStorage::kWritePriority);
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getValueToStoreMutable().getOperandNumber()],
+          "value to store",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getValueToStore().getType())
+                      .getShape())),
+          "implied by write operation", emitError)))
+    return failure();
+  if (failed(joinIndexExprsLatticeInPlace(
+          operandExprs[getMemoryMutable().getOperandNumber()], "memory",
+          IndexExprsLatticeStorage(
+              DictionaryAttr::get(getContext(), indexMappings),
+              IndexExprsLatticeStorage::kWritePriority,
+              detail::filterVectorShape(
+                  hardwareConstraint.getVectorShapes(),
+                  cast<WaveTensorType>(getMemory().getType()).getShape())),
+          "implied by write operation", emitError)))
+    return failure();
 
   return success();
 }
@@ -2374,23 +2498,60 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  auto joined =
-      IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
-
-  // XXX: if sideways propagation would result in a new conflict, don't
-  // propagate. This is a questionable design carried over from the initial
-  // Python prototype.
-  if (joined.isTop() && !(operandExprs[0].isTop() || operandExprs[1].isTop())) {
+  // XXX: If both are propagating from MMAs, temporarily assume equal priority
+  // (ignore order of MMAs). If sideways propagation would result in a new
+  // conflict in this case, don't propagate. This is a questionable design
+  // carried over from the initial Python prototype.
+  auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
+    if (lattice.isBottom() || lattice.isTop())
+      return lattice;
+    DictionaryAttr priorityDict = lattice.getPriorities();
+    bool needsCapping =
+        priorityDict && llvm::any_of(priorityDict, [](NamedAttribute na) {
+          return llvm::cast<IntegerAttr>(na.getValue()).getInt() >
+                 IndexExprsLatticeStorage::kMmaPriority;
+        });
+    if (!needsCapping)
+      return lattice;
+    MLIRContext *ctx = priorityDict.getContext();
+    IntegerType i32 = IntegerType::get(ctx, 32);
+    SmallVector<NamedAttribute> capped;
+    capped.reserve(priorityDict.size());
+    for (NamedAttribute na : priorityDict) {
+      int32_t priority = llvm::cast<IntegerAttr>(na.getValue()).getInt();
+      capped.emplace_back(
+          na.getName(),
+          IntegerAttr::get(
+              i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
+    }
+    return IndexExprsLatticeStorage(lattice.getConcreteValue(),
+                                    DictionaryAttr::get(ctx, capped),
+                                    lattice.getVectorShape());
+  };
+  IndexExprsLatticeStorage lhs = forceMmaPriority(operandExprs[0]);
+  IndexExprsLatticeStorage rhs = forceMmaPriority(operandExprs[1]);
+  auto joined = IndexExprsLatticeStorage::join(lhs, rhs);
+  if (joined.isTop() && !(lhs.isTop() || rhs.isTop())) {
     return ChangeResult::NoChange;
   }
 
+  // Re-join with the original expressions to get the right priority.
+  joined = IndexExprsLatticeStorage::join(operandExprs[0], operandExprs[1]);
+
+  unsigned valueToStoreOperandNumber =
+      getValueToStoreMutable().getOperandNumber();
+  unsigned memoryOperandNumber = getMemoryMutable().getOperandNumber();
   ChangeResult changeResult = ChangeResult::NoChange;
-  if (operandExprs[0] != joined) {
-    operandExprs[0] = joined;
+  if (operandExprs[valueToStoreOperandNumber] != joined &&
+      wave::detail::shouldPropagateIndexExprs(
+          operandExprs[valueToStoreOperandNumber], joined, getValueToStore())) {
+    operandExprs[valueToStoreOperandNumber] = joined;
     changeResult = ChangeResult::Change;
   }
-  if (operandExprs[1] != joined) {
-    operandExprs[1] = joined;
+  if (operandExprs[memoryOperandNumber] != joined &&
+      wave::detail::shouldPropagateIndexExprs(operandExprs[memoryOperandNumber],
+                                              joined, getMemory())) {
+    operandExprs[memoryOperandNumber] = joined;
     changeResult = ChangeResult::Change;
   }
   return changeResult;
@@ -2450,6 +2611,358 @@ LogicalResult wave::CastOp::verify() {
   }
 
   return success();
+}
+
+/// Return true if the hyperparameter for \p sym is a WaveExprListAttr.
+static bool isExprListDim(DictionaryAttr mapping, wave::WaveSymbolAttr sym) {
+  Attribute attr = mapping.get(sym.getName());
+  return llvm::isa_and_nonnull<wave::WaveExprListAttr>(attr);
+}
+
+/// Return the indices of all scaled dimensions in a bitcast.  A scaled
+/// dimension is one whose symbol maps to a WaveExprListAttr (a derived
+/// expression) in the hyperparameters rather than a plain IntegerAttr.
+/// Returns an empty vector when no hyperparameters are available or when no
+/// expr_list dimension is found.
+static SmallVector<unsigned> getScaledDimensions(wave::BitcastOp op) {
+  wave::WaveHyperparameterAttr hyper =
+      wave::getHyperparameters(op.getOperation());
+  if (!hyper)
+    return {};
+  auto srcType =
+      llvm::dyn_cast<wave::WaveTensorType>(op.getValueToCast().getType());
+  auto dstType = llvm::dyn_cast<wave::WaveTensorType>(op.getResult().getType());
+  if (!srcType || !dstType)
+    return {};
+  ArrayRef<wave::WaveSymbolAttr> srcShape = srcType.getShape();
+  ArrayRef<wave::WaveSymbolAttr> dstShape = dstType.getShape();
+  assert(srcShape.size() == dstShape.size() &&
+         "bitcast shapes must have equal rank");
+  DictionaryAttr mapping = hyper.getMapping();
+  SmallVector<unsigned> scaledDims;
+  for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
+    if (isExprListDim(mapping, srcShape[i]) ||
+        isExprListDim(mapping, dstShape[i]))
+      scaledDims.push_back(i);
+  }
+  return scaledDims;
+}
+
+/// Verify that the scaled dimension of a bitcast is consistent with the
+/// element bitwidth ratio.  The caller must have identified a scaled dimension
+/// via getScaledDimensions(), which requires hyperparameters.
+/// \p scaledDim is the dimension index that carries the scaling.
+/// Returns success when the constraint holds.
+static LogicalResult verifyBitcastScaledDim(wave::WaveHyperparameterAttr hyper,
+                                            wave::WaveTensorType srcType,
+                                            wave::WaveTensorType dstType,
+                                            unsigned srcBits, unsigned dstBits,
+                                            unsigned scaledDim,
+                                            llvm::raw_ostream &errs) {
+  unsigned maxBW = std::max(srcBits, dstBits);
+  unsigned minBW = std::min(srcBits, dstBits);
+  if (maxBW % minBW != 0) {
+    errs << "larger element bitwidth (" << maxBW
+         << ") must be evenly divisible by the smaller (" << minBW << ")";
+    return failure();
+  }
+  if (srcBits == dstBits)
+    return success();
+
+  int64_t srcDimVal =
+      hyper.getKnownSymbolValue(srcType.getShape()[scaledDim].getName());
+  int64_t dstDimVal =
+      hyper.getKnownSymbolValue(dstType.getShape()[scaledDim].getName());
+  if (srcDimVal * srcBits != dstDimVal * dstBits) {
+    errs << "bitcast scaled dimension #" << scaledDim << " mismatch: source ("
+         << srcDimVal << ") * " << srcBits << " bits != result (" << dstDimVal
+         << ") * " << dstBits << " bits";
+    return failure();
+  }
+  return success();
+}
+
+//-----------------------------------------------------------------------------
+// BitcastOp
+//-----------------------------------------------------------------------------
+
+LogicalResult wave::BitcastOp::verify() {
+  Type valueType = getValueToCast().getType();
+  Type resultType = getResult().getType();
+
+  wave::WaveTensorType valueTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(valueType);
+  wave::WaveTensorType resultTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(resultType);
+
+  if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
+      resultTensor.getFullySpecified()) {
+    size_t rank = valueTensor.getRank();
+    if (rank == 0)
+      return emitOpError("rank-0 wave tensors are not supported in bitcast");
+
+    if (rank != resultTensor.getRank())
+      return emitOpError("rank of input (")
+             << rank << ") must match rank of result ("
+             << resultTensor.getRank() << ")";
+
+    unsigned srcBW = valueTensor.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBW = resultTensor.getElementType().getIntOrFloatBitWidth();
+
+    // Detect which dimension is scaled.  The scaled dimension is the one
+    // backed by a WaveExprListAttr in the hyperparameters.
+    SmallVector<unsigned> scaledDims = getScaledDimensions(*this);
+    if (scaledDims.size() > 1)
+      return emitOpError("expected at most one scaled dimension (backed by "
+                         "an expr_list hyperparameter), but found ")
+             << scaledDims.size();
+    std::optional<unsigned> scaledDim =
+        scaledDims.empty() ? std::nullopt : std::optional(scaledDims[0]);
+
+    // Verify that all non-scaled dimensions match.
+    SmallVector<int> srcNonScaled, dstNonScaled;
+    for (unsigned i = 0; i < rank; ++i) {
+      if (scaledDim && i == *scaledDim)
+        continue;
+      srcNonScaled.push_back(i);
+      dstNonScaled.push_back(i);
+    }
+    if (failed(wave::detail::verifyTypesMatchingDimensions(
+            getLoc(), "input", valueTensor, srcNonScaled, "result",
+            resultTensor, dstNonScaled)))
+      return failure();
+
+    if (scaledDim) {
+      std::string errMsg;
+      llvm::raw_string_ostream errStream(errMsg);
+      wave::WaveHyperparameterAttr hyper =
+          wave::getHyperparameters(getOperation());
+      if (failed(verifyBitcastScaledDim(hyper, valueTensor, resultTensor, srcBW,
+                                        dstBW, *scaledDim, errStream)))
+        return emitOpError(errMsg);
+    } else if (srcBW != dstBW) {
+      return emitOpError("element bitwidths differ (")
+             << srcBW << " vs " << dstBW
+             << ") but no scaled dimension was found";
+    }
+
+    return success();
+  }
+
+  VectorType valueVec = llvm::dyn_cast<VectorType>(valueType);
+  VectorType resultVec = llvm::dyn_cast<VectorType>(resultType);
+  if (valueVec && resultVec) {
+    unsigned srcBitWidth = valueVec.getElementType().getIntOrFloatBitWidth();
+    unsigned dstBitWidth = resultVec.getElementType().getIntOrFloatBitWidth();
+    unsigned maxBW = std::max(srcBitWidth, dstBitWidth);
+    unsigned minBW = std::min(srcBitWidth, dstBitWidth);
+    if (maxBW % minBW != 0)
+      return emitOpError("larger element bitwidth (")
+             << maxBW << ") must be evenly divisible by the smaller (" << minBW
+             << ")";
+    int64_t srcElements = valueVec.getNumElements();
+    int64_t dstElements = resultVec.getNumElements();
+    if (srcElements * srcBitWidth != dstElements * dstBitWidth)
+      return emitOpError("total bit count must be preserved");
+  }
+
+  return success();
+}
+
+// Remap the index expression lattice for bitcast: non-scaled dimensions pass
+// through as identity, and the scaled dimension gets its symbol renamed and its
+// step (and start/stride if present) scaled by the element bitwidth ratio.
+// \p scaledDim is the index of the dimension that carries the scaling.
+static IndexExprsLatticeStorage
+scaleBitcastIndexExprs(const IndexExprsLatticeStorage &inputLattice,
+                       ArrayRef<wave::WaveSymbolAttr> fromShape,
+                       ArrayRef<wave::WaveSymbolAttr> toShape,
+                       unsigned fromBits, unsigned toBits, unsigned scaledDim,
+                       MLIRContext *ctx) {
+  if (inputLattice.isBottom() || inputLattice.isTop())
+    return inputLattice;
+
+  assert(fromShape.size() == toShape.size() &&
+         "bitcast shapes must have equal rank");
+
+  DictionaryAttr inputDict = inputLattice.getConcreteValue();
+
+  unsigned ratio =
+      (fromBits > toBits) ? (fromBits / toBits) : (toBits / fromBits);
+  bool scaleUp = fromBits > toBits;
+
+  SmallVector<NamedAttribute> newMappings;
+  newMappings.reserve(inputDict.size());
+
+  WaveSymbolAttr fromScaledSym = fromShape[scaledDim];
+  WaveSymbolAttr toScaledSym = toShape[scaledDim];
+
+  for (NamedAttribute namedAttr : inputDict) {
+    StringRef symName = namedAttr.getName().getValue();
+    auto mapping = llvm::cast<WaveIndexMappingAttr>(namedAttr.getValue());
+
+    // Non-scaled dimensions: pass through unchanged.
+    if (symName != fromScaledSym.getName()) {
+      newMappings.push_back(namedAttr);
+      continue;
+    }
+
+    // Scaled dimension: rename the symbol key and scale the step by the
+    // bitwidth ratio.  If the step has no thread dimensions (thread-independent
+    // initialization), skip this lattice to avoid producing a zero-step mapping
+    // that would conflict with a real propagated value.
+    AffineMap stepMap = mapping.getStep();
+    if (!stepMap || (stepMap.getNumDims() == 0 && stepMap.getNumSymbols() == 0))
+      return IndexExprsLatticeStorage::bottom();
+
+    auto scaleMap = [&](AffineMap map) -> AffineMap {
+      AffineExpr scaled =
+          scaleUp ? map.getResult(0) * ratio : map.getResult(0).floorDiv(ratio);
+      return AffineMap::get(map.getNumDims(), map.getNumSymbols(), scaled, ctx);
+    };
+
+    AffineMap newStep = scaleMap(stepMap);
+    auto newMapping =
+        WaveIndexMappingAttr::get(ctx, mapping.getSymbols(), mapping.getStart(),
+                                  newStep, mapping.getStride());
+
+    newMappings.push_back(NamedAttribute(
+        StringAttr::get(ctx, toScaledSym.getName()), newMapping));
+  }
+
+  if (newMappings.empty())
+    return IndexExprsLatticeStorage::bottom();
+
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, newMappings),
+                                  inputLattice.getPriorities(),
+                                  inputLattice.getVectorShape());
+}
+
+// Shared propagation logic for BitcastOp index expressions in both directions.
+// \p fromExprs is the source lattice, \p toExprs is the destination to update.
+// \p fromType / \p toType are the wave tensor types on the respective sides.
+// \p fromBits / \p toBits are the element bitwidths on the respective sides.
+static llvm::FailureOr<ChangeResult> propagateBitcastIndexExprs(
+    wave::BitcastOp op, llvm::ArrayRef<IndexExprsLatticeStorage> fromExprs,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> toExprs,
+    WaveTensorType fromType, WaveTensorType toType, unsigned fromBits,
+    unsigned toBits, StringRef fromName, StringRef toName, mlir::Value toValue,
+    wave::EmitErrorFn emitError) {
+  if (!fromType || !fromType.getFullySpecified() || !toType ||
+      !toType.getFullySpecified())
+    return ChangeResult::NoChange;
+
+  if (fromBits == toBits)
+    return wave::detail::identityIndexExprsPropagate(
+        fromExprs, toExprs, toValue, fromName, toName, emitError);
+
+  // Detect which dimension is scaled using the hyperparameters.
+  SmallVector<unsigned> scaledDims = getScaledDimensions(op);
+  std::optional<unsigned> scaledDim =
+      scaledDims.empty() ? std::nullopt : std::optional(scaledDims[0]);
+
+  if (!scaledDim) {
+    InFlightDiagnostic diag = emitError()
+                              << "could not determine scaled dimension for "
+                                 "BitcastOp with differing bitwidths";
+    return diag;
+  }
+
+  IndexExprsLatticeStorage scaled = scaleBitcastIndexExprs(
+      fromExprs[0], fromType.getShape(), toType.getShape(), fromBits, toBits,
+      *scaledDim, op.getContext());
+
+  IndexExprsLatticeStorage newLattice =
+      IndexExprsLatticeStorage::join(toExprs[0], scaled);
+
+  if (newLattice.isTop() && !toExprs[0].isTop() && !scaled.isTop()) {
+    InFlightDiagnostic diag = emitError()
+                              << "conflict when propagating " << fromName
+                              << " to " << toName << " lattice in BitcastOp";
+    diag.attachNote() << toName << " lattice: " << toExprs[0];
+    diag.attachNote() << fromName << " lattice: " << fromExprs[0];
+    return diag;
+  }
+
+  return updateIfChanged(toExprs[0], newLattice);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(*this, operandExprs, resultExprs, inputType,
+                                    resultType, srcBits, dstBits, "operand",
+                                    "result", getResult(), emitError);
+}
+
+llvm::FailureOr<ChangeResult> wave::BitcastOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  WaveTensorType inputType =
+      llvm::dyn_cast<WaveTensorType>(getValueToCast().getType());
+  WaveTensorType resultType =
+      llvm::dyn_cast<WaveTensorType>(getResult().getType());
+  unsigned srcBits =
+      wave::getElementType(getValueToCast().getType()).getIntOrFloatBitWidth();
+  unsigned dstBits =
+      wave::getElementType(getResult().getType()).getIntOrFloatBitWidth();
+  return propagateBitcastIndexExprs(
+      *this, resultExprs, operandExprs, resultType, inputType, dstBits, srcBits,
+      "result", "operand", getValueToCast(), emitError);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadForward(
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (operandElements[getValueToCastMutable().getOperandNumber()].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned srcEpt = operandElements[0].getValue();
+  unsigned dstEpt = srcEpt * srcBitWidth / dstBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(dstEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      resultElements, "computed from bitcast ratio", "", "result", errs);
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::BitcastOp::propagateElementsPerThreadBackward(
+    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
+    llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadInit &) {
+  if (resultElements[0].isBottom())
+    return ChangeResult::NoChange;
+
+  Type srcElemType = wave::getElementType(getValueToCast().getType());
+  Type dstElemType = wave::getElementType(getResult().getType());
+  unsigned srcBitWidth = srcElemType.getIntOrFloatBitWidth();
+  unsigned dstBitWidth = dstElemType.getIntOrFloatBitWidth();
+
+  unsigned dstEpt = resultElements[0].getValue();
+  unsigned srcEpt = dstEpt * dstBitWidth / srcBitWidth;
+
+  wave::ElementsPerThreadLatticeValue expected(srcEpt);
+  return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+      expected, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      operandElements, "computed from bitcast ratio", "", "input", errs);
 }
 
 //-----------------------------------------------------------------------------
@@ -2668,9 +3181,9 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsForward(
   // present in the source to the result and make sure they are joined with
   // those. Additional propagation backward from the result users will be needed
   // to cover all symbols.
-  return detail::identityIndexExprsPropagate(
-      operandIndexExprs, resultIndexExprs, getResult().getType(), "operand",
-      "result", emitError);
+  return detail::identityIndexExprsPropagate(operandIndexExprs,
+                                             resultIndexExprs, getResult(),
+                                             "operand", "result", emitError);
 }
 
 FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
@@ -2686,7 +3199,7 @@ FailureOr<ChangeResult> wave::BroadcastOp::propagateIndexExprsBackward(
   // Backward propagation is identity only for symbols that are present
   return detail::identityIndexExprsPropagate(
       resultIndexExprs[0].keepOnlySymbols(sourceTensorType.getShape()),
-      operandIndexExprs, sourceTensorType, "result", "operand", emitError);
+      operandIndexExprs, getSource(), "result", "operand", emitError);
 }
 
 LogicalResult wave::BroadcastOp::verify() {
@@ -2897,7 +3410,8 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   }
 
   return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, permutedMappings),
-                                  inputLattice.getPriority());
+                                  inputLattice.getPriorities(),
+                                  inputLattice.getVectorShape());
 }
 
 llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsForward(
@@ -2946,6 +3460,11 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
   auto resultType = llvm::dyn_cast<WaveTensorType>(getResult().getType());
   if (!resultType || !resultType.getFullySpecified())
     return ChangeResult::NoChange;
+
+  if (!wave::detail::shouldPropagateIndexExprs(resultExprs[0], operandExprs[0],
+                                               getValue())) {
+    return ChangeResult::NoChange;
+  }
 
   ArrayRef<WaveSymbolAttr> resultShape = resultType.getShape();
   ArrayRef<WaveSymbolAttr> srcShape = inputType.getShape();

@@ -210,7 +210,8 @@ jobs:
         if: ${{ env.HAS_GPU == 'true' && env.IS_CDNA4 == 'false' }}
         run: |
           python -m pip install --upgrade pip
-          pip install -r pytorch-rocm-requirements.txt
+          ./gen-pytorch-rocm-requirements.py -o /tmp/pytorch-rocm-requirements.txt
+          pip install -r /tmp/pytorch-rocm-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -e ".[dev]"
 
@@ -218,6 +219,16 @@ jobs:
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
           pytest -n 4 --capture=tee-sys -vv ./tests/mlir_wave_iface
+
+      - name: Run LIT tests
+        env:
+           WAVE_TEST_WATER: ${{ (env.IS_CDNA3 == 'true' || env.is_CDNA4 == 'true')  && '1' || '0'  }}
+           WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
+        run: |
+          # TODO: can't sudo to install dwarfdump on rdna4
+          echo "WAVE_TEST_WATER=$WAVE_TEST_WATER"
+          echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"
+          lit lit_tests/ -vv
 
       - name: Test TKW runtime related stack on amdgpu
         if: ${{ env.HAS_GPU == 'true' }}
@@ -237,16 +248,6 @@ jobs:
         if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
-
-      - name: Run LIT tests
-        env:
-           WAVE_TEST_WATER: ${{ (env.IS_CDNA3 == 'true' || env.is_CDNA4 == 'true')  && '1' || '0'  }}
-           WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
-        run: |
-          # TODO: can't sudo to install dwarfdump on rdna4
-          echo "WAVE_TEST_WATER=$WAVE_TEST_WATER"
-          echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"
-          lit lit_tests/ -vv
 
       - name: MyPy Type Checking
         run: |
@@ -323,6 +324,11 @@ jobs:
         run: |
           cd cmake_build
           cmake --build . --target check-water
+
+      - name: Build docs
+        run: |
+          cd cmake_build
+          cmake --build . --target mlir-doc
 
 
   check_water_changes:

@@ -59,7 +59,8 @@ jobs:
           # Note: We install in three steps in order to satisfy requirements
           # from non default locations first. Installing the PyTorch CPU
           # wheels saves multiple minutes and a lot of bandwidth on runner setup.
-          pip install -r pytorch-rocm-requirements.txt
+          ./gen-pytorch-rocm-requirements.py -o /tmp/pytorch-rocm-requirements.txt
+          pip install -r /tmp/pytorch-rocm-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -e ".[dev]"
 

@@ -20,9 +20,11 @@ target_link_libraries(waveasm-translate
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRLLVMDialect
   MLIRMemRefDialect
   MLIRParser
   MLIRPass
+  MLIRROCDLDialect
   MLIRSCFDialect
   MLIRSupport
   MLIRTransforms

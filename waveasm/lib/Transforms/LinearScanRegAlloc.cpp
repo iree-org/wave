@@ -171,10 +171,14 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
     physReg = tryAllocate(pool, range.size, range.alignment);
 
     if (!physReg) {
-      return program.emitOpError()
-             << "Failed to allocate " << regClassName
-             << " for value. Peak pressure: " << maxPressure
-             << ", limit: " << maxRegs;
+      InFlightDiagnostic diag = mlir::emitError(range.reg.getLoc())
+                                << "Failed to allocate " << regClassName
+                                << ": kernel requires " << maxPressure
+                                << " but only " << maxRegs << " are available";
+      diag.attachNote(range.reg.getLoc())
+          << "Register spilling is not supported; reduce register pressure "
+             "(e.g., smaller tile sizes, fewer unrolled iterations).";
+      return failure();
     }
 
     // Record mapping: Value -> physical register

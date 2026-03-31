@@ -24,6 +24,37 @@ func.func @batched_mma(%a: !wave.tensor<[@B, @M, @K] of f16>,
   return %0 : !wave.tensor<[@B, @M, @N] of f32>
 }
 
+// CHECK-LABEL: @bitcast_i8_to_f4
+func.func @bitcast_i8_to_f4(%v: !wave.tensor<[@M, @K2] of i8>) -> !wave.tensor<[@M, @K] of f4E2M1FN>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
+  // CHECK: wave.bitcast
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @K2] of i8> to !wave.tensor<[@M, @K] of f4E2M1FN>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN>
+}
+
+// CHECK-LABEL: @bitcast_i8_to_f8e8m0
+func.func @bitcast_i8_to_f8e8m0(%v: !wave.tensor<[@M, @K32] of i8>) -> !wave.tensor<[@M, @K32] of f8E8M0FNU> {
+  // CHECK: wave.bitcast
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @K32] of i8> to !wave.tensor<[@M, @K32] of f8E8M0FNU>
+  return %0 : !wave.tensor<[@M, @K32] of f8E8M0FNU>
+}
+
+// CHECK-LABEL: @bitcast_hyper_valid
+func.func @bitcast_hyper_valid(%v: !wave.tensor<[@M, @N] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, K = 32, N = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
+  // CHECK: wave.bitcast %{{.*}} : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  %0 = wave.bitcast %v : !wave.tensor<[@M, @N] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+}
+
+// CHECK-LABEL: @bitcast_non_last_dim_scaled
+func.func @bitcast_non_last_dim_scaled(%v: !wave.tensor<[@K2, @N] of i8, <register>>) -> !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+    attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, N = 16}>} {
+  // CHECK: wave.bitcast %{{.*}} : !wave.tensor<[@K2, @N] of i8, <register>> to !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+  %0 = wave.bitcast %v : !wave.tensor<[@K2, @N] of i8, <register>> to !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+  return %0 : !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
@@ -81,6 +112,16 @@ func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B
   // CHECK: wave.reciprocal
   %1 = wave.reciprocal %0 : (!wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
   return %1 : !wave.tensor<[@A, @B] of bf16>
+}
+
+// CHECK-LABEL: @vector_shape_roundtrip
+func.func @vector_shape_roundtrip(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> attributes {
+  wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
+} {
+  // CHECK: wave.add
+  // CHECK-SAME: vector_shape [{A : 4 : i64, B : 2 : i64}]
+  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i64, B : 2 : i64}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  return %0 : !wave.tensor<[@A, @B] of bf16>
 }
 
 // CHECK-LABEL: @binary
@@ -563,7 +604,7 @@ func.func @permute_with_index(%arg0: !wave.tensor<[@M, @N] of f16, <register>>) 
 // -----
 // Test wave.iterate and wave.yield with vector types
 
-normalform.module [#wave.normal_form<full_types>] attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
 
 // Test that wave.iterate supports vector types in both iter_args and captures
 // CHECK-LABEL: @iterate_vector_types

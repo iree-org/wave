@@ -13,6 +13,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -43,13 +44,14 @@ llvm::LogicalResult wave::collectWaveConstraints(
 }
 
 llvm::LogicalResult
-wave::setNormalFormPassPostcondition(wave::WaveNormalForm form, Operation *root,
-                                     bool preserve) {
+wave::setNormalFormPassPostcondition(ArrayRef<wave::WaveNormalForm> forms,
+                                     Operation *root, bool preserve) {
   auto module = llvm::dyn_cast<normalform::ModuleOp>(root);
   if (!module)
     return root->emitError() << "expected normalform.module";
 
-  wave::WaveNormalForm finalForm = form;
+  llvm::DenseSet<wave::WaveNormalForm> finalForms(forms.begin(), forms.end());
+
   auto normalforms =
       module.getNormalForms().getAsRange<normalform::NormalFormAttrInterface>();
 
@@ -58,22 +60,26 @@ wave::setNormalFormPassPostcondition(wave::WaveNormalForm form, Operation *root,
                              llvm::IsaPred<wave::WaveNormalFormAttr>);
 
   if (preserve) {
-    // Merge all existing normal forms with the new form.
-    for (auto nf : waveNormalForms) {
-      wave::WaveNormalForm currentForm =
-          cast<WaveNormalFormAttr>(nf).getValue();
-      finalForm = finalForm | currentForm;
-    }
+    for (auto nf : waveNormalForms)
+      finalForms.insert(cast<WaveNormalFormAttr>(nf).getValue());
   }
 
   if (!waveNormalForms.empty())
     module.removeNormalForms(waveNormalForms);
 
-  module.addNormalForms(
-      {wave::WaveNormalFormAttr::get(root->getContext(), finalForm)});
+  SmallVector<wave::WaveNormalForm> sortedForms(finalForms.begin(),
+                                                finalForms.end());
+  llvm::sort(sortedForms, [](wave::WaveNormalForm a, wave::WaveNormalForm b) {
+    return static_cast<uint32_t>(a) < static_cast<uint32_t>(b);
+  });
 
-  // We rely on the pass manager to call verifyRegion on the normalform.module
-  // after the pass
+  SmallVector<normalform::NormalFormAttrInterface> newAttrs;
+  newAttrs.reserve(sortedForms.size());
+
+  for (wave::WaveNormalForm form : sortedForms)
+    newAttrs.push_back(wave::WaveNormalFormAttr::get(root->getContext(), form));
+
+  module.addNormalForms(newAttrs);
 
   return llvm::success();
 }
@@ -95,26 +101,28 @@ llvm::LogicalResult wave::clearNormalFormPassPostcondition(Operation *root) {
   return llvm::success();
 }
 
-llvm::LogicalResult
-wave::verifyNormalFormPassPrecondition(WaveNormalForm form, Operation *root,
-                                       llvm::StringRef passName) {
+llvm::LogicalResult wave::verifyNormalFormPassPrecondition(
+    ArrayRef<WaveNormalForm> forms, Operation *root, llvm::StringRef passName) {
   auto module = llvm::dyn_cast<normalform::ModuleOp>(root);
   if (!module)
     return root->emitError()
            << "expected << " << normalform::ModuleOp::getOperationName();
 
   ArrayRef<Attribute> normalforms = module.getNormalForms().getValue();
-  WaveNormalForm expectedForm = WaveNormalForm::None;
-  for (Attribute form : llvm::make_filter_range(
-           normalforms, llvm::IsaPred<WaveNormalFormAttr>)) {
-    expectedForm |= cast<WaveNormalFormAttr>(form).getValue();
+  llvm::DenseSet<WaveNormalForm> presentForms;
+  for (Attribute attr :
+       llvm::make_filter_range(normalforms, llvm::IsaPred<WaveNormalFormAttr>))
+    presentForms.insert(cast<WaveNormalFormAttr>(attr).getValue());
+
+  for (WaveNormalForm form : forms) {
+    if (!presentForms.contains(form)) {
+      return root->emitError()
+             << passName
+             << " pass expects the root operation or its ancestor to "
+                "guarantee the "
+             << wave::stringifyWaveNormalForm(form) << " normal form";
+    }
   }
 
-  if (wave::bitEnumContainsAll(expectedForm, form))
-    return llvm::success();
-
-  return root->emitError()
-         << passName
-         << " pass expects the root operation or its ancestor to guarantee the "
-         << wave::stringifyEnum(form) << " normal form";
+  return llvm::success();
 }

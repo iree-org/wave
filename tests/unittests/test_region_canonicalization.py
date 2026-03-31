@@ -168,6 +168,30 @@ def test_enable_direct_capture_refs_exposes_outer_placeholder_captures():
     verify_canonical_region_captures(trace)
 
 
+def test_canonicalize_region_captures_propagates_vector_shapes():
+    """Capture placeholders inherit vector_shapes from the outer source node."""
+
+    trace, subgraph, outer_value = (
+        _build_nested_region_with_lifted_capture_placeholder()
+    )
+
+    outer_vector_shapes = {IndexSymbol("M"): 16, IndexSymbol("N"): 16}
+    outer_value.vector_shapes = outer_vector_shapes
+
+    canonicalize_region_captures(trace)
+    verify_canonical_region_captures(trace)
+
+    capture_placeholder = next(
+        node
+        for node in subgraph.nodes
+        if isinstance(get_custom(node), Placeholder) and "lifted" in node.meta
+    )
+    assert hasattr(
+        capture_placeholder, "vector_shapes"
+    ), "Capture placeholder should inherit vector_shapes from outer source"
+    assert capture_placeholder.vector_shapes == outer_vector_shapes
+
+
 def test_canonicalize_region_captures_rejects_missing_nested_subgraph():
     """Canonicalization fails fast when a nested region references no subgraph."""
 

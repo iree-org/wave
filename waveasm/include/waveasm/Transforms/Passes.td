@@ -262,4 +262,80 @@ def WAVEASMMemoryOffsetOpt : Pass<"waveasm-memory-offset-opt"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+//===----------------------------------------------------------------------===//
+// Translate from LLVM Dialect Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMGPUModuleToBinary : Pass<"waveasm-gpu-module-to-binary"> {
+  let summary = "Emit assembly and link gpu.module { waveasm.program } to gpu.binary";
+  let description = [{
+    Final pass in the WaveASM pipeline.  Expects gpu.module ops containing
+    register-allocated waveasm.program ops.  Emits AMDGCN assembly, assembles
+    + links to HSACO via LLVM MC, and replaces each gpu.module with a
+    gpu.binary holding the code object.
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx942\"",
+           "Target GPU architecture">,
+    Option<"lldPath", "lld-path", "std::string", "\"\"",
+           "Path to ld.lld for linking HSACO">
+  ];
+
+  let dependentDialects = [
+    "::waveasm::WaveASMDialect",
+    "::mlir::gpu::GPUDialect"
+  ];
+}
+
+def WAVEASMArithLegalization : Pass<"waveasm-arith-legalization"> {
+  let summary = "Lower generic arithmetic pseudo-ops to concrete SALU/VALU ops";
+  let description = [{
+    Lowers register-file-agnostic arith pseudo-ops (arith.add, arith.mul,
+    arith.cmp, arith.select, arith.trunc, arith.sext, arith.zext) to
+    concrete SALU or VALU machine ops.
+
+    Register file assignment (demand-driven divergence):
+    - If any operand is a VGPR → use VALU, result is VGPR.
+    - If all operands are SGPR/immediate → use SALU, result is SGPR.
+
+    Constant bus enforcement:
+    - VALU ops can read at most one SGPR per instruction.
+    - If both operands are SGPRs, one is moved to VGPR via v_mov_b32.
+
+    i64 legalization (split into i32 halves):
+    - add: carry chain (s_add_u32 + s_addc_u32 / v_add_co_u32 + v_addc_co_u32).
+    - mul: schoolbook decomposition (lo*lo, hi*lo, lo*hi).
+    - cmp eq/ne: XOR each half, OR, compare to zero.
+    - cmp ordered: hi/lo decomposition with signed hi / unsigned lo.
+    - select: split both operands, v_cndmask_b32 each half, merge.
+    - sext/zext: extend to {lo, sign/zero} pair.
+    - trunc: extract lo half.
+
+    Reports errors on unsupported widths (anything other than i32/i64).
+  }];
+
+  let statistics = [
+    Statistic<"numOpsLegalized", "Pseudo-ops legalized", "count">,
+    Statistic<"numSGPRToVGPRMoves", "SGPR-to-VGPR moves inserted", "count">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
+  let summary = "Translate LLVM dialect kernels to WaveASM IR";
+  let description = [{
+    Translates gpu.module { llvm.func } with rocdl intrinsics into
+    waveasm.program ops.  Fails on any unhandled op (strict mode).
+  }];
+
+  let options = [
+    Option<"targetArch", "target", "std::string", "\"gfx950\"",
+           "Target GPU architecture">
+  ];
+
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
 #endif // WaveASM_TRANSFORMS_PASSES

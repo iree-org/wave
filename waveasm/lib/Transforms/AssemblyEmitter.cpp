@@ -1105,8 +1105,45 @@ LogicalResult writeAssembly(ProgramOp program, const PhysicalMapping &mapping,
     return program.emitError() << "target attribute not specified";
   }
 
-  KernelGenerator generator(program, mapping, targetAttr.getTargetKind());
+  auto targetKind = targetAttr.getTargetKind();
+  KernelGenerator generator(program, mapping, targetKind);
   auto lines = generator.generate();
+
+  // Check if generated assembly exceeds hardware register limits.
+  // The emitter may allocate extra registers (e.g., swap temps for loop
+  // back-edge copies) beyond what the register allocator budgeted.  Catch
+  // the overflow here with a single clear diagnostic instead of letting
+  // the assembler produce many "register index is out of range" errors.
+  int64_t peakVGPRs = generator.getPeakVGPRs();
+  int64_t peakAGPRs = generator.getPeakAGPRs();
+  int64_t maxVGPRs = targetKind.getMaxVGPRs();
+  int64_t maxAGPRs = targetKind.getMaxAGPRs();
+
+  std::string overflowDetails;
+  llvm::raw_string_ostream detail(overflowDetails);
+  bool overflow = false;
+  if (peakVGPRs > maxVGPRs) {
+    detail << "VGPRs: " << peakVGPRs << " used, " << maxVGPRs << " limit";
+    overflow = true;
+  }
+  if (maxAGPRs > 0 && peakAGPRs > maxAGPRs) {
+    if (overflow)
+      detail << "; ";
+    detail << "AGPRs: " << peakAGPRs << " used, " << maxAGPRs << " limit";
+    overflow = true;
+  }
+
+  if (overflow) {
+    InFlightDiagnostic diag =
+        program.emitError()
+        << "kernel '" << getKernelName(program)
+        << "' exceeds hardware register limit: " << detail.str();
+    diag.attachNote(program.getLoc())
+        << "Register spilling is not supported; reduce register pressure "
+           "by optimizing the kernel (e.g., smaller tile sizes, fewer "
+           "unrolled iterations).";
+    return diag;
+  }
 
   for (const auto &line : lines) {
     os << line << "\n";

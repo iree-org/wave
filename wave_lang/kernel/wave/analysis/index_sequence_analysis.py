@@ -37,6 +37,7 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
+    Reshape,
     TensorLoadToLDS,
     MMA,
     MMABase,
@@ -281,7 +282,8 @@ def _set_water_id(trace: CapturedTrace):
 def _reset_water_id(trace: CapturedTrace):
     """Remove the previously set unique identifier for each node in the trace."""
     for node in trace.walk(lambda x: x):
-        delattr(node, "_water_id")
+        if hasattr(node, "_water_id"):
+            delattr(node, "_water_id")
 
 
 def _check_index_difference_is_zero(
@@ -313,9 +315,16 @@ def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence
     those to find the index inferred by Water.
     """
     for node in trace.walk(lambda x: x):
-        water_id = getattr(node, "_water_id")
+        water_id = getattr(node, "_water_id", None)
         custom = get_custom(node)
         if isinstance(custom, (Placeholder, Output)):
+            continue
+        # Broadcast and Reshape may be inserted by pywave, and separately by
+        # water emitter on-the-fly, making them not have water ids. This means
+        # the MLIR equivalent pass is only doing propagation, not conflict
+        # resolution. When we want to replace the pass, we need to keep conflict
+        # resolution separate.
+        if water_id is None and isinstance(custom, (Broadcast, Reshape)):
             continue
         if water_id not in inferred:
             raise RuntimeError(
@@ -818,7 +827,7 @@ def combine_indices(
     which make the index sequence (access pattern) thread specific. These are
     added to the thread independent index which is obtained from the constraints.
     """
-    combined_index = {k: v for k, v in thread_independent_index.items()}
+    combined_index = {k: deepcopy(v) for k, v in thread_independent_index.items()}
     for k in combined_index:
         if k in thread_dependent_index:
             combined_index[k].start += thread_dependent_index[k].start
@@ -932,12 +941,9 @@ def propagate_indices(
                 source, source_index, source_vector_shapes, symbolic_constraints
             ):
                 continue
-            # GetResults inherit their index from the Iterate node
-            # and hence we don't need to update their index.
             source.vector_shapes = deepcopy(source_vector_shapes)
-            if not isinstance(source, GetResult):
-                source_index = source.transform_index(source_index)
-                source.index = combine_indices(source.index, source_index)
+            source_index = source.transform_index(source_index)
+            source.index = combine_indices(source.index, source_index)
             append_aliased_shapes(source, symbolic_constraints)
         visited.add(source)
         for func in [get_inputs, get_users]:

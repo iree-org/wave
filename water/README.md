@@ -11,6 +11,8 @@ passes, dialects and interfaces usable in other projects.
 
 This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR`.
 
+Step 1: configure the build.
+
 ```sh
 cmake -G Ninja \
       -B build \
@@ -18,6 +20,24 @@ cmake -G Ninja \
       -DBUILD_SHARED_LIBS=On \
       -DPython3_EXECUTABLE="$(which python)" \
       -DWATER_ENABLE_PYTHON=ON
+```
+
+Step 2 (optional): amend the build to use the LLVM C++ toolchain for faster
+compilation and linking (assumes the toolchain and ccache are installed
+and avaibale in `$PATH`).
+
+```sh
+cmake -B build
+      -DCMAKE_C_COMPILER=clang
+      -DCMAKE_CXX_COMPILER=clang++
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      -DLLVM_USE_LINKER=lld
+```
+
+Step 3: build and test.
+
+```sh
 cmake --build build --target check-water
 ```
 
@@ -51,8 +71,6 @@ Here, `$LLVM_SRC_DIR` needs to point to the root of the monorepo.
 * `-DBUILD_SHARED_LIBS=Off` - build static libraries, increases build time and
   **may lead to missing library dependencies**, may be necessary to avoid LLVM
   version conflicts in binary distributions.
-* `-DCMAKE_C_COMPILER_LAUNCHER=ccache` - use ccache for C files.
-* `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache` - use ccache for C++ files.
 * `-DLLVM_PARALLEL_LINK_JOBS=1` - disable parallel linking, helps with build
   times and out-of-memory errors on low-memory machines.
 * `-DCMAKE_EXPORT_COMPILE_COMMANDS=On` - generate `compile_commands.json` used

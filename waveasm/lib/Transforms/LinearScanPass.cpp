@@ -33,8 +33,27 @@ namespace waveasm {
 #include "waveasm/Transforms/Passes.h.inc"
 } // namespace waveasm
 
+/// Get a value's physical register index from the mapping, falling back to
+/// the type's index for already-physical (precolored) values.
+/// Returns -1 if the value has no physical register assignment.
+static int64_t getEffectivePhysReg(Value value,
+                                   const PhysicalMapping &mapping) {
+  int64_t physReg = mapping.getPhysReg(value);
+  if (physReg >= 0)
+    return physReg;
+  Type ty = value.getType();
+  if (auto pvreg = dyn_cast<PVRegType>(ty))
+    return pvreg.getIndex();
+  if (auto pareg = dyn_cast<PARegType>(ty))
+    return pareg.getIndex();
+  if (auto psreg = dyn_cast<PSRegType>(ty))
+    return psreg.getIndex();
+  return -1;
+}
+
 /// Convert a virtual register type to a physical register type.
-/// Returns the original type unchanged if it's not a virtual register type
+/// Also handles re-indexing an already-physical type to a new physReg.
+/// Returns the original type unchanged if it's not a register type
 /// or if physReg < 0.
 static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
                              int64_t physReg) {
@@ -46,6 +65,12 @@ static Type makePhysicalType(MLIRContext *ctx, Type virtualType,
     return PSRegType::get(ctx, physReg, sreg.getSize());
   if (auto areg = dyn_cast<ARegType>(virtualType))
     return PARegType::get(ctx, physReg, areg.getSize());
+  if (auto pvreg = dyn_cast<PVRegType>(virtualType))
+    return PVRegType::get(ctx, physReg, pvreg.getSize());
+  if (auto psreg = dyn_cast<PSRegType>(virtualType))
+    return PSRegType::get(ctx, physReg, psreg.getSize());
+  if (auto pareg = dyn_cast<PARegType>(virtualType))
+    return PARegType::get(ctx, physReg, pareg.getSize());
   return virtualType;
 }
 
@@ -229,30 +254,39 @@ private:
 
     auto [mapping, stats] = *result;
 
-    // Handle waveasm.extract ops: result = source[offset]
-    // Set the extract result's physical register = source's physical register +
-    // offset
+    // Handle waveasm.extract ops: result = source[offset].
+    // Set the extract result's physical register = source's physReg + offset.
     program.walk([&](ExtractOp extractOp) {
-      Value source = extractOp.getVector();
-      Value extractResult = extractOp.getResult();
-      int64_t index = extractOp.getIndex();
-
-      // Get source's physical register (may be precolored or allocated)
-      int64_t sourcePhysReg = -1;
-      Type srcType = source.getType();
-      if (auto pvreg = dyn_cast<PVRegType>(srcType)) {
-        sourcePhysReg = pvreg.getIndex();
-      } else if (auto pareg = dyn_cast<PARegType>(srcType)) {
-        sourcePhysReg = pareg.getIndex();
-      } else {
-        sourcePhysReg = mapping.getPhysReg(source);
-      }
-
-      if (sourcePhysReg >= 0) {
-        // Set the extract result to source + offset
-        mapping.setPhysReg(extractResult, sourcePhysReg + index);
-      }
+      int64_t sourcePhysReg =
+          getEffectivePhysReg(extractOp.getVector(), mapping);
+      if (sourcePhysReg >= 0)
+        mapping.setPhysReg(extractOp.getResult(),
+                           sourcePhysReg + extractOp.getIndex());
     });
+
+    // Handle waveasm.pack ops: input[i] gets result's physReg + i.
+    // Pack inputs were excluded from the allocation worklists during liveness
+    // analysis, so they have no mapping yet. Assign them here from the pack
+    // result's contiguous allocation.
+    WalkResult packResult = program.walk([&](PackOp packOp) {
+      int64_t resultPhysReg = getEffectivePhysReg(packOp.getResult(), mapping);
+      if (resultPhysReg < 0) {
+        packOp.emitError(
+            "pack result has no physical register; cannot assign inputs");
+        return WalkResult::interrupt();
+      }
+      for (auto [i, input] : llvm::enumerate(packOp.getElements())) {
+#ifndef NDEBUG
+        for (unsigned j = 0; j < i; ++j)
+          assert(packOp.getElements()[j] != input &&
+                 "duplicate pack input survived liveness copy insertion");
+#endif
+        mapping.setPhysReg(input, resultPhysReg + static_cast<int64_t>(i));
+      }
+      return WalkResult::advance();
+    });
+    if (packResult.wasInterrupted())
+      return failure();
 
     // Transform the IR: replace virtual register types with physical types
     OpBuilder builder(program.getContext());
@@ -428,14 +462,27 @@ private:
       }
     });
 
-    // Also update if op result types from yield operand types
+    // Also update if op result types.
+    // Prefer the allocation mapping (which respects loop ties) over the
+    // then-yield operand type.  When an if result feeds a loop init arg,
+    // the allocator ties it to the loop block arg and both receive the
+    // same physical register.  The then-yield operand may carry a
+    // *different* physical register (from the inner loop), so copying it
+    // blindly would break the LoopLikeOpInterface verifier which requires
+    // exact type equality between init args and region iter_args.
     program.walk([&](IfOp ifOp) {
       auto &thenBlock = ifOp.getThenBlock();
-      if (auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator())) {
-        for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
-          if (i < yieldOp.getResults().size()) {
-            ifOp->getResult(i).setType(yieldOp.getResults()[i].getType());
-          }
+      auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator());
+      if (!yieldOp)
+        return;
+      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+        Value res = ifOp->getResult(i);
+        int64_t physReg = mapping.getPhysReg(res);
+        if (physReg >= 0) {
+          res.setType(
+              makePhysicalType(ifOp->getContext(), res.getType(), physReg));
+        } else if (i < yieldOp.getResults().size()) {
+          res.setType(yieldOp.getResults()[i].getType());
         }
       }
     });

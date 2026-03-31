@@ -63,6 +63,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Allocate,
     ApplyExpr,
     BinaryOpBase,
+    BitcastOp as Bitcast,
     Extract,
     ExtractSlice,
     get_custom,
@@ -107,6 +108,7 @@ try:
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         ApplyExprOp,
+        BitcastOp,
         SubOp,
         AllocateOp,
         BroadcastOp,
@@ -161,6 +163,7 @@ except Exception as e:
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
     "apply_expr": ApplyExprOp,
+    "bitcast": BitcastOp,
     "broadcast": BroadcastOp,
     "sub": SubOp,
     "allocate": AllocateOp,
@@ -197,6 +200,13 @@ DATATYPE_MAP: dict[str, Callable[[], ir.Type]] = {
     "f16": ir.F16Type.get,
     "f32": ir.F32Type.get,
     "f64": ir.F64Type.get,
+    "f8E5M2": ir.Float8E5M2Type.get,
+    "f8E5M2FNUZ": ir.Float8E5M2FNUZType.get,
+    "f8E4M3FN": ir.Float8E4M3FNType.get,
+    "f8E4M3FNUZ": ir.Float8E4M3FNUZType.get,
+    "f8E8M0FNU": ir.Float8E8M0FNUType.get,
+    "f6E2M3FN": ir.Float6E2M3FNType.get,
+    "f4E2M1FN": ir.Float4E2M1FNType.get,
     "i1": lambda: ir.IntegerType.get_signless(1),
     # 'bool' is an alias for 'i1'.
     "bool": lambda: ir.IntegerType.get_signless(1),
@@ -254,6 +264,27 @@ def _map_address_space(addr) -> WaveAddressSpaceAttr:
         return WaveAddressSpaceAttr.get(WaveAddressSpace.Unspecified)
 
 
+def _derived_dim_clean_name(expr: sympy.Expr) -> str:
+    """Return a clean MLIR-friendly name for a derived SymPy expression, or
+    the original name if the expression is already a plain symbol"""
+    if expr.is_Symbol or expr.is_Number:
+        return expr.name
+    if len(expr.free_symbols) != 1:
+        raise NotImplementedError(
+            f"expressions with more than one free symbol {expr} are not yet supported"
+        )
+    base = list(expr.free_symbols)[0]
+    _, denom = expr.as_numer_denom()
+    if isinstance(denom, sympy.Integer) and denom > 1:
+        return f"{base.name}{int(denom)}"
+    if isinstance(expr, sympy.Mul):
+        args = expr.args
+        ints = [a for a in args if a.is_Integer]
+        if len(ints) == 1:
+            return f"{base.name}{int(ints[0])}"
+    raise NotImplementedError(f"shortening expression {expr} is not yet supported")
+
+
 def _create_wave_tensor_type(
     ctx: ir.Context,
     symbolic_shape: tuple,
@@ -261,7 +292,10 @@ def _create_wave_tensor_type(
     address_space_attr: WaveAddressSpaceAttr,
 ) -> ir.Type:
     """Helper function to create a WaveTensorType from shape, dtype, and address space."""
-    shape_attrs = [WaveSymbolAttr.get(str(s)) for s in symbolic_shape]
+    shape_attrs = []
+    for s in symbolic_shape:
+        clean = _derived_dim_clean_name(s)
+        shape_attrs.append(WaveSymbolAttr.get(clean if clean else str(s)))
     element_type = _dtype_to_mlir_scalar_type(dtype)
     return WaveTensorType.get(shape_attrs, True, element_type, address_space_attr)
 
@@ -310,6 +344,17 @@ def _convert_sympy_expr_to_affine_map(
     # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
     expr = expr.subs(symbol_mapping)
     expr = sympy.simplify(expr)
+
+    # Bare symbolic fractions like BLOCK_K/32 cannot be represented as affine
+    # expressions directly. Wrap them in ceiling() so they lower to ceildiv.
+    # All Wave symbols are positive integers, so ceiling(x/n) == x/n when x is
+    # divisible by n.
+    if isinstance(expr, sympy.Mul):
+        _, denom = expr.as_numer_denom()
+        if denom != 1 and not isinstance(denom, sympy.Integer):
+            pass
+        elif isinstance(denom, sympy.Integer) and denom > 1:
+            expr = sympy.ceiling(expr)
 
     return convert_sympy_to_affine_map(
         expr, [sym.name for sym in symbol_mapping.values()]
@@ -404,6 +449,44 @@ def _attach_attributes(
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveSymbolMappingAttr.get(bounds)
+
+    if getattr(node, "vector_shapes", None):
+        if not isinstance(node, MMA):
+            op.attributes["vector_shape"] = ir.ArrayAttr.get(
+                [_convert_vector_shapes(node.vector_shapes)]
+            )
+        else:
+            # MMA needs exactly 4 vector_shape entries: lhs, rhs, acc, result.
+            vector_shape_entries = []
+            lhs_vector_shapes = getattr(node.lhs, "vector_shapes", None)
+            rhs_vector_shapes = getattr(node.rhs, "vector_shapes", None)
+            acc_vector_shapes = getattr(node.acc, "vector_shapes", None)
+            result_vector_shapes = getattr(node, "vector_shapes", None)
+            some_vector_shapes = any(
+                [
+                    lhs_vector_shapes,
+                    rhs_vector_shapes,
+                    acc_vector_shapes,
+                    result_vector_shapes,
+                ]
+            )
+            if some_vector_shapes:
+                assert lhs_vector_shapes is not None, "MMA missing LHS vector shapes."
+                assert rhs_vector_shapes is not None, "MMA missing RHS vector shapes."
+                assert acc_vector_shapes is not None, "MMA missing ACC vector shapes."
+                assert (
+                    result_vector_shapes is not None
+                ), "MMA missing result vector shapes."
+                vector_shape_entries.extend(
+                    _convert_vector_shapes(x)
+                    for x in [
+                        lhs_vector_shapes,
+                        rhs_vector_shapes,
+                        acc_vector_shapes,
+                        result_vector_shapes,
+                    ]
+                )
+            op.attributes["vector_shape"] = ir.ArrayAttr.get(vector_shape_entries)
 
     if water_id := getattr(node.fx_node, "_water_id", None):
         op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)
@@ -590,6 +673,38 @@ def _emit_ops_from_graph(
                     )
                 return mlir_operands
 
+            def attach_get_result_attr(
+                iterate_op: IterateOp,
+                position: int,
+                name: str,
+                attr: ir.Attribute,
+                *,
+                prepend: bool,
+            ):
+                current_attribute = (
+                    iterate_op.attributes[name]
+                    if name in iterate_op.attributes
+                    else None
+                )
+                # When prepend=True, slot 0 is reserved for the iterate's
+                # own entry (already set by _attach_attributes).  Result
+                # entries occupy slots 1..N.
+                effective_position = (position + 1) if prepend else position
+                total_slots = len(iterate_op.results) + (1 if prepend else 0)
+                if current_attribute is None:
+                    attribute_list = [ir.UnitAttr.get()] * total_slots
+                elif (
+                    isinstance(current_attribute, ir.ArrayAttr)
+                    and len(current_attribute) < total_slots
+                ):
+                    attribute_list = list(current_attribute) + [ir.UnitAttr.get()] * (
+                        total_slots - len(current_attribute)
+                    )
+                else:
+                    attribute_list = list(current_attribute)
+                attribute_list[effective_position] = attr
+                iterate_op.attributes[name] = ir.ArrayAttr.get(attribute_list)
+
             if isinstance(node, GetResult):
                 if node.res_idx >= len(value_map[node.value]):
                     raise RuntimeError(
@@ -598,29 +713,34 @@ def _emit_ops_from_graph(
                     )
                 value_map[fx_node] = (value_map[node.value][node.res_idx],)
 
-                # Attach IDs of `get_result` to the loop instead so we can recover them
-                # later because `get_result` doesn't exist in the dialect. Only do so when
-                # there are some results.
-                if known_ids is not None and len(value_map[node.value]) > 0:
+                # Attach IDs and vector_shapes of `get_result` to the loop
+                # instead so we can recover them later because `get_result`
+                # doesn't exist in the dialect. Only do so when there are some
+                # results.
+                if len(value_map[node.value]) > 0:
                     iterate_op = get_single_mapped_value(fx_node).owner
-                    water_id = getattr(fx_node, "_water_id", None)
-                    if water_id is None:
-                        raise RuntimeError(
-                            f"Water id requested for 'get_result' but not specified: {node}"
+                    if vector_shapes := getattr(fx_node, "vector_shapes", None):
+                        attach_get_result_attr(
+                            iterate_op,
+                            node.res_idx,
+                            "vector_shape",
+                            _convert_vector_shapes(vector_shapes),
+                            prepend=True,
                         )
-                    known_ids.add(water_id)
-                    current_attribute = (
-                        iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME]
-                        if _INTERNAL_RESULT_WATER_IRS_ATTR_NAME in iterate_op.attributes
-                        else ir.ArrayAttr.get(
-                            [ir.UnitAttr.get()] * len(iterate_op.results)
+                    if known_ids is not None:
+                        water_id = getattr(fx_node, "_water_id", None)
+                        if water_id is None:
+                            raise RuntimeError(
+                                f"Water id requested for 'get_result' but not specified: {node}"
+                            )
+                        known_ids.add(water_id)
+                        attach_get_result_attr(
+                            iterate_op,
+                            node.res_idx,
+                            _INTERNAL_RESULT_WATER_IRS_ATTR_NAME,
+                            ir.StringAttr.get(water_id),
+                            prepend=False,
                         )
-                    )
-                    attribute_list = list(current_attribute)
-                    attribute_list[node.res_idx] = ir.StringAttr.get(water_id)
-                    iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME] = (
-                        ir.ArrayAttr.get(attribute_list)
-                    )
 
                 # additional handling for this op is not needed, skip rest
                 continue
@@ -752,6 +872,8 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type, *create_mlir_operands(), kind=mma_kind
                     )
+                elif isinstance(node, Bitcast):
+                    mlir_op = op_builder(result_type, get_single_mapped_value(node.arg))
                 elif isinstance(node, Reduce):
                     args = node.arg if isinstance(node.arg, Sequence) else [node.arg]
                     inputs = [get_single_mapped_value(a) for a in args]
@@ -1245,12 +1367,38 @@ def _create_kernel_module(
                         f"Unexpected non-int mapping in hyperparameters: {k} -> {v}. "
                         f"Expected all non-int values to be address spaces"
                     )
-        # Convert the symbols in subs to strings and attach as
-        # WaveHyperparameterAttr to func_op
+        # Build the hyperparameters dict: base symbols map to integers,
+        # derived dims (e.g. K/2) map to WaveExprListAttr expressions.
+        hyper_params: dict[str, int | WaveExprListAttr] = {
+            str(k): v for k, v in options.subs.items() if isinstance(v, int)
+        }
+        # Collect derived symbolic dimensions from tensor shapes across the
+        # graph.  Instead of pre-evaluating them to integers, encode the
+        # affine relationship so the C++ backend can resolve them symbolically.
+        for node in trace.walk():
+            c = get_custom(node)
+            t = getattr(c, "_type", None) or getattr(c, "type", None)
+            shapes = []
+            if t is not None:
+                shapes = getattr(t, "symbolic_shape", None) or []
+            for dim_expr in shapes:
+                clean = _derived_dim_clean_name(dim_expr)
+                if clean is None or clean in hyper_params:
+                    continue
+                free = list(dim_expr.free_symbols)
+                if len(free) != 1:
+                    continue
+                base_sym = free[0]
+                if str(base_sym) not in hyper_params:
+                    continue
+                sym_mapping = preprocess_symbols(free)
+                affine_map = _convert_sympy_expr_to_affine_map(dim_expr, sym_mapping)
+                sym_attrs = [
+                    symbol_name_to_attribute(sym.name) for sym in sym_mapping.values()
+                ]
+                hyper_params[clean] = WaveExprListAttr.get(sym_attrs, affine_map)
         func_op.operation.attributes["wave.hyperparameters"] = (
-            wave.WaveHyperparameterAttr.get(
-                {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
-            )
+            wave.WaveHyperparameterAttr.get(hyper_params)
         )
 
         try:
@@ -1435,6 +1583,7 @@ def _build_response(
                 def record_index(
                     attribute: ir.Attribute,
                     inferred_attributes: dict[str, dict[str, Any]],
+                    element: int = 0,
                 ):
                     assert isinstance(
                         attribute, ir.StringAttr
@@ -1450,7 +1599,7 @@ def _build_response(
                     inferred_attributes[attribute.value].update(
                         {
                             "index": convert_index_mapping_array_to_sympy(
-                                op, op.attributes["index"]
+                                op, op.attributes["index"], element
                             )
                         }
                     )
@@ -1461,8 +1610,8 @@ def _build_response(
                     assert isinstance(
                         result_attribute, ir.ArrayAttr
                     ), f"Unexpected attribute type: {result_attribute}."
-                    for attribute in result_attribute:
-                        record_index(attribute, inferred_attributes)
+                    for i, attribute in enumerate(result_attribute):
+                        record_index(attribute, inferred_attributes, i)
 
                 return ir.WalkResult.ADVANCE
 

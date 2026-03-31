@@ -313,25 +313,41 @@ struct PyWaveHyperparameterAttr
             }
             std::string symbolName = nb::cast<std::string>(key_handle);
 
-            // Get the value (resolved value)
+            MlirIdentifier ident = mlirIdentifierGet(
+                context->get(),
+                mlirStringRefCreate(symbolName.data(), symbolName.size()));
+
             nb::handle value_handle = item.second;
-            if (!nb::isinstance<nb::int_>(value_handle)) {
-              throw nb::type_error(
-                  "Symbol dictionary value must be an integer");
-            }
-            int64_t resolvedValue;
-            try {
-              resolvedValue = nb::cast<int64_t>(value_handle);
-            } catch (const nb::cast_error &e) {
-              throw nb::value_error("Value is too large for int64_t");
+            MlirAttribute valueAttr;
+            if (nb::isinstance<nb::int_>(value_handle)) {
+              int64_t resolvedValue;
+              try {
+                resolvedValue = nb::cast<int64_t>(value_handle);
+              } catch (const nb::cast_error &e) {
+                throw nb::value_error("Value is too large for int64_t");
+              }
+              valueAttr = mlirIntegerAttrGet(
+                  mlirIntegerTypeGet(context->get(), 64), resolvedValue);
+            } else {
+              try {
+                valueAttr = nb::cast<MlirAttribute>(value_handle);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error(
+                    "Symbol dictionary value must be an integer or an "
+                    "Attribute (e.g. WaveExprListAttr)");
+              }
+
+              // Only accept IntegerAttr or WaveExprListAttr to avoid
+              // constructing invalid #wave.hyperparameters mappings.
+              if (!mlirAttributeIsAInteger(valueAttr) &&
+                  !mlirAttributeIsAWaveExprListAttr(valueAttr)) {
+                throw nb::type_error(
+                    "Symbol dictionary value must be either an integer, an "
+                    "IntegerAttr, or a WaveExprListAttr");
+              }
             }
 
-            namedAttrs.push_back(mlirNamedAttributeGet(
-                mlirIdentifierGet(
-                    context->get(),
-                    mlirStringRefCreate(symbolName.data(), symbolName.size())),
-                mlirIntegerAttrGet(mlirIntegerTypeGet(context->get(), 64),
-                                   resolvedValue)));
+            namedAttrs.push_back(mlirNamedAttributeGet(ident, valueAttr));
           }
 
           return PyWaveHyperparameterAttr(
@@ -1053,13 +1069,13 @@ NB_MODULE(_waterDialects, m) {
       .value("GPR_NUMBER", WaveIndexSymbol_GPR_NUMBER);
 
   nb::enum_<WaveNormalForm>(d, "WaveNormalForm")
-      .value("None_", WaveNormalFormNone)
       .value("FunctionBoundarySpecified",
              WaveNormalFormFunctionBoundarySpecified)
       .value("OpTypesSpecified", WaveNormalFormOpTypesSpecified)
       .value("IndexExprsSpecified", WaveNormalFormIndexExprsSpecified)
       .value("MemoryOnlyTypes", WaveNormalFormMemoryOnlyTypes)
-      .value("AllTypesSpecified", WaveNormalFormAllTypesSPecified);
+      .value("ResolvedAllocations", WaveNormalFormResolvedAllocations)
+      .value("OrderedSymsSpecified", WaveNormalFormOrderedSymsSpecified);
 
   nb::enum_<WaveWorkgroupDim>(d, "WaveWorkgroupDim")
       .value("X", WaveWorkgroupDimX)

@@ -478,6 +478,73 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // already handle all necessary live range extensions by directly inspecting
   // the region structure.
 
+  // Pass 3a: Pack group pass -- treat pack inputs as sub-registers of the
+  // pack result.
+  //
+  // waveasm.pack emits no assembly; it is a register allocation directive
+  // declaring that N inputs form a contiguous register block. The pack result
+  // already gets a correct contiguous allocation via allocRange, but pack
+  // inputs would otherwise get independent allocations to arbitrary registers.
+  //
+  // Fix: extend the pack result's live range to cover the full lifetime of
+  // all inputs (both defs and uses), then remove pack inputs from the
+  // allocation worklists entirely. A post-pass in LinearScanPass assigns
+  // input[i].physReg = result.physReg + i.
+  llvm::DenseSet<Value> claimedPackInputs;
+  program.walk([&](PackOp packOp) {
+    Value packResult = packOp.getResult();
+    auto resultIt = info.ranges.find(packResult);
+    assert(resultIt != info.ranges.end() &&
+           "pack result must have a live range");
+
+    for (auto [idx, input] : llvm::enumerate(packOp.getElements())) {
+      bool isExtract = input.getDefiningOp<ExtractOp>() != nullptr;
+      bool isDuplicate = claimedPackInputs.contains(input);
+
+      if (isDuplicate || isExtract) {
+        // Insert a copy for:
+        // - Duplicate inputs: same value claimed by another PackOp slot or
+        //   repeated within this PackOp. A single SSA value can only occupy
+        //   one physical register.
+        // - ExtractOp inputs: ExtractOp is non-emitting and aliases
+        //   source[offset]. The PackOp post-pass assigns input[i] =
+        //   result_base + i, which may differ from the extract's physical
+        //   register. Without a copy, the SRD word is silently wrong.
+        OpBuilder builder(packOp);
+        Value copy;
+        if (isSGPRType(input.getType()))
+          copy = S_MOV_B32::create(builder, packOp.getLoc(), input.getType(),
+                                   input);
+        else
+          copy = V_MOV_B32::create(builder, packOp.getLoc(), input.getType(),
+                                   input);
+        packOp.setOperand(idx, copy);
+
+        // If this is a first-seen extract, also remove its range from the
+        // allocator worklist (the ExtractOp walk in LinearScanPass will
+        // assign the correct physReg based on the source vector).
+        auto inputIt = info.ranges.find(input);
+        if (!isDuplicate && inputIt != info.ranges.end()) {
+          info.ranges.erase(inputIt);
+          claimedPackInputs.insert(input);
+        }
+      } else {
+        auto inputIt = info.ranges.find(input);
+        if (inputIt != info.ranges.end()) {
+          // First PackOp to claim this input: extend the pack result's range
+          // to cover the input's full lifetime, then remove from the
+          // allocator worklist.
+          resultIt->second.start =
+              std::min(resultIt->second.start, inputIt->second.start);
+          resultIt->second.end =
+              std::max(resultIt->second.end, inputIt->second.end);
+          info.ranges.erase(inputIt);
+          claimedPackInputs.insert(input);
+        }
+      }
+    }
+  });
+
   // Pass 3b: Build tied equivalence classes for pressure de-duplication.
   //
   // LoopOp results, condition iter_args, and block args are all tied to the

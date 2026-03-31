@@ -244,7 +244,8 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
            "::wave::EmitErrorFn":$emitError),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return ::llvm::success();
+        return ::wave::detail::defaultInitializeIndexExprsForward(
+            $_op, resultExprs, initObject, emitError);
       }]
     >,
     InterfaceMethod<[{
@@ -268,7 +269,9 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
            "::wave::EmitDelayedErrorFn &":$delayedErrorEmitter),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return ::llvm::success();
+        return ::wave::detail::defaultInitializeIndexExprsBackward(
+            $_op, operandExprs, initObject, emitError,
+            delayedErrorEmitter);
       }]
     >,
     InterfaceMethod<[{
@@ -296,6 +299,11 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
 
 def IdentityIndexExprsOpTrait
     : NativeOpTrait<"IdentityIndexExprsOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+def ReductionIndexExprsInferenceOpTrait
+    : NativeOpTrait<"ReductionIndexExprsInferenceOpTrait"> {
   let cppNamespace = "::wave";
 }
 
