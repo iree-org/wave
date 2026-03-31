@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "waveasm/Transforms/Liveness.h"
-#include "waveasm/Dialect/WaveASMInterfaces.h"
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Dialect/WaveASMTypes.h"
 
@@ -50,12 +49,26 @@ static bool hasWARHazard(Value iterArg, Value blockArg,
   if (isa<BlockArgument>(iterArg))
     return false;
   auto *defOp = iterArg.getDefiningOp();
-  if (!defOp)
-    return false;
+  assert(defOp && "non-BlockArgument Value must have a defining op");
 
-  // Check for def/use overlap: if the iter_arg is defined at a point
-  // where block_arg still has subsequent uses, tying them creates a
-  // WAR hazard.
+  // Single-element buffer loads (ubyte/sbyte/ushort/sshort): the block_arg
+  // is consumed indirectly through vector.bitcast / vector.extract that
+  // share the same physical register. These transitive uses don't appear
+  // in usePoints, so unconditionally untie to be safe.
+  auto opName = defOp->getName().getStringRef();
+  if (opName.contains("buffer_load") && !opName.contains("_lds")) {
+    if (opName.contains("_ubyte") || opName.contains("_sbyte") ||
+        opName.contains("_ushort") || opName.contains("_sshort")) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  WAR hazard (single-element load): " << opName << "\n");
+      return true;
+    }
+  }
+
+  // General case: check for def/use overlap. If the iter_arg is defined
+  // at a point where block_arg still has subsequent uses (strictly after,
+  // since same-point means read-before-write), tying them creates a WAR
+  // hazard.
   auto iterDefIt = info.defPoints.find(iterArg);
   auto baUseIt = info.usePoints.find(blockArg);
   if (iterDefIt != info.defPoints.end() && baUseIt != info.usePoints.end()) {
@@ -698,7 +711,8 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // At the same start point, allocate larger and more constrained ranges
   // first to reduce fragmentation — a 16-wide aligned range has very few
   // valid slots, so giving it priority prevents smaller ranges from
-  // blocking its only valid position.
+  // blocking its only valid position. Final tie-break: longer ranges first,
+  // since they are harder to fit around existing allocations.
   auto sortByStart = [](const LiveRange &a, const LiveRange &b) {
     if (a.start != b.start)
       return a.start < b.start;
