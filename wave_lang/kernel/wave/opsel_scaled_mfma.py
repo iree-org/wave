@@ -28,9 +28,12 @@ dead-code eliminated by a subsequent canonicalization pass.
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Optional
 
 from iree.compiler.ir import (
+    AffineAddExpr,
+    AffineConstantExpr,
+    AffineMapAttr,
     ArrayAttr,
     Block,
     Float8E8M0FNUType,
@@ -54,6 +57,39 @@ from wave_lang.support.logging import get_logger
 logger = get_logger("wave.opsel_scaled_mfma")
 
 SCALE_VECTOR_WIDTH = 4
+
+_i8 = None
+_i64 = None
+_v1xi8 = None
+_sizes_1 = None
+_strides_1 = None
+_types_ctx = None
+
+
+def _init_types():
+    """Initialize MLIR type constants for the current context."""
+    global _i8, _i64, _v1xi8, _sizes_1, _strides_1, _types_ctx
+    from iree.compiler.ir import Context as _Ctx
+
+    cur_ctx = _Ctx.current
+    if _types_ctx is cur_ctx:
+        return
+    _types_ctx = cur_ctx
+    _i8 = IntegerType.get_signless(8)
+    _i64 = IntegerType.get_signless(64)
+    _v1xi8 = VectorType.get([1], _i8)
+    _sizes_1 = ArrayAttr.get([IntegerAttr.get(_i64, 1)])
+    _strides_1 = ArrayAttr.get([IntegerAttr.get(_i64, 1)])
+
+
+def _make_extract_slice(source: Value, offset: int, size: int = 1):
+    """Create ``extract_strided_slice(source, offset, size, 1)``."""
+    result_type = VectorType.get([size], _i8) if size > 1 else _v1xi8
+    offsets = ArrayAttr.get([IntegerAttr.get(_i64, offset)])
+    sizes = _sizes_1 if size == 1 else ArrayAttr.get([IntegerAttr.get(_i64, size)])
+    return vector_d.ExtractStridedSliceOp(
+        result_type, source, offsets, sizes, _strides_1
+    )
 
 
 def _is_op_named(op, name: str) -> bool:
@@ -82,10 +118,10 @@ def _trace_scale_chain(scale_value):
                                : vector<4xi8> -> vector<1xi8>
         <- source             : vector<4xi8>  (typically a vector.load)
     """
+    # Step 1: scale_value must come from vector.extract [0] : vector<1xf8E8M0FNU>
     extract_op = scale_value.owner
     if not _is_op_named(extract_op, "vector.extract"):
         return None
-
     extract_source = extract_op.operands[0]
     extract_source_type = extract_source.type
     if not isinstance(extract_source_type, VectorType):
@@ -93,10 +129,10 @@ def _trace_scale_chain(scale_value):
     if extract_source_type.rank != 1 or extract_source_type.shape[0] != 1:
         return None
 
+    # Step 2: that vector<1xf8E8M0FNU> must come from vector.bitcast(vector<1xi8>)
     bitcast_op = extract_source.owner
     if not _is_op_named(bitcast_op, "vector.bitcast"):
         return None
-
     bitcast_source = bitcast_op.operands[0]
     bitcast_source_type = bitcast_source.type
     if not isinstance(bitcast_source_type, VectorType):
@@ -104,18 +140,19 @@ def _trace_scale_chain(scale_value):
     if bitcast_source_type.rank != 1 or bitcast_source_type.shape[0] != 1:
         return None
 
+    # Step 3: that vector<1xi8> must come from extract_strided_slice of a
+    # vector<4xi8> (skip through arith.select from flatten-bounds masking).
     slice_op = _look_through_select(bitcast_source.owner)
     if not _is_op_named(slice_op, "vector.extract_strided_slice"):
         return None
-
     offset = IntegerAttr(slice_op.opview.offsets[0]).value
 
+    # Step 4: the slice source must be exactly vector<4xi8> — the width
+    # that amdgpu.scaled_mfma requires for vector scale operands.
     slice_source = slice_op.operands[0]
     slice_source_type = slice_source.type
     if not isinstance(slice_source_type, VectorType):
         return None
-    # Only apply opsel optimization to vector<4xi8> sources.
-    # The amdgpu.scaled_mfma operation requires vector<4xf8E8M0FNU> scale operands.
     if slice_source_type.rank != 1 or slice_source_type.shape[0] != SCALE_VECTOR_WIDTH:
         return None
 
@@ -190,8 +227,7 @@ def _find_mergeable_groups(
 
     Returns a list of ``(init_source, yield_source, {offset: iter_index})``.
     """
-    i8 = IntegerType.get_signless(8)
-    v1xi8 = VectorType.get([1], i8)
+    _init_types()
 
     init_args = list(for_view.initArgs)
     yield_operands = list(yield_op.operands)
@@ -201,9 +237,15 @@ def _find_mergeable_groups(
     # extract_strided_slice (e.g. pipelined sub-word loads from a swapped
     # double-buffer).  Such groups are still mergeable — we construct the
     # yield vector from individual bytes later.
+    # Phase 1: Classify each vector<1xi8> iter_arg.
+    # For each one, check whether its init and yield values trace back to
+    # extract_strided_slice of a vector<4xi8>.  Three outcomes:
+    #   - Both trace, same offset  -> normal group member (yield_src set)
+    #   - Both trace, diff offset  -> address-shifted (yield_src = None)
+    #   - Yield doesn't trace      -> untraceable (yield_src = None)
     eligible = []
     for i, iter_arg in enumerate(for_view.inner_iter_args):
-        if iter_arg.type != v1xi8:
+        if iter_arg.type != _v1xi8:
             continue
         init_info = _trace_extract_strided_slice(init_args[i])
         if init_info is None:
@@ -235,11 +277,17 @@ def _find_mergeable_groups(
             )
         eligible.append((i, init_off, init_src, yield_src))
 
+    # Phase 2: Group eligible iter_args by their init source vector<4xi8>.
+    # Uses hash() for MLIR Value identity (id() can alias across bindings).
     by_init_src = defaultdict(list)
     for entry in eligible:
         _, _, init_src, _ = entry
         by_init_src[hash(init_src.owner)].append(entry)
 
+    # Phase 3: Within each source group, greedily form mergeable groups
+    # from distinct byte offsets.  A group needs >= 2 offsets to be worth
+    # coalescing (full groups of 4 are common; partial like {0, 2} arise
+    # from preshuffle scales).
     result = []
     for entries in by_init_src.values():
         by_offset = defaultdict(list)
@@ -247,9 +295,6 @@ def _find_mergeable_groups(
             _, off, _, _ = entry
             by_offset[off].append(entry)
 
-        # Greedily form groups from available offsets. Accept any group
-        # with >= 2 distinct offsets (full groups of 4 are the common
-        # case; partial groups like {0, 2} arise from preshuffle scales).
         present_offsets = [o for o in range(SCALE_VECTOR_WIDTH) if by_offset[o]]
         while len(present_offsets) >= 2:
             members = {}
@@ -267,11 +312,13 @@ def _find_mergeable_groups(
                 else:
                     has_untraceable_yield = True
             if has_untraceable_yield:
-                # Some yield values don't trace — the yield vector will be
-                # constructed from individual bytes during coalescing.
+                # Some yield values don't trace — yield_source=None signals
+                # _coalesce_vector_iter_args to construct the yield vector.
                 result.append((init_source, None, members))
             elif len(yield_owners) == 1:
+                # All yield values come from the same vector<4xi8> source.
                 result.append((init_source, yield_source, members))
+            # else: yields come from multiple sources — can't safely merge.
             present_offsets = [o for o in range(SCALE_VECTOR_WIDTH) if by_offset[o]]
 
     return result
@@ -299,6 +346,7 @@ def _build_coalesce_plan(
     """Compute index mappings and new init/yield arg lists (no IR mutation)."""
     plan = _CoalescePlan(groups=groups)
 
+    # Map each merged iter_arg index to its group and byte offset.
     for g_idx, (_, _, members) in enumerate(groups):
         for offset, iter_idx in members.items():
             plan.merged_indices.add(iter_idx)
@@ -308,6 +356,9 @@ def _build_coalesce_plan(
     old_yield_operands = list(yield_op.operands)
     plan.num_iter_args = len(list(for_view.inner_iter_args))
 
+    # Build new_init_args: replace each group's N individual vector<1xi8>
+    # init values with one vector<4xi8> (the group's init_source).
+    # Non-merged iter_args pass through unchanged.
     cur = 0
     seen_groups: set[int] = set()
     for i in range(plan.num_iter_args):
@@ -324,6 +375,8 @@ def _build_coalesce_plan(
             plan.old_to_new_iter_idx[i] = cur
             cur += 1
 
+    # Build new_yield_vals: similarly replace grouped yields with the
+    # group's yield_source vector<4xi8>.
     seen_groups = set()
     for i in range(plan.num_iter_args):
         if i in plan.merged_indices:
@@ -342,16 +395,22 @@ def _rewire_for_results(
     old_results: list,
     new_results: list,
     for_op,
-    make_extract_slice: Callable[[Value, int], Value],
 ) -> None:
-    """Replace uses of old scf.for results with extracts from the new for."""
+    """Replace uses of old scf.for results with extracts from the new for.
+
+    Non-merged results map 1:1.  For merged groups, insert
+    extract_strided_slice ops after the new for to extract individual
+    bytes from the coalesced vector<4xi8> result.
+    """
     seen_groups: set[int] = set()
     for i in range(plan.num_iter_args):
+        # Non-merged results pass through directly.
         if i not in plan.merged_indices:
             new_idx = plan.old_to_new_iter_idx[i]
             old_results[i].replace_all_uses_with(new_results[new_idx])
             continue
 
+        # Process each merged group once (skip duplicate member visits).
         g_idx, _ = plan.index_to_group[i]
         if g_idx in seen_groups:
             continue
@@ -359,17 +418,19 @@ def _rewire_for_results(
 
         members = plan.groups[g_idx][2]
         new_idx = plan.group_new_iter_idx[g_idx]
+        # Skip extract creation if no downstream code uses these results.
         has_users = any(
             any(True for _ in old_results[members[o]].uses) for o in members
         )
         if not has_users:
             continue
 
+        # Insert byte extracts from the coalesced result after the for op.
         with InsertionPoint(for_op):
             for o, old_i in members.items():
                 if not any(True for _ in old_results[old_i].uses):
                     continue
-                extract_slice = make_extract_slice(new_results[new_idx], o)
+                extract_slice = _make_extract_slice(new_results[new_idx], o)
                 old_results[old_i].replace_all_uses_with(extract_slice.result)
 
 
@@ -384,18 +445,7 @@ def _coalesce_vector_iter_args(module: Module) -> None:
     Handles both full groups (all 4 offsets present) and partial groups
     (e.g. only offsets {0, 2} from preshuffle scales).
     """
-    i8 = IntegerType.get_signless(8)
-    i64 = IntegerType.get_signless(64)
-    v1xi8 = VectorType.get([1], i8)
-    _sizes_1 = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-    _strides_1 = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-
-    def make_extract_slice(source: Value, offset: int):
-        """Create extract_strided_slice(source, offset, 1, 1) -> vector<1xi8>."""
-        offsets = ArrayAttr.get([IntegerAttr.get(i64, offset)])
-        return vector_d.ExtractStridedSliceOp(
-            v1xi8, source, offsets, _sizes_1, _strides_1
-        )
+    _init_types()
 
     for_ops = [
         op for op in _walk_operations(module.operation) if _is_op_named(op, "scf.for")
@@ -427,18 +477,20 @@ def _coalesce_vector_iter_args(module: Module) -> None:
             # exists (from an extract_strided_slice of a wider load).
             # This handles the address-shifted pattern where init and yield
             # extract different offsets from their respective dword loads.
-            any_member_idx = next(iter(members.values()))
-            any_yield = old_yield_operands[any_member_idx]
-            any_yield_info = _trace_extract_strided_slice(any_yield)
-            if any_yield_info is not None:
-                # The yield value is an extract from a vector<4xi8> — use
-                # the source vector directly as the merged yield value.
-                yield_vec_src, _ = any_yield_info
-                groups[g_idx] = (init_source, yield_vec_src, members)
-                logger.debug(
-                    f"Group {g_idx}: reusing existing vector<4xi8> yield "
-                    f"source (offset-shifted pattern)"
-                )
+            found_yield_src = False
+            for member_idx in members.values():
+                yield_val = old_yield_operands[member_idx]
+                yield_info = _trace_extract_strided_slice(yield_val)
+                if yield_info is not None:
+                    yield_vec_src, _ = yield_info
+                    groups[g_idx] = (init_source, yield_vec_src, members)
+                    logger.debug(
+                        f"Group {g_idx}: reusing existing vector<4xi8> yield "
+                        f"source (offset-shifted pattern)"
+                    )
+                    found_yield_src = True
+                    break
+            if found_yield_src:
                 continue
 
             if 0 not in members:
@@ -455,10 +507,13 @@ def _coalesce_vector_iter_args(module: Module) -> None:
                     f"({byte0_op.name}) — skipping"
                 )
                 continue
+            # Assumes the 4 scale bytes are contiguous starting at the
+            # byte-0 address.  This holds for LDS scale loads produced by
+            # the pipeliner but is not validated here.
             load_view = byte0_op.opview
             memref = load_view.base
             indices = list(load_view.indices)
-            v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], i8)
+            v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], _i8)
             with InsertionPoint(byte0_op):
                 wide_load = vector_d.load(v4xi8, memref, indices)
             groups[g_idx] = (init_source, wide_load, members)
@@ -499,7 +554,7 @@ def _coalesce_vector_iter_args(module: Module) -> None:
             for g_idx, (_, _, members) in enumerate(groups):
                 merged_arg = new_for.inner_iter_args[plan.group_new_iter_idx[g_idx]]
                 for offset, iter_idx in members.items():
-                    extract_slice = make_extract_slice(merged_arg, offset)
+                    extract_slice = _make_extract_slice(merged_arg, offset)
                     extract_results[iter_idx] = extract_slice.result
 
         # --- rewire block arg uses ---
@@ -512,9 +567,7 @@ def _coalesce_vector_iter_args(module: Module) -> None:
                 old_iter_args[i].replace_all_uses_with(new_for.inner_iter_args[new_idx])
 
         # --- rewire for results and clean up ---
-        _rewire_for_results(
-            plan, old_results, list(new_for.results_), for_op, make_extract_slice
-        )
+        _rewire_for_results(plan, old_results, list(new_for.results_), for_op)
         for_op.erase()
 
 
@@ -523,19 +576,15 @@ def _get_affine_constant_offset(op) -> Optional[int]:
 
     For ``affine_map<()[s0,s1] -> (expr + 2)>`` returns ``2``.
     For ``affine_map<()[s0,s1] -> (expr)>`` (no trailing constant) returns ``0``.
-    Returns ``None`` if *op* is not an affine.apply or the map cannot be parsed.
+    Returns ``None`` if *op* is not an affine.apply.
     """
     if not _is_op_named(op, "affine.apply"):
         return None
-    import re
-
-    map_str = str(op.attributes["map"])
-    m = re.search(r"\+\s*(\d+)\)\s*>\s*$", map_str)
-    if m:
-        return int(m.group(1))
-    if re.search(r"\)\s*>\s*$", map_str):
-        return 0
-    return None
+    affine_map = AffineMapAttr(op.attributes["map"]).value
+    expr = affine_map.results[0]
+    if isinstance(expr, AffineAddExpr) and isinstance(expr.rhs, AffineConstantExpr):
+        return expr.rhs.value
+    return 0
 
 
 def _affine_base_key(op) -> Optional[tuple]:
@@ -550,15 +599,13 @@ def _affine_base_key(op) -> Optional[tuple]:
     if not _is_op_named(op, "affine.apply"):
         return None
     operand_hashes = tuple(hash(v) for v in op.operands)
-    import re
-
-    map_str = str(op.attributes["map"])
-    m = re.search(r"\+\s*\d+\)\s*>\s*$", map_str)
-    if m:
-        base_map = map_str[: m.start()].rstrip() + ")>"
+    affine_map = AffineMapAttr(op.attributes["map"]).value
+    expr = affine_map.results[0]
+    if isinstance(expr, AffineAddExpr) and isinstance(expr.rhs, AffineConstantExpr):
+        base_expr = expr.lhs
     else:
-        base_map = map_str
-    return (base_map, operand_hashes)
+        base_expr = expr
+    return (str(base_expr), operand_hashes)
 
 
 def _merge_scale_byte_loads(module: Module) -> None:
@@ -570,18 +617,19 @@ def _merge_scale_byte_loads(module: Module) -> None:
     users with direct byte extracts from the wide vector<4xi8>, so that
     _trace_scale_chain sees the correct source type for opsel.
     """
-    i8 = IntegerType.get_signless(8)
-    i64 = IntegerType.get_signless(64)
-    v1xi8 = VectorType.get([1], i8)
+    _init_types()
 
+    # Step 1: Collect all vector<1xi8> and vector<2xi8> loads whose last
+    # index is computed by affine.apply (so we can extract the constant
+    # byte offset and group loads that differ only by that offset).
     byte_loads: list[Operation] = []
     for op in _walk_operations(module.operation):
         if not _is_op_named(op, "vector.load"):
             continue
-        rtype = op.results[0].type
-        if not isinstance(rtype, VectorType) or rtype.element_type != i8:
+        result_type = op.results[0].type
+        if not isinstance(result_type, VectorType) or result_type.element_type != _i8:
             continue
-        if rtype.shape[0] > 2:
+        if result_type.shape[0] > 2:
             continue
         view = op.opview
         addr = view.indices[-1]
@@ -592,8 +640,10 @@ def _merge_scale_byte_loads(module: Module) -> None:
     if not byte_loads:
         return
 
+    # Step 2: Group loads that share the same memref, prefix indices, and
+    # affine base expression — i.e. they differ only by a constant offset
+    # in the last index (e.g. addr, addr+1, addr+2, addr+3).
     def _full_group_key(op: Operation):
-        """Group by memref, all non-last indices, AND the affine base expr."""
         view = op.opview
         memref_h = hash(view.base)
         prefix_hashes = tuple(hash(v) for v in list(view.indices)[:-1])
@@ -605,6 +655,8 @@ def _merge_scale_byte_loads(module: Module) -> None:
     for op in byte_loads:
         by_group[_full_group_key(op)].append(op)
 
+    # Step 3: For each group, find the offset-0 load (base address) and
+    # replace all sub-word loads with extracts from a single vector<4xi8>.
     for loads in by_group.values():
         if len(loads) < 2:
             continue
@@ -618,48 +670,47 @@ def _merge_scale_byte_loads(module: Module) -> None:
                 continue
             if off >= SCALE_VECTOR_WIDTH:
                 continue
-            addr_to_offset[id(load_op)] = off
+            addr_to_offset[hash(load_op)] = off
             if off == 0:
                 base_op = load_op
 
+        # Without an offset-0 load we don't know the dword-aligned base.
         if base_op is None:
             continue
 
         base_view = base_op.opview
-        v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], i8)
+        v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], _i8)
 
-        earliest = base_op
-        for load_op in loads:
-            if id(load_op) in addr_to_offset:
-                earliest = load_op
-                break
-
-        with InsertionPoint(earliest):
+        # Insert the wide load before the first eligible load in the group
+        # (all grouped loads are in the same block, so any valid member works).
+        first_eligible = next(op for op in loads if hash(op) in addr_to_offset)
+        with InsertionPoint(first_eligible):
             wide = vector_d.load(v4xi8, base_view.base, list(base_view.indices))
 
         replaced = 0
         for load_op in loads:
-            if id(load_op) not in addr_to_offset:
+            if hash(load_op) not in addr_to_offset:
                 continue
-            off = addr_to_offset[id(load_op)]
-            rtype = load_op.results[0].type
-            n = rtype.shape[0]
-            if off + n > SCALE_VECTOR_WIDTH:
+            off = addr_to_offset[hash(load_op)]
+            load_type = load_op.results[0].type
+            load_width = load_type.shape[0]
+            if off + load_width > SCALE_VECTOR_WIDTH:
                 continue
 
-            if n == 1:
+            if load_width == 1:
+                # vector<1xi8> load: replace directly with a byte extract
+                # from the wide load.
                 with InsertionPoint(load_op):
-                    offsets = ArrayAttr.get([IntegerAttr.get(i64, off)])
-                    sizes = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-                    strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-                    ext = vector_d.ExtractStridedSliceOp(
-                        v1xi8, wide, offsets, sizes, strides
-                    )
+                    ext = _make_extract_slice(wide, off)
                 load_op.results[0].replace_all_uses_with(ext.result)
                 load_op.erase()
                 replaced += 1
             else:
-                ess_users = []
+                # vector<2xi8> load: rewrite each downstream size-1
+                # extract_strided_slice to pull directly from the wide
+                # vector<4xi8>, computing the absolute byte offset as
+                # load_offset + inner_extract_offset.
+                byte_extract_users = []
                 for use in list(load_op.results[0].uses):
                     user_op = use.owner
                     if (
@@ -669,28 +720,20 @@ def _merge_scale_byte_loads(module: Module) -> None:
                         inner_off = IntegerAttr(user_op.opview.offsets[0]).value
                         byte_off = off + inner_off
                         if byte_off < SCALE_VECTOR_WIDTH:
-                            ess_users.append((user_op, byte_off))
+                            byte_extract_users.append((user_op, byte_off))
 
-                for user_op, byte_off in ess_users:
+                for user_op, byte_off in byte_extract_users:
                     with InsertionPoint(user_op):
-                        offsets = ArrayAttr.get([IntegerAttr.get(i64, byte_off)])
-                        sizes = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-                        strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-                        ext = vector_d.ExtractStridedSliceOp(
-                            v1xi8, wide, offsets, sizes, strides
-                        )
+                        ext = _make_extract_slice(wide, byte_off)
                     user_op.results[0].replace_all_uses_with(ext.result)
                     user_op.erase()
 
+                # If the vector<2xi8> load still has other users (not size-1
+                # extracts), keep it alive as an extract from the wide load.
                 has_remaining = any(True for _ in load_op.results[0].uses)
                 if has_remaining:
                     with InsertionPoint(load_op):
-                        offsets = ArrayAttr.get([IntegerAttr.get(i64, off)])
-                        sizes = ArrayAttr.get([IntegerAttr.get(i64, n)])
-                        strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
-                        fallback = vector_d.ExtractStridedSliceOp(
-                            rtype, wide, offsets, sizes, strides
-                        )
+                        fallback = _make_extract_slice(wide, off, size=load_width)
                     load_op.results[0].replace_all_uses_with(fallback.result)
 
                 load_op.erase()
@@ -715,11 +758,17 @@ def apply_opsel_scaled_mfma(module: Module):
     mlir_ctx = module.operation.context
 
     with mlir_ctx, Location.unknown():
+        # Pre-pass 1: Merge vector<1xi8> scf.for iter_args back into
+        # vector<4xi8> so that scale chains are visible to the main pass.
         _coalesce_vector_iter_args(module)
+
+        # Pre-pass 2: Merge sub-word LDS loads (from unrolled iterations)
+        # into vector<4xi8> loads for the same reason.
         _merge_scale_byte_loads(module)
 
         f8e8m0 = Float8E8M0FNUType.get()
 
+        # Collect all scaled_mfma ops to process.
         scaled_mfma_ops = []
         for op in _walk_operations(module.operation):
             if _is_op_named(op, "amdgpu.scaled_mfma"):
@@ -730,8 +779,9 @@ def apply_opsel_scaled_mfma(module: Module):
 
         logger.debug(f"Found {len(scaled_mfma_ops)} scaled_mfma ops")
 
+        # For each scaled_mfma, try to trace each scale operand back
+        # through the extract+bitcast chain to find the source vector<4xi8>.
         replacements = []
-
         for mfma_op in scaled_mfma_ops:
             idx_a = int(mfma_op.scalesIdxA)
             idx_b = int(mfma_op.scalesIdxB)
@@ -762,30 +812,34 @@ def apply_opsel_scaled_mfma(module: Module):
 
         i32 = IntegerType.get_signless(32)
 
-        # Cache: defining Operation -> bitcast result Value.
-        # Using the Operation object identity ensures one bitcast per source load.
+        # Bitcast caches: ensure one bitcast per source vector<4xi8>,
+        # shared across all scaled_mfma ops that reference the same load.
         source_op_to_bitcast = {}
-
         block_arg_bitcasts: dict[tuple, Value] = {}
 
         def get_wide_bitcast(source_vec: Value) -> Value:
-            """Get or create a wide bitcast vector<Nxi8> -> vector<Nxf8E8M0FNU>."""
+            """Get or create vector.bitcast(vector<Nxi8> -> vector<Nxf8E8M0FNU>).
+
+            For block arguments (loop-carried iter_args), inserts at block
+            begin.  For op results, inserts immediately after the defining op.
+            """
             defining_op = source_vec.owner
 
+            # Block argument: source is a loop iter_arg, not an op result.
             if isinstance(defining_op, Block):
                 cache_key = (defining_op, source_vec.arg_number)
                 if cache_key in block_arg_bitcasts:
                     return block_arg_bitcasts[cache_key]
-
                 source_type = source_vec.type
-                n = source_type.shape[0]
-                result_type = VectorType.get([n], f8e8m0)
-
+                vec_width = source_type.shape[0]
+                result_type = VectorType.get([vec_width], f8e8m0)
                 with InsertionPoint.at_block_begin(defining_op):
                     bc = vector_d.bitcast(result_type, source_vec)
                 block_arg_bitcasts[cache_key] = bc
                 return bc
 
+            # Op result: use (op, result_number) as cache key for
+            # multi-result ops, or just the op for single-result ops.
             if len(defining_op.results) > 1:
                 cache_key = (defining_op, source_vec.result_number)
             else:
@@ -794,16 +848,16 @@ def apply_opsel_scaled_mfma(module: Module):
                 return source_op_to_bitcast[cache_key]
 
             source_type = source_vec.type
-            n = source_type.shape[0]
-            result_type = VectorType.get([n], f8e8m0)
-
+            vec_width = source_type.shape[0]
+            result_type = VectorType.get([vec_width], f8e8m0)
             with InsertionPoint(defining_op):
                 bc = vector_d.bitcast(result_type, source_vec)
             bc.owner.move_after(defining_op)
-
             source_op_to_bitcast[cache_key] = bc
             return bc
 
+        # Apply: replace each scalar-scale scaled_mfma with a new one
+        # that uses vector<4xf8E8M0FNU> scales + opsel byte index.
         for mfma_op, new_scale_a, new_idx_a, new_scale_b, new_idx_b in replacements:
             actual_scale_a = mfma_op.scalesA
             actual_scale_b = mfma_op.scalesB

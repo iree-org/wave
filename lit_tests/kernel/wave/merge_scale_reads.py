@@ -237,3 +237,51 @@ def test_preshuffle_b_opsel():
 
     # No remaining scaled_mfma should have scalar B scale either.
     # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,
+
+
+@run_test
+def test_opsel_coalescing_asymmetric_2x2():
+    """Verify opsel coalescing for asymmetric block=(256,192,256) with wave_shape=(2,2).
+
+    With (2,2) wave shapes and asymmetric M!=N block dimensions, the opsel
+    pass must handle untraceable yield values where A-scale iter_args don't
+    trace cleanly through extract_strided_slice chains.  Without the fix,
+    4 vector<1xi8> iter_args leak through as individual byte loads requiring
+    v_bfe_u32 extraction, and 72 scaled_mfma ops retain scalar scale operands.
+
+    With the fix:
+    - All vector<1xi8> iter_args are coalesced into vector<4xi8>
+    - All scaled_mfma ops use vector<4xf8E8M0FNU> with opsel indexing
+    - scf.for iter_args drop from 76 to 73
+    """
+    shape = (1024, 1024, 8192)
+    block = (256, 192, 256)
+    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape, block, wave_shape=(2, 2)
+    )
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.use_buffer_ops = True
+    options.compile_to_mlir = True
+    options.device = "hip"
+    options.target = "gfx950"
+    schedule = get_mxfp4_asymmetric_schedule()
+    result = wave_compile(options, kernel, schedule)
+    print(result.asm)
+
+    # CHECK-LABEL: test_opsel_coalescing_asymmetric_2x2
+
+    # No vector<1xi8> should remain in scf.for iter_args — they must be
+    # coalesced into wider vector<4xi8> loads.
+    # CHECK-NOT: vector<1xi8>
+
+    # All scaled_mfma ops should use vector<4xf8E8M0FNU> scale operands
+    # with opsel byte selection, not scalar f8E8M0FNU.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : f8E8M0FNU,
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,
+
+    # At least one scaled_mfma with vector A-scale and opsel indexing.
+    # CHECK: amdgpu.scaled_mfma {{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+
+    # No scalar-scale scaled_mfma should remain after.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : f8E8M0FNU,
