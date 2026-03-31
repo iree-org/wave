@@ -714,26 +714,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return None
 
-    def _same_value(a, b) -> bool:
-        """Structural equality for emitter values (_ApplyExpr / OpResult).
-
-        Detects when two independently-built IR values represent the same
-        computation.  Used in _add to avoid denominator explosion when
-        adding _Rationals that share a common denominator.
-        """
-        if isinstance(a, _ApplyExpr) and isinstance(b, _ApplyExpr):
-            if a.expr != b.expr or len(a.args) != len(b.args):
-                return False
-            return all(_same_value(x, y) for x, y in zip(a.args, b.args))
-        if isinstance(a, (Value, OpResult)) and isinstance(b, (Value, OpResult)):
-            if a is b:
-                return True
-            a_val = get_const_val(a)
-            b_val = get_const_val(b)
-            if a_val is not None and b_val is not None:
-                return a_val == b_val
-        return False
-
     overflow_flags = arith_d.IntegerOverflowFlags.nsw | arith_d.IntegerOverflowFlags.nuw
 
     def muli(lhs, rhs):
@@ -840,15 +820,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             numerator = add_expr(numerator, rhs.numerator)
             return _Rational(numerator, rhs.denominator)
         elif is_rational_lhs and is_rational_rhs:
-            if _same_value(lhs.denominator, rhs.denominator):
-                numerator = add_expr(lhs.numerator, rhs.numerator)
-                return _Rational(numerator, lhs.denominator)
-            else:
-                lhs_numerator = muli_expr(lhs.numerator, rhs.denominator)
-                rhs_numerator = muli_expr(rhs.numerator, lhs.denominator)
-                numerator = add_expr(lhs_numerator, rhs_numerator)
-                denominator = muli_expr(lhs.denominator, rhs.denominator)
-                return _Rational(numerator, denominator)
+            lhs_numerator = muli_expr(lhs.numerator, rhs.denominator)
+            rhs_numerator = muli_expr(rhs.numerator, lhs.denominator)
+            numerator = add_expr(lhs_numerator, rhs_numerator)
+            denominator = muli_expr(lhs.denominator, rhs.denominator)
+            return _Rational(numerator, denominator)
         else:
             return add_expr(lhs, rhs)
 
@@ -906,6 +882,36 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             return value
 
         return floordiv_expr(value.numerator, value.denominator)
+
+    def _group_same_denom_fractions(expr):
+        """Group Add terms that share the same denominator to prevent
+        denominator explosion during IR emission.
+        e.g. x/5 + 2*y/5 becomes UnevaluatedExpr(x + 2*y) / 5,
+        which the emitter lowers as a single (x + 2*y) floordiv 5.
+        """
+        if not isinstance(expr, sympy.Add):
+            return expr
+
+        from collections import defaultdict
+
+        groups = defaultdict(list)
+        for term in sympy.Add.make_args(expr):
+            n, d = term.as_numer_denom()
+            groups[d].append(n)
+
+        if all(len(v) <= 1 for v in groups.values()):
+            return expr
+
+        new_terms = []
+        for d, nums in groups.items():
+            if d == 1:
+                new_terms.extend(nums)
+            elif len(nums) == 1:
+                new_terms.append(nums[0] / d)
+            else:
+                new_terms.append(sympy.UnevaluatedExpr(sympy.Add(*nums)) / d)
+
+        return sympy.Add(*new_terms)
 
     def _ceiling(value):
         if not isinstance(value, _Rational):
@@ -981,7 +987,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
     if not isinstance(expr, sympy.Expr):
         expr = sympy.sympify(expr)
     expr = piecewise_aware_subs(expr, idxc.subs)
-
+    expr = _group_same_denom_fractions(expr)
     # Why affine, for now simply create indexing expressions.
     # This can easily be adapted to affine expressions later.
     select_stack = []
