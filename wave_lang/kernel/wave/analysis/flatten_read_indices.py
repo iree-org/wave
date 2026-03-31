@@ -50,6 +50,28 @@ from ..utils.mapping_utils import (
 from ..utils.symbol_utils import subs_idxc
 
 
+def _should_use_original_index(phys, index_entry):
+    """Return True when the physical start should NOT be used for masking.
+
+    The physical start (post-mapping) may contain symbols introduced by
+    the mapping that shift the coordinate into a different space than the
+    bound applies to.  This happens with:
+    - ``$dynamic_val`` symbols from ``dynamic_val_mappings``
+    - runtime offsets added via ``set_symbol`` (e.g. OFFSET, EXT_IDX)
+
+    We detect this by checking whether the physical start has free symbols
+    that are absent from the original (pre-mapping) index start.  Any
+    extra symbols indicate a coordinate-space shift that makes the bound
+    comparison invalid.
+    """
+    orig_start = (
+        index_entry.start if isinstance(index_entry, IndexSequence) else index_entry
+    )
+    phys_syms = sympy.sympify(phys).free_symbols
+    orig_syms = sympy.sympify(orig_start).free_symbols
+    return bool(phys_syms - orig_syms)
+
+
 def _convert_bounds(bounds, index, phys_starts, ept, symbolic_shape, symbolic_dims):
     """Convert per-dim bounds to expression-keyed form.
 
@@ -61,10 +83,10 @@ def _convert_bounds(bounds, index, phys_starts, ept, symbolic_shape, symbolic_di
     gets broadcast.
 
     Falls back to the original (pre-mapping) index for dimensions whose
-    physical start contains dynamic-val symbols (``$dynamic_val``),
-    because those symbols are only resolvable through the mapping's
-    dynamic_val_indices at codegen time, and the mapping is cleared
-    after flattening.
+    physical start contains extra symbols not present in the original
+    index (e.g. ``$dynamic_val`` symbols or ``set_symbol``'d offsets),
+    because the bound value applies to the logical coordinate space,
+    not the shifted physical space.
 
     Returns ``None`` if there are no applicable bounds.
     """
@@ -76,7 +98,7 @@ def _convert_bounds(bounds, index, phys_starts, ept, symbolic_shape, symbolic_di
         if dim not in symbolic_dims:
             continue
         phys = phys_starts[dim]
-        if any("dynamic_val" in str(s) for s in sympy.sympify(phys).free_symbols):
+        if dim in index and _should_use_original_index(phys, index[dim]):
             dim_start = (
                 index[dim].start
                 if isinstance(index[dim], IndexSequence)
