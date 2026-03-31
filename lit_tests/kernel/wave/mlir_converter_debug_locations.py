@@ -270,6 +270,9 @@ def mlir_converter_location_iterate():
 
     # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":185
     # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":183
-    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":180
+    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":18{{[01]}}
+    # The line number for loc4 (@tkw.iterate) differs by Python version: Python < 3.11
+    # attributes decorator bytecode to the `def` line (181), while Python >= 3.11
+    # (via co_positions()) correctly points to the `@` decorator line (180).
     # CHECK: #loc5 = loc("{{.*}}mlir_converter_debug_locations.py":187
     # CHECK: #loc6 = loc("{{.*}}mlir_converter_debug_locations.py":191
