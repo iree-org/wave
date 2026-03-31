@@ -215,12 +215,8 @@ IXS_STATIC int ixs_node_cmp(const ixs_node *a, const ixs_node *b) {
     return (int)a->tag < (int)b->tag ? -1 : 1;
 
   switch (a->tag) {
-  case IXS_INT:
-    if (a->u.ival < b->u.ival)
-      return -1;
-    if (a->u.ival > b->u.ival)
-      return 1;
-    return 0;
+  case IXS_INT: /* three-way compare, overflow-safe */
+    return (a->u.ival > b->u.ival) - (a->u.ival < b->u.ival);
   case IXS_RAT:
     return ixs_rat_cmp(a->u.rat.p, a->u.rat.q, b->u.rat.p, b->u.rat.q);
   case IXS_SYM:

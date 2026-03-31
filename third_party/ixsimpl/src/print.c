@@ -90,6 +90,92 @@ static void print_wrapped(printbuf *pb, ixs_node *n, prec_t parent_prec) {
   }
 }
 
+static void print_add(printbuf *pb, ixs_node *n) {
+  uint32_t i;
+  int64_t cp, cq;
+  bool first = true;
+
+  ixs_node_get_rat(n->u.add.coeff, &cp, &cq);
+  if (!ixs_rat_is_zero(cp)) {
+    print_node(pb, n->u.add.coeff, PREC_ADD);
+    first = false;
+  }
+
+  for (i = 0; i < n->u.add.nterms; i++) {
+    int64_t tp, tq;
+    ixs_node_get_rat(n->u.add.terms[i].coeff, &tp, &tq);
+
+    if (first) {
+      if (tp == -1 && tq == 1) {
+        pb_str(pb, "-");
+        print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+      } else if (tp == 1 && tq == 1) {
+        print_wrapped(pb, n->u.add.terms[i].term, PREC_ADD);
+      } else if (ixs_rat_is_neg(tp)) {
+        pb_str(pb, "-");
+        int64_t np = 0, nq = 0;
+        ixs_rat_neg(tp, tq, &np, &nq);
+        if (np == 1 && nq == 1) {
+          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+        } else {
+          ixs_node tmp;
+          memset(&tmp, 0, sizeof(tmp));
+          if (nq == 1) {
+            tmp.tag = IXS_INT;
+            tmp.u.ival = np;
+          } else {
+            tmp.tag = IXS_RAT;
+            tmp.u.rat.p = np;
+            tmp.u.rat.q = nq;
+          }
+          print_node(pb, &tmp, PREC_MUL);
+          pb_char(pb, '*');
+          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+        }
+      } else {
+        if (!(tp == 1 && tq == 1)) {
+          print_node(pb, n->u.add.terms[i].coeff, PREC_MUL);
+          pb_char(pb, '*');
+        }
+        print_wrapped(pb, n->u.add.terms[i].term, PREC_ADD);
+      }
+      first = false;
+    } else {
+      if (ixs_rat_is_neg(tp)) {
+        pb_str(pb, " - ");
+        int64_t np = 0, nq = 0;
+        ixs_rat_neg(tp, tq, &np, &nq);
+        if (np == 1 && nq == 1) {
+          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+        } else {
+          ixs_node tmp;
+          memset(&tmp, 0, sizeof(tmp));
+          if (nq == 1) {
+            tmp.tag = IXS_INT;
+            tmp.u.ival = np;
+          } else {
+            tmp.tag = IXS_RAT;
+            tmp.u.rat.p = np;
+            tmp.u.rat.q = nq;
+          }
+          print_node(pb, &tmp, PREC_MUL);
+          pb_char(pb, '*');
+          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+        }
+      } else {
+        pb_str(pb, " + ");
+        if (!(tp == 1 && tq == 1)) {
+          print_node(pb, n->u.add.terms[i].coeff, PREC_MUL);
+          pb_char(pb, '*');
+        }
+        print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
+      }
+    }
+  }
+  if (first)
+    pb_str(pb, "0");
+}
+
 static void print_node(printbuf *pb, ixs_node *n, prec_t parent_prec) {
   uint32_t i;
   (void)parent_prec;
@@ -114,92 +200,9 @@ static void print_node(printbuf *pb, ixs_node *n, prec_t parent_prec) {
     pb_str(pb, n->u.name);
     break;
 
-  case IXS_ADD: {
-    int64_t cp, cq;
-    bool first = true;
-
-    /* Print constant term first if nonzero. */
-    ixs_node_get_rat(n->u.add.coeff, &cp, &cq);
-    if (!ixs_rat_is_zero(cp)) {
-      print_node(pb, n->u.add.coeff, PREC_ADD);
-      first = false;
-    }
-
-    for (i = 0; i < n->u.add.nterms; i++) {
-      int64_t tp, tq;
-      ixs_node_get_rat(n->u.add.terms[i].coeff, &tp, &tq);
-
-      if (first) {
-        if (tp == -1 && tq == 1) {
-          pb_str(pb, "-");
-          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-        } else if (tp == 1 && tq == 1) {
-          print_wrapped(pb, n->u.add.terms[i].term, PREC_ADD);
-        } else if (ixs_rat_is_neg(tp)) {
-          pb_str(pb, "-");
-          int64_t np = 0, nq = 0;
-          ixs_rat_neg(tp, tq, &np, &nq);
-          if (np == 1 && nq == 1) {
-            print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-          } else {
-            ixs_node tmp;
-            memset(&tmp, 0, sizeof(tmp));
-            if (nq == 1) {
-              tmp.tag = IXS_INT;
-              tmp.u.ival = np;
-            } else {
-              tmp.tag = IXS_RAT;
-              tmp.u.rat.p = np;
-              tmp.u.rat.q = nq;
-            }
-            print_node(pb, &tmp, PREC_MUL);
-            pb_char(pb, '*');
-            print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-          }
-        } else {
-          if (!(tp == 1 && tq == 1)) {
-            print_node(pb, n->u.add.terms[i].coeff, PREC_MUL);
-            pb_char(pb, '*');
-          }
-          print_wrapped(pb, n->u.add.terms[i].term, PREC_ADD);
-        }
-        first = false;
-      } else {
-        if (ixs_rat_is_neg(tp)) {
-          pb_str(pb, " - ");
-          int64_t np = 0, nq = 0;
-          ixs_rat_neg(tp, tq, &np, &nq);
-          if (np == 1 && nq == 1) {
-            print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-          } else {
-            ixs_node tmp;
-            memset(&tmp, 0, sizeof(tmp));
-            if (nq == 1) {
-              tmp.tag = IXS_INT;
-              tmp.u.ival = np;
-            } else {
-              tmp.tag = IXS_RAT;
-              tmp.u.rat.p = np;
-              tmp.u.rat.q = nq;
-            }
-            print_node(pb, &tmp, PREC_MUL);
-            pb_char(pb, '*');
-            print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-          }
-        } else {
-          pb_str(pb, " + ");
-          if (!(tp == 1 && tq == 1)) {
-            print_node(pb, n->u.add.terms[i].coeff, PREC_MUL);
-            pb_char(pb, '*');
-          }
-          print_wrapped(pb, n->u.add.terms[i].term, PREC_MUL);
-        }
-      }
-    }
-    if (first)
-      pb_str(pb, "0");
+  case IXS_ADD:
+    print_add(pb, n);
     break;
-  }
 
   case IXS_MUL: {
     int64_t cp, cq;
