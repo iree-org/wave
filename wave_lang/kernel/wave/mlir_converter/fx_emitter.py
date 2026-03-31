@@ -189,6 +189,7 @@ class AttrNames(Enum):
     ORDERED_SYMS = ("ordered_syms", "ordered_syms")
     TARGET_VECTOR_SHAPE = ("target_vector_shape", "target_vector_shape")
     VALUE = ("value", "value")
+    VECTOR_SHAPES = ("vector_shape", "vector_shapes")
 
     @property
     def mlir_name(self) -> str:
@@ -324,6 +325,32 @@ def _convert_mapping_attr(
         return IndexMapping(n, value_mapping, memory_mapping)
 
 
+def _convert_single_vector_shape_entry(
+    entry: ir.Attribute,
+) -> dict[IndexSymbol, int] | None:
+    """Convert one element of a vector_shape ArrayAttr.
+
+    DictAttr entries are converted to {IndexSymbol: int}.  UnitAttr entries
+    (placeholder slots for missing results) are returned as None.
+    """
+    if isinstance(entry, ir.UnitAttr):
+        return None
+    return {index_symbol(named.name): int(named.attr.value) for named in entry}
+
+
+def _convert_vector_shapes(
+    attr: ir.ArrayAttr,
+) -> list[dict[IndexSymbol, int] | None]:
+    """Converts an MLIR vector_shape ArrayAttr to a list of symbol->int dicts.
+
+    The water_emitter serializes vector_shapes as an ArrayAttr whose entries are:
+      - Regular ops:   [DictAttr]           (1 entry)
+      - MMA ops:       [lhs, rhs, acc, res] (4 DictAttr entries)
+      - Iterate ops:   [self, gr0, gr1, …]  (1 + N entries, some may be UnitAttr)
+    """
+    return [_convert_single_vector_shape_entry(e) for e in attr]
+
+
 def _convert_supported_attrs(
     op: ir.OpView, ignore_attrs: set[str] | None = None
 ) -> dict[str, AttrValue]:
@@ -339,6 +366,7 @@ def _convert_supported_attrs(
         - BOUNDS: dict[IndexSymbol, IndexExpr]
         - ELEMENTS_PER_THREAD: int
         - KIND: MMAType | ScaledMMAType
+        - VECTOR_SHAPES: list[dict[IndexSymbol, int] | None]
         - WATER_INTERNAL_ID: str
     """
     attrs = op.attributes
@@ -351,6 +379,7 @@ def _convert_supported_attrs(
         AttrNames.BOUNDS.mlir_name: _convert_read_write_bounds,
         AttrNames.ELEMENTS_PER_THREAD.mlir_name: lambda a: int(a.value),
         AttrNames.KIND.mlir_name: _convert_mma_kind,
+        AttrNames.VECTOR_SHAPES.mlir_name: _convert_vector_shapes,
         AttrNames.WATER_INTERNAL_ID.mlir_name: lambda a: a.value,
     }
     converted: dict[str, AttrValue] = {}
@@ -376,10 +405,24 @@ def _apply_mlir_attrs_to_fx_node(
         | str,
     ],
 ) -> None:
-    """Attaches converted MLIR attributes to an FX node using the AttrNames mapping."""
+    """Attaches converted MLIR attributes to an FX node using the AttrNames mapping.
+
+    For VECTOR_SHAPES the converter returns a list of dicts.  Regular ops
+    carry exactly one entry; unwrap it to a plain dict here.  MMA and
+    iterate ops should pop the attribute before calling this function and
+    handle multi-entry lists themselves.
+    """
     for attr in AttrNames:
         if attr.mlir_name in converted_attrs:
-            setattr(fx_node, attr.fx_property, converted_attrs[attr.mlir_name])
+            value = converted_attrs[attr.mlir_name]
+            if attr == AttrNames.VECTOR_SHAPES and isinstance(value, list):
+                assert len(value) == 1, (
+                    f"Expected single vector_shape entry for {fx_node}, "
+                    f"got {len(value)}.  MMA/iterate ops must pop this "
+                    f"attribute and handle it before calling this function."
+                )
+                value = value[0]
+            setattr(fx_node, attr.fx_property, value)
 
 
 def _convert_constraints(op: ir.Operation) -> list[Constraint]:
@@ -815,6 +858,10 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     converted_attrs = _convert_supported_attrs(op)
     mma_type = converted_attrs.pop(AttrNames.KIND.mlir_name, None)
 
+    # Pop vector_shapes before _apply_mlir_attrs_to_fx_node (which
+    # expects single-entry lists).  MMA carries [lhs, rhs, acc, result].
+    vector_shape_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
+
     mma_op = MMA.create(
         parse_ctx.graph,
         lhs=lhs_node,
@@ -825,6 +872,30 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
     )
 
     _apply_mlir_attrs_to_fx_node(mma_op.fx_node, converted_attrs)
+
+    if vector_shape_entries is not None:
+        assert len(vector_shape_entries) == 4, (
+            f"MMA vector_shape must have 4 entries "
+            f"(lhs, rhs, acc, result), got {len(vector_shape_entries)}"
+        )
+        lhs_vs, rhs_vs, acc_vs, result_vs = vector_shape_entries
+
+        def _check_operand_vector_shapes(
+            label: str, node: fx.Node, expected: dict[IndexSymbol, int] | None
+        ):
+            actual = getattr(node, "vector_shapes", None)
+            if expected is not None and actual != expected:
+                raise ValueError(
+                    f"MMA {label} vector_shapes mismatch: "
+                    f"operand has {actual}, MLIR attr has {expected}"
+                )
+
+        _check_operand_vector_shapes("lhs", lhs_node, lhs_vs)
+        _check_operand_vector_shapes("rhs", rhs_node, rhs_vs)
+        _check_operand_vector_shapes("acc", acc_node, acc_vs)
+
+        if result_vs is not None:
+            mma_op.fx_node.vector_shapes = result_vs
 
     # Derive reduction_dim: the dimension shared by lhs and rhs but absent from acc.
     lhs_shape = get_custom(lhs_node).type.symbolic_shape
@@ -1271,6 +1342,7 @@ def _create_get_result_nodes(
     ),
     output_values: Sequence[fx.Node],
     axis: IndexSymbol,
+    result_vector_shapes: Sequence[dict[IndexSymbol, int] | None] | None = None,
 ) -> None:
     """Creates GetResult nodes for each result of a wave.iterate operation.
 
@@ -1278,6 +1350,10 @@ def _create_get_result_nodes(
     iterate's output tuple.  The index is used as-is: `Iterate.index`
     delegates to `MMA.acc_index` which already specialises MMA_ACC and
     drops the reduction dimension before the emitters serialise it.
+
+    ``result_vector_shapes``, when provided, carries per-result vector_shapes
+    recovered from the iterate op's MLIR ``vector_shape`` attribute (entries
+    [1:]).  Each entry is either a dict or None (UnitAttr placeholder).
     """
     # inserting_after pins the insertion point, so each new node would land
     # at the same spot and reverse the order. Advance the cursor after each
@@ -1311,6 +1387,12 @@ def _create_get_result_nodes(
 
         if isinstance(result_index, dict):
             get_result_op.fx_node.index = result_index
+
+        if result_vector_shapes is not None and idx < len(result_vector_shapes):
+            vector_shapes = result_vector_shapes[idx]
+            if vector_shapes is not None:
+                get_result_op.fx_node.vector_shapes = vector_shapes
+
         parse_ctx.add_mapping(result, get_result_op.fx_node)
 
 
@@ -1442,6 +1524,17 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
             "operandSegmentSizes",
         },
     )
+
+    # Pop vector_shapes before the generic apply (which expects single-entry
+    # lists).  Iterate carries [self_vs, gr0_vs, gr1_vs, …].
+    vector_shape_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
+    result_vector_shapes: list[dict[IndexSymbol, int] | None] | None = None
+    if vector_shape_entries is not None:
+        iterate_vector_shapes = vector_shape_entries[0]
+        if iterate_vector_shapes is not None:
+            iterate_op.fx_node.vector_shapes = iterate_vector_shapes
+        result_vector_shapes = vector_shape_entries[1:]
+
     _apply_mlir_attrs_to_fx_node(iterate_op.fx_node, converted_attrs)
 
     # Create GetResult nodes for each iterate result
@@ -1453,6 +1546,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
         iter_index,
         output_values,
         axis,
+        result_vector_shapes=result_vector_shapes,
     )
 
 
