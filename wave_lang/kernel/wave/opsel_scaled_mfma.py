@@ -197,24 +197,48 @@ def _find_mergeable_groups(
     yield_operands = list(yield_op.operands)
 
     # Collect per-arg info: (iter_index, offset, init_source, yield_source).
+    # yield_source may be None when the yield value doesn't trace back to
+    # extract_strided_slice (e.g. pipelined sub-word loads from a swapped
+    # double-buffer).  Such groups are still mergeable — we construct the
+    # yield vector from individual bytes later.
     eligible = []
     for i, iter_arg in enumerate(for_view.inner_iter_args):
         if iter_arg.type != v1xi8:
             continue
         init_info = _trace_extract_strided_slice(init_args[i])
-        yield_info = _trace_extract_strided_slice(yield_operands[i])
-        if init_info is None or yield_info is None:
+        if init_info is None:
             continue
         init_src, init_off = init_info
-        yield_src, yield_off = yield_info
-        if init_off != yield_off:
-            continue
+        yield_info = _trace_extract_strided_slice(yield_operands[i])
+        if yield_info is not None:
+            yield_src, yield_off = yield_info
+            if init_off != yield_off:
+                # Init and yield extract different bytes from their respective
+                # dword loads.  This happens when the pipeliner shifts the LDS
+                # address by one scale element between init and yield (e.g.
+                # init loads at addr X and extracts byte 1, yield loads at
+                # addr X+1 and extracts byte 0 — same physical byte).
+                # Mark yield as untraceable so the coalescer constructs the
+                # yield vector from the yield source's parent vector<4xi8>.
+                yield_src = None
+                logger.debug(
+                    f"iter_arg {i}: init offset {init_off} != yield offset "
+                    f"{yield_off} — treating yield as untraceable for "
+                    f"dword coalescing"
+                )
+        else:
+            yield_src = None
+            logger.debug(
+                f"iter_arg {i}: init traces to offset {init_off} but yield "
+                f"value does not trace to extract_strided_slice — will "
+                f"construct yield vector from individual bytes"
+            )
         eligible.append((i, init_off, init_src, yield_src))
 
     by_init_src = defaultdict(list)
     for entry in eligible:
         _, _, init_src, _ = entry
-        by_init_src[id(init_src.owner)].append(entry)
+        by_init_src[hash(init_src.owner)].append(entry)
 
     result = []
     for entries in by_init_src.values():
@@ -232,13 +256,21 @@ def _find_mergeable_groups(
             init_source = None
             yield_owners = set()
             yield_source = None
+            has_untraceable_yield = False
             for o in present_offsets:
                 idx, _, isrc, ysrc = by_offset[o].pop(0)
                 members[o] = idx
                 init_source = isrc
-                yield_source = ysrc
-                yield_owners.add(id(ysrc.owner))
-            if len(yield_owners) == 1:
+                if ysrc is not None:
+                    yield_source = ysrc
+                    yield_owners.add(hash(ysrc.owner))
+                else:
+                    has_untraceable_yield = True
+            if has_untraceable_yield:
+                # Some yield values don't trace — the yield vector will be
+                # constructed from individual bytes during coalescing.
+                result.append((init_source, None, members))
+            elif len(yield_owners) == 1:
                 result.append((init_source, yield_source, members))
             present_offsets = [o for o in range(SCALE_VECTOR_WIDTH) if by_offset[o]]
 
@@ -381,6 +413,61 @@ def _coalesce_vector_iter_args(module: Module) -> None:
 
         logger.debug(f"Coalescing {len(groups)} group(s) of vector<1xi8> iter_args")
 
+        # For groups whose yield values don't trace to extract_strided_slice
+        # (e.g. pipelined sub-word loads from a swapped double-buffer),
+        # create a single wide vector<4xi8> load at the same base address
+        # as the byte-0 yield load.  This replaces the sub-word loads with
+        # one dword load that waveasm can map to a ds_read_b32.
+        old_yield_operands = list(yield_op.operands)
+        for g_idx, (init_source, yield_source, members) in enumerate(groups):
+            if yield_source is not None:
+                continue
+
+            # Try to find a yield value whose source vector<4xi8> already
+            # exists (from an extract_strided_slice of a wider load).
+            # This handles the address-shifted pattern where init and yield
+            # extract different offsets from their respective dword loads.
+            any_member_idx = next(iter(members.values()))
+            any_yield = old_yield_operands[any_member_idx]
+            any_yield_info = _trace_extract_strided_slice(any_yield)
+            if any_yield_info is not None:
+                # The yield value is an extract from a vector<4xi8> — use
+                # the source vector directly as the merged yield value.
+                yield_vec_src, _ = any_yield_info
+                groups[g_idx] = (init_source, yield_vec_src, members)
+                logger.debug(
+                    f"Group {g_idx}: reusing existing vector<4xi8> yield "
+                    f"source (offset-shifted pattern)"
+                )
+                continue
+
+            if 0 not in members:
+                logger.debug(
+                    f"Group {g_idx}: no byte-0 member, cannot determine base "
+                    f"address for wide load — skipping"
+                )
+                continue
+            byte0_yield = old_yield_operands[members[0]]
+            byte0_op = byte0_yield.owner
+            if not _is_op_named(byte0_op, "vector.load"):
+                logger.debug(
+                    f"Group {g_idx}: byte-0 yield is not a vector.load "
+                    f"({byte0_op.name}) — skipping"
+                )
+                continue
+            load_view = byte0_op.opview
+            memref = load_view.base
+            indices = list(load_view.indices)
+            v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], i8)
+            with InsertionPoint(byte0_op):
+                wide_load = vector_d.load(v4xi8, memref, indices)
+            groups[g_idx] = (init_source, wide_load, members)
+            logger.debug(
+                f"Created wide vector<{SCALE_VECTOR_WIDTH}xi8> load for "
+                f"group {g_idx} yield value (replaces {len(members)} "
+                f"sub-word loads)"
+            )
+
         plan = _build_coalesce_plan(groups, for_view, yield_op)
         old_iter_args = list(for_view.inner_iter_args)
         old_iv = for_view.induction_variable
@@ -431,6 +518,191 @@ def _coalesce_vector_iter_args(module: Module) -> None:
         for_op.erase()
 
 
+def _get_affine_constant_offset(op) -> Optional[int]:
+    """Extract the trailing integer constant from an affine.apply's map.
+
+    For ``affine_map<()[s0,s1] -> (expr + 2)>`` returns ``2``.
+    For ``affine_map<()[s0,s1] -> (expr)>`` (no trailing constant) returns ``0``.
+    Returns ``None`` if *op* is not an affine.apply or the map cannot be parsed.
+    """
+    if not _is_op_named(op, "affine.apply"):
+        return None
+    import re
+
+    map_str = str(op.attributes["map"])
+    m = re.search(r"\+\s*(\d+)\)\s*>\s*$", map_str)
+    if m:
+        return int(m.group(1))
+    if re.search(r"\)\s*>\s*$", map_str):
+        return 0
+    return None
+
+
+def _affine_base_key(op) -> Optional[tuple]:
+    """Return a key that identifies the non-constant base of an affine.apply.
+
+    Two affine.apply ops with the same base key compute addresses that
+    differ only by a compile-time constant offset, so a single wide load
+    at the offset-0 address covers all of them.
+
+    Returns ``None`` when *op* is not an affine.apply.
+    """
+    if not _is_op_named(op, "affine.apply"):
+        return None
+    operand_hashes = tuple(hash(v) for v in op.operands)
+    import re
+
+    map_str = str(op.attributes["map"])
+    m = re.search(r"\+\s*\d+\)\s*>\s*$", map_str)
+    if m:
+        base_map = map_str[: m.start()].rstrip() + ")>"
+    else:
+        base_map = map_str
+    return (base_map, operand_hashes)
+
+
+def _merge_scale_byte_loads(module: Module) -> None:
+    """Merge adjacent vector<1/2xi8> LDS loads into vector<4xi8> + extract.
+
+    Handles the unrolled-iteration pattern where sub-word scale loads
+    aren't loop-carried and thus not covered by _coalesce_vector_iter_args.
+    For vector<2xi8> loads, replaces downstream extract_strided_slice(size=1)
+    users with direct byte extracts from the wide vector<4xi8>, so that
+    _trace_scale_chain sees the correct source type for opsel.
+    """
+    i8 = IntegerType.get_signless(8)
+    i64 = IntegerType.get_signless(64)
+    v1xi8 = VectorType.get([1], i8)
+
+    byte_loads: list[Operation] = []
+    for op in _walk_operations(module.operation):
+        if not _is_op_named(op, "vector.load"):
+            continue
+        rtype = op.results[0].type
+        if not isinstance(rtype, VectorType) or rtype.element_type != i8:
+            continue
+        if rtype.shape[0] > 2:
+            continue
+        view = op.opview
+        addr = view.indices[-1]
+        if _get_affine_constant_offset(addr.owner) is None:
+            continue
+        byte_loads.append(op)
+
+    if not byte_loads:
+        return
+
+    def _full_group_key(op: Operation):
+        """Group by memref, all non-last indices, AND the affine base expr."""
+        view = op.opview
+        memref_h = hash(view.base)
+        prefix_hashes = tuple(hash(v) for v in list(view.indices)[:-1])
+        addr = view.indices[-1]
+        base_k = _affine_base_key(addr.owner)
+        return (memref_h, prefix_hashes, base_k)
+
+    by_group: dict = defaultdict(list)
+    for op in byte_loads:
+        by_group[_full_group_key(op)].append(op)
+
+    for loads in by_group.values():
+        if len(loads) < 2:
+            continue
+
+        addr_to_offset: dict[int, int] = {}
+        base_op: Optional[Operation] = None
+        for load_op in loads:
+            addr_val = load_op.opview.indices[-1]
+            off = _get_affine_constant_offset(addr_val.owner)
+            if off is None:
+                continue
+            if off >= SCALE_VECTOR_WIDTH:
+                continue
+            addr_to_offset[id(load_op)] = off
+            if off == 0:
+                base_op = load_op
+
+        if base_op is None:
+            continue
+
+        base_view = base_op.opview
+        v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], i8)
+
+        earliest = base_op
+        for load_op in loads:
+            if id(load_op) in addr_to_offset:
+                earliest = load_op
+                break
+
+        with InsertionPoint(earliest):
+            wide = vector_d.load(v4xi8, base_view.base, list(base_view.indices))
+
+        replaced = 0
+        for load_op in loads:
+            if id(load_op) not in addr_to_offset:
+                continue
+            off = addr_to_offset[id(load_op)]
+            rtype = load_op.results[0].type
+            n = rtype.shape[0]
+            if off + n > SCALE_VECTOR_WIDTH:
+                continue
+
+            if n == 1:
+                with InsertionPoint(load_op):
+                    offsets = ArrayAttr.get([IntegerAttr.get(i64, off)])
+                    sizes = ArrayAttr.get([IntegerAttr.get(i64, 1)])
+                    strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
+                    ext = vector_d.ExtractStridedSliceOp(
+                        v1xi8, wide, offsets, sizes, strides
+                    )
+                load_op.results[0].replace_all_uses_with(ext.result)
+                load_op.erase()
+                replaced += 1
+            else:
+                ess_users = []
+                for use in list(load_op.results[0].uses):
+                    user_op = use.owner
+                    if (
+                        _is_op_named(user_op, "vector.extract_strided_slice")
+                        and IntegerAttr(user_op.opview.sizes[0]).value == 1
+                    ):
+                        inner_off = IntegerAttr(user_op.opview.offsets[0]).value
+                        byte_off = off + inner_off
+                        if byte_off < SCALE_VECTOR_WIDTH:
+                            ess_users.append((user_op, byte_off))
+
+                for user_op, byte_off in ess_users:
+                    with InsertionPoint(user_op):
+                        offsets = ArrayAttr.get([IntegerAttr.get(i64, byte_off)])
+                        sizes = ArrayAttr.get([IntegerAttr.get(i64, 1)])
+                        strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
+                        ext = vector_d.ExtractStridedSliceOp(
+                            v1xi8, wide, offsets, sizes, strides
+                        )
+                    user_op.results[0].replace_all_uses_with(ext.result)
+                    user_op.erase()
+
+                has_remaining = any(True for _ in load_op.results[0].uses)
+                if has_remaining:
+                    with InsertionPoint(load_op):
+                        offsets = ArrayAttr.get([IntegerAttr.get(i64, off)])
+                        sizes = ArrayAttr.get([IntegerAttr.get(i64, n)])
+                        strides = ArrayAttr.get([IntegerAttr.get(i64, 1)])
+                        fallback = vector_d.ExtractStridedSliceOp(
+                            rtype, wide, offsets, sizes, strides
+                        )
+                    load_op.results[0].replace_all_uses_with(fallback.result)
+
+                load_op.erase()
+                replaced += 1
+
+        if replaced:
+            logger.debug(
+                f"Merged {replaced} sub-word LDS loads into one "
+                f"vector<{SCALE_VECTOR_WIDTH}xi8> load"
+            )
+
+
 def apply_opsel_scaled_mfma(module: Module):
     """Walk the MLIR module and apply the opsel optimization to scaled_mfma ops.
 
@@ -444,6 +716,7 @@ def apply_opsel_scaled_mfma(module: Module):
 
     with mlir_ctx, Location.unknown():
         _coalesce_vector_iter_args(module)
+        _merge_scale_byte_loads(module)
 
         f8e8m0 = Float8E8M0FNUType.get()
 
