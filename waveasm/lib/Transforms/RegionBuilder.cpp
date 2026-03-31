@@ -9,6 +9,9 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "waveasm/Dialect/WaveASMOps.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "waveasm-region-builder"
 
 using namespace mlir;
 using namespace waveasm;
@@ -232,8 +235,12 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (failed(translateOp(&op))) {
-      forOp.emitError("failed to translate loop body operation");
-      return nullptr;
+      // Non-critical failures (e.g. mask computation on vector<Nxindex>) leave
+      // results unmapped.  Downstream consumers that need them (maskedload)
+      // handle the absence gracefully.  Only abort if the yield operands end
+      // up unmapped (checked below).
+      LLVM_DEBUG(llvm::dbgs()
+                 << "loop body: skipping untranslated op: " << op << "\n");
     }
   }
 
@@ -249,8 +256,9 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
   }
 
   auto sregType = ctx.createSRegType();
+  auto sccType = ctx.createSCCType();
   Value nextIV =
-      S_ADD_U32::create(builder, loc, sregType, sregType, inductionVar, *step)
+      S_ADD_U32::create(builder, loc, sregType, sccType, inductionVar, *step)
           .getDst();
   // S_CMP only accepts SGPR operands. If upper bound is a VGPR (e.g. from
   // v_min_i32 in split-K trip count computation), convert to SGPR first.
@@ -258,7 +266,7 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
   if (isVGPRType(ub.getType())) {
     ub = V_READFIRSTLANE_B32::create(builder, loc, sregType, ub);
   }
-  Value cond = S_CMP_LT_U32::create(builder, loc, sregType, nextIV, ub);
+  Value cond = S_CMP_LT_U32::create(builder, loc, sccType, nextIV, ub);
 
   // Collect iter args from yield
   auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());

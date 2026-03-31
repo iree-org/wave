@@ -132,7 +132,8 @@ static void legalizeAddI32(Value lhs, Value rhs, ArithAddOp op,
     result = V_ADD_U32::create(builder, loc, vregTy, lhs, rhs);
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
-    result = S_ADD_U32::create(builder, loc, sregTy, sregTy, lhs, rhs).getDst();
+    auto sccTy = SCCType::get(builder.getContext());
+    result = S_ADD_U32::create(builder, loc, sregTy, sccTy, lhs, rhs).getDst();
   }
   op.replaceAllUsesWith(result);
 }
@@ -182,11 +183,12 @@ static void legalizeAddI64(Value lhs, Value rhs, ArithAddOp op,
     hiResult = addHi.getDst();
   } else {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+    auto sccTy = SCCType::get(builder.getContext());
     // s_add_u32: lo + lo, carry out to SCC.
-    auto addLo = S_ADD_U32::create(builder, loc, sregTy, sregTy, lhsLo, rhsLo);
+    auto addLo = S_ADD_U32::create(builder, loc, sregTy, sccTy, lhsLo, rhsLo);
     loResult = addLo.getDst();
     // s_addc_u32: hi + hi + carry in from SCC.
-    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sregTy, lhsHi, rhsHi);
+    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sccTy, addLo.getScc(), lhsHi, rhsHi);
     hiResult = addHi.getDst();
   }
 
@@ -227,10 +229,11 @@ static void legalizeMulI64(Value lhs, Value rhs, ArithMulOp op,
     Value cross1 = S_MUL_I32::create(builder, loc, sregTy, aLo, bHi);
     Value cross2 = S_MUL_I32::create(builder, loc, sregTy, aHi, bLo);
     // Accumulate (carry discarded -- computing mod 2^64).
+    auto sccTy = SCCType::get(builder.getContext());
     Value hiTemp =
-        S_ADD_U32::create(builder, loc, sregTy, sregTy, hiPartial, cross1)
+        S_ADD_U32::create(builder, loc, sregTy, sccTy, hiPartial, cross1)
             .getDst();
-    hiResult = S_ADD_U32::create(builder, loc, sregTy, sregTy, hiTemp, cross2)
+    hiResult = S_ADD_U32::create(builder, loc, sregTy, sccTy, hiTemp, cross2)
                    .getDst();
   }
 
@@ -280,7 +283,7 @@ static Value emitVCmp(CmpPredicate pred, Value lhs, Value rhs,
 /// Emit an SCC-setting compare and return the sreg result.
 static Value emitSCmp(CmpPredicate pred, Value lhs, Value rhs,
                       OpBuilder &builder, Location loc) {
-  auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+  auto sregTy = SCCType::get(builder.getContext());
   switch (pred) {
   case CmpPredicate::eq:
     return S_CMP_EQ_I32::create(builder, loc, sregTy, lhs, rhs);
@@ -407,25 +410,51 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
 
     if (isEqNe) {
       // eq/ne: XOR each half, OR, compare to zero.
-      Value xorLo = S_XOR_B32::create(builder, loc, sregTy, lhsLo, rhsLo);
-      Value xorHi = S_XOR_B32::create(builder, loc, sregTy, lhsHi, rhsHi);
-      Value combined = S_OR_B32::create(builder, loc, sregTy, xorLo, xorHi);
+      auto sccTy = SCCType::get(builder.getContext());
+      Value xorLo =
+          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsLo, rhsLo)
+              .getDst();
+      Value xorHi =
+          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsHi, rhsHi)
+              .getDst();
+      Value combined =
+          S_OR_B32::create(builder, loc, sregTy, sccTy, xorLo, xorHi)
+              .getDst();
       auto immTy = ImmType::get(builder.getContext(), 0);
       Value zero = ConstantOp::create(builder, loc, immTy, 0);
       Value result;
       if (pred == CmpPredicate::eq)
-        result = S_CMP_EQ_I32::create(builder, loc, sregTy, combined, zero);
+        result = S_CMP_EQ_I32::create(builder, loc, sccTy, combined, zero);
       else
-        result = S_CMP_NE_I32::create(builder, loc, sregTy, combined, zero);
+        result = S_CMP_NE_I32::create(builder, loc, sccTy, combined, zero);
       op.replaceAllUsesWith(result);
     } else {
       // Ordered: result = hiPred(hi) | (hiEq(hi) & loPred(lo)).
+      // Each S_CMP sets SCC (returns SCCType). Materialize each to a
+      // 0/1 SGPR via s_cselect_b32 before combining with AND/OR.
       auto [hiPred, loPred] = getOrderedI64Preds(pred);
-      Value hiCmp = emitSCmp(hiPred, lhsHi, rhsHi, builder, loc);
-      Value hiEq = emitSCmp(CmpPredicate::eq, lhsHi, rhsHi, builder, loc);
-      Value loCmp = emitSCmp(loPred, lhsLo, rhsLo, builder, loc);
-      Value eqAndLo = S_AND_B32::create(builder, loc, sregTy, hiEq, loCmp);
-      Value result = S_OR_B32::create(builder, loc, sregTy, hiCmp, eqAndLo);
+      auto immTy0 = ImmType::get(builder.getContext(), 0);
+      auto immTy1 = ImmType::get(builder.getContext(), 1);
+      Value zero = ConstantOp::create(builder, loc, immTy0, 0);
+      Value one = ConstantOp::create(builder, loc, immTy1, 1);
+      Value oneSgpr = S_MOV_B32::create(builder, loc, sregTy, one);
+
+      Value hiSCC = emitSCmp(hiPred, lhsHi, rhsHi, builder, loc);
+      Value hiCmp = S_CSELECT_B32::create(builder, loc, sregTy, hiSCC, oneSgpr, zero);
+
+      Value eqSCC = emitSCmp(CmpPredicate::eq, lhsHi, rhsHi, builder, loc);
+      Value hiEq = S_CSELECT_B32::create(builder, loc, sregTy, eqSCC, oneSgpr, zero);
+
+      Value loSCC = emitSCmp(loPred, lhsLo, rhsLo, builder, loc);
+      Value loCmp = S_CSELECT_B32::create(builder, loc, sregTy, loSCC, oneSgpr, zero);
+
+      auto sccTy2 = SCCType::get(builder.getContext());
+      Value eqAndLo =
+          S_AND_B32::create(builder, loc, sregTy, sccTy2, hiEq, loCmp)
+              .getDst();
+      Value result =
+          S_OR_B32::create(builder, loc, sregTy, sccTy2, hiCmp, eqAndLo)
+              .getDst();
       op.replaceAllUsesWith(result);
     }
   }
@@ -521,7 +550,8 @@ static LogicalResult legalizeBitwiseOp(ArithOp op, OpBuilder &builder) {
       result = VALUOp64::create(builder, loc, vregTy, lhs, rhs);
     } else {
       auto sregTy = SRegType::get(builder.getContext(), 2, 2);
-      result = SALUOp64::create(builder, loc, sregTy, lhs, rhs);
+      auto sccTy = SCCType::get(builder.getContext());
+      result = SALUOp64::create(builder, loc, sregTy, sccTy, lhs, rhs).getDst();
     }
   } else {
     if (anyVGPR({lhs, rhs})) {
@@ -530,7 +560,8 @@ static LogicalResult legalizeBitwiseOp(ArithOp op, OpBuilder &builder) {
       result = VALUOp32::create(builder, loc, vregTy, lhs, rhs);
     } else {
       auto sregTy = SRegType::get(builder.getContext(), 1, 1);
-      result = SALUOp32::create(builder, loc, sregTy, lhs, rhs);
+      auto sccTy = SCCType::get(builder.getContext());
+      result = SALUOp32::create(builder, loc, sregTy, sccTy, lhs, rhs).getDst();
     }
   }
   op.replaceAllUsesWith(result);
@@ -595,38 +626,38 @@ static LogicalResult legalizeCmp(ArithCmpOp op, OpBuilder &builder) {
     auto placeholder = ConstantOp::create(builder, loc, immTy, 1);
     op.replaceAllUsesWith(placeholder.getResult());
   } else {
-    auto sregTy = SRegType::get(builder.getContext(), 1, 1);
+    auto sccTy = SCCType::get(builder.getContext());
     Value result;
     switch (pred) {
     case CmpPredicate::eq:
-      result = S_CMP_EQ_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_EQ_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::ne:
-      result = S_CMP_NE_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_NE_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::slt:
-      result = S_CMP_LT_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_LT_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::sle:
-      result = S_CMP_LE_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_LE_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::sgt:
-      result = S_CMP_GT_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_GT_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::sge:
-      result = S_CMP_GE_I32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_GE_I32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::ult:
-      result = S_CMP_LT_U32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_LT_U32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::ule:
-      result = S_CMP_LE_U32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_LE_U32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::ugt:
-      result = S_CMP_GT_U32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_GT_U32::create(builder, loc, sccTy, lhs, rhs);
       break;
     case CmpPredicate::uge:
-      result = S_CMP_GE_U32::create(builder, loc, sregTy, lhs, rhs);
+      result = S_CMP_GE_U32::create(builder, loc, sccTy, lhs, rhs);
       break;
     }
     op.replaceAllUsesWith(result);
@@ -743,7 +774,9 @@ static LogicalResult legalizeSExt(ArithSExtOp op, OpBuilder &builder) {
     auto sregTy = SRegType::get(builder.getContext(), 1, 1);
     auto immTy = ImmType::get(builder.getContext(), 31);
     Value shift = ConstantOp::create(builder, loc, immTy, 31);
-    Value hi = S_ASHR_I32::create(builder, loc, sregTy, src, shift);
+    auto sccTy = SCCType::get(builder.getContext());
+    Value hi =
+        S_ASHR_I32::create(builder, loc, sregTy, sccTy, src, shift).getDst();
     Value result = mergeI64(src, hi, builder, loc);
     op.replaceAllUsesWith(result);
   } else {

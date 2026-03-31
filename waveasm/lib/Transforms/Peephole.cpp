@@ -273,8 +273,9 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
     // Case 1: voffset = V_ADD_U32(row, V_LSHLREV_B32(const, sgpr)).
     if (auto found = findShiftInAdd(outerAdd)) {
       auto [base, shiftAmt, other] = *found;
-      auto sLshl =
-          S_LSHL_B32::create(rewriter, loc, base.getType(), base, shiftAmt);
+      auto sccTy = SCCType::get(rewriter.getContext());
+      auto sLshl = S_LSHL_B32::create(rewriter, loc, base.getType(), sccTy,
+                                       base, shiftAmt);
       rewriter.modifyOpInPlace(loadOp, [&]() {
         loadOp.getVoffsetMutable().assign(other);
         loadOp.getSoffsetMutable().assign(sLshl.getDst());
@@ -294,8 +295,9 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
         continue;
 
       auto [base, shiftAmt, threadBase] = *found;
-      auto sLshl =
-          S_LSHL_B32::create(rewriter, loc, base.getType(), base, shiftAmt);
+      auto sccTy = SCCType::get(rewriter.getContext());
+      auto sLshl = S_LSHL_B32::create(rewriter, loc, base.getType(), sccTy,
+                                       base, shiftAmt);
       // Rebuild voffset without the scalar shift: v_add_u32(threadBase, row).
       auto newAdd = V_ADD_U32::create(
           rewriter, loc, outerAdd.getResult().getType(), threadBase, row);
@@ -321,8 +323,9 @@ struct BufferLoadLDSSoffsetPattern : public OpRewritePattern<BufferLoadOp> {
         continue;
 
       auto [base, shiftAmt] = *shift;
-      auto sLshl =
-          S_LSHL_B32::create(rewriter, loc, base.getType(), base, shiftAmt);
+      auto sccTy = SCCType::get(rewriter.getContext());
+      auto sLshl = S_LSHL_B32::create(rewriter, loc, base.getType(), sccTy,
+                                       base, shiftAmt);
       // Create v_lshl_add_u32(src0, src1, 0) — drop the scalar shift.
       auto immType = rewriter.getType<ImmType>(0);
       auto zeroConst = ConstantOp::create(rewriter, loc, immType, 0);
