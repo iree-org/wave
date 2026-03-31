@@ -72,7 +72,10 @@ namespace {
 static bool isAddressVALU(Operation *op) {
   return isa<V_LSHLREV_B32, V_LSHL_OR_B32, V_LSHL_ADD_U32, V_ADD_U32, V_SUB_U32,
              V_AND_B32, V_OR_B32, V_LSHRREV_B32, V_MUL_LO_U32, V_MOV_B32,
-             V_XOR_B32, V_BFE_U32>(op);
+             V_XOR_B32, V_BFE_U32,
+             // Scalar address ops in buffer_load address chains (e.g.
+             // s_mul_i32 computing iv * element_bytes).
+             S_MUL_I32, S_ADD_U32, S_SUB_U32, S_MOV_B32>(op);
 }
 
 static bool isBufferLoad(Operation *op) {
@@ -176,6 +179,188 @@ static Value cloneChainBeforeLoop(const llvm::SetVector<Operation *> &deps,
     if (deps.contains(&op))
       builder.clone(op, mapping);
   return mapping.lookupOrDefault(targetVoffset);
+}
+
+/// Run local CSE on ops in [from, to) within a block.  Merges structurally
+/// identical ops that share the same opcode, operands, attributes, and result
+/// types.  For commutative ops, operand order is canonicalized so that
+/// V_ADD_U32(a, b) and V_ADD_U32(b, a) produce the same key.
+///
+/// This is used after cloneChainBeforeLoop to merge the independently cloned
+/// address chains for different buffer_load candidates.  Because all clones
+/// share the same leaf operands (init args, precolored registers), the CSE
+/// cascades from leaves upward, collapsing N identical chains into one.
+static void localCSERange(Block *block, Operation *from, Operation *to) {
+  // Key: (opName hash, operand pointers, attr hash, result type hash).
+  // Use a simple vector-scan since the typical pre-loop region is < 300 ops.
+  struct CSEEntry {
+    Operation *op;
+    StringRef opName;
+    SmallVector<Value, 4> operands;
+    SmallVector<NamedAttribute, 2> attrs;
+    SmallVector<Type, 2> resultTypes;
+  };
+  SmallVector<CSEEntry> canonical;
+  SmallVector<Operation *, 16> toErase;
+
+  auto matches = [](const CSEEntry &a, const CSEEntry &b) -> bool {
+    if (a.opName != b.opName)
+      return false;
+    if (a.operands.size() != b.operands.size())
+      return false;
+    for (unsigned i = 0; i < a.operands.size(); ++i)
+      if (a.operands[i] != b.operands[i])
+        return false;
+    if (a.attrs.size() != b.attrs.size())
+      return false;
+    for (unsigned i = 0; i < a.attrs.size(); ++i)
+      if (a.attrs[i] != b.attrs[i])
+        return false;
+    if (a.resultTypes.size() != b.resultTypes.size())
+      return false;
+    for (unsigned i = 0; i < a.resultTypes.size(); ++i)
+      if (a.resultTypes[i] != b.resultTypes[i])
+        return false;
+    return true;
+  };
+
+  auto startIt = from ? std::next(Block::iterator(from)) : block->begin();
+  for (auto it = startIt; it != Block::iterator(to);) {
+    Operation *op = &*it;
+    ++it; // Advance before potential erase.
+
+    // Only CSE pure ops (no side effects, no regions).
+    if (op->getNumRegions() > 0)
+      continue;
+    if (!op->hasTrait<OpTrait::IsTerminator>() &&
+        !isa<ConstantOp>(op) && !isAddressVALU(op))
+      continue;
+
+    CSEEntry entry;
+    entry.op = op;
+    entry.opName = op->getName().getStringRef();
+    entry.operands.append(op->operand_begin(), op->operand_end());
+    // Canonicalize commutative binary ops by sorting operand pointers.
+    if (entry.operands.size() == 2 &&
+        op->hasTrait<OpTrait::IsCommutative>()) {
+      if (entry.operands[0].getAsOpaquePointer() >
+          entry.operands[1].getAsOpaquePointer())
+        std::swap(entry.operands[0], entry.operands[1]);
+    }
+    for (NamedAttribute attr : op->getAttrs())
+      entry.attrs.push_back(attr);
+    for (Type ty : op->getResultTypes())
+      entry.resultTypes.push_back(ty);
+
+    // Search for a match in existing canonical ops.
+    Operation *match = nullptr;
+    for (auto &prev : canonical) {
+      if (matches(prev, entry)) {
+        match = prev.op;
+        break;
+      }
+    }
+
+    if (match) {
+      op->replaceAllUsesWith(match);
+      toErase.push_back(op);
+    } else {
+      canonical.push_back(std::move(entry));
+    }
+  }
+
+  for (Operation *op : llvm::reverse(toErase))
+    op->erase();
+}
+
+/// Decomposition of a precomputed voffset into shared VGPR base, per-load
+/// SGPR addends, and compile-time constant (for instOffset).
+struct VoffsetDecomp {
+  Value vgprBase;                  // Shared VGPR base (thread-dependent).
+  SmallVector<Value, 2> sgprParts; // Per-load SGPR addends (summed in soffset).
+  int64_t constAddend;             // Compile-time constant for instOffset.
+};
+
+/// Walk V_ADD_U32 chains on a precomputed voffset, stripping both constant
+/// addends (foldable into instOffset) and SGPR addends (foldable into a
+/// per-load soffset computation).  Stops at the first non-V_ADD_U32 op or
+/// when neither operand is a constant or SGPR.
+///
+/// Example: V_ADD_U32(V_ADD_U32(vgpr_base, sgpr_n_delta), const_2048)
+///   → {vgprBase=vgpr_base, sgprAddend=sgpr_n_delta, constAddend=2048}
+/// Combine multiple SGPR addend values into one via S_ADD_U32 chain.
+/// The combined value is emitted at the builder's current insertion point
+/// (before the loop), so it is loop-invariant and only computed once.
+/// Zero-valued parts (e.g. s_mul_i32(0, stride) from iv_init=0) are skipped.
+static Value _combineSGPRParts(ArrayRef<Value> parts, OpBuilder &builder,
+                               Location loc, SRegType sregTy) {
+  Value combined = nullptr;
+  for (Value part : parts) {
+    // Skip provably-zero SGPRs — adding 0 wastes an SALU and extends
+    // live ranges for no benefit.  Catches s_mov_b32(0) directly and
+    // s_mul_i32(0, x) / s_mul_i32(x, 0) from iv_init=0.
+    auto cval = getConstantValue(part);
+    if (cval && *cval == 0)
+      continue;
+    if (auto mulOp = part.getDefiningOp<S_MUL_I32>()) {
+      auto c0 = getConstantValue(mulOp.getSrc0());
+      auto c1 = getConstantValue(mulOp.getSrc1());
+      if ((c0 && *c0 == 0) || (c1 && *c1 == 0))
+        continue;
+    }
+    if (!combined)
+      combined = part;
+    else
+      combined = S_ADD_U32::create(builder, loc, sregTy,
+                                   SCCType::get(builder.getContext()),
+                                   combined, part)
+                     .getDst();
+  }
+  return combined;
+}
+
+static VoffsetDecomp decomposeVoffset(Value voff) {
+  VoffsetDecomp result = {voff, {}, 0};
+
+  // Phase 1: strip constant addends from the outermost V_ADD_U32 chain.
+  Value current = voff;
+  int64_t totalConst = 0;
+  while (auto addOp = current.getDefiningOp<V_ADD_U32>()) {
+    auto c1 = getConstantValue(addOp.getSrc1());
+    if (c1) {
+      totalConst += *c1;
+      current = addOp.getSrc0();
+      continue;
+    }
+    auto c0 = getConstantValue(addOp.getSrc0());
+    if (c0) {
+      totalConst += *c0;
+      current = addOp.getSrc1();
+      continue;
+    }
+    break;
+  }
+  result.constAddend = totalConst;
+
+  // Phase 2: check if the remaining value is V_ADD_U32(vgpr, sgpr).
+  // This captures per-load SGPR offsets like n_idx * 16 * K_PACKED.
+  if (auto addOp = current.getDefiningOp<V_ADD_U32>()) {
+    Value src0 = addOp.getSrc0();
+    Value src1 = addOp.getSrc1();
+    if (isVGPRType(src0.getType()) && isSGPRType(src1.getType())) {
+      result.vgprBase = src0;
+      result.sgprParts.push_back(src1);
+    } else if (isSGPRType(src0.getType()) && isVGPRType(src1.getType())) {
+      result.vgprBase = src1;
+      result.sgprParts.push_back(src0);
+    } else {
+      result.vgprBase = current;
+    }
+  } else {
+    result.vgprBase = current;
+  }
+
+  return result;
 }
 
 // Symbolically compute the stride of the voffset chain w.r.t. the IV.
@@ -336,6 +521,48 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       continue;
     }
 
+    // Scalar multiply: same as V_MUL_LO_U32 but on SGPRs.
+    if (auto smulOp = dyn_cast<S_MUL_I32>(op)) {
+      int64_t d0 = getDelta(smulOp.getSrc0());
+      int64_t d1 = getDelta(smulOp.getSrc1());
+      if (d0 != 0 && d1 != 0)
+        return std::nullopt;
+      if (d0 == 0 && d1 == 0) {
+        for (Value r : op->getResults())
+          delta[r] = 0;
+        continue;
+      }
+      Value constOperand = d0 == 0 ? smulOp.getSrc0() : smulOp.getSrc1();
+      int64_t dVar = d0 != 0 ? d0 : d1;
+      auto constVal = getConstantValue(constOperand);
+      if (!constVal)
+        return std::nullopt;
+      for (Value r : op->getResults())
+        delta[r] = dVar * *constVal;
+      continue;
+    }
+
+    // Scalar add/sub: same as VALU variants.
+    if (auto saddOp = dyn_cast<S_ADD_U32>(op)) {
+      int64_t d = getDelta(saddOp.getSrc0()) + getDelta(saddOp.getSrc1());
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+    if (auto ssubOp = dyn_cast<S_SUB_U32>(op)) {
+      int64_t d = getDelta(ssubOp.getSrc0()) - getDelta(ssubOp.getSrc1());
+      for (Value r : op->getResults())
+        delta[r] = d;
+      continue;
+    }
+
+    // Scalar move: pass through delta.
+    if (isa<S_MOV_B32>(op)) {
+      for (Value r : op->getResults())
+        delta[r] = getDelta(op->getOperand(0));
+      continue;
+    }
+
     // Bitwise ops (AND, OR, XOR, BFE): nonlinear if IV-dependent.
     bool hasIVDep = false;
     for (Value operand : op->getOperands())
@@ -484,11 +711,91 @@ static void applyStrengthReduction(LoopOp loopOp) {
   }
 
   // Precompute all initial voffsets (at iv=initial_value, soffset=0).
+  // Record the last op before cloning so we can CSE the newly cloned ops.
+  Operation *lastBeforeClone = nullptr;
+  {
+    auto it = Block::iterator(loopOp);
+    if (it != loopOp->getBlock()->begin())
+      lastBeforeClone = &*std::prev(it);
+  }
+
   SmallVector<Value> initialVoffsets;
   for (auto &info : candidates) {
     Value voff = cloneChainBeforeLoop(info.deps, info.voffset, ivInit, loopOp,
                                       body, builder);
     initialVoffsets.push_back(voff);
+  }
+
+  // CSE the cloned chains to merge structurally identical address ops.
+  // Each cloneChainBeforeLoop call creates a fresh IRMapping, so two
+  // candidates sharing the same base expression get independent SSA
+  // clones.  Since all clones share the same leaf operands (init args,
+  // precolored registers), the CSE cascades from leaves upward and
+  // collapses N identical chains into one.
+  localCSERange(loopOp->getBlock(), lastBeforeClone, loopOp);
+
+  // Decompose voffsets within each SRD group into (vgprBase, sgprAddend,
+  // constAddend).  Constants fold into instOffset; SGPR addends fold into
+  // per-load soffset computations (s_add_u32 in the loop body).  This
+  // reduces unique voffset VGPRs to the number of distinct VGPR bases —
+  // typically 1–2 for B-data loads (matching AITER's pattern).
+  constexpr int64_t kMaxInstOffset = 4095; // 12-bit unsigned.
+  SmallVector<int64_t> instOffsetDeltas(candidates.size(), 0);
+  SmallVector<Value> sgprAddends(candidates.size());
+
+  for (unsigned g = 0; g < groups.size(); ++g) {
+    SmallVector<unsigned> groupMembers;
+    for (unsigned i = 0; i < candidates.size(); ++i)
+      if (candidateGroupIdx[i] == g)
+        groupMembers.push_back(i);
+
+    if (groupMembers.size() <= 1)
+      continue;
+
+    // Decompose each candidate's precomputed voffset.
+    SmallVector<VoffsetDecomp> decomps(candidates.size());
+    for (unsigned idx : groupMembers)
+      decomps[idx] = decomposeVoffset(initialVoffsets[idx]);
+
+    // Find the canonical VGPR base: pick the first member's base, then
+    // verify all members match.  After localCSERange, structurally
+    // identical bases share the same SSA Value.
+    Value canonicalBase = decomps[groupMembers[0]].vgprBase;
+
+    for (unsigned idx : groupMembers) {
+      auto &d = decomps[idx];
+
+      // If the VGPR base doesn't match the canonical one, this candidate
+      // has a genuinely different thread-dependent expression.  Fall back
+      // to keeping its original voffset unchanged.
+      if (d.vgprBase != canonicalBase) {
+        LDBG() << "voffset dedup: base mismatch for candidate " << idx;
+        continue;
+      }
+
+      // Validate the constant fits in instOffset budget.
+      int64_t existingOffset = 0;
+      if (auto attr =
+              candidates[idx].loadOp->getAttrOfType<IntegerAttr>("instOffset"))
+        existingOffset = attr.getInt();
+      if (d.constAddend + existingOffset > kMaxInstOffset ||
+          d.constAddend < 0) {
+        // Constant too large for instOffset.  Keep the original voffset
+        // but still try SGPR splitting (without the constant part).
+        if (!d.sgprParts.empty() && d.constAddend == 0) {
+          initialVoffsets[idx] = d.vgprBase;
+          sgprAddends[idx] = _combineSGPRParts(d.sgprParts, builder, loc,
+                                                sregType);
+        }
+        continue;
+      }
+
+      // Apply decomposition: shared base + instOffset + sgpr addend.
+      initialVoffsets[idx] = canonicalBase;
+      instOffsetDeltas[idx] = d.constAddend;
+      sgprAddends[idx] = _combineSGPRParts(d.sgprParts, builder, loc,
+                                            sregType);
+    }
   }
 
   // Build expanded init args: old args + soffset per SRD group (starts at 0).
@@ -518,18 +825,32 @@ static void applyStrengthReduction(LoopOp loopOp) {
     opMapping[&op] = cloned;
   }
 
-  // Patch buffer_loads: set voffset to precomputed value, soffset to iter_arg.
+  // Patch buffer_loads: set voffset to precomputed value, soffset to
+  // iter_arg (possibly adjusted by per-load SGPR addend), and apply
+  // instOffset deltas from voffset deduplication.
   for (auto [i, info] : llvm::enumerate(candidates)) {
     Operation *clonedLoad = opMapping.lookup(info.loadOp);
     assert(clonedLoad && "cloned load not found in op mapping");
 
-    // Replace voffset with precomputed initial value.
+    // Replace voffset with precomputed (possibly deduplicated) value.
     clonedLoad->setOperand(getVoffsetIdx(clonedLoad), initialVoffsets[i]);
 
-    // Replace soffset (always operand 2) with the group's soffset iter_arg.
+    // Replace soffset with the group's soffset iter_arg.
     unsigned groupIdx = candidateGroupIdx[i];
     Value soffsetArg = newBody.getArgument(soffsetArgBase + groupIdx);
     clonedLoad->setOperand(2, soffsetArg);
+
+    // Apply instOffset delta from voffset deduplication.
+    if (instOffsetDeltas[i] != 0) {
+      int64_t existingOffset = 0;
+      if (auto attr = clonedLoad->getAttrOfType<IntegerAttr>("instOffset"))
+        existingOffset = attr.getInt();
+      clonedLoad->setAttr(
+          "instOffset",
+          IntegerAttr::get(
+              IntegerType::get(clonedLoad->getContext(), 64),
+              existingOffset + instOffsetDeltas[i]));
+    }
   }
 
   // Compute next soffsets BEFORE the condition (s_add_u32 clobbers SCC,
@@ -566,7 +887,6 @@ static void applyStrengthReduction(LoopOp loopOp) {
 
     ConditionOp::create(bodyBuilder, loc, newCond, newCondIterArgs);
   } else {
-    // Fallback: no condition producer found, just append.
     SmallVector<Value> newCondIterArgs;
     for (Value v : condIterArgs)
       newCondIterArgs.push_back(mapping.lookup(v));
@@ -618,6 +938,53 @@ static void applyStrengthReduction(LoopOp loopOp) {
   loopOp.erase();
 }
 
+// Peephole: when a buffer_load has voffset = V_ADD_U32(vgpr, sgpr) and
+// soffset = 0, fold the SGPR addend into soffset. This avoids a VALU
+// instruction per load by using the hardware scalar offset field.
+static void peepholeSoffsetFold(Operation *root) {
+  root->walk([&](Operation *op) {
+    if (!isBufferLoad(op) && !isBufferLoadLDS(op))
+      return;
+    if (op->getNumOperands() < 3)
+      return;
+
+    unsigned soffsetIdx = 2;
+    auto soffsetConst = getConstantValue(op->getOperand(soffsetIdx));
+    if (!soffsetConst || *soffsetConst != 0)
+      return;
+
+    unsigned voffsetIdx = getVoffsetIdx(op);
+    Value voffset = op->getOperand(voffsetIdx);
+    auto addOp = voffset.getDefiningOp<V_ADD_U32>();
+    if (!addOp)
+      return;
+
+    Value src0 = addOp.getSrc0();
+    Value src1 = addOp.getSrc1();
+    Value vgprPart = nullptr;
+    Value sgprPart = nullptr;
+
+    if (isVGPRType(src0.getType()) && isSGPRType(src1.getType())) {
+      vgprPart = src0;
+      sgprPart = src1;
+    } else if (isSGPRType(src0.getType()) && isVGPRType(src1.getType())) {
+      vgprPart = src1;
+      sgprPart = src0;
+    }
+    if (!vgprPart || !sgprPart)
+      return;
+
+    // Only fold if the V_ADD_U32 is used exclusively by buffer_loads.
+    for (Operation *user : addOp->getUsers()) {
+      if (!isBufferLoad(user) && !isBufferLoadLDS(user))
+        return;
+    }
+
+    op->setOperand(voffsetIdx, vgprPart);
+    op->setOperand(soffsetIdx, sgprPart);
+  });
+}
+
 struct BufferLoadStrengthReductionPass
     : public waveasm::impl::WAVEASMBufferLoadStrengthReductionBase<
           BufferLoadStrengthReductionPass> {
@@ -630,6 +997,7 @@ struct BufferLoadStrengthReductionPass
     module->walk([&](LoopOp loopOp) { loops.push_back(loopOp); });
     for (auto loopOp : loops)
       applyStrengthReduction(loopOp);
+    peepholeSoffsetFold(module);
   }
 };
 

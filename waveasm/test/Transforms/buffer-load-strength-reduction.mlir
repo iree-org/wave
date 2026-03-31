@@ -172,11 +172,12 @@ waveasm.program @shared_srd_group
   %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
 
   // One SRD group (same stride=16) -> 1 extra soffset iter_arg.
-  // Both loads share the same loop-carried soffset.
+  // Both loads share the same loop-carried soffset and the same precomputed
+  // voffset.  The +16 constant from voff_b is folded into instOffset.
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
-  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
-  // CHECK: waveasm.buffer_load_dword {{.*}}, {{.*}}, [[SOFF]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: waveasm.buffer_load_dword {{.*}}, [[VOFF:%[a-z0-9]+]], [[SOFF:%[a-z0-9]+]] : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
+  // CHECK: waveasm.buffer_load_dword {{.*}}, [[VOFF]], [[SOFF]] offset : 16 : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.sreg ->
   // CHECK: [[NEXT_SOFF:%[a-z0-9_]+]], %{{.*}} = waveasm.s_add_u32 [[SOFF]], {{.*}} ->
   // CHECK: waveasm.condition {{.*}} iter_args({{.*}}, {{.*}}, [[NEXT_SOFF]]) :
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
@@ -666,6 +667,79 @@ waveasm.program @lshrrev_non_divisible
         : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
 
     %new_acc = waveasm.v_add_u32 %acc, %val : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
+
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0, %new_acc) : !waveasm.sreg, !waveasm.vreg
+  }
+
+  waveasm.s_endpgm
+}
+
+// ---- SGPR addend extraction: shared VGPR base + per-load SGPR offset ----
+// Two loads with voffset = V_ADD_U32(shared_thread_base, sgpr_n) + const_k.
+// After transformation:
+//   - Both loads share the same voffset VGPR (shared_thread_base).
+//   - Per-load soffset = s_add_u32(group_soff, sgpr_n).
+//   - const_k folded into instOffset.
+//
+// This models the B-data pattern: multiple loads that differ only by an
+// N-tile SGPR offset and a K-half constant.
+
+// CHECK-LABEL: @sgpr_addend_extraction
+waveasm.program @sgpr_addend_extraction
+  target = #waveasm.target<#waveasm.gfx942, 5>
+  abi = #waveasm.abi<tid = 0, kernarg = 0>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %one = waveasm.constant 1 : !waveasm.imm<1>
+  %four = waveasm.constant 4 : !waveasm.imm<4>
+  %c256 = waveasm.constant 256 : !waveasm.imm<256>
+  %limit = waveasm.constant 8 : !waveasm.imm<8>
+  %soff0 = waveasm.constant 0 : !waveasm.imm<0>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %tid = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %n_offset = waveasm.precolored.sreg 8 : !waveasm.psreg<8>
+  %init_iv = waveasm.s_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.sreg
+  %init_acc = waveasm.v_mov_b32 %zero : !waveasm.imm<0> -> !waveasm.vreg
+
+  // After SGPR addend extraction: both loads should use the same voffset
+  // (the shared VGPR base), with the SGPR n_offset folded into per-load
+  // soffset via s_add_u32.  The constant 256 folds into instOffset.
+  //
+  // CHECK: waveasm.loop
+  // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
+  //
+  // Load A: voffset = shared base, soffset = group_soff (no SGPR addend).
+  // CHECK: waveasm.buffer_load_dword {{.*}}, [[VOFF:%[a-z0-9]+]], [[SOFF:%[a-z0-9]+]] :
+  //
+  // Load B: same voffset, soffset = group_soff (single-level strips the
+  //         iv-init SGPR, leaving the delta in voffset), const 256 in instOffset.
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{%[a-z0-9]+}}, [[SOFF]]
+  // CHECK-SAME: offset : 256
+  %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
+      : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+
+    // Shared thread-dependent base: (tid + iv) << 4.
+    %addr = waveasm.v_add_u32 %tid, %iv : !waveasm.pvreg<0>, !waveasm.sreg -> !waveasm.vreg
+    %base = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    // Load A: voffset = base (no SGPR addend, no constant).
+    %voff_a = waveasm.v_lshlrev_b32 %four, %addr : !waveasm.imm<4>, !waveasm.vreg -> !waveasm.vreg
+
+    // Load B: voffset = base + n_offset (SGPR) + 256 (constant).
+    %with_n = waveasm.v_add_u32 %base, %n_offset : !waveasm.vreg, !waveasm.psreg<8> -> !waveasm.vreg
+    %voff_b = waveasm.v_add_u32 %with_n, %c256 : !waveasm.vreg, !waveasm.imm<256> -> !waveasm.vreg
+
+    %val_a = waveasm.buffer_load_dword %srd, %voff_a, %soff0
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
+    %val_b = waveasm.buffer_load_dword %srd, %voff_b, %soff0
+        : !waveasm.psreg<0, 4>, !waveasm.vreg, !waveasm.imm<0> -> !waveasm.vreg
+
+    %sum = waveasm.v_add_u32 %val_a, %val_b : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
+    %new_acc = waveasm.v_add_u32 %acc, %sum : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
 
     %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.scc
