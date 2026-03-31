@@ -53,6 +53,20 @@ class ControlFlowOp : public TraitBase<ConcreteType, ControlFlowOp> {};
 template <typename ConcreteType>
 class SpecialRegOp : public TraitBase<ConcreteType, SpecialRegOp> {};
 
+/// Trait for operations that implicitly write the SCC (Scalar Condition Code)
+/// flag as a hardware side effect.  Ops with this trait must not be placed
+/// between an SCC-producing op and its consumer (ConditionOp, s_cselect,
+/// s_addc_u32).  The SCC verifier pass checks this invariant.
+template <typename ConcreteType>
+class SCCDef : public TraitBase<ConcreteType, SCCDef> {};
+
+/// Trait for operations that implicitly read the SCC flag.
+/// The result depends on the current SCC value, so these ops are NOT
+/// eligible for CSE (two identical operands can produce different results
+/// if SCC differs).
+template <typename ConcreteType>
+class SCCUse : public TraitBase<ConcreteType, SCCUse> {};
+
 } // namespace OpTrait
 } // namespace mlir
 
