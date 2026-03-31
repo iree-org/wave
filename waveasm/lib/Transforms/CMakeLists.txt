@@ -31,6 +31,8 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   Peephole.cpp
   RegionBuilder.cpp
   ScalePackElimination.cpp
+  SCCSpillReload.cpp
+  SCCVerifier.cpp
   ScopedCSE.cpp
   Ticketing.cpp
   TranslateFromLLVMDialect.cpp
