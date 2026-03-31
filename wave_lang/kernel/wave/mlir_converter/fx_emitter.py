@@ -860,7 +860,7 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
 
     # Pop vector_shapes before _apply_mlir_attrs_to_fx_node (which
     # expects single-entry lists).  MMA carries [lhs, rhs, acc, result].
-    vector_shapes_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
+    vector_shape_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
 
     mma_op = MMA.create(
         parse_ctx.graph,
@@ -873,18 +873,18 @@ def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
 
     _apply_mlir_attrs_to_fx_node(mma_op.fx_node, converted_attrs)
 
-    if vector_shapes_entries is not None:
-        assert len(vector_shapes_entries) == 4, (
+    if vector_shape_entries is not None:
+        assert len(vector_shape_entries) == 4, (
             f"MMA vector_shape must have 4 entries "
-            f"(lhs, rhs, acc, result), got {len(vector_shapes_entries)}"
+            f"(lhs, rhs, acc, result), got {len(vector_shape_entries)}"
         )
-        lhs_vs, rhs_vs, acc_vs, result_vs = vector_shapes_entries
+        lhs_vs, rhs_vs, acc_vs, result_vs = vector_shape_entries
 
         def _check_operand_vector_shapes(
             label: str, node: fx.Node, expected: dict[IndexSymbol, int] | None
         ):
             actual = getattr(node, "vector_shapes", None)
-            if expected is not None and actual is not None and actual != expected:
+            if expected is not None and actual != expected:
                 raise ValueError(
                     f"MMA {label} vector_shapes mismatch: "
                     f"operand has {actual}, MLIR attr has {expected}"
