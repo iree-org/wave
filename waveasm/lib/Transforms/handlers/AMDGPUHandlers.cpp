@@ -646,11 +646,15 @@ LogicalResult handleFatRawBufferCast(Operation *op, TranslationContext &ctx) {
     int64_t srdWord1Bits = static_cast<int64_t>(swizzleStride | 0x4000) << 16;
     auto maskImm = ctx.createImmType(0xffff);
     auto maskVal = ConstantOp::create(builder, loc, maskImm, 0xffff);
-    Value cleared = S_AND_B32::create(builder, loc, sregTy, srcWord1, maskVal);
+    Value cleared = S_AND_B32::create(builder, loc, sregTy, ctx.createSCCType(),
+                                      srcWord1, maskVal)
+                        .getDst();
     auto swizzleImm = ctx.createImmType(srdWord1Bits);
     auto swizzleVal =
         ConstantOp::create(builder, loc, swizzleImm, srdWord1Bits);
-    word1 = S_OR_B32::create(builder, loc, sregTy, cleared, swizzleVal);
+    word1 = S_OR_B32::create(builder, loc, sregTy, ctx.createSCCType(), cleared,
+                             swizzleVal)
+                .getDst();
   } else {
     word1 = S_MOV_B32::create(builder, loc, sregTy, srcWord1);
   }
@@ -926,7 +930,9 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
               auto shiftConst =
                   ConstantOp::create(builder, loc, shiftImm, shiftAmt);
               rowContrib = S_LSHL_B32::create(builder, loc, sregType,
-                                              rowContrib, shiftConst);
+                                              ctx.createSCCType(), rowContrib,
+                                              shiftConst)
+                               .getDst();
             } else {
               auto strideImm = ctx.createImmType(ldsRowStride);
               auto strideConst =
@@ -1048,8 +1054,10 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
                   auto shiftImm = ctx.createImmType(shiftAmt);
                   auto shiftConst =
                       ConstantOp::create(builder, loc, shiftImm, shiftAmt);
-                  colVal = S_LSHL_B32::create(builder, loc, sregType, colVal,
-                                              shiftConst);
+                  colVal = S_LSHL_B32::create(builder, loc, sregType,
+                                              ctx.createSCCType(), colVal,
+                                              shiftConst)
+                               .getDst();
                 } else {
                   auto scaleImm = ctx.createImmType(ldsElemBytes);
                   auto scaleConst =
@@ -1059,8 +1067,8 @@ LogicalResult handleGatherToLds(Operation *op, TranslationContext &ctx) {
                 }
               }
               auto sregType = ctx.createSRegType();
-              m0Val = S_ADD_U32::create(builder, loc, sregType, sregType, m0Val,
-                                        colVal)
+              m0Val = S_ADD_U32::create(builder, loc, sregType,
+                                        ctx.createSCCType(), m0Val, colVal)
                           .getDst();
             } else {
               // At least one is VGPR: fall back to VALU

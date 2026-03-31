@@ -188,7 +188,8 @@ static void legalizeAddI64(Value lhs, Value rhs, ArithAddOp op,
     auto addLo = S_ADD_U32::create(builder, loc, sregTy, sccTy, lhsLo, rhsLo);
     loResult = addLo.getDst();
     // s_addc_u32: hi + hi + carry in from SCC.
-    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sccTy, addLo.getScc(), lhsHi, rhsHi);
+    auto addHi = S_ADDC_U32::create(builder, loc, sregTy, sccTy, addLo.getScc(),
+                                    lhsHi, rhsHi);
     hiResult = addHi.getDst();
   }
 
@@ -233,8 +234,8 @@ static void legalizeMulI64(Value lhs, Value rhs, ArithMulOp op,
     Value hiTemp =
         S_ADD_U32::create(builder, loc, sregTy, sccTy, hiPartial, cross1)
             .getDst();
-    hiResult = S_ADD_U32::create(builder, loc, sregTy, sccTy, hiTemp, cross2)
-                   .getDst();
+    hiResult =
+        S_ADD_U32::create(builder, loc, sregTy, sccTy, hiTemp, cross2).getDst();
   }
 
   Value result = mergeI64(loResult, hiResult, builder, loc);
@@ -412,14 +413,11 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
       // eq/ne: XOR each half, OR, compare to zero.
       auto sccTy = SCCType::get(builder.getContext());
       Value xorLo =
-          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsLo, rhsLo)
-              .getDst();
+          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsLo, rhsLo).getDst();
       Value xorHi =
-          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsHi, rhsHi)
-              .getDst();
+          S_XOR_B32::create(builder, loc, sregTy, sccTy, lhsHi, rhsHi).getDst();
       Value combined =
-          S_OR_B32::create(builder, loc, sregTy, sccTy, xorLo, xorHi)
-              .getDst();
+          S_OR_B32::create(builder, loc, sregTy, sccTy, xorLo, xorHi).getDst();
       auto immTy = ImmType::get(builder.getContext(), 0);
       Value zero = ConstantOp::create(builder, loc, immTy, 0);
       Value result;
@@ -440,18 +438,20 @@ static LogicalResult legalizeCmpI64(Value lhs, Value rhs, CmpPredicate pred,
       Value oneSgpr = S_MOV_B32::create(builder, loc, sregTy, one);
 
       Value hiSCC = emitSCmp(hiPred, lhsHi, rhsHi, builder, loc);
-      Value hiCmp = S_CSELECT_B32::create(builder, loc, sregTy, hiSCC, oneSgpr, zero);
+      Value hiCmp =
+          S_CSELECT_B32::create(builder, loc, sregTy, hiSCC, oneSgpr, zero);
 
       Value eqSCC = emitSCmp(CmpPredicate::eq, lhsHi, rhsHi, builder, loc);
-      Value hiEq = S_CSELECT_B32::create(builder, loc, sregTy, eqSCC, oneSgpr, zero);
+      Value hiEq =
+          S_CSELECT_B32::create(builder, loc, sregTy, eqSCC, oneSgpr, zero);
 
       Value loSCC = emitSCmp(loPred, lhsLo, rhsLo, builder, loc);
-      Value loCmp = S_CSELECT_B32::create(builder, loc, sregTy, loSCC, oneSgpr, zero);
+      Value loCmp =
+          S_CSELECT_B32::create(builder, loc, sregTy, loSCC, oneSgpr, zero);
 
       auto sccTy2 = SCCType::get(builder.getContext());
       Value eqAndLo =
-          S_AND_B32::create(builder, loc, sregTy, sccTy2, hiEq, loCmp)
-              .getDst();
+          S_AND_B32::create(builder, loc, sregTy, sccTy2, hiEq, loCmp).getDst();
       Value result =
           S_OR_B32::create(builder, loc, sregTy, sccTy2, hiCmp, eqAndLo)
               .getDst();

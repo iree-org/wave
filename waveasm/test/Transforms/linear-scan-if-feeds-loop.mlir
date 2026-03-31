@@ -39,9 +39,9 @@ waveasm.program @if_result_feeds_loop
   %vs = waveasm.precolored.vreg 8 : !waveasm.pvreg<8>
 
   %s_zero = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
-  %cmp = waveasm.s_cmp_lt_u32 %s_zero, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+  %cmp = waveasm.s_cmp_lt_u32 %s_zero, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.scc
 
-  %if_result = waveasm.if %cmp : !waveasm.sreg -> !waveasm.areg<4, 4> {
+  %if_result = waveasm.if %cmp : !waveasm.scc -> !waveasm.areg<4, 4> {
     %acc_init = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.areg<4, 4>
     %mfma = waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 %v0, %v4, %acc_init, %vs, %vs
         : !waveasm.pvreg<0, 4>, !waveasm.pvreg<4, 4>, !waveasm.areg<4, 4>, !waveasm.pvreg<8>, !waveasm.pvreg<8> -> !waveasm.areg<4, 4>
@@ -59,9 +59,9 @@ waveasm.program @if_result_feeds_loop
     %new_mfma = waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 %v0, %v4, %acc, %vs, %vs
         : !waveasm.pvreg<0, 4>, !waveasm.pvreg<4, 4>, !waveasm.areg<4, 4>, !waveasm.pvreg<8>, !waveasm.pvreg<8> -> !waveasm.areg<4, 4>
 
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c4 : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-    waveasm.condition %loop_cond : !waveasm.sreg iter_args(%next_i#0, %new_mfma) : !waveasm.sreg, !waveasm.areg<4, 4>
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c4 : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
+    waveasm.condition %loop_cond : !waveasm.scc iter_args(%next_i#0, %new_mfma) : !waveasm.sreg, !waveasm.areg<4, 4>
   }
 
   waveasm.s_endpgm

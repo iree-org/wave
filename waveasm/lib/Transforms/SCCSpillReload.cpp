@@ -40,9 +40,7 @@ namespace waveasm {
 namespace {
 
 /// Return true if the operation writes the SCC flag on hardware.
-static bool writesSCC(Operation *op) {
-  return op->hasTrait<OpTrait::SCCDef>();
-}
+static bool writesSCC(Operation *op) { return op->hasTrait<OpTrait::SCCDef>(); }
 
 /// Check if there is any SCC-clobbering op between \p producer and
 /// \p consumer in the same block.  Returns true if a clobber exists.
@@ -71,9 +69,8 @@ struct SCCSpillReloadPass
   using WAVEASMSCCSpillReloadBase::WAVEASMSCCSpillReloadBase;
 
   void runOnOperation() override {
-    getOperation()->walk([&](ProgramOp program) {
-      processBlock(program.getBodyBlock());
-    });
+    getOperation()->walk(
+        [&](ProgramOp program) { processBlock(program.getBodyBlock()); });
   }
 
 private:
@@ -134,17 +131,17 @@ private:
 
       // Insert spill right after the producer: s_cselect_b32 sN, 1, 0.
       builder.setInsertionPointAfter(info.producer);
-      Value oneConst = ConstantOp::create(builder, info.producer->getLoc(),
-                                          immTy1, 1);
-      Value zeroConst = ConstantOp::create(builder, info.producer->getLoc(),
-                                           immTy0, 0);
+      Value oneConst =
+          ConstantOp::create(builder, info.producer->getLoc(), immTy1, 1);
+      Value zeroConst =
+          ConstantOp::create(builder, info.producer->getLoc(), immTy0, 0);
       // s_cselect_b32 reads SCC explicitly: dst = SCC ? src0 : src1.
-      Value spillSgpr = S_CSELECT_B32::create(
-          builder, info.producer->getLoc(), sregTy, info.sccValue, oneConst, zeroConst);
+      Value spillSgpr =
+          S_CSELECT_B32::create(builder, info.producer->getLoc(), sregTy,
+                                info.sccValue, oneConst, zeroConst);
 
-      LLVM_DEBUG(llvm::dbgs()
-                 << "SCC spill: inserted s_cselect_b32 after "
-                 << info.producer->getName() << "\n");
+      LLVM_DEBUG(llvm::dbgs() << "SCC spill: inserted s_cselect_b32 after "
+                              << info.producer->getName() << "\n");
 
       // Insert reload before each consumer that needs it.
       for (OpOperand *use : info.usesNeedingReload) {
@@ -152,17 +149,16 @@ private:
         builder.setInsertionPoint(consumer);
 
         // s_cmp_ne_u32 sN, 0: reloads the spilled boolean back into SCC.
-        Value reloadZero = ConstantOp::create(builder, consumer->getLoc(),
-                                              immTy0, 0);
+        Value reloadZero =
+            ConstantOp::create(builder, consumer->getLoc(), immTy0, 0);
         Value reloadSCC = S_CMP_NE_U32::create(builder, consumer->getLoc(),
-                                                sccTy, spillSgpr, reloadZero);
+                                               sccTy, spillSgpr, reloadZero);
 
         // Replace the consumer's SCC operand with the reload result.
         use->set(reloadSCC);
 
-        LLVM_DEBUG(llvm::dbgs()
-                   << "SCC reload: inserted s_cmp_ne_u32 before "
-                   << consumer->getName() << "\n");
+        LLVM_DEBUG(llvm::dbgs() << "SCC reload: inserted s_cmp_ne_u32 before "
+                                << consumer->getName() << "\n");
       }
     }
   }

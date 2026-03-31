@@ -655,13 +655,13 @@ Value emitSRDBaseAdjustment(const TranslationContext::PendingSRDBaseAdjust &adj,
       S_MUL_I32::create(builder, loc, sregTy, offsetVal, elemSizeImm);
 
   // Adjust SRD base: s_add_u32 (sets SCC) + s_addc_u32 (reads SCC).
-  auto sccTy = ctx.createSRegType();
-  Value adjWord0 =
-      S_ADD_U32::create(builder, loc, sregTy, sccTy, srcWord0, byteOffLo)
-          .getDst();
-  Value adjWord1 =
-      S_ADDC_U32::create(builder, loc, sregTy, sccTy, srcWord1, byteOffHi)
-          .getDst();
+  SCCType sccTy = ctx.createSCCType();
+  auto addLo =
+      S_ADD_U32::create(builder, loc, sregTy, sccTy, srcWord0, byteOffLo);
+  Value adjWord0 = addLo.getDst();
+  Value adjWord1 = S_ADDC_U32::create(builder, loc, sregTy, sccTy,
+                                      addLo.getScc(), srcWord1, byteOffHi)
+                       .getDst();
 
   // Build word 2 (num_records).
   Value word2;

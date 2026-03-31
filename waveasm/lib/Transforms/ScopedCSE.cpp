@@ -156,7 +156,8 @@ bool isCSEEligible(Operation *op) {
     return false;
 
   // SCC-reading ops are NOT CSE-eligible: their result depends on implicit
-  // SCC state, so two ops with identical operands can produce different results.
+  // SCC state, so two ops with identical operands can produce different
+  // results.
   if (op->hasTrait<OpTrait::SCCUse>())
     return false;
 

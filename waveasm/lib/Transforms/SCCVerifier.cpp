@@ -38,9 +38,7 @@ namespace {
 /// Returns true if the operation writes the SCC flag on hardware.
 /// Uses hasTrait<SCCDef> for ops that carry the trait (carry ops, cmp ops),
 /// and isa<> for ops still on SALUBinaryOp/SALUUnaryOp (pending migration).
-static bool writesSCC(Operation *op) {
-  return op->hasTrait<OpTrait::SCCDef>();
-}
+static bool writesSCC(Operation *op) { return op->hasTrait<OpTrait::SCCDef>(); }
 
 struct SCCVerifierPass
     : public waveasm::impl::WAVEASMSCCVerifierBase<SCCVerifierPass> {
@@ -54,22 +52,26 @@ struct SCCVerifierPass
         errorCount += verifyBlock(block);
     });
     if (errorCount > 0) {
-      LLVM_DEBUG(llvm::dbgs() << "SCC verifier: found " << errorCount
-                               << " SCC hazard(s)\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "SCC verifier: found " << errorCount << " SCC hazard(s)\n");
       signalPassFailure();
     }
   }
 
 private:
   static SmallVector<Operation *> findSCCClobbersBetween(Operation *producer,
-                                                          Operation *consumer) {
+                                                         Operation *consumer) {
     SmallVector<Operation *> clobbers;
     if (!producer || !consumer || producer->getBlock() != consumer->getBlock())
       return clobbers;
     bool inRange = false;
     for (Operation &op : *producer->getBlock()) {
-      if (&op == producer) { inRange = true; continue; }
-      if (&op == consumer) break;
+      if (&op == producer) {
+        inRange = true;
+        continue;
+      }
+      if (&op == consumer)
+        break;
       if (inRange && writesSCC(&op))
         clobbers.push_back(&op);
     }
@@ -77,7 +79,7 @@ private:
   }
 
   static void emitSCCClobberError(Operation *consumer, Operation *producer,
-                                   ArrayRef<Operation *> clobbers) {
+                                  ArrayRef<Operation *> clobbers) {
     auto diag = consumer->emitError()
                 << "SCC hazard: " << clobbers.size()
                 << " SCC-clobbering op(s) between SCC producer '"
@@ -121,8 +123,7 @@ private:
         ++errors;
       }
       if (isa<S_ADDC_U32>(&op) && !lastSCCWriter) {
-        op.emitError()
-            << "SCC hazard: s_addc_u32 has no preceding SCC writer";
+        op.emitError() << "SCC hazard: s_addc_u32 has no preceding SCC writer";
         ++errors;
       }
       if (writesSCC(&op))
