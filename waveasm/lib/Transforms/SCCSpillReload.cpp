@@ -26,6 +26,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 
 #define DEBUG_TYPE "waveasm-scc-spill-reload"
 
@@ -140,8 +141,8 @@ private:
           S_CSELECT_B32::create(builder, info.producer->getLoc(), sregTy,
                                 info.sccValue, oneConst, zeroConst);
 
-      LLVM_DEBUG(llvm::dbgs() << "SCC spill: inserted s_cselect_b32 after "
-                              << info.producer->getName() << "\n");
+      LDBG() << "SCC spill: inserted s_cselect_b32 after "
+             << info.producer->getName();
 
       // Insert reload before each consumer that needs it.
       for (OpOperand *use : info.usesNeedingReload) {
@@ -157,8 +158,8 @@ private:
         // Replace the consumer's SCC operand with the reload result.
         use->set(reloadSCC);
 
-        LLVM_DEBUG(llvm::dbgs() << "SCC reload: inserted s_cmp_ne_u32 before "
-                                << consumer->getName() << "\n");
+        LDBG() << "SCC reload: inserted s_cmp_ne_u32 before "
+               << consumer->getName();
       }
     }
   }

@@ -22,6 +22,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 
 #define DEBUG_TYPE "waveasm-scc-verifier"
 
@@ -52,8 +53,7 @@ struct SCCVerifierPass
         errorCount += verifyBlock(block);
     });
     if (errorCount > 0) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "SCC verifier: found " << errorCount << " SCC hazard(s)\n");
+      LDBG() << "SCC verifier: found " << errorCount << " SCC hazard(s)";
       signalPassFailure();
     }
   }
