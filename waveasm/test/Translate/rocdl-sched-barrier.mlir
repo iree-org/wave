@@ -1,17 +1,17 @@
 // RUN: waveasm-translate %s | FileCheck %s
 //
-// Test: rocdl.sched.barrier handler emits waveasm.raw "s_sched_barrier".
+// Test: rocdl.sched.barrier lowers to a comment for the ASM backend.
 
 // CHECK-LABEL: waveasm.program @sched_barrier_test
 
-// rocdl.sched.barrier 0 -> s_sched_barrier 0x0
-// CHECK: waveasm.raw "s_sched_barrier 0x0"
+// rocdl.sched.barrier 0 -> waveasm.comment preserving the source position
+// CHECK: waveasm.comment "s_sched_barrier 0x0 (not emitted)"
 
-// rocdl.sched.barrier 1 -> s_sched_barrier 0x1
-// CHECK: waveasm.raw "s_sched_barrier 0x1"
+// rocdl.sched.barrier 1 -> waveasm.comment preserving the source position
+// CHECK: waveasm.comment "s_sched_barrier 0x1 (not emitted)"
 
-// rocdl.sched.barrier 255 -> s_sched_barrier 0xFF
-// CHECK: waveasm.raw "s_sched_barrier 0xFF"
+// rocdl.sched.barrier 255 -> waveasm.comment preserving the source position
+// CHECK: waveasm.comment "s_sched_barrier 0xFF (not emitted)"
 
 // CHECK: waveasm.s_endpgm
 

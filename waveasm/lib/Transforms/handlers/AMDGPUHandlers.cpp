@@ -1366,9 +1366,13 @@ LogicalResult handleROCDLSchedBarrier(Operation *op, TranslationContext &ctx) {
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();
 
+  // Scheduling barriers are compiler hints.
+  // Preserve the source position in emitted assembly with a comment.
   int32_t mask = schedBarrierOp.getMask();
-
-  RawOp::create(builder, loc, "s_sched_barrier 0x" + llvm::utohexstr(mask));
+  CommentOp::create(builder, loc,
+                    "s_sched_barrier 0x" +
+                        llvm::utohexstr(static_cast<uint32_t>(mask)) +
+                        " (not emitted)");
   return success();
 }
 
