@@ -1366,7 +1366,7 @@ def _generate_asm_code(mb, options):
         )
         tail_passes = [
             "--waveasm-scc-verifier",
-            "--waveasm-linear-scan=max-vgprs=512 max-agprs=512",
+            "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
