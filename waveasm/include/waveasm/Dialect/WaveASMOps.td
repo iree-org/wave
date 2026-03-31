@@ -798,12 +798,11 @@ def WaveASM_S_ADD_I32 : SALUBinaryWithCarryOp<"s_add_i32">;
 def WaveASM_S_SUB_U32 : SALUBinaryWithCarryOp<"s_sub_u32">;
 def WaveASM_S_SUB_I32 : SALUBinaryWithCarryOp<"s_sub_i32">;
 // Conditional select: dst = SCC ? src0 : src1 (reads SCC, no SCC write).
-// Conditional select: dst = SCC ? src0 : src1.
 // Takes an explicit SCC operand for SSA tracking of the SCC dependency.
 // NOT CSE-eligible: result depends on SCC state.  NoMemoryEffect allows DCE.
 def WaveASM_S_CSELECT_B32 : WAVEASMOp<"s_cselect_b32",
     [WaveASM_SCCUse, NoMemoryEffect]> {
-  let arguments = (ins WaveASM_SCC:$scc_in, WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let arguments = (ins WaveASM_SCC:$scc_in, WaveASM_SRegOrImm:$src0, WaveASM_SRegOrImm:$src1);
   let results = (outs WaveASM_AnySGPR:$dst);
   let assemblyFormat = "$scc_in `,` $src0 `,` $src1 attr-dict `:` type($scc_in) `,` type($src0) `,` type($src1) `->` type($dst)";
 }
