@@ -2,73 +2,46 @@
 
 import sympy
 
-from iree.compiler.ir import (
-    Context,
-    Location,
-    InsertionPoint,
-    IndexType,
-    FunctionType,
-    Module,
-)
-from iree.compiler.dialects import func as func_d
-
-from wave_lang.kernel._support.indexing import IndexingContext
-from wave_lang.kernel.compiler.wave_codegen.emitter import gen_sympy_index
-
-
-def _gen_ir(expr, sym_list):
-    """Emit *expr* inside a throwaway function and return the MLIR string."""
-    with Context(), Location.unknown():
-        module = Module.create()
-        with InsertionPoint(module.body):
-            idx = IndexType.get()
-            ftype = FunctionType.get([idx] * len(sym_list), [idx])
-            func = func_d.FuncOp("test_fn", ftype)
-            entry = func.add_entry_block()
-            with InsertionPoint(entry):
-                with IndexingContext() as idxc:
-                    idxc.finalize()
-                    dynamics = {s: entry.arguments[i] for i, s in enumerate(sym_list)}
-                    result = gen_sympy_index(dynamics, expr)
-                    func_d.return_([result])
-        return str(module)
-
+from wave_lang.kernel.compiler.wave_codegen.emitter import _group_same_denom_fractions
 
 x, y, z = sympy.symbols("x y z")
 
 # CHECK-LABEL: same_denom_two_fractions
-# x/5 + 2*y/5 should keep denominator 5, not cross-multiply to 25.
-# Single symbol denominator (no multiplication in floordiv operand).
-# CHECK: floordiv s{{[0-9]+}})>
-# CHECK-NOT: arith.constant 25
+# x/5 + 2*y/5 should group into (x + 2*y) / 5.
+# CHECK: (x + 2*y)/5
 print("same_denom_two_fractions")
 expr = sympy.Rational(1, 5) * x + sympy.Rational(2, 5) * y
-print(_gen_ir(expr, [x, y]))
+print(_group_same_denom_fractions(expr))
 print("-----")
 
 # CHECK-LABEL: same_denom_three_fractions
-# x/3 + y/3 + 2*z/3 should keep denominator 3, not blow up to 9 or 27.
-# CHECK: floordiv s{{[0-9]+}})>
-# CHECK-NOT: arith.constant 9
-# CHECK-NOT: arith.constant 27
+# x/3 + y/3 + 2*z/3 should group into (x + y + 2*z) / 3.
+# CHECK: (x + y + 2*z)/3
 print("same_denom_three_fractions")
 expr = sympy.Rational(1, 3) * x + sympy.Rational(1, 3) * y + sympy.Rational(2, 3) * z
-print(_gen_ir(expr, [x, y, z]))
+print(_group_same_denom_fractions(expr))
 print("-----")
 
 # CHECK-LABEL: different_denom
-# x/5 + y/7 must cross-multiply: denominator is a product of two symbols.
-# CHECK: floordiv (s{{[0-9]+}} * s{{[0-9]+}})
+# x/5 + y/7 has different denominators — should be unchanged.
+# CHECK: x/5 + y/7
 print("different_denom")
 expr = sympy.Rational(1, 5) * x + sympy.Rational(1, 7) * y
-print(_gen_ir(expr, [x, y]))
+print(_group_same_denom_fractions(expr))
 print("-----")
 
 # CHECK-LABEL: mixed_rational_and_integer
-# x/4 + y should become (x + 4*y) / 4.
-# CHECK: floordiv s{{[0-9]+}})>
-# CHECK-NOT: arith.constant 16
+# x/4 + y: only one term has denom 4, no grouping needed — should be unchanged.
+# CHECK: x/4 + y
 print("mixed_rational_and_integer")
 expr = sympy.Rational(1, 4) * x + y
-print(_gen_ir(expr, [x, y]))
+print(_group_same_denom_fractions(expr))
+print("-----")
+
+# CHECK-LABEL: no_fractions
+# x + 2*y: no fractions at all — should be unchanged.
+# CHECK: x + 2*y
+print("no_fractions")
+expr = x + 2 * y
+print(_group_same_denom_fractions(expr))
 print("-----")

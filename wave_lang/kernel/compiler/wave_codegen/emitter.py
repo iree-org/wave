@@ -638,6 +638,37 @@ _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])
 
 
+def _group_same_denom_fractions(expr):
+    """Group Add terms that share the same denominator to prevent
+    denominator explosion during IR emission.
+    e.g. x/5 + 2*y/5 becomes UnevaluatedExpr(x + 2*y) / 5,
+    which the emitter lowers as a single (x + 2*y) floordiv 5.
+    """
+    if not isinstance(expr, sympy.Add):
+        return expr
+
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for term in sympy.Add.make_args(expr):
+        n, d = term.as_numer_denom()
+        groups[d].append(n)
+
+    if all(len(v) <= 1 for v in groups.values()):
+        return expr
+
+    new_terms = []
+    for d, nums in groups.items():
+        if d == 1:
+            new_terms.extend(nums)
+        elif len(nums) == 1:
+            new_terms.append(nums[0] / d)
+        else:
+            new_terms.append(sympy.UnevaluatedExpr(sympy.Add(*nums)) / d)
+
+    return sympy.Add(*new_terms)
+
+
 def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Value:
     use_affine_expr = _use_affine_expr
     stack: list[OpResult] = []
@@ -882,36 +913,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             return value
 
         return floordiv_expr(value.numerator, value.denominator)
-
-    def _group_same_denom_fractions(expr):
-        """Group Add terms that share the same denominator to prevent
-        denominator explosion during IR emission.
-        e.g. x/5 + 2*y/5 becomes UnevaluatedExpr(x + 2*y) / 5,
-        which the emitter lowers as a single (x + 2*y) floordiv 5.
-        """
-        if not isinstance(expr, sympy.Add):
-            return expr
-
-        from collections import defaultdict
-
-        groups = defaultdict(list)
-        for term in sympy.Add.make_args(expr):
-            n, d = term.as_numer_denom()
-            groups[d].append(n)
-
-        if all(len(v) <= 1 for v in groups.values()):
-            return expr
-
-        new_terms = []
-        for d, nums in groups.items():
-            if d == 1:
-                new_terms.extend(nums)
-            elif len(nums) == 1:
-                new_terms.append(nums[0] / d)
-            else:
-                new_terms.append(sympy.UnevaluatedExpr(sympy.Add(*nums)) / d)
-
-        return sympy.Add(*new_terms)
 
     def _ceiling(value):
         if not isinstance(value, _Rational):
