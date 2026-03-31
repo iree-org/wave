@@ -1086,22 +1086,11 @@ def testScaledGemmMXFP4PreshuffleBWideStores(
 
 
 MACROTILES_PRESHUFFLE_8WAVE_PINGPONG = [
+    (256, 192, 256),
+    (256, 256, 256),
     (256, 160, 256),
-    (256, 224, 256),
-    (128, 128, 256),
-    (128, 256, 256),
-    (256, 32, 256),
-    (64, 192, 256),
-    (64, 128, 256),
+    (64, 64, 256),
 ]
-
-
-_DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS = {
-    (128, 128, 256),
-    (128, 256, 256),
-    (64, 192, 256),
-    (64, 128, 256),
-}
 
 
 @require_e2e
@@ -1126,9 +1115,6 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScales(
     (A&B scales preshuffled, A and B global-to-LDS).
     Note: In dynamic mode, this test only covers selected block shapes to avoid exceeding LDS memory limits.
     """
-    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
-        pytest.skip("Dynamic mode is only covered for selected block shapes.")
-
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
         shape,
         block_shape,
@@ -1233,8 +1219,6 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
     B is prefteched through LDS.
     """
-    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
-        pytest.skip("Dynamic mode is only covered for selected block shapes.")
 
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
