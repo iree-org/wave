@@ -64,16 +64,10 @@ private:
     SmallVector<Operation *> clobbers;
     if (!producer || !consumer || producer->getBlock() != consumer->getBlock())
       return clobbers;
-    bool inRange = false;
-    for (Operation &op : *producer->getBlock()) {
-      if (&op == producer) {
-        inRange = true;
-        continue;
-      }
-      if (&op == consumer)
-        break;
-      if (inRange && writesSCC(&op))
-        clobbers.push_back(&op);
+    for (Operation *op = producer->getNextNode(); op && op != consumer;
+         op = op->getNextNode()) {
+      if (writesSCC(op))
+        clobbers.push_back(op);
     }
     return clobbers;
   }

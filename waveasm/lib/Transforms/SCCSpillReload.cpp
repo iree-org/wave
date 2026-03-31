@@ -51,15 +51,9 @@ static bool hasSCCClobberBetween(Operation *producer, Operation *consumer) {
   // Different blocks: conservatively assume clobber.
   if (producer->getBlock() != consumer->getBlock())
     return true;
-  bool inRange = false;
-  for (Operation &op : *producer->getBlock()) {
-    if (&op == producer) {
-      inRange = true;
-      continue;
-    }
-    if (&op == consumer)
-      break;
-    if (inRange && writesSCC(&op))
+  for (Operation *op = producer->getNextNode(); op && op != consumer;
+       op = op->getNextNode()) {
+    if (writesSCC(op))
       return true;
   }
   return false;
