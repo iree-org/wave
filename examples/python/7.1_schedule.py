@@ -375,7 +375,7 @@ def test_dbuf_4wave_mxfp_preshuffle_b_gemm_cpp(
     eliminate_epilogue=True,
 ):
     """Preshuffle-B MXFP4 GEMM using C++ WaveASM backend."""
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(2, 2))
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(shape, block, wave_shape=(1, 4))
     options.backend = "asm"
     options.use_buffer_ops = True
     options.wave_runtime = True

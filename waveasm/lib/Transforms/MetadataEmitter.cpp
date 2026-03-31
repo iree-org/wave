@@ -148,6 +148,7 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
 
   int64_t userSgprCount = 2;
   if (isGfx950) {
+    // Hardware limits user SGPRs to 16 on gfx950.
     userSgprCount = std::min(int64_t(16), 2 + numArgs * 2);
   }
 
@@ -205,15 +206,17 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
 
   auto targetAttr = program.getTarget();
   auto targetKind = targetAttr.getTargetKind();
+  int64_t preloadLength = program.getKernargPreloadLength();
   bool usePreloading = llvm::isa<GFX950TargetAttr>(targetKind);
 
-  int64_t preloadLength = program.getKernargPreloadLength();
   if (usePreloading && preloadLength == 0) {
     int64_t numArgs = 2;
     if (auto numArgsAttr =
             program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
       numArgs = numArgsAttr.getInt();
     }
+    // Hardware limits user SGPRs to 16 on gfx950 (2 for kernarg ptr + 14 max
+    // preloaded). Overflow args are loaded via explicit s_load in the prologue.
     preloadLength = std::min(int64_t(14), numArgs * 2);
   }
 
