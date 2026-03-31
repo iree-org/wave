@@ -275,11 +275,13 @@ def _find_mergeable_groups(
         eligible.append((i, init_off, init_src, yield_src))
 
     # Phase 2: Group eligible iter_args by their init source vector<4xi8>.
-    # Uses hash() for MLIR Value identity (id() can alias across bindings).
+    # Uses the Operation object directly as dict key (not id() which can
+    # alias across Python bindings, and not bare hash() which has
+    # theoretical collision risk — dict keys use both __hash__ and __eq__).
     by_init_src = defaultdict(list)
     for entry in eligible:
         _, _, init_src, _ = entry
-        by_init_src[hash(init_src.owner)].append(entry)
+        by_init_src[init_src.owner].append(entry)
 
     # Phase 3: Within each source group, greedily form mergeable groups
     # from distinct byte offsets.  A group needs >= 2 offsets to be worth
@@ -305,7 +307,7 @@ def _find_mergeable_groups(
                 init_source = isrc
                 if ysrc is not None:
                     yield_source = ysrc
-                    yield_owners.add(hash(ysrc.owner))
+                    yield_owners.add(ysrc.owner)
                 else:
                     has_untraceable_yield = True
             if has_untraceable_yield:
@@ -504,10 +506,22 @@ def _coalesce_vector_iter_args(module: Module) -> None:
                     f"({byte0_op.name}) — skipping"
                 )
                 continue
-            # Assumes the 4 scale bytes are contiguous starting at the
-            # byte-0 address.  This holds for LDS scale loads produced by
-            # the pipeliner but is not validated here.
+
+            # The wide load reads 4 contiguous bytes starting at byte-0's
+            # address.  This is safe because the pipeliner produces these
+            # individual byte loads by splitting a single vector<4xi8> LDS
+            # load — the bytes are guaranteed contiguous in LDS layout.
+            # Guard: only apply to LDS (workgroup) loads where the
+            # contiguity invariant holds.
             load_view = byte0_op.opview
+            memref_type = load_view.base.type
+            if hasattr(memref_type, "memory_space") and "workgroup" not in str(
+                memref_type.memory_space
+            ):
+                logger.debug(
+                    f"Group {g_idx}: byte-0 yield load is not from LDS — " f"skipping"
+                )
+                continue
             memref = load_view.base
             indices = list(load_view.indices)
             v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], _i8)
