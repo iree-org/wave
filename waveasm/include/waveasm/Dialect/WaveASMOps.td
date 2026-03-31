@@ -83,10 +83,8 @@ class VALUCmpOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Unary: dst = op(src)
-// Pure — does NOT clobber SCC on hardware.
+// Pure -- does NOT clobber SCC on hardware.
 // Used for: s_mov_b32, s_mov_b64, s_sext_i32_i8, s_sext_i32_i16.
-// NOTE: Also used for SCC-clobbering ops (s_not, s_brev, etc.) until
-// SALUUnaryWithSCCOp migration is validated.
 class SALUUnaryOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_SRegOrImm:$src);
@@ -106,10 +104,8 @@ class SALUUnaryWithSCCOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Binary: dst = op(src0, src1)
-// Pure — does NOT clobber SCC on hardware.
-// Used for: s_mul_i32, s_mul_hi_*, s_bfm_*, s_pack_*, s_cselect_b32.
-// NOTE: Also used for SCC-clobbering ops (s_and, s_or, s_lshl, etc.)
-// until SALUBinaryWithSCCOp migration is validated.
+// Pure -- does NOT clobber SCC on hardware.
+// Used for: s_mul_i32, s_mul_hi_*, s_bfm_*, s_pack_*.
 class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
@@ -140,7 +136,7 @@ class SALUBinaryWithCarryOp<string mnemonic, list<Trait> traits = []>
 // SALU Binary with carry-in AND carry-out: dst, scc = op(scc_in, src0, src1)
 // Reads SCC (carry-in) and writes SCC (carry-out). Used for S_ADDC_U32.
 // The explicit $scc_in operand creates a true SSA dependency for the
-// carry chain (s_add_u32 → s_addc_u32), enabling correct CSE behavior.
+// carry chain (s_add_u32 -> s_addc_u32), enabling correct CSE behavior.
 class SALUBinaryWithCarryInOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp, WaveASM_SCCDef, WaveASM_SCCUse], traits)> {
   let arguments = (ins WaveASM_SCC:$scc_in, WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
@@ -149,17 +145,11 @@ class SALUBinaryWithCarryInOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Compare: returns condition in SCC.
-// NOTE: On hardware, s_cmp sets the implicit SCC flag with no destination
-// register. We model SCC as an explicit sreg result so that ConditionOp
-// (the while-loop terminator) can reference it as an SSA Value. The
-// assembly emitter special-cases all S_CMP ops to emit only the two
-// source operands (no destination). The register allocator treats the
-// result as a regular sreg; this wastes one SGPR slot per s_cmp.
-//
-// SALUCmpOp is CSE-eligible.  All SCCDef ops (SALUBinaryWithSCCOp,
-// SALUBinaryWithCarryOp, SALUCmpOp) now produce explicit SCCType results,
-// so the SCC spill/reload pass can track all SCC values via SSA and
-// insert spill/reload where SCC-clobbering ops intervene after CSE.
+// On hardware, s_cmp sets the implicit SCC flag with no destination register.
+// We model SCC as an explicit SCCType result so that ConditionOp / IfOp can
+// reference it as an SSA Value. The assembly emitter skips SCC results and
+// operands during emission. CSE-eligible; the SCC spill/reload pass handles
+// extended live ranges created by CSE.
 class SALUCmpOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp,
         WaveASM_SCCDef], traits)> {
@@ -804,7 +794,7 @@ def WaveASM_S_MUL_I32 : SALUBinaryOp<"s_mul_i32">;
 def WaveASM_S_MUL_HI_U32 : SALUBinaryOp<"s_mul_hi_u32">;
 def WaveASM_S_MUL_HI_I32 : SALUBinaryOp<"s_mul_hi_i32">;
 
-// Bitwise — all clobber SCC (SCC = result != 0)
+// Bitwise -- all clobber SCC (SCC = result != 0).
 def WaveASM_S_AND_B32 : SALUBinaryWithSCCOp<"s_and_b32">;
 def WaveASM_S_AND_B64 : SALUBinaryWithSCCOp<"s_and_b64">;
 def WaveASM_S_OR_B32 : SALUBinaryWithSCCOp<"s_or_b32">;

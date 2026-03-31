@@ -8,9 +8,7 @@
 // SCC Verifier Pass
 //
 // Verifies that no SCC-clobbering SALU instruction is placed between an
-// SCC-producing op and its consumer.  Uses isa<> checks instead of
-// hasTrait<SCCDef>() because adding traits to existing op classes changes
-// ODS-generated C++ and causes MLIR passes to produce different IR.
+// SCC-producing op and its consumer.
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMDialect.h"
@@ -37,8 +35,6 @@ namespace waveasm {
 namespace {
 
 /// Returns true if the operation writes the SCC flag on hardware.
-/// Uses hasTrait<SCCDef> for ops that carry the trait (carry ops, cmp ops),
-/// and isa<> for ops still on SALUBinaryOp/SALUUnaryOp (pending migration).
 static bool writesSCC(Operation *op) { return op->hasTrait<OpTrait::SCCDef>(); }
 
 struct SCCVerifierPass

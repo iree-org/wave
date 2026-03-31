@@ -253,11 +253,10 @@ def WAVEASMExtractScalarization
 def WAVEASMSCCSpillReload : Pass<"waveasm-scc-spill-reload"> {
   let summary = "Insert SCC spill/reload around SCC-clobbering ops";
   let description = [{
-    After CSE merges identical s_cmp ops, the SCC live range may extend
-    across SCC-clobbering ops.  This pass inserts s_cselect_b32 (spill:
-    SCC -> SGPR) right after each s_cmp whose SCC value is consumed
-    across a clobber, and s_cmp_ne_u32 (reload: SGPR -> SCC) right
-    before each affected consumer.
+    When an SCC live range extends across SCC-clobbering ops (e.g. after
+    CSE merges identical SCC producers), this pass inserts s_cselect_b32
+    (spill: SCC -> SGPR) right after the producer and s_cmp_ne_u32
+    (reload: SGPR -> SCC) right before each affected consumer.
   }];
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
@@ -270,8 +269,7 @@ def WAVEASMSCCVerifier : Pass<"waveasm-scc-verifier"> {
   let summary = "Verify SCC (Scalar Condition Code) liveness invariants";
   let description = [{
     Checks that no SCC-clobbering SALU instruction sits between an
-    SCC-producing op and its consumer.  Uses isa<> checks (not traits)
-    to avoid changing ODS-generated code for existing op classes.
+    SCC-producing op (SCCDef trait) and its consumer.
   }];
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
