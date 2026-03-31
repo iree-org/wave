@@ -1020,17 +1020,12 @@ def _emit_ops_from_graph(
                         ),
                     )
                 elif isinstance(node, Reshape):
-                    # FIXME(#873): temporary fix to work around a malformed op.
-                    if isinstance(node.target_vector_shape, int):
-                        target_vector_shape = {
-                            node.type.symbolic_shape[-1]: node.target_vector_shape
-                        }
-                    else:
-                        target_vector_shape = node.target_vector_shape
                     mlir_op = op_builder(
                         result_type,
                         source=create_mlir_operands(),
-                        target_vector_shape=_convert_vector_shapes(target_vector_shape),
+                        target_vector_shape=_convert_vector_shapes(
+                            node.target_vector_shape
+                        ),
                         logical_slice=node.logical_slice,
                         num_slices=node.num_slices,
                     )

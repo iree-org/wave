@@ -320,7 +320,8 @@ def create_transpose_writes(
                 propagate_tag(write.fx_node, value)
                 values.append(value)
 
-            value = Reshape(values, store_elems_per_thread).add_to_graph(
+            target_shape = {dst_symbolic_shape[-1]: store_elems_per_thread}
+            value = Reshape(values, target_shape).add_to_graph(
                 write.graph, loc=write.location
             )
             value.type = Register[(*dst_symbolic_shape, write.register_type.dtype)]

@@ -813,15 +813,30 @@ def _check_graphs_equivalent(
     lhs_nodes = list(lhs.nodes)
     rhs_nodes = list(rhs.nodes)
 
-    # Filter transparent wrapper ops that may appear asymmetrically.
+    # Filter semantically irrelevant wrapper ops that may appear
+    # asymmetrically between the two traces.
     #
-    # GetResult: filtered from rhs when the lhs is pre-canonical
-    # (add_get_results has not yet run; the MLIR importer always produces
-    # GetResult wrappers).
+    # GetResult with no users is dead code: it extracts an iterate
+    # result that nothing consumes.  The two traces may disagree on
+    # whether these exist because (a) some compilation passes erase
+    # dead GetResult nodes while others don't, and (b) the MLIR
+    # importer always creates one per iterate result. Dropping them
+    # from both sides before comparison is equivalent to DCE and
+    # ensures we only compare semantically meaningful nodes.
+    # TODO: Eventually we should handle this in a canonicalization pass.
+    #
+    # Pre-canonical special case: before add_get_results has run, the
+    # lhs has no GetResult nodes at all, so drop all rhs GetResults.
     lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
     lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
     if lhs_has_iterate and not lhs_has_getresult:
         rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), GetResult)]
+    else:
+        _is_dead_get_result = (
+            lambda n: isinstance(get_custom(n), GetResult) and not n.users
+        )
+        lhs_nodes = [n for n in lhs_nodes if not _is_dead_get_result(n)]
+        rhs_nodes = [n for n in rhs_nodes if not _is_dead_get_result(n)]
 
     # Broadcast: always filtered from both sides; either trace may
     # contain explicit broadcasts at different positions.

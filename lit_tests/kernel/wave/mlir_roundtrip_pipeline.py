@@ -224,39 +224,9 @@ def attention_progressive_roundtrip():
         compile_to_mlir=True,
     )
 
-    # Passes whose MLIR roundtrip is known to fail for the attention kernel.
-    # See: https://github.com/iree-org/wave/issues/1019
-    expected_failures = frozenset(
-        {
-            "in_thread_transpose",
-            "global_to_shared_gathers",
-            "minimize_global_loads",
-            "preshuffle_scale_to_shared",
-            "specialize_kernel",
-            "gather_to_shared",
-            "gather_to_shared_swizzling",
-            "mark_hardware_transpose_candidates",
-            "apply_shared_memory_indexing_corrections",
-            "partition_ops_with_gpr_offsets",
-            "partition_strided_operators",
-            "remove_chained_extractslice",
-            "decompose_reduce_ops",
-            "decompose_scan_ops",
-            "decompose_topk_ops",
-            "schedule_graph",
-            "schedule_reordering",
-            "minimize_shared_allocs",
-            "add_shared_memory_barriers",
-            "add_cluster_barriers",
-            "compute_shared_memory_usage",
-            "partition_gather_like_ops",
-            "generate_bounds_exprs",
-            "guard_g2s_with_bounds_check",
-            "merge_contiguous_reads",
-            "location_check_pass",
-            "simplify_indices",
-        }
-    )
+    # Passes whose MLIR roundtrip is known to fail for this kernel.
+    # Currently, we expect all passes to pass the roundtrip for this kernel.
+    expected_failures = frozenset()
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
     _run_progressive_roundtrip(attention, options, expected_failures)
