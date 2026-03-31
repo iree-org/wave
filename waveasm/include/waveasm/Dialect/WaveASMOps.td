@@ -96,12 +96,9 @@ class SALUUnaryOp<string mnemonic, list<Trait> traits = []>
 
 // SALU Unary with SCC clobber: dst = op(src), SCC = f(result)
 // Writes SCC on hardware but result depends only on operands.
-// Uses NoMemoryEffect + AlwaysSpeculatableImplTrait (equivalent to Pure)
-// so MLIR's DCE and LICM still work, plus SCCDef for the SCC verifier.
 class SALUUnaryWithSCCOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([
-        WaveASM_ArithmeticOp, WaveASM_SCCDef,
-        NoMemoryEffect, AlwaysSpeculatableImplTrait
+        Pure, WaveASM_ArithmeticOp, WaveASM_SCCDef
       ], traits)> {
   let arguments = (ins WaveASM_SRegOrImm:$src);
   let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
@@ -122,13 +119,9 @@ class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
 
 // SALU Binary with SCC clobber: dst = op(src0, src1), SCC = f(result)
 // Writes SCC on hardware but result depends only on operands.
-// Uses NoMemoryEffect + AlwaysSpeculatableImplTrait (equivalent to Pure)
-// so MLIR's DCE and LICM still work, plus SCCDef so the SCC verifier
-// can identify these as SCC-clobbering.
 class SALUBinaryWithSCCOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([
-        WaveASM_ArithmeticOp, WaveASM_SCCDef,
-        NoMemoryEffect, AlwaysSpeculatableImplTrait
+        Pure, WaveASM_ArithmeticOp, WaveASM_SCCDef
       ], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
   let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
@@ -168,8 +161,8 @@ class SALUBinaryWithCarryInOp<string mnemonic, list<Trait> traits = []>
 // so the SCC spill/reload pass can track all SCC values via SSA and
 // insert spill/reload where SCC-clobbering ops intervene after CSE.
 class SALUCmpOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp, WaveASM_SCCDef,
-        NoMemoryEffect, AlwaysSpeculatableImplTrait], traits)> {
+    : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp,
+        WaveASM_SCCDef], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
   let results = (outs WaveASM_SCC:$result);  // SCC flag (not a real SGPR)
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($result)";
