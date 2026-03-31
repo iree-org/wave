@@ -31,9 +31,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from iree.compiler.ir import (
-    AffineAddExpr,
-    AffineConstantExpr,
-    AffineMapAttr,
     ArrayAttr,
     Block,
     Float8E8M0FNUType,
@@ -523,6 +520,17 @@ def _coalesce_vector_iter_args(module: Module) -> None:
                 f"sub-word loads)"
             )
 
+        # Drop unresolved groups: if neither strategy above found a valid
+        # vector<4xi8> yield source, the group's yield_source is still None.
+        # Passing None to scf.YieldOp would crash, so we exclude these
+        # groups from coalescing.  This can happen when:
+        #   - No member's yield traces to extract_strided_slice (strategy 1)
+        #   - No byte-0 member exists, or byte-0 yield isn't a vector.load
+        #     (strategy 2 prerequisites)
+        groups = [g for g in groups if g[1] is not None]
+        if not groups:
+            continue
+
         plan = _build_coalesce_plan(groups, for_view, yield_op)
         old_iter_args = list(for_view.inner_iter_args)
         old_iv = for_view.induction_variable
@@ -571,181 +579,6 @@ def _coalesce_vector_iter_args(module: Module) -> None:
         for_op.erase()
 
 
-def _get_affine_constant_offset(op) -> Optional[int]:
-    """Extract the trailing integer constant from an affine.apply's map.
-
-    For ``affine_map<()[s0,s1] -> (expr + 2)>`` returns ``2``.
-    For ``affine_map<()[s0,s1] -> (expr)>`` (no trailing constant) returns ``0``.
-    Returns ``None`` if *op* is not an affine.apply.
-    """
-    if not _is_op_named(op, "affine.apply"):
-        return None
-    affine_map = AffineMapAttr(op.attributes["map"]).value
-    expr = affine_map.results[0]
-    if isinstance(expr, AffineAddExpr) and isinstance(expr.rhs, AffineConstantExpr):
-        return expr.rhs.value
-    return 0
-
-
-def _affine_base_key(op) -> Optional[tuple]:
-    """Return a key that identifies the non-constant base of an affine.apply.
-
-    Two affine.apply ops with the same base key compute addresses that
-    differ only by a compile-time constant offset, so a single wide load
-    at the offset-0 address covers all of them.
-
-    Returns ``None`` when *op* is not an affine.apply.
-    """
-    if not _is_op_named(op, "affine.apply"):
-        return None
-    operand_hashes = tuple(hash(v) for v in op.operands)
-    affine_map = AffineMapAttr(op.attributes["map"]).value
-    expr = affine_map.results[0]
-    if isinstance(expr, AffineAddExpr) and isinstance(expr.rhs, AffineConstantExpr):
-        base_expr = expr.lhs
-    else:
-        base_expr = expr
-    return (str(base_expr), operand_hashes)
-
-
-def _merge_scale_byte_loads(module: Module) -> None:
-    """Merge adjacent vector<1/2xi8> LDS loads into vector<4xi8> + extract.
-
-    Handles the unrolled-iteration pattern where sub-word scale loads
-    aren't loop-carried and thus not covered by _coalesce_vector_iter_args.
-    For vector<2xi8> loads, replaces downstream extract_strided_slice(size=1)
-    users with direct byte extracts from the wide vector<4xi8>, so that
-    _trace_scale_chain sees the correct source type for opsel.
-    """
-    _init_types()
-
-    # Step 1: Collect all vector<1xi8> and vector<2xi8> loads whose last
-    # index is computed by affine.apply (so we can extract the constant
-    # byte offset and group loads that differ only by that offset).
-    byte_loads: list[Operation] = []
-    for op in _walk_operations(module.operation):
-        if not _is_op_named(op, "vector.load"):
-            continue
-        result_type = op.results[0].type
-        if not isinstance(result_type, VectorType) or result_type.element_type != _i8:
-            continue
-        if result_type.shape[0] > 2:
-            continue
-        view = op.opview
-        addr = view.indices[-1]
-        if _get_affine_constant_offset(addr.owner) is None:
-            continue
-        byte_loads.append(op)
-
-    if not byte_loads:
-        return
-
-    # Step 2: Group loads that share the same memref, prefix indices, and
-    # affine base expression — i.e. they differ only by a constant offset
-    # in the last index (e.g. addr, addr+1, addr+2, addr+3).
-    def _full_group_key(op: Operation):
-        view = op.opview
-        memref_h = hash(view.base)
-        prefix_hashes = tuple(hash(v) for v in list(view.indices)[:-1])
-        addr = view.indices[-1]
-        base_k = _affine_base_key(addr.owner)
-        return (memref_h, prefix_hashes, base_k)
-
-    by_group: dict = defaultdict(list)
-    for op in byte_loads:
-        by_group[_full_group_key(op)].append(op)
-
-    # Step 3: For each group, find the offset-0 load (base address) and
-    # replace all sub-word loads with extracts from a single vector<4xi8>.
-    for loads in by_group.values():
-        if len(loads) < 2:
-            continue
-
-        addr_to_offset: dict[int, int] = {}
-        base_op: Optional[Operation] = None
-        for load_op in loads:
-            addr_val = load_op.opview.indices[-1]
-            off = _get_affine_constant_offset(addr_val.owner)
-            if off is None:
-                continue
-            if off >= SCALE_VECTOR_WIDTH:
-                continue
-            addr_to_offset[hash(load_op)] = off
-            if off == 0:
-                base_op = load_op
-
-        # Without an offset-0 load we don't know the dword-aligned base.
-        if base_op is None:
-            continue
-
-        base_view = base_op.opview
-        v4xi8 = VectorType.get([SCALE_VECTOR_WIDTH], _i8)
-
-        # Insert the wide load before the first eligible load in the group
-        # (all grouped loads are in the same block, so any valid member works).
-        first_eligible = next(op for op in loads if hash(op) in addr_to_offset)
-        with InsertionPoint(first_eligible):
-            wide = vector_d.load(v4xi8, base_view.base, list(base_view.indices))
-
-        replaced = 0
-        for load_op in loads:
-            if hash(load_op) not in addr_to_offset:
-                continue
-            off = addr_to_offset[hash(load_op)]
-            load_type = load_op.results[0].type
-            load_width = load_type.shape[0]
-            if off + load_width > SCALE_VECTOR_WIDTH:
-                continue
-
-            if load_width == 1:
-                # vector<1xi8> load: replace directly with a byte extract
-                # from the wide load.
-                with InsertionPoint(load_op):
-                    ext = _make_extract_slice(wide, off)
-                load_op.results[0].replace_all_uses_with(ext.result)
-                load_op.erase()
-                replaced += 1
-            else:
-                # vector<2xi8> load: rewrite each downstream size-1
-                # extract_strided_slice to pull directly from the wide
-                # vector<4xi8>, computing the absolute byte offset as
-                # load_offset + inner_extract_offset.
-                byte_extract_users = []
-                for use in list(load_op.results[0].uses):
-                    user_op = use.owner
-                    if (
-                        _is_op_named(user_op, "vector.extract_strided_slice")
-                        and IntegerAttr(user_op.opview.sizes[0]).value == 1
-                    ):
-                        inner_off = IntegerAttr(user_op.opview.offsets[0]).value
-                        byte_off = off + inner_off
-                        if byte_off < SCALE_VECTOR_WIDTH:
-                            byte_extract_users.append((user_op, byte_off))
-
-                for user_op, byte_off in byte_extract_users:
-                    with InsertionPoint(user_op):
-                        ext = _make_extract_slice(wide, byte_off)
-                    user_op.results[0].replace_all_uses_with(ext.result)
-                    user_op.erase()
-
-                # If the vector<2xi8> load still has other users (not size-1
-                # extracts), keep it alive as an extract from the wide load.
-                has_remaining = any(True for _ in load_op.results[0].uses)
-                if has_remaining:
-                    with InsertionPoint(load_op):
-                        fallback = _make_extract_slice(wide, off, size=load_width)
-                    load_op.results[0].replace_all_uses_with(fallback.result)
-
-                load_op.erase()
-                replaced += 1
-
-        if replaced:
-            logger.debug(
-                f"Merged {replaced} sub-word LDS loads into one "
-                f"vector<{SCALE_VECTOR_WIDTH}xi8> load"
-            )
-
-
 def apply_opsel_scaled_mfma(module: Module):
     """Walk the MLIR module and apply the opsel optimization to scaled_mfma ops.
 
@@ -758,13 +591,11 @@ def apply_opsel_scaled_mfma(module: Module):
     mlir_ctx = module.operation.context
 
     with mlir_ctx, Location.unknown():
-        # Pre-pass 1: Merge vector<1xi8> scf.for iter_args back into
+        # Pre-pass: merge vector<1xi8> scf.for iter_args back into
         # vector<4xi8> so that scale chains are visible to the main pass.
+        # Non-loop-carried loads that are already vector<4xi8> (produced by
+        # merge_contiguous_reads) don't need additional merging.
         _coalesce_vector_iter_args(module)
-
-        # Pre-pass 2: Merge sub-word LDS loads (from unrolled iterations)
-        # into vector<4xi8> loads for the same reason.
-        _merge_scale_byte_loads(module)
 
         f8e8m0 = Float8E8M0FNUType.get()
 

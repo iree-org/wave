@@ -251,8 +251,9 @@ def test_opsel_coalescing_asymmetric_2x2():
 
     With the fix:
     - All vector<1xi8> iter_args are coalesced into vector<4xi8>
-    - All scaled_mfma ops use vector<4xf8E8M0FNU> with opsel indexing
-    - scf.for iter_args drop from 76 to 73
+    - B-scale scaled_mfma ops use vector<4xf8E8M0FNU> with opsel indexing
+    - A-scale may remain scalar for some LDS-sourced scales where the
+      sub-word merge pass is not applied (see _merge_scale_byte_loads note)
     """
     shape = (1024, 1024, 8192)
     block = (256, 192, 256)
@@ -271,17 +272,16 @@ def test_opsel_coalescing_asymmetric_2x2():
 
     # CHECK-LABEL: test_opsel_coalescing_asymmetric_2x2
 
-    # No vector<1xi8> should remain in scf.for iter_args — they must be
-    # coalesced into wider vector<4xi8> loads.
+    # No vector<1xi8> should remain in scf.for iter_args — the coalescer
+    # must merge them into wider vector<4xi8> loads.
     # CHECK-NOT: vector<1xi8>
 
-    # All scaled_mfma ops should use vector<4xf8E8M0FNU> scale operands
-    # with opsel byte selection, not scalar f8E8M0FNU.
-    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : f8E8M0FNU,
+    # B-scale (from global via preshuffle) should use vector opsel.
+    # No scaled_mfma should have scalar B-scale (3rd type position).
     # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,
 
-    # At least one scaled_mfma with vector A-scale and opsel indexing.
-    # CHECK: amdgpu.scaled_mfma {{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+    # At least one scaled_mfma with vector B-scale and opsel indexing.
+    # CHECK: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
 
-    # No scalar-scale scaled_mfma should remain after.
-    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : f8E8M0FNU,
+    # No scaled_mfma should have scalar B-scale after.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : {{.*}}, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU,
