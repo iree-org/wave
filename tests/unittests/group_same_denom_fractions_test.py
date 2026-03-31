@@ -1,6 +1,4 @@
-import logging
 import unittest
-
 import sympy
 
 from wave_lang.kernel.compiler.wave_codegen.emitter import _group_same_denom_fractions
@@ -16,9 +14,7 @@ class GroupSameDenomFractionsTest(unittest.TestCase):
         """x/5 + 2y/5 should group into (x + 2y) / 5."""
         expr = sympy.Rational(1, 5) * self.x + sympy.Rational(2, 5) * self.y
         result = _group_same_denom_fractions(expr)
-        n, d = result.as_numer_denom()
-        self.assertEqual(d, 5)
-        self.assertEqual(sympy.expand(n), self.x + 2 * self.y)
+        self.assertEqual(str(result), "(x + 2*y)/5")
 
     def test_same_denominator_three_fractions(self):
         """x/3 + y/3 + 2z/3 should group into (x + y + 2z) / 3."""
@@ -28,9 +24,7 @@ class GroupSameDenomFractionsTest(unittest.TestCase):
             + sympy.Rational(2, 3) * self.z
         )
         result = _group_same_denom_fractions(expr)
-        n, d = result.as_numer_denom()
-        self.assertEqual(d, 3)
-        self.assertEqual(sympy.expand(n), self.x + self.y + 2 * self.z)
+        self.assertEqual(str(result), "(x + y + 2*z)/3")
 
     def test_different_denominators_unchanged(self):
         """x/5 + y/7 has different denominators — should be unchanged."""
@@ -55,8 +49,3 @@ class GroupSameDenomFractionsTest(unittest.TestCase):
         expr = self.x * self.y
         result = _group_same_denom_fractions(expr)
         self.assertEqual(result, expr)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    unittest.main()
