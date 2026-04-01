@@ -34,8 +34,10 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     format_diagnostics,
     PersistentEmitter,
 )
+from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
 from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import get_tagged_mxfp4_gemm
 from wave_lang.kernel.wave.templates.vanilla_attention import (
     get_vanilla_attention_kernel,
 )
@@ -93,6 +95,7 @@ def _run_progressive_roundtrip(
     launchable: LaunchableWave,
     options: WaveCompileOptions,
     expected_failures: frozenset[str],
+    schedule=None,
 ) -> None:
     """Run all compilation passes, roundtripping after each one.
 
@@ -111,7 +114,7 @@ def _run_progressive_roundtrip(
             location_capture_config=options.location_capture_config
         )
 
-        graph_passes = build_graph_passes(launchable, trace, options)
+        graph_passes = build_graph_passes(launchable, trace, options, schedule=schedule)
 
         # Validate that every name in the xfail set corresponds to an actual
         # pass.  Catches stale entries after pass renames or removals.
@@ -136,11 +139,14 @@ def _run_progressive_roundtrip(
             # Each pass mutates `trace` in place (captured by reference in
             # the partial). _try_roundtrip is read-only on the trace: it
             # serializes to MLIR text and compares it against a fresh import.
-            p()
-
-            result = _try_roundtrip(
-                trace, launchable.constraints, options, emitter=emitter
-            )
+            try:
+                p()
+            except Exception as e:
+                result = Failure(f"pass crashed: {e}")
+            else:
+                result = _try_roundtrip(
+                    trace, launchable.constraints, options, emitter=emitter
+                )
 
             if result and not expected_fail:
                 ok_count += 1
@@ -230,3 +236,81 @@ def attention_progressive_roundtrip():
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
     _run_progressive_roundtrip(attention, options, expected_failures)
+
+
+# CHECK-LABEL: mxfp4_gemm_progressive_roundtrip
+@run_test
+def mxfp4_gemm_progressive_roundtrip():
+    """Test MLIR roundtrip at each stage of the MXFP4 GEMM compilation pipeline."""
+    gemm, options = get_tagged_mxfp4_gemm(
+        shape=(128, 128, 256),
+        block_shape=(64, 64, 128),
+        wave_shape=(2, 2),
+        reorder_workgroups=False,
+    )
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=False)
+    options.compile_to_mlir = True
+
+    # Passes whose MLIR roundtrip is known to fail for this kernel.
+    # Passes 1-11: emitter lacks ScaledMmaOp in the Water MLIR dialect.
+    # Passes 12-44: BLOCK_M/2 from wave_shape=(2,2) produces an invalid
+    #   fraction in the sympy-to-affine index converter.
+    # Pass 38: run_manual_schedule crashes (partition_by_dim expects expanded K).
+    # Passes 45-49: type metadata corruption after simplify_indices
+    #   (issubclass() arg 1 must be a class).
+    expected_failures = frozenset(
+        {
+            "debug_log_hoist",
+            "initialize_iter_args",
+            "create_induction_vars",
+            "initialize_reductions",
+            "finalize_indices",
+            "substitute_vector_shapes",
+            "add_get_results",
+            "infer_types",
+            "construct_index_mapping",
+            "debug_log_write_replace",
+            "promote_placeholders",
+            "set_node_indices",
+            "reorder_workgroups",
+            "expand_graph",
+            "set_post_expansion_indices",
+            "remove_chained_getresult",
+            "decompose_vmma_ops",
+            "decompose_dot_mma",
+            "hoist_loop_invariant_ops",
+            "tensor_load_to_shared",
+            "multicast",
+            "fuse_tensor_loads",
+            "in_thread_transpose",
+            "global_to_shared_gathers",
+            "minimize_global_loads",
+            "preshuffle_scale_to_shared",
+            "specialize_kernel",
+            "gather_to_shared",
+            "gather_to_shared_swizzling",
+            "mark_hardware_transpose_candidates",
+            "apply_shared_memory_indexing_corrections",
+            "partition_ops_with_gpr_offsets",
+            "partition_strided_operators",
+            "remove_chained_extractslice",
+            "decompose_reduce_ops",
+            "decompose_scan_ops",
+            "decompose_topk_ops",
+            "run_manual_schedule",
+            "guard_g2s_with_bounds_check",
+            "schedule_reordering",
+            "minimize_shared_allocs",
+            "add_shared_memory_barriers",
+            "add_cluster_barriers",
+            "compute_shared_memory_usage",
+            "simplify_indices",
+            "partition_gather_like_ops",
+            "generate_bounds_exprs",
+            "merge_contiguous_reads",
+            "location_check_pass",
+        }
+    )
+
+    # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
+    _run_progressive_roundtrip(gemm, options, expected_failures, schedule=schedule)
