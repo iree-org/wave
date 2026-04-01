@@ -1143,6 +1143,7 @@ def _dbuf_mxfp4_helper(
     reorder_workgroups=None,
     eliminate_epilogue=False,
     linearize_reads=True,
+    reads_merged=None,
 ):
     """Shared helper for double-buffered MXFP4 scheduled GEMM tests.
 
@@ -1258,10 +1259,18 @@ def _dbuf_mxfp4_helper(
         options, gemm, schedule=schedule, dynamic_values=dynamic_values
     )
 
-    # Verify MLIR contains scaled_mfma operation
+    # Verify MLIR contains scaled_mfma operation.
     assert (
         "amdgpu.scaled_mfma" in kernel_info.mlir_text
     ), "Expected amdgpu.scaled_mfma operation in MLIR"
+    # Check whether scale reads were merged by merge_contiguous_reads.
+    if reads_merged is not None:
+        actually_merged = "vector<1xi8>" not in kernel_info.mlir_text
+        assert actually_merged == reads_merged, (
+            f"Scale read merge status changed: expected "
+            f"{'merged' if reads_merged else 'unmerged'}, "
+            f"got {'merged' if actually_merged else 'unmerged'}"
+        )
     if dynamic_dims:
         expected_idx = r"function_type = \([^)]*index, index, index\) -> \(\)"
         expected_msg = "M, N, and K"
@@ -1342,20 +1351,33 @@ def _dbuf_mxfp4_helper(
 @pytest.mark.parametrize("eliminate_epilogue", [True, False], ids=["ee", "no_ee"])
 @pytest.mark.parametrize("output_dtype", ["f32", "bf16"])
 @pytest.mark.parametrize(
-    "shape,block,wave_shape",
+    "shape,block,wave_shape,reads_merged",
     [
-        pytest.param((1024, 1024, 8192), (128, 256, 256), (1, 4), id="128x256x256"),
-        pytest.param((1024, 1024, 8192), (128, 32, 256), (2, 2), id="128x32x256"),
-        pytest.param((896, 640, 8192), (224, 160, 256), (2, 2), id="224x160x256"),
-        pytest.param((1024, 768, 8192), (256, 192, 256), (1, 4), id="256x192x256"),
-        pytest.param((1024, 640, 8192), (256, 160, 256), (2, 2), id="256x160x256"),
-        pytest.param((1024, 896, 8192), (256, 224, 256), (2, 2), id="256x224x256"),
+        pytest.param(
+            (1024, 1024, 8192), (128, 256, 256), (1, 4), True, id="128x256x256"
+        ),
+        pytest.param(
+            (1024, 1024, 8192), (128, 32, 256), (2, 2), False, id="128x32x256"
+        ),
+        pytest.param(
+            (896, 640, 8192), (224, 160, 256), (2, 2), False, id="224x160x256"
+        ),
+        pytest.param(
+            (1024, 768, 8192), (256, 192, 256), (1, 4), False, id="256x192x256"
+        ),
+        pytest.param(
+            (1024, 640, 8192), (256, 160, 256), (2, 2), False, id="256x160x256"
+        ),
+        pytest.param(
+            (1024, 896, 8192), (256, 224, 256), (2, 2), False, id="256x224x256"
+        ),
     ],
 )
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     shape,
     block,
     wave_shape,
+    reads_merged,
     dynamic_dims,
     use_buffer_ops,
     use_schedule,
@@ -1499,6 +1521,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         wave_shape=wave_shape,
         eliminate_epilogue=eliminate_epilogue,
         linearize_reads=not skip_linearize,
+        reads_merged=reads_merged,
     )
 
 
@@ -1534,6 +1557,7 @@ def test_dbuf_4wave_mxfp4_dynamic_mn_reorder_cpp_backend(
         use_schedule=True,
         wave_shape=wave_shape,
         reorder_workgroups=True,
+        reads_merged=True,
     )
 
 
