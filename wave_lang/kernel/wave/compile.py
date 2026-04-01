@@ -546,6 +546,11 @@ def build_graph_passes(
     graph_passes.append(partial(simplify_indices, trace, launchable.constraints))
     graph_passes.append(
         partial(
+            partition_gather_like_ops, trace, launchable.constraints, options.target
+        )
+    )
+    graph_passes.append(
+        partial(
             merge_contiguous_reads,
             trace,
             launchable.constraints,
@@ -609,9 +614,6 @@ def build_graph_passes(
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(simplify_indices, trace, launchable.constraints),
-        partial(
-            partition_gather_like_ops, trace, launchable.constraints, options.target
-        ),
         partial(
             generate_bounds_exprs,
             trace,
