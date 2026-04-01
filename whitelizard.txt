@@ -1,0 +1,39 @@
+# Existing violations grandfathered in.
+# Remove entries as functions get refactored below threshold.
+# Thresholds: CCN 50, length 300.
+
+# Python - templates and schedules (long but low-branching kernel definitions).
+get_extend_attention_kernel
+get_extend_attention_rpe_kernel
+get_paged_decode_attention_kernels
+get_streamk_gemm_kernel
+get_hybrid_streamk_gemm_kernel
+get_speculative_sampling_kernel
+get_mxfp4_dbuf_mixed_pingpong_schedule
+get_mxfp4_dbuf_mixed_pingpong_schedule.mxfp4_dbuf_schedule
+get_mxfp4_dbuf_mixed_pingpong_shuffle_schedule
+get_mxfp4_asymmetric_schedule
+get_mxfp4_asymmetric_schedule.mxfp4_dbuf_schedule
+
+# Python - compiler / codegen.
+_emit_ops_from_graph
+gen_sympy_index
+isolated_test_call
+
+# Python - scripts (qualified with file to avoid matching other main functions).
+wave_lang/kernel/wave/perf/bench_mxfp4_comparison.py:main
+wave_lang/kernel/wave/asm/scripts/compare_backends.py:main
+
+# C++ - waveasm handlers (big type-dispatch switches).
+waveasm::handleAMDGPUMfma
+waveasm::handleFatRawBufferCast
+waveasm::handleGatherToLds
+waveasm::handleAffineApply
+
+# C++ - waveasm core passes.
+waveasm::computeLiveness
+waveasm::TranslationContext::emitSRDPrologue
+handleVectorStore
+LinearScanPass::processProgram
+waveasm::KernelGenerator::generateOp
+waveasm::InstructionRegistry::InstructionRegistry
