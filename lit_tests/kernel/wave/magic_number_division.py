@@ -1,5 +1,4 @@
-# RUN: WAVE_MAGIC_NUMBER_DIV=1 python %s 2>&1 | FileCheck %s --check-prefix=MAGIC
-# RUN: WAVE_MAGIC_NUMBER_DIV=0 python %s 2>&1 | FileCheck %s --check-prefix=NOMAGIC
+# RUN: python %s | FileCheck %s
 
 from sympy import ceiling
 
@@ -102,9 +101,9 @@ def test_magic_number_div():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        magic_number_div=True,
     )
 
-    # Enable dynamic symbols
     options.dynamic_symbols = [M, N, K]
     for sym in options.dynamic_symbols:
         del options.subs[sym]
@@ -112,35 +111,24 @@ def test_magic_number_div():
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
 
-    # ---- MAGIC (WAVE_MAGIC_NUMBER_DIV=1) ----
-    # MAGIC-LABEL: func.func @gemm
-    # MAGIC-DAG:     arith.constant 4294967295 : i64
-    # MAGIC-DAG:     %[[C32:.*]] = arith.constant 32 : i64
+    # CHECK-LABEL: func.func @gemm
+    # CHECK-DAG:     arith.constant 4294967295 : i64
+    # CHECK-DAG:     %[[C32:.*]] = arith.constant 32 : i64
     #
     # Magic precomputation (divui) followed by multiply-high (shrui):
-    # MAGIC:         arith.divui {{.*}} : i64
-    # MAGIC:         arith.shrui {{.*}}, %[[C32]] : i64
+    # CHECK:         arith.divui {{.*}} : i64
+    # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
     #
     # Consume remaining precomputations from other address calculations.
-    # MAGIC:         arith.divui
-    # MAGIC:         arith.divui
-    # MAGIC:         arith.divui
-    # MAGIC:         arith.shrui {{.*}}, %[[C32]] : i64
+    # CHECK:         arith.divui
+    # CHECK:         arith.divui
+    # CHECK:         arith.divui
+    # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
     #
     # Amortised: mulhi reusing a previously computed magic number
     # with a different dividend — no new divui needed.
-    # MAGIC-NOT:     arith.divui
-    # MAGIC-NOT:     arith.divsi
-    # MAGIC:         arith.shrui {{.*}}, %[[C32]] : i64
-    # MAGIC-NOT:     arith.divsi
-    # MAGIC:         return
-
-    # ---- NOMAGIC (WAVE_MAGIC_NUMBER_DIV=0) ----
-    # Without magic numbers the dynamic floordiv/mod stay inside affine
-    # maps; no arith division ops are emitted.
-    # NOMAGIC-LABEL: func.func @gemm
-    # NOMAGIC-NOT:   arith.divui
-    # NOMAGIC-NOT:   arith.divsi
-    # NOMAGIC-NOT:   arith.shrui
-    # NOMAGIC-NOT:   4294967295
-    # NOMAGIC:       affine.apply
+    # CHECK-NOT:     arith.divui
+    # CHECK-NOT:     arith.divsi
+    # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
+    # CHECK-NOT:     arith.divsi
+    # CHECK:         return

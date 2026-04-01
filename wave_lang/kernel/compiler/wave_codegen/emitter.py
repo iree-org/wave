@@ -261,6 +261,10 @@ class WaveEmitter:
         return func_op
 
     def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
+        global _magic_number_enabled, _magic_number_cache
+        _magic_number_enabled = self.options.magic_number_div
+        _magic_number_cache = {}
+
         func = self.emit_func()
         with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
             self._emit_graph(
@@ -633,7 +637,7 @@ def add_emitter_subs(
 
 _emulate_ceildiv = bool(int(environ.get("WAVE_EMULATE_CEILDIV", 0)))
 _use_affine_expr = bool(int(environ.get("WAVE_USE_AFFINE_EXPR", 1)))
-_magic_number_enabled = bool(int(environ.get("WAVE_MAGIC_NUMBER_DIV", 1)))
+_magic_number_enabled = False
 
 _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])

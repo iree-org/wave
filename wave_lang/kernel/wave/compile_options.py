@@ -96,6 +96,7 @@ class WaveCompileOptions:
     enable_mark_hardware_transpose_candidates: bool = True
 
     # === Compiler options ===
+    magic_number_div: bool = False
     minimize_shared_allocs: bool = True
     reorder_allocs: bool = True
     override_schedule: Optional[str] = None
