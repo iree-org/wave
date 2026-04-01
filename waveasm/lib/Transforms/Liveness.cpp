@@ -570,8 +570,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
     auto sourceIt = info.ranges.find(source);
     while (sourceIt == info.ranges.end()) {
       auto defOp = source.getDefiningOp<InsertOp>();
-      if (!defOp)
+      if (!defOp) {
+        // Chain root has no live range -- unexpected, but not fatal.
+        // LinearScanPass will skip the insert (no physreg to alias).
+        insertOp.emitWarning("insert chain root has no live range");
         return;
+      }
       source = defOp.getVector();
       sourceIt = info.ranges.find(source);
     }

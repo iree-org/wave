@@ -282,6 +282,12 @@ private:
         return WalkResult::advance();
       mapping.setPhysReg(insertOp.getResult(), sourcePhysReg);
 
+      // Only single-word inserts are lowered for now (one mov).
+      if (getRegSize(insertOp.getValue().getType()) != 1) {
+        insertOp.emitError("multi-word insert is not yet supported");
+        return WalkResult::interrupt();
+      }
+
       // Emit a mov from the inserted value into the target slot.
       int64_t targetSlot = sourcePhysReg + insertOp.getIndex();
       int64_t valuePhysReg = getEffectivePhysReg(insertOp.getValue(), mapping);
