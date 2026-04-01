@@ -1345,6 +1345,12 @@ def _dbuf_mxfp4_helper(
     )
 
 
+def _mxfp4_config(shape, block, wave_shape, reads_merged=False):
+    """Build a pytest.param for an MXFP4 preshuffle config with auto-generated id."""
+    block_id = f"{block[0]}x{block[1]}x{block[2]}"
+    return pytest.param(shape, block, wave_shape, reads_merged, id=block_id)
+
+
 @param_bool("dynamic_dims", "dyn")
 @param_bool("use_buffer_ops", "bufops")
 @param_bool("use_schedule", "sched")
@@ -1353,24 +1359,12 @@ def _dbuf_mxfp4_helper(
 @pytest.mark.parametrize(
     "shape,block,wave_shape,reads_merged",
     [
-        pytest.param(
-            (1024, 1024, 8192), (128, 256, 256), (1, 4), True, id="128x256x256"
-        ),
-        pytest.param(
-            (1024, 1024, 8192), (128, 32, 256), (2, 2), False, id="128x32x256"
-        ),
-        pytest.param(
-            (896, 640, 8192), (224, 160, 256), (2, 2), False, id="224x160x256"
-        ),
-        pytest.param(
-            (1024, 768, 8192), (256, 192, 256), (1, 4), False, id="256x192x256"
-        ),
-        pytest.param(
-            (1024, 640, 8192), (256, 160, 256), (2, 2), False, id="256x160x256"
-        ),
-        pytest.param(
-            (1024, 896, 8192), (256, 224, 256), (2, 2), False, id="256x224x256"
-        ),
+        _mxfp4_config((1024, 1024, 8192), (128, 256, 256), (1, 4), reads_merged=True),
+        _mxfp4_config((1024, 1024, 8192), (128, 32, 256), (2, 2)),
+        _mxfp4_config((896, 640, 8192), (224, 160, 256), (2, 2)),
+        _mxfp4_config((1024, 768, 8192), (256, 192, 256), (1, 4)),
+        _mxfp4_config((1024, 640, 8192), (256, 160, 256), (2, 2)),
+        _mxfp4_config((1024, 896, 8192), (256, 224, 256), (2, 2)),
     ],
 )
 def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
