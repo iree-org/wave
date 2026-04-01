@@ -2130,7 +2130,8 @@ class ScaledMMA(MMABase):
     def _is_fp4(self) -> bool:
         lhs_dtype = self.lhs_type.dtype if self.lhs_type else None
         rhs_dtype = self.rhs_type.dtype if self.rhs_type else None
-        return lhs_dtype == rhs_dtype and lhs_dtype == f4e2m1fn
+        assert lhs_dtype == rhs_dtype, "Expected LHS and RHS to have the same dtype"
+        return lhs_dtype == f4e2m1fn
 
     @property
     def lhs_index(self) -> dict[IndexSymbol, IndexSequence]:

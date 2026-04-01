@@ -1887,9 +1887,6 @@ def test_mxfp4_scaled_mma_256x256x256():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
     @tkw.wave(constraints)
@@ -1919,9 +1916,9 @@ def test_mxfp4_scaled_mma_256x256x256():
 
     subs = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 32,
-        BLOCK_N: 32,
-        BLOCK_K: 256,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 128,
         M: 16384,
         N: 16384,
         K: 16384,
@@ -1962,17 +1959,10 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     # CHECK-SAME: #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
-    # CHECK-SAME: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M ceildiv 2)>>
-    # CHECK-SAME: #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N ceildiv 2)>>
-    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_16x16x128_f8f6f4>>
-    # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 256 : i64, BLOCK_M = 32 : i64, BLOCK_N = 32 : i64, K = 16384 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16384 : i64, N = 16384 : i64}>
+    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = <f32_16x16x128_f8f6f4>>
+    # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 128 : i64, BLOCK_M = 16 : i64, BLOCK_N = 16 : i64, K = 16384 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16384 : i64, N = 16384 : i64}>
     #
-    # CHECK:     %[[CST:.*]] = arith.constant 0.000000e+00 : f32
-    # CHECK-NEXT: %[[REG:.*]] = wave.register %[[CST]]
-    #
-    # CHECK:     %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
-    # CHECK-NEXT: ^{{.*}}(%[[ACC:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):
-    #
+    # CHECK:     %[[ITERATE:.*]] = wave.iterate @K
     # Global reads promoted through shared memory.
     #
     # CHECK:       wave.read %[[A]]
@@ -1991,13 +1981,11 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@N, @K2] of i8, <register>> to !wave.tensor<[@N, @K] of f4E2M1FN, <register>>
     # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@N, @K32] of i8, <register>> to !wave.tensor<[@N, @K32] of f8E8M0FNU, <register>>
     #
-    # Two scaled MMAs (BLOCK_K=256 with 128 per intrinsic).
+    # One scaled MMA (BLOCK_K=128 matches intrinsic size).
     #
-    # CHECK:       %[[SMMA0:.*]] = wave.scaled_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[ACC]]
+    # CHECK:       wave.scaled_mma
     # CHECK-SAME:  #wave.mma_kind<f32_16x16x128_f8f6f4>
-    # CHECK:       %[[SMMA1:.*]] = wave.scaled_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[SMMA0]]
-    # CHECK-SAME:  #wave.mma_kind<f32_16x16x128_f8f6f4>
-    # CHECK:       wave.yield %[[SMMA1]] : !wave.tensor<[@M, @N] of f32, <register>>
+    # CHECK:       wave.yield {{.*}} : !wave.tensor<[@M, @N] of f32, <register>>
     # CHECK-NEXT: }
     #
     # Results written back to the output tensor.

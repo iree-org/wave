@@ -606,6 +606,120 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK: @scaled_mma_16x16x128_f8
+  func.func @scaled_mma_16x16x128_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
+                              %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+                              %b: !wave.tensor<[@N, @K] of f8E5M2>,
+                              %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.scaled_mma
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: vector_shape
+    // CHECK-DAG:  K : 128
+    // CHECK-DAG:  M : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : 4
+    // CHECK-DAG:  M : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K : 128
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : 4
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  M : 16
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  M : 16
+    // CHECK-DAG:  N : 16
+    %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK: @scaled_mma_16x16x128_f4
+  func.func @scaled_mma_16x16x128_f4(%a: !wave.tensor<[@M, @K] of f4E2M1FN>,
+                              %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+                              %b: !wave.tensor<[@N, @K] of f4E2M1FN>,
+                              %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.scaled_mma
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: vector_shape
+    // CHECK-DAG:  K : 128
+    // CHECK-DAG:  M : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : 4
+    // CHECK-DAG:  M : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K : 128
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : 4
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  M : 16
+    // CHECK-DAG:  N : 16
+    // CHECK: }, {
+    // CHECK-DAG:  M : 16
+    // CHECK-DAG:  N : 16
+    %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x16_k4_f8
   func.func @mma_32x32x16_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
                                 %b: !wave.tensor<[@N, @K] of f8E5M2>,

@@ -2054,35 +2054,42 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
         std::function<void(raw_ostream &, unsigned)> descriptionGenerator =
             iface.getIndexExprValuesAndDescriptions(valuesForIndexExpr);
         indexExprs.reserve(valuesForIndexExpr.size());
-        if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation())) {
-          SmallVector<wave::IndexExprsLatticeStorage> operandLattices;
-          operandLattices.resize(3, wave::IndexExprsLatticeStorage::bottom());
+
+        // Shared handler for MMA-family ops: initializes operand lattices from
+        // MMA-kind-implied index expressions and sets the result index
+        // attribute. `numOperands` is the number of MMA operands (3 for MmaOp,
+        // 5 for ScaledMmaOp). `resultDescription` is used in error messages.
+        auto handleMmaOp = [&](wave::WaveInferIndexExprsOpInterface mmaIface,
+                               unsigned numOperands,
+                               StringRef resultDescription) -> WalkResult {
+          Operation *mmaOp = mmaIface.getOperation();
+          SmallVector<wave::IndexExprsLatticeStorage> operandLattices(
+              numOperands, wave::IndexExprsLatticeStorage::bottom());
           wave::EmitDelayedErrorFn delayedError;
           Attribute constraints;
           // TODO(#1049): this is not ideal, especially when combined with
           // getting hyperparameters below, we could just have a double walk
           // with a kernel operation first if we had one, or even do a
           // per-kernel pass.
-          for (Operation *parent = mma->getParentOp(); parent && !constraints;
+          for (Operation *parent = mmaOp->getParentOp(); parent && !constraints;
                parent = parent->getParentOp()) {
             constraints = parent->getAttrOfType<ArrayAttr>(
                 wave::WaveDialect::kWaveConstraintsAttrName);
           }
           if (!constraints) {
-            mma->emitError("constraints not found");
+            mmaOp->emitError("constraints not found");
             return WalkResult::interrupt();
           }
           FailureOr<wave::IndexExprsAnalysisInit> init =
               wave::IndexExprsAnalysisInit::create(
-                  mma, constraints, wave::getHyperparameters(mma));
-          if (failed(init)) {
+                  mmaOp, constraints, wave::getHyperparameters(mmaOp));
+          if (failed(init))
             return WalkResult::interrupt();
-          }
-          if (failed(mma.initializeIndexExprsBackward(
-                  operandLattices, *init, [&]() { return mma->emitError(); },
+          if (failed(mmaIface.initializeIndexExprsBackward(
+                  operandLattices, *init, [&]() { return mmaOp->emitError(); },
                   delayedError))) {
             if (delayedError) {
-              InFlightDiagnostic diag = mma->emitError();
+              InFlightDiagnostic diag = mmaOp->emitError();
               delayedError(diag);
             }
             return WalkResult::interrupt();
@@ -2093,32 +2100,38 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             llvm::raw_svector_ostream os(description);
             descriptionGenerator(os, i);
             [[maybe_unused]] LogicalResult logicalResult =
-                detail::checkAndAppendIndexExpr(mma->getLoc(), lattice,
+                detail::checkAndAppendIndexExpr(mmaOp->getLoc(), lattice,
                                                 description, indexExprs);
             assert(succeeded(logicalResult) &&
                    "failed to append implied index expression, it must not be "
                    "bottom/top");
           }
+          Value result = mmaOp->getResult(0);
           if (failed(detail::checkAndAppendIndexExpr(
-                  mma->getLoc(), getLatticeValue(mma.getResult()), "mma result",
+                  mmaOp->getLoc(), getLatticeValue(result), resultDescription,
                   indexExprs)))
             return WalkResult::interrupt();
 
-          MLIRContext *ctx = iface->getContext();
-          SmallVector<wave::IndexExprsLatticeStorage> mmaSlots =
-              llvm::to_vector(operandLattices);
-          mmaSlots.push_back(getLatticeValue(mma.getResult()));
+          MLIRContext *ctx = mmaIface->getContext();
+          SmallVector<wave::IndexExprsLatticeStorage> slots(operandLattices);
+          slots.push_back(getLatticeValue(result));
           SmallVector<Attribute> shapeDicts;
           if (failed(collectPerValueVectorShapeAttrs(
-                  mma, mmaSlots, descriptionGenerator, shapeDicts)))
+                  mmaOp, slots, descriptionGenerator, shapeDicts)))
             return WalkResult::interrupt();
-          iface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                         ArrayAttr::get(ctx, indexExprs));
+          mmaIface->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                            ArrayAttr::get(ctx, indexExprs));
           if (!shapeDicts.empty())
-            iface->setAttr(wave::WaveDialect::kVectorShapeAttrName,
-                           ArrayAttr::get(ctx, shapeDicts));
+            mmaIface->setAttr(wave::WaveDialect::kVectorShapeAttrName,
+                              ArrayAttr::get(ctx, shapeDicts));
           return WalkResult::advance();
-        }
+        };
+
+        if (auto mma = dyn_cast<wave::MmaOp>(iface.getOperation()))
+          return handleMmaOp(mma, /*numOperands=*/3, "mma result");
+
+        if (auto scaledMma = dyn_cast<wave::ScaledMmaOp>(iface.getOperation()))
+          return handleMmaOp(scaledMma, /*numOperands=*/5, "scaled_mma result");
 
         for (auto &&[i, value] : llvm::enumerate(valuesForIndexExpr)) {
           llvm::SmallString<32> description;

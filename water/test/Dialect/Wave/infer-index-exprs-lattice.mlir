@@ -1950,7 +1950,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 // Conflict between an explicitly set LHS index expression and what the scaled
-// MMA result implies triggers a diagnostic during backward propagation.
+// MMA kind implies triggers a diagnostic during backward propagation.
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @scaled_mma_lhs_vs_implied(
     %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
@@ -1968,14 +1968,92 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ],
     wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 128, K32 = 4}>
   } {
+    %lhs_bad = wave.read %lhs {wave_test.override_result_index = [[3, {
+      M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 32, 32)>
+    }]]} : (!wave.tensor<[@M, @K] of f4E2M1FN>) -> !wave.tensor<[@M, @K] of f4E2M1FN>
+
+    // expected-error @below {{conflict for LHS index expression when propagating from implied by scaled MMA kind lattice}}
+    // expected-note @below {{original LHS lattice}}
+    // expected-note @below {{implied by scaled MMA kind lattice}}
+    %r = wave.scaled_mma %lhs_bad, %lhs_scale, %rhs, %rhs_scale, %acc
+         {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+         : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Conflict between an explicitly set LHS vector shape and what the scaled
+// MMA kind implies triggers a diagnostic during backward propagation.
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @scaled_mma_lhs_vs_implied_vector_shape(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>,
+                                vector_shapes = {M = 16, N = 16, K = 128, K32 = 4}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (16)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (16)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 128, K32 = 4}>
+  } {
+    %lhs_bad = wave.read %lhs {wave_test.override_result_index = [[3, {
+      K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>,
+      M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0 mod 16 + WG0 * 16, 1, 1)>
+    }, {M = 42, K = 42}]]} : (!wave.tensor<[@M, @K] of f4E2M1FN>) -> !wave.tensor<[@M, @K] of f4E2M1FN>
+
     // expected-error @below {{conflict for LHS vector shape when propagating from implied by scaled MMA kind lattice}}
     // expected-note @below {{original LHS lattice}}
     // expected-note @below {{implied by scaled MMA kind lattice}}
+    %r = wave.scaled_mma %lhs_bad, %lhs_scale, %rhs, %rhs_scale, %acc
+         {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+         : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+            !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return %r : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Forcibly setting the scaled MMA result lattice to top triggers an error
+// during result attribute generation (analogous to mma_lhs_vs_implied).
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @scaled_mma_result_top(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>
+  ) -> !wave.tensor<[@M, @N] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
+                                mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>,
+                                vector_shapes = {M = 16, N = 16, K = 128, K32 = 4}>,
+      #wave.workgroup_constraint<dim = <"M">, tile_size = <[] -> (16)>, workgroup_dim = <x>>,
+      #wave.workgroup_constraint<dim = <"N">, tile_size = <[] -> (16)>, workgroup_dim = <y>>
+    ],
+    wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 128,
+      K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>}>
+  } {
+    // Forcibly setting the result lattice to top to check index attribute generation.
+    // This triggers an additional error because reaching top through the normal process
+    // would have been reported earlier and would have aborted the inference before
+    // reaching this point.
+    // expected-error @below {{conflict detected in index expressions for scaled_mma result}}
+    // expected-note @below {{PLEASE REPORT}}
     %r = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
          {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>,
-          wave_test.override_operand_index = [[3, {
-            M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 32, 32)>
-          }]]}
+          wave_test.override_result_index = ["<top>"]
+         }
          : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
             !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
             !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>

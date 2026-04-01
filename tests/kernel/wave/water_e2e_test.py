@@ -9,11 +9,9 @@ error is likely in the Python/C++ interfacing.
 import torch
 from torch.testing import assert_close
 
-import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType, ScaledMMAType
+from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import PersistentEmitter
 from wave_lang.kernel.wave.templates import AttentionShape
 from wave_lang.kernel.wave.utils.mxfp_utils import (
@@ -172,58 +170,14 @@ def test_attention_water():
 @require_cdna4
 def test_scaled_mma_mxfp4_water_e2e():
     """Test scaled MMA (MXFP4) through the Water middle-end pipeline on MI350x."""
+    from wave_lang.kernel.wave.templates.gemm import get_scaled_gemm_kernel
+
     M_val, N_val, K_val = 1024, 1024, 1024
-    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
 
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
-
-    @tkw.wave(constraints)
-    def scaled_gemm(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
-        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
-            a_scale_reg = tkw.read(a_scale)
-            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
-            b_reg = tkw.read(b)
-            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
-            b_scale_reg = tkw.read(b_scale)
-            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
-            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
-    hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 32,
-        BLOCK_N: 32,
-        BLOCK_K: 256,
-        M: M_val,
-        N: N_val,
-        K: K_val,
-    }
+    scaled_gemm, hyperparams = get_scaled_gemm_kernel(
+        shape=(M_val, N_val, K_val),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+    )
 
     # Step 1: Compile to Wave-dialect MLIR
     options_mlir = WaveCompileOptions(
@@ -243,7 +197,7 @@ def test_scaled_mma_mxfp4_water_e2e():
             trace, kernel_constraints, options_mlir
         )
     assert (
-        len(diagnostics) == 0
+        len(error_diagnostics(diagnostics)) == 0
     ), f"Should have no error diagnostics, got: {diagnostics}"
 
     # Step 2: Lower through Water middle-end

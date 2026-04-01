@@ -714,14 +714,18 @@ void MmaSingleIndexExprBuilder::populate(
 }
 } // namespace
 
+/// MXFP group scale factor for GFX950 and GFX1250.
+static constexpr unsigned kScaleGroupSize = 32;
+
 // Get the attribute representing the vector shape implied by the given MMA
 // operation kind for its M, N, K dimensions.
 static DictionaryAttr getMmaVectorShape(
     Location loc, wave::WaveMmaKind kind, wave::WaveSymbolAttr mSymbol,
     wave::WaveSymbolAttr nSymbol, wave::WaveSymbolAttr kSymbol,
+    wave::WaveSymbolAttr kScaledSymbol,
     ArrayRef<wave::WaveSymbolAttr> batchSymbols, DictionaryAttr hwVectorShape,
     wave::EmitDelayedErrorFn *delayedErrorEmitter) {
-  int m, n, k;
+  int m, n, k, kScaled;
   switch (kind) {
   case wave::WaveMmaKind::F32_16x16x16_F16:
   case wave::WaveMmaKind::I32_16x16x16_I8:
@@ -755,8 +759,18 @@ static DictionaryAttr getMmaVectorShape(
     n = 32;
     k = 16;
     break;
-  default:
-    return nullptr;
+  case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
+    m = 16;
+    n = 16;
+    k = 128;
+    kScaled = k / kScaleGroupSize;
+    break;
+  case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
+    m = 32;
+    n = 32;
+    k = 64;
+    kScaled = k / kScaleGroupSize;
+    break;
   }
 
   MLIRContext *ctx = loc->getContext();
@@ -770,6 +784,8 @@ static DictionaryAttr getMmaVectorShape(
     attributes.emplace_back(nSymbol.getName(), iAttr(n));
   if (kSymbol)
     attributes.emplace_back(kSymbol.getName(), iAttr(k));
+  if (kScaledSymbol)
+    attributes.emplace_back(kScaledSymbol.getName(), iAttr(kScaled));
 
   if (hwVectorShape) {
     for (NamedAttribute attr : hwVectorShape) {
@@ -815,6 +831,20 @@ static DictionaryAttr getMmaVectorShape(
         }
         continue;
       }
+      if (kScaledSymbol && attr.getName() == kScaledSymbol.getName()) {
+        if (delayedErrorEmitter &&
+            cast<IntegerAttr>(attr.getValue()).getValue() != kScaled) {
+          wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
+          *delayedErrorEmitter = [kScaledSymbol, kScaled,
+                                  previous](InFlightDiagnostic &diag) {
+            if (previous)
+              previous(diag);
+            diag << "overriding vector shape for " << kScaledSymbol << " to "
+                 << kScaled << " implied by the Scaled MMA operation";
+          };
+        }
+        continue;
+      }
       if (llvm::any_of(batchSymbols, [&](wave::WaveSymbolAttr symbol) {
             return symbol.getName() == attr.getName();
           })) {
@@ -833,7 +863,7 @@ static DictionaryAttr getMmaVectorShape(
 // be provided. If `isAccumulator` is set, the index expressions are created for
 // the accumulator/result of an MMA, which may affect the expression for the M
 // dimension. If `isScaled` is set, the K expression uses the scale operand
-// mapping (one scale per SCALE_GROUP_SIZE K-elements). If `isFP4` is set,
+// mapping (one scale per kScaleGroupSize K-elements). If `isFP4` is set,
 // the K expression uses the FP4 data mapping. Both `isScaled` and `isFP4`
 // currently produce the same K offset formula (they are ORed together), but
 // are kept separate because they represent distinct semantic cases: `isScaled`
@@ -986,7 +1016,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
                     ? 32 * laneId.floorDiv(16)
                     : 64 * gprNum.floorDiv(16) + 16 * laneId.floorDiv(16) +
                           (gprNum % 16))
-        .size(32)
+        .size(isScaled ? 1 : 32)
         .stride(1)
         .populate(attributes);
     return llvm::success();
@@ -1010,8 +1040,6 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .stride(1)
         .populate(attributes);
     return llvm::success();
-  default:
-    return llvm::failure();
   }
 }
 
@@ -1262,7 +1290,7 @@ LogicalResult MmaOp::initializeIndexExprsForward(
       wave::IndexExprsLatticeStorage(
           DictionaryAttr::get(getContext(), symbolMappings), priority,
           getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
-                            /*kSymbol=*/nullptr,
+                            /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
                             /*batchSymbols=*/indexingSymbols.drop_back(2),
                             initObject.hardwareConstraint.getVectorShapes(),
                             /*delayedErrorEmitter=*/nullptr)),
@@ -1351,7 +1379,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), lhsSymbolMappings), priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
-                                /*nSymbol=*/nullptr, kSymbol, batchSymbols,
+                                /*nSymbol=*/nullptr, kSymbol,
+                                /*kScaleSymbol=*/nullptr, batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
                                 &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
@@ -1362,7 +1391,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
               DictionaryAttr::get(getContext(), rhsSymbolMappings), priority,
               getMmaVectorShape(getLoc(), *mmaKind,
                                 /*mSymbol=*/nullptr, nSymbol, kSymbol,
-                                batchSymbols,
+                                /*kScaleSymbol=*/nullptr, batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
                                 &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
@@ -1374,7 +1403,8 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
               DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
-                                /*kSymbol=*/nullptr, batchSymbols,
+                                /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
+                                batchSymbols,
                                 initObject.hardwareConstraint.getVectorShapes(),
                                 &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
@@ -1647,19 +1677,21 @@ LogicalResult wave::ScaledMmaOp::verify() {
   WaveTensorType resultType =
       dyn_cast<wave::WaveTensorType>(getResult().getType());
 
+  if (failed(detail::verifyElementTypesMatch(
+          getLoc(), "LHS", getLhs().getType(), "RHS", getRhs().getType())) ||
+      failed(detail::verifyElementTypesMatch(
+          getLoc(), "LHS scale", getLhsScale().getType(), "RHS scale",
+          getRhsScale().getType())) ||
+      failed(detail::verifyElementTypesMatch(
+          getLoc(), "result", getResult().getType(), "accumulator",
+          getAccumulator().getType())))
+    return failure();
+
   // TODO: need to verify vector types, but for that, we need to know what they
   // must look like based on the MMA enum.
   if (!lhsType || !rhsType || !lhsScaleType || !rhsScaleType ||
       !accumulatorType || !resultType)
     return success();
-
-  if (failed(detail::verifyElementTypesMatch(getLoc(), "LHS", lhsType, "RHS",
-                                             rhsType)) ||
-      failed(detail::verifyElementTypesMatch(
-          getLoc(), "LHS scale", lhsScaleType, "RHS scale", rhsScaleType)) ||
-      failed(detail::verifyElementTypesMatch(getLoc(), "result", resultType,
-                                             "accumulator", accumulatorType)))
-    return failure();
 
   if (lhsType.getRank() != rhsType.getRank() ||
       lhsType.getRank() != accumulatorType.getRank() ||
@@ -1768,7 +1800,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "scaled MMA result",
       wave::IndexExprsLatticeStorage(
-          DictionaryAttr::get(getContext(), symbolMappings), priority, nullptr),
+          DictionaryAttr::get(getContext(), symbolMappings), priority,
+          getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                            /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
+                            /*batchSymbols=*/indexingSymbols.drop_back(2),
+                            initObject.hardwareConstraint.getVectorShapes(),
+                            /*delayedErrorEmitter=*/nullptr)),
       "implied by scaled MMA kind", emitError);
 }
 
@@ -1806,6 +1843,7 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
   // Data operand index expressions (lhs, rhs).
   llvm::SmallVector<NamedAttribute> operandSymbolMappings;
   operandSymbolMappings.reserve(lhsType.getShape().size() + 1);
+  // The result (accumulator) is f32 and is not scaled, so isScaled=false.
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, /*isScaled=*/false,
           /*isFP4=*/false, initObject.wavesPerBlock,
@@ -1896,28 +1934,46 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), lhsSymbolMappings), priority,
-              nullptr),
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
+                                /*nSymbol=*/nullptr, kSymbol,
+                                /*kScaleSymbol=*/nullptr, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsScaleMutable().getOperandNumber()], "LHS scale",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), lhsScaleSymbolMappings),
-              priority, nullptr),
+              priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
+                                /*nSymbol=*/nullptr, /*kSymbol=*/nullptr,
+                                /*kScaleSymbol=*/kScaleSymbol, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), rhsSymbolMappings), priority,
-              nullptr),
+              getMmaVectorShape(getLoc(), *mmaKind,
+                                /*mSymbol=*/nullptr, nSymbol, kSymbol,
+                                /*kScaleSymbol=*/nullptr, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsScaleMutable().getOperandNumber()], "RHS scale",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), rhsScaleSymbolMappings),
-              priority, nullptr),
+              priority,
+              getMmaVectorShape(getLoc(), *mmaKind,
+                                /*mSymbol=*/nullptr, nSymbol,
+                                /*kSymbol=*/nullptr, kScaleSymbol, batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
   if (failed(joinIndexExprsLatticeInPlace(
@@ -1925,7 +1981,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
           "accumulator",
           wave::IndexExprsLatticeStorage(
               DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
-              priority, nullptr),
+              priority,
+              getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
+                                /*kSymbol=*/nullptr, /*kScaleSymbol=*/nullptr,
+                                batchSymbols,
+                                initObject.hardwareConstraint.getVectorShapes(),
+                                &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
   return llvm::success();
@@ -1959,9 +2020,6 @@ wave::ScaledMmaOp::getIndexExprValuesAndDescriptions(
       os << "result";
   };
 }
-
-/// MXFP group scale factor for GFX950 and GFX1250.
-static constexpr unsigned kScaleGroupSize = 32;
 
 /// Compute the expected elements per thread for a specific scaled MMA operand.
 /// Handles LHS, LHS scale, RHS, RHS scale, and accumulator operands.

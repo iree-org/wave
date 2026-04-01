@@ -14,8 +14,6 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import sympy
 
-from wave_lang.kernel._support.indexing import IndexSequence
-from wave_lang.kernel.wave.utils.general_utils import infer_dim
 
 if __name__ == "__main__":
     # Add parent directory to sys.path to enable relative imports when running standalone
@@ -54,9 +52,10 @@ from wave_lang.kernel.wave.mlir_converter import dill_util
 from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.lang.wave_types import Memory, Register, IndexMapping
 from wave_lang.kernel.lang.kernel_buffer import AddressSpace
-from wave_lang.kernel._support.indexing import IndexSymbol, safe_subs
+from wave_lang.kernel._support.indexing import IndexSymbol, IndexSequence, safe_subs
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel.wave.utils.general_utils import infer_dim
 from wave_lang.kernel.wave.utils.symbol_utils import (
     collect_allowed_induction_symbols,
     strip_out_of_scope_induction_symbols,
@@ -472,7 +471,7 @@ def _attach_attributes(
                     dim = infer_dim(dim_expr)
                     res[dim_expr] = IndexSequence(
                         start=dim_expr.subs({dim: lhs_scale_index[dim].start}),
-                        size=int(dim_expr.subs({dim: lhs_scale_index[dim].size})),
+                        size=dim_expr.subs({dim: lhs_scale_index[dim].size}),
                         stride=1,
                     )
                 dict_attrs.append(
