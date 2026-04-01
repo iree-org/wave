@@ -16,6 +16,7 @@ from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
+    Reshape,
     TensorLoadToLDS,
     Write,
     get_custom,
@@ -332,13 +333,13 @@ def compute_multi_buffer_count(
     return result
 
 
-def propagate_scheduling_parameters_to_extract_slices(graph: fx.Graph):
+def propagate_scheduling_parameters_to_bridge_nodes(graph: fx.Graph):
     """
-    After merge_contiguous_reads, wide Reads produce ExtractSlice nodes
-    that sit between the staged Read and its staged consumers (e.g. Bitcast).
-    These bridge nodes need the same scheduling_parameters as their source
-    so that liveness analysis correctly identifies cross-stage dependencies
-    and creates rotating registers for them.
+    Ensure bridging nodes (ExtractSlice, Reshape) are assigned the same scheduling stage as their
+    source nodes so that pipelining handles them correctly.
+
+    Where ExtractSlice nodes are created by merge_contiguous_reads and
+    Reshape nodes are created by partition_gather_like_ops.
     """
     changed = True
     while changed:
@@ -353,6 +354,23 @@ def propagate_scheduling_parameters_to_extract_slices(graph: fx.Graph):
             if source_custom.scheduling_parameters is not None:
                 custom.scheduling_parameters = dict(source_custom.scheduling_parameters)
                 changed = True
+
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if not isinstance(custom, Reshape):
+            continue
+        sources = custom.args if isinstance(custom.args, Sequence) else (custom.args,)
+        if not sources:
+            continue
+        first_params = get_custom(sources[0]).scheduling_parameters
+        if first_params is None:
+            continue
+        if all(
+            get_custom(s).scheduling_parameters == first_params
+            for s in sources[1:]
+            if get_custom(s).scheduling_parameters is not None
+        ):
+            custom.scheduling_parameters = dict(first_params)
 
 
 def partition_graph_by_stage(

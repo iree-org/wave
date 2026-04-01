@@ -37,7 +37,7 @@ from .loop_reconstruction_utils import (
     interleave_instructions,
     liveness_analysis,
     partition_graph_by_stage,
-    propagate_scheduling_parameters_to_extract_slices,
+    propagate_scheduling_parameters_to_bridge_nodes,
 )
 from .resources import get_custom_operation_type
 from typing import Optional
@@ -916,7 +916,7 @@ def construct_pipelined_loop(
         final_results: List of nodes representing the final values after epilogue completes
     """
     induction_variable = get_induction_variable(reduction, constraints)
-    propagate_scheduling_parameters_to_extract_slices(graph)
+    propagate_scheduling_parameters_to_bridge_nodes(graph)
     num_rotating_registers = liveness_analysis(graph)
     multi_buffer_count = compute_multi_buffer_count(
         graph, initiation_interval, multi_buffer_count
