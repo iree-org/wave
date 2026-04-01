@@ -497,11 +497,10 @@ struct MulNegPow2ToShiftNegPattern : public OpRewritePattern<V_MUL_LO_U32> {
 };
 
 //===----------------------------------------------------------------------===//
-// Pattern: Add zero elimination
+// Pattern: Add constant simplification
 //
-// Removes:
-//   %dst = v_add_u32 %src, 0
-// Replacing with %src directly.
+// 1. Both operands constant -> fold to v_mov_b32 of computed sum.
+// 2. Either operand zero    -> identity elimination.
 //===----------------------------------------------------------------------===//
 
 struct AddZeroPattern : public OpRewritePattern<V_ADD_U32> {
@@ -570,12 +569,10 @@ struct MulOnePattern : public OpRewritePattern<V_MUL_LO_U32> {
 };
 
 //===----------------------------------------------------------------------===//
-// Pattern: Multiply by zero -> constant zero
+// Pattern: Multiply constant simplification
 //
-// Transforms:
-//   %dst = v_mul_lo_u32 %src, 0
-// Into:
-//   %dst = constant 0
+// 1. Both operands constant -> fold to v_mov_b32 of computed product.
+// 2. Either operand zero    -> result is zero.
 //===----------------------------------------------------------------------===//
 
 struct MulZeroPattern : public OpRewritePattern<V_MUL_LO_U32> {
@@ -588,7 +585,9 @@ struct MulZeroPattern : public OpRewritePattern<V_MUL_LO_U32> {
 
     // Fold: both operands constant -> compute result at compile time.
     if (val0 && val1) {
-      int64_t result = (*val0 * *val1) & 0xFFFFFFFF;
+      int64_t result = static_cast<int64_t>(
+          (static_cast<uint64_t>(*val0) * static_cast<uint64_t>(*val1)) &
+          0xFFFFFFFF);
       auto loc = mulOp.getLoc();
       auto immType = rewriter.getType<ImmType>(result);
       auto constOp = ConstantOp::create(rewriter, loc, immType, result);
