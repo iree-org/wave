@@ -261,11 +261,12 @@ class WaveEmitter:
         return func_op
 
     def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
-        global _magic_number_enabled, _magic_number_cache
+        global _magic_number_enabled, _magic_number_cache, _magic_entry_block
         _magic_number_enabled = self.options.magic_number_div
         _magic_number_cache = {}
 
         func = self.emit_func()
+        _magic_entry_block = func.entry_block
         with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
@@ -638,6 +639,7 @@ def add_emitter_subs(
 _emulate_ceildiv = bool(int(environ.get("WAVE_EMULATE_CEILDIV", 0)))
 _use_affine_expr = bool(int(environ.get("WAVE_USE_AFFINE_EXPR", 1)))
 _magic_number_enabled = False
+_magic_entry_block = None
 
 _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])
@@ -788,12 +790,10 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
     def _is_dynamic_divisor(val) -> bool:
         """Check if a value is NOT a compile-time constant."""
         if isinstance(val, _ApplyExpr):
-            if all(
+            return not all(
                 isinstance(a, OpResult) and get_const_val(a) is not None
                 for a in val.args
-            ):
-                return False
-            val = _get_ir_value(val)
+            )
         if isinstance(val, OpResult):
             return get_const_val(val) is None
         return True
@@ -827,24 +827,42 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
         magic_i32 = arith_d.trunci(i32, magic_i64)
         return magic_i32, d_i32
 
-    def _get_or_create_magic(divisor: Value):
-        """Get cached (magic_i32, d_i32) or compute and cache them."""
-        key = id(divisor)
+    def _get_or_create_magic(divisor_expr):
+        """Get cached (magic_i32, d_i32) or compute and cache them.
+
+        On cache miss the precomputation is hoisted to the function
+        entry block so that the magic constant dominates every use.
+        """
+        key = id(divisor_expr)
         if key in _magic_number_cache:
             return _magic_number_cache[key]
-        magic_i32, d_i32 = _precompute_magic_number(divisor)
+        if _magic_entry_block is not None:
+            with InsertionPoint.at_block_begin(_magic_entry_block):
+                divisor_val = (
+                    _get_ir_value(divisor_expr)
+                    if isinstance(divisor_expr, _ApplyExpr)
+                    else divisor_expr
+                )
+                magic_i32, d_i32 = _precompute_magic_number(divisor_val)
+        else:
+            divisor_val = (
+                _get_ir_value(divisor_expr)
+                if isinstance(divisor_expr, _ApplyExpr)
+                else divisor_expr
+            )
+            magic_i32, d_i32 = _precompute_magic_number(divisor_val)
         _magic_number_cache[key] = (magic_i32, d_i32)
         return magic_i32, d_i32
 
-    def _magic_div_and_rem(lhs_val, rhs_val):
+    def _magic_div_and_rem(lhs_val, rhs_expr):
         """
-        Compute (quotient, remainder) of lhs_val // rhs_val using
+        Compute (quotient, remainder) of lhs_val // rhs using
         magic number multiplication: q = mulhi(n, magic), with a
         one-step correction for exactness.
         Returns (quotient_index, remainder_index).
         """
         i32 = IntegerType.get_signless(32)
-        magic_i32, d_i32 = _get_or_create_magic(rhs_val)
+        magic_i32, d_i32 = _get_or_create_magic(rhs_expr)
         n_i32 = arith_d.index_cast(i32, lhs_val)
         q_i32 = _mulhi_u32(n_i32, magic_i32)
         qd_i32 = arith_d.muli(q_i32, d_i32)
@@ -868,8 +886,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         if _magic_number_enabled and _is_dynamic_divisor(rhs):
             lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
-            rhs_val = _get_ir_value(rhs) if isinstance(rhs, _ApplyExpr) else rhs
-            _, r = _magic_div_and_rem(lhs_val, rhs_val)
+            _, r = _magic_div_and_rem(lhs_val, rhs)
             return r
 
         return op_expr(lhs, rhs, lambda a, b: a % b)
@@ -880,8 +897,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         if _magic_number_enabled and _is_dynamic_divisor(rhs):
             lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
-            rhs_val = _get_ir_value(rhs) if isinstance(rhs, _ApplyExpr) else rhs
-            q, _ = _magic_div_and_rem(lhs_val, rhs_val)
+            q, _ = _magic_div_and_rem(lhs_val, rhs)
             return q
 
         return op_expr(lhs, rhs, lambda a, b: AffineExpr.get_floor_div(a, b))
