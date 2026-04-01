@@ -32,10 +32,14 @@ import sympy
 
 from ..._support.indexing import IndexingContext, IndexSequence
 from ..._support.tracing import CapturedTrace
-from ...compiler.utils import strides_from_symbolic_shape
+from ...compiler.utils import (
+    strides_from_symbolic_shape,
+    symbolic_strides_match_physical_memory,
+)
 from ...lang.global_symbols import LINEAR_INDEX, SHARED_ADDRESS_SPACE
 from ...ops.wave_ops import MemoryAccessFlags, Read, get_custom
 from ..assumptions import get_divisibility_subs
+from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint
 from ..utils.general_utils import (
     infer_dim,
@@ -202,8 +206,13 @@ def _linearize_to_flat(
 def flatten_read_indices(
     trace: CapturedTrace,
     constraints: Sequence[Constraint] = (),
+    options: WaveCompileOptions | None = None,
 ):
-    """Flatten N-D read indices to 1-D LINEAR_INDEX for eligible Reads."""
+    """Flatten N-D read indices to 1-D LINEAR_INDEX for eligible Reads.
+
+    *options* is required when invoked from ``compile.py``; a default of ``None``
+    keeps ad-hoc unit tests from constructing a full options object.
+    """
     idxc = IndexingContext.current()
     div_fwd, div_bwd = get_divisibility_subs(constraints)
 
@@ -221,14 +230,26 @@ def flatten_read_indices(
         if _is_shared_memory(mem_node):
             continue
 
-        if custom.flags != MemoryAccessFlags.NONE:
-            continue
-
         memory = get_custom(mem_node)
         symbolic_shape = memory.type.symbolic_shape
+        layout = getattr(memory.type, "physical_layout", None)
+
+        # Dynamic-strides-specific guards: under the LLVM + wave runtime
+        # ABI the only correct dense-stride assumption is when physical
+        # layout matches or is absent AND non-contiguous buffers are not
+        # expected.  The symbolic_strides_match_physical_memory check
+        # handles layout skew (e.g. attention's transposed layouts); the
+        # allow_noncontiguous_runtime_buffers opt-out handles slice views.
+        if options is not None and options.dynamic_strides:
+            if not symbolic_strides_match_physical_memory(memory, symbolic_shape):
+                continue
+            if options.allow_noncontiguous_runtime_buffers and layout is None:
+                continue
+
+        if custom.flags != MemoryAccessFlags.NONE:
+            continue
         symbolic_dims = [infer_dim(d) for d in symbolic_shape]
 
-        layout = getattr(memory.type, "physical_layout", None)
         stride_shape = layout.shape if layout is not None else symbolic_shape
 
         phys_starts = _get_physical_starts(

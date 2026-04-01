@@ -175,9 +175,11 @@ def test_read_mapped_buffer():
     print(read_mapped_buffer.asm)
 
     # CHECK-LABEL:    func.func @read_mapped_buffer
-    # CHECK: %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast
-    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%{{.*}}] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
-    # CHECK: %[[EXTRACT:.*]] = vector.extract %[[RES]][0] : f16 from vector<1xf16>
+    # CHECK: %[[RC:.*]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1], offset: ?>>
+    # CHECK: memref.extract_strided_metadata %[[RC]]
+    # CHECK: memref.reinterpret_cast %[[RC]] to offset:
+    # CHECK: vector.load %{{.*}}[%{{.*}}] : memref<?xf16, strided<[1], offset: ?>>, vector<1xf16>
+    # CHECK: %[[EXTRACT:.*]] = vector.extract %{{.*}}[0] : f16 from vector<1xf16>
     # CHECK: %[[FROM:.*]] = vector.from_elements %[[EXTRACT]]
 
 
@@ -223,8 +225,7 @@ def test_read_dynamic_3d_buffer():
     # CHECK:            %[[MEMREF_OFFSET:.+]] = arith.addi %{{.*}}, %[[BASE_TENSOR_OFFSET]] overflow<nsw> : index
 
     # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] to offset: [%[[MEMREF_OFFSET]]], {{.*}}: memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
-    # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
-    # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] validBytes{{.*}} cacheSwizzleStride{{.*}} resetOffset : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK:            vector.maskedload %[[MEMREF_CAST]][%{{.*}}], %{{.*}}, %{{.*}} : memref<?xf16, strided<[1], offset: ?>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
 
 
 @run_test
@@ -2116,7 +2117,8 @@ def test_broadcast_scaled_add():
     # on the rhs before doing add.
 
     # CHECK-LABEL: func @broadcast_scaled_add
-    # CHECK: %[[RHS:.+]] = memref.load {{.*}} : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # 1073741822 = (2^31 - 1) / 2 - 1 : max f16 element count for a 32-bit SRD
+    # CHECK: %[[RHS:.+]] = memref.load %{{.*}}[%{{.*}}] : memref<1073741822xf16, strided<[1]>>
     # CHECK: %[[BROADCAST_RHS:.+]] = vector.broadcast %[[RHS]] : f16 to vector<2xf16>
     # CHECK: arith.addf %{{.*}}, %[[BROADCAST_RHS]] : vector<2xf16>
 

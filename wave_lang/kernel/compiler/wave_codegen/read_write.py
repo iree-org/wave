@@ -46,7 +46,10 @@ from ..._support.indexing import (
 )
 from ..base import ValidationError
 from ..builder import IRProxyValue
-from ..utils import strides_from_symbolic_shape
+from ..utils import (
+    strides_from_symbolic_shape,
+    symbolic_strides_match_physical_memory as _symbolic_strides_match_physical,
+)
 from ...lang.global_symbols import *
 from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
@@ -260,27 +263,6 @@ def _get_strides_from_memref(mem: Value) -> list[Value]:
     metadata = memref_d.extract_strided_metadata(mem)
     # Strides start at index 2 + rank (after base, offset, sizes).
     return list(metadata[2 + rank : 2 + 2 * rank])
-
-
-def _symbolic_strides_match_physical(memory: CustomOp, symbolic_shape) -> bool:
-    """Return True when it is safe to linearize a write using symbolic strides.
-
-    Memories with an explicit physical_layout whose shape differs from the
-    symbolic shape will have memref strides that don't match the strides
-    computed by strides_from_symbolic_shape.  Linearizing with the wrong
-    strides produces incorrect offsets, so we must fall back to
-    multi-dimensional stores in that case.
-    """
-    mem_type = memory.type
-    if mem_type is None:
-        return True
-    layout = mem_type.physical_layout
-    if layout is None:
-        return True
-    layout_shape = layout.shape
-    if len(layout_shape) != len(symbolic_shape):
-        return False
-    return all(l == s for l, s in zip(layout_shape, symbolic_shape))
 
 
 def _linearize_memref(
@@ -1091,6 +1073,10 @@ def _handle_read_linear_index(
     ):
         subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
         sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
+        # Invariant: LINEAR_INDEX global reads always use maskedload on a
+        # linearized memref, never buffer fat-pointer ops.  This ensures
+        # numerics match under both IREE (VMFB) and wave runtime launch.
+        linear_buffer_ops = False
         lin_src = _linear_read_linearize_memref_maybe_hoisted(
             emitter,
             kb_src,
@@ -1098,7 +1084,7 @@ def _handle_read_linear_index(
             subs_map,
             kb_ir_type.element_type,
             input_shape,
-            buffer_ops_enabled,
+            linear_buffer_ops,
         )
         total_offset = gen_sympy_index(subs_map, flat_offset)
         result = _linear_read_emit_global_vector_load(
@@ -1107,7 +1093,7 @@ def _handle_read_linear_index(
             total_offset,
             mask,
             elements_per_thread,
-            buffer_ops_enabled,
+            linear_buffer_ops,
         )
         emitter.bind_node_proxy(node, IRProxyValue(result))
         return

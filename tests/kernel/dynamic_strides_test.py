@@ -29,6 +29,7 @@ def _compile_gemm(shape, dynamic_dims=False, buffer_ops=False):
         dynamic_symbols=dynamic_symbols,
         wave_runtime=True,
         use_buffer_ops=buffer_ops,
+        allow_noncontiguous_runtime_buffers=True,
     )
     options = set_default_run_config(options)
     return wave_compile(options, gemm), options

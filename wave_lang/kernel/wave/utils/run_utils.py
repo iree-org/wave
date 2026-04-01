@@ -104,9 +104,21 @@ def invoke_with_wave_runtime(
 
     # Force contiguous tensor layouts when dynamic strides are not enabled.
     kern_args = []
-    for arg_tensor in chain(kernel_inputs, kernel_outputs):
+    for i, arg_tensor in enumerate(chain(kernel_inputs, kernel_outputs)):
         if not arg_tensor.is_contiguous() and not options.dynamic_strides:
             arg_tensor = arg_tensor.contiguous()
+        if (
+            options.dynamic_strides
+            and options.linearize_reads
+            and not options.allow_noncontiguous_runtime_buffers
+            and not arg_tensor.is_contiguous()
+        ):
+            raise ValueError(
+                f"Buffer argument {i} is non-contiguous but kernel was compiled "
+                f"with linearized reads (dense stride assumption).  "
+                f"Pass a contiguous tensor, or set "
+                f"allow_noncontiguous_runtime_buffers=True and recompile."
+            )
         kern_args.append(arg_tensor.data_ptr())
 
     kernel_args = wave_runtime.Int64Vector(kern_args)

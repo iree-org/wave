@@ -150,7 +150,6 @@ def testPrefillAttention(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        linearize_reads=False,
     )
     options = set_default_run_config(options)
     prefill = wave_compile(options, prefill)
