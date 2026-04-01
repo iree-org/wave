@@ -141,8 +141,9 @@ static void rematerializeCheapOps(ProgramOp program) {
   // one instruction slot) and would increase code size for no gain.
   // 10 is empirical — long enough that the cloned op meaningfully
   // reduces pressure, short enough to catch real GEMM zero-init patterns.
-  // TODO: We should use a more sophisticated algorithm to determine the minimum
-  // range length.
+  // TODO: A future improvement could make this pressure-aware: only remat when
+  // current peak pressure exceeds the register budget, avoiding unnecessary
+  // code bloat in kernels that already fit.
   constexpr int64_t kMinRematRangeLength = 10;
 
   LivenessInfo liveness = computeLiveness(program);
