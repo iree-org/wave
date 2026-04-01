@@ -1347,7 +1347,7 @@ def _dbuf_mxfp4_helper(
 
 def _mxfp4_config(shape, block, wave_shape, reads_merged=False):
     """Build a pytest.param for an MXFP4 preshuffle config with auto-generated id."""
-    block_id = f"{block[0]}x{block[1]}x{block[2]}"
+    block_id = f"{block[0]}x{block[1]}x{block[2]}_w{'x'.join(map(str, wave_shape))}"
     return pytest.param(shape, block, wave_shape, reads_merged, id=block_id)
 
 
@@ -1360,9 +1360,11 @@ def _mxfp4_config(shape, block, wave_shape, reads_merged=False):
     "shape,block,wave_shape,reads_merged",
     [
         _mxfp4_config((1024, 1024, 8192), (128, 256, 256), (1, 4), reads_merged=True),
+        _mxfp4_config((1024, 1024, 8192), (128, 256, 256), (4, 1), reads_merged=True),
         _mxfp4_config((1024, 1024, 8192), (128, 32, 256), (2, 2)),
         _mxfp4_config((896, 640, 8192), (224, 160, 256), (2, 2)),
         _mxfp4_config((1024, 768, 8192), (256, 192, 256), (1, 4)),
+        _mxfp4_config((1024, 768, 8192), (256, 192, 256), (2, 2), reads_merged=True),
         _mxfp4_config((1024, 640, 8192), (256, 160, 256), (2, 2)),
         _mxfp4_config((1024, 896, 8192), (256, 224, 256), (2, 2)),
     ],
