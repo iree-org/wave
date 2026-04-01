@@ -909,6 +909,261 @@ def _build_mask_with_mapping(
         return _build_mask(emitter, index, elements_per_thread, bounds)
 
 
+def _sym_strides_for_flat_memref(
+    kb_src: Value,
+    input_shape: tuple[IndexExpr, ...],
+) -> list[sympy.Expr]:
+    """
+    Strides for linearizing a kernel-buffer memref: physical strides when
+    static, otherwise symbolic strides from the tensor shape.
+    """
+    kb_type = MemRefType(kb_src.type)
+    phys_strides, _ = kb_type.get_strides_and_offset()
+    dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
+    if any(s == dyn_sentinel for s in phys_strides):
+        return list(
+            strides_from_symbolic_shape(
+                IndexingContext.current(),
+                input_shape,
+                allow_mixed_shapes=True,
+            )
+        )
+    return [sympy.Integer(s) for s in phys_strides]
+
+
+def _linear_read_linearize_memref_maybe_hoisted(
+    emitter: WaveEmitter,
+    kb_src: Value,
+    sym_strides: list[sympy.Expr],
+    subs_map: dict[IndexExpr, Value],
+    element_type: IrType,
+    input_shape: tuple[IndexExpr, ...],
+    buffer_ops_enabled: bool,
+) -> Value:
+    """
+    Build a 1-D linearized memref for flattened reads; optionally hoist
+    stride materialization to the owning scf.for when inside a loop.
+    """
+    ip = InsertionPoint.current
+    owner = ip.block.owner
+    is_in_loop = not isinstance(owner, func_d.FuncOp) and owner.name == "scf.for"
+    hoist_ip = InsertionPoint(owner) if is_in_loop else None
+
+    if hoist_ip is not None:
+        with hoist_ip:
+            strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
+            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
+            lin_src, _ = _linearize_memref(
+                kb_src, zero_indices, zero_indices, strides_vals
+            )
+            if buffer_ops_enabled:
+                valid_bytes = _compute_valid_bytes(
+                    lin_src,
+                    element_type,
+                    input_shape,
+                    emitter,
+                    use_real_bounds_override=True,
+                )
+                lin_src = _cast_buffer_and_encode_stride(
+                    lin_src,
+                    strides_vals,
+                    element_type,
+                    valid_bytes,
+                )
+    else:
+        strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
+        zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
+        lin_src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
+        if buffer_ops_enabled:
+            valid_bytes = _compute_valid_bytes(
+                lin_src,
+                element_type,
+                input_shape,
+                emitter,
+                use_real_bounds_override=True,
+            )
+            lin_src = _cast_buffer_and_encode_stride(
+                lin_src,
+                strides_vals,
+                element_type,
+                valid_bytes,
+            )
+    return lin_src
+
+
+def _linear_read_emit_global_vector_load(
+    vector_type: VectorType,
+    lin_src: Value,
+    total_offset: Value,
+    mask: Optional[Value],
+    elements_per_thread: int,
+    buffer_ops_enabled: bool,
+) -> Value:
+    """Flattened global read: plain load, buffer-ops per-lane, or maskedload."""
+    element_type = vector_type.element_type
+    if mask is None:
+        return vector_d.load(vector_type, lin_src, [total_offset])
+    if buffer_ops_enabled:
+        oob_index_value = _get_out_of_bounds_index(element_type)
+        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+        mask_splat = _get_splat_input(mask)
+        if mask_splat is not None:
+            selected_index = arith_d.select(mask_splat, total_offset, oob_index)
+            return vector_d.load(vector_type, lin_src, [selected_index])
+        uint32 = IntegerType.get_signless(32)
+        offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
+        vals = [IntegerAttr.get(IndexType.get(), v) for v in range(elements_per_thread)]
+        offsets_vec = arith_d.constant(
+            offsets_vec_type,
+            DenseElementsAttr.get(vals, offsets_vec_type),
+        )
+        oob_vec = vector_d.broadcast(offsets_vec_type, oob_index)
+        uint32_vec_type = VectorType.get([elements_per_thread], uint32)
+        base_broadcast = vector_d.broadcast(offsets_vec_type, total_offset)
+        offsets_u32 = arith_d.index_cast(uint32_vec_type, offsets_vec)
+        base_u32 = arith_d.index_cast(uint32_vec_type, base_broadcast)
+        per_elem_offsets = arith_d.addi(base_u32, offsets_u32)
+        per_elem_offsets = arith_d.index_cast(offsets_vec_type, per_elem_offsets)
+        selected = arith_d.select(mask, per_elem_offsets, oob_vec)
+        singlenumvec_type = VectorType.get([1], vector_type.element_type)
+        elems = []
+        for i in range(elements_per_thread):
+            idx = vector_d.extract(
+                selected,
+                static_position=[i],
+                dynamic_position=[],
+            )
+            elem = vector_d.load(singlenumvec_type, lin_src, indices=[idx])
+            elem = vector_d.extract(
+                elem,
+                static_position=[0],
+                dynamic_position=[],
+            )
+            elems.append(elem)
+        return vector_d.from_elements(vector_type, elems)
+    el_type = vector_type.element_type
+    zero = arith_d.constant(el_type, get_constant_attr(0, el_type))
+    passthru = vector_d.broadcast(vector_type, zero)
+    return vector_d.maskedload(vector_type, lin_src, [total_offset], mask, passthru)
+
+
+def _linear_read_emit_global_vector_load_simple(
+    vector_type: VectorType,
+    lin_src: Value,
+    total_offset: Value,
+    mask: Optional[Value],
+) -> Value:
+    """Linear global read without buffer ops: load or maskedload."""
+    element_type = vector_type.element_type
+    if mask is None:
+        return vector_d.load(vector_type, lin_src, [total_offset])
+    zero = arith_d.constant(element_type, get_constant_attr(0, element_type))
+    passthru = vector_d.broadcast(vector_type, zero)
+    return vector_d.maskedload(vector_type, lin_src, [total_offset], mask, passthru)
+
+
+def _handle_read_linear_index(
+    emitter: WaveEmitter,
+    node: fx.Node,
+    memory: Any,
+    kb_src: Value,
+    kb_ir_type: MemRefType,
+    input_shape: tuple[IndexExpr, ...],
+    vector_type: VectorType,
+    elements_per_thread: int,
+    dynamic_vals_map_start: dict[IndexExpr, Value],
+    index: dict[IndexSymbol, IndexSequence | IndexExpr],
+    flags: MemoryAccessFlags,
+    buffer_ops_enabled: bool,
+    bounds: Optional[tuple[IndexSymbol, ...]],
+) -> None:
+    """Codegen for reads that use a single flattened LINEAR_INDEX."""
+    idx_seq = index[LINEAR_INDEX]
+    flat_offset = idx_seq.start
+
+    precomputed_mask_expr = getattr(node, "precomputed_mask_expr", None)
+    if precomputed_mask_expr is not None and not buffer_ops_enabled:
+        mask = gen_sympy_index(add_emitter_subs(emitter), precomputed_mask_expr)
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        if mask.type != mask_vec_type:
+            mask = vector_d.broadcast(mask_vec_type, mask)
+    else:
+        mask = _build_mask(emitter, index, elements_per_thread, bounds)
+
+    is_global = get_custom(memory).type.address_space != SHARED_ADDRESS_SPACE
+    use_llvm_load = flags != MemoryAccessFlags.NONE
+
+    if (
+        is_global
+        and not use_llvm_load
+        and not read_meets_hw_transpose_requirements(
+            get_custom(node), emitter.constraints, emitter.options.target
+        )
+    ):
+        subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
+        sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
+        lin_src = _linear_read_linearize_memref_maybe_hoisted(
+            emitter,
+            kb_src,
+            sym_strides,
+            subs_map,
+            kb_ir_type.element_type,
+            input_shape,
+            buffer_ops_enabled,
+        )
+        total_offset = gen_sympy_index(subs_map, flat_offset)
+        result = _linear_read_emit_global_vector_load(
+            vector_type,
+            lin_src,
+            total_offset,
+            mask,
+            elements_per_thread,
+            buffer_ops_enabled,
+        )
+        emitter.bind_node_proxy(node, IRProxyValue(result))
+        return
+
+    if is_global:
+        subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
+        sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
+        strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
+        zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
+        lin_src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
+        total_offset = gen_sympy_index(subs_map, flat_offset)
+        result = _linear_read_emit_global_vector_load_simple(
+            vector_type,
+            lin_src,
+            total_offset,
+            mask,
+        )
+        emitter.bind_node_proxy(node, IRProxyValue(result))
+        return
+
+    subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
+    flat_idx_val = gen_sympy_index(subs_map, flat_offset)
+    start_indices = [flat_idx_val]
+    start_indices_wg = [flat_idx_val]
+    start_indices_th = [arith_d.constant(IndexType.get(), 0)]
+
+    result = _create_vec_read_write(
+        emitter,
+        input_shape,
+        kb_src,
+        None,
+        vector_type,
+        start_indices,
+        start_indices_wg,
+        start_indices_th,
+        elements_per_thread,
+        get_custom(memory),
+        mask,
+        node_index=index,
+    )
+    emitter.bind_node_proxy(node, IRProxyValue(result))
+
+
 @handle_op(read)
 def handle_read(emitter: WaveEmitter, node: fx.Node):
     # This is similar to tkl.store with fixed start indices for now.
@@ -940,217 +1195,21 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 
     # --- LINEAR_INDEX path (flattened reads) ---
     if LINEAR_INDEX in index:
-        idx_seq = index[LINEAR_INDEX]
-        flat_offset = idx_seq.start
-        iv_stride_val = idx_seq.stride
-
-        precomputed_mask_expr = getattr(node, "precomputed_mask_expr", None)
-        if precomputed_mask_expr is not None and not buffer_ops_enabled:
-            mask = gen_sympy_index(add_emitter_subs(emitter), precomputed_mask_expr)
-            mask_vec_type = VectorType.get(
-                [elements_per_thread], IntegerType.get_signless(1)
-            )
-            if mask.type != mask_vec_type:
-                mask = vector_d.broadcast(mask_vec_type, mask)
-        else:
-            mask = _build_mask(emitter, index, elements_per_thread, bounds)
-
-        is_global = get_custom(memory).type.address_space != SHARED_ADDRESS_SPACE
-        use_llvm_load = flags != MemoryAccessFlags.NONE
-
-        if (
-            is_global
-            and not use_llvm_load
-            and not read_meets_hw_transpose_requirements(
-                get_custom(node), emitter.constraints, emitter.options.target
-            )
-        ):
-            subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
-
-            kb_type = MemRefType(kb_src.type)
-            phys_strides, _ = kb_type.get_strides_and_offset()
-            dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
-            if any(s == dyn_sentinel for s in phys_strides):
-                sym_strides = list(
-                    strides_from_symbolic_shape(
-                        IndexingContext.current(),
-                        input_shape,
-                        allow_mixed_shapes=True,
-                    )
-                )
-            else:
-                sym_strides = [sympy.Integer(s) for s in phys_strides]
-
-            ip = InsertionPoint.current
-            owner = ip.block.owner
-            is_in_loop = (
-                not isinstance(owner, func_d.FuncOp) and owner.name == "scf.for"
-            )
-            has_iv = iv_stride_val != 0 and is_in_loop
-            hoist_ip = InsertionPoint(owner) if is_in_loop else None
-
-            if hoist_ip is not None:
-                with hoist_ip:
-                    strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
-                    zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(
-                        sym_strides
-                    )
-                    lin_src, _ = _linearize_memref(
-                        kb_src, zero_indices, zero_indices, strides_vals
-                    )
-                    if buffer_ops_enabled:
-                        valid_bytes = _compute_valid_bytes(
-                            lin_src,
-                            element_type,
-                            input_shape,
-                            emitter,
-                            use_real_bounds_override=True,
-                        )
-                        lin_src = _cast_buffer_and_encode_stride(
-                            lin_src,
-                            strides_vals,
-                            element_type,
-                            valid_bytes,
-                        )
-            else:
-                strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
-                zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
-                lin_src, _ = _linearize_memref(
-                    kb_src, zero_indices, zero_indices, strides_vals
-                )
-                if buffer_ops_enabled:
-                    valid_bytes = _compute_valid_bytes(
-                        lin_src,
-                        element_type,
-                        input_shape,
-                        emitter,
-                        use_real_bounds_override=True,
-                    )
-                    lin_src = _cast_buffer_and_encode_stride(
-                        lin_src,
-                        strides_vals,
-                        element_type,
-                        valid_bytes,
-                    )
-
-            total_offset = gen_sympy_index(subs_map, flat_offset)
-
-            if mask is None:
-                result = vector_d.load(vector_type, lin_src, [total_offset])
-            elif buffer_ops_enabled:
-                oob_index_value = _get_out_of_bounds_index(element_type)
-                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-                mask_splat = _get_splat_input(mask)
-                if mask_splat is not None:
-                    selected_index = arith_d.select(mask_splat, total_offset, oob_index)
-                    result = vector_d.load(vector_type, lin_src, [selected_index])
-                else:
-                    uint32 = IntegerType.get_signless(32)
-                    offsets_vec_type = VectorType.get(
-                        vector_type.shape, IndexType.get()
-                    )
-                    vals = [
-                        IntegerAttr.get(IndexType.get(), v)
-                        for v in range(elements_per_thread)
-                    ]
-                    offsets_vec = arith_d.constant(
-                        offsets_vec_type,
-                        DenseElementsAttr.get(vals, offsets_vec_type),
-                    )
-                    oob_vec = vector_d.broadcast(offsets_vec_type, oob_index)
-                    uint32_vec_type = VectorType.get([elements_per_thread], uint32)
-                    base_broadcast = vector_d.broadcast(offsets_vec_type, total_offset)
-                    offsets_u32 = arith_d.index_cast(uint32_vec_type, offsets_vec)
-                    base_u32 = arith_d.index_cast(uint32_vec_type, base_broadcast)
-                    per_elem_offsets = arith_d.addi(base_u32, offsets_u32)
-                    per_elem_offsets = arith_d.index_cast(
-                        offsets_vec_type, per_elem_offsets
-                    )
-                    selected = arith_d.select(mask, per_elem_offsets, oob_vec)
-                    singlenumvec_type = VectorType.get([1], vector_type.element_type)
-                    elems = []
-                    for i in range(elements_per_thread):
-                        idx = vector_d.extract(
-                            selected,
-                            static_position=[i],
-                            dynamic_position=[],
-                        )
-                        elem = vector_d.load(singlenumvec_type, lin_src, indices=[idx])
-                        elem = vector_d.extract(
-                            elem,
-                            static_position=[0],
-                            dynamic_position=[],
-                        )
-                        elems.append(elem)
-                    result = vector_d.from_elements(vector_type, elems)
-            else:
-                el_type = vector_type.element_type
-                zero = arith_d.constant(el_type, get_constant_attr(0, el_type))
-                passthru = vector_d.broadcast(vector_type, zero)
-                result = vector_d.maskedload(
-                    vector_type, lin_src, [total_offset], mask, passthru
-                )
-            emitter.bind_node_proxy(node, IRProxyValue(result))
-            return
-
-        # Global reads that didn't take the fast path above (e.g. HW
-        # transpose candidates or LLVM-load flagged reads): linearize
-        # the memref and do a simple 1-D load so the flat index works.
-        if is_global:
-            subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
-            kb_type = MemRefType(kb_src.type)
-            phys_strides, _ = kb_type.get_strides_and_offset()
-            dyn_sentinel = ShapedType.get_dynamic_stride_or_offset()
-            if any(s == dyn_sentinel for s in phys_strides):
-                sym_strides = list(
-                    strides_from_symbolic_shape(
-                        IndexingContext.current(),
-                        input_shape,
-                        allow_mixed_shapes=True,
-                    )
-                )
-            else:
-                sym_strides = [sympy.Integer(s) for s in phys_strides]
-            strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
-            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
-            lin_src, _ = _linearize_memref(
-                kb_src, zero_indices, zero_indices, strides_vals
-            )
-            total_offset = gen_sympy_index(subs_map, flat_offset)
-            if mask is None:
-                result = vector_d.load(vector_type, lin_src, [total_offset])
-            else:
-                el_type = vector_type.element_type
-                zero = arith_d.constant(el_type, get_constant_attr(0, el_type))
-                passthru = vector_d.broadcast(vector_type, zero)
-                result = vector_d.maskedload(
-                    vector_type, lin_src, [total_offset], mask, passthru
-                )
-            emitter.bind_node_proxy(node, IRProxyValue(result))
-            return
-
-        # Shared memory paths.
-        subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
-        flat_idx_val = gen_sympy_index(subs_map, flat_offset)
-        start_indices = [flat_idx_val]
-        start_indices_wg = [flat_idx_val]
-        start_indices_th = [arith_d.constant(IndexType.get(), 0)]
-
-        result = _create_vec_read_write(
+        _handle_read_linear_index(
             emitter,
-            input_shape,
+            node,
+            memory,
             kb_src,
-            None,
+            kb_ir_type,
+            input_shape,
             vector_type,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
             elements_per_thread,
-            get_custom(memory),
-            mask,
-            node_index=index,
+            dynamic_vals_map_start,
+            index,
+            flags,
+            buffer_ops_enabled,
+            bounds,
         )
-        emitter.bind_node_proxy(node, IRProxyValue(result))
         return
 
     # --- N-D index path (non-flattened reads: dynamic mapping vals, etc.) ---
