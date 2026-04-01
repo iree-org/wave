@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [3.11]
+        version: [3.12]
         runs-on: [linux-mi325-1gpu-ossci-iree-org]
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 240 # Building LLVM can take multiple hours on public GH runners
@@ -112,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [3.11]
+        version: [3.12]
         os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org, [rdna4, self-hosted, Linux, X64, shark49]] # nodai-amdgpu-mi250-x86-64
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
@@ -259,7 +259,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [3.11]
+        version: [3.12]
         name: [linux-mi325-1gpu-ossci-iree-org]
         shared_libs: ["ON", "OFF"]
     runs-on: ${{ matrix.name }}
@@ -376,7 +376,7 @@ jobs:
         id: setup_python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           pip-install: -r water/requirements-dev.txt
 
       - name: Setup Cache Vars
@@ -481,7 +481,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [3.11]
+        version: [3.12]
         name: [linux-mi325-1gpu-ossci-iree-org]
         shared_libs: ["ON", "OFF"]
     runs-on: ${{ matrix.name }}
