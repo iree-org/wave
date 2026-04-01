@@ -543,6 +543,7 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    graph_passes.append(partial(simplify_indices, trace, launchable.constraints))
     graph_passes.append(
         partial(
             merge_contiguous_reads,
@@ -616,12 +617,6 @@ def build_graph_passes(
             trace,
             launchable.constraints,
             launchable.reordering_constraints,
-        ),
-        partial(
-            merge_contiguous_reads,
-            trace,
-            launchable.constraints,
-            options.target,
         ),
     ]
 
