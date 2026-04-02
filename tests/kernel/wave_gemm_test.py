@@ -57,10 +57,12 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
     get_splitk_gemm_kernel,
-    get_splitk_mxfp4_gemm_kernel,
     get_streamk_gemm_kernel,
     get_hybrid_streamk_gemm_kernel,
     get_persistent_reordering_kernel,
+)
+from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
+    get_tagged_splitk_mxfp4_gemm,
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
@@ -3652,17 +3654,14 @@ def testSplitKMxfp4Gemm(
     num_splits: int,
     output_type: torch.dtype,
 ):
-    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+    splitk_gemm, options = get_tagged_splitk_mxfp4_gemm(
         shape,
         num_splits=num_splits,
+        block_shape=(128, 128, 128),
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
         output_type=TORCH_DTYPE_TO_WAVE[output_type],
     )
 
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-    )
     options = set_default_run_config(options)
     splitk_gemm = wave_compile(options, splitk_gemm)
 

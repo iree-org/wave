@@ -1802,39 +1802,25 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
     import torch
     from torch.testing import assert_close
 
-    import wave_lang.kernel.lang as tkl
-    from wave_lang.kernel.lang.global_symbols import (
-        SHARED_ADDRESS_SPACE,
-    )
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import ScaledMMAType
-    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
+        get_tagged_splitk_mxfp4_gemm,
+    )
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         generate_gemm_afp4wfp4_inputs,
         torchScaledGemmMXFP4,
     )
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
-    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+    splitk_gemm, options = get_tagged_splitk_mxfp4_gemm(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
     )
 
-    # Override to use shared memory address space with global-to-shared loads,
-    # since the C++ backend doesn't yet support vector.maskedload (used by
-    # the global address space path).
-    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-        use_global_to_shared=True,
-    )
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
     options = set_default_run_config(options)
 
     kernel_info = capture_wave_kernel_info(options, splitk_gemm)
@@ -1917,30 +1903,21 @@ def test_splitk_mxfp4_bf16_asm_emission(
     if not is_cdna4():
         pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
 
-    import wave_lang.kernel.lang as tkl
-    from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import ScaledMMAType
-    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
+        get_tagged_splitk_mxfp4_gemm,
+    )
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
-    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+    splitk_gemm, options = get_tagged_splitk_mxfp4_gemm(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
     )
 
-    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-        use_global_to_shared=True,
-    )
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
     options = set_default_run_config(options)
 
     kernel_info = capture_wave_kernel_info(options, splitk_gemm)
@@ -2022,13 +1999,10 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     import torch
     from torch.testing import assert_close
 
-    import wave_lang.kernel.lang as tkl
-    from wave_lang.kernel.lang.global_symbols import (
-        SHARED_ADDRESS_SPACE,
-    )
-    from wave_lang.kernel.wave.compile import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import ScaledMMAType
-    from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
+    from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
+        get_tagged_splitk_mxfp4_gemm_preshuffle_scales,
+    )
     from wave_lang.kernel.wave.utils.mxfp_utils import (
         e8m0_shuffle,
         generate_gemm_afp4wfp4_inputs,
@@ -2036,25 +2010,16 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     )
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
-    splitk_gemm, hyperparams = get_splitk_mxfp4_gemm_kernel(
+    splitk_gemm, options = get_tagged_splitk_mxfp4_gemm_preshuffle_scales(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
-        preshuffle_scales=True,
         block_shape=(128, 128, 256),
     )
 
-    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        compile_to_mlir=False,
-        use_global_to_shared=True,
-    )
+    options.backend = "asm"
+    options.wave_runtime = True
+    options.compile_to_mlir = False
     options = set_default_run_config(options)
 
     kernel_info = capture_wave_kernel_info(options, splitk_gemm)

@@ -44,7 +44,6 @@ from wave_lang.kernel.wave.templates import (
     get_tagged_splitk_mxfp4_gemm_preshuffle_b,
     get_tagged_splitk_mxfp4_gemm_preshuffle_scales,
 )
-from wave_lang.kernel.wave.templates.gemm import get_splitk_mxfp4_gemm_kernel
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     b_preshuffle,
     e8m0_shuffle,
@@ -589,25 +588,16 @@ def test_splitk_preshuffle_scales_gemm_cpp(
 ):
     """Split-K MXFP4 GEMM using C++ WaveASM backend (preshuffled scales)."""
     num_splits = splitk if splitk else 2
-    splitk_fn, hyperparams = get_splitk_mxfp4_gemm_kernel(
+    splitk_fn, options = get_tagged_splitk_mxfp4_gemm_preshuffle_scales(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
         block_shape=block,
-        waves_per_block=(2, 2),
-        preshuffle_scales=True,
+        wave_shape=(2, 2),
         output_type=tkl.f32,
     )
-    hyperparams[tkl.sym.ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-    hyperparams[tkl.sym.B_ADDRESS_SPACE] = SHARED_ADDRESS_SPACE
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-        backend="asm",
-        wave_runtime=True,
-        use_global_to_shared=True,
-    )
+    options.backend = "asm"
+    options.wave_runtime = True
     options.use_wave_asm_backend = True
     options.print_ir_after = "all" if is_debug else []
     options = set_default_run_config(options)
