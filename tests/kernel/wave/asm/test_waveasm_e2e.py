@@ -1783,7 +1783,8 @@ def test_gemm_pipelined_cpp_backend(
 @pytest.mark.parametrize(
     "shape,num_splits",
     [
-        ((256, 256, 256), 2),
+        # k_per_split >= default BLOCK_K (256): ceil(512/2) = 256.
+        ((256, 256, 512), 2),
     ],
 )
 def test_splitk_mxfp4_bf16_atomic_cpp_backend(
@@ -1803,6 +1804,7 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
     from torch.testing import assert_close
 
     from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
         get_tagged_splitk_mxfp4_gemm,
     )
@@ -1823,7 +1825,8 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
     options.compile_to_mlir = False
     options = set_default_run_config(options)
 
-    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=True, k_partitions=1)
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm, schedule=schedule)
 
     test_id = f"splitk_mxfp4_bf16_{shape[0]}x{shape[1]}x{shape[2]}_s{num_splits}"
 
@@ -1887,7 +1890,7 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
 @pytest.mark.parametrize(
     "shape,num_splits",
     [
-        ((256, 256, 256), 2),
+        ((256, 256, 512), 2),
     ],
 )
 def test_splitk_mxfp4_bf16_asm_emission(
@@ -1904,6 +1907,7 @@ def test_splitk_mxfp4_bf16_asm_emission(
         pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
 
     from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
         get_tagged_splitk_mxfp4_gemm,
     )
@@ -1920,7 +1924,8 @@ def test_splitk_mxfp4_bf16_asm_emission(
     options.compile_to_mlir = False
     options = set_default_run_config(options)
 
-    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=True, k_partitions=1)
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm, schedule=schedule)
 
     test_id = (
         f"splitk_mxfp4_bf16_asm_emission_{shape[0]}x{shape[1]}x{shape[2]}_s{num_splits}"
@@ -2000,6 +2005,7 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     from torch.testing import assert_close
 
     from wave_lang.kernel.wave.constraints import ScaledMMAType
+    from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_pingpong_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
         get_tagged_splitk_mxfp4_gemm_preshuffle_scales,
     )
@@ -2022,7 +2028,10 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     options.compile_to_mlir = False
     options = set_default_run_config(options)
 
-    kernel_info = capture_wave_kernel_info(options, splitk_gemm)
+    schedule = get_mxfp4_dbuf_pingpong_schedule(
+        use_stagger=True, shape=shape, k_partitions=1
+    )
+    kernel_info = capture_wave_kernel_info(options, splitk_gemm, schedule=schedule)
 
     m, n, k = shape
     test_id = f"splitk_mxfp4_preshuffle_scales_{m}x{n}x{k}_s{num_splits}"

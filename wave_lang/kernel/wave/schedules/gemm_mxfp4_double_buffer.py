@@ -24,12 +24,29 @@ import wave_lang.kernel.wave.wave_schedule as wave_schedule
 from wave_lang.kernel.ops.wave_ops import get_custom
 
 
-def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
+def _partition_mxfp4_loop_k(nodes, K, *, k_partitions: int):
+    """Partition K-tagged nodes for MXFP4 double-buffer schedules.
+
+    ``k_partitions=2`` splits the loop body along distinct K expansion ids (usual
+    GEMM).  Split-K MXFP4 kernels only expose a single K id in the traced loop;
+    use ``k_partitions=1`` so all nodes stay in the first partition and the second
+    is empty.
+    """
+    if k_partitions == 1:
+        (first,) = tkw.partition_by_dim(nodes, dim=K, num_partitions=1)
+        return first, []
+    loop_0, loop_1 = tkw.partition_by_dim(nodes, dim=K, num_partitions=2)
+    return loop_0, loop_1
+
+
+def get_mxfp4_dbuf_schedule(use_stagger: bool = True, k_partitions: int = 2):
     """Return a double-buffered MXFP4 schedule for wave_compile().
 
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
             Recommended for 8-wave configs; disable for 4-wave.
+        k_partitions: ``2`` for standard GEMM (partition along K).  Use ``1`` for
+            split-K MXFP4 kernels where the K loop has only one expansion id.
     """
     K = tkl.sym.K
 
@@ -146,32 +163,32 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
         # shared loads, otherwise reorder_graph fails with
         # "Cannot find producer(s)" because bitcasts in an earlier cluster
         # would depend on shared loads in a later cluster.
-        loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
-            loop_scaled_mma, dim=K, num_partitions=2
+        loop_scaled_mma_0, loop_scaled_mma_1 = _partition_mxfp4_loop_k(
+            loop_scaled_mma, K, k_partitions=k_partitions
         )
-        loop_shared_load_a_0, loop_shared_load_a_1 = tkw.partition_by_dim(
-            loop_shared_load_a, dim=K, num_partitions=2
+        loop_shared_load_a_0, loop_shared_load_a_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_a, K, k_partitions=k_partitions
         )
-        loop_shared_load_b_0, loop_shared_load_b_1 = tkw.partition_by_dim(
-            loop_shared_load_b, dim=K, num_partitions=2
+        loop_shared_load_b_0, loop_shared_load_b_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_b, K, k_partitions=k_partitions
         )
-        loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = tkw.partition_by_dim(
-            loop_shared_load_a_scale, dim=K, num_partitions=2
+        loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_a_scale, K, k_partitions=k_partitions
         )
-        loop_shared_load_b_scale_0, loop_shared_load_b_scale_1 = tkw.partition_by_dim(
-            loop_shared_load_b_scale, dim=K, num_partitions=2
+        loop_shared_load_b_scale_0, loop_shared_load_b_scale_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_b_scale, K, k_partitions=k_partitions
         )
-        loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
-            loop_bitcast_a, dim=K, num_partitions=2
+        loop_bitcast_a_0, loop_bitcast_a_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_a, K, k_partitions=k_partitions
         )
-        loop_bitcast_a_scale_0, loop_bitcast_a_scale_1 = tkw.partition_by_dim(
-            loop_bitcast_a_scale, dim=K, num_partitions=2
+        loop_bitcast_a_scale_0, loop_bitcast_a_scale_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_a_scale, K, k_partitions=k_partitions
         )
-        loop_bitcast_b_0, loop_bitcast_b_1 = tkw.partition_by_dim(
-            loop_bitcast_b, dim=K, num_partitions=2
+        loop_bitcast_b_0, loop_bitcast_b_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_b, K, k_partitions=k_partitions
         )
-        loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = tkw.partition_by_dim(
-            loop_bitcast_b_scale, dim=K, num_partitions=2
+        loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_b_scale, K, k_partitions=k_partitions
         )
 
         independent_global_count = len(loop_global_to_shared)
@@ -198,46 +215,53 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
                 ]
             )
 
-        clusters = [
-            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
-            tkw.cluster(cluster_0_ops),
-            # Cluster 1: First K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_0,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWaitBarrier(load=independent_global_count),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 2: Second K-partition shared loads/bitcasts
-            tkw.cluster(
-                [
-                    loop_shared_load_a_1,
-                    loop_shared_load_a_scale_1,
-                    loop_shared_load_b_1,
-                    loop_shared_load_b_scale_1,
-                    loop_bitcast_a_1,
-                    loop_bitcast_a_scale_1,
-                    loop_bitcast_b_1,
-                    loop_bitcast_b_scale_1,
-                    tkw.SchedulingBarrier([]),
-                    tkw.MemoryCounterWaitBarrier(load=0),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 3: Second K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_1,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
+        cluster_1_ops = [
+            tkw.SetWavePrio(1),
+            loop_scaled_mma_0,
+            tkw.SetWavePrio(0),
+            tkw.SchedulingBarrier([]),
+            tkw.MemoryCounterWaitBarrier(load=independent_global_count),
+            tkw.SchedulingBarrier([]),
         ]
+        if k_partitions == 1:
+            # Split-K exposes a single K expansion id; the second K-partition
+            # clusters would be empty, which is invalid for reorder_graph.
+            clusters = [
+                tkw.cluster(cluster_0_ops),
+                tkw.cluster(cluster_1_ops),
+            ]
+        else:
+            clusters = [
+                # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
+                tkw.cluster(cluster_0_ops),
+                # Cluster 1: First K-partition scaled_mma (high priority)
+                tkw.cluster(cluster_1_ops),
+                # Cluster 2: Second K-partition shared loads/bitcasts
+                tkw.cluster(
+                    [
+                        loop_shared_load_a_1,
+                        loop_shared_load_a_scale_1,
+                        loop_shared_load_b_1,
+                        loop_shared_load_b_scale_1,
+                        loop_bitcast_a_1,
+                        loop_bitcast_a_scale_1,
+                        loop_bitcast_b_1,
+                        loop_bitcast_b_scale_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.MemoryCounterWaitBarrier(load=0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                # Cluster 3: Second K-partition scaled_mma (high priority)
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_1,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
 
         # Insert shared memory barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
@@ -253,7 +277,9 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
     return mxfp4_dbuf_schedule
 
 
-def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = None):
+def get_mxfp4_dbuf_pingpong_schedule(
+    use_stagger: bool = True, shape: tuple = None, k_partitions: int = 2
+):
     """Return a double-buffered MXFP4 schedule for wave_compile().
 
     Args:
@@ -262,6 +288,7 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         shape: Tuple of (M, N, K) dimensions. If provided and bigger than
             (1024, 1024, 1024), an extra WorkgroupBarrier will be added
             after the first SchedulingBarrier in cluster 0.
+        k_partitions: ``2`` for standard GEMM.  Use ``1`` for split-K MXFP4 kernels.
     """
     K = tkl.sym.K
 
@@ -359,34 +386,34 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
         )
         loop_scaled_mma = tkw.filter_nodes(scaled_mma, subgraph=pipeline_loop.KERNEL)
 
-        loop_scaled_mma_0, loop_scaled_mma_1 = tkw.partition_by_dim(
-            loop_scaled_mma, dim=K, num_partitions=2
+        loop_scaled_mma_0, loop_scaled_mma_1 = _partition_mxfp4_loop_k(
+            loop_scaled_mma, K, k_partitions=k_partitions
         )
-        loop_shared_load_a_0, loop_shared_load_a_1 = tkw.partition_by_dim(
-            loop_shared_load_a, dim=K, num_partitions=2
+        loop_shared_load_a_0, loop_shared_load_a_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_a, K, k_partitions=k_partitions
         )
-        loop_shared_load_b_0, loop_shared_load_b_1 = tkw.partition_by_dim(
-            loop_shared_load_b, dim=K, num_partitions=2
+        loop_shared_load_b_0, loop_shared_load_b_1 = _partition_mxfp4_loop_k(
+            loop_shared_load_b, K, k_partitions=k_partitions
         )
-        loop_all_read_a_scale_0, loop_all_read_a_scale_1 = tkw.partition_by_dim(
-            loop_all_read_a_scale, dim=K, num_partitions=2
+        loop_all_read_a_scale_0, loop_all_read_a_scale_1 = _partition_mxfp4_loop_k(
+            loop_all_read_a_scale, K, k_partitions=k_partitions
         )
-        loop_all_read_b_scale_0, loop_all_read_b_scale_1 = tkw.partition_by_dim(
-            loop_all_read_b_scale, dim=K, num_partitions=2
-        )
-
-        loop_bitcast_a_0, loop_bitcast_a_1 = tkw.partition_by_dim(
-            loop_bitcast_a, dim=K, num_partitions=2
-        )
-        loop_bitcast_a_scale_0, loop_bitcast_a_scale_1 = tkw.partition_by_dim(
-            loop_bitcast_a_scale, dim=K, num_partitions=2
+        loop_all_read_b_scale_0, loop_all_read_b_scale_1 = _partition_mxfp4_loop_k(
+            loop_all_read_b_scale, K, k_partitions=k_partitions
         )
 
-        loop_bitcast_b_0, loop_bitcast_b_1 = tkw.partition_by_dim(
-            loop_bitcast_b, dim=K, num_partitions=2
+        loop_bitcast_a_0, loop_bitcast_a_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_a, K, k_partitions=k_partitions
         )
-        loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = tkw.partition_by_dim(
-            loop_bitcast_b_scale, dim=K, num_partitions=2
+        loop_bitcast_a_scale_0, loop_bitcast_a_scale_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_a_scale, K, k_partitions=k_partitions
+        )
+
+        loop_bitcast_b_0, loop_bitcast_b_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_b, K, k_partitions=k_partitions
+        )
+        loop_bitcast_b_scale_0, loop_bitcast_b_scale_1 = _partition_mxfp4_loop_k(
+            loop_bitcast_b_scale, K, k_partitions=k_partitions
         )
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
@@ -423,47 +450,52 @@ def get_mxfp4_dbuf_pingpong_schedule(use_stagger: bool = True, shape: tuple = No
                 ]
             )
 
-        clusters = [
-            # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
-            tkw.cluster(cluster_0_ops),
-            # Cluster 1: First K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_0,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
-                    tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 2: Second K-partition shared loads/bitcasts
-            tkw.cluster(
-                [
-                    tkw.SchedulingBarrier([]),
-                    loop_shared_load_a_1,
-                    loop_shared_load_b_1,
-                    loop_bitcast_a_1,
-                    loop_bitcast_a_scale_1,
-                    loop_bitcast_b_1,
-                    loop_bitcast_b_scale_1,
-                    loop_all_read_a_scale_1,
-                    loop_all_read_b_scale_1,
-                    tkw.SchedulingBarrier([]),
-                    tkw.WorkgroupBarrier(),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
-            # Cluster 3: Second K-partition scaled_mma (high priority)
-            tkw.cluster(
-                [
-                    tkw.SetWavePrio(1),
-                    loop_scaled_mma_1,
-                    tkw.SetWavePrio(0),
-                    tkw.SchedulingBarrier([]),
-                ],
-            ),
+        cluster_1_ops_pingpong = [
+            tkw.SetWavePrio(1),
+            loop_scaled_mma_0,
+            tkw.SetWavePrio(0),
+            tkw.SchedulingBarrier([]),
+            tkw.WorkgroupBarrier(),
+            tkw.SchedulingBarrier([]),
         ]
+        if k_partitions == 1:
+            clusters = [
+                tkw.cluster(cluster_0_ops),
+                tkw.cluster(cluster_1_ops_pingpong),
+            ]
+        else:
+            clusters = [
+                # Cluster 0: First K-partition shared loads/bitcasts + async GatherToLDS
+                tkw.cluster(cluster_0_ops),
+                # Cluster 1: First K-partition scaled_mma (high priority)
+                tkw.cluster(cluster_1_ops_pingpong),
+                # Cluster 2: Second K-partition shared loads/bitcasts
+                tkw.cluster(
+                    [
+                        tkw.SchedulingBarrier([]),
+                        loop_shared_load_a_1,
+                        loop_shared_load_b_1,
+                        loop_bitcast_a_1,
+                        loop_bitcast_a_scale_1,
+                        loop_bitcast_b_1,
+                        loop_bitcast_b_scale_1,
+                        loop_all_read_a_scale_1,
+                        loop_all_read_b_scale_1,
+                        tkw.SchedulingBarrier([]),
+                        tkw.WorkgroupBarrier(),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+                # Cluster 3: Second K-partition scaled_mma (high priority)
+                tkw.cluster(
+                    [
+                        tkw.SetWavePrio(1),
+                        loop_scaled_mma_1,
+                        tkw.SetWavePrio(0),
+                        tkw.SchedulingBarrier([]),
+                    ],
+                ),
+            ]
 
         # Insert barriers at loop boundaries
         tkw.insert_before(pipeline_loop.KERNEL, tkw.WorkgroupBarrier())
