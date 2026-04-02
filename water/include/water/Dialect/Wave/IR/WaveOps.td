@@ -36,15 +36,10 @@ def WaveMemoryType : Type<Or<[WaveTensorInMemory.predicate, AnyMemRef.predicate]
 // Base class for all Wave operations.
 //-----------------------------------------------------------------------------
 
-// Wave operations must have an optional attribute for index sequences.
-def WaveSymbolMappingArrayAttr :
-  TypedArrayAttrBase<WaveSymbolMappingAttr,
-                     "Array of symbol mapping attributes">;
-
 class WaveOp<string mnemonic, list<Trait> traits = []>
     : Op<WaveDialect, mnemonic, !listconcat(traits, [HasWaveIndexMapping])> {
   dag commonArguments = (ins
-    Arg<OptionalAttr<DictArrayAttr>, "Index expression">:$index,
+    Arg<OptionalAttr<WaveSymbolMappingArrayAttr>, "Index expression">:$index,
     Arg<OptionalAttr<WaveSymbolMappingArrayAttr>, "Per-value vector shape mappings">:$vector_shape
   );
 
@@ -83,7 +78,8 @@ class UnaryWaveOp<string mnemonic>
   );
 
   let assemblyFormat =
-    "$argument attr-dict `:` functional-type(operands, results)";
+    "$argument " # commonArgumentsSyntax
+    # " attr-dict `:` functional-type(operands, results)";
 }
 
 class BinaryWaveOp<string mnemonic>
@@ -418,7 +414,8 @@ def AllocateOp : WaveOp<"allocate", [
   let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);
 
   let assemblyFormat =
-    " (`in` $parent^ `:` type($parent))? attr-dict `:` type($result)";
+    " (`in` $parent^ `:` type($parent))? "
+    # commonArgumentsSyntax # " attr-dict `:` type($result)";
 
   let hasVerifier = 1;
 }

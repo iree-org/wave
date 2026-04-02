@@ -14,6 +14,7 @@
 #include "mlir/Support/WalkResult.h"
 #include "water/Dialect/NormalForm/IR/NormalFormOps.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
 
@@ -39,7 +40,7 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr, DictionaryAttr(),
+        setIndexForValue(value, WaveSymbolMappingAttr(), DictionaryAttr(),
                          WaveSymbolMappingAttr());
         continue;
       }
@@ -146,7 +147,12 @@ overrideInitialization(Operation *top,
       if (!hasPriorities)
         setUniformPriority(wave::IndexExprsLatticeStorage::kLowestPriority);
 
-      setIndexForValue(value, indexExprs, prioritiesDict, vectorShape);
+      SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> mappingEntries;
+      for (NamedAttribute na : indexExprs)
+        mappingEntries.emplace_back(
+            wave::WaveSymbolAttr::get(ctx, na.getName()), na.getValue());
+      auto mapping = wave::WaveSymbolMappingAttr::get(ctx, mappingEntries);
+      setIndexForValue(value, mapping, prioritiesDict, vectorShape);
     }
     return success();
   };

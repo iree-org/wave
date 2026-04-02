@@ -643,14 +643,15 @@ public:
 
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
+  IndexExprsLatticeStorage(WaveSymbolMappingAttr concreteValue,
+                           int32_t priority,
                            wave::WaveSymbolMappingAttr vectorShape);
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+  IndexExprsLatticeStorage(WaveSymbolMappingAttr concreteValue,
                            mlir::DictionaryAttr priorities,
                            wave::WaveSymbolMappingAttr vectorShape);
 
 private:
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+  IndexExprsLatticeStorage(WaveSymbolMappingAttr concreteValue,
                            mlir::DictionaryAttr priorities,
                            wave::WaveSymbolMappingAttr vectorShape,
                            wave::WaveSymbolMappingAttr sourceVectorShape,
@@ -671,10 +672,11 @@ public:
 
   // Returns the concrete value stored in the lattice instance, be it fully
   // specified or not, or null if the lattice instance is a top or a bottom.
-  mlir::DictionaryAttr getConcreteValue() const;
+  WaveSymbolMappingAttr getConcreteValue() const;
 
   // Return the priority for a specific key, defaulting to kLowestPriority.
   int32_t getPriorityForKey(mlir::StringAttr key) const;
+  int32_t getPriorityForKey(WaveSymbolAttr key) const;
 
   // Return the per-key priorities as a DictionaryAttr mapping StringAttr keys
   // to IntegerAttr values. Asserts on non-concrete values.

@@ -860,15 +860,14 @@ public:
     if (!indexArr || indexArr.empty())
       return rewriter.notifyMatchFailure(op,
                                          "missing or empty index attribute");
-    DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+    auto indexMapping = cast<wave::WaveSymbolMappingAttr>(indexArr[0]);
 
     // Look up the index mapping for the specified dimension.
-    StringRef dimName = op.getDim().getName();
-    Attribute mappingAttr = indexDict.get(dimName);
-    if (!mappingAttr)
+    auto mapping = indexMapping.lookup<wave::WaveIndexMappingAttr>(op.getDim());
+    if (!mapping)
       return rewriter.notifyMatchFailure(
-          op, "index mapping not found for dimension '" + dimName + "'");
-    auto mapping = cast<wave::WaveIndexMappingAttr>(mappingAttr);
+          op, "index mapping not found for dimension '" +
+                  op.getDim().getName() + "'");
 
     // Materialize the start expression.
     FailureOr<SmallVector<Value>> startValues = wave::materializeAffine(

@@ -805,12 +805,13 @@ public:
       for (auto [i, value, index] :
            llvm::enumerate(valuesForIndexExpr, indexArray)) {
         ElementsPerThreadLattice *lattice = getLatticeElement(value);
-        auto indexDict = cast<DictionaryAttr>(index);
+        auto indexMapping = cast<wave::WaveSymbolMappingAttr>(index);
         std::optional<int64_t> elementsPerThread = std::nullopt;
         llvm::StringSet<> visitedSymbols;
-        for (const NamedAttribute &namedAttr : indexDict) {
-          visitedSymbols.insert(namedAttr.getName().strref());
-          auto mapping = cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
+        for (auto [key, val] :
+             llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
+          visitedSymbols.insert(key.getName());
+          auto mapping = cast<wave::WaveIndexMappingAttr>(val);
           ArrayRef<Attribute> symbols = mapping.getSymbols();
           AffineMap step = mapping.getStep();
           if (!step)

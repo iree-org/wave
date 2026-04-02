@@ -26,7 +26,7 @@ namespace wave {
 /// sequence step cannot be evaluated statically.
 std::optional<int64_t>
 getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                           mlir::DictionaryAttr indexDict,
+                           wave::WaveSymbolMappingAttr indexMapping,
                            wave::WaveHyperparameterAttr hyper);
 
 // Return the vector shape implied by the index sequence and hyperparameteters,
@@ -35,7 +35,7 @@ getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 // it cannot be fully evaluated.
 llvm::SmallVector<int64_t>
 getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                          mlir::DictionaryAttr indexDict,
+                          wave::WaveSymbolMappingAttr indexMapping,
                           wave::WaveHyperparameterAttr hyper);
 
 /// Resolve named Wave symbols to concrete integer values using the

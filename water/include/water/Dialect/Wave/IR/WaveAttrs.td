@@ -675,6 +675,10 @@ class WaveSymbolMappingAttrOf<list<AttrDef> valueTypes> : Attr<
   let returnType = WaveSymbolMappingAttr.returnType;
 }
 
+def WaveSymbolMappingArrayAttr
+  : TypedArrayAttrBase<WaveSymbolMappingAttr,
+                       "array of symbol mapping attributes">;
+
 class WaveSymbolMappingToNResultExprListAttr<int n> : Attr<
   And<[WaveSymbolMappingAttr.predicate,
        WaveSymbolMappingAllowedValuesPred<[WaveExprListAttr]>,

@@ -83,42 +83,13 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
   return llvm::success();
 }
 
-// Verify whether occurrence of Wave symbols, either as attributes or as string
-// names in relevant dictionaries, reference symbols listed as hyperparameters.
-// Report errors otherwise using the provided callback. Collect used symbols
-// into the given set for future checks.
+// Verify whether occurrences of Wave symbols reference symbols listed as
+// hyperparameters. Report errors otherwise using the provided callback. Collect
+// used symbols into the given set for future checks.
 static llvm::LogicalResult verifyAttributeHyperparamUses(
     wave::WaveHyperparameterAttr hyperparam, const NamedAttribute &namedAttr,
     llvm::StringSet<> &usedSymbols,
     llvm::function_ref<InFlightDiagnostic()> emitError) {
-
-  if (namedAttr.getName().strref() ==
-      wave::WaveDialect::kIndexWaveExprListAttrName) {
-    auto attr = namedAttr.getValue();
-    // Skip verification if not an array of dictionaries, op-level verifiers
-    // will detect this and complain.
-    auto arrayDict = llvm::dyn_cast<ArrayAttr>(attr);
-    if (!arrayDict)
-      return llvm::success();
-
-    for (Attribute a : arrayDict) {
-      auto dict = llvm::dyn_cast<DictionaryAttr>(a);
-      if (!dict)
-        continue;
-      for (const NamedAttribute &entry : dict) {
-        usedSymbols.insert(entry.getName().strref());
-
-        if (hyperparam.getMapping().contains(entry.getName().strref()))
-          continue;
-
-        InFlightDiagnostic diag = emitError()
-                                  << "uses symbolic value " << entry.getName()
-                                  << " not provided as a hyperparameter";
-        attachAvailableSymbolsNote(diag, hyperparam);
-        return llvm::failure();
-      }
-    }
-  }
   WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());

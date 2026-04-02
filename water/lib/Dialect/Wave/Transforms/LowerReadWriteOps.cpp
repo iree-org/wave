@@ -60,17 +60,15 @@ namespace {
 /// looks up a WaveIndexMappingAttr in `indexDict`, materializes its `start`
 /// map and returns one index-typed Value per dimension.
 static FailureOr<SmallVector<Value>>
-buildStartIndices(Location loc, DictionaryAttr indexDict,
+buildStartIndices(Location loc, wave::WaveSymbolMappingAttr indexMapping,
                   ArrayRef<wave::WaveSymbolAttr> orderedSyms,
                   PatternRewriter &rewriter,
                   wave::WaveHyperparameterAttr hyper) {
   SmallVector<Value> indices;
   indices.reserve(orderedSyms.size());
   for (wave::WaveSymbolAttr symAttr : orderedSyms) {
-    StringRef name = symAttr.getName();
-    Attribute a = indexDict.get(name);
-    assert(a && "index dict missing entry for dimension symbol");
-    auto mapAttr = cast<wave::WaveIndexMappingAttr>(a);
+    auto mapAttr = indexMapping.lookup<wave::WaveIndexMappingAttr>(symAttr);
+    assert(mapAttr && "index mapping missing entry for dimension symbol");
 
     FailureOr<SmallVector<Value>> startFo = wave::materializeAffine(
         loc, mapAttr.getSymbols(), mapAttr.getStart(), rewriter, hyper);
@@ -265,8 +263,8 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
 // orderedSyms and populate `updatedOrderedSyms` with the new order. Since the
 // only supported mappings are permutations now, the resulting index is the same
 // as the input and only the symbol order changes.
-static DictionaryAttr
-transformIndex(DictionaryAttr indexDict,
+static wave::WaveSymbolMappingAttr
+transformIndex(wave::WaveSymbolMappingAttr indexMapping,
                ArrayRef<wave::WaveSymbolAttr> orderedSyms,
                wave::WaveExprListAttr mapping,
                SmallVectorImpl<wave::WaveSymbolAttr> &updatedOrderedSyms) {
@@ -274,25 +272,16 @@ transformIndex(DictionaryAttr indexDict,
          "updatedOrderedSyms must be empty and will be populated");
   if (!mapping || mapping.getMap().isIdentity()) {
     updatedOrderedSyms.assign(orderedSyms);
-    return indexDict;
+    return indexMapping;
   }
 
-  // When we hit this while increasing mapping expressiveness, it would mean
-  // that we need to add the symbol part of the mapping to the new value. We
-  // will need to figure out which dimension.
   assert(mapping.getMap().isPermutation() &&
          "NYI: only permutation mappings are currently supported");
 
-  // Mapping is (memory shape) -> (value shape) and the original orderedSyms are
-  // the value shape so we to apply the inverse mapping to obtain the new
-  // ordered symbols list.
   wave::permuteShape(orderedSyms, mapping.getMap(), /*inverse=*/true,
                      updatedOrderedSyms);
 
-  // XXX: step/stride are not permuted similarly to pywave. For step, this works
-  // because the vectorized dimension is computed prior to permutation, but
-  // generally that looks incorrect.
-  return indexDict;
+  return indexMapping;
 }
 
 /// Describes access info used when lowering Wave ops to vector read/write ops.
@@ -330,16 +319,9 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   ArrayAttr indexArr = op.getIndexAttr();
   assert(indexArr && "IndexExprsSpecified normal form guarantees index attr");
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
-         "'index' must be an array with exactly one dictionary");
-  DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+         "'index' must be an array with exactly one mapping");
+  auto indexMapping = cast<wave::WaveSymbolMappingAttr>(indexArr[0]);
 
-  // Get ordered symbols for dimension ordering.
-  // DictionaryAttr stores entries sorted alphabetically by key, which doesn't
-  // match the semantic dimension ordering. We need to get the correct order
-  // from either:
-  // 1. The ordered_syms attribute (set by ResolveDistributedAllocations for
-  //    ops with MemRefType memory operands).
-  // 2. The WaveTensorType shape (for ops that still have WaveTensorType).
   SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
   ArrayRef<wave::WaveSymbolAttr> orderedSyms;
 
@@ -364,11 +346,11 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   }
 
   SmallVector<wave::WaveSymbolAttr> memoryShape;
-  DictionaryAttr transformedIndexDict =
-      transformIndex(indexDict, orderedSyms, mapping, memoryShape);
+  wave::WaveSymbolMappingAttr transformedIndexMapping =
+      transformIndex(indexMapping, orderedSyms, mapping, memoryShape);
 
   std::optional<int64_t> vectorizedDim = wave::getPositionOfVectorizedDim(
-      memoryShape, transformedIndexDict, hyper);
+      memoryShape, transformedIndexMapping, hyper);
 
   if (!vectorizedDim.has_value()) {
     return rewriter.notifyMatchFailure(
@@ -376,7 +358,7 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   }
 
   FailureOr<SmallVector<Value>> maybeStartIndices = buildStartIndices(
-      op->getLoc(), transformedIndexDict, memoryShape, rewriter, hyper);
+      op->getLoc(), transformedIndexMapping, memoryShape, rewriter, hyper);
   if (failed(maybeStartIndices))
     return rewriter.notifyMatchFailure(
         op, "failed to convert start indices to affine");

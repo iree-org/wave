@@ -1082,8 +1082,8 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
     return success();
   assert(llvm::hasSingleElement(arr.getValue()) &&
          "index length already validated for non-MMA read/write");
-  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(arr[0]);
-  if (!indexDict)
+  auto indexMapping = dyn_cast<wave::WaveSymbolMappingAttr>(arr[0]);
+  if (!indexMapping)
     return success();
 
   wave::WaveHyperparameterAttr hyper = nullptr;
@@ -1092,14 +1092,12 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
     hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(
         WaveDialect::kHyperparameterAttrName);
   }
-  // Default to empty hyperparameter set, sometimes we can run checks even in
-  // absence of these.
   if (!hyper)
     hyper = wave::WaveHyperparameterAttr::get(
         op->getContext(), DictionaryAttr::get(op->getContext()));
 
   SmallVector<int64_t> shape =
-      getUncollapsedVectorShape(tensorType.getShape(), indexDict, hyper);
+      getUncollapsedVectorShape(tensorType.getShape(), indexMapping, hyper);
   int64_t nonUnit = 1;
   bool hadDynamic = false;
   for (int64_t size : shape) {

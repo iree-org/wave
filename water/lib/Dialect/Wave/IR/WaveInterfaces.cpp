@@ -100,24 +100,25 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
-    return op->emitError("'index' attribute must be an array of dictionaries");
+    return op->emitError(
+        "'index' attribute must be an array of symbol mappings");
 
-  SmallVector<DictionaryAttr> dicts;
-  dicts.reserve(arr.size());
+  SmallVector<wave::WaveSymbolMappingAttr> mappings;
+  mappings.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
-    auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
-    if (!dict)
-      return op->emitError("'index' array elements must be dictionaries");
-    dicts.push_back(dict);
+    auto mapping = dyn_cast<wave::WaveSymbolMappingAttr>(nestedAttr);
+    if (!mapping)
+      return op->emitError(
+          "'index' array elements must be WaveSymbolMappingAttr");
+    mappings.push_back(mapping);
   }
 
-  for (DictionaryAttr dictAttr : dicts) {
-    for (auto named : dictAttr) {
-      auto val = named.getValue();
+  for (wave::WaveSymbolMappingAttr indexMapping : mappings) {
+    for (auto [key, val] :
+         llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
       if (!isa<wave::WaveIndexMappingAttr>(val))
         return op->emitError("'index' attribute value for key ")
-               << named.getName() << " must be WaveIndexMappingAttr, got "
-               << val;
+               << key.getName() << " must be WaveIndexMappingAttr, got " << val;
 
       auto mapping = cast<wave::WaveIndexMappingAttr>(val);
       for (auto symbol : mapping.getSymbols()) {
@@ -128,10 +129,6 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
         bool found = false;
         for (Operation *currentOp = op->getParentOp(); currentOp != nullptr;
              currentOp = currentOp->getParentOp()) {
-          // TODO: we don't want to depend on the IterateOp specifically from
-          // the interface (though technically we can), so we use the opaque
-          // attribute name. We should add something like a "wave control flow
-          // interface" that would provide it without hardcoded strings.
           auto parentIterSymbol =
               currentOp->getAttrOfType<wave::WaveSymbolAttr>("iterator");
           if (!parentIterSymbol)
@@ -158,10 +155,11 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // well-formedness yet, e.g., the op verifier checking for single-result
   // affine expressions in mappings did not run yet.
   wave::WaveHyperparameterAttr hyperparams = wave::getHyperparameters(op);
-  for (DictionaryAttr dictAttr : dicts) {
+  for (wave::WaveSymbolMappingAttr indexMapping : mappings) {
     int nonUnitCount = 0;
-    for (const NamedAttribute &named : dictAttr) {
-      auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(named.getValue());
+    for (auto [key, val] :
+         llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
+      auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(val);
       if (!mapping)
         continue;
 
@@ -174,7 +172,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
           if (step != ShapedType::kDynamic && step <= 0) {
             return op->emitOpError()
                    << "step in index expression must be strictly positive, got "
-                   << step << " for dimension " << named.getName();
+                   << step << " for dimension " << key.getName();
           }
           if (step != 1 && step != ShapedType::kDynamic && ++nonUnitCount > 1) {
             InFlightDiagnostic diag =
@@ -182,7 +180,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                 << "'" << WaveDialect::kIndexWaveExprListAttrName
                 << "' has more than one entry with non-unit step";
             diag.attachNote()
-                << "second non-unit step dimension: " << named.getName();
+                << "second non-unit step dimension: " << key.getName();
             return failure();
           }
         }
@@ -198,7 +196,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
             return op->emitOpError()
                    << "stride in index expression must be strictly positive, "
                       "got "
-                   << stride << " for dimension " << named.getName();
+                   << stride << " for dimension " << key.getName();
           }
         }
       }
@@ -234,10 +232,10 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 
 // ODS custom directive: parseWaveIndexDict/printWaveIndexDict
 ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
-  auto parseSingleDict = [&](DictionaryAttr &out) -> ParseResult {
-    SmallVector<NamedAttribute, 4> entries;
-    if (parser.parseLBrace())
-      return failure();
+  auto parseSingleMapping =
+      [&](wave::WaveSymbolMappingAttr &out) -> ParseResult {
+    SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
+    MLIRContext *ctx = parser.getContext();
     auto parseEntry = [&]() -> ParseResult {
       StringRef symbolName;
       if (parser.parseKeyword(&symbolName) || parser.parseColon())
@@ -245,50 +243,51 @@ ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
       WaveIndexMappingAttr mapping;
       if (failed(parser.parseCustomAttributeWithFallback(mapping)))
         return failure();
-      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
-                           mapping);
+      entries.emplace_back(wave::WaveSymbolAttr::get(ctx, symbolName), mapping);
       return success();
     };
-    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
+    if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Braces,
+                                       parseEntry))
       return failure();
-    out = parser.getBuilder().getDictionaryAttr(entries);
+    out = wave::WaveSymbolMappingAttr::get(ctx, entries);
     return success();
   };
 
-  SmallVector<Attribute> dicts;
+  SmallVector<Attribute> mappings;
   if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
                                      [&]() -> ParseResult {
-                                       DictionaryAttr dict;
-                                       if (failed(parseSingleDict(dict)))
+                                       wave::WaveSymbolMappingAttr mapping;
+                                       if (failed(parseSingleMapping(mapping)))
                                          return failure();
-                                       dicts.push_back(dict);
+                                       mappings.push_back(mapping);
                                        return success();
                                      }))
     return failure();
-  out = parser.getBuilder().getArrayAttr(dicts);
+  out = parser.getBuilder().getArrayAttr(mappings);
   return success();
 }
 
 void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
                               ArrayAttr arr) {
-  auto printOne = [&](DictionaryAttr dict) {
+  auto printOne = [&](wave::WaveSymbolMappingAttr mapping) {
     printer.getStream() << "{";
     llvm::interleaveComma(
-        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
-          printer.getStream() << namedAttr.getName().getValue() << " : ";
-          if (auto mappingAttr = llvm::dyn_cast<wave::WaveIndexMappingAttr>(
-                  namedAttr.getValue())) {
+        llvm::zip(mapping.getKeys(), mapping.getValues()), printer.getStream(),
+        [&](auto pair) {
+          auto [key, value] = pair;
+          printer.getStream() << key.getName() << " : ";
+          if (auto mappingAttr =
+                  llvm::dyn_cast<wave::WaveIndexMappingAttr>(value)) {
             mappingAttr.print(printer);
           } else {
-            printer.printAttribute(namedAttr.getValue());
+            printer.printAttribute(value);
           }
         });
     printer.getStream() << "}";
   };
-  // Always print as an array to match the parser syntax.
   printer.getStream() << "[";
   llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
-    printOne(llvm::cast<DictionaryAttr>(a));
+    printOne(llvm::cast<wave::WaveSymbolMappingAttr>(a));
   });
   printer.getStream() << "]";
 }

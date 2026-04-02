@@ -835,8 +835,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK:      wave.iterate
     // CHECK-SAME: iter_args
     // CHECK-SAME: index
-    // CHECK-DAG:  M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     %mma_result = wave.iterate @K iter_args(%c_reg) {
       ^bb0(%acc: !wave.tensor<[@M, @N] of f32>):
 
@@ -1062,7 +1062,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     %acc_init = wave.register %cst : !wave.tensor<[@M, @N] of f32>
 
-    // CHECK: wave.iterate @K iter_args({{.*}}) attributes {index = [{M = #wave.index_mapping<[] -> (0, 1, 1)>, N = #wave.index_mapping<[] -> (0, 1, 1)>}]}
+    // CHECK: wave.iterate @K iter_args({{.*}}) attributes {index = [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (0, 1, 1)>, @N = #wave.index_mapping<[] -> (0, 1, 1)>>]}
     %out = wave.iterate @K iter_args(%acc_init) captures(%mask) {
     ^bb0(%acc: !wave.tensor<[@M, @N] of f32>, %m: !wave.tensor<[@M, @N] of f32, <global>>):
       // CHECK: wave.read{{.*}}index [{M : <[] -> (0, 1, 1)>, N : <[] -> (0, 1, 1)>}]
