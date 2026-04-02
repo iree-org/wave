@@ -620,6 +620,10 @@ def _get_tagged_splitk_mxfp4_gemm_impl(
             f"K per split ({k_per_split}) is less than BLOCK_K ({block_shape[2]}). "
             f"Reduce num_splits or BLOCK_K so that each split has at least BLOCK_K elements."
         )
+    if k_per_split % block_shape[2] != 0:
+        raise ValueError(
+            f"k_per_split ({k_per_split}) must be a multiple of BLOCK_K ({block_shape[2]})."
+        )
 
     M = tkl.sym.M
     N = tkl.sym.N
