@@ -1164,12 +1164,14 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
     return success();
   // When newly reached top, report an error.
   if (joined.isTop() && !other.isTop()) {
-    bool isVectorShapeConflict =
-        failed(IndexExprsLatticeStorage::getJoinedVectorShape(lattice, other));
+    StringRef conflictKind = " index expression";
+    if (failed(IndexExprsLatticeStorage::getJoinedVectorShape(lattice, other)))
+      conflictKind = " vector shape";
+    else if (failed(IndexExprsLatticeStorage::getJoinedSourceVectorShape(
+                 lattice, other)))
+      conflictKind = " source vector shape";
     InFlightDiagnostic diag =
-        emitError() << "conflict for " << latticeName
-                    << (isVectorShapeConflict ? " vector shape"
-                                              : " index expression")
+        emitError() << "conflict for " << latticeName << conflictKind
                     << " when propagating from " << otherName << " lattice";
     diag.attachNote() << "original " << latticeName << " lattice: " << lattice;
     diag.attachNote() << otherName << " lattice: " << other;

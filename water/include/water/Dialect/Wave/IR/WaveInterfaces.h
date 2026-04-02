@@ -712,6 +712,13 @@ public:
   getJoinedVectorShape(const IndexExprsLatticeStorage &lhs,
                        const IndexExprsLatticeStorage &rhs);
 
+  // Return the join of source vector shapes from two lattices as a
+  // (shape, priority) pair. Returns failure if both sides have non-null
+  // source vector shapes with the same priority but different values.
+  static llvm::FailureOr<std::pair<mlir::DictionaryAttr, int32_t>>
+  getJoinedSourceVectorShape(const IndexExprsLatticeStorage &lhs,
+                             const IndexExprsLatticeStorage &rhs);
+
   // Join two lattice instances and return the result.
   static IndexExprsLatticeStorage join(const IndexExprsLatticeStorage &lhs,
                                        const IndexExprsLatticeStorage &rhs);

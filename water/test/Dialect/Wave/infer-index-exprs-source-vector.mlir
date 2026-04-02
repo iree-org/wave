@@ -51,7 +51,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Operand 1: sourceVectorShape {M=16, N=0}, sourceVectorShapePriority=5
     // Per-key vector shape join succeeds (higher priority wins for each key)
     // but sourceVectorShapes differ at equal priority 5 -> conflict.
-    // expected-error @below {{conflict when propagating index expressions from operand #1 to result #0}}
+    // expected-error @below {{conflict when propagating source vector shapes from operand #1 to result #0}}
     // expected-note @below {{original result lattice}}
     // expected-note @below {{operand #1 lattice}}
     %result = wave.add %a, %b {wave_test.override_operand_index = [

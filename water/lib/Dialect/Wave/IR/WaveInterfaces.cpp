@@ -1600,6 +1600,29 @@ static DictionaryAttr getJoinedVectorShape(DictionaryAttr lhs,
   return DictionaryAttr::get(lhs.getContext(), joinedVectorShapeEntries);
 }
 
+FailureOr<std::pair<DictionaryAttr, int32_t>>
+wave::IndexExprsLatticeStorage::getJoinedSourceVectorShape(
+    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs) {
+  DictionaryAttr lhsSVS = lhs.getSourceVectorShape();
+  DictionaryAttr rhsSVS = rhs.getSourceVectorShape();
+  int32_t lhsPri = lhs.getSourceVectorShapePriority();
+  int32_t rhsPri = rhs.getSourceVectorShapePriority();
+
+  if (!lhsSVS && !rhsSVS)
+    return std::make_pair(DictionaryAttr(), int32_t(0));
+  if (!lhsSVS)
+    return std::make_pair(rhsSVS, rhsPri);
+  if (!rhsSVS)
+    return std::make_pair(lhsSVS, lhsPri);
+  if (lhsPri > rhsPri)
+    return std::make_pair(lhsSVS, lhsPri);
+  if (rhsPri > lhsPri)
+    return std::make_pair(rhsSVS, rhsPri);
+  if (lhsSVS == rhsSVS)
+    return std::make_pair(lhsSVS, lhsPri);
+  return failure();
+}
+
 FailureOr<DictionaryAttr> wave::IndexExprsLatticeStorage::getJoinedVectorShape(
     const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs) {
   if (lhs.isBottom() && rhs.isBottom())
@@ -1685,38 +1708,11 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   // Join source vector shapes using priority: higher priority wins. If
   // priorities are equal, two different values cause top; two identical values
   // join cleanly.
-  DictionaryAttr joinedSourceVectorShape;
-  int32_t joinedSourceVectorShapePriority = 0;
-  {
-    DictionaryAttr lhsSVS = lhs.getSourceVectorShape();
-    DictionaryAttr rhsSVS = rhs.getSourceVectorShape();
-    int32_t lhsPri = lhs.getSourceVectorShapePriority();
-    int32_t rhsPri = rhs.getSourceVectorShapePriority();
-
-    if (!lhsSVS && !rhsSVS) {
-      // Both absent: nothing to do.
-    } else if (!lhsSVS) {
-      joinedSourceVectorShape = rhsSVS;
-      joinedSourceVectorShapePriority = rhsPri;
-    } else if (!rhsSVS) {
-      joinedSourceVectorShape = lhsSVS;
-      joinedSourceVectorShapePriority = lhsPri;
-    } else if (lhsPri > rhsPri) {
-      joinedSourceVectorShape = lhsSVS;
-      joinedSourceVectorShapePriority = lhsPri;
-    } else if (rhsPri > lhsPri) {
-      joinedSourceVectorShape = rhsSVS;
-      joinedSourceVectorShapePriority = rhsPri;
-    } else {
-      // Equal priorities: identical values join cleanly, different go to top.
-      if (lhsSVS == rhsSVS) {
-        joinedSourceVectorShape = lhsSVS;
-        joinedSourceVectorShapePriority = lhsPri;
-      } else {
-        return IndexExprsLatticeStorage::top();
-      }
-    }
-  }
+  auto joinedSVSResult = getJoinedSourceVectorShape(lhs, rhs);
+  if (failed(joinedSVSResult))
+    return IndexExprsLatticeStorage::top();
+  auto [joinedSourceVectorShape, joinedSourceVectorShapePriority] =
+      *joinedSVSResult;
 
   SmallVector<NamedAttribute> priEntries;
   priEntries.reserve(resultPriorities.size());
@@ -1885,14 +1881,16 @@ llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
       IndexExprsLatticeStorage joined =
           IndexExprsLatticeStorage::join(toLattice, fromLattice);
       if (joined.isTop() && !fromTop) {
-        bool isVectorShapeConflict =
-            failed(IndexExprsLatticeStorage::getJoinedVectorShape(
+        StringRef conflictKind = "index expressions";
+        if (failed(IndexExprsLatticeStorage::getJoinedVectorShape(
                 toLattice, fromLattice)) &&
-            toLattice.getVectorShape() && fromLattice.getVectorShape();
+            toLattice.getVectorShape() && fromLattice.getVectorShape())
+          conflictKind = "vector shapes";
+        else if (failed(IndexExprsLatticeStorage::getJoinedSourceVectorShape(
+                     toLattice, fromLattice)))
+          conflictKind = "source vector shapes";
         InFlightDiagnostic diag =
-            emitError() << "conflict when propagating "
-                        << (isVectorShapeConflict ? "vector shapes"
-                                                  : "index expressions")
+            emitError() << "conflict when propagating " << conflictKind
                         << " from " << fromName << " #" << fromNum << " to "
                         << toName << " #" << toNum;
         diag.attachNote() << "original " << toName << " lattice: " << toLattice;
