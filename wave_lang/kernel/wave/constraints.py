@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
 
-from sympy import Integer, Min, Mul, Piecewise, ceiling, floor
+from sympy import Add, Integer, Min, Mul, Piecewise, ceiling, floor
 
 from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
@@ -765,12 +765,24 @@ def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
 
     Returns ``False`` when we can prove the tiled work never overshoots the
     tensor dimension; ``True`` (bounds check needed) otherwise.
+
+    Handles the split-K pattern where ``work_bound`` is
+    ``start + tile * ceiling(Min(dim, f(wg)) / tile)`` -- the ``start`` term
+    is stripped before checking the ``tile * ceiling(...)`` core.
     """
     if work_bound == dim_bound:
         return False
 
     if isinstance(work_bound, (int, Integer)) and isinstance(dim_bound, (int, Integer)):
         return int(work_bound) > int(dim_bound)
+
+    # Strip an additive start offset so we match the tile*ceiling core even
+    # when work_bound = start + tile * ceiling(...).
+    core = work_bound
+    if isinstance(work_bound, Add):
+        mul_terms = [a for a in work_bound.args if isinstance(a, Mul)]
+        if len(mul_terms) == 1:
+            core = mul_terms[0]
 
     # The Min caps the numerator at dim, so
     #   Min(dim, x) <= dim
@@ -779,7 +791,7 @@ def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
     # as long as dim is evenly divisible by tile.
     if isinstance(dim_bound, (int, Integer)):
         dim_int = int(dim_bound)
-        tile, ceil_expr = _extract_tile_and_ceiling(work_bound)
+        tile, ceil_expr = _extract_tile_and_ceiling(core)
         if tile is not None and dim_int % tile == 0 and ceil_expr is not None:
             numer, denom = ceil_expr.args[0].as_numer_denom()
             if denom == tile and isinstance(numer, Min):
