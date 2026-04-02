@@ -232,8 +232,8 @@ static void localCSERange(Block *block, Operation *from, Operation *to) {
     // Only CSE pure ops (no side effects, no regions).
     if (op->getNumRegions() > 0)
       continue;
-    if (!op->hasTrait<OpTrait::IsTerminator>() &&
-        !isa<ConstantOp>(op) && !isAddressVALU(op))
+    if (!op->hasTrait<OpTrait::IsTerminator>() && !isa<ConstantOp>(op) &&
+        !isAddressVALU(op))
       continue;
 
     CSEEntry entry;
@@ -241,8 +241,7 @@ static void localCSERange(Block *block, Operation *from, Operation *to) {
     entry.opName = op->getName().getStringRef();
     entry.operands.append(op->operand_begin(), op->operand_end());
     // Canonicalize commutative binary ops by sorting operand pointers.
-    if (entry.operands.size() == 2 &&
-        op->hasTrait<OpTrait::IsCommutative>()) {
+    if (entry.operands.size() == 2 && op->hasTrait<OpTrait::IsCommutative>()) {
       if (entry.operands[0].getAsOpaquePointer() >
           entry.operands[1].getAsOpaquePointer())
         std::swap(entry.operands[0], entry.operands[1]);
@@ -311,9 +310,7 @@ static Value _combineSGPRParts(ArrayRef<Value> parts, OpBuilder &builder,
     if (!combined)
       combined = part;
     else
-      combined = S_ADD_U32::create(builder, loc, sregTy,
-                                   SCCType::get(builder.getContext()),
-                                   combined, part)
+      combined = S_ADD_U32::create(builder, loc, sregTy, sregTy, combined, part)
                      .getDst();
   }
   return combined;
@@ -784,8 +781,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
         // but still try SGPR splitting (without the constant part).
         if (!d.sgprParts.empty() && d.constAddend == 0) {
           initialVoffsets[idx] = d.vgprBase;
-          sgprAddends[idx] = _combineSGPRParts(d.sgprParts, builder, loc,
-                                                sregType);
+          sgprAddends[idx] =
+              _combineSGPRParts(d.sgprParts, builder, loc, sregType);
         }
         continue;
       }
@@ -793,8 +790,7 @@ static void applyStrengthReduction(LoopOp loopOp) {
       // Apply decomposition: shared base + instOffset + sgpr addend.
       initialVoffsets[idx] = canonicalBase;
       instOffsetDeltas[idx] = d.constAddend;
-      sgprAddends[idx] = _combineSGPRParts(d.sgprParts, builder, loc,
-                                            sregType);
+      sgprAddends[idx] = _combineSGPRParts(d.sgprParts, builder, loc, sregType);
     }
   }
 
@@ -847,9 +843,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
         existingOffset = attr.getInt();
       clonedLoad->setAttr(
           "instOffset",
-          IntegerAttr::get(
-              IntegerType::get(clonedLoad->getContext(), 64),
-              existingOffset + instOffsetDeltas[i]));
+          IntegerAttr::get(IntegerType::get(clonedLoad->getContext(), 64),
+                           existingOffset + instOffsetDeltas[i]));
     }
   }
 
