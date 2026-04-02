@@ -510,11 +510,14 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
         # Matrix A scale
         all_read_a_scale = tkw.get_node_by_tag("read_a_scale")
 
-        # Matrix B data
-        all_read_b = tkw.get_node_by_tag("read_b")
+        # Matrix B data - filter to Read nodes only to exclude
+        # Reshape/ExtractSlice bridge nodes from partition_gather_like_ops.
+        all_read_b = tkw.filter_nodes(tkw.get_node_by_tag("read_b"), node_type=tkw.Read)
 
-        # Matrix B scale
-        all_read_b_scale = tkw.get_node_by_tag("read_b_scale")
+        # Matrix B scale - filter to Read nodes only
+        all_read_b_scale = tkw.filter_nodes(
+            tkw.get_node_by_tag("read_b_scale"), node_type=tkw.Read
+        )
 
         # Bitcast operations (needed alongside compute)
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
@@ -1626,8 +1629,13 @@ def get_mxfp4_asymmetric_schedule(
         )
 
         # Matrix B data and B scale - Global to Vector
-        g2v_b = tkw.get_node_by_tag("read_b")
-        g2v_b_scale = tkw.get_node_by_tag("read_b_scale")
+        # Filter to Read nodes only: partition_gather_like_ops may create
+        # Reshape/ExtractSlice bridge nodes that inherit tags but don't
+        # generate buffer loads and must not inflate vmcnt counts.
+        g2v_b = tkw.filter_nodes(tkw.get_node_by_tag("read_b"), node_type=tkw.Read)
+        g2v_b_scale = tkw.filter_nodes(
+            tkw.get_node_by_tag("read_b_scale"), node_type=tkw.Read
+        )
 
         # Bitcast operations (needed alongside compute)
         bitcast_a = tkw.get_node_by_tag("bitcast_a")
