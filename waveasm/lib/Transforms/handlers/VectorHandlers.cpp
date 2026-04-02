@@ -117,7 +117,12 @@ LogicalResult handleVectorExtract(Operation *op, TranslationContext &ctx) {
           builder, loc, ctx.createImmType(bitOffset), bitOffset);
       auto shifted = V_LSHRREV_B32::create(builder, loc, ctx.createVRegType(),
                                            shiftImm, dwordReg);
-      ctx.getMapper().mapValue(extractOp.getResult(), shifted);
+      int64_t mask = (1LL << elemBits) - 1;
+      auto maskImm =
+          ConstantOp::create(builder, loc, ctx.createImmType(mask), mask);
+      auto masked = V_AND_B32::create(builder, loc, ctx.createVRegType(),
+                                      shifted, maskImm);
+      ctx.getMapper().mapValue(extractOp.getResult(), masked);
     } else {
       ctx.getMapper().mapValue(extractOp.getResult(), dwordReg);
     }
@@ -303,7 +308,12 @@ LogicalResult handleVectorExtractStridedSlice(Operation *op,
           builder, loc, ctx.createImmType(bitOffset), bitOffset);
       auto shifted = V_LSHRREV_B32::create(builder, loc, ctx.createVRegType(),
                                            shiftImm, dwordReg);
-      ctx.getMapper().mapValue(extractOp.getResult(), shifted);
+      int64_t mask = (1LL << elemBits) - 1;
+      auto maskImm =
+          ConstantOp::create(builder, loc, ctx.createImmType(mask), mask);
+      auto masked = V_AND_B32::create(builder, loc, ctx.createVRegType(),
+                                      shifted, maskImm);
+      ctx.getMapper().mapValue(extractOp.getResult(), masked);
     } else {
       ctx.getMapper().mapValue(extractOp.getResult(), dwordReg);
     }
