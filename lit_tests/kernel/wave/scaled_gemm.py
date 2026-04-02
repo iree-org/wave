@@ -593,10 +593,14 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [4096], strides: [1] : memref<256x16xi8, #gpu.address_space<workgroup>> to memref<4096xi8, #gpu.address_space<workgroup>>
     # CHECK:          vector.store {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<4xi8>
 
+    # Steady-state loop: all MFMAs are now inside the loop (no separate
+    # epilogue) because linearization absorbs the epilogue into the main
+    # loop body.  The 128 MFMAs split into two double-buffered K-blocks.
     # CHECK:          scf.for
-    # CHECK-COUNT-128: amdgpu.scaled_mfma
+    # CHECK-COUNT-64:  amdgpu.scaled_mfma
+    # CHECK-COUNT-64:  amdgpu.scaled_mfma
 
-    # Epilogue / stores: linearized global f32 + fat raw buffer path for vector.store.
+    # Stores: linearized global f32 + fat raw buffer path for vector.store.
     # CHECK:          memref.reinterpret_cast {{.*}} to offset: [{{.*}}], sizes: [536870910], strides: [1] : memref<f32> to memref<536870910xf32, strided<[1], offset: ?>>
     # CHECK:          amdgpu.fat_raw_buffer_cast {{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%{{.*}}) resetOffset : memref<?xf32, strided<[1], offset: ?>> to memref<?xf32, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:          vector.store {{.*}} : memref<?xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf32>
@@ -799,14 +803,18 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-LABEL:  test_mxfp4_scaled_mma_unaligned_16x16x128
     # CHECK:        func.func @batched_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: index, %arg6: index) attributes {translation_info = #translation} {
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[C_NEG_8192_I14:.*]] = arith.constant -8192 : i14
+    # CHECK-DAG:        %[[C2147483647:.*]] = arith.constant 2147483647 : index
     # CHECK-DAG:        %[[BLOCK_ID_X:.*]] = gpu.block_id  x
     # CHECK-DAG:        %[[BLOCK_ID_Z:.*]] = gpu.block_id  z
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x upper_bound 256
     # CHECK-DAG:        %[[THREAD_ID_Y:.*]] = gpu.thread_id  y upper_bound 2
     # CHECK-DAG:        %{{.*}} = memref.alloc() : memref<{{.*}}xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:        %{{.*}} = amdgpu.fat_raw_buffer_cast %{{.*}} : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
-    # CHECK-DAG:        arith.select %{{.*}}, %{{.*}}, %{{.*}} : index
-    # CHECK-DAG:        vector.load %{{.*}}[%{{.*}}] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # OOB-index-redirect: fat_raw_buffer_cast with validBytes and cacheSwizzleStride,
+    # then arith.select between computed index and sentinel (C2147483647).
+    # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK:            %[[SELECT:.*]] = arith.select %{{.*}}, %{{.*}}, %[[C2147483647]] : index
+    # CHECK:            vector.load %[[BUFF_CAST]][%[[SELECT]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
 
 
 @run_test

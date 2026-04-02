@@ -776,12 +776,12 @@ def test_read_write_conditional():
     #  CHECK-SAME:      (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
     #   CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
     #       CHECK:      %[[VEC:.*]] = vector.load %{{.*}}[%{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<8xf16>
-    #       CHECK:      %[[RES:.*]] = vector.extract_strided_slice %[[VEC]] {offsets = [1], sizes = [1], strides = [1]} : vector<8xf16> to vector<1xf16>
+    #       CHECK:      %[[RES:.*]] = vector.extract_strided_slice %[[VEC]] {offsets = [{{.*}}], sizes = [1], strides = [1]} : vector<8xf16> to vector<1xf16>
     #       CHECK:      %[[O1:.*]] = memref.load %{{.*}}[%{{.*}}] : memref<536870910xi32, strided<[1]>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.cmpi sgt, %[[O2]], %[[C0]] : index
     #       CHECK:      scf.if %[[O3]] {
-    #       CHECK:        vector.store {{.*}}, {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<1xf16>
+    #       CHECK:        vector.store %[[RES]], {{.*}}[{{.*}}] : memref<{{.*}}xf16{{.*}}>, vector<1xf16>
     #       CHECK:      }
 
 

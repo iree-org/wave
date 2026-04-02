@@ -2561,6 +2561,8 @@ def test_streamk_gemm():
 
     # CHECK:           llvm.store volatile %{{.+}}, %{{.+}} : vector<1xf32>, !llvm.ptr
 
+    # CHECK:           llvm.load volatile %{{.+}} : !llvm.ptr -> vector<1xf32>
+
 
 @run_test
 def test_splitk_gemm():
