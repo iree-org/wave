@@ -671,9 +671,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError("Unsupported MMA type")
 
-        assert isinstance(
-            constraint_index, MMAOperand
-        ), f"Invalid MMA operand {constraint_index}"
+        assert isinstance(constraint_index, MMAOperand), (
+            f"Invalid MMA operand {constraint_index}"
+        )
         return IndexSequence(
             offset[constraint_index.value],
             size[constraint_index.value],
@@ -767,8 +767,9 @@ def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
     tensor dimension; ``True`` (bounds check needed) otherwise.
 
     Handles the split-K pattern where ``work_bound`` is
-    ``start + tile * ceiling(Min(dim, f(wg)) / tile)`` -- the ``start`` term
-    is stripped before checking the ``tile * ceiling(...)`` core.
+    ``start + tile * ceiling((Min(dim, f(wg)) - start) / tile)`` -- the
+    ``start`` addend is stripped and the ceiling interior is checked for a
+    ``Min`` that caps the range at ``dim``.
     """
     if work_bound == dim_bound:
         return False
@@ -780,26 +781,38 @@ def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
     # when work_bound = start + tile * ceiling(...).
     core = work_bound
     if isinstance(work_bound, Add):
-        mul_terms = [a for a in work_bound.args if isinstance(a, Mul)]
-        if len(mul_terms) == 1:
-            core = mul_terms[0]
+        ceil_muls = [
+            a
+            for a in work_bound.args
+            if isinstance(a, Mul) and any(isinstance(f, ceiling) for f in a.args)
+        ]
+        if len(ceil_muls) == 1:
+            core = ceil_muls[0]
 
-    # The Min caps the numerator at dim, so
-    #   Min(dim, x) <= dim
-    #   ceiling(Min(dim, x) / tile) <= ceiling(dim / tile) = dim / tile
-    #   tile * ceiling(Min(dim, x) / tile) <= dim
-    # as long as dim is evenly divisible by tile.
+    # When ``dim`` is tile-aligned and the ceiling argument contains
+    # ``Min(dim, ...)`` anywhere in its numerator, the Min caps the range
+    # at ``dim``, so ``tile * ceiling(... / tile) <= dim``.
     if isinstance(dim_bound, (int, Integer)):
         dim_int = int(dim_bound)
         tile, ceil_expr = _extract_tile_and_ceiling(core)
         if tile is not None and dim_int % tile == 0 and ceil_expr is not None:
             numer, denom = ceil_expr.args[0].as_numer_denom()
-            if denom == tile and isinstance(numer, Min):
-                if any(a == dim_int for a in numer.args):
-                    return False
+            if denom == tile and _expr_contains_min_with_bound(numer, dim_int):
+                return False
 
     # Cannot prove safety -- assume bounds check is needed.
     return True
+
+
+def _expr_contains_min_with_bound(expr: IndexExpr, bound) -> bool:
+    """Return True when *expr* (recursively) contains ``Min(bound, ...)``."""
+    if isinstance(expr, Min):
+        if any(a == bound for a in expr.args):
+            return True
+    for arg in getattr(expr, "args", ()):
+        if _expr_contains_min_with_bound(arg, bound):
+            return True
+    return False
 
 
 def _extract_tile_and_ceiling(
@@ -950,9 +963,9 @@ class WaveConstraint(DistributionConstraint):
         # all threads in a wave are handled in wg_dim_0.
         if workgroup_constraint.workgroup_dim == 0:
             self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
-        assert (
-            old_wave_id is None or self.wave_id == old_wave_id
-        ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        assert old_wave_id is None or self.wave_id == old_wave_id, (
+            f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        )
         self.wg_constraint = workgroup_constraint
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
