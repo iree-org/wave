@@ -944,50 +944,37 @@ def _linear_read_linearize_memref_maybe_hoisted(
     Build a 1-D linearized memref for flattened reads; optionally hoist
     stride materialization to the owning scf.for when inside a loop.
     """
+    # TODO: Remove this manual hoisting once the waveasm LICM pass handles it.
     ip = InsertionPoint.current
     owner = ip.block.owner
     is_in_loop = not isinstance(owner, func_d.FuncOp) and owner.name == "scf.for"
     hoist_ip = InsertionPoint(owner) if is_in_loop else None
 
-    if hoist_ip is not None:
-        with hoist_ip:
-            strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
-            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
-            lin_src, _ = _linearize_memref(
-                kb_src, zero_indices, zero_indices, strides_vals
-            )
-            if buffer_ops_enabled:
-                valid_bytes = _compute_valid_bytes(
-                    lin_src,
-                    element_type,
-                    input_shape,
-                    emitter,
-                    use_real_bounds_override=True,
-                )
-                lin_src = _cast_buffer_and_encode_stride(
-                    lin_src,
-                    strides_vals,
-                    element_type,
-                    valid_bytes,
-                )
-    else:
+    def _materialize():
         strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
         zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
-        lin_src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
+        src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
         if buffer_ops_enabled:
             valid_bytes = _compute_valid_bytes(
-                lin_src,
+                src,
                 element_type,
                 input_shape,
                 emitter,
                 use_real_bounds_override=True,
             )
-            lin_src = _cast_buffer_and_encode_stride(
-                lin_src,
+            src = _cast_buffer_and_encode_stride(
+                src,
                 strides_vals,
                 element_type,
                 valid_bytes,
             )
+        return src
+
+    if hoist_ip is not None:
+        with hoist_ip:
+            lin_src = _materialize()
+    else:
+        lin_src = _materialize()
     return lin_src
 
 

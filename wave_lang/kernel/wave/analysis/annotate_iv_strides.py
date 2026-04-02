@@ -1,4 +1,4 @@
-# Copyright 2025 The IREE Authors
+# Copyright 2026 The IREE Authors
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -36,13 +36,6 @@ from ..utils.symbol_utils import (
     simplify as sym_simplify,
     subs_idxc,
 )
-
-_INDUCTION_PREFIX = "$ARG"
-
-
-def _get_iv_symbols(expr: sympy.Expr) -> list[sympy.Symbol]:
-    """Return all induction-variable symbols in *expr*."""
-    return [s for s in expr.free_symbols if str(s).startswith(_INDUCTION_PREFIX)]
 
 
 def _try_symbolic_stride(flat, iv_sym, step):
