@@ -16,8 +16,6 @@
 #include "waveasm/Dialect/WaveASMOps.h"
 #include "waveasm/Transforms/Passes.h"
 
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
@@ -83,41 +81,21 @@ private:
 
   unsigned verifyBlock(Block &block) {
     unsigned errors = 0;
-    Operation *lastSCCWriter = nullptr;
     for (Operation &op : block) {
-      if (auto condOp = dyn_cast<ConditionOp>(&op)) {
-        Value cond = condOp.getCondition();
-        Operation *condDef = cond.getDefiningOp();
-        if (condDef && lastSCCWriter && lastSCCWriter != condDef) {
-          auto clobbers = findSCCClobbersBetween(condDef, &op);
-          if (!clobbers.empty()) {
-            emitSCCClobberError(&op, condDef, clobbers);
-            ++errors;
-          }
+      // Check every SCC-typed operand: its producer must not be separated
+      // from this consumer by an SCC-clobbering op.
+      for (Value operand : op.getOperands()) {
+        if (!isa<SCCType>(operand.getType()))
+          continue;
+        Operation *producer = operand.getDefiningOp();
+        if (!producer)
+          continue;
+        auto clobbers = findSCCClobbersBetween(producer, &op);
+        if (!clobbers.empty()) {
+          emitSCCClobberError(&op, producer, clobbers);
+          ++errors;
         }
       }
-      if (auto ifOp = dyn_cast<IfOp>(&op)) {
-        Value cond = ifOp.getCondition();
-        Operation *condDef = cond.getDefiningOp();
-        if (condDef && lastSCCWriter && lastSCCWriter != condDef) {
-          auto clobbers = findSCCClobbersBetween(condDef, &op);
-          if (!clobbers.empty()) {
-            emitSCCClobberError(&op, condDef, clobbers);
-            ++errors;
-          }
-        }
-      }
-      if (isa<S_CSELECT_B32>(&op) && !lastSCCWriter) {
-        op.emitError()
-            << "SCC hazard: s_cselect_b32 has no preceding SCC writer";
-        ++errors;
-      }
-      if (isa<S_ADDC_U32>(&op) && !lastSCCWriter) {
-        op.emitError() << "SCC hazard: s_addc_u32 has no preceding SCC writer";
-        ++errors;
-      }
-      if (writesSCC(&op))
-        lastSCCWriter = &op;
       for (Region &region : op.getRegions())
         for (Block &nestedBlock : region)
           errors += verifyBlock(nestedBlock);
