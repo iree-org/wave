@@ -1700,11 +1700,6 @@ def get_mxfp4_asymmetric_schedule(
             2  # prefetch depth of A and A_scale is 2 iterations (triple buffer)
         )
 
-        if is_bscale_shuffled:
-            b_scale_shuffling_factor = 4
-        else:
-            b_scale_shuffling_factor = 1
-
         # =====================================================================
         # Prologue: G2S_A + G2S_A_scale + G2V_B + G2V_B_scale + vmcnt(25) + s2v_a_0 + s2v_a_scale_0
         # =====================================================================
@@ -1724,9 +1719,7 @@ def get_mxfp4_asymmetric_schedule(
         # A is prefetched twice in the prologue, we want to wait for just the first prefetch
         A_g2s_total = len(prologue_g2s_a) + len(prologue_g2s_a_scale)
         A_g2s_per_iter = A_g2s_total // num_pf_iters
-        B_g2v_prologue = len(prologue_g2v_b) + (
-            len(prologue_g2v_b_scale) // b_scale_shuffling_factor
-        )
+        B_g2v_prologue = len(prologue_g2v_b) + len(prologue_g2v_b_scale)
 
         prologue_clusters = [
             tkw.cluster(
@@ -1823,9 +1816,7 @@ def get_mxfp4_asymmetric_schedule(
             start_after_groups=[[], [], [1], [0]],
         )
 
-        loop_B_g2v_bs = len(loop_g2v_b) + (
-            len(loop_g2v_b_scale) // b_scale_shuffling_factor
-        )
+        loop_B_g2v_bs = len(loop_g2v_b) + len(loop_g2v_b_scale)
         loop_A_s2v_bs = len(loop_g2s_a) + len(loop_g2s_a_scale)
         clusters = [
             tkw.cluster(

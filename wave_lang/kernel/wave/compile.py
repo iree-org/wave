@@ -41,6 +41,7 @@ from .analysis.annotate_iv_strides import annotate_iv_strides
 from .analysis.flatten_read_indices import flatten_read_indices
 from .analysis.partition_strided_operators import (
     merge_contiguous_reads,
+    partition_gather_like_ops,
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
     simplify_indices,
@@ -543,6 +544,11 @@ def build_graph_passes(
     ]
 
     graph_passes.append(partial(simplify_indices, trace, launchable.constraints))
+    graph_passes.append(
+        partial(
+            partition_gather_like_ops, trace, launchable.constraints, options.target
+        )
+    )
     graph_passes.append(
         partial(
             merge_contiguous_reads,

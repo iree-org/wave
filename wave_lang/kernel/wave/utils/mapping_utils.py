@@ -180,9 +180,8 @@ def check_is_mapping_contiguous(
             [new_index[infer_dim(d)] for d in symbolic_shape], strides
         )
 
-        # When the sympy expressions are complex, we fallback to the aligned-base check.
-        # Because sympy evaluates to a value, we cannot use the difference check. Hence, the check fails.
-        if (offset - prev_offset) != 1:
+        diff_expr = offset - prev_offset
+        if diff_expr != 1:
             return _check_contiguous_with_aligned_base(
                 mapping,
                 symbolic_shape,
@@ -235,6 +234,7 @@ def _check_contiguous_with_aligned_base(
         [new_index[infer_dim(d)] for d in symbolic_shape],
         strides,
     )
+    symbolic_ok = True
     for i in range(1, elements_per_thread):
         new_index = transform_index_on_mapping(
             mapping,
@@ -248,8 +248,84 @@ def _check_contiguous_with_aligned_base(
         )
         diff_expr = simplify(offset - prev_offset)
         if diff_expr != 1:
-            return False
+            symbolic_ok = False
+            break
         prev_offset = offset
+
+    if symbolic_ok:
+        return True
+
+    return _check_contiguous_with_probes(
+        mapping,
+        symbolic_shape,
+        array_shape,
+        index,
+        elements_per_thread,
+        is_read,
+    )
+
+
+_CONTIGUITY_PROBES = (
+    lambda i: 137 + i * 31,
+    lambda i: 251 + i * 47,
+    lambda i: 503 + i * 17,
+    lambda i: 48 + i * 37,
+)
+
+
+def _check_contiguous_with_probes(
+    mapping: IndexMapping,
+    symbolic_shape: tuple[IndexExpr, ...],
+    array_shape: tuple[IndexExpr, ...],
+    index: dict[IndexExpr, IndexSequence],
+    elements_per_thread: int | IndexExpr,
+    is_read: bool,
+) -> bool:
+    """Numeric probing fallback for contiguity check.
+
+    When symbolic simplification fails (e.g. with dynamic shapes), evaluate
+    the offset difference with multiple diverse probe values. If all probes
+    produce diff=1, the mapping is treated as contiguous.
+    """
+    idxc = IndexingContext.current()
+    strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+
+    offset_exprs = []
+    for elem in range(elements_per_thread):
+        idx = deepcopy(index)
+        idx[fastest_dim].start += elem
+        new_index = transform_index_on_mapping(
+            mapping,
+            symbolic_shape,
+            idx,
+            is_read=is_read,
+        )
+        offset_expr = _compute_offset(
+            [new_index[infer_dim(d)] for d in symbolic_shape],
+            strides,
+        )
+        offset_exprs.append(subs_idxc(offset_expr))
+
+    all_free = set()
+    for expr in offset_exprs:
+        if hasattr(expr, "free_symbols"):
+            all_free.update(expr.free_symbols)
+    free_list = sorted(all_free, key=str)
+    if not free_list:
+        return False
+
+    for gen in _CONTIGUITY_PROBES:
+        probe_map = {s: gen(i) for i, s in enumerate(free_list)}
+        prev_val = None
+        for expr in offset_exprs:
+            try:
+                val = int(expr.subs(probe_map))
+            except (TypeError, ValueError, AttributeError):
+                return False
+            if prev_val is not None and val - prev_val != 1:
+                return False
+            prev_val = val
 
     return True
 
