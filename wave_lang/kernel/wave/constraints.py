@@ -671,9 +671,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError("Unsupported MMA type")
 
-        assert isinstance(constraint_index, MMAOperand), (
-            f"Invalid MMA operand {constraint_index}"
-        )
+        assert isinstance(
+            constraint_index, MMAOperand
+        ), f"Invalid MMA operand {constraint_index}"
         return IndexSequence(
             offset[constraint_index.value],
             size[constraint_index.value],
@@ -963,9 +963,9 @@ class WaveConstraint(DistributionConstraint):
         # all threads in a wave are handled in wg_dim_0.
         if workgroup_constraint.workgroup_dim == 0:
             self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
-        assert old_wave_id is None or self.wave_id == old_wave_id, (
-            f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
-        )
+        assert (
+            old_wave_id is None or self.wave_id == old_wave_id
+        ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
         self.wg_constraint = workgroup_constraint
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
