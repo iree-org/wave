@@ -18,7 +18,7 @@ Usage:
 import torch
 import wave_lang.kernel.lang as tkl
 
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.constraints import ScaledMMAType
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.templates import (
