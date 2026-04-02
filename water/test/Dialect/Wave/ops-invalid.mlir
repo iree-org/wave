@@ -62,6 +62,204 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
+func.func @scaled_mma_mismatch_element_lhs_rhs(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f8E5M2>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{expected LHS and RHS elemental types to match, got 'f4E2M1FN', 'f8E5M2'}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_mismatch_element_scale_lhs_rhs(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f32>,
+    %acc: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{expected LHS scale and RHS scale elemental types to match, got 'f8E8M0FNU', 'f32'}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f32>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_mismatch_element_acc_result(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of bf16>) {
+  // expected-error @below {{expected result and accumulator elemental types to match, got 'f32', 'bf16'}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of bf16>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_1d(
+    %lhs: !wave.tensor<[@K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@K] of f32>) {
+  // expected-error @below {{expects at least 2D operands for scaled MMA}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@K] of f4E2M1FN>, !wave.tensor<[@K32] of f8E8M0FNU>,
+       !wave.tensor<[@K] of f4E2M1FN>, !wave.tensor<[@K32] of f8E8M0FNU>,
+       !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_dim_lhs_rhs(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @J] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{expected LHS dimension #1 (#wave.symbol<"K">) to match RHS dimension #1 (#wave.symbol<"J">)}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @J] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_dim_lhs_acc(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@E, @N] of f32>) {
+  // expected-error @below {{expected LHS dimension #0 (#wave.symbol<"M">) to match accumulator dimension #0 (#wave.symbol<"E">)}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@E, @N] of f32>) -> !wave.tensor<[@E, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_dim_rhs_acc(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @D] of f32>) {
+  // expected-error @below {{expected RHS dimension #0 (#wave.symbol<"N">) to match accumulator dimension #1 (#wave.symbol<"D">)}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @D] of f32>) -> !wave.tensor<[@M, @D] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_non_scaled_kind(
+    %lhs: !wave.tensor<[@M, @K] of f16>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f16>,
+    %rhs: !wave.tensor<[@N, @K] of f16>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f16>,
+    %acc: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{expected a scaled MMA kind (F8F6F4 variant), got f32_16x16x16_f16}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x16_f16>}
+    : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@M, @K32] of f16>,
+       !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@N, @K32] of f16>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_wrong_scale_type(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f32>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f32>,
+    %acc: !wave.tensor<[@M, @N] of f32>) {
+  // expected-error @below {{unexpected scale elemental type 'f32' for MMA kind f32_16x16x128_f8f6f4}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f32>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f32>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+}
+
+// -----
+
+func.func @scaled_mma_wrong_acc_type(
+    %lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of bf16>) {
+  // expected-error @below {{unexpected accumulator/result elemental type 'bf16' for MMA kind f32_16x16x128_f8f6f4}}
+  wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of bf16>) -> !wave.tensor<[@M, @N] of bf16>
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @scaled_mma_rank_mismatch(
+      %lhs: !wave.tensor<[@B, @M, @K] of f4E2M1FN>,
+      %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+      %rhs: !wave.tensor<[@B, @N, @K] of f4E2M1FN>,
+      %rhs_scale: !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+      %acc: !wave.tensor<[@B, @M, @N] of f32>) {
+    // expected-error @below {{expects all operands and results to have the same rank}}
+    wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+      {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@B, @M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@B, @N, @K] of f4E2M1FN>, !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  func.func @scaled_mma_3d_batch_mismatch(
+      %lhs: !wave.tensor<[@B1, @M, @K] of f4E2M1FN>,
+      %lhs_scale: !wave.tensor<[@B1, @M, @K32] of f8E8M0FNU>,
+      %rhs: !wave.tensor<[@B2, @N, @K] of f4E2M1FN>,
+      %rhs_scale: !wave.tensor<[@B2, @N, @K32] of f8E8M0FNU>,
+      %acc: !wave.tensor<[@B1, @M, @N] of f32>) {
+    // expected-error @below {{expected LHS dimension #0 (#wave.symbol<"B1">) to match RHS dimension #0 (#wave.symbol<"B2">)}}
+    wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+      {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@B1, @M, @K] of f4E2M1FN>, !wave.tensor<[@B1, @M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@B2, @N, @K] of f4E2M1FN>, !wave.tensor<[@B2, @N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@B1, @M, @N] of f32>) -> !wave.tensor<[@B1, @M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
 func.func @invalid_register_type(%arg0: f32) {
   // expected-error @below {{expected wave tensor or vector type, got 'f32'}}
   wave.register %arg0 : f32

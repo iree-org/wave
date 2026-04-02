@@ -71,6 +71,39 @@ func.func @scaled_mma(%lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
   return %0 : !wave.tensor<[@M, @N] of f32>
 }
 
+// CHECK-LABEL: @batched_scaled_mma
+func.func @batched_scaled_mma(
+    %lhs: !wave.tensor<[@B, @M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@B, @M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@B, @N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32> {
+  // CHECK: wave.scaled_mma
+  %0 = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@B, @M, @K] of f4E2M1FN>, !wave.tensor<[@B, @M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@B, @N, @K] of f4E2M1FN>, !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+  return %0 : !wave.tensor<[@B, @M, @N] of f32>
+}
+
+// CHECK-LABEL: @scaled_mma_32x32x64
+func.func @scaled_mma_32x32x64(
+    %lhs: !wave.tensor<[@M, @K] of f8E5M2>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f8E5M2>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
+  // CHECK: wave.scaled_mma
+  // CHECK-SAME: kind = #wave.mma_kind<f32_32x32x64_f8f6f4>
+  %0 = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_32x32x64_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return %0 : !wave.tensor<[@M, @N] of f32>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
