@@ -1401,8 +1401,11 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             "not yet supported"
         )
 
-    def expect_fail(reason):
+    def expect_fail(reason, is_crashing=False):
         """Mark test as expected failure; XPASS (strict) catches silent fixes."""
+        if is_crashing:
+            # TODO: Some of those tests segfault, crashing the test runner.
+            pytest.xfail(reason)
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
     # VGPR overflow: 256x224x256 scheduled pipeline exceeds 256 VGPR limit.
@@ -1447,7 +1450,8 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
             expect_fail(
                 "VGPR overflow: 256x160x256 ee + scheduled pipeline + static "
-                "dims exceeds register limit (register index is out of range)"
+                "dims exceeds register limit (register index is out of range)",
+                is_crashing=True,
             )
 
     # VGPR overflow for 256x192x256: ee=True reduces register pressure
@@ -1485,7 +1489,8 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             expect_fail(
                 "128x32x256 (2,2) wave shape ee + scheduled pipeline + "
                 "static dims: numerical mismatch (no_bufops) or SGPR "
-                "overflow s103 not available (bufops)"
+                "overflow s103 not available (bufops)",
+                is_crashing=True,
             )
 
     # VGPR overflow: 128x256x256 with (4,1) wave shape and scheduled pipeline
@@ -1493,7 +1498,8 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     if block_id == "128x256x256" and wave_shape == (4, 1) and use_schedule:
         expect_fail(
             "C++ ASM backend exceeds VGPR limit (341 needed) for "
-            "128x256x256 (4,1) with scheduled pipeline"
+            "128x256x256 (4,1) with scheduled pipeline",
+            is_crashing=True,
         )
 
     # SGPR overflow: 128x256x256 with ee + scheduled pipeline + buffer ops
