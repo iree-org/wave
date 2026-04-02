@@ -37,11 +37,15 @@ def WaveMemoryType : Type<Or<[WaveTensorInMemory.predicate, AnyMemRef.predicate]
 //-----------------------------------------------------------------------------
 
 // Wave operations must have an optional attribute for index sequences.
+def WaveSymbolMappingArrayAttr :
+  TypedArrayAttrBase<WaveSymbolMappingAttr,
+                     "Array of symbol mapping attributes">;
+
 class WaveOp<string mnemonic, list<Trait> traits = []>
     : Op<WaveDialect, mnemonic, !listconcat(traits, [HasWaveIndexMapping])> {
   dag commonArguments = (ins
     Arg<OptionalAttr<DictArrayAttr>, "Index expression">:$index,
-    Arg<OptionalAttr<DictArrayAttr>, "Per-value vector shape dictionaries">:$vector_shape
+    Arg<OptionalAttr<WaveSymbolMappingArrayAttr>, "Per-value vector shape mappings">:$vector_shape
   );
 
   string commonArgumentsSyntax =

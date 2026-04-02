@@ -772,20 +772,17 @@ WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 LogicalResult HardwareConstraintAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, unsigned threadsPerWave,
     ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
-    DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
+    WaveSymbolMappingAttr vectorShapes, unsigned maxBitsPerLoad) {
 
   if (!(wavesPerBlock.empty() || wavesPerBlock.size() == 3))
     return emitError() << "waves_per_block (" << wavesPerBlock
                        << ") should have 3 elements";
 
   if (vectorShapes) {
-    for (NamedAttribute attr : vectorShapes) {
-      // TODO: verify that attr.getName() is a valid WaveSymbol
-      Attribute value = attr.getValue();
-
+    for (auto [key, value] :
+         llvm::zip(vectorShapes.getKeys(), vectorShapes.getValues())) {
       if (!isa<IntegerAttr>(value))
-        return emitError() << attr.getName()
-                           << " is not an IntegerAttr: " << attr.getValue();
+        return emitError() << key << " is not an IntegerAttr: " << value;
     }
   }
 

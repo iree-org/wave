@@ -16,16 +16,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Same priority, same shape -> should join cleanly without conflict.
     // CHECK: wave.add
     // CHECK-SAME: source_vector_shape_priorities = [3 : i32]
-    // CHECK-SAME: source_vector_shapes = [{M = 16 : i64, N = 16 : i64}]
+    // CHECK-SAME: source_vector_shapes = [#wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [3, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 16 : i64}],
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>],
       [3, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 16 : i64}]
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     ]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
@@ -58,11 +58,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       [{M = 3 : i32, N = 5 : i32}, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 16 : i64}],
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>],
       [{M = 5 : i32, N = 3 : i32}, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 0 : i64}]
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 0 : i64>]
     ]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
@@ -89,16 +89,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // sourceVectorShapePriority 5>3 -> no conflict, picks operand 0.
     // CHECK: wave.add
     // CHECK-SAME: source_vector_shape_priorities = [5 : i32]
-    // CHECK-SAME: source_vector_shapes = [{M = 16 : i64, N = 16 : i64}]
+    // CHECK-SAME: source_vector_shapes = [#wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [{M = 5 : i32, N = 5 : i32}, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 16 : i64}],
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>],
       [{M = 3 : i32, N = 3 : i32}, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 0 : i64}]
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 0 : i64>]
     ]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
@@ -124,7 +124,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Should join cleanly, picking operand 1's sourceVectorShape.
     // CHECK: wave.add
     // CHECK-SAME: source_vector_shape_priorities = [1 : i32]
-    // CHECK-SAME: source_vector_shapes = [{M = 16 : i64, N = 16 : i64}]
+    // CHECK-SAME: source_vector_shapes = [#wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [1, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
@@ -133,7 +133,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       [1, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 16 : i64, N = 16 : i64}]
+      }, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     ]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
@@ -158,16 +158,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Identical shapes -> should join cleanly.
     // CHECK: wave.add
     // CHECK-SAME: source_vector_shape_priorities = [3 : i32]
-    // CHECK-SAME: source_vector_shapes = [{M = 0 : i64, N = 0 : i64}]
+    // CHECK-SAME: source_vector_shapes = [#wave.symbol_mapping<@M = 0 : i64, @N = 0 : i64>]
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [3, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 0 : i64, N = 0 : i64}],
+      }, #wave.symbol_mapping<@M = 0 : i64, @N = 0 : i64>],
       [3, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
         N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
-      }, {M = 0 : i64, N = 0 : i64}]
+      }, #wave.symbol_mapping<@M = 0 : i64, @N = 0 : i64>]
     ]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>

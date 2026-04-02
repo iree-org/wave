@@ -1555,8 +1555,8 @@ func.func @bitcast_multiple_scaled_dims(%v: !wave.tensor<[@M2, @N2] of i8, <regi
 func.func @vector_shape_entry_must_be_i64(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
   wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
 } {
-  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
-  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i32}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  // expected-error @below {{vector_shape entry #wave.symbol<"A"> must be a 64-bit signless integer attribute, got 'i32'}}
+  %0 = wave.add %lhs, %rhs vector_shape [#wave.symbol_mapping<@A = 4 : i32>] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
   return %0 : !wave.tensor<[@A, @B] of bf16>
 }
 
@@ -1565,7 +1565,7 @@ func.func @vector_shape_entry_must_be_i64(%lhs: !wave.tensor<[@A, @B] of bf16>, 
 func.func @vector_shape_entry_index_type_rejected(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !wave.tensor<[@A, @B] of bf16>) attributes {
   wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
 } {
-  // expected-error @below {{expected 64-bit signless integer attribute for vector_shape entry}}
-  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : index}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  // expected-error @below {{vector_shape entry #wave.symbol<"A"> must be a 64-bit signless integer attribute, got 'index'}}
+  %0 = wave.add %lhs, %rhs vector_shape [#wave.symbol_mapping<@A = 4 : index>] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
   return %0 : !wave.tensor<[@A, @B] of bf16>
 }

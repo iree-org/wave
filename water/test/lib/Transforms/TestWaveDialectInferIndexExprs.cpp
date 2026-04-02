@@ -39,7 +39,8 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr, DictionaryAttr(), nullptr);
+        setIndexForValue(value, nullptr, DictionaryAttr(),
+                         WaveSymbolMappingAttr());
         continue;
       }
 
@@ -56,8 +57,31 @@ overrideInitialization(Operation *top,
       DictionaryAttr indexExprs = nullptr;
       DictionaryAttr prioritiesDict = nullptr;
       bool hasPriorities = false;
-      DictionaryAttr vectorShape = nullptr;
+      WaveSymbolMappingAttr vectorShape;
       MLIRContext *ctx = op->getContext();
+
+      auto dictToSymbolMapping =
+          [&](DictionaryAttr dict) -> WaveSymbolMappingAttr {
+        if (!dict)
+          return {};
+        SmallVector<WaveSymbolAttr> keys;
+        SmallVector<Attribute> values;
+        for (NamedAttribute na : dict) {
+          keys.push_back(WaveSymbolAttr::get(ctx, na.getName().getValue()));
+          values.push_back(na.getValue());
+        }
+        return WaveSymbolMappingAttr::get(ctx, keys, values);
+      };
+
+      auto parseVectorShapeAttr = [&](Attribute attr) -> WaveSymbolMappingAttr {
+        if (llvm::isa<UnitAttr>(attr) || !attr)
+          return {};
+        if (auto symMap = llvm::dyn_cast<WaveSymbolMappingAttr>(attr))
+          return symMap;
+        if (auto dict = llvm::dyn_cast<DictionaryAttr>(attr))
+          return dictToSymbolMapping(dict);
+        return {};
+      };
 
       auto setUniformPriority = [&](int32_t priority) {
         hasPriorities = true;
@@ -98,10 +122,11 @@ overrideInitialization(Operation *top,
               // [dict, vectorShape]
               indexExprs = firstDict;
               if (!llvm::isa<UnitAttr>(arrayAttr[1]))
-                vectorShape = secondDict;
-              if (!vectorShape)
+                vectorShape = parseVectorShapeAttr(arrayAttr[1]);
+              if (!llvm::isa<UnitAttr>(arrayAttr[1]) && !vectorShape)
                 return op->emitError()
-                       << "expected vector shape to be a DictionaryAttr";
+                       << "expected vector shape to be a DictionaryAttr or "
+                          "WaveSymbolMappingAttr";
             }
           }
         } else if (arrayAttr.size() == 3) {
@@ -110,14 +135,14 @@ overrideInitialization(Operation *top,
             indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
             setUniformPriority(firstInt.getInt());
             if (!llvm::isa<UnitAttr>(arrayAttr[2]))
-              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[2]);
+              vectorShape = parseVectorShapeAttr(arrayAttr[2]);
           } else if (auto firstDict =
                          llvm::dyn_cast<DictionaryAttr>(arrayAttr[0])) {
             // [priDict, dict, vectorShape]
             indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
             setPerKeyPriorities(firstDict);
             if (!llvm::isa<UnitAttr>(arrayAttr[2]))
-              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[2]);
+              vectorShape = parseVectorShapeAttr(arrayAttr[2]);
           }
         }
       } else {

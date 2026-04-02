@@ -644,16 +644,16 @@ public:
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
-                           mlir::DictionaryAttr vectorShape);
+                           wave::WaveSymbolMappingAttr vectorShape);
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
                            mlir::DictionaryAttr priorities,
-                           mlir::DictionaryAttr vectorShape);
+                           wave::WaveSymbolMappingAttr vectorShape);
 
 private:
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
                            mlir::DictionaryAttr priorities,
-                           mlir::DictionaryAttr vectorShape,
-                           mlir::DictionaryAttr sourceVectorShape,
+                           wave::WaveSymbolMappingAttr vectorShape,
+                           wave::WaveSymbolMappingAttr sourceVectorShape,
                            int32_t sourceVectorShapePriority);
 
 public:
@@ -685,20 +685,21 @@ public:
 
   // Returns the vector shape stored in the lattice instance, or null if the
   // lattice instance is a top or a bottom or has no vector shape set.
-  mlir::DictionaryAttr getVectorShape() const;
+  wave::WaveSymbolMappingAttr getVectorShape() const;
 
   // Returns the source vector shape stored in this lattice, or null if unset
   // or lattice is top/bottom. This is the vector shape from the originating
   // operation, propagated independently from the per-key-joined `vectorShape`.
-  mlir::DictionaryAttr getSourceVectorShape() const;
+  wave::WaveSymbolMappingAttr getSourceVectorShape() const;
 
   // Returns the priority associated with the source vector shape.
   int32_t getSourceVectorShapePriority() const;
 
   // Return a copy of this lattice value with the given source vector shape and
   // priority, leaving all other fields unchanged.
-  IndexExprsLatticeStorage withSourceVectorShape(mlir::DictionaryAttr shape,
-                                                 int32_t priority) const;
+  IndexExprsLatticeStorage
+  withSourceVectorShape(wave::WaveSymbolMappingAttr shape,
+                        int32_t priority) const;
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -708,14 +709,14 @@ public:
 
   // Return the join of vector shapes if present in two lattices, null if both
   // vector shapes are absent or failure if there is a conflict.
-  static llvm::FailureOr<mlir::DictionaryAttr>
+  static llvm::FailureOr<wave::WaveSymbolMappingAttr>
   getJoinedVectorShape(const IndexExprsLatticeStorage &lhs,
                        const IndexExprsLatticeStorage &rhs);
 
   // Return the join of source vector shapes from two lattices as a
   // (shape, priority) pair. Returns failure if both sides have non-null
   // source vector shapes with the same priority but different values.
-  static llvm::FailureOr<std::pair<mlir::DictionaryAttr, int32_t>>
+  static llvm::FailureOr<std::pair<wave::WaveSymbolMappingAttr, int32_t>>
   getJoinedSourceVectorShape(const IndexExprsLatticeStorage &lhs,
                              const IndexExprsLatticeStorage &rhs);
 
@@ -764,18 +765,18 @@ private:
   // per-instance heap allocation since attrs are interned.
   mlir::DictionaryAttr priorities;
 
-  // The vector shape associated with this lattice value. This is a dictionary
-  // mapping symbol names to vector dimension sizes. Two concrete lattice values
-  // with different vector shapes and equal priority cannot be joined and will
-  // result in top.
-  mlir::DictionaryAttr vectorShape;
+  // The vector shape associated with this lattice value. This is a mapping from
+  // wave symbols to vector dimension sizes. Two concrete lattice values with
+  // different vector shapes and equal priority cannot be joined and will result
+  // in top.
+  wave::WaveSymbolMappingAttr vectorShape;
 
   // The vector shape from the originating operation, propagated as a unit with
   // its own priority independently from the per-key-joined `vectorShape` field.
   // During join, the higher-priority value wins. If priorities are equal, two
   // different values cause the lattice to reach top while two identical values
   // join cleanly.
-  mlir::DictionaryAttr sourceVectorShape;
+  wave::WaveSymbolMappingAttr sourceVectorShape;
 
   // Priority associated with `sourceVectorShape`.
   int32_t sourceVectorShapePriority = 0;

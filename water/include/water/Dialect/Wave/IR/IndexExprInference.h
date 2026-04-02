@@ -50,10 +50,9 @@ llvm::LogicalResult buildThreadIndependentIndexMappings(
     const IndexExprsAnalysisInit &initObject,
     llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings);
 
-// Create a new vector shape dictionary attribute with only the provided symbols
-// present.
-mlir::DictionaryAttr
-filterVectorShape(mlir::DictionaryAttr vectorShape,
+// Create a new vector shape with only the provided symbols present.
+wave::WaveSymbolMappingAttr
+filterVectorShape(wave::WaveSymbolMappingAttr vectorShape,
                   llvm::ArrayRef<wave::WaveSymbolAttr> symbols);
 
 // Check the index expressions is a concrete value rather lattice top/bottom and

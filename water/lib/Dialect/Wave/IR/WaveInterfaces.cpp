@@ -62,19 +62,19 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
              << vsArr.size() << ") does not match the number of per-value "
              << "slots (" << expectedSlotCount << ")";
     for (Attribute nestedAttr : vsArr) {
-      auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
-      if (!dict)
+      auto mapping = dyn_cast<wave::WaveSymbolMappingAttr>(nestedAttr);
+      if (!mapping)
         return op->emitError(
-            "'vector_shape' array elements must be dictionaries");
-      for (NamedAttribute na : dict) {
-        auto intAttr = dyn_cast<IntegerAttr>(na.getValue());
+            "'vector_shape' array elements must be WaveSymbolMappingAttr");
+      for (auto [key, value] :
+           llvm::zip(mapping.getKeys(), mapping.getValues())) {
+        auto intAttr = dyn_cast<IntegerAttr>(value);
         if (!intAttr)
           return op->emitError("vector_shape entry ")
-                 << na.getName() << " must be an integer attribute";
+                 << key << " must be an integer attribute";
         if (!intAttr.getType().isSignlessInteger(64))
           return op->emitError("vector_shape entry ")
-                 << na.getName()
-                 << " must be a 64-bit signless integer attribute, got "
+                 << key << " must be a 64-bit signless integer attribute, got "
                  << intAttr.getType();
       }
     }
@@ -84,8 +84,8 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   if (Attribute vsAttr = op->getAttr(WaveDialect::kVectorShapeAttrName)) {
     auto vsArr = dyn_cast<ArrayAttr>(vsAttr);
     if (!vsArr)
-      return op->emitError(
-          "'vector_shape' attribute must be an array of dictionaries");
+      return op->emitError("'vector_shape' attribute must be an array of "
+                           "WaveSymbolMappingAttr");
     if (failed(verifyVectorShapeArray(vsArr)))
       return failure();
   }
@@ -298,61 +298,29 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
 // printWaveVectorShapeDictList
 ParseResult wave::parseWaveVectorShapeDictList(OpAsmParser &parser,
                                                ArrayAttr &out) {
-  auto parseSingleDict = [&](DictionaryAttr &dictOut) -> ParseResult {
-    SmallVector<NamedAttribute, 4> entries;
-    if (parser.parseLBrace())
-      return failure();
-    auto parseEntry = [&]() -> ParseResult {
-      StringRef symbolName;
-      if (parser.parseKeyword(&symbolName) || parser.parseColon())
-        return failure();
-      Attribute value;
-      if (failed(parser.parseAttribute(value)))
-        return failure();
-      auto intAttr = dyn_cast<IntegerAttr>(value);
-      if (!intAttr || !intAttr.getType().isSignlessInteger(64))
-        return parser.emitError(parser.getCurrentLocation())
-               << "expected 64-bit signless integer attribute for "
-                  "vector_shape entry";
-      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
-                           value);
-      return success();
-    };
-    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
-      return failure();
-    dictOut = parser.getBuilder().getDictionaryAttr(entries);
-    return success();
-  };
-
-  SmallVector<Attribute> dicts;
-  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
-                                     [&]() -> ParseResult {
-                                       DictionaryAttr dict;
-                                       if (failed(parseSingleDict(dict)))
-                                         return failure();
-                                       dicts.push_back(dict);
-                                       return success();
-                                     }))
+  SmallVector<Attribute> mappings;
+  if (parser.parseCommaSeparatedList(
+          OpAsmParser::Delimiter::Square, [&]() -> ParseResult {
+            Attribute attr;
+            if (parser.parseAttribute(attr))
+              return failure();
+            if (!isa<wave::WaveSymbolMappingAttr>(attr))
+              return parser.emitError(parser.getCurrentLocation())
+                     << "expected a "
+                        "WaveSymbolMappingAttr";
+            mappings.push_back(attr);
+            return success();
+          }))
     return failure();
-  out = parser.getBuilder().getArrayAttr(dicts);
+  out = parser.getBuilder().getArrayAttr(mappings);
   return success();
 }
 
 void wave::printWaveVectorShapeDictList(OpAsmPrinter &printer, Operation *op,
                                         ArrayAttr arr) {
-  auto printOne = [&](DictionaryAttr dict) {
-    printer.getStream() << "{";
-    llvm::interleaveComma(
-        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
-          printer.getStream() << namedAttr.getName().getValue() << " : ";
-          printer.printAttribute(namedAttr.getValue());
-        });
-    printer.getStream() << "}";
-  };
   printer.getStream() << "[";
-  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
-    printOne(cast<DictionaryAttr>(a));
-  });
+  llvm::interleaveComma(arr, printer.getStream(),
+                        [&](Attribute a) { printer.printAttribute(a); });
   printer.getStream() << "]";
 }
 

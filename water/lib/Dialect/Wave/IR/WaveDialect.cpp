@@ -96,19 +96,19 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   // special-casing will disappear as the walker below would also visit symbols
   // used as dictionary keys.
   if (namedAttr.getName().strref() == wave::WaveDialect::kVectorShapeAttrName) {
-    auto arrayDict = llvm::dyn_cast<ArrayAttr>(namedAttr.getValue());
-    if (!arrayDict)
+    auto arrayAttr = llvm::dyn_cast<ArrayAttr>(namedAttr.getValue());
+    if (!arrayAttr)
       return llvm::success();
-    for (Attribute a : arrayDict) {
-      auto dict = llvm::dyn_cast<DictionaryAttr>(a);
-      if (!dict)
+    for (Attribute a : arrayAttr) {
+      auto mapping = llvm::dyn_cast<wave::WaveSymbolMappingAttr>(a);
+      if (!mapping)
         continue;
-      for (const NamedAttribute &entry : dict) {
-        usedSymbols.insert(entry.getName().strref());
-        if (hyperparam.getMapping().contains(entry.getName().strref()))
+      for (wave::WaveSymbolAttr key : mapping.getKeys()) {
+        usedSymbols.insert(key.getName());
+        if (hyperparam.getMapping().contains(key.getName()))
           continue;
         InFlightDiagnostic diag = emitError()
-                                  << "uses symbolic value " << entry.getName()
+                                  << "uses symbolic value " << key.getName()
                                   << " not provided as a hyperparameter";
         attachAvailableSymbolsNote(diag, hyperparam);
         return llvm::failure();

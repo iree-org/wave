@@ -183,7 +183,7 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
     #wave.hardware_constraint<threads_per_wave = 64,
                               waves_per_block = [1, 1, 1],
                               mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-                              vector_shapes = {M = 1, N = 1, K = 64},
+                              vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 64 : i64>,
                               max_bits_per_load = 128>
     ```
 
@@ -196,8 +196,8 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
 
     Not all computation graphs have mma operators in them. In
     these situations, the user can specify the vector shape they
-    want to tile to by specifying the `vector_shapes` dictionary
-    which maps a tensor dimension to its corresponding tile size.
+    want to tile to by specifying the `vector_shapes` mapping
+    which maps a tensor dimension symbol to its corresponding tile size.
 
     Both mma constraints and vector shapes can be specified, but
     the mapping from symbols to shapes should be injective.
@@ -215,7 +215,7 @@ def HardwareConstraintAttr : AttrDef<WaveDialect, "HardwareConstraint"> {
   let parameters = (ins "unsigned":$threads_per_wave,
                         OptionalArrayRefParameter<"unsigned">:$waves_per_block,
                         OptionalParameter<"::wave::WaveMmaKindAttr">:$mma_type,
-                        OptionalParameter<"::mlir::DictionaryAttr">:$vector_shapes,
+                        OptionalParameter<"::wave::WaveSymbolMappingAttr">:$vector_shapes,
                         DefaultValuedParameter<"unsigned", "128">:$max_bits_per_load);
 
   let assemblyFormat = [{

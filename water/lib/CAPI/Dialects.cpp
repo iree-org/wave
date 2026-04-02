@@ -524,7 +524,7 @@ mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
   auto mmaTypeAttr =
       llvm::cast_if_present<wave::WaveMmaKindAttr>(unwrap(mmaType));
   auto vectorShapesAttr =
-      llvm::cast_if_present<DictionaryAttr>(unwrap(vectorShapes));
+      llvm::cast_if_present<wave::WaveSymbolMappingAttr>(unwrap(vectorShapes));
 
   return wrap(wave::HardwareConstraintAttr::get(
       ctx, threadsPerWave, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize),
@@ -554,8 +554,8 @@ MlirAttribute mlirHardwareConstraintAttrGetMmaType(MlirAttribute attr) {
       llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr)).getMmaType());
 }
 MlirAttribute mlirHardwareConstraintAttrGetVectorShapes(MlirAttribute attr) {
-  return wrap(llvm::dyn_cast<wave::HardwareConstraintAttr>(unwrap(attr))
-                  .getVectorShapes());
+  return wrap(
+      llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr)).getVectorShapes());
 }
 unsigned mlirHardwareConstraintAttrGetMaxBitsPerLoad(MlirAttribute attr) {
   return llvm::cast<wave::HardwareConstraintAttr>(unwrap(attr))
