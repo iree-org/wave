@@ -1502,25 +1502,11 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             is_crashing=True,
         )
 
-    # SGPR overflow: 128x256x256 with ee + scheduled pipeline + buffer ops
-    # exceeds the 102 SGPR limit (static: s103 not available; dynamic: SRD
-    # allocation assertion).
-    # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
-    if (
-        block_id == "128x256x256"
-        and eliminate_epilogue
-        and use_schedule
-        and use_buffer_ops
-    ):
-        expect_fail(
-            "C++ ASM backend exceeds SGPR limit for 128x256x256 with "
-            "ee + scheduled pipeline + buffer ops"
-        )
-
     # Linearized reads with dynamic dims produce complex floor/Mod
     # expressions that cause VGPR overflow or numerical mismatches
     # across all block configurations in the MXFP4 preshuffle pipeline.
     skip_linearize = dynamic_dims
+
 
     _dbuf_mxfp4_helper(
         shape=shape,
