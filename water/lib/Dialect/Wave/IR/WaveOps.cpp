@@ -1213,12 +1213,11 @@ bool wave::detail::shouldPropagateIndexExprs(
   }
 
   SmallVector<StringAttr> nonBatchDims;
-  for (WaveSymbolAttr attr :
-       cast<wave::WaveTensorType>(toValue.getType()).getShape()) {
-    if (sourceVectorShapes.get(attr.getName()) != nullptr &&
-        llvm::cast<IntegerAttr>(sourceVectorShapes.get(attr.getName()))
-                .getValue()
-                .getSExtValue() > 1) {
+  for (WaveSymbolAttr attr : toType.getShape()) {
+    Attribute dimSize = sourceVectorShapes.get(attr.getName());
+    if (!dimSize)
+      continue;
+    if (llvm::cast<IntegerAttr>(dimSize).getValue().getSExtValue() > 1) {
       nonBatchDims.push_back(
           StringAttr::get(attr.getContext(), attr.getName()));
     }
@@ -1300,7 +1299,7 @@ LogicalResult MmaOp::initializeIndexExprsForward(
       initObject.symbolConstraints, symbolMappings);
   wave::WaveSymbolAttr kSymbol =
       cast<wave::WaveTensorType>(getLhs().getType()).getShape().back();
-  auto sourceVectorShape = getMmaVectorShape(
+  DictionaryAttr sourceVectorShape = getMmaVectorShape(
       getLoc(), *mmaKind, mSymbol, nSymbol, kSymbol, /*kScaledSymbol=*/nullptr,
       indexingSymbols.drop_back(2),
       initObject.hardwareConstraint.getVectorShapes(), nullptr);

@@ -1071,14 +1071,25 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
       vectorShape(vectorShape), sourceVectorShape(vectorShape) {
   if (priorities) {
-    for (NamedAttribute na : priorities)
-      sourceVectorShapePriority =
-          std::max(sourceVectorShapePriority,
-                   (int32_t)llvm::cast<IntegerAttr>(na.getValue()).getInt());
+    for (NamedAttribute dimPriority : priorities)
+      sourceVectorShapePriority = std::max<int32_t>(
+          sourceVectorShapePriority,
+          llvm::cast<IntegerAttr>(dimPriority.getValue()).getInt());
   }
   if (sourceVectorShapePriority == kLowestPriority)
     sourceVectorShape = nullptr;
 }
+
+wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
+    DictionaryAttr concreteValue, DictionaryAttr priorities,
+    DictionaryAttr vectorShape, DictionaryAttr sourceVectorShape,
+    int32_t sourceVectorShapePriority)
+    : value(concreteValue, kSpecificTypeState), priorities(priorities),
+      vectorShape(vectorShape),
+      sourceVectorShape(sourceVectorShapePriority == kLowestPriority
+                            ? nullptr
+                            : sourceVectorShape),
+      sourceVectorShapePriority(sourceVectorShapePriority) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
     const IndexExprsLatticeStorage &other) const {
@@ -1148,6 +1159,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
   result.value.setPointer(nullptr);
   result.value.setInt(kUndecidableState);
   result.vectorShape = nullptr;
+  result.sourceVectorShape = nullptr;
+  result.sourceVectorShapePriority = 0;
   return result;
 }
 
@@ -1156,6 +1169,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::bottom() {
   result.value.setPointer(nullptr);
   result.value.setInt(kUninitializedState);
   result.vectorShape = nullptr;
+  result.sourceVectorShape = nullptr;
+  result.sourceVectorShapePriority = 0;
   return result;
 }
 
@@ -1715,9 +1730,8 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
                                                          pair.first,
                                                          pair.second);
                                                    })),
-      DictionaryAttr::get(ctx, priEntries), joinedVectorShape);
-  joined.sourceVectorShape = joinedSourceVectorShape;
-  joined.sourceVectorShapePriority = joinedSourceVectorShapePriority;
+      DictionaryAttr::get(ctx, priEntries), joinedVectorShape,
+      joinedSourceVectorShape, joinedSourceVectorShapePriority);
   return joined;
 }
 
@@ -1760,12 +1774,10 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
         attr.getName(),
         IntegerAttr::get(i32, getPriorityForKey(attr.getName())));
 
-  IndexExprsLatticeStorage result(DictionaryAttr::get(ctx, filtered),
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, filtered),
                                   DictionaryAttr::get(ctx, filteredPriorities),
-                                  filteredVectorShape);
-  result.sourceVectorShape = sourceVectorShape;
-  result.sourceVectorShapePriority = sourceVectorShapePriority;
-  return result;
+                                  filteredVectorShape, sourceVectorShape,
+                                  sourceVectorShapePriority);
 }
 
 wave::IndexExprsLatticeStorage

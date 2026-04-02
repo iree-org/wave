@@ -28,6 +28,7 @@ using SetIndexLatticeFn = llvm::function_ref<void(
     mlir::DictionaryAttr priorities, mlir::DictionaryAttr vectorShape)>;
 using OverrideInitializationFn = llvm::function_ref<llvm::LogicalResult(
     mlir::Operation *, SetIndexLatticeFn)>;
+class IndexExprsLatticeStorage;
 
 // Configuration options for forward analysis. Mostly usable for testing
 // purposes.
@@ -46,10 +47,14 @@ addWaveIndexExprsAnalyses(mlir::DataFlowSolver &solver,
 // Set the index attribute attributes on operations nested under `top` using the
 // lattices computed by the dataflow analyses in the given solver. Emit delayed
 // errors if they are related to operations for which we failed to infer index
-// expressions.
+// expressions. If `extraHandler` is provided, it will be called after setting
+// the index expression attribute to allow for further modifications.
 llvm::LogicalResult setWaveIndexExprAnalysisResults(
     mlir::Operation *top, const mlir::DataFlowSolver &solver,
-    const wave::DelayedErrorEmitterInfo &delayedErrorInfo);
+    const wave::DelayedErrorEmitterInfo &delayedErrorInfo,
+    llvm::function_ref<llvm::LogicalResult(
+        mlir::Operation *, llvm::ArrayRef<wave::IndexExprsLatticeStorage>)>
+        extraHandler = nullptr);
 
 // Run the dataflow analyses and capture whether some diagnostics were emitted.
 // Only emit a generic diagnostic if no more specific diagnostic was emitted.

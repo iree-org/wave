@@ -21,6 +21,7 @@ using namespace mlir;
 using namespace wave;
 
 namespace mlir::water::test {
+#define GEN_PASS_DECL_TESTWAVEDIALECTINFERINDEXEXPRSPASS
 #define GEN_PASS_DEF_TESTWAVEDIALECTINFERINDEXEXPRSPASS
 #include "Transforms/Passes.h.inc"
 } // namespace mlir::water::test
@@ -167,10 +168,14 @@ overrideInitialization(Operation *top,
   return failure(walkResult.wasInterrupted());
 }
 
+namespace {
 class TestWaveDialectInferIndexExprsPass
     : public mlir::water::test::impl::TestWaveDialectInferIndexExprsPassBase<
           TestWaveDialectInferIndexExprsPass> {
 public:
+  using TestWaveDialectInferIndexExprsPassBase::
+      TestWaveDialectInferIndexExprsPassBase;
+
   void runOnOperation() override {
     SymbolTableCollection symbolTable;
     DataFlowConfig config;
@@ -195,8 +200,36 @@ public:
     if (failed(wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
+    auto extraHandler =
+        [&](Operation *op,
+            ArrayRef<IndexExprsLatticeStorage> slots) -> LogicalResult {
+      if (!attachSourceVectorShapes)
+        return success();
+
+      SmallVector<Attribute> sourceVectorShapes;
+      SmallVector<Attribute> sourceVectorShapePriorities;
+      sourceVectorShapes.reserve(slots.size());
+      sourceVectorShapePriorities.reserve(slots.size());
+      for (const IndexExprsLatticeStorage &lattice : slots) {
+        if (lattice.isBottom() || lattice.isTop()) {
+          sourceVectorShapes.push_back(UnitAttr::get(&getContext()));
+          sourceVectorShapePriorities.push_back(UnitAttr::get(&getContext()));
+        } else {
+          sourceVectorShapes.push_back(lattice.getSourceVectorShape());
+          sourceVectorShapePriorities.push_back(
+              IntegerAttr::get(IntegerType::get(&getContext(), 32),
+                               lattice.getSourceVectorShapePriority()));
+        }
+      }
+      op->setAttr("wave_test.source_vector_shapes",
+                  ArrayAttr::get(&getContext(), sourceVectorShapes));
+      op->setAttr("wave_test.source_vector_shape_priorities",
+                  ArrayAttr::get(&getContext(), sourceVectorShapePriorities));
+      return success();
+    };
+
     if (failed(setWaveIndexExprAnalysisResults(getOperation(), solver,
-                                               delayedErrorInfo)))
+                                               delayedErrorInfo, extraHandler)))
       return signalPassFailure();
 
     getOperation()->walk([&](wave::IterateOp iterateOp) {
@@ -204,3 +237,5 @@ public:
     });
   }
 };
+
+} // namespace

@@ -649,6 +649,14 @@ public:
                            mlir::DictionaryAttr priorities,
                            mlir::DictionaryAttr vectorShape);
 
+private:
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+                           mlir::DictionaryAttr priorities,
+                           mlir::DictionaryAttr vectorShape,
+                           mlir::DictionaryAttr sourceVectorShape,
+                           int32_t sourceVectorShapePriority);
+
+public:
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
 

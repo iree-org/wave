@@ -2032,7 +2032,9 @@ static LogicalResult collectPerValueVectorShapeAttrs(
 
 LogicalResult wave::setWaveIndexExprAnalysisResults(
     Operation *top, const DataFlowSolver &solver,
-    const DelayedErrorEmitterInfo &delayedErrorInfo) {
+    const DelayedErrorEmitterInfo &delayedErrorInfo,
+    function_ref<LogicalResult(Operation *, ArrayRef<IndexExprsLatticeStorage>)>
+        extraHandler) {
   bool hadFailures = false;
   WalkResult walkResult =
       top->walk([&](wave::WaveInferIndexExprsOpInterface iface) {
@@ -2156,12 +2158,12 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             }
           }
         }
+
+        SmallVector<wave::IndexExprsLatticeStorage> slots = llvm::map_to_vector(
+            valuesForIndexExpr, [&](Value v) { return getLatticeValue(v); });
         // Only set the index expressions if there were no failures.
         if (!hadFailures) {
           MLIRContext *ctx = iface->getContext();
-          SmallVector<wave::IndexExprsLatticeStorage> slots =
-              llvm::map_to_vector(valuesForIndexExpr,
-                                  [&](Value v) { return getLatticeValue(v); });
           SmallVector<Attribute> shapeDicts;
           if (failed(collectPerValueVectorShapeAttrs(
                   iface, slots, descriptionGenerator, shapeDicts)))
@@ -2172,6 +2174,9 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
             iface->setAttr(wave::WaveDialect::kVectorShapeAttrName,
                            ArrayAttr::get(ctx, shapeDicts));
         }
+
+        if (extraHandler && failed(extraHandler(iface, slots)))
+          return WalkResult::interrupt();
 
         return WalkResult::advance();
       });
