@@ -1381,6 +1381,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     output_dtype,
     compiler,
     dump_asm,
+    request,
 ):
     """End-to-end test for asymmetric MXFP4 GEMM with 4 waves.
 
@@ -1400,27 +1401,31 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
             "not yet supported"
         )
 
+    def expect_fail(reason):
+        """Mark test as expected failure; XPASS (strict) catches silent fixes."""
+        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+
     # VGPR overflow: 256x224x256 scheduled pipeline exceeds 256 VGPR limit.
     if block_id == "256x224x256" and use_schedule:
-        pytest.xfail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
+        expect_fail("C++ ASM backend exceeds VGPR limit with scheduled pipeline")
 
     # VGPR overflow: 224x160x256 scheduled pipeline exceeds 256 VGPR limit
     # without epilogue elimination; with ee=True it fits for static dims
     # but dynamic dims adds enough extra VGPRs to overflow again.
     if block_id == "224x160x256" and use_schedule:
         if not eliminate_epilogue:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
                 "(ee=False) for 224x160x256"
             )
         elif dynamic_dims:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with ee=True + dynamic "
                 "dims for 224x160x256"
             )
         else:
             # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
-            pytest.xfail(
+            expect_fail(
                 "VGPR overflow: 224x160x256 ee + scheduled pipeline + static "
                 "dims exceeds register limit (register index is out of range)"
             )
@@ -1429,18 +1434,18 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     # but dynamic dims adds enough extra VGPRs to overflow again.
     if block_id == "256x160x256" and use_schedule:
         if not eliminate_epilogue:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
                 "(ee=False) for 256x160x256"
             )
         elif dynamic_dims:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with ee=True + dynamic "
                 "dims for 256x160x256"
             )
         else:
             # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
-            pytest.xfail(
+            expect_fail(
                 "VGPR overflow: 256x160x256 ee + scheduled pipeline + static "
                 "dims exceeds register limit (register index is out of range)"
             )
@@ -1449,18 +1454,18 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     # enough to pass with static dims; ee=False and dynamic dims still overflow.
     if block_id == "256x192x256" and use_schedule:
         if not eliminate_epilogue:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with scheduled pipeline "
                 "(ee=False); ee=True resolves this for 256x192x256"
             )
         elif dynamic_dims:
-            pytest.xfail(
+            expect_fail(
                 "C++ ASM backend exceeds VGPR limit with ee=True + dynamic "
                 "dims for 256x192x256"
             )
         else:
             # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
-            pytest.xfail(
+            expect_fail(
                 "VGPR overflow: 256x192x256 ee + scheduled pipeline + static "
                 "dims exceeds register limit (register index is out of range)"
             )
@@ -1469,19 +1474,27 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
     # dynamic dims when ee=False; dynamic-dims-only when ee=True).
     if block_id == "128x32x256" and use_schedule:
         if not eliminate_epilogue:
-            pytest.xfail(
+            expect_fail(
                 "Numerical mismatch on (2,2) wave shape with scheduled "
                 "pipeline (ee=False)"
             )
         elif dynamic_dims:
-            pytest.xfail("Numerical mismatch with dynamic dims on (2,2) wave shape")
+            expect_fail("Numerical mismatch with dynamic dims on (2,2) wave shape")
         else:
             # TODO (Gaurav/Sanket): should be passing after all the cherry-picks
-            pytest.xfail(
+            expect_fail(
                 "128x32x256 (2,2) wave shape ee + scheduled pipeline + "
                 "static dims: numerical mismatch (no_bufops) or SGPR "
                 "overflow s103 not available (bufops)"
             )
+
+    # VGPR overflow: 128x256x256 with (4,1) wave shape and scheduled pipeline
+    # requires 341 VGPRs but only 256 are available.
+    if block_id == "128x256x256" and wave_shape == (4, 1) and use_schedule:
+        expect_fail(
+            "C++ ASM backend exceeds VGPR limit (341 needed) for "
+            "128x256x256 (4,1) with scheduled pipeline"
+        )
 
     # SGPR overflow: 128x256x256 with ee + scheduled pipeline + buffer ops
     # exceeds the 102 SGPR limit (static: s103 not available; dynamic: SRD
@@ -1493,7 +1506,7 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         and use_schedule
         and use_buffer_ops
     ):
-        pytest.xfail(
+        expect_fail(
             "C++ ASM backend exceeds SGPR limit for 128x256x256 with "
             "ee + scheduled pipeline + buffer ops"
         )
