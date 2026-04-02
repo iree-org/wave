@@ -1609,7 +1609,8 @@ wave::IndexExprsLatticeStorage::getJoinedSourceVectorShape(
   int32_t rhsPri = rhs.getSourceVectorShapePriority();
 
   if (!lhsSVS && !rhsSVS)
-    return std::make_pair(DictionaryAttr(), wave::IndexExprsLatticeStorage::kLowestPriority);
+    return std::make_pair(DictionaryAttr(),
+                          wave::IndexExprsLatticeStorage::kLowestPriority);
   if (!lhsSVS)
     return std::make_pair(rhsSVS, rhsPri);
   if (!rhsSVS)
