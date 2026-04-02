@@ -621,7 +621,11 @@ def build_graph_passes(
             launchable.constraints,
             options.target,
         ),
-        partial(annotate_iv_strides, trace, launchable.constraints),
+        *(
+            [partial(annotate_iv_strides, trace, launchable.constraints)]
+            if options.linearize_reads
+            else []
+        ),
     ]
 
     if options.use_bound_check:
