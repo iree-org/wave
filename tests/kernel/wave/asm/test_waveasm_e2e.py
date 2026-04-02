@@ -1499,14 +1499,12 @@ def test_dbuf_4wave_mxfp4_gemm_cpp_backend(
         expect_fail(
             "C++ ASM backend exceeds VGPR limit (341 needed) for "
             "128x256x256 (4,1) with scheduled pipeline",
-            is_crashing=True,
         )
 
     # Linearized reads with dynamic dims produce complex floor/Mod
     # expressions that cause VGPR overflow or numerical mismatches
     # across all block configurations in the MXFP4 preshuffle pipeline.
     skip_linearize = dynamic_dims
-
 
     _dbuf_mxfp4_helper(
         shape=shape,
