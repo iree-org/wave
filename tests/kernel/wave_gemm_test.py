@@ -70,6 +70,7 @@ from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_unroll_with_iteration_access_kernel_and_schedule,
     get_gemm_pipeline_then_unroll_kernel_and_schedule,
 )
+from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
     get_tagged_gemm,
     get_tagged_BxA_T_gemm,
@@ -3663,7 +3664,8 @@ def testSplitKMxfp4Gemm(
     )
 
     options = set_default_run_config(options)
-    splitk_gemm = wave_compile(options, splitk_gemm)
+    schedule = get_mxfp4_dbuf_schedule(use_stagger=True, k_partitions=1)
+    splitk_gemm = wave_compile(options, splitk_gemm, schedule)
 
     m, n, k = shape
     x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
