@@ -762,7 +762,7 @@ def testNonTransposeGemm(
             MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
             32,
             False,
-            marks=(*require_rdna4, pytest.mark.skip(reason="flaky (race condition?)")),
+            marks=[require_rdna4, pytest.mark.skip(reason="flaky (race condition?)")],
         ),
     ],
 )
