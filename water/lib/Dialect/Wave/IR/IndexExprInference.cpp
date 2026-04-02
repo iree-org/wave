@@ -1788,15 +1788,18 @@ joinIndexExprsLatticeInPlace(wave::IndexExprsLatticeStorage &lattice,
 bool wave::detail::shouldPropagateIndexExprs(
     const wave::IndexExprsLatticeStorage &from,
     const wave::IndexExprsLatticeStorage &to, Value toValue) {
-  wave::WaveSymbolMappingAttr sourceVectorShapes = from.getSourceVectorShape();
-  if (from.isBottom() || from.isTop() || !sourceVectorShapes || to.isTop() ||
-      to.isBottom())
+  if (from.isBottom() || from.isTop() || to.isTop() || to.isBottom())
     return true;
 
-  if (toValue.getDefiningOp<wave::MmaOp>()) {
+  if (isa_and_nonnull<wave::MmaOp, wave::ScaledMmaOp>(
+          toValue.getDefiningOp())) {
     LLVM_DEBUG(LDBG() << "skipping update to mma");
     return false;
   }
+
+  wave::WaveSymbolMappingAttr sourceVectorShapes = from.getSourceVectorShape();
+  if (!sourceVectorShapes)
+    return true;
 
   auto toType = cast<WaveTensorType>(toValue.getType());
   ArrayRef<wave::WaveSymbolAttr> toShape = toType.getShape();
@@ -1885,11 +1888,11 @@ LogicalResult MmaOp::initializeIndexExprsForward(
 
   // Set the priority based on the order of operations: earlier MMAs have higher
   // priority.
-  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
-                                             llvm::IsaPred<MmaOp>);
+  auto orderedAllMmas = llvm::make_filter_range(
+      initObject.deterministicOpOrder, llvm::IsaPred<MmaOp, ScaledMmaOp>);
   int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
-                     std::distance(llvm::find(orderedMmas, getOperation()),
-                                   orderedMmas.end()) -
+                     std::distance(llvm::find(orderedAllMmas, getOperation()),
+                                   orderedAllMmas.end()) -
                      1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
@@ -1976,11 +1979,11 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   // Set the priority based on the order of operations: earlier MMAs have higher
   // priority.
-  auto orderedMmas = llvm::make_filter_range(initObject.deterministicOpOrder,
-                                             llvm::IsaPred<MmaOp>);
+  auto orderedAllMmas = llvm::make_filter_range(
+      initObject.deterministicOpOrder, llvm::IsaPred<MmaOp, ScaledMmaOp>);
   int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
-                     std::distance(llvm::find(orderedMmas, getOperation()),
-                                   orderedMmas.end()) -
+                     std::distance(llvm::find(orderedAllMmas, getOperation()),
+                                   orderedAllMmas.end()) -
                      1;
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
@@ -2072,13 +2075,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
 
   // Set the priority based on the order of operations: earlier scaled MMAs have
   // higher priority.
-  auto orderedScaledMmas = llvm::make_filter_range(
-      initObject.deterministicOpOrder, llvm::IsaPred<ScaledMmaOp>);
-  int32_t priority =
-      wave::IndexExprsLatticeStorage::kMmaPriority +
-      std::distance(llvm::find(orderedScaledMmas, getOperation()),
-                    orderedScaledMmas.end()) -
-      1;
+  auto orderedAllMmas = llvm::make_filter_range(
+      initObject.deterministicOpOrder, llvm::IsaPred<ScaledMmaOp, MmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedAllMmas, getOperation()),
+                                   orderedAllMmas.end()) -
+                     1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
       initObject.symbolConstraints, symbolMappings);
@@ -2194,13 +2196,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
 
   // Set the priority based on the order of operations: earlier scaled MMAs have
   // higher priority.
-  auto orderedScaledMmas = llvm::make_filter_range(
-      initObject.deterministicOpOrder, llvm::IsaPred<ScaledMmaOp>);
-  int32_t priority =
-      wave::IndexExprsLatticeStorage::kMmaPriority +
-      std::distance(llvm::find(orderedScaledMmas, getOperation()),
-                    orderedScaledMmas.end()) -
-      1;
+  auto orderedAllMmas = llvm::make_filter_range(
+      initObject.deterministicOpOrder, llvm::IsaPred<MmaOp, ScaledMmaOp>);
+  int32_t priority = wave::IndexExprsLatticeStorage::kMmaPriority +
+                     std::distance(llvm::find(orderedAllMmas, getOperation()),
+                                   orderedAllMmas.end()) -
+                     1;
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(

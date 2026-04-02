@@ -2087,3 +2087,47 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     return %r : !wave.tensor<[@M, @N] of f32>
   }
 }
+
+// -----
+
+// Backward propagation from an elementwise operation should not modify
+// the scaled MMA result's index expressions, even when the elementwise result
+// has a higher priority lattice.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @no_backward_into_scaled_mma_from_elementwise
+  func.func @no_backward_into_scaled_mma_from_elementwise(
+    %a: !wave.tensor<[@M, @K] of f8E5M2>,
+    %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %b: !wave.tensor<[@N, @K] of f8E5M2>,
+    %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %c: !wave.tensor<[@M, @N] of f32>,
+    %d: !wave.tensor<[@M, @N] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.scaled_mma
+    // CHECK-COUNT-5: }, {
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %mma = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    // CHECK: wave.add
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    %add = wave.add %mma, %d {wave_test.override_result_index = [
+      [100, {
+        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
+        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+      }, {M = 16 : i64, N = 16 : i64}]
+    ]}
+    : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    return
+  }
+}
