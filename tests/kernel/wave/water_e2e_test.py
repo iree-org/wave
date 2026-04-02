@@ -183,6 +183,7 @@ def test_scaled_mma_mxfp4_water_e2e():
 
     # Step 1: Compile to Wave-dialect MLIR
     options_mlir = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),

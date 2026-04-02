@@ -1945,6 +1945,7 @@ def test_mxfp4_scaled_mma_256x256x256():
         K: 16384,
     }
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
