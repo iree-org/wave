@@ -1468,8 +1468,6 @@ class FilterNodes(CustomScheduleOp):
             )
 
         nodes_list = list(nodes)
-        assert len(nodes_list) > 0, "FilterNodes: Nodes must have at least one element"
-
         if not nodes_list:
             return []
 

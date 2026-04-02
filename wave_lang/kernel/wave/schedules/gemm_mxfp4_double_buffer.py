@@ -21,6 +21,7 @@ Requires use_global_to_shared=True and threads_per_wave=64.
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 import wave_lang.kernel.wave.wave_schedule as wave_schedule
+from wave_lang.kernel.ops.wave_ops import get_custom
 
 
 def get_mxfp4_dbuf_schedule(use_stagger: bool = True):
@@ -1624,9 +1625,21 @@ def get_mxfp4_asymmetric_schedule(
 
         # partition s2v_a by M
         s2v_a_0, s2v_a_1 = tkw.partition_by_dim(s2v_a, dim=M, num_partitions=2)
-        s2v_a_scale_0, s2v_a_scale_1 = tkw.partition_by_dim(
-            s2v_a_scale, dim=M, num_partitions=2
-        )
+
+        # For small block tiles (e.g. BLOCK_M=32), merge_contiguous_reads may
+        # collapse all M-partitioned a_scale reads into a single wide read,
+        # leaving fewer than 2 unique M IDs. Skip the partition in that case.
+        a_scale_m_ids = {
+            get_custom(n).expanded_dims[M]
+            for n in s2v_a_scale
+            if get_custom(n).expanded_dims and M in get_custom(n).expanded_dims
+        }
+        if len(a_scale_m_ids) >= 2:
+            s2v_a_scale_0, s2v_a_scale_1 = tkw.partition_by_dim(
+                s2v_a_scale, dim=M, num_partitions=2
+            )
+        else:
+            s2v_a_scale_0, s2v_a_scale_1 = s2v_a_scale, []
 
         # Matrix B data and B scale - Global to Vector
         # Filter to Read nodes only: partition_gather_like_ops may create
