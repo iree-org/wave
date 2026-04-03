@@ -26,9 +26,9 @@ waveasm.program @if_yield_type_mismatch
 
   %val = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
   %s_zero = waveasm.s_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.sreg
-  %cmp = waveasm.s_cmp_lt_u32 %s_zero, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.scc
+  %cmp = waveasm.s_cmp_lt_u32 %s_zero, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
 
-  %result = waveasm.if %cmp : !waveasm.scc -> !waveasm.vreg {
+  %result = waveasm.if %cmp : !waveasm.sreg -> !waveasm.vreg {
     %added = waveasm.v_add_u32 %val, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
     waveasm.yield %added : !waveasm.vreg
   } else {
@@ -65,9 +65,9 @@ waveasm.program @if_in_loop_type_mismatch
   %i_out, %val_out = waveasm.loop(%i = %init_i, %val = %init_val)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
-    %cmp = waveasm.s_cmp_lt_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.scc
+    %cmp = waveasm.s_cmp_lt_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
 
-    %new_val = waveasm.if %cmp : !waveasm.scc -> !waveasm.vreg {
+    %new_val = waveasm.if %cmp : !waveasm.sreg -> !waveasm.vreg {
       %added = waveasm.v_add_u32 %val, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
       waveasm.yield %added : !waveasm.vreg
     } else {
@@ -76,9 +76,9 @@ waveasm.program @if_in_loop_type_mismatch
 
     %new_sum = waveasm.v_add_u32 %new_val, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
 
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
-    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
-    waveasm.condition %loop_cond : !waveasm.scc iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %loop_cond : !waveasm.sreg iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
   }
 
   waveasm.s_endpgm
@@ -110,25 +110,25 @@ waveasm.program @multiple_ifs_compound
   %i_out, %val_out = waveasm.loop(%i = %init_i, %val = %init_val)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
 
-    %cmp1 = waveasm.s_cmp_lt_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.scc
-    %if1_result = waveasm.if %cmp1 : !waveasm.scc -> !waveasm.vreg {
+    %cmp1 = waveasm.s_cmp_lt_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg
+    %if1_result = waveasm.if %cmp1 : !waveasm.sreg -> !waveasm.vreg {
       %a1 = waveasm.v_add_u32 %val, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
       waveasm.yield %a1 : !waveasm.vreg
     } else {
       waveasm.yield %val : !waveasm.vreg
     }
 
-    %cmp2 = waveasm.s_cmp_lt_u32 %i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
-    %if2_result = waveasm.if %cmp2 : !waveasm.scc -> !waveasm.vreg {
+    %cmp2 = waveasm.s_cmp_lt_u32 %i, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    %if2_result = waveasm.if %cmp2 : !waveasm.sreg -> !waveasm.vreg {
       %b1 = waveasm.v_add_u32 %if1_result, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
       waveasm.yield %b1 : !waveasm.vreg
     } else {
       waveasm.yield %if1_result : !waveasm.vreg
     }
 
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
-    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
-    waveasm.condition %loop_cond : !waveasm.scc iter_args(%next_i#0, %if2_result) : !waveasm.sreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %loop_cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
+    waveasm.condition %loop_cond : !waveasm.sreg iter_args(%next_i#0, %if2_result) : !waveasm.sreg, !waveasm.vreg
   }
 
   waveasm.s_endpgm

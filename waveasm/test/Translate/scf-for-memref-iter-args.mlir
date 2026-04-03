@@ -57,7 +57,7 @@ module {
       }
 
       // Condition should carry: [nextIV, acc, offsetB, offsetA] (swapped!)
-      // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}, %[[ACC]], %[[OB]], %[[OA]]) : !waveasm.sreg, !waveasm.vreg<4, 4>, !waveasm.sreg, !waveasm.sreg
+      // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}, %[[ACC]], %[[OB]], %[[OA]]) : !waveasm.sreg, !waveasm.vreg<4, 4>, !waveasm.sreg, !waveasm.sreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return

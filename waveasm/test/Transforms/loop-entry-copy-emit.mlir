@@ -29,8 +29,8 @@ waveasm.program @loop_entry_copy
     %next_iv = waveasm.v_mul_lo_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %cond_s = waveasm.v_readfirstlane_b32 %next_iv : !waveasm.vreg -> !waveasm.sreg
     %ub_s = waveasm.v_readfirstlane_b32 %init_i : !waveasm.vreg -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.scc
-    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv) : !waveasm.vreg
+    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.vreg
   }
 
   // Post-loop use still reads the original register.

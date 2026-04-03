@@ -1365,8 +1365,6 @@ def _generate_asm_code(mb, options):
             else "--waveasm-insert-waitcnt=ticketed-waitcnt=false"
         )
         tail_passes = [
-            "--waveasm-scc-spill-reload",
-            "--waveasm-scc-verifier",
             "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",

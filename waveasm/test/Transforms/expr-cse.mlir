@@ -88,9 +88,9 @@ waveasm.program @cse_sgpr_arith target = #waveasm.target<#waveasm.gfx942, 5> abi
 
   // First SALU add
   // CHECK: waveasm.s_add_u32
-  %r0:2 = waveasm.s_add_u32 %s0, %s1 : !waveasm.psreg<0>, !waveasm.psreg<1> -> !waveasm.sreg, !waveasm.scc
+  %r0:2 = waveasm.s_add_u32 %s0, %s1 : !waveasm.psreg<0>, !waveasm.psreg<1> -> !waveasm.sreg, !waveasm.sreg
   // Same operation - should be CSE'd
-  %r1:2 = waveasm.s_add_u32 %s0, %s1 : !waveasm.psreg<0>, !waveasm.psreg<1> -> !waveasm.sreg, !waveasm.scc
+  %r1:2 = waveasm.s_add_u32 %s0, %s1 : !waveasm.psreg<0>, !waveasm.psreg<1> -> !waveasm.sreg, !waveasm.sreg
   // Different operation
   // CHECK: waveasm.s_mul_i32
   %r2 = waveasm.s_mul_i32 %s0, %s1 : !waveasm.psreg<0>, !waveasm.psreg<1> -> !waveasm.sreg

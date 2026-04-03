@@ -326,7 +326,7 @@ ParseResult IfOp::parse(OpAsmParser &parser, OperationState &result) {
     }
   } else {
     // Default condition type
-    condType = SCCType::get(parser.getContext());
+    condType = SRegType::get(parser.getContext());
   }
 
   // Resolve condition

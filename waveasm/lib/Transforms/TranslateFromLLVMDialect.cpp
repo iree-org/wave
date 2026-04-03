@@ -435,9 +435,7 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
     auto maskImm = ctx.createImmType(kSRDWord1BaseMask);
     auto maskVal = ConstantOp::create(builder, loc, maskImm, kSRDWord1BaseMask);
-    word1 = S_AND_B32::create(builder, loc, sregTy, ctx.createSCCType(), word1,
-                              maskVal)
-                .getDst();
+    word1 = S_AND_B32::create(builder, loc, sregTy, word1, maskVal);
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
     auto flags = getConstantIntValue(op.getFlags());
@@ -466,11 +464,13 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
         offHi = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
 
       // Adjust base: S_ADD_U32 sets SCC, S_ADDC_U32 reads it.
-      SCCType sccTy = ctx.createSCCType();
-      auto addLo = S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo);
-      word0 = addLo.getDst();
-      word1 = S_ADDC_U32::create(builder, loc, sregTy, sccTy, addLo.getScc(),
-                                 word1, offHi)
+      // TODO: thread the SCC result from S_ADD_U32 into S_ADDC_U32 as an
+      // explicit operand. Currently S_ADDC_U32 has no SCC input in TableGen,
+      // so the carry dependency is only enforced by emission ordering.
+      SRegType sccTy = ctx.createSRegType();
+      word0 =
+          S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo).getDst();
+      word1 = S_ADDC_U32::create(builder, loc, sregTy, sccTy, word1, offHi)
                   .getDst();
     }
 
