@@ -513,7 +513,9 @@ struct AddZeroPattern : public OpRewritePattern<V_ADD_U32> {
 
     // Fold: both operands constant -> compute result at compile time.
     if (val0 && val1) {
-      int64_t result = (*val0 + *val1) & 0xFFFFFFFF;
+      int64_t result = static_cast<int64_t>(
+          (static_cast<uint64_t>(*val0) + static_cast<uint64_t>(*val1)) &
+          0xFFFFFFFF);
       auto loc = addOp.getLoc();
       auto immType = rewriter.getType<ImmType>(result);
       auto constOp = ConstantOp::create(rewriter, loc, immType, result);
@@ -524,11 +526,13 @@ struct AddZeroPattern : public OpRewritePattern<V_ADD_U32> {
     }
 
     // Fold: either operand is zero -> identity elimination.
-    if (val0 && *val0 == 0) {
+    // Guard: the surviving operand must be a VGPR; replacing a VGPR result
+    // with an SGPR/immediate would create a type mismatch for downstream users.
+    if (val0 && *val0 == 0 && isVGPRType(addOp.getSrc1().getType())) {
       rewriter.replaceOp(addOp, addOp.getSrc1());
       return success();
     }
-    if (val1 && *val1 == 0) {
+    if (val1 && *val1 == 0 && isVGPRType(addOp.getSrc0().getType())) {
       rewriter.replaceOp(addOp, addOp.getSrc0());
       return success();
     }
@@ -553,6 +557,8 @@ struct MulOnePattern : public OpRewritePattern<V_MUL_LO_U32> {
     auto checkOperand = [&](Value constVal, Value other) -> LogicalResult {
       auto val = getConstantValue(constVal);
       if (!val || *val != 1)
+        return failure();
+      if (!isVGPRType(other.getType()))
         return failure();
 
       rewriter.replaceOp(mulOp, other);
