@@ -307,7 +307,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     # CHECK-SAME: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>, #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 2)>>
-    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = {M = 64 : i64, N = 64 : i64}>
+    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = <@M = 64 : i64, @N = 64 : i64>>]
     # CHECK-SAME: BLOCK_M = 64 : i64
     # CHECK-SAME: BLOCK_N = 64 : i64
     # CHECK-SAME: M = 128 : i64
@@ -449,7 +449,7 @@ def mlir_converter_self_index():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_self_index
-    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] vector_shape [{M : 64 : i64}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] vector_shape [#wave.symbol_mapping<@M = 64 : i64>] : !wave.tensor<[@M] of i32, <register>>
     # CHECK: wave.write %[[SELF_INDEX]]
 
 

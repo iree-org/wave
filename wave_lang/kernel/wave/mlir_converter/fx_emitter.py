@@ -325,17 +325,26 @@ def _convert_mapping_attr(
         return IndexMapping(n, value_mapping, memory_mapping)
 
 
+def symbol_mapping_attr_to_dict(
+    attr: WaveSymbolMappingAttr,
+) -> dict[IndexSymbol, int]:
+    """Convert a WaveSymbolMappingAttr with integer values to {IndexSymbol: int}."""
+    return {
+        index_symbol(key.name): int(ir.IntegerAttr(value).value) for key, value in attr
+    }
+
+
 def _convert_single_vector_shape_entry(
     entry: ir.Attribute,
 ) -> dict[IndexSymbol, int] | None:
     """Convert one element of a vector_shape ArrayAttr.
 
-    DictAttr entries are converted to {IndexSymbol: int}.  UnitAttr entries
-    (placeholder slots for missing results) are returned as None.
+    WaveSymbolMappingAttr entries are converted to {IndexSymbol: int}.
+    UnitAttr entries (placeholder slots for missing results) are returned as None.
     """
     if isinstance(entry, ir.UnitAttr):
         return None
-    return {index_symbol(named.name): int(named.attr.value) for named in entry}
+    return symbol_mapping_attr_to_dict(entry)
 
 
 def _convert_vector_shapes(
@@ -344,8 +353,8 @@ def _convert_vector_shapes(
     """Converts an MLIR vector_shape ArrayAttr to a list of symbol->int dicts.
 
     The water_emitter serializes vector_shapes as an ArrayAttr whose entries are:
-      - Regular ops:   [DictAttr]           (1 entry)
-      - MMA ops:       [lhs, rhs, acc, res] (4 DictAttr entries)
+      - Regular ops:   [WaveSymbolMappingAttr]           (1 entry)
+      - MMA ops:       [lhs, rhs, acc, res] (4 WaveSymbolMappingAttr entries)
       - Iterate ops:   [self, gr0, gr1, …]  (1 + N entries, some may be UnitAttr)
     """
     return [_convert_single_vector_shape_entry(e) for e in attr]
@@ -495,10 +504,11 @@ def _convert_constraints(op: ir.Operation) -> list[Constraint]:
                     else None
                 )
 
-                vector_shapes = {
-                    index_symbol(named.name): int(named.attr.value)
-                    for named in (c.vector_shapes or [])
-                }
+                vector_shapes = (
+                    symbol_mapping_attr_to_dict(c.vector_shapes)
+                    if c.vector_shapes is not None
+                    else {}
+                )
 
                 max_bits_per_load = int(c.max_bits_per_load)
                 mma_type = (

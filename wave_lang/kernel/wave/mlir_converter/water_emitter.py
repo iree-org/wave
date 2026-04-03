@@ -669,12 +669,22 @@ def _parse_mma_kind(mma_type, ctx: ir.Context) -> ir.Attribute | None:
 
 def _convert_vector_shapes(
     shapes: dict[IndexSymbol, int | IndexExpr], subs: dict[IndexExpr, Any] = {}
-) -> ir.DictAttr:
-    """Converts a dictionary of index symbols mapped to integers to a dictionary attribute."""
+) -> "wave.WaveSymbolMappingAttr":
+    """Converts a dictionary of index symbols mapped to integers to a WaveSymbolMappingAttr."""
     resolved = _resolve_vector_shapes_for_attr(shapes, subs)
     i64 = ir.IntegerType.get_signless(64)
-    dict = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
-    return ir.DictAttr.get(dict)
+    mapping = {k: ir.IntegerAttr.get(i64, v) for k, v in resolved.items()}
+    return wave.WaveSymbolMappingAttr.get(mapping)
+
+
+def _symbol_mapping_to_dict_attr(
+    attr: "wave.WaveSymbolMappingAttr",
+) -> ir.DictAttr:
+    """Converts a WaveSymbolMappingAttr to a DictionaryAttr.
+
+    For use with attributes that have not yet been migrated to WaveSymbolMappingAttr.
+    """
+    return ir.DictAttr.get({key.name: value for key, value in attr})
 
 
 def _convert_index_mapping_to_water(
@@ -1159,8 +1169,9 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type,
                         source=create_mlir_operands(),
-                        target_vector_shape=_convert_vector_shapes(
-                            node.target_vector_shape
+                        # ReshapeOp.target_vector_shape is still DictionaryAttr.
+                        target_vector_shape=_symbol_mapping_to_dict_attr(
+                            _convert_vector_shapes(node.target_vector_shape)
                         ),
                         logical_slice=node.logical_slice,
                         num_slices=node.num_slices,
