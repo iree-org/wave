@@ -567,6 +567,8 @@ class Cluster(CustomScheduleOp):
                 first_node_encountered = True
                 context_location = getattr(get_custom(item), "location", None)
             elif isinstance(item, (list, tuple)):
+                if not item:
+                    continue
                 # Direct list of nodes
                 result_nodes.extend(item)
                 # Update anchor to the last node
