@@ -246,6 +246,12 @@ private:
       allocator.addTiedOperand(result, acc);
     }
 
+    // Use bidirectional allocation for VGPRs: long-lived multi-register
+    // ranges are allocated from the top, short-lived from the bottom.
+    if (bidirectionalThreshold > 0)
+      allocator.setVGPRStrategy(
+          std::make_unique<BidirectionalStrategy>(bidirectionalThreshold));
+
     // Run allocation
     auto result = allocator.allocate(program);
     if (failed(result)) {
