@@ -97,6 +97,9 @@ inline int64_t getRegAlignment(mlir::Type type) {
 /// Check if type is an immediate
 inline bool isImmType(mlir::Type type) { return mlir::isa<ImmType>(type); }
 
+/// Check if type is the SCC flag type
+inline bool isSCCType(mlir::Type type) { return mlir::isa<SCCType>(type); }
+
 /// Check if two types are structurally compatible for control flow.
 /// After register allocation, virtual types (vreg, sreg) become physical
 /// types (pvreg, psreg) which include a register index. For control flow
@@ -104,6 +107,11 @@ inline bool isImmType(mlir::Type type) { return mlir::isa<ImmType>(type); }
 /// not the specific physical register index.
 inline bool typesCompatible(mlir::Type a, mlir::Type b) {
   if (a == b)
+    return true;
+
+  // Both are SCC types (parameterless, so a == b already covers this,
+  // but be explicit for clarity).
+  if (mlir::isa<SCCType>(a) && mlir::isa<SCCType>(b))
     return true;
 
   // Both are VReg types (virtual)

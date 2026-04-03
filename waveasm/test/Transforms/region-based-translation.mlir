@@ -22,9 +22,9 @@ module {
         %i_i32 = arith.index_cast %i : index to i32
       }
       // Induction variable incremented, compared, condition terminates
-      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
-      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.sreg iter_args(%[[NEXT]]) : !waveasm.sreg
+      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
+      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]]) : !waveasm.sreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return
@@ -51,9 +51,9 @@ module {
       // Body accumulates: vreg + sreg
       // CHECK:      %[[NEWACC:.*]] = waveasm.v_add_u32 %[[ACC]], %[[IV]] : !waveasm.vreg, !waveasm.sreg -> !waveasm.vreg
       // Induction variable incremented, compared, condition with both iter_args
-      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
-      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.sreg iter_args(%[[NEXT]], %[[NEWACC]]) : !waveasm.sreg, !waveasm.vreg
+      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
+      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]], %[[NEWACC]]) : !waveasm.sreg, !waveasm.vreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return
@@ -68,7 +68,7 @@ module {
       %cond_i32 = arith.cmpi slt, %arg0, %c10 : i32
       %cond_ext = arith.extui %cond_i32 : i1 to i32
 
-      // CHECK:      %{{.*}} = waveasm.if %{{.*}} : !waveasm.sreg -> !waveasm.vreg {
+      // CHECK:      %{{.*}} = waveasm.if %{{.*}} : !waveasm.scc -> !waveasm.vreg {
       %result = scf.if %cond_i32 -> i32 {
         // CHECK:      waveasm.v_add_u32
         %sum = arith.addi %arg0, %arg1 : i32
@@ -104,10 +104,10 @@ module {
           %sum = arith.addi %i, %j : index
         }
         // Inner condition
-        // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}) : !waveasm.sreg
+        // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}) : !waveasm.sreg
       }
       // Outer condition
-      // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}) : !waveasm.sreg
+      // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}) : !waveasm.sreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return

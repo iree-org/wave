@@ -37,15 +37,15 @@ waveasm.program @emit_scalar_war_copy
 
     // Iter_arg defined EARLY : WAR hazard source.
     %next_iv:2 = waveasm.s_add_u32 %iv, %c2
-        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.scc
 
     // Block_arg %iv used AFTER %next_iv defined.
     %offset:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %offset#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0) : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0) : !waveasm.sreg
   }
 
   // CHECK:      s_cmp_lt_u32
@@ -91,10 +91,10 @@ waveasm.program @emit_vgpr_war_copy
         : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
     %next_i:2 = waveasm.s_add_u32 %i, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_i#0, %new_val) : !waveasm.sreg, !waveasm.vreg
   }
 
@@ -135,11 +135,11 @@ waveasm.program @emit_no_copy_same_point
     // %iv's ONLY use is as the operand of this instruction.
     // Same point as the def of %next_iv -> says no hazard - tied.
     %next_iv:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0) : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0) : !waveasm.sreg
   }
 
   // No back-edge copy: iter_arg and block_arg share the same register.
@@ -186,7 +186,7 @@ waveasm.program @emit_mixed_selective
 
     // Scalar IV iter_arg defined EARLY : WAR hazard source.
     %next_iv:2 = waveasm.s_add_u32 %iv, %c2
-        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.scc
 
     // MFMA: %acc used and %new_acc defined at SAME point -> no hazard.
     %new_acc = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %acc
@@ -195,11 +195,11 @@ waveasm.program @emit_mixed_selective
 
     // Block_arg %iv used AFTER %next_iv defined : WAR victim.
     %offset:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %offset#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 

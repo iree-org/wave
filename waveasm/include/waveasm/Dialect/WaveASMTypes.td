@@ -287,6 +287,29 @@ def WaveASM_ImmType : WAVEASMType<"Imm", "imm"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SCC (Status Condition Code) Type
+//===----------------------------------------------------------------------===//
+
+def WaveASM_SCCType : WAVEASMType<"SCC", "scc"> {
+  let summary = "SCC flag (implicit 1-bit condition code)";
+  let description = [{
+    Represents the hardware SCC (Status Condition Code) flag, an implicit
+    1-bit condition code set by scalar ALU compare and carry instructions.
+    Unlike SRegType, SCC is not a general-purpose SGPR — no physical register
+    is allocated for it. The register allocator skips SCCType values because
+    they are excluded from isVirtualRegType().
+
+    Used as the result type for:
+    - SALUCmpOp (s_cmp_*): the compare sets SCC, no SGPR is written.
+    - SALUBinaryWithCarryOp (s_add_u32, s_addc_u32): the $scc carry result.
+
+    Consumed by ConditionOp and IfOp to model the SCC flag dependency.
+  }];
+
+  let parameters = (ins);
+}
+
+//===----------------------------------------------------------------------===//
 // Type Predicates for Op Definitions
 //===----------------------------------------------------------------------===//
 
@@ -320,6 +343,12 @@ def WaveASM_AnyReg : AnyTypeOf<[
 
 // Immediate
 def WaveASM_Imm : AnyTypeOf<[WaveASM_ImmType], "immediate">;
+
+// SCC flag
+def WaveASM_SCC : AnyTypeOf<[WaveASM_SCCType], "SCC flag">;
+
+// SCC or any SGPR (for condition consumers that accept either)
+def WaveASM_AnySCCOrSGPR : AnyTypeOf<[WaveASM_SCCType, WaveASM_SRegType, WaveASM_PSRegType], "SCC or SGPR">;
 
 // VGPR or immediate (common for src1)
 def WaveASM_VRegOrImm : AnyTypeOf<[WaveASM_VRegType, WaveASM_PVRegType, WaveASM_ImmType],

@@ -145,10 +145,10 @@ waveasm.program @bidirectional_loop_double_buffer
         -> !waveasm.vreg<4, 4>
 
     %next_i:2 = waveasm.s_add_u32 %i, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c16
-        : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_i#0, %buf0_use, %buf1_use)
         : !waveasm.sreg, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>
   }
@@ -227,19 +227,19 @@ waveasm.program @sgpr_not_bidirectional
 
   %s1 = waveasm.s_mov_b32 %c1 : !waveasm.imm<1> -> !waveasm.sreg
   %s2:2 = waveasm.s_add_u32 %s1, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s3:2 = waveasm.s_add_u32 %s2#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s4:2 = waveasm.s_add_u32 %s3#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s5:2 = waveasm.s_add_u32 %s4#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s6:2 = waveasm.s_add_u32 %s5#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s7:2 = waveasm.s_add_u32 %s6#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
   %s8:2 = waveasm.s_add_u32 %s7#0, %c1
-      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+      : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
   // Late use of %ptr — long-lived SGPR quad
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
