@@ -519,6 +519,7 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
 
   let parameters = (ins "::mlir::DictionaryAttr":$mapping);
   let assemblyFormat = "`<` $mapping `>`";
+  let genVerifyDecl = 1;
 
   let extraClassDeclaration = [{
     /// Get the concrete value for a symbol name, returns std::nullopt if not

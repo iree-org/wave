@@ -684,6 +684,11 @@ module attributes { wave.hyperparameters = #wave.hyperparameters<{}> } {
 
 // -----
 
+// expected-error @below {{hyperparameter 'A' must be an i64 integer value, got 42 : i32}}
+module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42 : i32}> } {}
+
+// -----
+
 module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42, C = 43}> } {
   // expected-error @below {{region #0 block #0 argument type #0 uses symbolic value #wave.symbol<"B"> not provided as a hyperparameter}}
   // expected-note @below {{available symbols: A, C}}

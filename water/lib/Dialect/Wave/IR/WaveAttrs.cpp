@@ -483,6 +483,12 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
 // WaveHyperparameterAttr
 //===----------------------------------------------------------------------===//
 
+/// Returns true if `attr` is a signless i64 IntegerAttr.
+static bool isI64IntegerAttr(Attribute attr) {
+  auto intAttr = dyn_cast<IntegerAttr>(attr);
+  return intAttr && intAttr.getType().isSignlessInteger(64);
+}
+
 std::optional<int64_t>
 WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
   DictionaryAttr mapping = getMapping();
@@ -561,6 +567,18 @@ WaveHyperparameterAttr::getKnownSymbolValue(StringRef symbolName) const {
 
 bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
   return getMapping().get(symbolName) != nullptr;
+}
+
+LogicalResult
+WaveHyperparameterAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                               DictionaryAttr mapping) {
+  for (NamedAttribute attr : mapping) {
+    if (!isI64IntegerAttr(attr.getValue()))
+      return emitError() << "hyperparameter '" << attr.getName().getValue()
+                         << "' must be an i64 integer value, got "
+                         << attr.getValue();
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -781,11 +799,10 @@ LogicalResult HardwareConstraintAttr::verify(
   if (vectorShapes) {
     for (NamedAttribute attr : vectorShapes) {
       // TODO: verify that attr.getName() is a valid WaveSymbol
-      Attribute value = attr.getValue();
-
-      if (!isa<IntegerAttr>(value))
-        return emitError() << attr.getName()
-                           << " is not an IntegerAttr: " << attr.getValue();
+      if (!isI64IntegerAttr(attr.getValue()))
+        return emitError() << "vector_shapes entry '" << attr.getName().getValue()
+                           << "' must be an i64 integer value, got "
+                           << attr.getValue();
     }
   }
 
