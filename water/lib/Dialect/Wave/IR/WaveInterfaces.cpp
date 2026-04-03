@@ -129,7 +129,11 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
         bool found = false;
         for (Operation *currentOp = op->getParentOp(); currentOp != nullptr;
              currentOp = currentOp->getParentOp()) {
-          auto parentIterSymbol =
+          // TODO: we don't want to depend on the IterateOp specifically from
+          // the interface (though technically we can), so we use the opaque
+          // attribute name. We should add something like a "wave control flow
+          // interface" that would provide it without hardcoded strings.
+          WaveSymbolAttr parentIterSymbol =
               currentOp->getAttrOfType<wave::WaveSymbolAttr>("iterator");
           if (!parentIterSymbol)
             continue;

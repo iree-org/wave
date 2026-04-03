@@ -32,6 +32,9 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                                 wave::WaveHyperparameterAttr hyper) {
   return llvm::map_to_vector(shape, [&](wave::WaveSymbolAttr symbol) {
     auto mapAttr = indexMapping.lookup<wave::WaveIndexMappingAttr>(symbol);
+    // The entry may be missing from the index and we shouldn't crash. Just
+    // treat it as dynamic meaning we cannot statically evaluate it to a
+    // constant.
     if (!mapAttr)
       return ShapedType::kDynamic;
     if (!mapAttr.getStep())

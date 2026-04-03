@@ -625,7 +625,7 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
   let builders = [
     AttrBuilder<(ins
       "::llvm::ArrayRef<std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>>"
-      :$entries)>
+      :$entries)>,
   ];
 
   let extraClassDeclaration = [{
@@ -636,6 +636,16 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
       return ::llvm::dyn_cast_or_null<T>(lookupImpl(key));
     }
     ::mlir::Attribute lookupImpl(::wave::WaveSymbolAttr key) const;
+
+    template <typename Range>
+    static WaveSymbolMappingAttr get(
+        ::mlir::MLIRContext *context,
+        ::llvm::ArrayRef<::wave::WaveSymbolAttr> symbols,
+        Range &&values) {
+      ::llvm::SmallVector<::mlir::Attribute> attrs = ::llvm::map_to_vector(values,
+          [](auto &&value) -> ::mlir::Attribute { return value; });
+      return get(context, symbols, ::llvm::ArrayRef<::mlir::Attribute>(attrs));
+    }
 
     /// Check if a symbolic dimension exists in the mapping.
     bool hasSymbol(::wave::WaveSymbolAttr key) const {

@@ -78,8 +78,7 @@ class UnaryWaveOp<string mnemonic>
   );
 
   let assemblyFormat =
-    "$argument " # commonArgumentsSyntax
-    # " attr-dict `:` functional-type(operands, results)";
+    "$argument attr-dict `:` functional-type(operands, results)";
 }
 
 class BinaryWaveOp<string mnemonic>

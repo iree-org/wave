@@ -275,12 +275,21 @@ transformIndex(wave::WaveSymbolMappingAttr indexMapping,
     return indexMapping;
   }
 
+  // When we hit this while increasing mapping expressiveness, it would mean
+  // that we need to add the symbol part of the mapping to the new value. We
+  // will need to figure out which dimension.
   assert(mapping.getMap().isPermutation() &&
          "NYI: only permutation mappings are currently supported");
 
+  // Mapping is (memory shape) -> (value shape) and the original orderedSyms are
+  // the value shape so we to apply the inverse mapping to obtain the new
+  // ordered symbols list.
   wave::permuteShape(orderedSyms, mapping.getMap(), /*inverse=*/true,
                      updatedOrderedSyms);
 
+  // XXX: step/stride are not permuted similarly to pywave. For step, this works
+  // because the vectorized dimension is computed prior to permutation, but
+  // generally that looks incorrect.
   return indexMapping;
 }
 
@@ -320,6 +329,14 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   assert(indexArr && "IndexExprsSpecified normal form guarantees index attr");
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
          "'index' must be an array with exactly one mapping");
+
+  // Get ordered symbols for dimension ordering.
+  // DictionaryAttr stores entries sorted alphabetically by key, which doesn't
+  // match the semantic dimension ordering. We need to get the correct order
+  // from either:
+  // 1. The ordered_syms attribute (set by ResolveDistributedAllocations for
+  //    ops with MemRefType memory operands).
+  // 2. The WaveTensorType shape (for ops that still have WaveTensorType).
   auto indexMapping = cast<wave::WaveSymbolMappingAttr>(indexArr[0]);
 
   SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
