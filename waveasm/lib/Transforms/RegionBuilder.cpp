@@ -239,6 +239,7 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
       // results unmapped.  Downstream consumers that need them (maskedload)
       // handle the absence gracefully.  Only abort if the yield operands end
       // up unmapped (checked below).
+      op.emitWarning("loop body: skipping untranslated op");
       LLVM_DEBUG(llvm::dbgs()
                  << "loop body: skipping untranslated op: " << op << "\n");
     }

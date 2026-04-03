@@ -1251,6 +1251,24 @@ LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
   if (numBytes <= 0)
     return op->emitError("vector.maskedload with zero-size vector is invalid");
 
+  // The exec-mask path relies on hardware OOB zeroing for inactive lanes.
+  // This only produces correct results when the passthrough is zero.
+  if (auto cst =
+          maskedLoadOp.getPassThru().getDefiningOp<arith::ConstantOp>()) {
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(cst.getValue())) {
+      if (denseAttr.isSplat()) {
+        Attribute splatVal = denseAttr.getSplatValue<Attribute>();
+        bool isZero = false;
+        if (auto floatAttr = dyn_cast<FloatAttr>(splatVal))
+          isZero = floatAttr.getValue().isZero();
+        else if (auto intAttr = dyn_cast<IntegerAttr>(splatVal))
+          isZero = intAttr.getValue().isZero();
+        assert(isZero &&
+               "masked load passthrough must be zero for exec-mask lowering");
+      }
+    }
+  }
+
   auto mask = ctx.getMapper().getMapped(maskedLoadOp.getMask());
   Value savedExec;
   if (mask)
@@ -1258,7 +1276,13 @@ LogicalResult handleVectorMaskedLoad(Operation *op, TranslationContext &ctx) {
 
   auto [voffset, instOffset] = computeVOffsetFromIndices(
       memrefType, maskedLoadOp.getIndices(), ctx, loc, maskedLoadOp.getBase());
-  Value srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
+
+  Value srd;
+  if (auto *adj = ctx.getPendingSRDBaseAdjust(maskedLoadOp.getBase())) {
+    srd = emitSRDBaseAdjustment(*adj, maskedLoadOp.getBase(), ctx, loc);
+  } else {
+    srd = lookupSRD(maskedLoadOp.getBase(), ctx, loc);
+  }
   auto loadResults =
       emitBufferLoads(srd, voffset, instOffset, numBytes, ctx, loc);
 

@@ -118,7 +118,8 @@ class WaveCompileOptions:
     # keep read linearization without annotating every buffer.
     allow_noncontiguous_runtime_buffers: bool = False
 
-    # Enable dynamic strides through Wave runtime and LLVM backend
+    # Dynamic strides are enabled whenever wave_runtime is active,
+    # supported by both LLVM and waveasm backends.
     @property
     def dynamic_strides(self) -> bool:
         return self.wave_runtime
