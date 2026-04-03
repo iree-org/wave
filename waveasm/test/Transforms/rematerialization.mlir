@@ -161,10 +161,10 @@ waveasm.program @remat_no_clone_into_loop
     // CHECK: v_mfma_f32_16x16x16_f16
     %n0 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %sum : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
 
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     // CHECK: waveasm.condition
-    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c16 : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %n0)
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c16 : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_i#0, %n0)
         : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
