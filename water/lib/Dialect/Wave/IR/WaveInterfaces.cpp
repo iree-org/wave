@@ -66,8 +66,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
       if (!mapping)
         return op->emitError(
             "'vector_shape' array elements must be WaveSymbolMappingAttr");
-      for (auto [key, value] :
-           llvm::zip(mapping.getKeys(), mapping.getValues())) {
+      for (auto [key, value] : mapping.getMapping()) {
         auto intAttr = dyn_cast<IntegerAttr>(value);
         if (!intAttr)
           return op->emitError("vector_shape entry ")

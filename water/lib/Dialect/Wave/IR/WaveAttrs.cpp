@@ -779,8 +779,7 @@ LogicalResult HardwareConstraintAttr::verify(
                        << ") should have 3 elements";
 
   if (vectorShapes) {
-    for (auto [key, value] :
-         llvm::zip(vectorShapes.getKeys(), vectorShapes.getValues())) {
+    for (auto [key, value] : vectorShapes.getMapping()) {
       if (!isa<IntegerAttr>(value))
         return emitError() << key << " is not an IntegerAttr: " << value;
     }
@@ -899,12 +898,11 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
 
 void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
   printer << "<";
-  llvm::interleaveComma(llvm::zip(getKeys(), getValues()), printer,
-                        [&](auto pair) {
-                          printer.printSymbolName(std::get<0>(pair).getName());
-                          printer << " = ";
-                          printer.printAttribute(std::get<1>(pair));
-                        });
+  llvm::interleaveComma(getMapping(), printer, [&](auto pair) {
+    printer.printSymbolName(std::get<0>(pair).getName());
+    printer << " = ";
+    printer.printAttribute(std::get<1>(pair));
+  });
   printer << ">";
 }
 
@@ -927,7 +925,7 @@ WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 Attribute WaveSymbolMappingAttr::lookupImpl(WaveSymbolAttr key) const {
-  for (auto [k, v] : llvm::zip(getKeys(), getValues())) {
+  for (auto [k, v] : getMapping()) {
     if (k == key)
       return v;
   }

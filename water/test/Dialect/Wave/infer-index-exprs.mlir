@@ -634,7 +634,13 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: }, {
     // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
     // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>, #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>, #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>, #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
+    // CHECK: vector_shape
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
     %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
       : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
          !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
@@ -674,7 +680,13 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: }, {
     // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
     // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>, #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>, #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>, #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
+    // CHECK: vector_shape
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
     %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
       : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
          !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,

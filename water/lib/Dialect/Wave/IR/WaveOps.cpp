@@ -1152,7 +1152,7 @@ static LogicalResult verifyReadWriteBounds(Location loc,
 
   ArrayRef<wave::WaveSymbolAttr> validSymbols = boundedType.getShape();
 
-  for (auto [key, value] : llvm::zip(bounds.getKeys(), bounds.getValues())) {
+  for (auto [key, value] : bounds.getMapping()) {
     if (!llvm::is_contained(validSymbols, key)) {
       return emitError(loc)
              << "'bounds' specified for a symbol " << key.getName()

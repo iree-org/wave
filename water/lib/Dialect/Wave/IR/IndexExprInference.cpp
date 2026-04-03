@@ -119,12 +119,13 @@ wave::detail::filterVectorShape(wave::WaveSymbolMappingAttr vectorShape,
     return vectorShape;
   SmallVector<wave::WaveSymbolAttr> filteredKeys;
   SmallVector<Attribute> filteredValues;
-  for (auto [key, value] :
-       llvm::zip(vectorShape.getKeys(), vectorShape.getValues())) {
-    if (llvm::is_contained(symbols, key)) {
-      filteredKeys.push_back(key);
-      filteredValues.push_back(value);
-    }
+  filteredKeys.reserve(vectorShape.getNumEntries());
+  filteredValues.reserve(vectorShape.getNumEntries());
+  for (auto [key, value] : vectorShape.getMapping()) {
+    if (!llvm::is_contained(symbols, key))
+      continue;
+    filteredKeys.push_back(key);
+    filteredValues.push_back(value);
   }
   return wave::WaveSymbolMappingAttr::get(vectorShape.getContext(),
                                           filteredKeys, filteredValues);
@@ -732,7 +733,7 @@ static wave::WaveSymbolMappingAttr getJoinedVectorShape(
   SmallVector<Attribute> joinedValues;
 
   llvm::DenseSet<wave::WaveSymbolAttr> visited;
-  for (auto [key, value] : llvm::zip(lhs.getKeys(), lhs.getValues())) {
+  for (auto [key, value] : lhs.getMapping()) {
     visited.insert(key);
     Attribute rhsValue = rhs.lookup(key);
     StringRef keyName = key.getName();
@@ -757,7 +758,7 @@ static wave::WaveSymbolMappingAttr getJoinedVectorShape(
     }
   }
 
-  for (auto [key, value] : llvm::zip(rhs.getKeys(), rhs.getValues())) {
+  for (auto [key, value] : rhs.getMapping()) {
     if (!visited.contains(key)) {
       joinedKeys.push_back(key);
       joinedValues.push_back(value);
@@ -779,7 +780,7 @@ wave::IndexExprsLatticeStorage::getJoinedVectorShape(
     return rhs.getVectorShape();
   if (rhs.isBottom())
     return lhs.getVectorShape();
-  if (auto result =
+  if (wave::WaveSymbolMappingAttr result =
           ::getJoinedVectorShape(lhs.getVectorShape(), rhs.getVectorShape(),
                                  lhs.getPriorities(), rhs.getPriorities()))
     return result;
@@ -1391,9 +1392,8 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
   }
 
   if (hwVectorShape) {
-    for (auto [key, value] :
-         llvm::zip(hwVectorShape.getKeys(), hwVectorShape.getValues())) {
-      if (mSymbol && key.getName() == mSymbol.getName()) {
+    for (auto [key, value] : hwVectorShape.getMapping()) {
+      if (mSymbol && key == mSymbol) {
         if (delayedErrorEmitter && cast<IntegerAttr>(value).getValue() != m) {
           wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
           *delayedErrorEmitter = [mSymbol, m,
@@ -1406,7 +1406,7 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
         }
         continue;
       }
-      if (nSymbol && key.getName() == nSymbol.getName()) {
+      if (nSymbol && key == nSymbol) {
         if (delayedErrorEmitter && cast<IntegerAttr>(value).getValue() != n) {
           wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
           *delayedErrorEmitter = [nSymbol, n,
@@ -1419,7 +1419,7 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
         }
         continue;
       }
-      if (kSymbol && key.getName() == kSymbol.getName()) {
+      if (kSymbol && key == kSymbol) {
         if (delayedErrorEmitter && cast<IntegerAttr>(value).getValue() != k) {
           wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
           *delayedErrorEmitter = [kSymbol, k,
@@ -1432,7 +1432,7 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
         }
         continue;
       }
-      if (kScaledSymbol && key.getName() == kScaledSymbol.getName()) {
+      if (kScaledSymbol && key == kScaledSymbol) {
         if (delayedErrorEmitter &&
             cast<IntegerAttr>(value).getValue() != kScaled) {
           wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;

@@ -60,27 +60,10 @@ overrideInitialization(Operation *top,
       WaveSymbolMappingAttr vectorShape;
       MLIRContext *ctx = op->getContext();
 
-      auto dictToSymbolMapping =
-          [&](DictionaryAttr dict) -> WaveSymbolMappingAttr {
-        if (!dict)
-          return {};
-        SmallVector<WaveSymbolAttr> keys;
-        SmallVector<Attribute> values;
-        for (NamedAttribute na : dict) {
-          keys.push_back(WaveSymbolAttr::get(ctx, na.getName().getValue()));
-          values.push_back(na.getValue());
-        }
-        return WaveSymbolMappingAttr::get(ctx, keys, values);
-      };
-
       auto parseVectorShapeAttr = [&](Attribute attr) -> WaveSymbolMappingAttr {
         if (llvm::isa<UnitAttr>(attr) || !attr)
           return {};
-        if (auto symMap = llvm::dyn_cast<WaveSymbolMappingAttr>(attr))
-          return symMap;
-        if (auto dict = llvm::dyn_cast<DictionaryAttr>(attr))
-          return dictToSymbolMapping(dict);
-        return {};
+        return llvm::dyn_cast<WaveSymbolMappingAttr>(attr);
       };
 
       auto setUniformPriority = [&](int32_t priority) {

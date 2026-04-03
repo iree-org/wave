@@ -645,6 +645,13 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
     /// Get the number of entries in the mapping.
     size_t getNumEntries() const { return getKeys().size(); }
 
+    /// Returns a range of (key, value) pairs suitable for range-for with
+    /// structured bindings:
+    ///   for (auto [key, val] : symAttr.getMapping()) { ... }
+    auto getMapping() const {
+      return ::llvm::zip_equal(getKeys(), getValues());
+    }
+
     WaveSymbolMappingAttr getValue() const { return *this; }
   }];
 }

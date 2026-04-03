@@ -92,30 +92,6 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
     llvm::StringSet<> &usedSymbols,
     llvm::function_ref<InFlightDiagnostic()> emitError) {
 
-  // TODO: we need a first-class attribute for this mapping, at which point this
-  // special-casing will disappear as the walker below would also visit symbols
-  // used as dictionary keys.
-  if (namedAttr.getName().strref() == wave::WaveDialect::kVectorShapeAttrName) {
-    auto arrayAttr = llvm::dyn_cast<ArrayAttr>(namedAttr.getValue());
-    if (!arrayAttr)
-      return llvm::success();
-    for (Attribute a : arrayAttr) {
-      auto mapping = llvm::dyn_cast<wave::WaveSymbolMappingAttr>(a);
-      if (!mapping)
-        continue;
-      for (wave::WaveSymbolAttr key : mapping.getKeys()) {
-        usedSymbols.insert(key.getName());
-        if (hyperparam.getMapping().contains(key.getName()))
-          continue;
-        InFlightDiagnostic diag = emitError()
-                                  << "uses symbolic value " << key.getName()
-                                  << " not provided as a hyperparameter";
-        attachAvailableSymbolsNote(diag, hyperparam);
-        return llvm::failure();
-      }
-    }
-    return llvm::success();
-  }
   if (namedAttr.getName().strref() ==
       wave::WaveDialect::kIndexWaveExprListAttrName) {
     auto attr = namedAttr.getValue();
