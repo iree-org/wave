@@ -269,4 +269,10 @@ def WaveASM_ControlFlowOp : NativeOpTrait<"ControlFlowOp">;
 // Trait for special register operations (M0, VCC, EXEC)
 def WaveASM_SpecialRegOp : NativeOpTrait<"SpecialRegOp">;
 
+// Trait for operations that implicitly write the SCC flag.
+def WaveASM_SCCDef : NativeOpTrait<"SCCDef">;
+
+// Trait for operations that implicitly read the SCC flag.
+def WaveASM_SCCUse : NativeOpTrait<"SCCUse">;
+
 #endif // WaveASM_DIALECT_WAVEASMINTERFACES

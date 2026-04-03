@@ -104,8 +104,8 @@ waveasm.program @loop_invalidates_cache
     %next = waveasm.v_add_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %cond_s = waveasm.v_readfirstlane_b32 %next : !waveasm.vreg -> !waveasm.sreg
     %ub = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next) : !waveasm.vreg
+    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub : !waveasm.sreg, !waveasm.sreg -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next) : !waveasm.vreg
   }
 
   // CHECK: s_endpgm
@@ -144,8 +144,8 @@ waveasm.program @loop_body_cache_reuse
     %next = waveasm.v_add_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %cond_s = waveasm.v_readfirstlane_b32 %next : !waveasm.vreg -> !waveasm.sreg
     %ub = waveasm.v_readfirstlane_b32 %v0 : !waveasm.pvreg<0> -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next) : !waveasm.vreg
+    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub : !waveasm.sreg, !waveasm.sreg -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next) : !waveasm.vreg
   }
 
   // CHECK: s_endpgm
