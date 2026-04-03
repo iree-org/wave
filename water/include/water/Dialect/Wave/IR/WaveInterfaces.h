@@ -647,12 +647,12 @@ public:
                            int32_t priority,
                            wave::WaveSymbolMappingAttr vectorShape);
   IndexExprsLatticeStorage(WaveSymbolMappingAttr concreteValue,
-                           mlir::DictionaryAttr priorities,
+                           WaveSymbolMappingAttr priorities,
                            wave::WaveSymbolMappingAttr vectorShape);
 
 private:
   IndexExprsLatticeStorage(WaveSymbolMappingAttr concreteValue,
-                           mlir::DictionaryAttr priorities,
+                           WaveSymbolMappingAttr priorities,
                            wave::WaveSymbolMappingAttr vectorShape,
                            wave::WaveSymbolMappingAttr sourceVectorShape,
                            int32_t sourceVectorShapePriority);
@@ -675,12 +675,11 @@ public:
   WaveSymbolMappingAttr getConcreteValue() const;
 
   // Return the priority for a specific key, defaulting to kLowestPriority.
-  int32_t getPriorityForKey(mlir::StringAttr key) const;
   int32_t getPriorityForKey(WaveSymbolAttr key) const;
 
-  // Return the per-key priorities as a DictionaryAttr mapping StringAttr keys
-  // to IntegerAttr values. Asserts on non-concrete values.
-  mlir::DictionaryAttr getPriorities() const {
+  // Return the per-key priorities as a WaveSymbolMappingAttr mapping
+  // WaveSymbolAttr keys to IntegerAttr values. Asserts on non-concrete values.
+  WaveSymbolMappingAttr getPriorities() const {
     assert(getConcreteValue() && "no priorities for lattice top/bottom");
     return priorities;
   }
@@ -760,12 +759,12 @@ private:
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
-  // Per-key priorities as a DictionaryAttr mapping symbol names to IntegerAttr
-  // priority values. Each symbol in the dictionary has its own priority.
+  // Per-key priorities as a WaveSymbolMappingAttr mapping WaveSymbolAttr keys
+  // to IntegerAttr priority values. Each symbol has its own priority.
   // Higher-priority entries override lower-priority entries in joins; entries
-  // with equal priorities are structurally merged. Using DictionaryAttr avoids
-  // per-instance heap allocation since attrs are interned.
-  mlir::DictionaryAttr priorities;
+  // with equal priorities are structurally merged. Using an interned attribute
+  // avoids per-instance heap allocation.
+  WaveSymbolMappingAttr priorities;
 
   // The vector shape associated with this lattice value. This is a mapping from
   // wave symbols to vector dimension sizes. Two concrete lattice values with

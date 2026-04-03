@@ -218,30 +218,27 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
   MLIRContext *ctx = concreteValue.getContext();
   IntegerType i32 = IntegerType::get(ctx, 32);
   IntegerAttr priAttr = IntegerAttr::get(i32, priority);
-  SmallVector<NamedAttribute> entries;
-  entries.reserve(concreteValue.getNumEntries());
-  for (WaveSymbolAttr key : concreteValue.getKeys())
-    entries.emplace_back(StringAttr::get(ctx, key.getName()), priAttr);
-  priorities = DictionaryAttr::get(ctx, entries);
+  SmallVector<Attribute> priValues(concreteValue.getNumEntries(), priAttr);
+  priorities =
+      WaveSymbolMappingAttr::get(ctx, concreteValue.getKeys(), priValues);
 }
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    WaveSymbolMappingAttr concreteValue, DictionaryAttr priorities,
+    WaveSymbolMappingAttr concreteValue, WaveSymbolMappingAttr priorities,
     WaveSymbolMappingAttr vectorShape)
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
       vectorShape(vectorShape), sourceVectorShape(vectorShape) {
   if (priorities) {
-    for (NamedAttribute dimPriority : priorities)
+    for (Attribute priVal : priorities.getValues())
       sourceVectorShapePriority = std::max<int32_t>(
-          sourceVectorShapePriority,
-          llvm::cast<IntegerAttr>(dimPriority.getValue()).getInt());
+          sourceVectorShapePriority, llvm::cast<IntegerAttr>(priVal).getInt());
   }
   if (sourceVectorShapePriority == kLowestPriority)
     sourceVectorShape = nullptr;
 }
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    WaveSymbolMappingAttr concreteValue, DictionaryAttr priorities,
+    WaveSymbolMappingAttr concreteValue, WaveSymbolMappingAttr priorities,
     WaveSymbolMappingAttr vectorShape, WaveSymbolMappingAttr sourceVectorShape,
     int32_t sourceVectorShapePriority)
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
@@ -307,19 +304,14 @@ wave::IndexExprsLatticeStorage::withSourceVectorShape(
 }
 
 int32_t
-wave::IndexExprsLatticeStorage::getPriorityForKey(StringAttr key) const {
+wave::IndexExprsLatticeStorage::getPriorityForKey(WaveSymbolAttr key) const {
   assert(getConcreteValue() && "no priority for lattice top/bottom");
   if (!priorities)
     return kLowestPriority;
-  Attribute val = priorities.get(key);
+  auto val = priorities.lookup<IntegerAttr>(key);
   if (!val)
     return kLowestPriority;
-  return llvm::cast<IntegerAttr>(val).getInt();
-}
-
-int32_t
-wave::IndexExprsLatticeStorage::getPriorityForKey(WaveSymbolAttr key) const {
-  return getPriorityForKey(StringAttr::get(key.getContext(), key.getName()));
+  return val.getInt();
 }
 
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
@@ -715,9 +707,11 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
 // Returns a joined vector shape using per-key priorities. For each key, the
 // higher-priority entry wins. If priorities are equal and values differ,
 // returns nullptr indicating the failure to join (reaching top).
-static wave::WaveSymbolMappingAttr getJoinedVectorShape(
-    wave::WaveSymbolMappingAttr lhs, wave::WaveSymbolMappingAttr rhs,
-    DictionaryAttr lhsPriorities, DictionaryAttr rhsPriorities) {
+static wave::WaveSymbolMappingAttr
+getJoinedVectorShape(wave::WaveSymbolMappingAttr lhs,
+                     wave::WaveSymbolMappingAttr rhs,
+                     wave::WaveSymbolMappingAttr lhsPriorities,
+                     wave::WaveSymbolMappingAttr rhsPriorities) {
   if (!lhs)
     return rhs;
   if (!rhs)
@@ -726,13 +720,14 @@ static wave::WaveSymbolMappingAttr getJoinedVectorShape(
   if (lhs == rhs)
     return lhs;
 
-  auto getPriority = [](DictionaryAttr map, StringRef key) -> int32_t {
+  auto getPriority = [](wave::WaveSymbolMappingAttr map,
+                        wave::WaveSymbolAttr key) -> int32_t {
     if (!map)
       return wave::IndexExprsLatticeStorage::kLowestPriority;
-    Attribute val = map.get(key);
+    auto val = map.lookup<IntegerAttr>(key);
     if (!val)
       return wave::IndexExprsLatticeStorage::kLowestPriority;
-    return llvm::cast<IntegerAttr>(val).getInt();
+    return val.getInt();
   };
 
   SmallVector<wave::WaveSymbolAttr> joinedKeys;
@@ -742,14 +737,13 @@ static wave::WaveSymbolMappingAttr getJoinedVectorShape(
   for (auto [key, value] : lhs.getMapping()) {
     visited.insert(key);
     Attribute rhsValue = rhs.lookup(key);
-    StringRef keyName = key.getName();
     if (!rhsValue) {
       joinedKeys.push_back(key);
       joinedValues.push_back(value);
       continue;
     }
-    int32_t lhsPriority = getPriority(lhsPriorities, keyName);
-    int32_t rhsPriority = getPriority(rhsPriorities, keyName);
+    int32_t lhsPriority = getPriority(lhsPriorities, key);
+    int32_t rhsPriority = getPriority(rhsPriorities, key);
     if (lhsPriority > rhsPriority) {
       joinedKeys.push_back(key);
       joinedValues.push_back(value);
@@ -888,20 +882,27 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   auto [joinedSourceVectorShape, joinedSourceVectorShapePriority] =
       *joinedSVSResult;
 
-  SmallVector<NamedAttribute> priEntries;
-  priEntries.reserve(resultPriorities.size());
-  for (auto &[key, pri] : resultPriorities)
-    priEntries.emplace_back(StringAttr::get(ctx, key.getName()),
-                            IntegerAttr::get(i32, pri));
+  SmallVector<wave::WaveSymbolAttr> priKeys;
+  SmallVector<Attribute> priValues;
+  priKeys.reserve(resultPriorities.size());
+  priValues.reserve(resultPriorities.size());
+  for (auto &[key, pri] : resultPriorities) {
+    priKeys.push_back(key);
+    priValues.push_back(IntegerAttr::get(i32, pri));
+  }
 
-  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> joinedEntries;
-  joinedEntries.reserve(result.size());
-  for (auto &[key, val] : result)
-    joinedEntries.emplace_back(key, val);
+  SmallVector<wave::WaveSymbolAttr> joinedKeys;
+  SmallVector<Attribute> joinedValues;
+  joinedKeys.reserve(result.size());
+  joinedValues.reserve(result.size());
+  for (auto &[key, val] : result) {
+    joinedKeys.push_back(key);
+    joinedValues.push_back(val);
+  }
 
   IndexExprsLatticeStorage joined(
-      WaveSymbolMappingAttr::get(ctx, joinedEntries),
-      DictionaryAttr::get(ctx, priEntries), joinedVectorShape,
+      WaveSymbolMappingAttr::get(ctx, joinedKeys, joinedValues),
+      WaveSymbolMappingAttr::get(ctx, priKeys, priValues), joinedVectorShape,
       joinedSourceVectorShape, joinedSourceVectorShapePriority);
   return joined;
 }
@@ -926,30 +927,31 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
                                                  symbols.end());
 
   WaveSymbolMappingAttr mapping = getConcreteValue();
-  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> filtered;
-  for (auto [key, val] : llvm::zip(mapping.getKeys(), mapping.getValues())) {
-    if (symbolSet.contains(key))
-      filtered.emplace_back(key, val);
+  SmallVector<wave::WaveSymbolAttr> filteredKeys;
+  SmallVector<Attribute> filteredValues;
+  for (auto [key, val] : mapping.getMapping()) {
+    if (symbolSet.contains(key)) {
+      filteredKeys.push_back(key);
+      filteredValues.push_back(val);
+    }
   }
   wave::WaveSymbolMappingAttr filteredVectorShape =
       detail::filterVectorShape(getVectorShape(), symbols);
 
-  if (filtered.empty())
+  if (filteredKeys.empty())
     return bottom();
 
   MLIRContext *ctx = getConcreteValue().getContext();
   IntegerType i32 = IntegerType::get(ctx, 32);
-  SmallVector<NamedAttribute> filteredPriorities;
-  filteredPriorities.reserve(filtered.size());
-  for (auto &[key, val] : filtered)
-    filteredPriorities.emplace_back(
-        StringAttr::get(ctx, key.getName()),
-        IntegerAttr::get(i32, getPriorityForKey(key)));
+  SmallVector<Attribute> filteredPriValues;
+  filteredPriValues.reserve(filteredKeys.size());
+  for (wave::WaveSymbolAttr key : filteredKeys)
+    filteredPriValues.push_back(IntegerAttr::get(i32, getPriorityForKey(key)));
 
-  return IndexExprsLatticeStorage(WaveSymbolMappingAttr::get(ctx, filtered),
-                                  DictionaryAttr::get(ctx, filteredPriorities),
-                                  filteredVectorShape, sourceVectorShape,
-                                  sourceVectorShapePriority);
+  return IndexExprsLatticeStorage(
+      WaveSymbolMappingAttr::get(ctx, filteredKeys, filteredValues),
+      WaveSymbolMappingAttr::get(ctx, filteredKeys, filteredPriValues),
+      filteredVectorShape, sourceVectorShape, sourceVectorShapePriority);
 }
 
 wave::IndexExprsLatticeStorage
@@ -960,19 +962,20 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
 
   MLIRContext *ctx = getConcreteValue().getContext();
   WaveSymbolMappingAttr mapping = getConcreteValue();
-  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> updated;
-  updated.reserve(mapping.getNumEntries());
-  for (auto [key, val] : llvm::zip(mapping.getKeys(), mapping.getValues())) {
+  SmallVector<Attribute> updatedValues;
+  updatedValues.reserve(mapping.getNumEntries());
+  for (auto [key, val] : mapping.getMapping()) {
     auto idxMapping = llvm::cast<wave::WaveIndexMappingAttr>(val);
     for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
       auto actualIterSymbol =
           wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
       idxMapping = idxMapping.removeInput(actualIterSymbol);
     }
-    updated.emplace_back(key, idxMapping);
+    updatedValues.push_back(idxMapping);
   }
-  IndexExprsLatticeStorage result(WaveSymbolMappingAttr::get(ctx, updated),
-                                  getPriorities(), getVectorShape());
+  IndexExprsLatticeStorage result(
+      WaveSymbolMappingAttr::get(ctx, mapping.getKeys(), updatedValues),
+      getPriorities(), getVectorShape());
   result.sourceVectorShape = sourceVectorShape;
   result.sourceVectorShapePriority = sourceVectorShapePriority;
   return result;
@@ -2555,28 +2558,27 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
   auto forceMmaPriority = [](const IndexExprsLatticeStorage &lattice) {
     if (lattice.isBottom() || lattice.isTop())
       return lattice;
-    DictionaryAttr priorityDict = lattice.getPriorities();
+    WaveSymbolMappingAttr priorityMap = lattice.getPriorities();
     bool needsCapping =
-        priorityDict && llvm::any_of(priorityDict, [](NamedAttribute na) {
-          return llvm::cast<IntegerAttr>(na.getValue()).getInt() >
+        priorityMap && llvm::any_of(priorityMap.getValues(), [](Attribute val) {
+          return llvm::cast<IntegerAttr>(val).getInt() >
                  IndexExprsLatticeStorage::kMmaPriority;
         });
     if (!needsCapping)
       return lattice;
-    MLIRContext *ctx = priorityDict.getContext();
+    MLIRContext *ctx = priorityMap.getContext();
     IntegerType i32 = IntegerType::get(ctx, 32);
-    SmallVector<NamedAttribute> capped;
-    capped.reserve(priorityDict.size());
-    for (NamedAttribute na : priorityDict) {
-      int32_t priority = llvm::cast<IntegerAttr>(na.getValue()).getInt();
-      capped.emplace_back(
-          na.getName(),
-          IntegerAttr::get(
-              i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
+    SmallVector<Attribute> capped;
+    capped.reserve(priorityMap.getNumEntries());
+    for (Attribute val : priorityMap.getValues()) {
+      int32_t priority = llvm::cast<IntegerAttr>(val).getInt();
+      capped.push_back(IntegerAttr::get(
+          i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
     }
-    IndexExprsLatticeStorage result(lattice.getConcreteValue(),
-                                    DictionaryAttr::get(ctx, capped),
-                                    lattice.getVectorShape());
+    IndexExprsLatticeStorage result(
+        lattice.getConcreteValue(),
+        WaveSymbolMappingAttr::get(ctx, priorityMap.getKeys(), capped),
+        lattice.getVectorShape());
     return result.withSourceVectorShape(
         lattice.getSourceVectorShape(),
         std::min(lattice.getSourceVectorShapePriority(),
@@ -3159,7 +3161,7 @@ public:
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
               top, [&](Value value, wave::WaveSymbolMappingAttr mapping,
-                       DictionaryAttr priorities,
+                       wave::WaveSymbolMappingAttr priorities,
                        wave::WaveSymbolMappingAttr vecShape) {
                 if (!mapping)
                   return unsafeSet(getLatticeElement(value),
@@ -3467,7 +3469,7 @@ public:
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
               top, [&](Value value, wave::WaveSymbolMappingAttr mapping,
-                       DictionaryAttr priorities,
+                       wave::WaveSymbolMappingAttr priorities,
                        wave::WaveSymbolMappingAttr vecShape) {
                 if (!mapping)
                   return unsafeSet(getLatticeElement(value),
