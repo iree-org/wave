@@ -249,9 +249,8 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
   }
 
   auto sregType = ctx.createSRegType();
-  auto sccType = ctx.createSCCType();
   Value nextIV =
-      S_ADD_U32::create(builder, loc, sregType, sccType, inductionVar, *step)
+      S_ADD_U32::create(builder, loc, sregType, sregType, inductionVar, *step)
           .getDst();
   // S_CMP only accepts SGPR operands. If upper bound is a VGPR (e.g. from
   // v_min_i32 in split-K trip count computation), convert to SGPR first.
@@ -259,7 +258,7 @@ LoopOp RegionBuilder::buildLoopFromSCFFor(scf::ForOp forOp) {
   if (isVGPRType(ub.getType())) {
     ub = V_READFIRSTLANE_B32::create(builder, loc, sregType, ub);
   }
-  Value cond = S_CMP_LT_U32::create(builder, loc, sccType, nextIV, ub);
+  Value cond = S_CMP_LT_U32::create(builder, loc, sregType, nextIV, ub);
 
   // Collect iter args from yield
   auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());

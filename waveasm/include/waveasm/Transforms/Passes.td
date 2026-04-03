@@ -38,10 +38,12 @@ def WAVEASMLinearScan : Pass<"waveasm-linear-scan"> {
   let options = [
     Option<"maxVGPRs", "max-vgprs", "int64_t", "256",
            "Maximum VGPRs available">,
-    Option<"maxSGPRs", "max-sgprs", "int64_t", "104",
-           "Maximum SGPRs available">,
+    Option<"maxSGPRs", "max-sgprs", "int64_t", "102",
+           "Maximum user-addressable SGPRs (s0-s101 on GFX9+)">,
     Option<"maxAGPRs", "max-agprs", "int64_t", "256",
-           "Maximum AGPRs available">
+           "Maximum AGPRs available">,
+    Option<"bidirectionalThreshold", "bidirectional-threshold", "int64_t", "75",
+           "Lifetime percentage threshold for top-down VGPR allocation (0 to disable)">
   ];
 
   let statistics = [
@@ -244,34 +246,6 @@ def WAVEASMExtractScalarization
     "::mlir::arith::ArithDialect",
     "::mlir::vector::VectorDialect"
   ];
-}
-
-//===----------------------------------------------------------------------===//
-// SCC Spill/Reload Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMSCCSpillReload : Pass<"waveasm-scc-spill-reload"> {
-  let summary = "Insert SCC spill/reload around SCC-clobbering ops";
-  let description = [{
-    When an SCC live range extends across SCC-clobbering ops (e.g. after
-    CSE merges identical SCC producers), this pass inserts s_cselect_b32
-    (spill: SCC -> SGPR) right after the producer and s_cmp_ne_u32
-    (reload: SGPR -> SCC) right before each affected consumer.
-  }];
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
-}
-
-//===----------------------------------------------------------------------===//
-// SCC Verifier Pass
-//===----------------------------------------------------------------------===//
-
-def WAVEASMSCCVerifier : Pass<"waveasm-scc-verifier"> {
-  let summary = "Verify SCC (Scalar Condition Code) liveness invariants";
-  let description = [{
-    Checks that no SCC-clobbering SALU instruction sits between an
-    SCC-producing op (SCCDef trait) and its consumer.
-  }];
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
 //===----------------------------------------------------------------------===//

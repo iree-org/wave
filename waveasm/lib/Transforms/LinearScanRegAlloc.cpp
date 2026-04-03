@@ -70,31 +70,61 @@ static void insertActiveRange(llvm::SmallVectorImpl<ActiveRange> &active,
   active.insert(insertPos, newRange);
 }
 
-/// Try to allocate a physical register from the pool.
-/// Returns the allocated register index, or std::nullopt on failure.
+/// Try to allocate a physical register from the pool (lowest-first).
 static std::optional<int64_t> tryAllocate(RegPool &pool, int64_t size,
                                           int64_t alignment) {
   int64_t physReg =
       (size == 1) ? pool.allocSingle() : pool.allocRange(size, alignment);
-  if (physReg < 0) {
+  if (physReg < 0)
     return std::nullopt;
-  }
   return physReg;
+}
+
+//===----------------------------------------------------------------------===//
+// Concrete Allocation Strategies
+//===----------------------------------------------------------------------===//
+
+std::optional<int64_t>
+BidirectionalStrategy::allocate(RegPool &pool, const LiveRange &range,
+                                llvm::ArrayRef<LiveRange> allRanges,
+                                int64_t maxPressure) {
+  if (pool.getRegClass() != RegClass::VGPR || range.size <= 1)
+    return std::nullopt;
+
+  int64_t rangeLength = range.end - range.start;
+  // Ranges whose length exceeds 75% of the program span are allocated from
+  // the top. This targets buffer_load prefetch values (which span almost the
+  // entire loop body) while leaving ds_read values (consumed within one half)
+  // at the bottom. The ceiling is maxPressure (peak simultaneous VGPRs from
+  // liveness), not maxRegs, to avoid allocating into the AGPR region.
+  int64_t programEnd = 0;
+  for (const auto &lr : allRanges)
+    programEnd = std::max(programEnd, lr.end);
+  int64_t threshold = (programEnd * thresholdPct) / 100;
+  if (rangeLength > threshold) {
+    int64_t physReg =
+        pool.allocRangeFromTop(range.size, range.alignment, maxPressure);
+    if (physReg >= 0)
+      return physReg;
+  }
+
+  return std::nullopt;
 }
 
 //===----------------------------------------------------------------------===//
 // Register Class Allocation
 //===----------------------------------------------------------------------===//
 
-/// Allocate registers for a single register class (VGPR or SGPR).
+/// Allocate registers for a single register class (VGPR, SGPR, or AGPR).
 /// This is the core linear scan algorithm, parameterized by register class.
-static LogicalResult
-allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
-                 PhysicalMapping &mapping, AllocationStats &stats,
-                 const llvm::DenseMap<Value, Value> &tiedOperands,
-                 const llvm::DenseMap<Value, int64_t> &precoloredValues,
-                 llvm::StringRef regClassName, ProgramOp program,
-                 int64_t maxRegs, int64_t maxPressure) {
+/// An optional AllocationStrategy is consulted before the default bottom-up
+/// allocation; returning std::nullopt falls through to tryAllocate.
+static LogicalResult allocateRegClass(
+    ArrayRef<LiveRange> ranges, RegPool &pool, PhysicalMapping &mapping,
+    AllocationStats &stats, const llvm::DenseMap<Value, Value> &tiedOperands,
+    const llvm::DenseMap<Value, int64_t> &precoloredValues,
+    llvm::StringRef regClassName, ProgramOp program, int64_t maxRegs,
+    int64_t maxPressure, AllocationStrategy *strategy) {
 
   llvm::SmallVector<ActiveRange> active;
 
@@ -167,8 +197,11 @@ allocateRegClass(ArrayRef<LiveRange> ranges, RegPool &pool,
       }
     }
 
-    // Allocate physical register(s) from the pool
-    physReg = tryAllocate(pool, range.size, range.alignment);
+    // Consult the pluggable strategy (if any) before the bottom-up fallback.
+    if (strategy)
+      physReg = strategy->allocate(pool, range, ranges, maxPressure);
+    if (!physReg)
+      physReg = tryAllocate(pool, range.size, range.alignment);
 
     if (!physReg) {
       InFlightDiagnostic diag = mlir::emitError(range.reg.getLoc())
@@ -244,26 +277,29 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
     }
   }
 
-  // Step 5: Allocate VGPRs using linear scan
+  // Step 5: Allocate VGPRs using linear scan (with optional strategy)
   if (failed(allocateRegClass(liveness.vregRanges, vgprPool, mapping, stats,
                               tiedOperands, precoloredValues, "VGPR", program,
-                              maxVGPRs, liveness.maxVRegPressure))) {
+                              maxVGPRs, liveness.maxVRegPressure,
+                              vgprStrategy.get()))) {
     return failure();
   }
   stats.peakVGPRs = vgprPool.getPeakUsage();
 
-  // Step 6: Allocate SGPRs using linear scan
+  // Step 6: Allocate SGPRs using linear scan (no strategy, always bottom-up)
   if (failed(allocateRegClass(liveness.sregRanges, sgprPool, mapping, stats,
                               tiedOperands, precoloredValues, "SGPR", program,
-                              maxSGPRs, liveness.maxSRegPressure))) {
+                              maxSGPRs, liveness.maxSRegPressure,
+                              /*strategy=*/nullptr))) {
     return failure();
   }
   stats.peakSGPRs = sgprPool.getPeakUsage();
 
-  // Step 7: Allocate AGPRs using linear scan
+  // Step 7: Allocate AGPRs using linear scan (no strategy, always bottom-up)
   if (failed(allocateRegClass(liveness.aregRanges, agprPool, mapping, stats,
                               tiedOperands, precoloredValues, "AGPR", program,
-                              maxAGPRs, liveness.maxARegPressure))) {
+                              maxAGPRs, liveness.maxARegPressure,
+                              /*strategy=*/nullptr))) {
     return failure();
   }
   stats.peakAGPRs = agprPool.getPeakUsage();

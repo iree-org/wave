@@ -412,8 +412,8 @@ waveasm.program @loop_exit_no_hazard target = #waveasm.target<#waveasm.gfx942, 5
   %final = waveasm.loop(%i = %init) : (!waveasm.sreg) -> (!waveasm.sreg) {
     // VALU writes pvreg<0>.
     %sum = waveasm.v_add_u32 %v0, %v1 : !waveasm.pvreg<0>, !waveasm.pvreg<1> -> !waveasm.pvreg<0>
-    %cond = waveasm.s_cmp_lt_u32 %i, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
-    waveasm.condition %cond : !waveasm.scc iter_args(%i) : !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %i, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%i) : !waveasm.sreg
   }
 
   // condition (s_cbranch) is the last emitting op -- not a VALU.

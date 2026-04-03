@@ -75,7 +75,7 @@ def WaveASM_IfOp : WAVEASMOp<"if", [
     (simple if, if-then-else, multi-result if, if nested in loop).
   }];
 
-  let arguments = (ins WaveASM_AnySCCOrSGPR:$condition);
+  let arguments = (ins WaveASM_AnySGPR:$condition);
   let results = (outs Variadic<WaveASM_AnyReg>:$results);
   let regions = (region SizedRegion<1>:$thenRegion,
                         AnyRegion:$elseRegion);
@@ -123,7 +123,7 @@ def WaveASM_ConditionOp : WAVEASMOp<"condition", [
     See test/Dialect/region-control-flow.mlir for usage examples.
   }];
 
-  let arguments = (ins WaveASM_AnySCCOrSGPR:$condition,
+  let arguments = (ins WaveASM_AnySGPR:$condition,
                        Variadic<WaveASM_AnyReg>:$iterArgs);
 
   let assemblyFormat = [{

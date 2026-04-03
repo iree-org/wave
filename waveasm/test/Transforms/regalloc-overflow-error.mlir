@@ -61,9 +61,9 @@ waveasm.program @overflow_test
     %n8 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %acc8 : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
     %n9 = waveasm.v_mfma_f32_16x16x16_f16 %a, %b, %acc9 : !waveasm.pvreg<4, 4>, !waveasm.pvreg<8, 4>, !waveasm.vreg<4, 4> -> !waveasm.vreg<4, 4>
 
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
-    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.scc
-    waveasm.condition %cond : !waveasm.scc iter_args(%next_i#0, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7, %n8, %n9)
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c8 : !waveasm.sreg, !waveasm.imm<8> -> !waveasm.sreg
+    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7, %n8, %n9)
         : !waveasm.sreg,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>,
           !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>, !waveasm.vreg<4, 4>,
