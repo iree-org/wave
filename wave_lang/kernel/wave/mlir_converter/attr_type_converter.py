@@ -300,8 +300,13 @@ def _convert_index_mapping_dict_to_sympy(
     """Convert a WaveSymbolMappingAttr containing WaveIndexMappingAttr to a dictionary of Wave IndexSequences."""
     result = {}
     for i in range(len(mapping_attr)):
-        key_attr, value = mapping_attr[i]
-        key = key_attr.name
+        item = mapping_attr[i]
+        if isinstance(item, tuple):
+            key_attr, value = item
+            key = key_attr.name
+        else:
+            key = item.name
+            value = item.attr
         assert isinstance(
             value, wave.WaveIndexMappingAttr
         ), f"Unsupported index mapping attribute: {value}"
