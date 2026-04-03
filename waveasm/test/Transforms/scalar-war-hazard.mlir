@@ -42,17 +42,17 @@ waveasm.program @scalar_war_hazard
     // Iter_arg defined EARLY : WAR hazard source.
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[INIT_IV]]>{{.*}}!waveasm.imm<2>
     %next_iv:2 = waveasm.s_add_u32 %iv, %c2
-        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.scc
 
     // Block_arg %iv used AFTER %next_iv is defined : WAR victim.
     // If tied, this reads iv+2 instead of iv.
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[INIT_IV]]>{{.*}}!waveasm.imm<1>
     %offset:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %offset#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0) : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0) : !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -97,10 +97,10 @@ waveasm.program @vgpr_war_hazard
         : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
     %next_i:2 = waveasm.s_add_u32 %i, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_i#0, %new_val) : !waveasm.sreg, !waveasm.vreg
   }
 
@@ -142,12 +142,12 @@ waveasm.program @no_hazard_same_point
     // Same program point as the def of %next_iv → no hazard with >.
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[IV]]>{{.*}} -> !waveasm.psreg<[[IV]]>
     %next_iv:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     // Work that does NOT use %iv : only uses %next_iv.
     %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0) : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0) : !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -189,7 +189,7 @@ waveasm.program @mixed_mfma_and_scalar_war
     // --- Scalar IV: WAR hazard ---
     // Define iter_arg for %iv EARLY.
     %next_iv:2 = waveasm.s_add_u32 %iv, %c2
-        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.scc
 
     // --- MFMA accumulator: no hazard ---
     // %acc used as operand and %new_acc defined at the SAME program point.
@@ -202,11 +202,11 @@ waveasm.program @mixed_mfma_and_scalar_war
     // --- Scalar IV: WAR victim ---
     // Uses %iv AFTER %next_iv defined → triggers WAR.
     %offset:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %offset#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %new_acc) : !waveasm.sreg, !waveasm.vreg<4, 4>
   }
 
@@ -242,22 +242,22 @@ waveasm.program @multiple_post_def_uses
 
     // Iter_arg defined first.
     %next_iv:2 = waveasm.s_add_u32 %iv, %c4
-        : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg, !waveasm.scc
 
     // Three subsequent uses of %iv : all read wrong value if tied.
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[IV]]>{{.*}}!waveasm.imm<1>
     %off1:2 = waveasm.s_add_u32 %iv, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[IV]]>{{.*}}!waveasm.imm<2>
     %off2:2 = waveasm.s_add_u32 %iv, %c2
-        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<2> -> !waveasm.sreg, !waveasm.scc
     // CHECK: waveasm.s_add_u32 {{.*}}!waveasm.psreg<[[IV]]>{{.*}}!waveasm.imm<3>
     %off3:2 = waveasm.s_add_u32 %iv, %c3
-        : !waveasm.sreg, !waveasm.imm<3> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<3> -> !waveasm.sreg, !waveasm.scc
 
     %cond = waveasm.s_cmp_lt_u32 %off3#0, %c100
-        : !waveasm.sreg, !waveasm.imm<100> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv#0) : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<100> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv#0) : !waveasm.sreg
   }
 
   waveasm.s_endpgm
@@ -300,10 +300,10 @@ waveasm.program @no_war_def_after_all_uses
         : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
 
     %next_i:2 = waveasm.s_add_u32 %i, %c1
-        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
     %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10
-        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+        : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
   }
 

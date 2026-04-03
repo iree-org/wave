@@ -552,7 +552,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
       Value strideConst =
           ConstantOp::create(preCondBuilder, loc, strideImm, group.stride);
       Value nextSoff = S_ADD_U32::create(preCondBuilder, loc, sregType,
-                                         sregType, currentSoff, strideConst)
+                                         SCCType::get(builder.getContext()),
+                                         currentSoff, strideConst)
                            .getDst();
       nextSoffs.push_back(nextSoff);
     }
@@ -574,7 +575,8 @@ static void applyStrengthReduction(LoopOp loopOp) {
       auto strideImm = bodyBuilder.getType<ImmType>(group.stride);
       Value strideConst =
           ConstantOp::create(bodyBuilder, loc, strideImm, group.stride);
-      Value nextSoff = S_ADD_U32::create(bodyBuilder, loc, sregType, sregType,
+      Value nextSoff = S_ADD_U32::create(bodyBuilder, loc, sregType,
+                                         SCCType::get(builder.getContext()),
                                          currentSoff, strideConst)
                            .getDst();
       newCondIterArgs.push_back(nextSoff);

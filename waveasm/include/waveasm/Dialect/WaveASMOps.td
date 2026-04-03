@@ -83,6 +83,8 @@ class VALUCmpOp<string mnemonic, list<Trait> traits = []>
 }
 
 // SALU Unary: dst = op(src)
+// Pure -- does NOT clobber SCC on hardware.
+// Used for: s_mov_b32, s_mov_b64, s_sext_i32_i8, s_sext_i32_i16.
 class SALUUnaryOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_SRegOrImm:$src);
@@ -90,7 +92,20 @@ class SALUUnaryOp<string mnemonic, list<Trait> traits = []>
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst)";
 }
 
+// SALU Unary with SCC clobber: dst = op(src), SCC = f(result)
+// Writes SCC on hardware but result depends only on operands.
+class SALUUnaryWithSCCOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([
+        Pure, WaveASM_ArithmeticOp, WaveASM_SCCDef
+      ], traits)> {
+  let arguments = (ins WaveASM_SRegOrImm:$src);
+  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst) `,` type($scc)";
+}
+
 // SALU Binary: dst = op(src0, src1)
+// Pure -- does NOT clobber SCC on hardware.
+// Used for: s_mul_i32, s_mul_hi_*, s_bfm_*, s_pack_*.
 class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
     : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
@@ -98,34 +113,48 @@ class SALUBinaryOp<string mnemonic, list<Trait> traits = []>
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst)";
 }
 
-// SALU Binary with carry/SCC: dst, scc = op(src0, src1)
-// s_add_u32 and s_addc_u32 set SCC (carry flag) as a side effect.
-// We model SCC as an explicit sreg result so the verifier can prevent
-// reordering ops that corrupt the carry chain.
-// TODO: The scc result should be fed as an explicit operand to s_addc_u32
-// when used in an add-with-carry chain (s_add_u32 → s_addc_u32), creating
-// a true SSA dependency. Currently the chain is only enforced by emission
-// ordering, not by the SSA graph.
-class SALUBinaryWithCarryOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp], traits)> {
+// SALU Binary with SCC clobber: dst = op(src0, src1), SCC = f(result)
+// Writes SCC on hardware but result depends only on operands.
+class SALUBinaryWithSCCOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([
+        Pure, WaveASM_ArithmeticOp, WaveASM_SCCDef
+      ], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
-  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_AnySGPR:$scc);
+  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst) `,` type($scc)";
 }
 
-// SALU Compare: returns condition in SCC.
-// NOTE: On hardware, s_cmp sets the implicit SCC flag with no destination
-// register. We model SCC as an explicit sreg result so that ConditionOp
-// (the while-loop terminator) can reference it as an SSA Value. The
-// assembly emitter special-cases all S_CMP ops to emit only the two
-// source operands (no destination). The register allocator treats the
-// result as a regular sreg; this wastes one SGPR slot but is harmless
-// since the live range is very short (s_cmp -> condition terminator).
-// TODO: Consider a dedicated SCCType to avoid the wasted register slot.
-class SALUCmpOp<string mnemonic, list<Trait> traits = []>
-    : WAVEASMOp<mnemonic, traits> {
+// SALU Binary with carry-out: dst, scc = op(src0, src1)
+// Sets SCC as a side effect (carry-out). Used for S_ADD_U32, S_SUB_U32, etc.
+class SALUBinaryWithCarryOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp, WaveASM_SCCDef], traits)> {
   let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
-  let results = (outs WaveASM_AnySGPR:$result);  // SCC result (see note above)
+  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
+  let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($dst) `,` type($scc)";
+}
+
+// SALU Binary with carry-in AND carry-out: dst, scc = op(scc_in, src0, src1)
+// Reads SCC (carry-in) and writes SCC (carry-out). Used for S_ADDC_U32.
+// The explicit $scc_in operand creates a true SSA dependency for the
+// carry chain (s_add_u32 -> s_addc_u32), enabling correct CSE behavior.
+class SALUBinaryWithCarryInOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([WaveASM_ArithmeticOp, WaveASM_SCCDef, WaveASM_SCCUse], traits)> {
+  let arguments = (ins WaveASM_SCC:$scc_in, WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_AnySGPR:$dst, WaveASM_SCC:$scc);
+  let assemblyFormat = "$scc_in `,` $src0 `,` $src1 attr-dict `:` type($scc_in) `,` type($src0) `,` type($src1) `->` type($dst) `,` type($scc)";
+}
+
+// SALU Compare: returns condition in SCC.
+// On hardware, s_cmp sets the implicit SCC flag with no destination register.
+// We model SCC as an explicit SCCType result so that ConditionOp / IfOp can
+// reference it as an SSA Value. The assembly emitter skips SCC results and
+// operands during emission. CSE-eligible; the SCC spill/reload pass handles
+// extended live ranges created by CSE.
+class SALUCmpOp<string mnemonic, list<Trait> traits = []>
+    : WAVEASMOp<mnemonic, !listconcat([Pure, WaveASM_ArithmeticOp,
+        WaveASM_SCCDef], traits)> {
+  let arguments = (ins WaveASM_AnySGPR:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_SCC:$result);  // SCC flag (not a real SGPR)
   let assemblyFormat = "$src0 `,` $src1 attr-dict `:` type($src0) `,` type($src1) `->` type($result)";
 }
 
@@ -718,25 +747,28 @@ def WaveASM_V_CMP_GE_U64 : VALUCmpOp<"v_cmp_ge_u64">;
 // SALU Unary Instructions
 //===----------------------------------------------------------------------===//
 
+// No SCC clobber
 def WaveASM_S_MOV_B32 : SALUUnaryOp<"s_mov_b32">;
 def WaveASM_S_MOV_B64 : SALUUnaryOp<"s_mov_b64">;
-def WaveASM_S_NOT_B32 : SALUUnaryOp<"s_not_b32">;
-def WaveASM_S_NOT_B64 : SALUUnaryOp<"s_not_b64">;
-def WaveASM_S_BREV_B32 : SALUUnaryOp<"s_brev_b32">;
-def WaveASM_S_BREV_B64 : SALUUnaryOp<"s_brev_b64">;
-def WaveASM_S_BCNT0_I32_B32 : SALUUnaryOp<"s_bcnt0_i32_b32">;
-def WaveASM_S_BCNT0_I32_B64 : SALUUnaryOp<"s_bcnt0_i32_b64">;
-def WaveASM_S_BCNT1_I32_B32 : SALUUnaryOp<"s_bcnt1_i32_b32">;
-def WaveASM_S_BCNT1_I32_B64 : SALUUnaryOp<"s_bcnt1_i32_b64">;
-def WaveASM_S_FF0_I32_B32 : SALUUnaryOp<"s_ff0_i32_b32">;
-def WaveASM_S_FF0_I32_B64 : SALUUnaryOp<"s_ff0_i32_b64">;
-def WaveASM_S_FF1_I32_B32 : SALUUnaryOp<"s_ff1_i32_b32">;
-def WaveASM_S_FF1_I32_B64 : SALUUnaryOp<"s_ff1_i32_b64">;
-def WaveASM_S_FLBIT_I32_B32 : SALUUnaryOp<"s_flbit_i32_b32">;
-def WaveASM_S_FLBIT_I32_B64 : SALUUnaryOp<"s_flbit_i32_b64">;
-def WaveASM_S_ABS_I32 : SALUUnaryOp<"s_abs_i32">;
 def WaveASM_S_SEXT_I32_I8 : SALUUnaryOp<"s_sext_i32_i8">;
 def WaveASM_S_SEXT_I32_I16 : SALUUnaryOp<"s_sext_i32_i16">;
+
+// Clobber SCC (SCC = f(result))
+def WaveASM_S_NOT_B32 : SALUUnaryWithSCCOp<"s_not_b32">;
+def WaveASM_S_NOT_B64 : SALUUnaryWithSCCOp<"s_not_b64">;
+def WaveASM_S_BREV_B32 : SALUUnaryWithSCCOp<"s_brev_b32">;
+def WaveASM_S_BREV_B64 : SALUUnaryWithSCCOp<"s_brev_b64">;
+def WaveASM_S_BCNT0_I32_B32 : SALUUnaryWithSCCOp<"s_bcnt0_i32_b32">;
+def WaveASM_S_BCNT0_I32_B64 : SALUUnaryWithSCCOp<"s_bcnt0_i32_b64">;
+def WaveASM_S_BCNT1_I32_B32 : SALUUnaryWithSCCOp<"s_bcnt1_i32_b32">;
+def WaveASM_S_BCNT1_I32_B64 : SALUUnaryWithSCCOp<"s_bcnt1_i32_b64">;
+def WaveASM_S_FF0_I32_B32 : SALUUnaryWithSCCOp<"s_ff0_i32_b32">;
+def WaveASM_S_FF0_I32_B64 : SALUUnaryWithSCCOp<"s_ff0_i32_b64">;
+def WaveASM_S_FF1_I32_B32 : SALUUnaryWithSCCOp<"s_ff1_i32_b32">;
+def WaveASM_S_FF1_I32_B64 : SALUUnaryWithSCCOp<"s_ff1_i32_b64">;
+def WaveASM_S_FLBIT_I32_B32 : SALUUnaryWithSCCOp<"s_flbit_i32_b32">;
+def WaveASM_S_FLBIT_I32_B64 : SALUUnaryWithSCCOp<"s_flbit_i32_b64">;
+def WaveASM_S_ABS_I32 : SALUUnaryWithSCCOp<"s_abs_i32">;
 
 //===----------------------------------------------------------------------===//
 // SALU Binary Instructions
@@ -744,52 +776,61 @@ def WaveASM_S_SEXT_I32_I16 : SALUUnaryOp<"s_sext_i32_i16">;
 
 // Arithmetic with carry (sets SCC)
 def WaveASM_S_ADD_U32 : SALUBinaryWithCarryOp<"s_add_u32">;
-def WaveASM_S_ADDC_U32 : SALUBinaryWithCarryOp<"s_addc_u32">;
+def WaveASM_S_ADDC_U32 : SALUBinaryWithCarryInOp<"s_addc_u32">;
 def WaveASM_S_ADD_I32 : SALUBinaryWithCarryOp<"s_add_i32">;
 def WaveASM_S_SUB_U32 : SALUBinaryWithCarryOp<"s_sub_u32">;
 def WaveASM_S_SUB_I32 : SALUBinaryWithCarryOp<"s_sub_i32">;
+// Conditional select: dst = SCC ? src0 : src1 (reads SCC, no SCC write).
+// Takes an explicit SCC operand for SSA tracking of the SCC dependency.
+// NOT CSE-eligible: result depends on SCC state.  NoMemoryEffect allows DCE.
+def WaveASM_S_CSELECT_B32 : WAVEASMOp<"s_cselect_b32",
+    [WaveASM_SCCUse, NoMemoryEffect]> {
+  let arguments = (ins WaveASM_SCC:$scc_in, WaveASM_SRegOrImm:$src0, WaveASM_SRegOrImm:$src1);
+  let results = (outs WaveASM_AnySGPR:$dst);
+  let assemblyFormat = "$scc_in `,` $src0 `,` $src1 attr-dict `:` type($scc_in) `,` type($src0) `,` type($src1) `->` type($dst)";
+}
 // Multiplication does not set SCC
 def WaveASM_S_MUL_I32 : SALUBinaryOp<"s_mul_i32">;
 def WaveASM_S_MUL_HI_U32 : SALUBinaryOp<"s_mul_hi_u32">;
 def WaveASM_S_MUL_HI_I32 : SALUBinaryOp<"s_mul_hi_i32">;
 
-// Bitwise
-def WaveASM_S_AND_B32 : SALUBinaryOp<"s_and_b32">;
-def WaveASM_S_AND_B64 : SALUBinaryOp<"s_and_b64">;
-def WaveASM_S_OR_B32 : SALUBinaryOp<"s_or_b32">;
-def WaveASM_S_OR_B64 : SALUBinaryOp<"s_or_b64">;
-def WaveASM_S_XOR_B32 : SALUBinaryOp<"s_xor_b32">;
-def WaveASM_S_XOR_B64 : SALUBinaryOp<"s_xor_b64">;
-def WaveASM_S_ANDN2_B32 : SALUBinaryOp<"s_andn2_b32">;
-def WaveASM_S_ANDN2_B64 : SALUBinaryOp<"s_andn2_b64">;
-def WaveASM_S_ORN2_B32 : SALUBinaryOp<"s_orn2_b32">;
-def WaveASM_S_ORN2_B64 : SALUBinaryOp<"s_orn2_b64">;
-def WaveASM_S_NAND_B32 : SALUBinaryOp<"s_nand_b32">;
-def WaveASM_S_NAND_B64 : SALUBinaryOp<"s_nand_b64">;
-def WaveASM_S_NOR_B32 : SALUBinaryOp<"s_nor_b32">;
-def WaveASM_S_NOR_B64 : SALUBinaryOp<"s_nor_b64">;
-def WaveASM_S_XNOR_B32 : SALUBinaryOp<"s_xnor_b32">;
-def WaveASM_S_XNOR_B64 : SALUBinaryOp<"s_xnor_b64">;
+// Bitwise -- all clobber SCC (SCC = result != 0).
+def WaveASM_S_AND_B32 : SALUBinaryWithSCCOp<"s_and_b32">;
+def WaveASM_S_AND_B64 : SALUBinaryWithSCCOp<"s_and_b64">;
+def WaveASM_S_OR_B32 : SALUBinaryWithSCCOp<"s_or_b32">;
+def WaveASM_S_OR_B64 : SALUBinaryWithSCCOp<"s_or_b64">;
+def WaveASM_S_XOR_B32 : SALUBinaryWithSCCOp<"s_xor_b32">;
+def WaveASM_S_XOR_B64 : SALUBinaryWithSCCOp<"s_xor_b64">;
+def WaveASM_S_ANDN2_B32 : SALUBinaryWithSCCOp<"s_andn2_b32">;
+def WaveASM_S_ANDN2_B64 : SALUBinaryWithSCCOp<"s_andn2_b64">;
+def WaveASM_S_ORN2_B32 : SALUBinaryWithSCCOp<"s_orn2_b32">;
+def WaveASM_S_ORN2_B64 : SALUBinaryWithSCCOp<"s_orn2_b64">;
+def WaveASM_S_NAND_B32 : SALUBinaryWithSCCOp<"s_nand_b32">;
+def WaveASM_S_NAND_B64 : SALUBinaryWithSCCOp<"s_nand_b64">;
+def WaveASM_S_NOR_B32 : SALUBinaryWithSCCOp<"s_nor_b32">;
+def WaveASM_S_NOR_B64 : SALUBinaryWithSCCOp<"s_nor_b64">;
+def WaveASM_S_XNOR_B32 : SALUBinaryWithSCCOp<"s_xnor_b32">;
+def WaveASM_S_XNOR_B64 : SALUBinaryWithSCCOp<"s_xnor_b64">;
 
 // Shifts
-def WaveASM_S_LSHL_B32 : SALUBinaryOp<"s_lshl_b32">;
-def WaveASM_S_LSHL_B64 : SALUBinaryOp<"s_lshl_b64">;
-def WaveASM_S_LSHR_B32 : SALUBinaryOp<"s_lshr_b32">;
-def WaveASM_S_LSHR_B64 : SALUBinaryOp<"s_lshr_b64">;
-def WaveASM_S_ASHR_I32 : SALUBinaryOp<"s_ashr_i32">;
-def WaveASM_S_ASHR_I64 : SALUBinaryOp<"s_ashr_i64">;
+def WaveASM_S_LSHL_B32 : SALUBinaryWithSCCOp<"s_lshl_b32">;
+def WaveASM_S_LSHL_B64 : SALUBinaryWithSCCOp<"s_lshl_b64">;
+def WaveASM_S_LSHR_B32 : SALUBinaryWithSCCOp<"s_lshr_b32">;
+def WaveASM_S_LSHR_B64 : SALUBinaryWithSCCOp<"s_lshr_b64">;
+def WaveASM_S_ASHR_I32 : SALUBinaryWithSCCOp<"s_ashr_i32">;
+def WaveASM_S_ASHR_I64 : SALUBinaryWithSCCOp<"s_ashr_i64">;
 
 // Min/Max
-def WaveASM_S_MIN_I32 : SALUBinaryOp<"s_min_i32">;
-def WaveASM_S_MIN_U32 : SALUBinaryOp<"s_min_u32">;
-def WaveASM_S_MAX_I32 : SALUBinaryOp<"s_max_i32">;
-def WaveASM_S_MAX_U32 : SALUBinaryOp<"s_max_u32">;
+def WaveASM_S_MIN_I32 : SALUBinaryWithSCCOp<"s_min_i32">;
+def WaveASM_S_MIN_U32 : SALUBinaryWithSCCOp<"s_min_u32">;
+def WaveASM_S_MAX_I32 : SALUBinaryWithSCCOp<"s_max_i32">;
+def WaveASM_S_MAX_U32 : SALUBinaryWithSCCOp<"s_max_u32">;
 
 // Misc
-def WaveASM_S_BFE_U32 : SALUBinaryOp<"s_bfe_u32">;
-def WaveASM_S_BFE_I32 : SALUBinaryOp<"s_bfe_i32">;
-def WaveASM_S_BFE_U64 : SALUBinaryOp<"s_bfe_u64">;
-def WaveASM_S_BFE_I64 : SALUBinaryOp<"s_bfe_i64">;
+def WaveASM_S_BFE_U32 : SALUBinaryWithSCCOp<"s_bfe_u32">;
+def WaveASM_S_BFE_I32 : SALUBinaryWithSCCOp<"s_bfe_i32">;
+def WaveASM_S_BFE_U64 : SALUBinaryWithSCCOp<"s_bfe_u64">;
+def WaveASM_S_BFE_I64 : SALUBinaryWithSCCOp<"s_bfe_i64">;
 def WaveASM_S_BFM_B32 : SALUBinaryOp<"s_bfm_b32">;
 def WaveASM_S_BFM_B64 : SALUBinaryOp<"s_bfm_b64">;
 def WaveASM_S_PACK_LL_B32_B16 : SALUBinaryOp<"s_pack_ll_b32_b16">;
@@ -1162,6 +1203,10 @@ def WaveASM_S_NOP : WaveASM_CountedScalarOp<"s_nop"> {
 
 def WaveASM_S_SETPRIO : WaveASM_CountedScalarOp<"s_setprio"> {
   let summary = "Set wave priority level (0=default, 1-3=elevated)";
+}
+
+def WaveASM_S_SCHED_BARRIER : WaveASM_CountedScalarOp<"s_sched_barrier"> {
+  let summary = "Scheduling barrier (bitmask controls which instructions cross)";
 }
 
 //===----------------------------------------------------------------------===//

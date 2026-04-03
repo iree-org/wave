@@ -15,6 +15,9 @@ waveasm.program @simple_kernel
   // Comment
   waveasm.comment "Basic kernel body"
 
+  // Scheduling barrier.
+  waveasm.s_sched_barrier 0
+
   // End program
   waveasm.s_endpgm
 }

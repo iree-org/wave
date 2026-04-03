@@ -66,13 +66,13 @@ waveasm.program @basic_scale_pack
     %nb2 = waveasm.v_bfe_u32 %next_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
     %nb3 = waveasm.v_bfe_u32 %next_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
 
     // Yield should carry (next_iv, next_dword) instead of (next_iv, nb0..nb3).
     // CHECK: waveasm.condition
     // CHECK-SAME: iter_args(%{{.*}}, %{{.*}}) : !waveasm.sreg, !waveasm.vreg
-    waveasm.condition %cond : !waveasm.sreg
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %nb0, %nb1, %nb2, %nb3)
         : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
   }
@@ -135,9 +135,9 @@ waveasm.program @no_transform_extra_use
     %nb2 = waveasm.v_bfe_u32 %next_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
     %nb3 = waveasm.v_bfe_u32 %next_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %nb0, %nb1, %nb2, %nb3)
         : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
   }
@@ -199,9 +199,9 @@ waveasm.program @no_transform_different_yield_source
     %nb2 = waveasm.v_bfe_u32 %dword_b, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
     %nb3 = waveasm.v_bfe_u32 %dword_b, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %nb0, %nb1, %nb2, %nb3)
         : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
   }
@@ -299,13 +299,13 @@ waveasm.program @two_chains
     %nb2 = waveasm.v_bfe_u32 %next_dword_b, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
     %nb3 = waveasm.v_bfe_u32 %next_dword_b, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
 
     // Yield should carry (next_iv, next_dword_a, next_dword_b).
     // CHECK: waveasm.condition
     // CHECK-SAME: iter_args(%{{.*}}, %{{.*}}, %{{.*}}) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
-    waveasm.condition %cond : !waveasm.sreg
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %na0, %na1, %na2, %na3, %nb0, %nb1, %nb2, %nb3)
         : !waveasm.sreg,
           !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg,
@@ -369,9 +369,9 @@ waveasm.program @post_loop_multi_byte_use
     %nb2 = waveasm.v_bfe_u32 %next_dword, %sixteen, %eight : !waveasm.vreg, !waveasm.imm<16>, !waveasm.imm<8> -> !waveasm.vreg
     %nb3 = waveasm.v_bfe_u32 %next_dword, %twentyfour, %eight : !waveasm.vreg, !waveasm.imm<24>, !waveasm.imm<8> -> !waveasm.vreg
 
-    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg
+    %next_iv:2 = waveasm.s_add_u32 %iv, %one : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_iv#0, %limit : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc
         iter_args(%next_iv#0, %nb0, %nb1, %nb2, %nb3)
         : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg
   }

@@ -26,9 +26,9 @@ module {
         scf.yield %new_sum : i32
       }
       // Increment, compare, condition with both iter_args
-      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.sreg
-      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.sreg iter_args(%[[NEXT]], %[[NEWSUM]]) : !waveasm.sreg, !waveasm.vreg
+      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+      // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<4> -> !waveasm.scc
+      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]], %[[NEWSUM]]) : !waveasm.sreg, !waveasm.vreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return
@@ -57,7 +57,7 @@ module {
         scf.yield %new_a, %new_b : i32, i32
       }
       // Condition feeds back all three iter_args
-      // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}, %[[NEWA]], %[[NEWB]]) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
+      // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}, %[[NEWA]], %[[NEWB]]) : !waveasm.sreg, !waveasm.vreg, !waveasm.vreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return
@@ -82,11 +82,11 @@ module {
           scf.yield %next : i32
         }
         // Inner condition
-        // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}, %{{.*}}) : !waveasm.sreg, !waveasm.vreg
+        // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}, %{{.*}}) : !waveasm.sreg, !waveasm.vreg
         scf.yield %inner_result : i32
       }
       // Outer condition uses inner loop result (#1) for accumulator
-      // CHECK:      waveasm.condition %{{.*}} : !waveasm.sreg iter_args(%{{.*}}, %[[INNER]]#1) : !waveasm.sreg, !waveasm.vreg
+      // CHECK:      waveasm.condition %{{.*}} : !waveasm.scc iter_args(%{{.*}}, %[[INNER]]#1) : !waveasm.sreg, !waveasm.vreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return

@@ -97,9 +97,9 @@ waveasm.program @loop_result_alloc target = #waveasm.target<#waveasm.gfx942, 5> 
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
     // CHECK: waveasm.v_add_u32 {{.*}} -> !waveasm.pvreg<[[LR]]>
     %new_sum = waveasm.v_add_u32 %sum, %v0 : !waveasm.vreg, !waveasm.pvreg<0> -> !waveasm.vreg
-    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
+    %next_i:2 = waveasm.s_add_u32 %i, %c1 : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+    %cond = waveasm.s_cmp_lt_u32 %next_i#0, %c10 : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_i#0, %new_sum) : !waveasm.sreg, !waveasm.vreg
   }
 
   // Post-loop use: loop result should have same physical register as init/body.
@@ -133,8 +133,8 @@ waveasm.program @init_arg_post_loop_use target = #waveasm.target<#waveasm.gfx942
     %next_iv = waveasm.v_mul_lo_u32 %iv, %c1 : !waveasm.vreg, !waveasm.imm<1> -> !waveasm.vreg
     %cond_s = waveasm.v_readfirstlane_b32 %next_iv : !waveasm.vreg -> !waveasm.sreg
     %ub_s = waveasm.v_readfirstlane_b32 %init_i : !waveasm.vreg -> !waveasm.sreg
-    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.sreg
-    waveasm.condition %cond : !waveasm.sreg iter_args(%next_iv) : !waveasm.vreg
+    %cond = waveasm.s_cmp_lt_u32 %cond_s, %ub_s : !waveasm.sreg, !waveasm.sreg -> !waveasm.scc
+    waveasm.condition %cond : !waveasm.scc iter_args(%next_iv) : !waveasm.vreg
   }
 
   // Post-loop use of %init_val. It must still hold 0, not the loop's final IV.
