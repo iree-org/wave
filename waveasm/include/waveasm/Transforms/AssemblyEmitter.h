@@ -122,6 +122,9 @@ public:
   int64_t getPeakAGPRs() const { return peakAGPRs; }
 
 private:
+  /// Scratch VGPR for loading non-inline literals (v15).
+  /// VGPRCompaction has a matching constant; keep them in sync.
+  static constexpr int64_t kScratchVGPR = 15;
   /// Resolve an SSA Value to its physical register string
   std::string resolveValue(mlir::Value value);
   std::string resolveScalarValue(mlir::Value value);
@@ -208,13 +211,6 @@ private:
 
   /// Counter for generating unique loop labels in assembly
   int loopLabelCounter = 0;
-
-  /// Scratch VGPR for loading non-inline literals.
-  /// We use a lower VGPR (v15) to avoid excessive VGPR allocation.
-  /// The Python backend uses v_mov_b32 to materialize large constants
-  /// during IR generation, which is better.
-  /// TODO: Handle this properly during MLIR translation instead.
-  static constexpr int64_t kScratchVGPR = 15;
 
   /// Cached value currently held in kScratchVGPR, used to avoid redundant
   /// v_mov_b32 materializations of the same literal.

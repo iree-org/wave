@@ -1368,6 +1368,7 @@ def _generate_asm_code(mb, options):
             "--waveasm-scc-spill-reload",
             "--waveasm-scc-verifier",
             "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
+            "--waveasm-vgpr-compaction",
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",
