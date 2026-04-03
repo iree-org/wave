@@ -158,6 +158,26 @@ static std::optional<int64_t> findIVStep(ConditionOp condOp, Block &body) {
   return std::nullopt;
 }
 
+/// Try to extract the loop iteration count from the condition.
+/// Looks for s_cmp_lt_u32(next_iv, limit) and computes
+/// (limit - iv_init) / iv_step.  Returns nullopt if any part
+/// is non-constant or the division is inexact.
+static std::optional<int64_t>
+estimateMaxIterations(ConditionOp condOp, Value ivInit, int64_t ivStep) {
+  Value cond = condOp.getCondition();
+  auto cmpOp = cond.getDefiningOp<S_CMP_LT_U32>();
+  if (!cmpOp)
+    return std::nullopt;
+  auto limit = getConstantValue(cmpOp.getSrc1());
+  auto init = getConstantValue(ivInit);
+  if (!limit || !init || ivStep == 0)
+    return std::nullopt;
+  int64_t range = *limit - *init;
+  if (range <= 0 || range % ivStep != 0)
+    return std::nullopt;
+  return range / ivStep;
+}
+
 static bool dependsOnIV(const llvm::SetVector<Operation *> &deps, Value iv) {
   for (Operation *op : deps)
     for (Value operand : op->getOperands())
@@ -190,9 +210,11 @@ static Value cloneChainBeforeLoop(const llvm::SetVector<Operation *> &deps,
 /// address chains for different buffer_load candidates.  Because all clones
 /// share the same leaf operands (init args, precolored registers), the CSE
 /// cascades from leaves upward, collapsing N identical chains into one.
+///
+/// O(N*M) where N = ops in range, M = canonical set size.  Acceptable for
+/// typical pre-loop regions (< 300 ops); switch to hash-based lookup if
+/// pre-loop regions grow significantly.
 static void localCSERange(Block *block, Operation *from, Operation *to) {
-  // Key: (opName hash, operand pointers, attr hash, result type hash).
-  // Use a simple vector-scan since the typical pre-loop region is < 300 ops.
   struct CSEEntry {
     Operation *op;
     StringRef opName;
@@ -339,23 +361,24 @@ static VoffsetDecomp decomposeVoffset(Value voff) {
   }
   result.constAddend = totalConst;
 
-  // Phase 2: check if the remaining value is V_ADD_U32(vgpr, sgpr).
-  // This captures per-load SGPR offsets like n_idx * 16 * K_PACKED.
-  if (auto addOp = current.getDefiningOp<V_ADD_U32>()) {
+  // Phase 2: iteratively peel SGPR addends from V_ADD_U32(vgpr, sgpr)
+  // chains.  Handles multi-level patterns like
+  //   V_ADD_U32(V_ADD_U32(base, sgpr1), sgpr2)
+  // where both sgpr1 and sgpr2 are folded into per-load soffset.
+  while (auto addOp = current.getDefiningOp<V_ADD_U32>()) {
     Value src0 = addOp.getSrc0();
     Value src1 = addOp.getSrc1();
     if (isVGPRType(src0.getType()) && isSGPRType(src1.getType())) {
-      result.vgprBase = src0;
       result.sgprParts.push_back(src1);
+      current = src0;
     } else if (isSGPRType(src0.getType()) && isVGPRType(src1.getType())) {
-      result.vgprBase = src1;
       result.sgprParts.push_back(src0);
+      current = src1;
     } else {
-      result.vgprBase = current;
+      break;
     }
-  } else {
-    result.vgprBase = current;
   }
+  result.vgprBase = current;
 
   return result;
 }
@@ -461,18 +484,20 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
 
     if (auto lshlOrOp = dyn_cast<V_LSHL_OR_B32>(op)) {
       // lshl_or(src, amt, or_val) = (src << amt) | or_val.
-      // In address computation, OR always has disjoint bits (packed fields),
-      // so delta = (dSrc << amt) + dOr — same as lshl_add.
+      // Treating OR as ADD is only safe when the OR value is
+      // IV-independent (delta=0, bits are disjoint by construction).
+      // If the OR operand varies with IV, the bit-overlap semantics
+      // diverge from addition and the delta is undefined.
       int64_t dSrc = getDelta(lshlOrOp.getSrc0());
       int64_t dShift = getDelta(lshlOrOp.getSrc1());
       int64_t dOr = getDelta(lshlOrOp.getSrc2());
-      if (dShift != 0)
+      if (dShift != 0 || dOr != 0)
         return std::nullopt;
       auto shiftAmt = validShift(getConstantValue(lshlOrOp.getSrc1()));
       if (!shiftAmt)
         return std::nullopt;
       for (Value r : op->getResults())
-        delta[r] = (dSrc << *shiftAmt) + dOr;
+        delta[r] = dSrc << *shiftAmt;
       continue;
     }
 
@@ -670,6 +695,19 @@ static void applyStrengthReduction(LoopOp loopOp) {
       // (e.g. via right-shift truncation / staircase patterns). Hoisting
       // the voffset and bumping soffset by 0 would freeze the address.
       if (stride && *stride != 0) {
+        // Guard against soffset overflow: if the accumulated soffset
+        // (stride * iterations) exceeds 32 bits, the buffer address wraps
+        // and produces incorrect results.
+        auto maxIter = estimateMaxIterations(condOp, ivInit, *ivStep);
+        if (maxIter) {
+          int64_t maxSoff = std::abs(*stride) * *maxIter;
+          if (maxSoff > INT32_MAX) {
+            LDBG() << "skipping candidate: soffset would overflow "
+                   << "(stride=" << *stride << " * iters=" << *maxIter << " = "
+                   << maxSoff << ")";
+            continue;
+          }
+        }
         candidateStrides.push_back(*stride);
         filtered.push_back(std::move(info));
       } else {
@@ -852,9 +890,11 @@ static void applyStrengthReduction(LoopOp loopOp) {
   // and s_cmp -> s_cbranch must have no SCC-clobbering ops between them).
   // Find the cloned s_cmp/s_add for IV (the ops that produce the condition)
   // and insert soffset updates before them.
-  // NOTE: s_add_u32 wraps at 2^32. For typical GEMM loops (stride < 2^20,
-  // iterations < 2^12), soffset stays well within 32 bits. If the product
-  // stride*iterations overflows 2^32, the buffer address will be wrong.
+  // s_add_u32 wraps at 2^32. When the loop bound is a compile-time
+  // constant, estimateMaxIterations rejects candidates whose accumulated
+  // soffset would overflow INT32_MAX. For dynamic bounds (non-constant
+  // limit), the check is skipped and we rely on the typical GEMM
+  // assumption (stride < 2^20, iterations < 2^12).
   Value newCond = mapping.lookup(condOp.getCondition());
 
   // Insert soffset updates before the s_cmp that produces the condition.
