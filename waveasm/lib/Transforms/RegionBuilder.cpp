@@ -334,12 +334,23 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
     return nullptr;
   }
 
-  // Convert condition to sreg if it's an immediate
-  // (arith.cmpi maps result to immediate placeholder)
+  // Ensure the condition is an SGPR.  arith.cmpi on scalar operands produces
+  // an SRegType directly, but when the inputs were VGPRs (e.g. workgroup-
+  // uniform values that flowed through VALU ops like v_min_i32 in split-K
+  // trip-count computation) the comparison materializes a VGPR bool (0/1).
+  // waveasm.if requires WaveASM_AnySGPR, so promote the condition.
   Value conditionValue = *condition;
   if (isa<ImmType>(conditionValue.getType())) {
     auto sregType = ctx.createSRegType();
     conditionValue = S_MOV_B32::create(builder, loc, sregType, conditionValue);
+  } else if (isVGPRType(conditionValue.getType())) {
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    Value scalarCond =
+        V_READFIRSTLANE_B32::create(builder, loc, sregType, conditionValue);
+    auto zeroImm = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+    conditionValue =
+        S_CMP_GT_U32::create(builder, loc, sccType, scalarCond, zeroImm);
   }
 
   // Infer result types by peeking at what the then region will yield

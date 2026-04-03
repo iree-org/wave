@@ -19,6 +19,7 @@
 #include "waveasm/Dialect/WaveASMTypes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/Support/Debug.h"
 
@@ -387,6 +388,71 @@ LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx) {
       break;
     case arith::CmpIPredicate::uge:
       result = S_CMP_GE_U32::create(builder, loc, sccType, lhsOp, rhsOp);
+      break;
+    }
+    ctx.getMapper().mapValue(cmpOp.getResult(), result);
+    return success();
+  }
+
+  // When a comparison with VGPR operands is used only by scf.if, promote the
+  // operands to SGPRs via V_READFIRSTLANE_B32 and use S_CMP.  This avoids
+  // the round-trip through VCC -> bool VGPR -> V_READFIRSTLANE -> S_CMP that
+  // buildIfFromSCFIf would otherwise need, reducing SGPR pressure.  The
+  // values must be workgroup-uniform for correctness (split-K trip-count
+  // comparisons satisfy this since they derive from workgroup_id).
+  bool allUsesAreScfIf = !cmpOp.getResult().use_empty();
+  for (Operation *user : cmpOp.getResult().getUsers()) {
+    if (!isa<scf::IfOp>(user)) {
+      allUsesAreScfIf = false;
+      break;
+    }
+  }
+
+  if (allUsesAreScfIf) {
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    auto promoteToSGPR = [&](Value v) -> Value {
+      if (isImmType(v.getType()))
+        return v;
+      if (isSGPRType(v.getType()))
+        return v;
+      return V_READFIRSTLANE_B32::create(builder, loc, sregType, v);
+    };
+    Value lhsS = promoteToSGPR(*lhs);
+    Value rhsS = promoteToSGPR(*rhs);
+    if (isImmType(lhsS.getType()))
+      lhsS = S_MOV_B32::create(builder, loc, sregType, lhsS);
+    Value result;
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+      result = S_CMP_EQ_U32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::ne:
+      result = S_CMP_NE_U32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::slt:
+      result = S_CMP_LT_I32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::sle:
+      result = S_CMP_LE_I32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::sgt:
+      result = S_CMP_GT_I32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::sge:
+      result = S_CMP_GE_I32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::ult:
+      result = S_CMP_LT_U32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::ule:
+      result = S_CMP_LE_U32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::ugt:
+      result = S_CMP_GT_U32::create(builder, loc, sccType, lhsS, rhsS);
+      break;
+    case arith::CmpIPredicate::uge:
+      result = S_CMP_GE_U32::create(builder, loc, sccType, lhsS, rhsS);
       break;
     }
     ctx.getMapper().mapValue(cmpOp.getResult(), result);

@@ -599,36 +599,79 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
 
         // Emit copies from init arg registers to block arg registers when
         // they differ (i.e. coalescing was broken because the init arg has
-        // post-loop uses).
+        // post-loop uses, or IfOp result aliasing placed them in a different
+        // range).
         Block &body = loopOp.getBodyBlock();
         for (unsigned i = 0; i < body.getNumArguments(); ++i) {
           if (i >= loopOp.getInitArgs().size())
             break;
-          auto [srcPhys, isSGPR] = [&]() -> std::pair<int64_t, bool> {
-            Type ty = loopOp.getInitArgs()[i].getType();
-            if (auto psreg = dyn_cast<PSRegType>(ty))
-              return {psreg.getIndex(), true};
+          auto getPhysFromType = [](Type ty) -> std::pair<int64_t, int> {
             if (auto pvreg = dyn_cast<PVRegType>(ty))
-              return {pvreg.getIndex(), false};
-            return {-1, false};
-          }();
-          auto [dstPhys, dstIsSGPR] = [&]() -> std::pair<int64_t, bool> {
-            Type ty = body.getArgument(i).getType();
+              return {pvreg.getIndex(), 0};
             if (auto psreg = dyn_cast<PSRegType>(ty))
-              return {psreg.getIndex(), true};
-            if (auto pvreg = dyn_cast<PVRegType>(ty))
-              return {pvreg.getIndex(), false};
-            return {-1, false};
-          }();
-          if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys) {
+              return {psreg.getIndex(), 1};
+            if (auto pareg = dyn_cast<PARegType>(ty))
+              return {pareg.getIndex(), 2};
+            return {-1, -1};
+          };
+          auto [srcPhys, srcClass] =
+              getPhysFromType(loopOp.getInitArgs()[i].getType());
+          auto [dstPhys, dstClass] =
+              getPhysFromType(body.getArgument(i).getType());
+          if (srcPhys >= 0 && dstPhys >= 0 && srcPhys != dstPhys &&
+              srcClass == dstClass) {
             int64_t width = getRegSize(body.getArgument(i).getType());
             for (int64_t r = 0; r < width; ++r) {
-              if (isSGPR)
+              if (dstClass == 1) {
                 os << "  s_mov_b32 s" << (dstPhys + r) << ", s" << (srcPhys + r)
                    << "\n";
-              else
+              } else if (dstClass == 2) {
+                os << "  v_accvgpr_read_b32 "
+                   << formatVGPRRange(kScratchVGPR, 1) << ", a" << (srcPhys + r)
+                   << "\n";
+                os << "  v_accvgpr_write_b32 a" << (dstPhys + r) << ", "
+                   << formatVGPRRange(kScratchVGPR, 1) << "\n";
+                peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+                invalidateScratchCache();
+              } else {
                 os << "  v_mov_b32 v" << (dstPhys + r) << ", v" << (srcPhys + r)
                    << "\n";
+              }
+            }
+          }
+        }
+
+        // Guard: skip the entire loop body when the trip count is zero.
+        // WaveASM LoopOp has do-while semantics (body runs at least once),
+        // but scf.for can have zero iterations.  Emit a pre-loop check:
+        //   s_cmp_ge_u32 initIV, upperBound
+        //   s_cbranch_scc1 L_after_loop_N
+        // The initArg-to-blockArg copies above ensure loop results are
+        // correct even when the body is skipped entirely.
+        std::string afterLabel =
+            "L_after_loop_" + std::to_string(loopLabelCounter - 1);
+        {
+          auto condOp = cast<ConditionOp>(body.getTerminator());
+          Value condVal = condOp.getCondition();
+          Operation *cmpOp = condVal.getDefiningOp();
+          if (cmpOp && isa<S_CMP_LT_U32>(cmpOp)) {
+            int64_t initIVPhys = -1;
+            if (!loopOp.getInitArgs().empty()) {
+              Type initTy = loopOp.getInitArgs()[0].getType();
+              if (auto ps = dyn_cast<PSRegType>(initTy))
+                initIVPhys = ps.getIndex();
+            }
+            if (initIVPhys >= 0) {
+              Value ubVal = cmpOp->getOperand(1);
+              Type ubTy = ubVal.getType();
+              if (auto ps = dyn_cast<PSRegType>(ubTy)) {
+                os << "  s_cmp_ge_u32 s" << initIVPhys << ", s" << ps.getIndex()
+                   << "\n";
+              } else if (auto imm = dyn_cast<ImmType>(ubTy)) {
+                os << "  s_cmp_ge_u32 s" << initIVPhys << ", " << imm.getValue()
+                   << "\n";
+              }
+              os << "  s_cbranch_scc1 " << afterLabel << "\n";
             }
           }
         }
@@ -762,7 +805,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               }
             }
 
-            os << "  s_cbranch_scc1 " << labelName;
+            os << "  s_cbranch_scc1 " << labelName << "\n";
             break;
           }
 
@@ -780,6 +823,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           }
         }
 
+        os << afterLabel << ":\n";
         return os.str();
       })
       .Case<IfOp>([&](IfOp ifOp) -> std::optional<std::string> {
@@ -795,6 +839,68 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         } else {
           os << "  s_cbranch_scc0 " << endLabel << "\n";
         }
+
+        // Helper: resolve physical register index and class for a Value.
+        // Checks physical types first, then falls back to the mapping for
+        // virtual types.  Returns {physIndex, regClass} where regClass:
+        // 0=VGPR, 1=SGPR, 2=AGPR.  Returns {-1, -1} if unresolvable.
+        auto getPhysInfo = [&](Value val) -> std::pair<int64_t, int> {
+          Type ty = val.getType();
+          if (auto pvreg = dyn_cast<PVRegType>(ty))
+            return {pvreg.getIndex(), 0};
+          if (auto psreg = dyn_cast<PSRegType>(ty))
+            return {psreg.getIndex(), 1};
+          if (auto pareg = dyn_cast<PARegType>(ty))
+            return {pareg.getIndex(), 2};
+          int64_t physIdx = mapping.getPhysReg(val);
+          if (physIdx >= 0) {
+            if (isVGPRType(ty))
+              return {physIdx, 0};
+            if (isSGPRType(ty))
+              return {physIdx, 1};
+            if (isAGPRType(ty))
+              return {physIdx, 2};
+          }
+          return {-1, -1};
+        };
+
+        // Helper: emit copies from yield registers to if-result registers.
+        auto emitYieldToResultCopies = [&](Block &block) {
+          auto yieldOp = dyn_cast<YieldOp>(block.getTerminator());
+          if (!yieldOp)
+            return;
+          unsigned numResults = ifOp->getNumResults();
+          for (unsigned i = 0; i < numResults; ++i) {
+            if (i >= yieldOp.getResults().size())
+              break;
+            Value dst = ifOp->getResult(i);
+            Value src = yieldOp.getResults()[i];
+            auto [dstPhys, dstClass] = getPhysInfo(dst);
+            auto [srcPhys, srcClass] = getPhysInfo(src);
+            if (srcPhys < 0 || dstPhys < 0 || srcPhys == dstPhys)
+              continue;
+            if (srcClass != dstClass)
+              continue;
+            int64_t width = getRegSize(dst.getType());
+            for (int64_t r = 0; r < width; ++r) {
+              if (dstClass == 1) {
+                os << "  s_mov_b32 s" << (dstPhys + r) << ", s" << (srcPhys + r)
+                   << "\n";
+              } else if (dstClass == 2) {
+                os << "  v_accvgpr_read_b32 "
+                   << formatVGPRRange(kScratchVGPR, 1) << ", a" << (srcPhys + r)
+                   << "\n";
+                os << "  v_accvgpr_write_b32 a" << (dstPhys + r) << ", "
+                   << formatVGPRRange(kScratchVGPR, 1) << "\n";
+                peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+                invalidateScratchCache();
+              } else {
+                os << "  v_mov_b32 v" << (dstPhys + r) << ", v" << (srcPhys + r)
+                   << "\n";
+              }
+            }
+          }
+        };
 
         for (Operation &thenOp : ifOp.getThenBlock()) {
           if (isa<YieldOp>(&thenOp))
@@ -812,6 +918,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             os << line << "\n";
           }
         }
+        emitYieldToResultCopies(ifOp.getThenBlock());
 
         if (ifOp.hasElse()) {
           os << "  s_branch " << endLabel << "\n";
@@ -835,6 +942,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               os << line << "\n";
             }
           }
+          emitYieldToResultCopies(*ifOp.getElseBlock());
         }
 
         os << endLabel << ":";
@@ -1048,13 +1156,18 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   peakVGPRs = 0;
   peakSGPRs = 0;
   peakAGPRs = 0;
+  int64_t maxGPSGPRs = target.getMaxSGPRs();
+  auto isArchitecturalSGPR = [maxGPSGPRs](int64_t index) {
+    return index >= maxGPSGPRs;
+  };
   program.walk([&](Operation *preOp) {
     for (Value result : preOp->getResults()) {
       Type ty = result.getType();
       if (auto pvreg = dyn_cast<PVRegType>(ty)) {
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
       } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+        if (!isArchitecturalSGPR(psreg.getIndex()))
+          peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
       } else if (auto pareg = dyn_cast<PARegType>(ty)) {
         peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
       } else if (isVirtualRegType(ty)) {
@@ -1074,9 +1187,10 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
       Type ty = operand.getType();
       if (auto pvreg = dyn_cast<PVRegType>(ty))
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
-      else if (auto psreg = dyn_cast<PSRegType>(ty))
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
-      else if (auto pareg = dyn_cast<PARegType>(ty))
+      else if (auto psreg = dyn_cast<PSRegType>(ty)) {
+        if (!isArchitecturalSGPR(psreg.getIndex()))
+          peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      } else if (auto pareg = dyn_cast<PARegType>(ty))
         peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
     }
   });

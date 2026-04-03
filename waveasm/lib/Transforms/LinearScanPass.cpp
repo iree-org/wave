@@ -484,6 +484,27 @@ private:
     if (packResult.wasInterrupted())
       return failure();
 
+    // Assign IfOp result physical registers from the then-yield operands.
+    // IfOp result ranges were removed from the allocation worklist (in
+    // liveness Pass 3c), so they have no mapping yet. Like PackOp/InsertOp
+    // results, they alias another value's allocation.
+    program.walk([&](IfOp ifOp) {
+      auto thenYield = dyn_cast<YieldOp>(ifOp.getThenBlock().getTerminator());
+      if (!thenYield)
+        return;
+      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+        if (i >= thenYield.getResults().size())
+          break;
+        Value ifResult = ifOp->getResult(i);
+        if (mapping.hasMapping(ifResult))
+          continue;
+        Value yieldVal = thenYield.getResults()[i];
+        int64_t yieldPhys = getEffectivePhysReg(yieldVal, mapping);
+        if (yieldPhys >= 0)
+          mapping.setPhysReg(ifResult, yieldPhys);
+      }
+    });
+
     // Transform the IR: replace virtual register types with physical types
     OpBuilder builder(program.getContext());
 
@@ -644,6 +665,8 @@ private:
               blockPhys = pvreg.getIndex();
             else if (auto psreg = dyn_cast<PSRegType>(blockArgType))
               blockPhys = psreg.getIndex();
+            else if (auto pareg = dyn_cast<PARegType>(blockArgType))
+              blockPhys = pareg.getIndex();
 
             if (initPhys < 0 || blockPhys < 0 || initPhys == blockPhys)
               initArg.setType(blockArgType);
@@ -654,31 +677,6 @@ private:
       for (unsigned i = 0; i < loopOp->getNumResults(); ++i) {
         if (i < bodyBlock.getNumArguments()) {
           loopOp->getResult(i).setType(bodyBlock.getArgument(i).getType());
-        }
-      }
-    });
-
-    // Also update if op result types.
-    // Prefer the allocation mapping (which respects loop ties) over the
-    // then-yield operand type.  When an if result feeds a loop init arg,
-    // the allocator ties it to the loop block arg and both receive the
-    // same physical register.  The then-yield operand may carry a
-    // *different* physical register (from the inner loop), so copying it
-    // blindly would break the LoopLikeOpInterface verifier which requires
-    // exact type equality between init args and region iter_args.
-    program.walk([&](IfOp ifOp) {
-      auto &thenBlock = ifOp.getThenBlock();
-      auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator());
-      if (!yieldOp)
-        return;
-      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
-        Value res = ifOp->getResult(i);
-        int64_t physReg = mapping.getPhysReg(res);
-        if (physReg >= 0) {
-          res.setType(
-              makePhysicalType(ifOp->getContext(), res.getType(), physReg));
-        } else if (i < yieldOp.getResults().size()) {
-          res.setType(yieldOp.getResults()[i].getType());
         }
       }
     });
