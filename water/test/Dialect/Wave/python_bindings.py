@@ -299,13 +299,6 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
-    try:
-        wave.WaveSymbolMappingAttr.get({"A": addr_attr})
-    except TypeError as e:
-        assert "must be a WaveExprListAttr" in str(e)
-    else:
-        assert False, "Expected to fail with TypeError."
-
     # CHECK: #wave.mma_kind<f32_16x16x16_f16>
     mma_type_attr = wave.WaveMmaKindAttr.get(wave.WaveMmaKind.F32_16x16x16_F16)
     print(mma_type_attr)
@@ -339,12 +332,12 @@ with ir.Context() as ctx:
     int_expr_attr = wave.WaveExprListAttr.get([], int_expr_map)
     print(int_expr_attr)
 
-    # CHECK: {M = 512 : i64, N = 512 : i64}
     i64 = ir.IntegerType.get_signless(64)
-    shape_dict = ir.DictAttr.get(
+    # CHECK: #wave.symbol_mapping<@M = 512 : i64, @N = 512 : i64>
+    shape_mapping = wave.WaveSymbolMappingAttr.get(
         {"M": ir.IntegerAttr.get(i64, 512), "N": ir.IntegerAttr.get(i64, 512)}
     )
-    print(shape_dict)
+    print(shape_mapping)
 
     # CHECK: #wave.hardware_constraint<threads_per_wave = 64, mma_type = <f32_16x16x16_f16>>
     hardware_constr_1 = wave.HardwareConstraintAttr.get(
@@ -357,25 +350,25 @@ with ir.Context() as ctx:
     print(hardware_constr_1.mma_type)
     # CHECK: 128
     print(hardware_constr_1.max_bits_per_load)
-    # CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 512 : i64, N = 512 : i64}>
+    # CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = <@M = 512 : i64, @N = 512 : i64>>
     hardware_constr_2 = wave.HardwareConstraintAttr.get(
-        threads_per_wave=64, vector_shapes=shape_dict, max_bits_per_load=128
+        threads_per_wave=64, vector_shapes=shape_mapping, max_bits_per_load=128
     )
     print(hardware_constr_2)
     # CHECK: 64
     print(hardware_constr_2.threads_per_wave)
     # CHECK: None
     print(hardware_constr_2.mma_type)
-    # CHECK: {M = 512 : i64, N = 512 : i64}
+    # CHECK: #wave.symbol_mapping<@M = 512 : i64, @N = 512 : i64>
     print(hardware_constr_2.vector_shapes)
     # CHECK: 128
     print(hardware_constr_2.max_bits_per_load)
 
-    # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], vector_shapes = {M = 512 : i64, N = 512 : i64}>
+    # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], vector_shapes = <@M = 512 : i64, @N = 512 : i64>>
     hardware_constr_3 = wave.HardwareConstraintAttr.get(
         threads_per_wave=64,
         waves_per_block=[2, 2, 1],
-        vector_shapes=shape_dict,
+        vector_shapes=shape_mapping,
         max_bits_per_load=128,
     )
     print(hardware_constr_3)
@@ -548,7 +541,6 @@ func.func @bitcast_test(%arg0: !wave.tensor<[@M, @K2] of i8, <register>>) -> !wa
     # CHECK-SAME: to
     # CHECK-SAME: !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
     print(bitcast_test_module)
-
 
 # CHECK: wave_ok
 print("wave_ok")

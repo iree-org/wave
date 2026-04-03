@@ -37,6 +37,8 @@ from .analysis.index_sequence_analysis import (
     set_node_indices_water_checked,
     set_post_expansion_indices,
 )
+from .analysis.annotate_iv_strides import annotate_iv_strides
+from .analysis.flatten_read_indices import flatten_read_indices
 from .analysis.partition_strided_operators import (
     merge_contiguous_reads,
     partition_gather_like_ops,
@@ -606,11 +608,23 @@ def build_graph_passes(
             launchable.constraints,
             launchable.reordering_constraints,
         ),
+        *(
+            [partial(flatten_read_indices, trace, launchable.constraints)]
+            if options.linearize_reads
+            and not options.dynamic_strides
+            and not options.use_water_backend
+            else []
+        ),
         partial(
             merge_contiguous_reads,
             trace,
             launchable.constraints,
             options.target,
+        ),
+        *(
+            [partial(annotate_iv_strides, trace, launchable.constraints)]
+            if options.linearize_reads
+            else []
         ),
     ]
 
@@ -1351,6 +1365,8 @@ def _generate_asm_code(mb, options):
             else "--waveasm-insert-waitcnt=ticketed-waitcnt=false"
         )
         tail_passes = [
+            "--waveasm-scc-spill-reload",
+            "--waveasm-scc-verifier",
             "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",

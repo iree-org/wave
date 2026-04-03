@@ -22,7 +22,7 @@ from wave_lang.kernel.wave.compile import (
     wave_compile,
 )
 from wave_lang.kernel.wave.type_inference import infer_types
-from wave_lang.kernel.wave.constraints import Constraint, MMAType
+from wave_lang.kernel.wave.constraints import Constraint, MMAType, ScaledMMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     format_diagnostics,
     PersistentEmitter,
@@ -81,6 +81,7 @@ def _get_dummy_trace_options_and_constraints() -> (
     tuple[CapturedTrace, WaveCompileOptions, list[Constraint]]
 ):
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
         compile_to_mlir=True,
     )
@@ -185,6 +186,7 @@ def vector_shapes_symbol_not_in_subs():
     # Use a symbol only in vector_shapes so compilation succeeds but emit_wave_dialect hits the check.
     VEC_M = tkl.sym.VEC_M
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
         compile_to_mlir=True,
     )
@@ -269,6 +271,7 @@ def mlir_converter_matrix_add():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -307,7 +310,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     # CHECK-SAME: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>, #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 2)>>
-    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = {M = 64 : i64, N = 64 : i64}>
+    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = <@M = 64 : i64, @N = 64 : i64>>]
     # CHECK-SAME: BLOCK_M = 64 : i64
     # CHECK-SAME: BLOCK_N = 64 : i64
     # CHECK-SAME: M = 128 : i64
@@ -395,6 +398,7 @@ def mlir_converter_broadcast():
         wave.write(broadcasted, b)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64, N: 256, BLOCK_N: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -430,6 +434,7 @@ def mlir_converter_self_index():
         wave.write(idx, a)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -449,7 +454,7 @@ def mlir_converter_self_index():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_self_index
-    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] vector_shape [{M : 64 : i64}] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] vector_shape [#wave.symbol_mapping<@M = 64 : i64>] : !wave.tensor<[@M] of i32, <register>>
     # CHECK: wave.write %[[SELF_INDEX]]
 
 
@@ -476,6 +481,7 @@ def mlir_converter_select():
         wave.write(res, d)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={M: 128, BLOCK_M: 64},
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -533,6 +539,7 @@ def mlir_converter_implicit_broadcast():
         wave.write(sel_result, out)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={
             ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
             M: 128,
@@ -624,6 +631,7 @@ def multi_result_handling():
         tkw.write(r1, c)
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs={
             M: 64,
             N: 64,
@@ -695,6 +703,7 @@ def mlir_converter_reshape():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -759,6 +768,7 @@ def mlir_converter_sum():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -841,6 +851,7 @@ def mlir_converter_apply_expr():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -922,6 +933,7 @@ def mlir_converter_apply_expr_combinators():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1029,6 +1041,7 @@ def mlir_converter_emit_wave_dialect_loop_implicit_capture():
         K: 32,
     }
     options_loop = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs_loop,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1120,6 +1133,7 @@ def mlir_converter_matmul():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1309,6 +1323,7 @@ def mlir_converter_attention():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1438,6 +1453,7 @@ def mlir_converter_mixed_memory_spaces():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1492,6 +1508,7 @@ def mlir_converter_invalid_non_int_hyperparameter():
     }
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1557,6 +1574,7 @@ def mlir_converter_permute():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1655,6 +1673,7 @@ def mlir_converter_read_with_mapping():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1751,6 +1770,7 @@ def mlir_converter_write_with_mapping():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
@@ -1813,6 +1833,7 @@ def mlir_converter_attention_pre_infer_types():
     )
 
     options = WaveCompileOptions(
+        linearize_reads=False,
         subs=hyperparams,
         compile_to_mlir=True,
     )
@@ -1866,3 +1887,129 @@ def mlir_converter_attention_pre_infer_types():
 
     # Iterate result types match init_arg types.
     # CHECK: -> (!wave.tensor<[@B, @M] of f32, <register>>, !wave.tensor<[@B, @M] of f32, <register>>, !wave.tensor<[@B, @N, @M] of f32, <register>>)
+
+
+@run_test
+def test_mxfp4_scaled_mma_256x256x256():
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    @tkw.wave(constraints)
+    def scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    subs = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 128,
+        M: 16384,
+        N: 16384,
+        K: 16384,
+    }
+    options = WaveCompileOptions(
+        linearize_reads=False,
+        subs=subs,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx950",
+    )
+
+    compiled_kernel = wave_compile(options, scaled_gemm)
+    trace = compiled_kernel.get_compiled_graph()
+
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, scaled_gemm.constraints, options
+    )
+
+    if diagnostics:
+        print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
+
+    print(mlir_output)
+
+    # CHECK-LABEL: test_mxfp4_scaled_mma_256x256x256
+    # CHECK: module
+    # CHECK-NEXT: func.func @kernel(
+    # CHECK-SAME: %[[A:.*]]: !wave.tensor<[@M, @K2] of i8, <global>>
+    # CHECK-SAME: %[[A_SCALE:.*]]: !wave.tensor<[@M, @K32] of i8, <global>>
+    # CHECK-SAME: %[[B:.*]]: !wave.tensor<[@N, @K2] of i8, <global>>
+    # CHECK-SAME: %[[B_SCALE:.*]]: !wave.tensor<[@N, @K32] of i8, <global>>
+    # CHECK-SAME: %[[C:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
+    # CHECK-SAME: wave.constraints =
+    # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
+    # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
+    # CHECK-SAME: #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+    # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = <f32_16x16x128_f8f6f4>>
+    # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 128 : i64, BLOCK_M = 16 : i64, BLOCK_N = 16 : i64, K = 16384 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16384 : i64, N = 16384 : i64}>
+    #
+    # CHECK:     %[[ITERATE:.*]] = wave.iterate @K
+    # Global reads promoted through shared memory.
+    #
+    # CHECK:       wave.read %[[A]]
+    # CHECK:       wave.write {{.*}} !wave.tensor<[@M, @K2] of i8, <shared>>
+    # CHECK:       wave.read %[[A_SCALE]]
+    # CHECK:       wave.write {{.*}} !wave.tensor<[@M, @K32] of i8, <shared>>
+    # CHECK:       wave.read %[[B]]
+    # CHECK:       wave.write {{.*}} !wave.tensor<[@N, @K2] of i8, <shared>>
+    # CHECK:       wave.read %[[B_SCALE]]
+    # CHECK:       wave.write {{.*}} !wave.tensor<[@N, @K32] of i8, <shared>>
+    #
+    # Bitcasts from i8 to scaled MMA operand types.
+    #
+    # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+    # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@M, @K32] of i8, <register>> to !wave.tensor<[@M, @K32] of f8E8M0FNU, <register>>
+    # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@N, @K2] of i8, <register>> to !wave.tensor<[@N, @K] of f4E2M1FN, <register>>
+    # CHECK:       wave.bitcast {{.*}} : !wave.tensor<[@N, @K32] of i8, <register>> to !wave.tensor<[@N, @K32] of f8E8M0FNU, <register>>
+    #
+    # One scaled MMA (BLOCK_K=128 matches intrinsic size).
+    #
+    # CHECK:       wave.scaled_mma
+    # CHECK-SAME:  #wave.mma_kind<f32_16x16x128_f8f6f4>
+    # CHECK:       wave.yield {{.*}} : !wave.tensor<[@M, @N] of f32, <register>>
+    # CHECK-NEXT: }
+    #
+    # Results written back to the output tensor.
+    #
+    # CHECK:     wave.write {{.*}}, %[[C]]

@@ -49,4 +49,9 @@ def TestWaveDialectInferIndexExprsPass : Pass<"water-test-wave-infer-index-exprs
     pass. The array is coindexed with the corresponding op results or block
     arguments.
   }];
+
+  let options = [
+    Option<"attachSourceVectorShapes", "attach-source-vector-shapes", "bool", /*default=*/"false",
+    "Attach source vector shape values from the result lattices to operations">,
+  ];
 }

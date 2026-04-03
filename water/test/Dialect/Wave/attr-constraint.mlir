@@ -7,11 +7,11 @@
 func.func private @test_hw1() attributes { wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64>] }
 
 // CHECK-LABEL: @test_hw2
-// CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = {K = 64 : i64, M = 1 : i64, N = 1 : i64}>
+// CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = <f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 64 : i64>>
 #hw_constraint2 = #wave.hardware_constraint<threads_per_wave = 64,
                                             waves_per_block = [1, 1, 1],
                                             mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-                                            vector_shapes = {M = 1, N = 1, K = 64},
+                                            vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 64 : i64>,
                                             max_bits_per_load = 128>
 func.func private @test_hw2() attributes { wave.hyperparameters = #wave.hyperparameters<{M = 1024, N = 1024, K = 1024}>,
                                            wave.constraints = [#hw_constraint2] }

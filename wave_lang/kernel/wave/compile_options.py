@@ -48,6 +48,7 @@ class WaveCompileOptions:
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
     use_water_backend: bool = False  # Use Water backend with host wrapper
+    linearize_reads: bool = True  # Flatten N-D read indices to 1-D offsets
 
     # === Benchmark options ===
     run_bench: bool = False

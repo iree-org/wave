@@ -12,7 +12,7 @@ from typing import Sequence, Optional
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.constraints import MMAType, ScaledMMAType
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     torch_dtype_to_wave,
@@ -129,6 +129,80 @@ def get_gemm_kernel(
         del hyperparams[K]
 
     return gemm, hyperparams, dynamic_symbols
+
+
+def get_scaled_gemm_kernel(
+    shape: tuple[int, int, int],
+    mfma_variant: ScaledMMAType,
+    block_shape: Optional[tuple[int, int, int]] = None,
+    waves_per_block: Optional[tuple[int, int]] = None,
+):
+    """Creates an MXFP4 scaled GEMM kernel.
+
+    Args:
+        shape: (M, N, K) problem dimensions.
+        mfma_variant: Scaled MMA instruction type.
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        waves_per_block: (waves_M, waves_N) waves per workgroup.
+    """
+    if not block_shape:
+        block_shape = (32, 32, 256)
+
+    if not waves_per_block:
+        waves_per_block = (2, 2)
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / waves_per_block[0])]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / waves_per_block[1])]
+    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    @tkw.wave(constraints)
+    def scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    return scaled_gemm, hyperparams
 
 
 def get_splitk_gemm_kernel(

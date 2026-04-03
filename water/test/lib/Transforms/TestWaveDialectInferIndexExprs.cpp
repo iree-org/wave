@@ -21,6 +21,7 @@ using namespace mlir;
 using namespace wave;
 
 namespace mlir::water::test {
+#define GEN_PASS_DECL_TESTWAVEDIALECTINFERINDEXEXPRSPASS
 #define GEN_PASS_DEF_TESTWAVEDIALECTINFERINDEXEXPRSPASS
 #include "Transforms/Passes.h.inc"
 } // namespace mlir::water::test
@@ -38,7 +39,8 @@ overrideInitialization(Operation *top,
         continue;
       if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
-        setIndexForValue(value, nullptr, DictionaryAttr(), nullptr);
+        setIndexForValue(value, nullptr, DictionaryAttr(),
+                         WaveSymbolMappingAttr());
         continue;
       }
 
@@ -55,8 +57,14 @@ overrideInitialization(Operation *top,
       DictionaryAttr indexExprs = nullptr;
       DictionaryAttr prioritiesDict = nullptr;
       bool hasPriorities = false;
-      DictionaryAttr vectorShape = nullptr;
+      WaveSymbolMappingAttr vectorShape;
       MLIRContext *ctx = op->getContext();
+
+      auto parseVectorShapeAttr = [&](Attribute attr) -> WaveSymbolMappingAttr {
+        if (llvm::isa<UnitAttr>(attr) || !attr)
+          return {};
+        return llvm::dyn_cast<WaveSymbolMappingAttr>(attr);
+      };
 
       auto setUniformPriority = [&](int32_t priority) {
         hasPriorities = true;
@@ -97,10 +105,11 @@ overrideInitialization(Operation *top,
               // [dict, vectorShape]
               indexExprs = firstDict;
               if (!llvm::isa<UnitAttr>(arrayAttr[1]))
-                vectorShape = secondDict;
-              if (!vectorShape)
+                vectorShape = parseVectorShapeAttr(arrayAttr[1]);
+              if (!llvm::isa<UnitAttr>(arrayAttr[1]) && !vectorShape)
                 return op->emitError()
-                       << "expected vector shape to be a DictionaryAttr";
+                       << "expected vector shape to be a DictionaryAttr or "
+                          "WaveSymbolMappingAttr";
             }
           }
         } else if (arrayAttr.size() == 3) {
@@ -109,14 +118,14 @@ overrideInitialization(Operation *top,
             indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
             setUniformPriority(firstInt.getInt());
             if (!llvm::isa<UnitAttr>(arrayAttr[2]))
-              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[2]);
+              vectorShape = parseVectorShapeAttr(arrayAttr[2]);
           } else if (auto firstDict =
                          llvm::dyn_cast<DictionaryAttr>(arrayAttr[0])) {
             // [priDict, dict, vectorShape]
             indexExprs = llvm::dyn_cast<DictionaryAttr>(arrayAttr[1]);
             setPerKeyPriorities(firstDict);
             if (!llvm::isa<UnitAttr>(arrayAttr[2]))
-              vectorShape = llvm::dyn_cast<DictionaryAttr>(arrayAttr[2]);
+              vectorShape = parseVectorShapeAttr(arrayAttr[2]);
           }
         }
       } else {
@@ -167,10 +176,14 @@ overrideInitialization(Operation *top,
   return failure(walkResult.wasInterrupted());
 }
 
+namespace {
 class TestWaveDialectInferIndexExprsPass
     : public mlir::water::test::impl::TestWaveDialectInferIndexExprsPassBase<
           TestWaveDialectInferIndexExprsPass> {
 public:
+  using TestWaveDialectInferIndexExprsPassBase::
+      TestWaveDialectInferIndexExprsPassBase;
+
   void runOnOperation() override {
     SymbolTableCollection symbolTable;
     DataFlowConfig config;
@@ -195,8 +208,36 @@ public:
     if (failed(wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
+    auto extraHandler =
+        [&](Operation *op,
+            ArrayRef<IndexExprsLatticeStorage> slots) -> LogicalResult {
+      if (!attachSourceVectorShapes)
+        return success();
+
+      SmallVector<Attribute> sourceVectorShapes;
+      SmallVector<Attribute> sourceVectorShapePriorities;
+      sourceVectorShapes.reserve(slots.size());
+      sourceVectorShapePriorities.reserve(slots.size());
+      for (const IndexExprsLatticeStorage &lattice : slots) {
+        if (lattice.isBottom() || lattice.isTop()) {
+          sourceVectorShapes.push_back(UnitAttr::get(&getContext()));
+          sourceVectorShapePriorities.push_back(UnitAttr::get(&getContext()));
+        } else {
+          sourceVectorShapes.push_back(lattice.getSourceVectorShape());
+          sourceVectorShapePriorities.push_back(
+              IntegerAttr::get(IntegerType::get(&getContext(), 32),
+                               lattice.getSourceVectorShapePriority()));
+        }
+      }
+      op->setAttr("wave_test.source_vector_shapes",
+                  ArrayAttr::get(&getContext(), sourceVectorShapes));
+      op->setAttr("wave_test.source_vector_shape_priorities",
+                  ArrayAttr::get(&getContext(), sourceVectorShapePriorities));
+      return success();
+    };
+
     if (failed(setWaveIndexExprAnalysisResults(getOperation(), solver,
-                                               delayedErrorInfo)))
+                                               delayedErrorInfo, extraHandler)))
       return signalPassFailure();
 
     getOperation()->walk([&](wave::IterateOp iterateOp) {
@@ -204,3 +245,5 @@ public:
     });
   }
 };
+
+} // namespace

@@ -772,20 +772,16 @@ WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 LogicalResult HardwareConstraintAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, unsigned threadsPerWave,
     ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
-    DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
+    WaveSymbolMappingAttr vectorShapes, unsigned maxBitsPerLoad) {
 
   if (!(wavesPerBlock.empty() || wavesPerBlock.size() == 3))
     return emitError() << "waves_per_block (" << wavesPerBlock
                        << ") should have 3 elements";
 
   if (vectorShapes) {
-    for (NamedAttribute attr : vectorShapes) {
-      // TODO: verify that attr.getName() is a valid WaveSymbol
-      Attribute value = attr.getValue();
-
+    for (auto [key, value] : vectorShapes.getMapping()) {
       if (!isa<IntegerAttr>(value))
-        return emitError() << attr.getName()
-                           << " is not an IntegerAttr: " << attr.getValue();
+        return emitError() << key << " is not an IntegerAttr: " << value;
     }
   }
 
@@ -902,12 +898,11 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
 
 void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
   printer << "<";
-  llvm::interleaveComma(llvm::zip(getKeys(), getValues()), printer,
-                        [&](auto pair) {
-                          printer.printSymbolName(std::get<0>(pair).getName());
-                          printer << " = ";
-                          printer.printAttribute(std::get<1>(pair));
-                        });
+  llvm::interleaveComma(getMapping(), printer, [&](auto pair) {
+    printer.printSymbolName(std::get<0>(pair).getName());
+    printer << " = ";
+    printer.printAttribute(std::get<1>(pair));
+  });
   printer << ">";
 }
 
@@ -930,7 +925,7 @@ WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 Attribute WaveSymbolMappingAttr::lookupImpl(WaveSymbolAttr key) const {
-  for (auto [k, v] : llvm::zip(getKeys(), getValues())) {
+  for (auto [k, v] : getMapping()) {
     if (k == key)
       return v;
   }

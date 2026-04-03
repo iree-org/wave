@@ -5,6 +5,7 @@
 
 from typing import TypeVar
 from copy import deepcopy
+
 import sympy
 import torch.fx as fx
 
@@ -251,6 +252,120 @@ def _check_contiguous_with_aligned_base(
         prev_offset = offset
 
     return True
+
+
+def _expand_mod(expr: sympy.Expr) -> sympy.Expr:
+    """Rewrite ``Mod(x, d)`` as ``x - d*floor(x/d)``.
+
+    This lets ``floor(x/d)*d + Mod(x, d)`` cancel to ``x`` via normal
+    algebraic simplification, which SymPy cannot do when ``Mod`` is
+    kept as an opaque node.
+    """
+    if not expr.has(sympy.Mod):
+        return expr
+    return expr.replace(
+        lambda e: isinstance(e, sympy.Mod),
+        lambda e: e.args[0] - e.args[1] * sympy.floor(e.args[0] / e.args[1]),
+    )
+
+
+def _eval_concrete_floor_mod(expr: sympy.Expr) -> sympy.Expr:
+    """Evaluate ``floor`` and ``Mod`` nodes whose arguments are concrete.
+
+    SymPy sometimes leaves ``floor(4)`` or ``Mod(0, K)`` un-evaluated
+    when they were built symbolically and then substituted.  This pass
+    collapses them bottom-up so the result contains no unnecessary
+    wrappers around known integers.
+    """
+
+    def _try_eval(e):
+        if isinstance(e, sympy.floor):
+            inner = e.args[0]
+            if inner.is_number:
+                return sympy.Integer(int(sympy.floor(inner)))
+        if isinstance(e, sympy.Mod):
+            a, m = e.args
+            if a.is_Integer and m.is_Integer and int(m) != 0:
+                return sympy.Integer(int(a) % int(m))
+            if a.is_Integer and int(a) == 0:
+                return sympy.Integer(0)
+        return e
+
+    if not expr.has(sympy.floor) and not expr.has(sympy.Mod):
+        return expr
+    return expr.replace(
+        lambda e: isinstance(e, (sympy.floor, sympy.Mod)),
+        _try_eval,
+    )
+
+
+def mem_simplify(expr: sympy.Expr) -> sympy.Expr:
+    """Simplify an expression representing a tensor memory index.
+
+    Domain-specific alternative to ``sympy.simplify`` that applies only
+    the algebraic identities relevant to integer memory addressing:
+
+    1. Rewrite ``Mod(x, d)`` as ``x - d*floor(x/d)`` so that paired
+       floor terms cancel algebraically.
+    2. ``expand()`` to distribute products and cancel matching terms —
+       this collapses the fundamental round-trip
+       ``floor(E/D)*D + Mod(E, D) → E``.
+    3. Evaluate any ``floor`` or ``Mod`` of concrete integers left over.
+    """
+    expr = sympy.sympify(expr)
+    if expr.is_number:
+        return expr
+    if expr.has(sympy.Mod):
+        expr = _expand_mod(expr)
+    expr = sympy.expand(expr)
+    expr = _eval_concrete_floor_mod(expr)
+    return expr
+
+
+def linearize_dims(
+    dim_exprs: list[sympy.Expr],
+    strides: list[sympy.Expr],
+) -> sympy.Expr:
+    """Compute ``sum(dim_i * stride_i)`` with floor/Mod cancellation.
+
+    Preshuffle mappings produce ``floor(flat/D)`` for one dimension and
+    ``Mod(flat, D)`` for another, with the first dimension's stride
+    equal to ``D``.  The naive sum keeps SymPy's opaque ``Mod`` node
+    and ``simplify`` cannot prove the cancellation.
+
+    By expanding ``Mod`` to its floor definition first and then calling
+    ``expand``, the matching ``floor`` terms cancel algebraically::
+
+        floor(E/D)*D + Mod(E,D)
+        → floor(E/D)*D + E - D*floor(E/D)
+        → E
+    """
+    total = sum(d * s for d, s in zip(dim_exprs, strides))
+    return mem_simplify(total)
+
+
+def _infer_floor_to_exact(mem_strides: list[IndexExpr]) -> dict:
+    """Infer ``floor(sym/n) → sym/n`` substitutions from memory strides.
+
+    When a memory stride has the form ``sym/n`` (symbolic numerator over
+    a positive integer denominator), the stride must be a non-negative
+    integer for the layout to be physically valid.  That forces the
+    numerator to be a multiple of the denominator, so
+    ``floor(sym/n) == sym/n``.
+
+    Substituting this into dimension expressions collapses
+    ``floor(E / floor(sym/n)) * (sym/n) + Mod(E, floor(sym/n))`` back
+    into ``E`` via the standard floor/Mod identity, eliminating the
+    symbolic divisor that the probing cannot handle.
+    """
+    subs_map: dict[sympy.Expr, sympy.Expr] = {}
+    for stride in mem_strides:
+        stride = sympy.sympify(stride)
+        numer, denom = stride.as_numer_denom()
+        if denom.is_Integer and int(denom) > 1 and numer.free_symbols:
+            exact_quot = numer / denom
+            subs_map[sympy.floor(exact_quot)] = exact_quot
+    return subs_map
 
 
 def transform_index_on_mapping(

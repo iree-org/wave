@@ -55,6 +55,55 @@ func.func @bitcast_non_last_dim_scaled(%v: !wave.tensor<[@K2, @N] of i8, <regist
   return %0 : !wave.tensor<[@K, @N] of f4E2M1FN, <register>>
 }
 
+
+// CHECK-LABEL: @scaled_mma
+func.func @scaled_mma(%lhs: !wave.tensor<[@M, @K] of f4E2M1FN>,
+                      %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+                      %rhs: !wave.tensor<[@N, @K] of f4E2M1FN>,
+                      %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+                      %acc: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
+  // CHECK: wave.scaled_mma
+  %0 = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return %0 : !wave.tensor<[@M, @N] of f32>
+}
+
+// CHECK-LABEL: @batched_scaled_mma
+func.func @batched_scaled_mma(
+    %lhs: !wave.tensor<[@B, @M, @K] of f4E2M1FN>,
+    %lhs_scale: !wave.tensor<[@B, @M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@B, @N, @K] of f4E2M1FN>,
+    %rhs_scale: !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32> {
+  // CHECK: wave.scaled_mma
+  %0 = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@B, @M, @K] of f4E2M1FN>, !wave.tensor<[@B, @M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@B, @N, @K] of f4E2M1FN>, !wave.tensor<[@B, @N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
+  return %0 : !wave.tensor<[@B, @M, @N] of f32>
+}
+
+// CHECK-LABEL: @scaled_mma_32x32x64
+func.func @scaled_mma_32x32x64(
+    %lhs: !wave.tensor<[@M, @K] of f8E5M2>,
+    %lhs_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %rhs: !wave.tensor<[@N, @K] of f8E5M2>,
+    %rhs_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %acc: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
+  // CHECK: wave.scaled_mma
+  // CHECK-SAME: kind = #wave.mma_kind<f32_32x32x64_f8f6f4>
+  %0 = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
+    {kind = #wave.mma_kind<f32_32x32x64_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+       !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+  return %0 : !wave.tensor<[@M, @N] of f32>
+}
+
 // CHECK-LABEL: @extract_slice
 func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
   // CHECK: wave.extract_slice
@@ -119,8 +168,8 @@ func.func @vector_shape_roundtrip(%lhs: !wave.tensor<[@A, @B] of bf16>, %rhs: !w
   wave.hyperparameters = #wave.hyperparameters<{A = 8, B = 8}>
 } {
   // CHECK: wave.add
-  // CHECK-SAME: vector_shape [{A : 4 : i64, B : 2 : i64}]
-  %0 = wave.add %lhs, %rhs vector_shape [{A : 4 : i64, B : 2 : i64}] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
+  // CHECK-SAME: vector_shape [#wave.symbol_mapping<@A = 4 : i64, @B = 2 : i64>]
+  %0 = wave.add %lhs, %rhs vector_shape [#wave.symbol_mapping<@A = 4 : i64, @B = 2 : i64>] : (!wave.tensor<[@A, @B] of bf16>, !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16>
   return %0 : !wave.tensor<[@A, @B] of bf16>
 }
 
@@ -236,7 +285,7 @@ func.func @register_with_hyperparameter() attributes {hyperparameters = #wave.hy
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
                                          waves_per_block = [1, 1, 1],
                                          mma_type = #wave.mma_kind<f32_32x32x8_f16>,
-                                         vector_shapes = {M = 1, N = 1, K = 8},
+                                         vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>,
                                          max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_interface
@@ -262,7 +311,7 @@ func.func @mma_elements_per_thread_interface() attributes {
 #hw_constraint_32_threads = #wave.hardware_constraint<threads_per_wave = 32,
                                                      waves_per_block = [1, 1, 1],
                                                      mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-                                                     vector_shapes = {M = 1, N = 1, K = 16},
+                                                     vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>,
                                                      max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_32_threads
@@ -288,7 +337,7 @@ func.func @mma_elements_per_thread_32_threads() attributes {
 #hw_constraint_128_threads = #wave.hardware_constraint<threads_per_wave = 128,
                                                       waves_per_block = [1, 1, 1],
                                                       mma_type = #wave.mma_kind<f32_32x32x8_f16>,
-                                                      vector_shapes = {M = 1, N = 1, K = 8},
+                                                      vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>,
                                                       max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_128_threads
@@ -314,7 +363,7 @@ func.func @mma_elements_per_thread_128_threads() attributes {
 #hw_constraint_interface_alt = #wave.hardware_constraint<threads_per_wave = 64,
                                          waves_per_block = [1, 1, 1],
                                          mma_type = #wave.mma_kind<f32_32x32x8_f16>,
-                                         vector_shapes = {M = 1, N = 1, K = 8},
+                                         vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>,
                                          max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_interface_explicit
@@ -340,7 +389,7 @@ func.func @mma_elements_per_thread_interface_explicit() attributes {
 #hw_constraint_32_threads_explicit = #wave.hardware_constraint<threads_per_wave = 32,
                                                      waves_per_block = [1, 1, 1],
                                                      mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-                                                     vector_shapes = {M = 1, N = 1, K = 16},
+                                                     vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>,
                                                      max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_32_threads_explicit
@@ -366,7 +415,7 @@ func.func @mma_elements_per_thread_32_threads_explicit() attributes {
 #hw_constraint_128_threads_explicit = #wave.hardware_constraint<threads_per_wave = 128,
                                                       waves_per_block = [1, 1, 1],
                                                       mma_type = #wave.mma_kind<f32_32x32x8_f16>,
-                                                      vector_shapes = {M = 1, N = 1, K = 8},
+                                                      vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>,
                                                       max_bits_per_load = 128>
 
 // CHECK-LABEL: @mma_elements_per_thread_128_threads_explicit

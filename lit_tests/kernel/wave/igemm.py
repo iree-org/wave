@@ -189,7 +189,7 @@ def test_igemm():
     #  CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 
     # Input load must be contiguous.
-    #      CHECK: %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}], %{{.*}}, %{{.*}} : memref<2x64x64x640xf16
+    #      CHECK: vector.load %{{.*}}[%{{.*}}] : memref<1073741822xf16, strided<[1]>>, vector<2xf16>
 
     # Unrolled result store
-    #      CHECK-COUNT-32: vector.maskedstore {{.*}} : memref<{{.*}}xf32{{.*}}>
+    #      CHECK: vector.store {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>>, vector<8xf16>

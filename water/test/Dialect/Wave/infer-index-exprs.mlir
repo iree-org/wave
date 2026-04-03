@@ -99,14 +99,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
         threads_per_wave = 64,
         waves_per_block = [2, 3, 4],
         mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-        vector_shapes = {M = 1 : i64, N = 1 : i64, K = 8 : i64}>
+        vector_shapes = #wave.symbol_mapping<@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>>
     ],
     wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64}>
   } {
     // CHECK: wave.mma
     // Four per-value dicts: lhs (M,K), rhs (K,N), acc (M,N), result (M,N); MMA
     // kind fixes M/N/K vector sizes at 16 : i64 regardless of hardware hints.
-    // CHECK-SAME: vector_shape [{K : 16 : i64, M : 16 : i64}, {K : 16 : i64, N : 16 : i64}, {M : 16 : i64, N : 16 : i64}, {M : 16 : i64, N : 16 : i64}]
+    // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @K = 16 : i64>, #wave.symbol_mapping<@N = 16 : i64, @K = 16 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>, #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -455,6 +455,94 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
+// Test that index expressions don't propagate between a ScaledMMA and a regular
+// MMA in a chain. The ScaledMMA appears first and should receive higher priority
+// in the joint ordering. The cast between them retains the ScaledMMA result's
+// layout, and the regular MMA independently initializes its own indices.
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK-LABEL: @scaled_mma_mma_chain_without_propagation
+  func.func @scaled_mma_mma_chain_without_propagation(
+    %a: !wave.tensor<[@M, @K] of f8E5M2>,
+    %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+    %b: !wave.tensor<[@N, @K] of f8E5M2>,
+    %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+    %c1: !wave.tensor<[@M, @N] of f32>,
+    %e: !wave.tensor<[@P, @N] of f16>,
+    %c2: !wave.tensor<[@M, @P] of f32>
+  ) attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64,
+                                waves_per_block = [2, 3, 4]>
+    ]
+  } {
+    // ScaledMMA operation
+    // CHECK: wave.scaled_mma
+    // LHS
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK: }, {
+    // LHS scale
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK: }, {
+    // RHS
+    // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // RHS scale
+    // CHECK-DAG: K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Accumulator
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Result (matches the accumulator)
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %result1 = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c1 {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+
+    // Cast should have index expressions from the earlier scaled mma because it
+    // is given higher priority.
+    // CHECK: wave.cast
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %result1_casted = wave.cast %result1
+      : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
+
+    // Regular MMA operation using result from ScaledMMA as operand.
+    // The index expressions should be independently initialized for this MMA,
+    // not propagated from %result1_casted
+    // CHECK: wave.mma
+    // LHS
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK: }, {
+    // RHS
+    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Accumulator
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // Result (matches the accumulator)
+    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    %result2 = wave.mma %result1_casted, %e, %c2 {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (!wave.tensor<[@M, @N] of f16>, !wave.tensor<[@P, @N] of f16>, !wave.tensor<[@M, @P] of f32>)
+      -> !wave.tensor<[@M, @P] of f32>
+
+    return
+  }
+}
+
+// -----
+
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK: @mma_32x32x8_f16
   func.func @mma_32x32x8_f16(%a: !wave.tensor<[@M, @K] of f16>,
@@ -599,6 +687,98 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK: @scaled_mma_16x16x128_f8
+  func.func @scaled_mma_16x16x128_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
+                              %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+                              %b: !wave.tensor<[@N, @K] of f8E5M2>,
+                              %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.scaled_mma
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: vector_shape
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+  // CHECK: @scaled_mma_16x16x128_f4
+  func.func @scaled_mma_16x16x128_f4(%a: !wave.tensor<[@M, @K] of f4E2M1FN>,
+                              %a_scale: !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+                              %b: !wave.tensor<[@N, @K] of f4E2M1FN>,
+                              %b_scale: !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.scaled_mma
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: }, {
+    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK: vector_shape
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K = 128 : i64>
+    // CHECK:  #wave.symbol_mapping<@N = 16 : i64, @K32 = 4 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>
+    %r = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+      : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@N, @K] of f4E2M1FN>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
+         !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
   }
 }
@@ -1047,7 +1227,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     // CHECK: wave.register
     // Backward propagation from MMA: register gets M index expr only (not N).
-    // CHECK:     M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK:     M :
     // CHECK-NOT: N :
     %reg = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
 
@@ -1119,7 +1299,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
@@ -1128,24 +1308,24 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK-DAG: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK-DAG: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.add
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK-DAG: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK-DAG: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %sum, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
@@ -1161,7 +1341,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
@@ -1172,7 +1352,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * 8 + WG0 * BLOCK_M, 8, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK-DAG: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
@@ -1188,7 +1368,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 16 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 16 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
@@ -1199,7 +1379,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64 + WG0 * BLOCK_M, 1, 16)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 8, 1)>
-    // CHECK-SAME: vector_shape [{M : 4 : i64, N : 16 : i64}]
+    // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 16 : i64>]
     wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
@@ -1218,7 +1398,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@B, @M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
@@ -1230,7 +1410,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK-DAG: B : <[] -> (0, 1, 1)>
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
 
     // Write should preserve the same index expressions
@@ -1238,7 +1418,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK-DAG: B : <[] -> (0, 1, 1)>
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %a_reg, %output : !wave.tensor<[@B, @M, @N] of f32, <register>>, !wave.tensor<[@B, @M, @N] of f32>
 
     return
@@ -1260,7 +1440,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %out2: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
@@ -1269,32 +1449,32 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.add
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // Both writes establish the same index expressions
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %sum, %out1 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
-    // CHECK: vector_shape [{M : 4 : i64, N : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %a_reg, %out2 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
@@ -1311,20 +1491,20 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@P, @Q] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {P = 1 : i64, Q = 1 : i64}>
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>>
     ],
     wave.hyperparameters = #wave.hyperparameters<{P = 8 : i64, Q = 16 : i64}>
   } {
     // CHECK: wave.read
     // CHECK-DAG: P : <[] -> (0, 1, 1)>
     // CHECK-DAG: Q : <[] -> (0, 1, 1)>
-    // CHECK: vector_shape [{P : 1 : i64, Q : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@P, @Q] of f32>) -> !wave.tensor<[@P, @Q] of f32, <register>>
 
     // CHECK: wave.write
     // CHECK-DAG: P : <[] -> (0, 1, 1)>
     // CHECK-DAG: Q : <[] -> (0, 1, 1)>
-    // CHECK: vector_shape [{P : 1 : i64, Q : 1 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>]
     wave.write %a_reg, %output : !wave.tensor<[@P, @Q] of f32, <register>>, !wave.tensor<[@P, @Q] of f32>
 
     return
@@ -1345,7 +1525,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %output: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>,
       #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>,
@@ -1354,10 +1534,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
   } {
     // CHECK: wave.read
-    // CHECK: vector_shape [{K : 16 : i64, M : 16 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @K = 16 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16, <register>>
     // CHECK: wave.read
-    // CHECK: vector_shape [{K : 16 : i64, N : 16 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@N = 16 : i64, @K = 16 : i64>]
     %b_reg = wave.read %b : (!wave.tensor<[@N, @K] of f16>) -> !wave.tensor<[@N, @K] of f16, <register>>
     %mma = wave.mma %a_reg, %b_reg, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
@@ -1367,7 +1547,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.write
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M
     // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N
-    // CHECK: vector_shape [{M : 16 : i64, N : 16 : i64}]
+    // CHECK: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     wave.write %mma, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     return
@@ -1446,7 +1626,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1],
                                 mma_type = #wave.mma_kind<f32_16x16x16_f16>,
-                                vector_shapes = {M = 4 : i64}>
+                                vector_shapes = #wave.symbol_mapping<@M = 4 : i64>>
     ]
   } {
     // CHECK: wave.write
@@ -1466,7 +1646,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %b: !wave.tensor<[@M, @N] of f32>
   ) attributes {
     wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 4 : i64, N = 1 : i64}>,
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>>,
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],

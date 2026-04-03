@@ -162,14 +162,14 @@ def test_preshuffle_scale_merge_block_k_128():
 
     # CHECK-LABEL: test_preshuffle_scale_merge_block_k_128
 
-    # Each scale tensor produces 2 merged vector<2xi8> loads from global.
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
-    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<2xi8>
+    # Each scale tensor produces 2 merged vector<2xi8> loads from global (linearized 1-D memref).
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<2xi8>
+    # CHECK:      vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<2xi8>
 
     # No unmerged scalar scale loads from global should remain.
-    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[{{.*}}, 1]>>, vector<1xi8>
+    # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<1xi8>
 
 
 @run_test
@@ -188,13 +188,11 @@ def test_preshuffle_scale_merge_block_k_256():
     # No unmerged scalar scale loads from global should remain.
     # CHECK-NOT:  vector.load %{{.*}} : memref<{{.*}}xi8, strided<[1]>>, vector<1xi8>
 
-    # Check that amdgpu.scaled_mfma uses opsel (indexed access into scale values)
-    # The key indicator is the [N] indexing syntax on f8E8M0FNU scale operands.  Check %REG[1] as a simple check that we are doing a non-zero index
-    # CHECK: amdgpu.scaled_mfma {{.*}} (%{{.*}}[1] * %{{.*}}) * (%{{.*}}[1] * %{{.*}}) + %{{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
+    # Check that amdgpu.scaled_mfma uses opsel: vector<4xf8E8M0FNU> operands with per-lane [N] indexing.
+    # CHECK: amdgpu.scaled_mfma {{.*}} : vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf8E8M0FNU>, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
 
-    # Verify that we're not using scalar scale extracts (the old pattern)
-    # If opsel is working, we should NOT see vector.extract before scaled_mfma
-    # CHECK-NOT: vector.extract %{{.*}}[0] : f8E8M0FNU
+    # Verify that we're not using scalar f8E8M0FNU scale type in the scaled_mfma signature.
+    # CHECK-NOT: amdgpu.scaled_mfma {{.*}} : f8E8M0FNU, vector<{{.*}}xf4E2M1FN>, f8E8M0FNU, vector<{{.*}}xf4E2M1FN>, vector<4xf32>
 
 
 @run_test

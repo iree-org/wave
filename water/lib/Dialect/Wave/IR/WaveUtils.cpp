@@ -5,10 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveUtils.h"
-#include "mlir/IR/Attributes.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveDialect.h"
 
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 
@@ -290,4 +291,26 @@ LogicalResult wave::verifyHyperparameterAcyclicity(
                        << llvm::join(names, ", ");
   }
   return llvm::success();
+}
+
+LogicalResult
+wave::collectWaveConstraints(Operation *top,
+                             DenseMap<Operation *, Attribute> &constraints) {
+  auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
+  auto walkResult = top->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (auto attr = op->getAttrOfType<ArrayAttr>(
+            wave::WaveDialect::kWaveConstraintsAttrName)) {
+      constraints[op] = attr;
+      return WalkResult::skip();
+    }
+    if (op->getDialect() == waveDialect) {
+      op->emitError()
+          << "wave dialect operation without constraints on an ancestor";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
+  return success();
 }

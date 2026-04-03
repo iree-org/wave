@@ -82,7 +82,7 @@ func.func @mma_operands_from_reads(
     %mem_b: !wave.tensor<[@N, @K] of f16, <global>>,
     %mem_c: !wave.tensor<[@M, @N] of f32, <global>>,
     %out: !wave.tensor<[@M, @N] of f32, <global>>)
-  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, K = 32}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64, K = 32}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
 
   %a = wave.read %mem_a { elements_per_thread = 8 } : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
   %b = wave.read %mem_b { elements_per_thread = 8 } : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
@@ -363,7 +363,7 @@ func.func @read_register_propagation(%mem: !wave.tensor<[@M] of f16, <shared>>) 
 // CHECK: #wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
 // CHECK-LABEL: @mma_compute_lhs_from_rhs
-func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
   // LHS without elements_per_thread - will be computed from RHS + MMA constraints.
   %lhs_init = arith.constant 0.0 : f16
   // CHECK: wave.register {{.*}} : vector<8xf16>
@@ -389,7 +389,7 @@ func.func @mma_compute_lhs_from_rhs(%mem1: !wave.tensor<[@N, @K] of f16, <global
 // CHECK: #wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
 // CHECK-LABEL: @mma_compute_rhs_from_lhs
-func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
   // LHS properly initialized through read operation.
   // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K] of f16, <global>>) -> vector<8xf16>
   %lhs = wave.read %mem1 {elements_per_thread = 8} : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
@@ -416,7 +416,7 @@ func.func @mma_compute_rhs_from_lhs(%mem1: !wave.tensor<[@M, @K] of f16, <global
 // CHECK: #wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: @mma_compute_both_lhs_rhs
-  func.func @mma_compute_both_lhs_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@N, @K] of f16, <global>>, %mem3: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+  func.func @mma_compute_both_lhs_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@N, @K] of f16, <global>>, %mem3: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
     // Both LHS and RHS without elements_per_thread - can compute from MMA formulas.
     %lhs_init = arith.constant 0.0 : f16
     // CHECK: wave.register {{.*}} : vector<8xf16>
@@ -441,7 +441,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // Test MMA error when operand has wrong elements_per_thread
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @mma_operand_mismatch(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+  func.func @mma_operand_mismatch(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
     // LHS with wrong elements_per_thread (should be 8, not 4).
     %lhs = wave.read %mem1 {elements_per_thread = 4} : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
 
@@ -462,7 +462,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   // CHECK-LABEL: func.func @batched_mma
-  func.func @batched_mma(%mem1: !wave.tensor<[@B, @M, @K] of f16, <global>>, %mem2: !wave.tensor<[@B, @N, @K] of f16, <global>>, %mem3: !wave.tensor<[@B, @M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{B = 2, M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = {B = 1, M = 1, N = 1, K = 16}, max_bits_per_load = 128>]} {
+  func.func @batched_mma(%mem1: !wave.tensor<[@B, @M, @K] of f16, <global>>, %mem2: !wave.tensor<[@B, @N, @K] of f16, <global>>, %mem3: !wave.tensor<[@B, @M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{B = 2, M = 16, N = 16, K = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 32, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = <@B = 1 : i64, @M = 1 : i64, @N = 1 : i64, @K = 16 : i64>, max_bits_per_load = 128>]} {
     %lhs_init = arith.constant 0.0 : f16
     %lhs = wave.register %lhs_init : !wave.tensor<[@B, @M, @K] of f16, <register>>
     %rhs_init = arith.constant 0.0 : f16
@@ -485,7 +485,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   // CHECK-LABEL: @iterate_with_vectors_after_ept
   func.func @iterate_with_vectors_after_ept(%mem: !wave.tensor<[@M] of f32, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, I = 4}>,
-                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_32x32x8_f16>, vector_shapes = {M = 1}>]} {
+                wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_32x32x8_f16>, vector_shapes = <@M = 1 : i64>>]} {
 
     // Read into register tensor - this will become a vector after PropagateElementsPerThread.
     // CHECK: %[[INIT:.*]] = wave.read {{.*}} : (!wave.tensor<[@M] of f32, <global>>) -> vector<8xf32>
@@ -751,7 +751,7 @@ func.func @reshape_backward_multiple_operands(
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>]
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
 // CHECK-LABEL: @bitcast_forward_propagation
-func.func @bitcast_forward_propagation(%mem: !wave.tensor<[@M, @K2] of i8, <global>>, %out_mem: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, M = 16, N = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>, vector_shapes = {M = 1, N = 1, K = 128, K2 = 64}, max_bits_per_load = 128>]} {
+func.func @bitcast_forward_propagation(%mem: !wave.tensor<[@M, @K2] of i8, <global>>, %out_mem: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, M = 16, N = 16}>, wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 128 : i64, @K2 = 64 : i64>, max_bits_per_load = 128>]} {
   // Read 16 i8 elements (K2 dimension, 16 elements per thread)
   // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> vector<16xi8>
   %data = wave.read %mem {elements_per_thread = 16} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
@@ -759,6 +759,60 @@ func.func @bitcast_forward_propagation(%mem: !wave.tensor<[@M, @K2] of i8, <glob
   // Bitcast: 16 i8 -> 32 f4 (doubles EPT from 16 to 32)
   // CHECK: wave.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
   %bitcasted = wave.bitcast %data : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+  return
+}
+}
+
+// -----
+
+// Test scaled MMA with i8 inputs + bitcast to f4, mirroring the PyWave pattern:
+//   a: Memory[M, K/2, i8]  ->  read  ->  bitcast to f4E2M1FN  ->  scaled_mma
+// EPT flows: read produces 16 xi8, bitcast doubles to 32 xf4, scaled_mma
+// consumes 32 xf4 for data, 1 xf8E8M0FNU for scales, 4 xf32 for acc.
+// CHECK: #wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
+// CHECK-LABEL: @scaled_mma_backward_propagation
+func.func @scaled_mma_backward_propagation(
+    %a_mem: !wave.tensor<[@M, @K2] of i8, <global>>,
+    %a_scale_mem: !wave.tensor<[@M, @K32] of f8E8M0FNU, <global>>,
+    %b_mem: !wave.tensor<[@N, @K2] of i8, <global>>,
+    %b_scale_mem: !wave.tensor<[@N, @K32] of f8E8M0FNU, <global>>,
+    %acc_mem: !wave.tensor<[@M, @N] of f32, <global>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16, N = 16}>,
+      wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x128_f8f6f4>, vector_shapes = <@M = 1 : i64, @N = 1 : i64, @K = 128 : i64, @K2 = 64 : i64, @K32 = 4 : i64>, max_bits_per_load = 128>]} {
+
+  // LHS: read i8 from [M, K2] -> 16 xi8, then bitcast to 32 xf4
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> vector<16xi8>
+  %a_i8 = wave.read %a_mem {elements_per_thread = 16} : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
+  // CHECK: wave.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
+  %a_f4 = wave.bitcast %a_i8 : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
+
+  // LHS scale: read f8E8M0FNU from [M, K32] -> 1 xf8E8M0FNU
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @K32] of f8E8M0FNU, <global>>) -> vector<1xf8E8M0FNU>
+  %a_scale = wave.read %a_scale_mem {elements_per_thread = 1} : (!wave.tensor<[@M, @K32] of f8E8M0FNU, <global>>) -> !wave.tensor<[@M, @K32] of f8E8M0FNU, <register>>
+
+  // RHS: read i8 from [N, K2] -> 16 xi8, then bitcast to 32 xf4
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@N, @K2] of i8, <global>>) -> vector<16xi8>
+  %b_i8 = wave.read %b_mem {elements_per_thread = 16} : (!wave.tensor<[@N, @K2] of i8, <global>>) -> !wave.tensor<[@N, @K2] of i8, <register>>
+  // CHECK: wave.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
+  %b_f4 = wave.bitcast %b_i8 : !wave.tensor<[@N, @K2] of i8, <register>> to !wave.tensor<[@N, @K] of f4E2M1FN, <register>>
+
+  // RHS scale: read f8E8M0FNU from [N, K32] -> 1 xf8E8M0FNU
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@N, @K32] of f8E8M0FNU, <global>>) -> vector<1xf8E8M0FNU>
+  %b_scale = wave.read %b_scale_mem {elements_per_thread = 1} : (!wave.tensor<[@N, @K32] of f8E8M0FNU, <global>>) -> !wave.tensor<[@N, @K32] of f8E8M0FNU, <register>>
+
+  // ACC: M*N / threads = 16*16/64 = 4
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<4xf32>
+  %acc = wave.read %acc_mem {elements_per_thread = 4} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.scaled_mma {{.*}} : (vector<32xf4E2M1FN>, vector<1xf8E8M0FNU>, vector<32xf4E2M1FN>, vector<1xf8E8M0FNU>, vector<4xf32>) -> vector<4xf32>
+  %result = wave.scaled_mma %a_f4, %a_scale, %b_f4, %b_scale, %acc
+    {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
+    : (!wave.tensor<[@M, @K] of f4E2M1FN, <register>>,
+       !wave.tensor<[@M, @K32] of f8E8M0FNU, <register>>,
+       !wave.tensor<[@N, @K] of f4E2M1FN, <register>>,
+       !wave.tensor<[@N, @K32] of f8E8M0FNU, <register>>,
+       !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   return
 }
 }

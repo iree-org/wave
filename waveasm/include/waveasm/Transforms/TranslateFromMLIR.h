@@ -258,6 +258,9 @@ public:
   /// Create a virtual AGPR type
   ARegType createARegType(int64_t size = 1, int64_t alignment = 1);
 
+  /// Create an SCC flag type
+  SCCType createSCCType();
+
   /// Create an immediate type with a value
   ImmType createImmType(int64_t value);
 

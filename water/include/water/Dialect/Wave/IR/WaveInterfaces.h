@@ -465,6 +465,7 @@ private:
 struct ElementsPerThreadInit {
   wave::WaveSymbolAttr threadXDimension;
   wave::WaveHyperparameterAttr hyperparams;
+  wave::HardwareConstraintAttr hardwareConstraint;
 };
 
 namespace detail {
@@ -616,10 +617,21 @@ public:
 
 // Lattice for propagating index expressions across wave dialect operations.
 // In addition to the bottom and top states, it can represent a concrete state
-// manifested as a dictionary attribute mapping symbol names to index mappings.
-// The JOIN function is defined similarly to other lattices with special
-// handling for combining thread-dependent and thread-independent index
-// expressions.
+// including:
+//   - a dictionary attribute mapping symbol names to index mappings;
+//   - a dictionary attribute mapping symbol names to vector shapes;
+//   - a priority for each symbol;
+//   - a separate, "source" vector shape and priority referring to the operation
+//     where the lattice initially originated.
+// Source vector shape is ignored for the lowest-priority entries, typically
+// default-constructed, since they don't originate from any "meaningful"
+// operation such as Mma or Write.
+//
+// XXX: the latter is required for compatibility with the python prototype and
+// its propagation heuristic, it must be revised towards a more principled
+// approach.
+// TODO: consider using a single dictionary attribute with one entry per symbol
+// rather than separate ones for the three fields.
 class IndexExprsLatticeStorage {
 public:
   // Priorities for specific operations that may be used.
@@ -632,11 +644,19 @@ public:
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue, int32_t priority,
-                           mlir::DictionaryAttr vectorShape);
+                           wave::WaveSymbolMappingAttr vectorShape);
   IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
                            mlir::DictionaryAttr priorities,
-                           mlir::DictionaryAttr vectorShape);
+                           wave::WaveSymbolMappingAttr vectorShape);
 
+private:
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+                           mlir::DictionaryAttr priorities,
+                           wave::WaveSymbolMappingAttr vectorShape,
+                           wave::WaveSymbolMappingAttr sourceVectorShape,
+                           int32_t sourceVectorShapePriority);
+
+public:
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
 
@@ -665,7 +685,21 @@ public:
 
   // Returns the vector shape stored in the lattice instance, or null if the
   // lattice instance is a top or a bottom or has no vector shape set.
-  mlir::DictionaryAttr getVectorShape() const;
+  wave::WaveSymbolMappingAttr getVectorShape() const;
+
+  // Returns the source vector shape stored in this lattice, or null if unset
+  // or lattice is top/bottom. This is the vector shape from the originating
+  // operation, propagated independently from the per-key-joined `vectorShape`.
+  wave::WaveSymbolMappingAttr getSourceVectorShape() const;
+
+  // Returns the priority associated with the source vector shape.
+  int32_t getSourceVectorShapePriority() const;
+
+  // Return a copy of this lattice value with the given source vector shape and
+  // priority, leaving all other fields unchanged.
+  IndexExprsLatticeStorage
+  withSourceVectorShape(wave::WaveSymbolMappingAttr shape,
+                        int32_t priority) const;
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -675,9 +709,16 @@ public:
 
   // Return the join of vector shapes if present in two lattices, null if both
   // vector shapes are absent or failure if there is a conflict.
-  static llvm::FailureOr<mlir::DictionaryAttr>
+  static llvm::FailureOr<wave::WaveSymbolMappingAttr>
   getJoinedVectorShape(const IndexExprsLatticeStorage &lhs,
                        const IndexExprsLatticeStorage &rhs);
+
+  // Return the join of source vector shapes from two lattices as a
+  // (shape, priority) pair. Returns failure if both sides have non-null
+  // source vector shapes with the same priority but different values.
+  static llvm::FailureOr<std::pair<wave::WaveSymbolMappingAttr, int32_t>>
+  getJoinedSourceVectorShape(const IndexExprsLatticeStorage &lhs,
+                             const IndexExprsLatticeStorage &rhs);
 
   // Join two lattice instances and return the result.
   static IndexExprsLatticeStorage join(const IndexExprsLatticeStorage &lhs,
@@ -724,11 +765,21 @@ private:
   // per-instance heap allocation since attrs are interned.
   mlir::DictionaryAttr priorities;
 
-  // The vector shape associated with this lattice value. This is a dictionary
-  // mapping symbol names to vector dimension sizes. Two concrete lattice values
-  // with different vector shapes and equal priority cannot be joined and will
-  // result in top.
-  mlir::DictionaryAttr vectorShape;
+  // The vector shape associated with this lattice value. This is a mapping from
+  // wave symbols to vector dimension sizes. Two concrete lattice values with
+  // different vector shapes and equal priority cannot be joined and will result
+  // in top.
+  wave::WaveSymbolMappingAttr vectorShape;
+
+  // The vector shape from the originating operation, propagated as a unit with
+  // its own priority independently from the per-key-joined `vectorShape` field.
+  // During join, the higher-priority value wins. If priorities are equal, two
+  // different values cause the lattice to reach top while two identical values
+  // join cleanly.
+  wave::WaveSymbolMappingAttr sourceVectorShape;
+
+  // Priority associated with `sourceVectorShape`.
+  int32_t sourceVectorShapePriority = 0;
 
   // State flags.
   constexpr static unsigned kUninitializedState = 0;
@@ -736,13 +787,7 @@ private:
   constexpr static unsigned kUndecidableState = 2;
 };
 
-void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value);
 } // namespace wave
-
-namespace llvm {
-llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
-                              const wave::IndexExprsLatticeStorage &value);
-} // namespace llvm
 
 namespace wave {
 namespace detail {
@@ -757,43 +802,6 @@ identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
                             llvm::StringRef toName,
                             wave::EmitErrorFn emitError);
 
-// Heuristic to stop index expression propagation. It stops
-// propagation of index expressions if any of the following conditions is met:
-//   (1) the propagation would happen to the result of the MMA op;
-//   (2) any of the symbols in the shape of the "to" _value_ are not present in
-//   the "from" vector shape; (3) there are dimensions in the "to" index
-//   expression don't correspond to non-unit entires in the "from" vector shape
-//   (when there are less "to" dimensions than entries in the "from" vector
-//   shape); (4) there are non-unit entries in the "vector" shape that don't
-//   correspond to a "to" index expression (when there are less entires in the
-//   "from" vector shape).
-// XXX: conditions 2-4 are carried over from the python prototype and are not
-// principled.
-//
-// Defined in WaveOps.cpp to uss specific op names, which we don't want in
-// interfaces.
-// TODO: move all the index expr logic to one file and avoid this spreadout.
-bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
-                               const wave::IndexExprsLatticeStorage &to,
-                               mlir::Value toValue);
-
-// Build thread-independent index mapping for a single tensor type and append to
-// symbolMappings. Used by identity and reduction index expr initialization.
-// Defined in WaveOps.cpp to use mixInThreadIndependentConstraints function
-// template that needs access to specific ops, which we don't want in
-// interfaces.
-// TODO: move all the index expr logic to one file and avoid this spreadout.
-llvm::LogicalResult buildThreadIndependentIndexMappings(
-    mlir::Operation *op, mlir::Type type,
-    const IndexExprsAnalysisInit &initObject,
-    llvm::SmallVectorImpl<mlir::NamedAttribute> &symbolMappings);
-
-// Create a new vector shape dictionary attribute with only the provided symbols
-// present.
-mlir::DictionaryAttr
-filterVectorShape(mlir::DictionaryAttr vectorShape,
-                  llvm::ArrayRef<wave::WaveSymbolAttr> symbols);
-
 // Default implementation for interface: initialize index expressions with
 // thread-independent constraints for all values returned by
 // getIndexExprValuesAndDescriptions. Forward analysis initializes results,
@@ -807,15 +815,6 @@ llvm::LogicalResult defaultInitializeIndexExprsBackward(
     llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
     const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError,
     wave::EmitDelayedErrorFn &delayedErrorEmitter);
-
-// Check the index expressions is a concrete value rather lattice top/bottom and
-// append it to the indexExprs list. If it is lattice top/bottom, report an
-// error and return failure.
-llvm::LogicalResult
-checkAndAppendIndexExpr(mlir::Location loc,
-                        const IndexExprsLatticeStorage &expr,
-                        const llvm::Twine &description,
-                        llvm::SmallVectorImpl<mlir::Attribute> &indexExprs);
 
 static inline std::function<void(llvm::raw_ostream &, unsigned)>
 defaultGetIndexExprValuesAndDescriptions(

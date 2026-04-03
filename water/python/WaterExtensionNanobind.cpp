@@ -726,10 +726,6 @@ struct PyWaveSymbolMappingAttr
               throw nb::type_error(
                   "Symbolic dimension dictionary value must be an attribute");
             }
-            if (!mlirAttributeIsAWaveExprListAttr(valueAttr)) {
-              throw nb::type_error("Symbolic dimension dictionary value must "
-                                   "be a WaveExprListAttr");
-            }
 
             keys.push_back(keyAttr);
             values.push_back(valueAttr);

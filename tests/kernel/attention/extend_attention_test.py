@@ -399,6 +399,7 @@ def testExtendAttention(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         wave_runtime=(True if use_wave_runtime else False),
+        linearize_reads=False,
     )
     options = set_default_run_config(options)
     extend_attention = wave_compile(options, extend_attention)
@@ -537,6 +538,7 @@ def testExtendRpeAttention(
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        linearize_reads=False,
     )
     options = set_default_run_config(options)
     extend_attention_rpe = wave_compile(options, extend_attention_rpe)

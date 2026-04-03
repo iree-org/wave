@@ -76,6 +76,12 @@ llvm::LogicalResult verifyHyperparameterAcyclicity(
     wave::WaveHyperparameterAttr hyperparams, mlir::MLIRContext *ctx,
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError);
 
+/// Populates `constraints` with a mapping from an operation with a Wave
+/// constraints attribute attached to that attribute.
+llvm::LogicalResult collectWaveConstraints(
+    mlir::Operation *top,
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints);
+
 } // namespace wave
 
 namespace llvm {

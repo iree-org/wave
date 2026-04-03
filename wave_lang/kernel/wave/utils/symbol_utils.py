@@ -509,6 +509,11 @@ def get_induction_symbol(axis: IndexSymbol):
 _INDUCTION_SYMBOL_PREFIX = "$ARG"
 
 
+def get_iv_symbols(expr: sympy.Expr) -> list[sympy.Symbol]:
+    """Return all induction-variable symbols in *expr*."""
+    return [s for s in expr.free_symbols if str(s).startswith(_INDUCTION_SYMBOL_PREFIX)]
+
+
 def collect_allowed_induction_symbols(fx_node) -> set[IndexSymbol]:
     """Walk parent graphs from `fx_node` to collect in-scope induction symbols.
 

@@ -69,6 +69,10 @@ VALU_UNITS = index_symbol("$VALU_UNITS")
 SHUFFLE_UNITS = index_symbol("$SHUFFLE_UNITS")
 
 
+# Linearized index symbol -- signals a pre-flattened 1-D physical offset.
+LINEAR_INDEX = index_symbol("$LINEAR_INDEX")
+
+
 # Iteration symbols.
 def GET_ITER_ARG(i: int):
     return sympy.Symbol(f"$GET_ITER_ARG_{i}")

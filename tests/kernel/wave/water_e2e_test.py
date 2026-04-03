@@ -10,9 +10,14 @@ import torch
 from torch.testing import assert_close
 
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.constraints import MMAType, ScaledMMAType
+from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import PersistentEmitter
 from wave_lang.kernel.wave.templates import AttentionShape
+from wave_lang.kernel.wave.utils.mxfp_utils import (
+    generate_gemm_afp4wfp4_inputs,
+    torchScaledGemmMXFP4,
+)
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 from wave_lang.kernel.wave.water import apply_water_middle_end_passes
@@ -24,7 +29,7 @@ from wave_lang.support.location_config import (
     LocationCaptureLevel,
 )
 
-from tests.kernel.common.utils import require_e2e, require_water_and_ee
+from tests.kernel.common.utils import require_cdna4, require_e2e, require_water_and_ee
 
 
 def _run_matmul_water_e2e(minimize_shared_allocs: bool):
@@ -46,6 +51,7 @@ def _run_matmul_water_e2e(minimize_shared_allocs: bool):
     options_mlir = WaveCompileOptions(
         subs=hyperparams,
         compile_to_mlir=True,
+        linearize_reads=False,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
         minimize_shared_allocs=minimize_shared_allocs,
@@ -120,6 +126,7 @@ def test_attention_water():
     options_mlir = WaveCompileOptions(
         subs=hyperparams,
         compile_to_mlir=True,
+        linearize_reads=False,
         # TODO(#982): this pass creates IR that appears malformed, though pywave
         # manages to execute it.
         enable_mark_hardware_transpose_candidates=False,
@@ -158,3 +165,62 @@ def test_attention_water():
     )
 
     assert_close(output, expected, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+
+@require_e2e
+@require_water_and_ee
+@require_cdna4
+def test_scaled_mma_mxfp4_water_e2e():
+    """Test scaled MMA (MXFP4) through the Water middle-end pipeline on MI350x."""
+    from wave_lang.kernel.wave.templates.gemm import get_scaled_gemm_kernel
+
+    M_val, N_val, K_val = 1024, 1024, 1024
+
+    scaled_gemm, hyperparams = get_scaled_gemm_kernel(
+        shape=(M_val, N_val, K_val),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+    )
+
+    # Step 1: Compile to Wave-dialect MLIR
+    options_mlir = WaveCompileOptions(
+        linearize_reads=False,
+        subs=hyperparams,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options_mlir = set_default_run_config(options_mlir)
+
+    compiled_kernel = wave_compile(options_mlir, scaled_gemm)
+    trace = compiled_kernel.compiled_graph
+    kernel_constraints = scaled_gemm.constraints
+
+    with PersistentEmitter() as emitter:
+        wave_dialect_mlir, diagnostics, _ = emitter.emit_wave_dialect(
+            trace, kernel_constraints, options_mlir
+        )
+    assert (
+        len(error_diagnostics(diagnostics)) == 0
+    ), f"Should have no error diagnostics, got: {diagnostics}"
+
+    # Step 2: Lower through Water middle-end
+    lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
+
+    # Step 3: Execute and verify
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs((M_val, N_val, K_val))
+    out = device_zeros(M_val, N_val, dtype=torch.float32)
+
+    options_e2e = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+        override_mlir=lowered_mlir,
+    )
+    options_e2e = set_default_run_config(options_e2e)
+
+    compiled_e2e = wave_compile(options_e2e, scaled_gemm)
+    compiled_e2e(x, x_scales, w.T.contiguous(), w_scales, out)
+
+    expected = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+    assert_close(out, expected, rtol=1e-3, atol=1e-3, check_dtype=False)

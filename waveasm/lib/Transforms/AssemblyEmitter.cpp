@@ -78,6 +78,9 @@ std::string KernelGenerator::resolveValue(Value value) {
     return "0";
   }
 
+  if (isa<SCCType>(ty))
+    return "scc";
+
   return "<unknown>";
 }
 
@@ -287,9 +290,13 @@ std::string KernelGenerator::emitDefaultFormat(Operation *op,
   }
 
   for (Value result : op->getResults()) {
+    if (isa<SCCType>(result.getType()))
+      continue;
     operands.push_back(resolveValue(result));
   }
   for (Value operand : op->getOperands()) {
+    if (isa<SCCType>(operand.getType()))
+      continue;
     if (isScalarOp) {
       operands.push_back(resolveScalarValue(operand));
     } else {
@@ -841,13 +848,20 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
       .Case<YieldOp>(
           [&](YieldOp) -> std::optional<std::string> { return std::nullopt; })
       .Case<S_CMP_LT_U32, S_CMP_EQ_U32, S_CMP_LE_U32, S_CMP_GT_U32,
-            S_CMP_GE_U32, S_CMP_LT_I32, S_CMP_EQ_I32, S_CMP_LE_I32,
-            S_CMP_GT_I32, S_CMP_GE_I32>(
+            S_CMP_GE_U32, S_CMP_NE_U32, S_CMP_LT_I32, S_CMP_EQ_I32,
+            S_CMP_LE_I32, S_CMP_GT_I32, S_CMP_GE_I32, S_CMP_NE_I32>(
           [&](auto cmpOp) -> std::optional<std::string> {
             llvm::StringRef opName = cmpOp->getName().getStringRef();
             llvm::StringRef mnemonic = opName;
             if (opName.starts_with("waveasm.")) {
               mnemonic = opName.drop_front(8);
+            }
+            std::string mnemStr;
+            if (mnemonic.contains("_ne_")) {
+              mnemStr = mnemonic.str();
+              size_t pos = mnemStr.find("_ne_");
+              mnemStr.replace(pos, 4, "_lg_");
+              mnemonic = mnemStr;
             }
             llvm::SmallVector<std::string> operands;
             for (Value operand : cmpOp->getOperands()) {
@@ -868,6 +882,8 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             // Only emit the first result (dst), not the second (scc)
             operands.push_back(resolveValue(addOp.getDst()));
             for (Value operand : addOp->getOperands()) {
+              if (isa<SCCType>(operand.getType()))
+                continue;
               operands.push_back(resolveValue(operand));
             }
             return formatter.format(mnemonic, operands);
@@ -976,6 +992,15 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               operands.push_back("vcc");
             return prefix + formatter.format(carryOp->getName().stripDialect(),
                                              operands);
+          })
+
+      .Case<S_CSELECT_B32>(
+          [&](S_CSELECT_B32 selOp) -> std::optional<std::string> {
+            llvm::SmallVector<std::string> operands;
+            operands.push_back(resolveValue(selOp.getDst()));
+            operands.push_back(resolveScalarValue(selOp.getSrc0()));
+            operands.push_back(resolveScalarValue(selOp.getSrc1()));
+            return formatter.format("s_cselect_b32", operands);
           })
 
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {

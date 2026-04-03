@@ -1,5 +1,6 @@
 add_mlir_dialect_library(MLIRWaveDialect
   IndexExpr.cpp
+  IndexExprInference.cpp
   WaveAttrs.cpp
   WaveDialect.cpp
   WaveInterfaces.cpp
@@ -11,6 +12,7 @@ add_mlir_dialect_library(MLIRWaveDialect
   MLIRWaveIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAnalysis
   MLIRControlFlowInterfaces
   MLIRFunctionInterfaces
   MLIRIR
