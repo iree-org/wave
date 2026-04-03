@@ -547,16 +547,37 @@ def build_graph_passes(
     graph_passes.append(
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
-        )
+        ),
     )
     graph_passes.append(
+        partial(
+            generate_bounds_exprs,
+            trace,
+            launchable.constraints,
+            launchable.reordering_constraints,
+        ),
+    )
+
+    graph_passes += [
+        *(
+            [partial(flatten_read_indices, trace, launchable.constraints)]
+            if options.linearize_reads
+            and not options.dynamic_strides
+            and not options.use_water_backend
+            else []
+        ),
         partial(
             merge_contiguous_reads,
             trace,
             launchable.constraints,
             options.target,
-        )
-    )
+        ),
+        *(
+            [partial(annotate_iv_strides, trace, launchable.constraints)]
+            if options.linearize_reads
+            else []
+        ),
+    ]
 
     # Schedule the iterate ops.
     scheduling_type = options.schedule
@@ -614,12 +635,6 @@ def build_graph_passes(
         partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(simplify_indices, trace, launchable.constraints),
-        partial(
-            generate_bounds_exprs,
-            trace,
-            launchable.constraints,
-            launchable.reordering_constraints,
-        ),
     ]
 
     if options.use_bound_check:
