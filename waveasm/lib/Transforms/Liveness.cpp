@@ -781,6 +781,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
   info.maxSRegPressure = computeMaxPressure(info.sregRanges, info.tiedClasses);
   info.maxARegPressure = computeMaxPressure(info.aregRanges, info.tiedClasses);
 
+  LLVM_DEBUG({
+    dumpPeakPressureInfo(info, ops, RegClass::VGPR);
+    dumpPeakPressureInfo(info, ops, RegClass::SGPR);
+    dumpPeakPressureInfo(info, ops, RegClass::AGPR);
+  });
+
   return info;
 }
 
