@@ -5,7 +5,7 @@
 
 """Flatten N-D read indices to 1-D physical offsets (LINEAR_INDEX).
 
-For every eligible Read (unmapped and mapped), this pass:
+For every eligible Read or GatherToLDS (unmapped and mapped), this pass:
 
 1. Resolves the index mapping (if any) into physical coordinates.
 2. Linearizes them into a single flat offset using memory strides.
@@ -37,7 +37,7 @@ from ...compiler.utils import (
     symbolic_strides_match_physical_memory,
 )
 from ...lang.global_symbols import LINEAR_INDEX, SHARED_ADDRESS_SPACE
-from ...ops.wave_ops import MemoryAccessFlags, Read, get_custom
+from ...ops.wave_ops import GatherToLDS, MemoryAccessFlags, Read, get_custom
 from ..assumptions import get_divisibility_subs
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint
@@ -208,7 +208,7 @@ def flatten_read_indices(
     constraints: Sequence[Constraint] = (),
     options: WaveCompileOptions | None = None,
 ):
-    """Flatten N-D read indices to 1-D LINEAR_INDEX for eligible Reads.
+    """Flatten N-D read indices to 1-D LINEAR_INDEX for eligible Reads and GatherToLDS ops.
 
     *options* is required when invoked from ``compile.py``; a default of ``None``
     keeps ad-hoc unit tests from constructing a full options object.
@@ -216,18 +216,22 @@ def flatten_read_indices(
     idxc = IndexingContext.current()
     div_fwd, div_bwd = get_divisibility_subs(constraints)
 
-    for node in trace.walk(lambda n: isinstance(get_custom(n), Read)):
+    for node in trace.walk(lambda n: isinstance(get_custom(n), (Read, GatherToLDS))):
         custom = get_custom(node)
+        is_g2l = isinstance(custom, GatherToLDS)
 
-        index = custom.index
-        mem_node = custom.memory
-        bounds = custom.bounds
-        mapping = custom.mapping
+        index = custom.src_index if is_g2l else custom.index
+        mem_node = custom.src if is_g2l else custom.memory
+        bounds = custom.src_bounds if is_g2l else custom.bounds
+        mapping = custom.src_mapping if is_g2l else custom.mapping
 
         if is_flattened_index(index):
             continue
 
-        if _is_shared_memory(mem_node):
+        if not is_g2l and _is_shared_memory(mem_node):
+            continue
+
+        if not is_g2l and custom.flags != MemoryAccessFlags.NONE:
             continue
 
         memory = get_custom(mem_node)
@@ -245,9 +249,6 @@ def flatten_read_indices(
                 continue
             if options.allow_noncontiguous_runtime_buffers and layout is None:
                 continue
-
-        if custom.flags != MemoryAccessFlags.NONE:
-            continue
         symbolic_dims = [infer_dim(d) for d in symbolic_shape]
 
         stride_shape = layout.shape if layout is not None else symbolic_shape
@@ -287,6 +288,11 @@ def flatten_read_indices(
 
         new_index = {LINEAR_INDEX: IndexSequence(flat_start, ept_val, 1)}
 
-        custom.index = new_index
-        custom.update_arg("mapping", None)
-        custom.update_arg("bounds", new_bounds)
+        if is_g2l:
+            custom.update_arg("src_index", new_index)
+            custom.update_arg("src_mapping", None)
+            custom.update_arg("src_bounds", new_bounds)
+        else:
+            custom.index = new_index
+            custom.update_arg("mapping", None)
+            custom.update_arg("bounds", new_bounds)

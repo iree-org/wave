@@ -60,11 +60,53 @@ def _try_symbolic_stride(flat, iv_sym, step):
     return base, stride
 
 
+def _compute_probe_depth(flat, iv_sym, step):
+    """Compute the minimum probe depth needed to detect cyclic strides.
+
+    Flat expressions with ``floor(expr/D)`` or ``Mod(expr, D)`` terms
+    can produce stride patterns that repeat with period
+    ``D / gcd(C, D)`` where *C* is the coefficient of the IV in the
+    inner expression.  The overall period is the LCM of all such
+    per-divisor periods.
+
+    Returns the probe depth (at least 8, capped at 1024).
+    """
+    from math import gcd, lcm
+
+    divisors = set()
+    for atom in sympy.preorder_traversal(flat):
+        if isinstance(atom, sympy.floor):
+            arg = atom.args[0]
+            # floor(expr) typically comes from floor(something / D) which
+            # sympy represents as floor(something * (1/D)).  Extract D
+            # from rational coefficients of iv_sym.
+            coeff = arg.coeff(iv_sym)
+            if coeff and coeff.is_Rational and coeff.q > 1:
+                divisors.add(int(coeff.q))
+        elif isinstance(atom, sympy.Mod):
+            modulus = atom.args[1]
+            if modulus.is_Integer and int(modulus) > 1:
+                divisors.add(int(modulus))
+
+    if not divisors:
+        return 8
+
+    iv_step_int = int(step) if isinstance(step, (int, sympy.Integer)) else 1
+    period = 1
+    for d in divisors:
+        contribution = d // gcd(iv_step_int, d)
+        period = lcm(period, contribution)
+
+    return max(8, min(period, 1024))
+
+
 def _try_numerical_probe(flat, iv_sym, step):
     """Fall back to numerical probing for IV stride extraction.
 
     Evaluates the flat address at several concrete IV values and checks
-    whether the stride (addr[iv+1] - addr[iv]) is constant.
+    whether the stride (addr[iv+1] - addr[iv]) is constant.  The probe
+    depth is computed from floor/Mod divisors in the expression to
+    ensure cyclic patterns are fully sampled.
 
     Returns ``(base, stride)`` or ``None``.
     """
@@ -83,7 +125,7 @@ def _try_numerical_probe(flat, iv_sym, step):
         except (TypeError, ValueError):
             return None
 
-    n_probes = 8
+    n_probes = _compute_probe_depth(flat, iv_sym, step)
     addrs = [_eval(i) for i in range(n_probes + 1)]
     if any(a is None for a in addrs):
         return None
@@ -222,6 +264,6 @@ def annotate_iv_strides(
             new_index = {LINEAR_INDEX: IndexSequence(new_offset, ept, per_unit)}
 
             if is_g2l:
-                custom.src_index = new_index
+                custom.update_arg("src_index", new_index)
             else:
                 custom.index = new_index
