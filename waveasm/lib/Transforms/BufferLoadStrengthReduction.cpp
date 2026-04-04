@@ -436,6 +436,23 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       return amt;
     };
 
+    // Overflow-safe multiply for delta propagation.  Returns nullopt if
+    // the product would overflow int64_t (e.g. large stride * large
+    // element size in a deeply nested address chain).
+    auto safeMul = [](int64_t a, int64_t b) -> std::optional<int64_t> {
+      if (a == 0 || b == 0)
+        return int64_t(0);
+      if (a > 0 && b > 0 && a > INT64_MAX / b)
+        return std::nullopt;
+      if (a < 0 && b < 0 && a < INT64_MAX / b)
+        return std::nullopt;
+      if (a > 0 && b < 0 && b < INT64_MIN / a)
+        return std::nullopt;
+      if (a < 0 && b > 0 && a < INT64_MIN / b)
+        return std::nullopt;
+      return a * b;
+    };
+
     if (auto lshlAddOp = dyn_cast<V_LSHL_ADD_U32>(op)) {
       // v_lshl_add_u32(a, b, c) = (a << b) + c.
       // For lshl_add: treat as add(lshl(a, b), c) — but b must be constant
@@ -512,14 +529,16 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
           delta[r] = 0;
         continue;
       }
-      // One is IV-dependent, the other must be a known constant.
       Value constOperand = d0 == 0 ? mulOp.getSrc0() : mulOp.getSrc1();
       int64_t dVar = d0 != 0 ? d0 : d1;
       auto constVal = getConstantValue(constOperand);
       if (!constVal)
         return std::nullopt;
+      auto product = safeMul(dVar, *constVal);
+      if (!product)
+        return std::nullopt;
       for (Value r : op->getResults())
-        delta[r] = dVar * *constVal;
+        delta[r] = *product;
       continue;
     }
 
@@ -559,8 +578,11 @@ computeStaticStride(const llvm::SetVector<Operation *> &deps, Value voffset,
       auto constVal = getConstantValue(constOperand);
       if (!constVal)
         return std::nullopt;
+      auto product = safeMul(dVar, *constVal);
+      if (!product)
+        return std::nullopt;
       for (Value r : op->getResults())
-        delta[r] = dVar * *constVal;
+        delta[r] = *product;
       continue;
     }
 
@@ -859,6 +881,27 @@ static void applyStrengthReduction(LoopOp loopOp) {
     opMapping[&op] = cloned;
   }
 
+  // Pre-compute soffset + sgpr_addend for each unique (group, addend) pair
+  // at the top of the loop body, so loads sharing the same addend reuse one
+  // s_add_u32 instead of each emitting their own.
+  DenseMap<std::pair<unsigned, Value>, Value> soffsetCache;
+  auto getSoffsetWithAddend = [&](unsigned groupIdx, Value addend) -> Value {
+    Value base = newBody.getArgument(soffsetArgBase + groupIdx);
+    if (!addend)
+      return base;
+    auto key = std::make_pair(groupIdx, addend);
+    auto it = soffsetCache.find(key);
+    if (it != soffsetCache.end())
+      return it->second;
+    OpBuilder topBuilder = OpBuilder::atBlockBegin(&newBody);
+    Value result =
+        S_ADD_U32::create(topBuilder, loc, sregType,
+                          SCCType::get(topBuilder.getContext()), base, addend)
+            .getDst();
+    soffsetCache[key] = result;
+    return result;
+  };
+
   // Patch buffer_loads: set voffset to precomputed value, soffset to
   // iter_arg (possibly adjusted by per-load SGPR addend), and apply
   // instOffset deltas from voffset deduplication.
@@ -869,10 +912,11 @@ static void applyStrengthReduction(LoopOp loopOp) {
     // Replace voffset with precomputed (possibly deduplicated) value.
     clonedLoad->setOperand(getVoffsetIdx(clonedLoad), initialVoffsets[i]);
 
-    // Replace soffset with the group's soffset iter_arg.
+    // Replace soffset with the group's soffset iter_arg, folding in any
+    // per-load SGPR addend extracted during voffset deduplication.
     unsigned groupIdx = candidateGroupIdx[i];
-    Value soffsetArg = newBody.getArgument(soffsetArgBase + groupIdx);
-    clonedLoad->setOperand(2, soffsetArg);
+    Value soffsetVal = getSoffsetWithAddend(groupIdx, sgprAddends[i]);
+    clonedLoad->setOperand(2, soffsetVal);
 
     // Apply instOffset delta from voffset deduplication.
     if (instOffsetDeltas[i] != 0) {

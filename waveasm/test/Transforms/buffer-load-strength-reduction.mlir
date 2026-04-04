@@ -712,12 +712,14 @@ waveasm.program @sgpr_addend_extraction
   // CHECK: waveasm.loop
   // CHECK-SAME: -> (!waveasm.sreg, !waveasm.vreg, !waveasm.sreg) {
   //
-  // Load A: voffset = shared base, soffset = group_soff (no SGPR addend).
-  // CHECK: waveasm.buffer_load_dword {{.*}}, [[VOFF:%[a-z0-9]+]], [[SOFF:%[a-z0-9]+]] :
+  // SGPR addend folded once at the top of the loop body, reused by Load B.
+  // CHECK: [[SOFF_B:%[a-z0-9_]+]], %{{.*}} = waveasm.s_add_u32 [[SOFF:%[a-z0-9]+]], {{.*}} ->
   //
-  // Load B: same voffset, soffset = group_soff (single-level strips the
-  //         iv-init SGPR, leaving the delta in voffset), const 256 in instOffset.
-  // CHECK: waveasm.buffer_load_dword {{.*}}, {{%[a-z0-9]+}}, [[SOFF]]
+  // Load A: voffset = shared base, soffset = group_soff (no SGPR addend).
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{%[a-z0-9]+}}, [[SOFF]] :
+  //
+  // Load B: soffset = s_add_u32(group_soff, n_offset), const 256 in instOffset.
+  // CHECK: waveasm.buffer_load_dword {{.*}}, {{%[a-z0-9]+}}, [[SOFF_B]]
   // CHECK-SAME: offset : 256
   %final_iv, %final_acc = waveasm.loop(%iv = %init_iv, %acc = %init_acc)
       : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
