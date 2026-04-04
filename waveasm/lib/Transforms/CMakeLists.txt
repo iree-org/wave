@@ -37,6 +37,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   Ticketing.cpp
   TranslateFromLLVMDialect.cpp
   TranslateFromMLIR.cpp
+  VGPRCompaction.cpp
   ${HANDLERS_FULL_PATHS}
 
   ADDITIONAL_HEADER_DIRS

@@ -277,6 +277,26 @@ def WAVEASMSCCVerifier : Pass<"waveasm-scc-verifier"> {
 }
 
 //===----------------------------------------------------------------------===//
+// VGPR Compaction Pass
+//===----------------------------------------------------------------------===//
+
+def WAVEASMVGPRCompaction : Pass<"waveasm-vgpr-compaction"> {
+  let summary = "Compact physical VGPR assignments to reduce peak register count";
+  let description = [{
+    Re-assigns physical VGPRs after linear scan allocation to eliminate
+    fragmentation caused by interleaved buffer_load and ds_read destinations.
+    Uses a shortest-first greedy strategy: short-lived values get low
+    registers, long-lived values get high registers, eliminating gaps
+    from interleaving.
+
+    Scope: VGPRs only (PVRegType).  SGPRs and AGPRs are not compacted
+    because SGPR pressure is rarely the bottleneck and AGPRs have fixed
+    hardware mapping for MFMA accumulators.
+  }];
+  let dependentDialects = ["::waveasm::WaveASMDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // Memory Offset Optimization Pass
 //===----------------------------------------------------------------------===//
 
