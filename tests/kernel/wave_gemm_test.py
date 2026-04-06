@@ -51,6 +51,7 @@ from wave_lang.kernel.wave.constraints import (
 from wave_lang.kernel.wave.utils.mxfp_utils import (
     generate_gemm_afp4wfp4_inputs,
     torchScaledGemmMXFP4,
+    e8m0_shuffle,
 )
 from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
@@ -63,6 +64,8 @@ from wave_lang.kernel.wave.templates.gemm import (
 )
 from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
     get_tagged_splitk_mxfp4_gemm,
+    get_tagged_streamk_mxfp4_gemm,
+    get_tagged_streamk_mxfp4_gemm_preshuffle_scales,
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
@@ -3688,3 +3691,95 @@ def testSplitKMxfp4Gemm(
         # partial-sum magnitudes of ~250-430 the ULP is 2-4, so with 2-4
         # splits the worst-case rounding error is O(num_splits * ULP).
         assert_close(c_gpu.cpu().to(torch.float32), torch_ref, rtol=1e-1, atol=4.0)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape, num_ctas",
+    [
+        ((128, 128, 128), 1),
+        ((128, 128, 256), 2),
+        ((256, 256, 256), 8),
+        ((256, 256, 512), 16),
+        ((512, 512, 1024), 16),
+    ],
+)
+@pytest.mark.parametrize("output_type", [torch.float32])
+def testStreamKMxfp4Gemm(
+    shape: tuple[int, int, int],
+    num_ctas: int,
+    output_type: torch.dtype,
+):
+    m, n, k = shape
+    block_m, block_n, block_k = 128, 128, 128
+
+    streamk_gemm, options = get_tagged_streamk_mxfp4_gemm(
+        shape,
+        block_shape=(block_m, block_n, block_k),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        output_type=TORCH_DTYPE_TO_WAVE[output_type],
+        num_ctas=num_ctas,
+    )
+
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, streamk_gemm)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_gpu = x_scales.cuda()
+    w_scales_gpu = w_scales.cuda()
+    c_gpu = device_zeros(m, n, dtype=output_type)
+
+    gemm(x_gpu, x_scales_gpu, w_t_gpu, w_scales_gpu, c_gpu)
+    assert_close(c_gpu.cpu(), torch_ref, rtol=1e-3, atol=1e-2)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape, num_ctas",
+    [
+        ((128, 128, 256), 2),
+        ((256, 256, 256), 8),
+        ((256, 256, 512), 16),
+    ],
+)
+@pytest.mark.parametrize("output_type", [torch.float32])
+def testStreamKMxfp4GemmPreshuffleScales(
+    shape: tuple[int, int, int],
+    num_ctas: int,
+    output_type: torch.dtype,
+):
+    m, n, k = shape
+    block_m, block_n, block_k = 128, 128, 128
+
+    streamk_gemm, options = get_tagged_streamk_mxfp4_gemm_preshuffle_scales(
+        shape,
+        block_shape=(block_m, block_n, block_k),
+        mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        output_type=TORCH_DTYPE_TO_WAVE[output_type],
+        num_ctas=num_ctas,
+    )
+
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, streamk_gemm)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(
+        shape, device=torch.device("cpu")
+    )
+    torch_ref = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    x_gpu = x.cuda()
+    w_t_gpu = w.T.contiguous().cuda()
+    x_scales_ps = e8m0_shuffle(x_scales).cuda()
+    w_scales_ps = e8m0_shuffle(w_scales).cuda()
+    c_gpu = device_zeros(m, n, dtype=output_type)
+
+    gemm(x_gpu, x_scales_ps, w_t_gpu, w_scales_ps, c_gpu)
+    assert_close(c_gpu.cpu(), torch_ref, rtol=1e-3, atol=1e-2)

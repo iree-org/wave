@@ -1035,6 +1035,376 @@ def get_tagged_mxfp4_gemm_preshuffle_b_wide_store(
     )
 
 
+def get_tagged_streamk_mxfp4_gemm(
+    shape: tuple[int, int, int] = (256, 256, 256),
+    block_shape: tuple[int, int, int] = (128, 128, 128),
+    wave_shape: tuple[int, int] = (2, 2),
+    mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
+    a_address_space: tkl.AddressSpace = GLOBAL_ADDRESS_SPACE,
+    output_type: "tkl.DataType" = tkl.f32,
+    num_ctas: int = 304,
+):
+    """Return a tagged stream-K MXFP4 GEMM kernel + compile options.
+
+    Stream-K distributes K-loop iterations across a fixed number of CTAs
+    (persistent kernel).  Each CTA dynamically determines which output tile(s)
+    and K-range(s) to process, using atomic_add for accumulation.  The caller
+    must zero-initialize C before launch.
+
+    All data and scales are read directly from global memory.
+
+    Args:
+        shape: (M, N, K) problem dimensions.
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
+        mfma_variant: Scaled MMA instruction type.
+        a_address_space: Address space for A/B data and scales.
+        output_type: Element type of output tensor C.
+        num_ctas: Number of CTAs (workgroups) to launch.
+
+    Returns:
+        (kernel_function, WaveCompileOptions)
+    """
+    return _get_tagged_streamk_mxfp4_gemm_impl(
+        shape,
+        block_shape,
+        wave_shape,
+        mfma_variant,
+        a_address_space,
+        output_type=output_type,
+        num_ctas=num_ctas,
+    )
+
+
+def get_tagged_streamk_mxfp4_gemm_preshuffle_scales(
+    shape: tuple[int, int, int] = (256, 256, 256),
+    block_shape: tuple[int, int, int] = (128, 128, 128),
+    wave_shape: tuple[int, int] = (2, 2),
+    mfma_variant: ScaledMMAType = ScaledMMAType.F32_16x16x128_F8F6F4,
+    a_address_space: tkl.AddressSpace = GLOBAL_ADDRESS_SPACE,
+    output_type: "tkl.DataType" = tkl.f32,
+    num_ctas: int = 304,
+):
+    """Return a tagged stream-K MXFP4 GEMM kernel with preshuffled scales.
+
+    Stream-K distributes K-loop iterations across a fixed number of CTAs
+    (persistent kernel).  Each CTA dynamically determines which output tile(s)
+    and K-range(s) to process, using atomic_add for accumulation.  The caller
+    must zero-initialize C before launch.
+
+    A and B data are read from global memory with plain CTA-offset mappings.
+    A and B scales are read from global memory using e8m0 preshuffle mappings.
+
+    Args:
+        shape: (M, N, K) problem dimensions.
+        block_shape: (BLOCK_M, BLOCK_N, BLOCK_K) tile sizes.
+        wave_shape: (WAVE_M, WAVE_N) waves per workgroup.
+        mfma_variant: Scaled MMA instruction type.
+        a_address_space: Address space for A/B data.
+        output_type: Element type of output tensor C.
+        num_ctas: Number of CTAs (workgroups) to launch.
+
+    Returns:
+        (kernel_function, WaveCompileOptions)
+    """
+    return _get_tagged_streamk_mxfp4_gemm_impl(
+        shape,
+        block_shape,
+        wave_shape,
+        mfma_variant,
+        a_address_space,
+        preshuffle_scales=True,
+        output_type=output_type,
+        num_ctas=num_ctas,
+    )
+
+
+def _get_tagged_streamk_mxfp4_gemm_impl(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    wave_shape: tuple[int, int],
+    mfma_variant: ScaledMMAType,
+    a_address_space: tkl.AddressSpace,
+    *,
+    preshuffle_scales: bool = False,
+    output_type: "tkl.DataType" = tkl.f32,
+    num_ctas: int = 304,
+):
+    """Shared implementation for tagged stream-K MXFP4 GEMM kernels.
+
+    Uses a persistent-kernel approach: a fixed number of CTAs iterate over
+    work units.  Each work unit covers a contiguous range of K-loop iterations
+    for one output tile.  Partial results are accumulated into C via atomic_add.
+
+    When preshuffle_scales is False:
+        all data and scales are read from global memory with plain CTA-offset
+        mappings.
+    When preshuffle_scales is True:
+        A and B data use plain CTA-offset mappings; A and B scales are read
+        from global memory using e8m0 preshuffle mappings (with CTA offsets).
+
+    Note: preshuffle_B is not supported for stream-K.  The B preshuffle
+    mapping uses nonlinear arithmetic on the K iterator (floor-div, modulo)
+    which does not compose correctly with stream-K's dynamic
+    TilingConstraint(K, start=..., iters=...).
+    """
+    from wave_lang.kernel._support.indexing import sym
+    from wave_lang.kernel._support.dtype import i32
+
+    m, n, k = shape
+    block_m, block_n, block_k = block_shape
+
+    num_tiles_m = math.ceil(m / block_m)
+    num_tiles_n = math.ceil(n / block_n)
+    total_tiles = num_tiles_m * num_tiles_n
+
+    iters_per_tile = math.ceil(k / block_k)
+    total_iters = total_tiles * iters_per_tile
+
+    sk_iters_pcu = total_iters // num_ctas
+    sk_extra_iters = total_iters % num_ctas
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+
+    k_scale_shuffled_val = (((k // 32) + 7) // 8) * 8
+
+    NUM_CTAS = sym.NUM_CTAS
+    N_TILES = sym.N_TILES
+    ITERS_PER_TILE = sym.ITERS_PER_TILE
+    SK_ITERS_PCU = sym.SK_ITERS_PCU
+    SK_EXTRA_ITERS = sym.SK_EXTRA_ITERS
+    CTA_M_OFFSET = sym.CTA_M_OFFSET
+    CTA_N_OFFSET = sym.CTA_N_OFFSET
+    START_K_TILE = sym.START_K_TILE
+    NUM_K_TILES = sym.NUM_K_TILES
+    WORK_UNIT_START = sym.WORK_UNIT_START
+    WORK_UNIT_END = sym.WORK_UNIT_END
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+
+    # --- A data read mapping (always plain offset) ---
+    a_read_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i + CTA_M_OFFSET, K: j},
+        outputs={M: i, K: j},
+    )
+
+    # --- B data read mapping ---
+    # NOTE: preshuffle_B is not supported for stream-K because the B
+    # preshuffle mapping uses nonlinear arithmetic on the K iterator
+    # (floor-div, modulo), which does not compose correctly with the
+    # dynamic TilingConstraint(K, start=..., iters=...) that stream-K
+    # requires.  The dynamic K start symbol propagates into the
+    # preshuffle expression and the compiler generates incorrect code.
+    # preshuffle_scales works because the e8m0 scale mappings operate
+    # on the K/32 scale dimension, not the K/2 data dimension.
+    b_read_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={N: i + CTA_N_OFFSET, K: j},
+        outputs={N: i, K: j},
+    )
+
+    # --- Scale read mappings ---
+    a_scale_read_mapping = None
+    b_scale_read_mapping = None
+    if preshuffle_scales:
+        # A scale e8m0 preshuffle with CTA_M_OFFSET
+        i_a = tkw.IndexMapping.iterator(0)
+        j_a = tkw.IndexMapping.iterator(1)
+        _flat_a = (
+            (j_a // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (i_a // 8) * 256
+            + ((i_a % 8) % 4) * 64
+            + ((j_a % 32) % 16) * 4
+            + (((i_a % 8) // 4) * 2)
+            + ((j_a % 32) // 16)
+        )
+        a_scale_read_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                M: _flat_a // k_scale_shuffled_val + CTA_M_OFFSET,
+                K: _flat_a % k_scale_shuffled_val,
+            },
+            outputs={K: i_a, M: j_a},
+        )
+
+        # B scale e8m0 preshuffle with CTA_N_OFFSET
+        kk = tkw.IndexMapping.iterator(0)
+        n_s = tkw.IndexMapping.iterator(1)
+        _flat_b = (
+            (n_s // 32) * ((k_scale_shuffled_val // 8) * 256)
+            + (kk // 8) * 256
+            + ((kk % 8) % 4) * 64
+            + ((n_s % 32) % 16) * 4
+            + (((kk % 8) // 4) * 2)
+            + ((n_s % 32) // 16)
+        )
+        b_scale_read_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={
+                N: _flat_b // k_scale_shuffled_val + CTA_N_OFFSET,
+                K: _flat_b % k_scale_shuffled_val,
+            },
+            outputs={K: kk, N: n_s},
+        )
+    else:
+        a_scale_read_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={M: i + CTA_M_OFFSET, K: j},
+            outputs={M: i, K: j},
+        )
+        b_scale_read_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={N: i + CTA_N_OFFSET, K: j},
+            outputs={N: i, K: j},
+        )
+
+    c_write_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={M: i + CTA_M_OFFSET, N: j + CTA_N_OFFSET},
+    )
+
+    # Address spaces: scales from global when preshuffled.
+    a_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
+    b_scale_space = GLOBAL_ADDRESS_SPACE if preshuffle_scales else ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.GridConstraint(NUM_CTAS),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(
+            K, BLOCK_K, iters=NUM_K_TILES, start=START_K_TILE * BLOCK_K
+        ),
+        tkw.TilingConstraint(WORK_UNIT_START),
+        tkw.WaveConstraint(M, BLOCK_M / wave_shape[0]),
+        tkw.WaveConstraint(N, BLOCK_N / wave_shape[1]),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=mfma_variant,
+            vector_shapes={WORK_UNIT_START: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def streamk_mxfp4_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, a_scale_space, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, b_scale_space, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, output_type],
+    ):
+        cta_id = tkw.scalar(WORKGROUP_0, i32)
+        iters_per_tile = tkw.scalar(ITERS_PER_TILE, i32)
+        sk_iters_pcu = tkw.scalar(SK_ITERS_PCU, i32)
+        sk_extra_iters = tkw.scalar(SK_EXTRA_ITERS, i32)
+
+        extra_iter = tkw.minimum(cta_id, sk_extra_iters)
+        work_unit_start = cta_id * sk_iters_pcu + extra_iter
+        next_extra_iter = tkw.minimum(cta_id + tkw.scalar(1, i32), sk_extra_iters)
+        work_unit_end = (cta_id + tkw.scalar(1, i32)) * sk_iters_pcu + next_extra_iter
+
+        tkw.set_symbol(WORK_UNIT_END, work_unit_end)
+        sk_condition = WORK_UNIT_START < WORK_UNIT_END
+
+        @tkw.iterate(
+            WORK_UNIT_START,
+            start=work_unit_start,
+            condition=sk_condition,
+            init_args=[],
+        )
+        def sk_loop():
+            cta_k_start = tkw.scalar(WORK_UNIT_START, i32)
+            remainder = cta_k_start % iters_per_tile
+            cta_k_end = tkw.minimum(
+                cta_k_start + (iters_per_tile - remainder),
+                tkw.scalar(WORK_UNIT_END, i32),
+            )
+            output_tile_id = cta_k_start // iters_per_tile
+
+            m_offset = (output_tile_id // tkw.scalar(N_TILES, i32)) * tkw.scalar(
+                BLOCK_M, i32
+            )
+            n_offset = (output_tile_id % tkw.scalar(N_TILES, i32)) * tkw.scalar(
+                BLOCK_N, i32
+            )
+            tkw.set_symbol(CTA_M_OFFSET, m_offset)
+            tkw.set_symbol(CTA_N_OFFSET, n_offset)
+
+            tkw.set_symbol(START_K_TILE, remainder)
+            tkw.set_symbol(NUM_K_TILES, cta_k_end - cta_k_start)
+
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+            def repeat(
+                acc: tkl.Register[M, N, tkl.f32],
+            ) -> tkl.Register[M, N, tkl.f32]:
+                a_reg = tkw.read(a, mapping=a_read_mapping, tag="read_a")
+                a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
+                a_scale_reg = tkw.read(
+                    a_scale, mapping=a_scale_read_mapping, tag="read_a_scale"
+                )
+                a_scale_reg = tkw.bitcast(
+                    a_scale_reg, tkl.f8e8m0fnu, tag="bitcast_a_scale"
+                )
+                b_reg = tkw.read(b, mapping=b_read_mapping, tag="read_b")
+                b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
+                b_scale_reg = tkw.read(
+                    b_scale, mapping=b_scale_read_mapping, tag="read_b_scale"
+                )
+                b_scale_reg = tkw.bitcast(
+                    b_scale_reg, tkl.f8e8m0fnu, tag="bitcast_b_scale"
+                )
+                acc = tkw.scaled_mma(
+                    a_reg,
+                    a_scale_reg,
+                    b_reg,
+                    b_scale_reg,
+                    acc,
+                    tag="scaled_mma",
+                )
+                return acc
+
+            repeat_out = tkw.cast(repeat, output_type)
+            tkw.atomic_add(repeat_out, c, mapping=c_write_mapping)
+
+            new_cta_k_start = cta_k_end
+            tkw.set_symbol(WORK_UNIT_START, new_cta_k_start)
+
+    hyperparams = {
+        ADDRESS_SPACE: a_address_space,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        N_TILES: num_tiles_n,
+        NUM_CTAS: num_ctas,
+        ITERS_PER_TILE: iters_per_tile,
+        SK_ITERS_PCU: sk_iters_pcu,
+        SK_EXTRA_ITERS: sk_extra_iters,
+    }
+    if preshuffle_scales:
+        hyperparams[K_SCALE_SHUFFLED] = k_scale_shuffled_val
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+
+    return streamk_mxfp4_gemm, options
+
+
 def _reorder_mxfp4_workgroups(m, n, block_m, block_n, group_size_n):
     """Remap workgroup indices to a new order based on group_size_n along N dimension.
 
