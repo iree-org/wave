@@ -1045,13 +1045,18 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
   peakVGPRs = 0;
   peakSGPRs = 0;
   peakAGPRs = 0;
+  int64_t maxGPSGPRs = target.getMaxSGPRs();
+  auto isArchitecturalSGPR = [maxGPSGPRs](int64_t index) {
+    return index >= maxGPSGPRs;
+  };
   program.walk([&](Operation *preOp) {
     for (Value result : preOp->getResults()) {
       Type ty = result.getType();
       if (auto pvreg = dyn_cast<PVRegType>(ty)) {
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
       } else if (auto psreg = dyn_cast<PSRegType>(ty)) {
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+        if (!isArchitecturalSGPR(psreg.getIndex()))
+          peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
       } else if (auto pareg = dyn_cast<PARegType>(ty)) {
         peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
       } else if (isVirtualRegType(ty)) {
@@ -1071,9 +1076,10 @@ llvm::SmallVector<std::string> KernelGenerator::generate() {
       Type ty = operand.getType();
       if (auto pvreg = dyn_cast<PVRegType>(ty))
         peakVGPRs = std::max(peakVGPRs, pvreg.getIndex() + pvreg.getSize());
-      else if (auto psreg = dyn_cast<PSRegType>(ty))
-        peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
-      else if (auto pareg = dyn_cast<PARegType>(ty))
+      else if (auto psreg = dyn_cast<PSRegType>(ty)) {
+        if (!isArchitecturalSGPR(psreg.getIndex()))
+          peakSGPRs = std::max(peakSGPRs, psreg.getIndex() + psreg.getSize());
+      } else if (auto pareg = dyn_cast<PARegType>(ty))
         peakAGPRs = std::max(peakAGPRs, pareg.getIndex() + pareg.getSize());
     }
   });
