@@ -126,15 +126,21 @@ def _try_numerical_probe(flat, iv_sym, step):
             return None
 
     n_probes = _compute_probe_depth(flat, iv_sym, step)
-    addrs = [_eval(i) for i in range(n_probes + 1)]
-    if any(a is None for a in addrs):
-        return None
 
-    diffs = [addrs[i + 1] - addrs[i] for i in range(n_probes)]
-    if len(set(diffs)) != 1:
+    prev = _eval(0)
+    if prev is None:
         return None
-
-    stride_val = diffs[0]
+    stride_val = None
+    for i in range(1, n_probes + 1):
+        cur = _eval(i)
+        if cur is None:
+            return None
+        diff = cur - prev
+        if stride_val is None:
+            stride_val = diff
+        elif diff != stride_val:
+            return None
+        prev = cur
 
     probe_map2 = {s: 251 + i * 47 for i, s in enumerate(free_syms)}
 
@@ -147,12 +153,16 @@ def _try_numerical_probe(flat, iv_sym, step):
         except (TypeError, ValueError):
             return None
 
-    addrs2 = [_eval2(i) for i in range(n_probes + 1)]
-    if any(a is None for a in addrs2):
+    prev2 = _eval2(0)
+    if prev2 is None:
         return None
-    diffs2 = [addrs2[i + 1] - addrs2[i] for i in range(n_probes)]
-    if len(set(diffs2)) != 1 or diffs2[0] != stride_val:
-        return None
+    for i in range(1, n_probes + 1):
+        cur2 = _eval2(i)
+        if cur2 is None:
+            return None
+        if cur2 - prev2 != stride_val:
+            return None
+        prev2 = cur2
 
     base = sym_simplify(safe_subs(flat, {iv_sym: sympy.Integer(0)}))
     return base, sympy.Integer(stride_val)
