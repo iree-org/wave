@@ -112,7 +112,7 @@ jobs:
           echo "WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}"
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@ee02a1537ce3071a004a6b08c41e72f0fdc42d9a # v3.4.0
+        uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084 # v3.4.1
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-${{ matrix.platform }}
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
@@ -155,7 +155,7 @@ jobs:
       contents: write # Create/update a release
     steps:
       - name: Download wheels
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: snapshot-*
           # Merge all artifacts into a single directory
@@ -163,7 +163,7 @@ jobs:
           path: dist
 
       - name: Release python wheels (rolling dev-wheels)
-        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           artifacts: dist/*.whl
           tag: "dev-wheels"
@@ -183,14 +183,14 @@ jobs:
       contents: write
     steps:
       - name: Download wheels
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: snapshot-*
           merge-multiple: true
           path: dist
 
       - name: Release python wheels (tagged stable)
-        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           artifacts: dist/*.whl
           tag: ${{ github.ref_name }}
