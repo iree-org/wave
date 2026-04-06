@@ -830,15 +830,21 @@ static void applyStrengthReduction(LoopOp loopOp) {
         continue;
       }
 
+      // For LDS loads, do not fold constants into instOffset.
+      // The inst_offset field may not interact correctly with the SRD
+      // swizzle stride on GFX950, causing incorrect address computation.
+      bool isLDS = isBufferLoadLDS(candidates[idx].loadOp);
+
       // Validate the constant fits in instOffset budget.
       int64_t existingOffset = 0;
       if (auto attr =
               candidates[idx].loadOp->getAttrOfType<IntegerAttr>("instOffset"))
         existingOffset = attr.getInt();
-      if (d.constAddend + existingOffset > kMaxInstOffset ||
+      if (isLDS || d.constAddend + existingOffset > kMaxInstOffset ||
           d.constAddend < 0) {
-        // Constant too large for instOffset.  Keep the original voffset
-        // but still try SGPR splitting (without the constant part).
+        // Constant too large for instOffset (or LDS load).
+        // Keep the original voffset but still try SGPR splitting
+        // (without the constant part).
         if (!d.sgprParts.empty() && d.constAddend == 0) {
           initialVoffsets[idx] = d.vgprBase;
           sgprAddends[idx] =
