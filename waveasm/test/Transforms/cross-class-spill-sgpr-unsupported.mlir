@@ -4,7 +4,7 @@
 // is not yet implemented.  The allocator does not attempt cross-class
 // eviction for SGPRs (altPool is nullptr).
 
-// CHECK: error: 'waveasm.program' op Failed to allocate SGPR
+// CHECK: error: Failed to allocate SGPR
 waveasm.program @sgpr_overflow target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %s0 = waveasm.precolored.sreg 0 : !waveasm.psreg<0>
   %s1 = waveasm.precolored.sreg 1 : !waveasm.psreg<1>

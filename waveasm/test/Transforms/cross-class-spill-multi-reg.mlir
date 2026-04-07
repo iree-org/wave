@@ -4,7 +4,7 @@
 // When the only live values are multi-register, eviction is not attempted
 // and allocation fails.
 
-// CHECK: error: 'waveasm.program' op Failed to allocate VGPR
+// CHECK: error: Failed to allocate VGPR
 waveasm.program @multi_reg_no_spill target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
   %voff = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>

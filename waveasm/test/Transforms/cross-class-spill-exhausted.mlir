@@ -3,7 +3,7 @@
 // Test: When both VGPR and AGPR pools are exhausted, allocation fails
 // with a diagnostic.  max-agprs=0 leaves no spare AGPRs for eviction.
 
-// CHECK: error: 'waveasm.program' op Failed to allocate VGPR
+// CHECK: error: Failed to allocate VGPR
 waveasm.program @both_exhausted target = #waveasm.target<#waveasm.gfx942, 5> abi = #waveasm.abi<> {
   %v0 = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
   %v1 = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>

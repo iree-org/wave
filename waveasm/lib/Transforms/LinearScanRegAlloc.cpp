@@ -330,29 +330,28 @@ LinearScanRegAlloc::allocate(ProgramOp program) {
   }
 
   // Step 5: Allocate VGPRs. On failure, evict to spare AGPRs.
-  if (failed(allocateRegClass(liveness.vregRanges, vgprPool, mapping, stats,
-                              tiedOperands, precoloredValues, "VGPR", program,
-                              maxVGPRs, liveness.maxVRegPressure,
-                              vgprStrategy.get(), &agprPool, &spills,
-                              &liveness)))
+  if (failed(allocateRegClass(
+          liveness.vregRanges, vgprPool, mapping, stats, tiedOperands,
+          precoloredValues, "VGPR", program, maxVGPRs, liveness.maxVRegPressure,
+          vgprStrategy.get(), &agprPool, &spills, &liveness)))
     return failure();
   stats.peakVGPRs = vgprPool.getPeakUsage();
 
   // Step 6: Allocate SGPRs (no cross-class spilling yet).
-  if (failed(allocateRegClass(
-          liveness.sregRanges, sgprPool, mapping, stats, tiedOperands,
-          precoloredValues, "SGPR", program, maxSGPRs, liveness.maxSRegPressure,
-          /*strategy=*/nullptr, /*altPool=*/nullptr, /*spills=*/nullptr,
-          &liveness)))
+  if (failed(allocateRegClass(liveness.sregRanges, sgprPool, mapping, stats,
+                              tiedOperands, precoloredValues, "SGPR", program,
+                              maxSGPRs, liveness.maxSRegPressure,
+                              /*strategy=*/nullptr, /*altPool=*/nullptr,
+                              /*spills=*/nullptr, &liveness)))
     return failure();
   stats.peakSGPRs = sgprPool.getPeakUsage();
 
   // Step 7: Allocate AGPRs (no cross-class spilling yet).
-  if (failed(allocateRegClass(
-          liveness.aregRanges, agprPool, mapping, stats, tiedOperands,
-          precoloredValues, "AGPR", program, maxAGPRs, liveness.maxARegPressure,
-          /*strategy=*/nullptr, /*altPool=*/nullptr, /*spills=*/nullptr,
-          &liveness)))
+  if (failed(allocateRegClass(liveness.aregRanges, agprPool, mapping, stats,
+                              tiedOperands, precoloredValues, "AGPR", program,
+                              maxAGPRs, liveness.maxARegPressure,
+                              /*strategy=*/nullptr, /*altPool=*/nullptr,
+                              /*spills=*/nullptr, &liveness)))
     return failure();
   stats.peakAGPRs = agprPool.getPeakUsage();
 

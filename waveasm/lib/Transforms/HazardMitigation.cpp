@@ -223,11 +223,10 @@ private:
       // On GFX950 the VGPR destination of v_accvgpr_read_b32 is not
       // immediately available; a VALU that consumes it in the next cycle
       // reads stale data.  Insert s_nop 0 to cover the 1-cycle wait.
-      if (isAccVgprReadOp(current) && isVALUOp(next)) {
-        auto defs = getVGPRDefs(current);
-        auto uses = getVGPRUses(next);
-        if (hasIntersection(defs, uses))
-          insertionPoints.push_back(next);
+      if (isVALUOp(op) && i > 0) {
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isAccVgprReadOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
       }
     }
 
