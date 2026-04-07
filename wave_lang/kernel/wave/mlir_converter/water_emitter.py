@@ -350,16 +350,15 @@ def _convert_sympy_expr_to_affine_map(
     expr = expr.subs(symbol_mapping)
     expr = sympy.simplify(expr)
 
-    # Bare symbolic fractions like BLOCK_K/32 cannot be represented as affine
-    # expressions directly. Wrap them in ceiling() so they lower to ceildiv.
-    # All Wave symbols are positive integers, so ceiling(x/n) == x/n when x is
+    # Expressions with integer denominators (e.g. BLOCK_K/32, or compound
+    # expressions like A + B*floor(T/64)/2) cannot be represented directly in
+    # the affine system. Wrap in ceiling() so the converter lowers to ceildiv.
+    # Sympy takes care of distribution of ceiling over add and mul if they are
+    # known to be integers. All Wave symbols are positive integers, so ceiling(x/n) == x/n when x is
     # divisible by n.
-    if isinstance(expr, sympy.Mul):
-        _, denom = expr.as_numer_denom()
-        if denom != 1 and not isinstance(denom, sympy.Integer):
-            pass
-        elif isinstance(denom, sympy.Integer) and denom > 1:
-            expr = sympy.ceiling(expr)
+    _, denom = expr.as_numer_denom()
+    if isinstance(denom, sympy.Integer) and denom > 1:
+        expr = sympy.ceiling(expr)
 
     return convert_sympy_to_affine_map(
         expr, [sym.name for sym in symbol_mapping.values()]
