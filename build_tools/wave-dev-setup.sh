@@ -352,15 +352,17 @@ do_build_waveasm() {
 }
 
 do_test_waveasm_lit() {
-    if [[ ! -f "$WAVEASM_BUILD/build.ninja" ]]; then
-        echo "error: WaveASM not built.  Run --build-waveasm first." >&2
-        exit 1
-    fi
+    # Rebuild water and waveasm to ensure no stale native artifacts during testing.
+    do_build_water
+    do_build_waveasm
     echo "Running WaveASM lit tests ..."
     cmake --build "$WAVEASM_BUILD" --target check-waveasm
 }
 
 do_test_waveasm_e2e() {
+    # Rebuild water and waveasm to ensure no stale native artifacts during testing.
+    do_build_water
+    do_build_waveasm
     echo "Running WaveASM Python e2e tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
@@ -369,15 +371,17 @@ do_test_waveasm_e2e() {
 }
 
 do_test_water_lit() {
-    if [[ ! -f "$WATER_BUILD/build.ninja" ]]; then
-        echo "error: Water not built.  Run --build-water first." >&2
-        exit 1
-    fi
+    # Rebuild water and waveasm to ensure no stale native artifacts during testing.
+    do_build_water
+    do_build_waveasm
     echo "Running Water lit tests ..."
     cmake --build "$WATER_BUILD" --target check-water
 }
 
 do_test_wave_lit() {
+    # Rebuild water and waveasm to ensure no stale native artifacts during testing.
+    do_build_water
+    do_build_waveasm
     echo "Running Wave lit tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
@@ -386,6 +390,9 @@ do_test_wave_lit() {
 }
 
 do_test_wave_e2e() {
+    # Rebuild water and waveasm to ensure no stale native artifacts during testing.
+    do_build_water
+    do_build_waveasm
     echo "Running Wave Python e2e tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
