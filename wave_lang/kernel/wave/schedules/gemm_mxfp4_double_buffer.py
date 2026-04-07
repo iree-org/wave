@@ -45,9 +45,13 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True, k_partitions: int = 2):
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
             Recommended for 8-wave configs; disable for 4-wave.
+            Forced off when ``k_partitions=1`` because the stagger interacts
+            incorrectly with single-partition pipeline iterations > 1.
         k_partitions: ``2`` for standard GEMM (partition along K).  Use ``1`` for
             split-K MXFP4 kernels where the K loop has only one expansion id.
     """
+    if k_partitions == 1:
+        use_stagger = False
     K = tkl.sym.K
 
     @wave_schedule.wave_schedule()
@@ -289,11 +293,15 @@ def get_mxfp4_dbuf_pingpong_schedule(
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.
             Recommended for 8-wave configs; disable for 4-wave.
+            Forced off when ``k_partitions=1`` because the stagger interacts
+            incorrectly with single-partition pipeline iterations > 1.
         shape: Tuple of (M, N, K) dimensions. If provided and bigger than
             (1024, 1024, 1024), an extra WorkgroupBarrier will be added
             after the first SchedulingBarrier in cluster 0.
         k_partitions: ``2`` for standard GEMM.  Use ``1`` for split-K MXFP4 kernels.
     """
+    if k_partitions == 1:
+        use_stagger = False
     K = tkl.sym.K
 
     @wave_schedule.wave_schedule()
