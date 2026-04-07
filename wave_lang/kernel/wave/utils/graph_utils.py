@@ -215,14 +215,6 @@ def _check_expr_equivalent(
     if isinstance(lhs, sympy.Basic) and isinstance(rhs, sympy.Basic):
         if sympy.simplify(lhs - rhs) == 0:
             return Success()
-        # The affine type system lacks exact division, so the emitter wraps
-        # divisions in ceiling(). Accept ceiling(X) as equivalent to X: if
-        # the original trace has X without ceiling, the ceiling was only
-        # introduced for affine compatibility and not present in the source.
-        if isinstance(rhs, sympy.ceiling) and sympy.simplify(rhs.args[0] - lhs) == 0:
-            return Success()
-        if isinstance(lhs, sympy.ceiling) and sympy.simplify(lhs.args[0] - rhs) == 0:
-            return Success()
         return Failure(f"symbolic expr mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, (int, sympy.Basic)) and isinstance(rhs, (int, sympy.Basic)):
         if sympy.simplify(sympy.sympify(lhs) - sympy.sympify(rhs)) == 0:
@@ -942,6 +934,7 @@ def assert_constraints_equivalent(
     lhs_constraints: Sequence[Any],
     rhs_constraints: Sequence[Any],
     custom_comparators: Optional[dict[type, callable]] = None,
+    subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> None:
     """
     Assert that two lists of constraints are equivalent (order-independent).
@@ -954,8 +947,9 @@ def assert_constraints_equivalent(
         lhs_constraints: First list of constraints
         rhs_constraints: Second list of constraints
         custom_comparators: Optional dict mapping constraint types to custom comparison
-            functions. Each function should take (lhs, rhs) and return bool.
+            functions. Each function should take (lhs, rhs, subs) and return bool.
             If a constraint type is in this dict, its comparator is used instead of ==.
+        subs: Optional symbol-to-value substitutions for resolving symbolic expressions.
 
     Raises:
         AssertionError: If constraints are not equivalent
@@ -972,7 +966,7 @@ def assert_constraints_equivalent(
                 if isinstance(lhs_c, constraint_type) and isinstance(
                     rhs_c, constraint_type
                 ):
-                    return comparator(lhs_c, rhs_c)
+                    return comparator(lhs_c, rhs_c, subs)
         return lhs_c == rhs_c
 
     # Check each LHS constraint has a matching RHS constraint (order-independent)
@@ -986,7 +980,9 @@ def assert_constraints_equivalent(
 
 
 def compare_hardware_constraints_for_mlir_roundtrip(
-    source: HardwareConstraint, roundtripped: HardwareConstraint
+    source: HardwareConstraint,
+    roundtripped: HardwareConstraint,
+    subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> bool:
     """
     Compare HardwareConstraints for MLIR roundtrip testing.
@@ -1030,7 +1026,9 @@ def compare_hardware_constraints_for_mlir_roundtrip(
 
 
 def compare_tiling_constraints_for_mlir_roundtrip(
-    source: TilingConstraint, roundtripped: TilingConstraint
+    source: TilingConstraint,
+    roundtripped: TilingConstraint,
+    subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> bool:
     """Directional comparison for TilingConstraint during MLIR roundtrip.
 
@@ -1043,7 +1041,7 @@ def compare_tiling_constraints_for_mlir_roundtrip(
     """
     if source.dim != roundtripped.dim:
         return False
-    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size):
+    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size, subs):
         return False
     # These fields are populated by `create_induction_vars`, a
     # accept None on the source side
@@ -1057,16 +1055,18 @@ def compare_tiling_constraints_for_mlir_roundtrip(
 
 
 def compare_wave_constraints_for_mlir_roundtrip(
-    source: WaveConstraint, roundtripped: WaveConstraint
+    source: WaveConstraint,
+    roundtripped: WaveConstraint,
+    subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> bool:
     """Directional comparison for WaveConstraint during MLIR roundtrip.
 
-    Tolerates ceiling wrappers on tile_size (the emitter wraps exact
-    divisions in ceiling for the affine type system).
+    Tolerates ceiling wrappers on tile_size when the division is verified
+    to be exact under the given hyperparameter substitutions.
     """
     if source.dim != roundtripped.dim:
         return False
-    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size, None):
+    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size, subs):
         return False
     if source.wave_id is not None and source.wave_id != roundtripped.wave_id:
         return False
