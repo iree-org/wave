@@ -1,4 +1,4 @@
-Wave is a Python DSL for high-performance ML kernel development targeting AMD GPUs (ROCm). The default compilation path is pure Python using IREE for codegen. Water and WaveASM are optional C++ extensions that replace parts of the IREE path — see @water/CLAUDE.md and @waveasm/CLAUDE.md.
+Wave is a Python DSL for high-performance ML kernel development targeting AMD GPUs (ROCm). The default compilation path is pure Python using IREE for codegen. Water and WaveASM are optional C++ extensions that replace parts of the IREE path.
 
 ## Commands
 
