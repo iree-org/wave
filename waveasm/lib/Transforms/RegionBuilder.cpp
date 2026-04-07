@@ -339,6 +339,12 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
   // uniform values that flowed through VALU ops like v_min_i32 in split-K
   // trip-count computation) the comparison materializes a VGPR bool (0/1).
   // waveasm.if requires WaveASM_AnySGPR, so promote the condition.
+  //
+  // INVARIANT: the VGPR condition must be workgroup-uniform (all lanes hold
+  // the same value).  V_READFIRSTLANE_B32 reads only lane 0; if lanes
+  // diverge the scalar branch will follow lane 0's path for every lane,
+  // silently miscompiling.  This is safe for split-K trip-count tests
+  // (derived from workgroup_id).  Do NOT feed lane-varying conditions here.
   Value conditionValue = *condition;
   if (isa<ImmType>(conditionValue.getType())) {
     auto sregType = ctx.createSRegType();
