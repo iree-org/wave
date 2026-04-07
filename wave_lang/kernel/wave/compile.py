@@ -556,13 +556,6 @@ def build_graph_passes(
         )
 
     graph_passes += [
-        partial(
-            add_shared_memory_barriers,
-            trace,
-            target=options.target,
-            is_specialized=options.specialize,
-        ),
-        partial(add_cluster_barriers, trace, launchable.constraints, options),
         partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(simplify_indices, trace, launchable.constraints),
         partial(
@@ -613,6 +606,7 @@ def build_graph_passes(
             enforce_locations=options.enforce_locations,
         )
     )
+
     # Schedule the iterate ops.
     scheduling_type = options.schedule
     use_scheduling_barriers = options.use_scheduling_barriers
@@ -650,6 +644,16 @@ def build_graph_passes(
                 options.use_global_to_shared,
             ),
         )
+
+    graph_passes += [
+        partial(
+            add_shared_memory_barriers,
+            trace,
+            target=options.target,
+            is_specialized=options.specialize,
+        ),
+        partial(add_cluster_barriers, trace, launchable.constraints, options),
+    ]
 
     raw_graph_passes = [raw_graph_pass(graph_pass) for graph_pass in graph_passes]
     return wrap_graph_passes_with_region_adapters(trace, raw_graph_passes)
