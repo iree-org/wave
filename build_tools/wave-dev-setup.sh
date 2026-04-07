@@ -131,7 +131,7 @@ MLIR_DIR="$LLVM_BUILD/lib/cmake/mlir"
 LLD_DIR="$LLVM_BUILD/lib/cmake/lld"
 
 git_clone_depth=2
-VERBOSE=0
+VERBOSE="${VERBOSE:-0}"
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -150,8 +150,11 @@ Usage:
   --print-wave-env       Print shell exports for Wave development.
 
   --build-llvm           Clone (if needed), configure, and build LLVM/MLIR.
+                         Silent unless there are errors (see --verbose).
   --build-water          Configure and build the Water MLIR dialect.
+                         Silent unless there are errors (see --verbose).
   --build-waveasm        Configure and build the WaveASM backend.
+                         Silent unless there are errors (see --verbose).
   --build-all            Build LLVM, Water, and WaveASM (in order).
   --clean-llvm           Remove LLVM build and install directories.
   --clean-water          Remove Water build directory.
@@ -160,13 +163,18 @@ Usage:
   --checkout-llvm-sha    Check out the pinned LLVM SHA (from
                          water/llvm-sha.txt) in the local LLVM clone.
                          Does not modify the pin file itself.
-  --test-wave-lit        Run Wave lit tests.
+  --test-wave-lit        Run Wave lit tests.  Rebuilds native components
+                         first (silently; see --verbose).
   --test-wave-e2e        Run Wave Python e2e tests (pytest --run-e2e).
+                         Rebuilds native components first (silently).
   --test-water-lit       Run Water lit tests (ninja check-water).
+                         Rebuilds native components first (silently).
   --test-waveasm-lit     Run WaveASM lit tests (ninja check-waveasm).
+                         Rebuilds native components first (silently).
   --test-waveasm-e2e     Run WaveASM Python e2e tests (pytest --run-e2e).
-  --verbose              Show full build output in worktree-initialize
-                         (default: quiet, log on error).
+                         Rebuilds native components first (silently).
+  --verbose              Show full build output instead of suppressing it
+                         (default: quiet, show output only on error).
   --help                 Show this help message.
 
 Arguments after -- are passed to pytest (for e2e test commands):
@@ -217,6 +225,27 @@ require_llvm_install() {
         echo "error: LLVM install not found at $LLVM_INSTALL" >&2
         echo "Run --build-llvm first." >&2
         exit 1
+    fi
+}
+
+# Run a command silently, showing output only on failure.
+# When VERBOSE=1, output streams through directly instead.
+# Usage: run_silent "description" command [args...]
+run_silent() {
+    local desc="$1"
+    shift
+    if [[ "$VERBOSE" -eq 1 ]]; then
+        "$@"
+    else
+        local log_file
+        log_file="$(mktemp)"
+        if ! "$@" > "$log_file" 2>&1; then
+            echo "error: $desc failed. Output:" >&2
+            cat "$log_file" >&2
+            rm -f "$log_file"
+            exit 1
+        fi
+        rm -f "$log_file"
     fi
 }
 
@@ -353,16 +382,16 @@ do_build_waveasm() {
 
 do_test_waveasm_lit() {
     # Rebuild water and waveasm to ensure no stale native artifacts during testing.
-    do_build_water
-    do_build_waveasm
+    run_silent "Water build" do_build_water
+    run_silent "WaveASM build" do_build_waveasm
     echo "Running WaveASM lit tests ..."
     cmake --build "$WAVEASM_BUILD" --target check-waveasm
 }
 
 do_test_waveasm_e2e() {
     # Rebuild water and waveasm to ensure no stale native artifacts during testing.
-    do_build_water
-    do_build_waveasm
+    run_silent "Water build" do_build_water
+    run_silent "WaveASM build" do_build_waveasm
     echo "Running WaveASM Python e2e tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
@@ -372,16 +401,16 @@ do_test_waveasm_e2e() {
 
 do_test_water_lit() {
     # Rebuild water and waveasm to ensure no stale native artifacts during testing.
-    do_build_water
-    do_build_waveasm
+    run_silent "Water build" do_build_water
+    run_silent "WaveASM build" do_build_waveasm
     echo "Running Water lit tests ..."
     cmake --build "$WATER_BUILD" --target check-water
 }
 
 do_test_wave_lit() {
     # Rebuild water and waveasm to ensure no stale native artifacts during testing.
-    do_build_water
-    do_build_waveasm
+    run_silent "Water build" do_build_water
+    run_silent "WaveASM build" do_build_waveasm
     echo "Running Wave lit tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
@@ -391,8 +420,8 @@ do_test_wave_lit() {
 
 do_test_wave_e2e() {
     # Rebuild water and waveasm to ensure no stale native artifacts during testing.
-    do_build_water
-    do_build_waveasm
+    run_silent "Water build" do_build_water
+    run_silent "WaveASM build" do_build_waveasm
     echo "Running Wave Python e2e tests ..."
     WAVE_CACHE_ON=0 \
     PYTHONPATH="$WAVE_DIR" \
@@ -433,7 +462,10 @@ EOF
 do_worktree_initialize() {
     local venv_dir="$WAVE_DIR/.venv"
 
-    run_init() {
+    # Wrapped in a function so run_silent can invoke it.
+    # run_silent runs this in the current shell, so we use a subshell
+    # inside to keep `source` and `trap` from leaking.
+    run_init() {(
         set -euo pipefail
         pytorch_req="$(mktemp /tmp/pytorch-rocm-requirements.XXXXXX.txt)"
         trap "rm -f '$pytorch_req'" EXIT
@@ -449,21 +481,9 @@ do_worktree_initialize() {
         WAVE_WAVEASM_DIR="$WAVEASM_BUILD" \
         WAVE_WATER_DIR="$WATER_BUILD" \
             uv pip install -e "$WAVE_DIR[dev]"
-    }
+    )}
 
-    if [[ "$VERBOSE" -eq 1 ]]; then
-        (run_init)
-    else
-        local log_file
-        log_file="$(mktemp)"
-        if ! (run_init) > "$log_file" 2>&1; then
-            echo "error: worktree initialization failed. Output:" >&2
-            cat "$log_file" >&2
-            rm -f "$log_file"
-            exit 1
-        fi
-        rm -f "$log_file"
-    fi
+    run_silent "worktree initialization" run_init
 
     do_print_wave_env
 }
@@ -583,9 +603,9 @@ for action in "${ACTIONS[@]}"; do
         clean-llvm)          do_clean_llvm ;;
         clean-water)         do_clean_water ;;
         clean-waveasm)       do_clean_waveasm ;;
-        build-llvm)          do_build_llvm ;;
-        build-water)         do_build_water ;;
-        build-waveasm)       do_build_waveasm ;;
+        build-llvm)          run_silent "LLVM build" do_build_llvm ;;
+        build-water)         run_silent "Water build" do_build_water ;;
+        build-waveasm)       run_silent "WaveASM build" do_build_waveasm ;;
         checkout-llvm-sha)   do_checkout_llvm_sha ;;
         test-wave-lit)       do_test_wave_lit ;;
         test-wave-e2e)       do_test_wave_e2e ;;
