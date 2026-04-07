@@ -380,14 +380,14 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     else:
         vgpr_count = 164
         vgpr_spill_count = 0
-        sgpr_count = 60
+        sgpr_count = 61
         sgpr_spill_count = 0
         waitcounts = [
             "s_waitcnt lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
             "s_waitcnt vmcnt(0) lgkmcnt(0)",
             "s_waitcnt vmcnt(0)",
-            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(7)",
             "s_waitcnt lgkmcnt(6)",
             "s_waitcnt lgkmcnt(5)",
             "s_waitcnt lgkmcnt(4)",
