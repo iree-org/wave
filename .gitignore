@@ -59,3 +59,6 @@ water/build_tools/wheel/water_mlir/water_mlir
 
 # rocm version detection
 requirements-pytorch-rocm-generated.txt
+
+# Claude
+CLAUDE.local.md
