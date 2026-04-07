@@ -46,7 +46,7 @@ def compile_to_vmfb(
 
     # TODO: More targets/backends support.
     if options.device == "hip" or options.device == "rocm":
-        flags.append(f"--iree-rocm-target={options.target}")
+        flags.append(f"--iree-hip-target={options.target}")
         if not options.drop_debug_info_before_mlir:
             flags.append("--iree-rocm-emit-debug-info")
 
