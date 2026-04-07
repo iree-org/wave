@@ -48,8 +48,8 @@ bool shouldPropagateIndexExprs(const wave::IndexExprsLatticeStorage &from,
 llvm::LogicalResult buildThreadIndependentIndexMappings(
     mlir::Operation *op, mlir::Type type,
     const IndexExprsAnalysisInit &initObject,
-    llvm::SmallVectorImpl<wave::WaveSymbolAttr> &symbols,
-    llvm::SmallVectorImpl<wave::WaveIndexMappingAttr> &indexExprs);
+    llvm::SmallVectorImpl<
+        std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>> &entries);
 
 // Create a new vector shape with only the provided symbols present.
 wave::WaveSymbolMappingAttr

@@ -10,6 +10,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "water/Dialect/NormalForm/IR/NormalFormInterfaces.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace wave {
 
@@ -42,7 +43,8 @@ bool allExprSymbolsOfType(WaveExprListAttr expr) {
 /// template arguments. Does NOT emit diagnostics.
 template <typename... ValueTypes>
 bool areAllSymbolMappingValuesAllowed(WaveSymbolMappingAttr mapping) {
-  return llvm::all_of(mapping.getValues(), llvm::IsaPred<ValueTypes...>);
+  return llvm::all_of(llvm::make_second_range(mapping),
+                      llvm::IsaPred<ValueTypes...>);
 }
 
 /// Check that all expression lists used as values of the mapping have exactly
@@ -50,9 +52,10 @@ bool areAllSymbolMappingValuesAllowed(WaveSymbolMappingAttr mapping) {
 static inline bool
 areAllSymbolMappingValuesNResultExprLists(WaveSymbolMappingAttr mapping,
                                           unsigned n) {
-  return llvm::all_of(mapping.getValues(), [&](mlir::Attribute attr) {
-    return llvm::cast<WaveExprListAttr>(attr).getMap().getNumResults() == n;
-  });
+  return llvm::all_of(
+      llvm::make_second_range(mapping), [&](mlir::Attribute attr) {
+        return llvm::cast<WaveExprListAttr>(attr).getMap().getNumResults() == n;
+      });
 }
 } // namespace detail
 

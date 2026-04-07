@@ -749,7 +749,7 @@ struct PyWaveSymbolMappingAttr
           mlirWaveSymbolMappingAttrLookup(self, keyAttr));
     });
     c.def("__len__", [](MlirAttribute self) -> intptr_t {
-      return mlirWaveSymbolMappingAttrGetNumEntries(self);
+      return mlirWaveSymbolMappingAttrSize(self);
     });
     c.def("__getitem__", [](MlirAttribute self, MlirAttribute key) {
       MlirAttribute value = mlirWaveSymbolMappingAttrLookup(self, key);
@@ -769,7 +769,7 @@ struct PyWaveSymbolMappingAttr
       return value;
     });
     c.def("__getitem__", [](MlirAttribute self, intptr_t index) {
-      if (index < 0 || index >= mlirWaveSymbolMappingAttrGetNumEntries(self)) {
+      if (index < 0 || index >= mlirWaveSymbolMappingAttrSize(self)) {
         throw nb::index_error("Index out of range.");
       }
       return nb::make_tuple(mlirWaveSymbolMappingAttrGetKey(self, index),

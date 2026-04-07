@@ -466,32 +466,30 @@ bool mlirAttributeIsAWaveSymbolMappingAttr(MlirAttribute attr) {
 MlirAttribute mlirWaveSymbolMappingAttrGet(MlirContext ctx, intptr_t numEntries,
                                            MlirAttribute *keys,
                                            MlirAttribute *values) {
-  SmallVector<wave::WaveSymbolAttr> keyAttrs;
-  SmallVector<Attribute> valueAttrs;
-  keyAttrs.reserve(numEntries);
-  valueAttrs.reserve(numEntries);
-  for (intptr_t i = 0; i < numEntries; ++i) {
-    keyAttrs.push_back(llvm::cast<wave::WaveSymbolAttr>(unwrap(keys[i])));
-    valueAttrs.push_back(unwrap(values[i]));
-  }
-  return wrap(
-      wave::WaveSymbolMappingAttr::get(unwrap(ctx), keyAttrs, valueAttrs));
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
+  entries.reserve(numEntries);
+  for (intptr_t i = 0; i < numEntries; ++i)
+    entries.emplace_back(llvm::cast<wave::WaveSymbolAttr>(unwrap(keys[i])),
+                         unwrap(values[i]));
+  return wrap(wave::WaveSymbolMappingAttr::get(unwrap(ctx), entries));
 }
 
-intptr_t mlirWaveSymbolMappingAttrGetNumEntries(MlirAttribute attr) {
-  return llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr)).getNumEntries();
+intptr_t mlirWaveSymbolMappingAttrSize(MlirAttribute attr) {
+  return llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr)).size();
 }
 
 MlirAttribute mlirWaveSymbolMappingAttrGetKey(MlirAttribute attr,
                                               intptr_t index) {
-  return wrap(
-      llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr)).getKeys()[index]);
+  return wrap(llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr))
+                  .getMapping()[index]
+                  .first);
 }
 
 MlirAttribute mlirWaveSymbolMappingAttrGetValue(MlirAttribute attr,
                                                 intptr_t index) {
-  return wrap(
-      llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr)).getValues()[index]);
+  return wrap(llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(attr))
+                  .getMapping()[index]
+                  .second);
 }
 
 MlirAttribute mlirWaveSymbolMappingAttrLookup(MlirAttribute attr,

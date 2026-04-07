@@ -117,32 +117,30 @@ wave::detail::filterVectorShape(wave::WaveSymbolMappingAttr vectorShape,
                                 llvm::ArrayRef<wave::WaveSymbolAttr> symbols) {
   if (!vectorShape)
     return vectorShape;
-  SmallVector<wave::WaveSymbolAttr> filteredKeys;
-  SmallVector<Attribute> filteredValues;
-  filteredKeys.reserve(vectorShape.getNumEntries());
-  filteredValues.reserve(vectorShape.getNumEntries());
-  for (auto [key, value] : vectorShape.getMapping()) {
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> filtered;
+  filtered.reserve(vectorShape.size());
+  for (auto [key, value] : vectorShape) {
     if (!llvm::is_contained(symbols, key))
       continue;
-    filteredKeys.push_back(key);
-    filteredValues.push_back(value);
+    filtered.emplace_back(key, value);
   }
-  return wave::WaveSymbolMappingAttr::get(vectorShape.getContext(),
-                                          filteredKeys, filteredValues);
+  return wave::WaveSymbolMappingAttr::get(vectorShape.getContext(), filtered);
 }
 
 static void initializeIndexExprsWithThreadIndependentConstraints(
     Operation *op, Type type, wave::IndexExprsLatticeStorage &storage,
     const wave::IndexExprsAnalysisInit &initObject) {
-  llvm::SmallVector<wave::WaveSymbolAttr> symbols;
-  llvm::SmallVector<wave::WaveIndexMappingAttr> indexExprs;
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      entries;
   if (failed(wave::detail::buildThreadIndependentIndexMappings(
-          op, type, initObject, symbols, indexExprs)))
+          op, type, initObject, entries)))
     return;
 
   auto tensorType = cast<wave::WaveTensorType>(type);
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> indexEntries(
+      entries.begin(), entries.end());
   storage.unsafeSet(wave::IndexExprsLatticeStorage(
-      wave::WaveSymbolMappingAttr::get(op->getContext(), symbols, indexExprs),
+      wave::WaveSymbolMappingAttr::get(op->getContext(), indexEntries),
       wave::IndexExprsLatticeStorage::kLowestPriority,
       wave::detail::filterVectorShape(
           initObject.hardwareConstraint.getVectorShapes(),
@@ -218,9 +216,11 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
   MLIRContext *ctx = concreteValue.getContext();
   IntegerType i32 = IntegerType::get(ctx, 32);
   IntegerAttr priAttr = IntegerAttr::get(i32, priority);
-  SmallVector<Attribute> priValues(concreteValue.getNumEntries(), priAttr);
-  priorities =
-      WaveSymbolMappingAttr::get(ctx, concreteValue.getKeys(), priValues);
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> priEntries;
+  priEntries.reserve(concreteValue.size());
+  for (auto [key, _] : concreteValue)
+    priEntries.emplace_back(key, priAttr);
+  priorities = WaveSymbolMappingAttr::get(ctx, priEntries);
 }
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
@@ -229,7 +229,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
       vectorShape(vectorShape), sourceVectorShape(vectorShape) {
   if (priorities) {
-    for (Attribute priVal : priorities.getValues())
+    for (auto [_, priVal] : priorities)
       sourceVectorShapePriority = std::max<int32_t>(
           sourceVectorShapePriority, llvm::cast<IntegerAttr>(priVal).getInt());
   }
@@ -730,43 +730,35 @@ getJoinedVectorShape(wave::WaveSymbolMappingAttr lhs,
     return val.getInt();
   };
 
-  SmallVector<wave::WaveSymbolAttr> joinedKeys;
-  SmallVector<Attribute> joinedValues;
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> joined;
 
   llvm::DenseSet<wave::WaveSymbolAttr> visited;
-  for (auto [key, value] : lhs.getMapping()) {
+  for (auto [key, value] : lhs) {
     visited.insert(key);
     Attribute rhsValue = rhs.lookup(key);
     if (!rhsValue) {
-      joinedKeys.push_back(key);
-      joinedValues.push_back(value);
+      joined.emplace_back(key, value);
       continue;
     }
     int32_t lhsPriority = getPriority(lhsPriorities, key);
     int32_t rhsPriority = getPriority(rhsPriorities, key);
     if (lhsPriority > rhsPriority) {
-      joinedKeys.push_back(key);
-      joinedValues.push_back(value);
+      joined.emplace_back(key, value);
     } else if (rhsPriority > lhsPriority) {
-      joinedKeys.push_back(key);
-      joinedValues.push_back(rhsValue);
+      joined.emplace_back(key, rhsValue);
     } else {
       if (value != rhsValue)
         return nullptr;
-      joinedKeys.push_back(key);
-      joinedValues.push_back(value);
+      joined.emplace_back(key, value);
     }
   }
 
-  for (auto [key, value] : rhs.getMapping()) {
-    if (!visited.contains(key)) {
-      joinedKeys.push_back(key);
-      joinedValues.push_back(value);
-    }
+  for (auto [key, value] : rhs) {
+    if (!visited.contains(key))
+      joined.emplace_back(key, value);
   }
 
-  return wave::WaveSymbolMappingAttr::get(lhs.getContext(), joinedKeys,
-                                          joinedValues);
+  return wave::WaveSymbolMappingAttr::get(lhs.getContext(), joined);
 }
 
 FailureOr<wave::WaveSymbolMappingAttr>
@@ -834,13 +826,11 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   IntegerType i32 = IntegerType::get(ctx, 32);
   llvm::MapVector<wave::WaveSymbolAttr, Attribute> result;
   llvm::MapVector<wave::WaveSymbolAttr, int32_t> resultPriorities;
-  for (auto [key, val] :
-       llvm::zip(lhsMapping.getKeys(), lhsMapping.getValues())) {
+  for (auto [key, val] : lhsMapping) {
     result[key] = val;
     resultPriorities[key] = lhs.getPriorityForKey(key);
   }
-  for (auto [key, val] :
-       llvm::zip(rhsMapping.getKeys(), rhsMapping.getValues())) {
+  for (auto [key, val] : rhsMapping) {
     int32_t rhsPriority = rhs.getPriorityForKey(key);
 
     auto [it, inserted] = result.try_emplace(key, val);
@@ -882,27 +872,19 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   auto [joinedSourceVectorShape, joinedSourceVectorShapePriority] =
       *joinedSVSResult;
 
-  SmallVector<wave::WaveSymbolAttr> priKeys;
-  SmallVector<Attribute> priValues;
-  priKeys.reserve(resultPriorities.size());
-  priValues.reserve(resultPriorities.size());
-  for (auto &[key, pri] : resultPriorities) {
-    priKeys.push_back(key);
-    priValues.push_back(IntegerAttr::get(i32, pri));
-  }
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> priEntries;
+  priEntries.reserve(resultPriorities.size());
+  for (auto &[key, pri] : resultPriorities)
+    priEntries.emplace_back(key, IntegerAttr::get(i32, pri));
 
-  SmallVector<wave::WaveSymbolAttr> joinedKeys;
-  SmallVector<Attribute> joinedValues;
-  joinedKeys.reserve(result.size());
-  joinedValues.reserve(result.size());
-  for (auto &[key, val] : result) {
-    joinedKeys.push_back(key);
-    joinedValues.push_back(val);
-  }
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> joinedEntries;
+  joinedEntries.reserve(result.size());
+  for (auto &[key, val] : result)
+    joinedEntries.emplace_back(key, val);
 
   IndexExprsLatticeStorage joined(
-      WaveSymbolMappingAttr::get(ctx, joinedKeys, joinedValues),
-      WaveSymbolMappingAttr::get(ctx, priKeys, priValues), joinedVectorShape,
+      WaveSymbolMappingAttr::get(ctx, joinedEntries),
+      WaveSymbolMappingAttr::get(ctx, priEntries), joinedVectorShape,
       joinedSourceVectorShape, joinedSourceVectorShapePriority);
   return joined;
 }
@@ -927,31 +909,27 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
                                                  symbols.end());
 
   WaveSymbolMappingAttr mapping = getConcreteValue();
-  SmallVector<wave::WaveSymbolAttr> filteredKeys;
-  SmallVector<Attribute> filteredValues;
-  for (auto [key, val] : mapping.getMapping()) {
+  MLIRContext *ctx = getConcreteValue().getContext();
+  IntegerType i32 = IntegerType::get(ctx, 32);
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> filtered;
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> filteredPri;
+  for (auto [key, val] : mapping) {
     if (symbolSet.contains(key)) {
-      filteredKeys.push_back(key);
-      filteredValues.push_back(val);
+      filtered.emplace_back(key, val);
+      filteredPri.emplace_back(key,
+                               IntegerAttr::get(i32, getPriorityForKey(key)));
     }
   }
   wave::WaveSymbolMappingAttr filteredVectorShape =
       detail::filterVectorShape(getVectorShape(), symbols);
 
-  if (filteredKeys.empty())
+  if (filtered.empty())
     return bottom();
 
-  MLIRContext *ctx = getConcreteValue().getContext();
-  IntegerType i32 = IntegerType::get(ctx, 32);
-  SmallVector<Attribute> filteredPriValues;
-  filteredPriValues.reserve(filteredKeys.size());
-  for (wave::WaveSymbolAttr key : filteredKeys)
-    filteredPriValues.push_back(IntegerAttr::get(i32, getPriorityForKey(key)));
-
-  return IndexExprsLatticeStorage(
-      WaveSymbolMappingAttr::get(ctx, filteredKeys, filteredValues),
-      WaveSymbolMappingAttr::get(ctx, filteredKeys, filteredPriValues),
-      filteredVectorShape, sourceVectorShape, sourceVectorShapePriority);
+  return IndexExprsLatticeStorage(WaveSymbolMappingAttr::get(ctx, filtered),
+                                  WaveSymbolMappingAttr::get(ctx, filteredPri),
+                                  filteredVectorShape, sourceVectorShape,
+                                  sourceVectorShapePriority);
 }
 
 wave::IndexExprsLatticeStorage
@@ -962,20 +940,19 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
 
   MLIRContext *ctx = getConcreteValue().getContext();
   WaveSymbolMappingAttr mapping = getConcreteValue();
-  SmallVector<Attribute> updatedValues;
-  updatedValues.reserve(mapping.getNumEntries());
-  for (auto [key, val] : mapping.getMapping()) {
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> updated;
+  updated.reserve(mapping.size());
+  for (auto [key, val] : mapping) {
     auto idxMapping = llvm::cast<wave::WaveIndexMappingAttr>(val);
     for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
       auto actualIterSymbol =
           wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
       idxMapping = idxMapping.removeInput(actualIterSymbol);
     }
-    updatedValues.push_back(idxMapping);
+    updated.emplace_back(key, idxMapping);
   }
-  IndexExprsLatticeStorage result(
-      WaveSymbolMappingAttr::get(ctx, mapping.getKeys(), updatedValues),
-      getPriorities(), getVectorShape());
+  IndexExprsLatticeStorage result(WaveSymbolMappingAttr::get(ctx, updated),
+                                  getPriorities(), getVectorShape());
   result.sourceVectorShape = sourceVectorShape;
   result.sourceVectorShapePriority = sourceVectorShapePriority;
   return result;
@@ -989,7 +966,7 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   } else {
     os << "[pri: {";
     bool first = true;
-    for (WaveSymbolAttr key : getConcreteValue().getKeys()) {
+    for (auto [key, _] : getConcreteValue()) {
       if (!first)
         os << ", ";
       first = false;
@@ -1200,8 +1177,8 @@ struct MmaSingleIndexExprBuilder {
   MmaSingleIndexExprBuilder &k();
 
   // Populate the attributes with all index expressions.
-  void populate(SmallVectorImpl<WaveSymbolAttr> &keys,
-                SmallVectorImpl<WaveIndexMappingAttr> &indexExprs) const;
+  void populate(SmallVectorImpl<std::pair<WaveSymbolAttr, WaveIndexMappingAttr>>
+                    &entries) const;
 
   MmaIndexingExprBuilder &parent;
   AffineExpr offsetExpr, sizeExpr, strideExpr;
@@ -1249,8 +1226,8 @@ struct MmaIndexingExprBuilder {
   MmaSingleIndexExprBuilder &k() { return kBuilder; }
 
   // Populate the attributes with all index expressions.
-  void populate(SmallVectorImpl<WaveSymbolAttr> &keys,
-                SmallVectorImpl<WaveIndexMappingAttr> &indexExprs) const {
+  void populate(SmallVectorImpl<std::pair<WaveSymbolAttr, WaveIndexMappingAttr>>
+                    &entries) const {
     MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
     auto buildMap = [&](AffineExpr expr) {
@@ -1265,18 +1242,12 @@ struct MmaIndexingExprBuilder {
           buildMap(builder.sizeExpr), buildMap(builder.strideExpr));
     };
 
-    if (mSymbol) {
-      keys.push_back(mSymbol);
-      indexExprs.push_back(buildOne(mBuilder));
-    }
-    if (nSymbol) {
-      keys.push_back(nSymbol);
-      indexExprs.push_back(buildOne(nBuilder));
-    }
-    if (kSymbol) {
-      keys.push_back(kSymbol);
-      indexExprs.push_back(buildOne(kBuilder));
-    }
+    if (mSymbol)
+      entries.emplace_back(mSymbol, buildOne(mBuilder));
+    if (nSymbol)
+      entries.emplace_back(nSymbol, buildOne(nBuilder));
+    if (kSymbol)
+      entries.emplace_back(kSymbol, buildOne(kBuilder));
   }
 
   llvm::ArrayRef<Attribute> symbols;
@@ -1318,9 +1289,9 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
   return parent.k();
 }
 void MmaSingleIndexExprBuilder::populate(
-    SmallVectorImpl<WaveSymbolAttr> &keys,
-    SmallVectorImpl<WaveIndexMappingAttr> &indexExprs) const {
-  parent.populate(keys, indexExprs);
+    SmallVectorImpl<std::pair<WaveSymbolAttr, WaveIndexMappingAttr>> &entries)
+    const {
+  parent.populate(entries);
 }
 } // namespace
 
@@ -1389,27 +1360,18 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
   auto iAttr = [&](int64_t value) {
     return IntegerAttr::get(IntegerType::get(ctx, 64), value);
   };
-  SmallVector<wave::WaveSymbolAttr> keys;
-  SmallVector<Attribute> values;
-  if (mSymbol) {
-    keys.push_back(mSymbol);
-    values.push_back(iAttr(m));
-  }
-  if (nSymbol) {
-    keys.push_back(nSymbol);
-    values.push_back(iAttr(n));
-  }
-  if (kSymbol) {
-    keys.push_back(kSymbol);
-    values.push_back(iAttr(k));
-  }
-  if (kScaledSymbol) {
-    keys.push_back(kScaledSymbol);
-    values.push_back(iAttr(kScaled));
-  }
+  SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
+  if (mSymbol)
+    entries.emplace_back(mSymbol, iAttr(m));
+  if (nSymbol)
+    entries.emplace_back(nSymbol, iAttr(n));
+  if (kSymbol)
+    entries.emplace_back(kSymbol, iAttr(k));
+  if (kScaledSymbol)
+    entries.emplace_back(kScaledSymbol, iAttr(kScaled));
 
   if (hwVectorShape) {
-    for (auto [key, value] : hwVectorShape.getMapping()) {
+    for (auto [key, value] : hwVectorShape) {
       if (mSymbol && key == mSymbol) {
         if (delayedErrorEmitter && cast<IntegerAttr>(value).getValue() != m) {
           wave::EmitDelayedErrorFn previous = *delayedErrorEmitter;
@@ -1463,14 +1425,12 @@ getMmaVectorShape(Location loc, wave::WaveMmaKind kind,
         }
         continue;
       }
-      if (llvm::is_contained(batchSymbols, key)) {
-        keys.push_back(key);
-        values.push_back(value);
-      }
+      if (llvm::is_contained(batchSymbols, key))
+        entries.emplace_back(key, value);
     }
   }
 
-  return wave::WaveSymbolMappingAttr::get(ctx, keys, values);
+  return wave::WaveSymbolMappingAttr::get(ctx, entries);
 }
 
 // Populate `attributes` with index expressions for the symbols associated with
@@ -1489,8 +1449,8 @@ static llvm::LogicalResult populateMmaIndexingExpr(
     wave::WaveMmaKind kind, bool isAccumulator, bool isScaled, bool isFP4,
     llvm::ArrayRef<unsigned> wavesPerWorkgroup, int64_t threadsPerWave,
     wave::WaveSymbolAttr mSymbol, wave::WaveSymbolAttr nSymbol,
-    wave::WaveSymbolAttr kSymbol, SmallVectorImpl<WaveSymbolAttr> &keys,
-    SmallVectorImpl<WaveIndexMappingAttr> &indexExprs) {
+    wave::WaveSymbolAttr kSymbol,
+    SmallVectorImpl<std::pair<WaveSymbolAttr, WaveIndexMappingAttr>> &entries) {
   MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
   llvm::SmallVector<Attribute> symbolNames = {
@@ -1523,7 +1483,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(4 * laneId.floorDiv(16))
         .size(4)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
 
   case wave::WaveMmaKind::F32_32x32x8_F16:
@@ -1542,7 +1502,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(4 * laneId.floorDiv(32))
         .size(4)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
 
   case wave::WaveMmaKind::F32_16x16x32_F8:
@@ -1562,7 +1522,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(8 * laneId.floorDiv(16))
         .size(8)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_16x16x32_K4_F8:
     builder.m()
@@ -1578,7 +1538,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
                 (gprNum % 4))
         .size(8)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_32x32x16_F8:
   case wave::WaveMmaKind::F32_32x32x16_BF16:
@@ -1599,7 +1559,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(8 * laneId.floorDiv(32))
         .size(8)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_32x32x16_K4_F8:
     builder.m()
@@ -1616,7 +1576,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(8 * gprNum.floorDiv(4) + 4 * laneId.floorDiv(32) + (gprNum % 4))
         .size(8)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
 
   case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
@@ -1635,7 +1595,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
                           (gprNum % 16))
         .size(isScaled ? 1 : 32)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
   case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
     builder.m()
@@ -1652,7 +1612,7 @@ static llvm::LogicalResult populateMmaIndexingExpr(
         .offset(32 * laneId.floorDiv(32))
         .size(32)
         .stride(1)
-        .populate(keys, indexExprs);
+        .populate(entries);
     return llvm::success();
   }
 }
@@ -1669,37 +1629,33 @@ static void mixInThreadIndependentConstraints(
     Operation *where, uint64_t threadsPerWave, RangeT &&indexingSymbols,
     const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints,
-    SmallVectorImpl<wave::WaveSymbolAttr> &symbols,
-    SmallVectorImpl<wave::WaveIndexMappingAttr> &indexExprs) {
+    SmallVectorImpl<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+        &entries) {
 
   static_assert(
       std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
                      wave::WaveSymbolAttr>,
       "expected a range of WaveSymbolAttr");
-  assert(symbols.size() == indexExprs.size() &&
-         "symbols and expressions must have the same size");
 
   auto zero = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
                              getAffineConstantExpr(0, where->getContext()));
   auto one = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
                             getAffineConstantExpr(1, where->getContext()));
   for (wave::WaveSymbolAttr symbol : indexingSymbols) {
-    auto symbolIt = llvm::find(symbols, symbol);
-    wave::WaveIndexMappingAttr mapping = [&]() {
-      if (symbolIt != symbols.end())
-        return indexExprs[std::distance(symbols.begin(), symbolIt)];
-
+    auto entryIt =
+        llvm::find_if(entries, [&](auto &p) { return p.first == symbol; });
+    if (entryIt == entries.end()) {
       auto mapping = wave::WaveIndexMappingAttr::get(
           where->getContext(), /*symbols=*/{}, zero, one, one);
-      symbols.push_back(symbol);
-      indexExprs.push_back(mapping);
-      return mapping;
-    }();
+      entryIt = entries.insert(entries.end(), {symbol, mapping});
+    }
 
     auto it = symbolConstraints.find(symbol);
     if (it == symbolConstraints.end()) {
       continue;
     }
+
+    wave::WaveIndexMappingAttr &mapping = entryIt->second;
 
     // There is interaction between constraints of different kinds for the same
     // symbol, find them all upfront.
@@ -1730,7 +1686,7 @@ static void mixInThreadIndependentConstraints(
         if (!iterateOp)
           continue;
         wave::WaveSymbolAttr iterSymbol = iterateOp.getIterator();
-        if (iterSymbol.getName() == symbol.getName()) {
+        if (iterSymbol == symbol) {
           mapping = applyConstraint(tilingConstraint, mapping);
           break;
         }
@@ -1746,13 +1702,6 @@ static void mixInThreadIndependentConstraints(
       mapping = applyConstraint(
           waveConstraint, workgroupConstraint.getWorkgroupDim().getValue(),
           threadsPerWave, mapping);
-    }
-
-    if (symbolIt != symbols.end()) {
-      indexExprs[std::distance(symbols.begin(), symbolIt)] = mapping;
-    } else if (mapping) {
-      indexExprs.push_back(mapping);
-      symbols.push_back(symbol);
     }
   }
 }
@@ -1842,9 +1791,9 @@ bool wave::detail::shouldPropagateIndexExprs(
     }
   }
 
-  SmallVector<StringAttr> toKeys = llvm::map_to_vector(
-      to.getConcreteValue().getKeys(), [](wave::WaveSymbolAttr sym) {
-        return StringAttr::get(sym.getContext(), sym.getName());
+  SmallVector<StringAttr> toKeys =
+      llvm::map_to_vector(to.getConcreteValue(), [](auto pair) {
+        return StringAttr::get(pair.first.getContext(), pair.first.getName());
       });
   auto isSubset = [](ArrayRef<StringAttr> subset,
                      ArrayRef<StringAttr> superset) {
@@ -1864,8 +1813,8 @@ bool wave::detail::shouldPropagateIndexExprs(
 
 LogicalResult wave::detail::buildThreadIndependentIndexMappings(
     Operation *op, Type type, const wave::IndexExprsAnalysisInit &initObject,
-    SmallVectorImpl<wave::WaveSymbolAttr> &symbols,
-    SmallVectorImpl<wave::WaveIndexMappingAttr> &indexExprs) {
+    SmallVectorImpl<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+        &entries) {
   auto tensorType = dyn_cast<wave::WaveTensorType>(type);
   if (!tensorType)
     return failure();
@@ -1873,7 +1822,7 @@ LogicalResult wave::detail::buildThreadIndependentIndexMappings(
   ArrayRef<wave::WaveSymbolAttr> indexingSymbols = tensorType.getShape();
   mixInThreadIndependentConstraints(
       op, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
-      initObject.symbolConstraints, symbols, indexExprs);
+      initObject.symbolConstraints, entries);
   return success();
 }
 
@@ -1886,10 +1835,9 @@ LogicalResult MmaOp::initializeIndexExprsForward(
     const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
   ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
       cast<wave::WaveTensorType>(getResult().getType()).getShape();
-  SmallVector<wave::WaveSymbolAttr> symbols;
-  SmallVector<wave::WaveIndexMappingAttr> indexExprs;
-  symbols.reserve(indexingSymbols.size());
-  indexExprs.reserve(indexingSymbols.size());
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      entries;
+  entries.reserve(indexingSymbols.size());
 
   assert(indexingSymbols.size() >= 2 &&
          "at least 2 indexing symbols are required for MMA result");
@@ -1904,7 +1852,7 @@ LogicalResult MmaOp::initializeIndexExprsForward(
           /*isAccumulator=*/true, /*isScaled=*/false, /*isFP4=*/false,
           initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          /*kSymbol=*/nullptr, symbols, indexExprs))) {
+          /*kSymbol=*/nullptr, entries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
@@ -1918,11 +1866,13 @@ LogicalResult MmaOp::initializeIndexExprsForward(
                      1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
-      initObject.symbolConstraints, symbols, indexExprs);
+      initObject.symbolConstraints, entries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>> resultEntries(
+      entries.begin(), entries.end());
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "MMA result",
       wave::IndexExprsLatticeStorage(
-          WaveSymbolMappingAttr::get(getContext(), symbols, indexExprs),
+          wave::WaveSymbolMappingAttr::get(getContext(), resultEntries),
           priority,
           getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
                             /*kSymbol=*/nullptr,
@@ -1935,20 +1885,16 @@ LogicalResult MmaOp::initializeIndexExprsForward(
 
 // Populate the filteredSymbols and filteredIndexExprs with the symbols and
 // index expressions except the excluded one.
-static void
-filterSymbol(const SmallVector<wave::WaveSymbolAttr> &symbols,
-             const SmallVector<wave::WaveIndexMappingAttr> &indexExprs,
-             WaveSymbolAttr exclude,
-             SmallVectorImpl<wave::WaveSymbolAttr> &filteredSymbols,
-             SmallVectorImpl<wave::WaveIndexMappingAttr> &filteredIndexExprs) {
-  filteredSymbols.reserve(filteredSymbols.size() + symbols.size());
-  filteredIndexExprs.reserve(filteredIndexExprs.size() + indexExprs.size());
-  for (auto &&[symbol, indexExpr] : llvm::zip_equal(symbols, indexExprs)) {
-    if (symbol != exclude) {
-      filteredSymbols.push_back(symbol);
-      filteredIndexExprs.push_back(indexExpr);
-    }
-  }
+static void filterSymbol(
+    llvm::ArrayRef<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+        entries,
+    WaveSymbolAttr exclude,
+    SmallVectorImpl<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+        &filtered) {
+  filtered.reserve(filtered.size() + entries.size());
+  for (auto &entry : entries)
+    if (entry.first != exclude)
+      filtered.push_back(entry);
 }
 
 // Initialize the index expression lattices for the operands of the MMA
@@ -1973,28 +1919,26 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   // Reserve space for 1 more since the list will initially contain m,n,k along
   // with batch dimensions until we drop either m or n for each operand.
-  SmallVector<wave::WaveSymbolAttr> operandSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> operandIndexExprs;
-  operandSymbols.reserve(lhsType.getShape().size() + 1);
-  operandIndexExprs.reserve(lhsType.getShape().size() + 1);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      operandEntries;
+  operandEntries.reserve(lhsType.getShape().size() + 1);
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, /*isScaled=*/false,
           /*isFP4=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          kSymbol, operandSymbols, operandIndexExprs))) {
+          kSymbol, operandEntries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  SmallVector<wave::WaveSymbolAttr> accumulatorSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> accumulatorIndexExprs;
-  accumulatorSymbols.reserve(resultType.getShape().size());
-  accumulatorIndexExprs.reserve(resultType.getShape().size());
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      accumulatorEntries;
+  accumulatorEntries.reserve(resultType.getShape().size());
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, /*isScaled=*/false, /*isFP4=*/false,
           initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          nullptr, accumulatorSymbols, accumulatorIndexExprs))) {
+          nullptr, accumulatorEntries))) {
     return emitError() << "MMA kind not supported by index deduction";
   }
 
@@ -2004,21 +1948,19 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       llvm::concat<const WaveSymbolAttr>(batchSymbols,
                                          ArrayRef{mSymbol, nSymbol, kSymbol}),
-      initObject.symbolConstraints, operandSymbols, operandIndexExprs);
+      initObject.symbolConstraints, operandEntries);
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       llvm::concat<const WaveSymbolAttr>(batchSymbols,
                                          ArrayRef{mSymbol, nSymbol}),
-      initObject.symbolConstraints, accumulatorSymbols, accumulatorIndexExprs);
+      initObject.symbolConstraints, accumulatorEntries);
 
-  SmallVector<wave::WaveSymbolAttr> lhsSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> lhsIndexExprs;
-  filterSymbol(operandSymbols, operandIndexExprs, nSymbol, lhsSymbols,
-               lhsIndexExprs);
-  SmallVector<wave::WaveSymbolAttr> rhsSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> rhsIndexExprs;
-  filterSymbol(operandSymbols, operandIndexExprs, mSymbol, rhsSymbols,
-               rhsIndexExprs);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      lhsEntries;
+  filterSymbol(operandEntries, nSymbol, lhsEntries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      rhsEntries;
+  filterSymbol(operandEntries, mSymbol, rhsEntries);
 
   // Set the priority based on the order of operations: earlier MMAs have higher
   // priority.
@@ -2028,11 +1970,12 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                      std::distance(llvm::find(orderedAllMmas, getOperation()),
                                    orderedAllMmas.end()) -
                      1;
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      lhsMappingEntries(lhsEntries.begin(), lhsEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), lhsSymbols,
-                                         lhsIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), lhsMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
                                 /*nSymbol=*/nullptr, kSymbol,
@@ -2041,11 +1984,12 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      rhsMappingEntries(rhsEntries.begin(), rhsEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), rhsSymbols,
-                                         rhsIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), rhsMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind,
                                 /*mSymbol=*/nullptr, nSymbol, kSymbol,
@@ -2054,12 +1998,13 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      accMappingEntries(accumulatorEntries.begin(), accumulatorEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getAccumulatorMutable().getOperandNumber()],
           "accumulator",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), accumulatorSymbols,
-                                         accumulatorIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), accMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
                                 /*kSymbol=*/nullptr,
@@ -2102,10 +2047,9 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
     const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
   ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
       cast<wave::WaveTensorType>(getResult().getType()).getShape();
-  SmallVector<wave::WaveSymbolAttr> symbols;
-  SmallVector<wave::WaveIndexMappingAttr> indexExprs;
-  symbols.reserve(indexingSymbols.size());
-  indexExprs.reserve(indexingSymbols.size());
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      entries;
+  entries.reserve(indexingSymbols.size());
 
   assert(indexingSymbols.size() >= 2 &&
          "at least 2 indexing symbols are required for MMA result");
@@ -2119,7 +2063,7 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
           *mmaKind, /*isAccumulator=*/true, /*isScaled=*/false,
           /*isFP4=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          /*kSymbol=*/nullptr, symbols, indexExprs))) {
+          /*kSymbol=*/nullptr, entries))) {
     return emitError() << "scaled MMA kind not supported by index deduction";
   }
 
@@ -2133,11 +2077,13 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsForward(
                      1;
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(), indexingSymbols,
-      initObject.symbolConstraints, symbols, indexExprs);
+      initObject.symbolConstraints, entries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      scaledResultEntries(entries.begin(), entries.end());
   return joinIndexExprsLatticeInPlace(
       resultExprs[0], "scaled MMA result",
       wave::IndexExprsLatticeStorage(
-          WaveSymbolMappingAttr::get(getContext(), symbols, indexExprs),
+          wave::WaveSymbolMappingAttr::get(getContext(), scaledResultEntries),
           priority,
           getMmaVectorShape(
               getLoc(), *mmaKind, mSymbol, nSymbol,
@@ -2166,40 +2112,37 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
   if (!mmaKind)
     return emitError() << "scaled MMA without kind attribute not supported";
 
-  SmallVector<wave::WaveSymbolAttr> operandSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> operandIndexExprs;
-  operandSymbols.reserve(lhsType.getShape().size() + 1);
-  operandIndexExprs.reserve(lhsType.getShape().size() + 1);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      operandEntries;
+  operandEntries.reserve(lhsType.getShape().size() + 1);
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, /*isScaled=*/false,
           /*isFP4=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          kSymbol, operandSymbols, operandIndexExprs))) {
+          kSymbol, operandEntries))) {
     return emitError() << "scaled MMA kind not supported by index deduction";
   }
 
-  SmallVector<wave::WaveSymbolAttr> scaleSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> scaleIndexExprs;
-  scaleSymbols.reserve(lhsScaleType.getShape().size() + 1);
-  scaleIndexExprs.reserve(lhsScaleType.getShape().size() + 1);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      scaleEntries;
+  scaleEntries.reserve(lhsScaleType.getShape().size() + 1);
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, /*isScaled=*/true,
           /*isFP4=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          kScaleSymbol, scaleSymbols, scaleIndexExprs))) {
+          kScaleSymbol, scaleEntries))) {
     return emitError()
            << "scaled MMA kind not supported by scale index deduction";
   }
 
-  SmallVector<wave::WaveSymbolAttr> accumulatorSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> accumulatorIndexExprs;
-  accumulatorSymbols.reserve(resultType.getShape().size());
-  accumulatorIndexExprs.reserve(resultType.getShape().size());
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      accumulatorEntries;
+  accumulatorEntries.reserve(resultType.getShape().size());
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/true, /*isScaled=*/false,
           /*isFP4=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
-          nullptr, accumulatorSymbols, accumulatorIndexExprs))) {
+          nullptr, accumulatorEntries))) {
     return emitError() << "scaled MMA kind not supported by index deduction";
   }
 
@@ -2210,34 +2153,30 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       llvm::concat<const WaveSymbolAttr>(batchSymbols,
                                          ArrayRef{mSymbol, nSymbol, kSymbol}),
-      initObject.symbolConstraints, operandSymbols, operandIndexExprs);
+      initObject.symbolConstraints, operandEntries);
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       llvm::concat<const WaveSymbolAttr>(
           batchSymbols, ArrayRef{mSymbol, nSymbol, kScaleSymbol}),
-      initObject.symbolConstraints, scaleSymbols, scaleIndexExprs);
+      initObject.symbolConstraints, scaleEntries);
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
       llvm::concat<const WaveSymbolAttr>(batchSymbols,
                                          ArrayRef{mSymbol, nSymbol}),
-      initObject.symbolConstraints, accumulatorSymbols, accumulatorIndexExprs);
+      initObject.symbolConstraints, accumulatorEntries);
 
-  SmallVector<wave::WaveSymbolAttr> lhsSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> lhsIndexExprs;
-  filterSymbol(operandSymbols, operandIndexExprs, nSymbol, lhsSymbols,
-               lhsIndexExprs);
-  SmallVector<wave::WaveSymbolAttr> rhsSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> rhsIndexExprs;
-  filterSymbol(operandSymbols, operandIndexExprs, mSymbol, rhsSymbols,
-               rhsIndexExprs);
-  SmallVector<wave::WaveSymbolAttr> lhsScaleSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> lhsScaleIndexExprs;
-  filterSymbol(scaleSymbols, scaleIndexExprs, nSymbol, lhsScaleSymbols,
-               lhsScaleIndexExprs);
-  SmallVector<wave::WaveSymbolAttr> rhsScaleSymbols;
-  SmallVector<wave::WaveIndexMappingAttr> rhsScaleIndexExprs;
-  filterSymbol(scaleSymbols, scaleIndexExprs, mSymbol, rhsScaleSymbols,
-               rhsScaleIndexExprs);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      lhsEntries;
+  filterSymbol(operandEntries, nSymbol, lhsEntries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      rhsEntries;
+  filterSymbol(operandEntries, mSymbol, rhsEntries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      lhsScaleEntries;
+  filterSymbol(scaleEntries, nSymbol, lhsScaleEntries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, wave::WaveIndexMappingAttr>>
+      rhsScaleEntries;
+  filterSymbol(scaleEntries, mSymbol, rhsScaleEntries);
 
   // Set the priority based on the order of operations: earlier scaled MMAs have
   // higher priority.
@@ -2247,11 +2186,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                      std::distance(llvm::find(orderedAllMmas, getOperation()),
                                    orderedAllMmas.end()) -
                      1;
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      lhsMappingEntries(lhsEntries.begin(), lhsEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsMutable().getOperandNumber()], "LHS",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), lhsSymbols,
-                                         lhsIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), lhsMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
                                 /*nSymbol=*/nullptr, kSymbol,
@@ -2260,11 +2200,13 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      lhsScaleMappingEntries(lhsScaleEntries.begin(), lhsScaleEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getLhsScaleMutable().getOperandNumber()], "LHS scale",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), lhsScaleSymbols,
-                                         lhsScaleIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(),
+                                               lhsScaleMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol,
                                 /*nSymbol=*/nullptr, /*kSymbol=*/nullptr,
@@ -2273,11 +2215,12 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      rhsMappingEntries(rhsEntries.begin(), rhsEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsMutable().getOperandNumber()], "RHS",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), rhsSymbols,
-                                         rhsIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), rhsMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind,
                                 /*mSymbol=*/nullptr, nSymbol, kSymbol,
@@ -2286,11 +2229,13 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      rhsScaleMappingEntries(rhsScaleEntries.begin(), rhsScaleEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getRhsScaleMutable().getOperandNumber()], "RHS scale",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), rhsScaleSymbols,
-                                         rhsScaleIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(),
+                                               rhsScaleMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind,
                                 /*mSymbol=*/nullptr, nSymbol,
@@ -2299,12 +2244,13 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                                 &delayedErrorEmitter)),
           "implied by scaled MMA kind", emitError)))
     return failure();
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>>
+      accMappingEntries(accumulatorEntries.begin(), accumulatorEntries.end());
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getAccumulatorMutable().getOperandNumber()],
           "accumulator",
           wave::IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), accumulatorSymbols,
-                                         accumulatorIndexExprs),
+              wave::WaveSymbolMappingAttr::get(getContext(), accMappingEntries),
               priority,
               getMmaVectorShape(getLoc(), *mmaKind, mSymbol, nSymbol,
                                 /*kSymbol=*/nullptr,
@@ -2419,8 +2365,7 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
       break;
     }
 
-  SmallVector<WaveSymbolAttr> indexSymbols;
-  SmallVector<WaveIndexMappingAttr> indexExprs;
+  SmallVector<std::pair<WaveSymbolAttr, WaveIndexMappingAttr>> indexEntries;
   for (int64_t i = 0, e = tensorType.getRank(); i < e; ++i) {
     AffineExpr elementsPerThread = nullptr;
     bool isVectorized = (i == vectorizedDimPos);
@@ -2510,20 +2455,20 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
         AffineMap::get(/*dimCount=*/0, symbols.size(), elementsPerThread),
         AffineMap::get(/*dimCount=*/0, symbols.size(),
                        getAffineConstantExpr(stride, getContext())));
-    indexSymbols.push_back(tensorType.getShape()[i]);
-    indexExprs.push_back(indexMapping);
+    indexEntries.emplace_back(tensorType.getShape()[i], indexMapping);
   }
   mixInThreadIndependentConstraints(
       *this, initObject.hardwareConstraint.getThreadsPerWave(),
-      tensorType.getShape(), initObject.symbolConstraints, indexSymbols,
-      indexExprs);
+      tensorType.getShape(), initObject.symbolConstraints, indexEntries);
+  SmallVector<std::pair<wave::WaveSymbolAttr, mlir::Attribute>> writeEntries(
+      indexEntries.begin(), indexEntries.end());
+  auto writeMapping =
+      wave::WaveSymbolMappingAttr::get(getContext(), writeEntries);
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getValueToStoreMutable().getOperandNumber()],
           "value to store",
           IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), indexSymbols,
-                                         indexExprs),
-              IndexExprsLatticeStorage::kWritePriority,
+              writeMapping, IndexExprsLatticeStorage::kWritePriority,
               detail::filterVectorShape(
                   hardwareConstraint.getVectorShapes(),
                   cast<WaveTensorType>(getValueToStore().getType())
@@ -2533,9 +2478,7 @@ LogicalResult WriteOp::initializeIndexExprsBackward(
   if (failed(joinIndexExprsLatticeInPlace(
           operandExprs[getMemoryMutable().getOperandNumber()], "memory",
           IndexExprsLatticeStorage(
-              WaveSymbolMappingAttr::get(getContext(), indexSymbols,
-                                         indexExprs),
-              IndexExprsLatticeStorage::kWritePriority,
+              writeMapping, IndexExprsLatticeStorage::kWritePriority,
               detail::filterVectorShape(
                   hardwareConstraint.getVectorShapes(),
                   cast<WaveTensorType>(getMemory().getType()).getShape())),
@@ -2559,26 +2502,26 @@ llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     if (lattice.isBottom() || lattice.isTop())
       return lattice;
     WaveSymbolMappingAttr priorityMap = lattice.getPriorities();
-    bool needsCapping =
-        priorityMap && llvm::any_of(priorityMap.getValues(), [](Attribute val) {
-          return llvm::cast<IntegerAttr>(val).getInt() >
-                 IndexExprsLatticeStorage::kMmaPriority;
-        });
+    bool needsCapping = priorityMap && llvm::any_of(priorityMap, [](auto pair) {
+                          return llvm::cast<IntegerAttr>(pair.second).getInt() >
+                                 IndexExprsLatticeStorage::kMmaPriority;
+                        });
     if (!needsCapping)
       return lattice;
     MLIRContext *ctx = priorityMap.getContext();
     IntegerType i32 = IntegerType::get(ctx, 32);
-    SmallVector<Attribute> capped;
-    capped.reserve(priorityMap.getNumEntries());
-    for (Attribute val : priorityMap.getValues()) {
+    SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> capped;
+    capped.reserve(priorityMap.size());
+    for (auto [key, val] : priorityMap) {
       int32_t priority = llvm::cast<IntegerAttr>(val).getInt();
-      capped.push_back(IntegerAttr::get(
-          i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
+      capped.emplace_back(
+          key,
+          IntegerAttr::get(
+              i32, std::min(priority, IndexExprsLatticeStorage::kMmaPriority)));
     }
-    IndexExprsLatticeStorage result(
-        lattice.getConcreteValue(),
-        WaveSymbolMappingAttr::get(ctx, priorityMap.getKeys(), capped),
-        lattice.getVectorShape());
+    IndexExprsLatticeStorage result(lattice.getConcreteValue(),
+                                    WaveSymbolMappingAttr::get(ctx, capped),
+                                    lattice.getVectorShape());
     return result.withSourceVectorShape(
         lattice.getSourceVectorShape(),
         std::min(lattice.getSourceVectorShapePriority(),
@@ -2679,8 +2622,7 @@ permuteIndexExprsStrides(const IndexExprsLatticeStorage &inputLattice,
   WaveSymbolMappingAttr inputMapping = inputLattice.getConcreteValue();
 
   llvm::DenseMap<WaveSymbolAttr, WaveIndexMappingAttr> symbolToMapping;
-  for (auto [key, val] :
-       llvm::zip(inputMapping.getKeys(), inputMapping.getValues())) {
+  for (auto [key, val] : inputMapping) {
     if (auto mapping = llvm::dyn_cast<WaveIndexMappingAttr>(val))
       symbolToMapping[key] = mapping;
   }
@@ -2861,13 +2803,12 @@ scaleBitcastIndexExprs(const IndexExprsLatticeStorage &inputLattice,
   bool scaleUp = fromBits > toBits;
 
   SmallVector<std::pair<WaveSymbolAttr, Attribute>> newMappings;
-  newMappings.reserve(inputMapping.getNumEntries());
+  newMappings.reserve(inputMapping.size());
 
   WaveSymbolAttr fromScaledSym = fromShape[scaledDim];
   WaveSymbolAttr toScaledSym = toShape[scaledDim];
 
-  for (auto [key, val] :
-       llvm::zip(inputMapping.getKeys(), inputMapping.getValues())) {
+  for (auto [key, val] : inputMapping) {
     auto mapping = llvm::cast<WaveIndexMappingAttr>(val);
 
     if (key != fromScaledSym) {

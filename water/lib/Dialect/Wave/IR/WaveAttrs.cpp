@@ -779,7 +779,7 @@ LogicalResult HardwareConstraintAttr::verify(
                        << ") should have 3 elements";
 
   if (vectorShapes) {
-    for (auto [key, value] : vectorShapes.getMapping()) {
+    for (auto [key, value] : vectorShapes) {
       if (!isa<IntegerAttr>(value))
         return emitError() << key << " is not an IntegerAttr: " << value;
     }
@@ -848,20 +848,6 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 // WaveSymbolMappingAttr
 //===----------------------------------------------------------------------===//
 
-WaveSymbolMappingAttr WaveSymbolMappingAttr::get(
-    MLIRContext *context,
-    ArrayRef<std::pair<WaveSymbolAttr, Attribute>> entries) {
-  SmallVector<WaveSymbolAttr> keys;
-  SmallVector<Attribute> values;
-  keys.reserve(entries.size());
-  values.reserve(entries.size());
-  for (auto &[k, v] : entries) {
-    keys.push_back(k);
-    values.push_back(v);
-  }
-  return Base::get(context, keys, values);
-}
-
 Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
   // Capture the location before consuming any tokens so that verification
   // errors are reported at the opening `<`.
@@ -871,8 +857,7 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};
 
-  SmallVector<WaveSymbolAttr> keys;
-  SmallVector<Attribute> values;
+  SmallVector<std::pair<WaveSymbolAttr, Attribute>> entries;
 
   // Handle empty mapping: `<>`.
   if (failed(parser.parseOptionalGreater())) {
@@ -882,8 +867,8 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
       if (failed(parser.parseSymbolName(nameAttr)) || parser.parseEqual() ||
           failed(parser.parseAttribute(value)))
         return {};
-      keys.push_back(WaveSymbolAttr::get(parser.getContext(), nameAttr));
-      values.push_back(value);
+      entries.emplace_back(WaveSymbolAttr::get(parser.getContext(), nameAttr),
+                           value);
     } while (succeeded(parser.parseOptionalComma()));
 
     if (parser.parseGreater())
@@ -893,7 +878,7 @@ Attribute WaveSymbolMappingAttr::parse(AsmParser &parser, Type) {
   // Use getChecked so that verify failures are reported as proper parse errors
   // rather than assertions.
   return getChecked([&]() { return parser.emitError(loc); },
-                    parser.getContext(), keys, values);
+                    parser.getContext(), entries);
 }
 
 void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
@@ -906,29 +891,23 @@ void WaveSymbolMappingAttr::print(AsmPrinter &printer) const {
   printer << ">";
 }
 
-LogicalResult
-WaveSymbolMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                              ArrayRef<WaveSymbolAttr> keys,
-                              ArrayRef<Attribute> values) {
-  if (keys.size() != values.size())
-    return emitError() << "keys and values arrays must have the same size, got "
-                       << keys.size() << " keys and " << values.size()
-                       << " values";
-
+LogicalResult WaveSymbolMappingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    ArrayRef<std::pair<WaveSymbolAttr, Attribute>> mapping) {
   llvm::SmallPtrSet<Attribute, 8> seen;
-  for (WaveSymbolAttr key : keys) {
+  for (auto &[key, value] : mapping) {
     if (!seen.insert(key).second)
       return emitError() << "duplicate key: " << key;
   }
-
   return success();
 }
 
 Attribute WaveSymbolMappingAttr::lookupImpl(WaveSymbolAttr key) const {
-  for (auto [k, v] : getMapping()) {
-    if (k == key)
-      return v;
-  }
+  auto it =
+      llvm::find_if(getMapping(), [&](auto &p) { return p.first == key; });
+  if (it != getMapping().end())
+    return it->second;
+
   return {};
 }
 

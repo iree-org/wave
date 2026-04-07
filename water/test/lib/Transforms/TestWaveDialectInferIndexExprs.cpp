@@ -72,26 +72,23 @@ overrideInitialization(Operation *top,
         if (indexExprs) {
           IntegerType i32 = IntegerType::get(ctx, 32);
           IntegerAttr priAttr = IntegerAttr::get(i32, priority);
-          SmallVector<wave::WaveSymbolAttr> keys;
-          keys.reserve(indexExprs.size());
+          SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
+          entries.reserve(indexExprs.size());
           for (NamedAttribute na : indexExprs)
-            keys.push_back(wave::WaveSymbolAttr::get(ctx, na.getName()));
-          SmallVector<Attribute> values(keys.size(), priAttr);
-          prioritiesMapping = WaveSymbolMappingAttr::get(ctx, keys, values);
+            entries.emplace_back(wave::WaveSymbolAttr::get(ctx, na.getName()),
+                                 priAttr);
+          prioritiesMapping = WaveSymbolMappingAttr::get(ctx, entries);
         }
       };
 
       auto setPerKeyPriorities = [&](DictionaryAttr priDict) {
         hasPriorities = true;
-        SmallVector<wave::WaveSymbolAttr> keys;
-        SmallVector<Attribute> values;
-        keys.reserve(priDict.size());
-        values.reserve(priDict.size());
-        for (NamedAttribute na : priDict) {
-          keys.push_back(wave::WaveSymbolAttr::get(ctx, na.getName()));
-          values.push_back(na.getValue());
-        }
-        prioritiesMapping = WaveSymbolMappingAttr::get(ctx, keys, values);
+        SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
+        entries.reserve(priDict.size());
+        for (NamedAttribute na : priDict)
+          entries.emplace_back(wave::WaveSymbolAttr::get(ctx, na.getName()),
+                               na.getValue());
+        prioritiesMapping = WaveSymbolMappingAttr::get(ctx, entries);
       };
 
       if (auto arrayAttr = llvm::dyn_cast<ArrayAttr>(attr)) {
@@ -156,16 +153,12 @@ overrideInitialization(Operation *top,
       if (!hasPriorities)
         setUniformPriority(wave::IndexExprsLatticeStorage::kLowestPriority);
 
-      SmallVector<wave::WaveSymbolAttr> mappingKeys;
-      SmallVector<Attribute> mappingValues;
-      mappingKeys.reserve(indexExprs.size());
-      mappingValues.reserve(indexExprs.size());
-      for (NamedAttribute na : indexExprs) {
-        mappingKeys.push_back(wave::WaveSymbolAttr::get(ctx, na.getName()));
-        mappingValues.push_back(na.getValue());
-      }
-      auto mapping =
-          WaveSymbolMappingAttr::get(ctx, mappingKeys, mappingValues);
+      SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> mappingEntries;
+      mappingEntries.reserve(indexExprs.size());
+      for (NamedAttribute na : indexExprs)
+        mappingEntries.emplace_back(
+            wave::WaveSymbolAttr::get(ctx, na.getName()), na.getValue());
+      auto mapping = WaveSymbolMappingAttr::get(ctx, mappingEntries);
       setIndexForValue(value, mapping, prioritiesMapping, vectorShape);
     }
     return success();

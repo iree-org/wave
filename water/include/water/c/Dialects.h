@@ -444,8 +444,7 @@ mlirWaveSymbolMappingAttrGet(MlirContext ctx, intptr_t numEntries,
                              MlirAttribute *keys, MlirAttribute *values);
 
 /// Returns the number of entries in a WaveSymbolMappingAttr.
-MLIR_CAPI_EXPORTED intptr_t
-mlirWaveSymbolMappingAttrGetNumEntries(MlirAttribute attr);
+MLIR_CAPI_EXPORTED intptr_t mlirWaveSymbolMappingAttrSize(MlirAttribute attr);
 
 /// Returns the key at the given index.
 MLIR_CAPI_EXPORTED MlirAttribute

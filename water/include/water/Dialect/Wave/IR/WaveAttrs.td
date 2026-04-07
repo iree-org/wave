@@ -599,8 +599,8 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
   let mnemonic = "symbol_mapping";
   let description = [{
     An ordered mapping from `WaveSymbolAttr` keys to arbitrary attribute values.
-    The ordering of entries is guaranteed to be persistent, implemented as two
-    co-indexed arrays: `keys[i]` maps to `values[i]`.
+    The ordering of entries is guaranteed to be persistent, stored as an array
+    of key-value pairs.
 
     Example:
     ```mlir
@@ -615,18 +615,11 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
   }];
 
   let parameters = (ins
-    ArrayRefParameter<"::wave::WaveSymbolAttr">:$keys,
-    ArrayRefParameter<"::mlir::Attribute">:$values
+    ArrayRefParameter<"std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>">:$mapping
   );
 
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
-
-  let builders = [
-    AttrBuilder<(ins
-      "::llvm::ArrayRef<std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>>"
-      :$entries)>,
-  ];
 
   let extraClassDeclaration = [{
     /// Look up the attribute associated with `key`.
@@ -637,32 +630,52 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
     }
     ::mlir::Attribute lookupImpl(::wave::WaveSymbolAttr key) const;
 
-    template <typename Range>
-    static WaveSymbolMappingAttr get(
-        ::mlir::MLIRContext *context,
-        ::llvm::ArrayRef<::wave::WaveSymbolAttr> symbols,
-        Range &&values) {
-      ::llvm::SmallVector<::mlir::Attribute> attrs = ::llvm::map_to_vector(values,
-          [](auto &&value) -> ::mlir::Attribute { return value; });
-      return get(context, symbols, ::llvm::ArrayRef<::mlir::Attribute>(attrs));
-    }
-
     /// Check if a symbolic dimension exists in the mapping.
     bool hasSymbol(::wave::WaveSymbolAttr key) const {
       return static_cast<bool>(lookup(key));
     }
 
-    /// Get the number of entries in the mapping.
-    size_t getNumEntries() const { return getKeys().size(); }
+    WaveSymbolMappingAttr getValue() const { return *this; }
 
-    /// Returns a range of (key, value) pairs suitable for range-for with
-    /// structured bindings:
-    ///   for (auto [key, val] : symAttr.getMapping()) { ... }
-    auto getMapping() const {
-      return ::llvm::zip_equal(getKeys(), getValues());
+    using iterator = ::llvm::ArrayRef<std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>>::iterator;
+    iterator begin() const { return getMapping().begin(); }
+    iterator end() const { return getMapping().end(); }
+    bool empty() const { return getMapping().empty(); }
+    size_t size() const { return getMapping().size(); }
+
+    /// Walk all immediate sub-attributes (keys and values) so that the MLIR
+    /// attribute walker can find WaveSymbolAttr keys inside the pair storage.
+    static auto getWalkImmediateSubElementsFn() {
+      return [](::mlir::Attribute instance,
+                ::llvm::function_ref<void(::mlir::Attribute)> walkAttrsFn,
+                ::llvm::function_ref<void(::mlir::Type)>) {
+        for (auto &[key, value] :
+             ::llvm::cast<WaveSymbolMappingAttr>(instance).getMapping()) {
+          walkAttrsFn(key);
+          walkAttrsFn(value);
+        }
+      };
     }
 
-    WaveSymbolMappingAttr getValue() const { return *this; }
+    /// Replace all immediate sub-attributes in the same key/value order as
+    /// getWalkImmediateSubElementsFn walks them.
+    static auto getReplaceImmediateSubElementsFn() {
+      return [](::mlir::Attribute instance,
+                ::llvm::ArrayRef<::mlir::Attribute> replAttrs,
+                ::llvm::ArrayRef<::mlir::Type>) -> ::mlir::Attribute {
+        auto attr = ::llvm::cast<WaveSymbolMappingAttr>(instance);
+        auto mapping = attr.getMapping();
+        ::llvm::SmallVector<
+            ::std::pair<::wave::WaveSymbolAttr, ::mlir::Attribute>>
+            newMapping;
+        newMapping.reserve(mapping.size());
+        for (size_t i = 0; i < mapping.size(); ++i)
+          newMapping.emplace_back(
+              ::llvm::cast<::wave::WaveSymbolAttr>(replAttrs[2 * i]),
+              replAttrs[2 * i + 1]);
+        return WaveSymbolMappingAttr::get(attr.getContext(), newMapping);
+      };
+    }
   }];
 }
 
