@@ -1073,10 +1073,13 @@ def _handle_read_linear_index(
     ):
         subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
         sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
-        # Invariant: LINEAR_INDEX global reads always use maskedload on a
-        # linearized memref, never buffer fat-pointer ops.  This ensures
-        # numerics match under both IREE (VMFB) and wave runtime launch.
-        linear_buffer_ops = False
+        # LINEAR_INDEX global reads default to maskedload (no buffer ops)
+        # so numerics match across IREE and wave runtime.  When
+        # eliminate_epilogue is active, OOB prefetch reads need
+        # hardware bounds checking to avoid faults.
+        linear_buffer_ops = (
+            buffer_ops_enabled and emitter.options.eliminate_epilogue
+        )
         lin_src = _linear_read_linearize_memref_maybe_hoisted(
             emitter,
             kb_src,

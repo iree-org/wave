@@ -967,6 +967,65 @@ def testScaledGemmMXFP4PreshuffleBDynamic(
     torch.testing.assert_close(torch_out, out, check_dtype=False)
 
 
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 1024, 8192)],
+)
+@pytest.mark.parametrize(
+    "block_shape,wave_shape",
+    [((128, 256, 256), (1, 4))],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+def testScaledGemmMXFP4PreshuffleBDynamicWaveRuntime(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    wave_shape: tuple[int, int],
+    mfma_variant: ScaledMMAType,
+):
+    """E2e MXFP4 preshuffle-B with wave runtime, dynamic dims, and epilogue elimination.
+
+    Exercises the combination of linearized reads (flatten_read_indices)
+    and epilogue elimination under the LLVM wave-runtime launch path.
+    """
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block_shape,
+        wave_shape=wave_shape,
+        mfma_variant=mfma_variant,
+    )
+    dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+    for sym in dynamic_symbols:
+        del options.subs[sym]
+    options.dynamic_symbols = dynamic_symbols
+    options.eliminate_epilogue = True
+    schedule = get_mxfp4_asymmetric_schedule(
+        eliminate_epilogue=True, is_bscale_shuffled=True
+    )
+    options.use_buffer_ops = True
+    options.backend = "llvm"
+    options.wave_runtime = True
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
+    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
 MACROTILES_PRESHUFFLE_8WAVE_PINGPONG = [
     (256, 160, 256),
     (256, 224, 256),
