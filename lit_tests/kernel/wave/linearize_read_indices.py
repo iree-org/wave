@@ -54,9 +54,8 @@ def test_linearize_preshuffle_static():
     # CHECK: read(memory=b, {{.*}}index={$LINEAR_INDEX: {{.*}} : 16 : 1})
 
     # B scale: was {K/32: ..., N: ...} with e8m0_shuffle mapping;
-    # also linearized.  merge_contiguous_reads already merged 4 reads
-    # into one (ept=4) before flattening on this branch.
-    # CHECK: read(memory=b_scale, {{.*}}index={$LINEAR_INDEX: {{.*}} : 4 : 1})
+    # also linearized.
+    # CHECK: read(memory=b_scale, {{.*}}index={$LINEAR_INDEX: {{.*}} : 1 : 1})
 
     # ---------------------------------------------------------------
     # 2. After annotate_iv_strides: concrete strides, base+IV*stride form

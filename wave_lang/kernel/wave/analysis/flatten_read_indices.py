@@ -38,7 +38,6 @@ from ...compiler.utils import (
 )
 from ...lang.global_symbols import LINEAR_INDEX, SHARED_ADDRESS_SPACE
 from ...ops.wave_ops import (
-    ExtractSlice,
     GatherToLDS,
     MemoryAccessFlags,
     Read,
@@ -238,9 +237,6 @@ def flatten_read_indices(
             continue
 
         if not is_g2l and custom.flags != MemoryAccessFlags.NONE:
-            continue
-
-        if any(isinstance(get_custom(u), ExtractSlice) for u in node.users):
             continue
 
         memory = get_custom(mem_node)
