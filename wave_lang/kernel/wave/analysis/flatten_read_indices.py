@@ -37,7 +37,13 @@ from ...compiler.utils import (
     symbolic_strides_match_physical_memory,
 )
 from ...lang.global_symbols import LINEAR_INDEX, SHARED_ADDRESS_SPACE
-from ...ops.wave_ops import ExtractSlice, MemoryAccessFlags, Read, get_custom
+from ...ops.wave_ops import (
+    ExtractSlice,
+    GatherToLDS,
+    MemoryAccessFlags,
+    Read,
+    get_custom,
+)
 from ..assumptions import get_divisibility_subs
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint
