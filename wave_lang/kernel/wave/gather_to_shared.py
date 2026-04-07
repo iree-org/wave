@@ -27,8 +27,10 @@ from ..ops.wave_ops import (
     Write,
     get_custom,
 )
+from ..wave.assumptions import get_divisibility_subs
 from ..wave.constraints import (
     Constraint,
+    DistributionConstraint,
     TilingConstraint,
     WaveConstraint,
     WorkgroupConstraint,
@@ -49,6 +51,7 @@ from .utils.general_utils import (
     remove_thread_indexing,
     remove_global_indexing,
 )
+from .generate_bounds_exprs import is_divisible
 from .utils.general_utils import is_gather
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
@@ -541,6 +544,18 @@ def gather_to_shared(
             bounds = find_index_bounds(
                 constraints, read.index, vector_shapes, symbolic_shape
             )
+
+        # Remove bounds where divisibility assumptions prove full tile alignment
+        fwd, _ = get_divisibility_subs(constraints)
+        if bounds and fwd:
+            for c in constraints:
+                if (
+                    isinstance(c, DistributionConstraint)
+                    and c.dim in bounds
+                    and is_divisible(c.dim, c.tile_size, fwd)
+                ):
+                    del bounds[c.dim]
+            bounds = bounds or None
 
         logger.info(f"bounds={bounds}")
         fastest_dim_bound = bounds.get(symbolic_shape[-1], None) if bounds else None
