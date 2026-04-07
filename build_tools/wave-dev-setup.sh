@@ -100,7 +100,7 @@ resolve_main_repo_root() {
         exit 1
     }
     # git-common-dir may be relative; resolve it.
-    git_common_dir="$(cd "$WAVE_DIR" && cd "$git_common_dir" && pwd)"
+    git_common_dir="$(cd "$WAVE_DIR" && realpath "$git_common_dir")"
     # The repo root is the parent of .git
     dirname "$git_common_dir"
 }
@@ -130,7 +130,7 @@ LLVM_DIR="$LLVM_BUILD/lib/cmake/llvm"
 MLIR_DIR="$LLVM_BUILD/lib/cmake/mlir"
 LLD_DIR="$LLVM_BUILD/lib/cmake/lld"
 
-git_clone_depth=10
+git_clone_depth=2
 VERBOSE=0
 
 # ---------------------------------------------------------------------------
@@ -277,6 +277,7 @@ do_build_llvm() {
             -DLLVM_ENABLE_ASSERTIONS=ON \
             -DLLVM_ENABLE_ZSTD=OFF \
             -DLLVM_INSTALL_UTILS=ON \
+            -DLLVM_USE_LINKER=lld \
             -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON \
             -DCMAKE_INSTALL_PREFIX="$LLVM_INSTALL" \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
@@ -305,6 +306,7 @@ do_build_water() {
             -DMLIR_DIR="$MLIR_DIR" \
             -DLLD_DIR="$LLD_DIR" \
             -DBUILD_SHARED_LIBS="$BUILD_SHARED_LIBS" \
+            -DLLVM_USE_LINKER=lld \
             -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
             -DWATER_ENABLE_PYTHON=ON \
@@ -334,6 +336,7 @@ do_build_waveasm() {
             -DMLIR_DIR="$MLIR_DIR" \
             -DLLD_DIR="$LLD_DIR" \
             -DBUILD_SHARED_LIBS="$BUILD_SHARED_LIBS" \
+            -DLLVM_USE_LINKER=lld \
             -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DPython3_EXECUTABLE="$(which python3)"
@@ -399,6 +402,24 @@ export WAVE_WATER_DIR="$WATER_BUILD"
 export WAVE_WAVEASM_DIR="$WAVEASM_BUILD"
 export WAVE_CACHE_ON=0
 export PYTHONPATH="$WAVE_DIR"
+
+# optional environment variables
+#WAVE_TEST_WATER=1                   # enable Water-dependent lit tests
+#WAVE_TEST_DWARFDUMP=1               # enable DWARF debug info lit tests
+#WAVE_STRICT_FORMATTER=1             # strict formatter validation in ASM tests (default: on)
+#WAVE_DEFAULT_ARCH=gfx942            # override detected GPU architecture
+#WAVE_DUMP_MLIR=1                    # print MLIR during compilation
+#WAVE_DUMP_MLIR_FILE=dump.mlir       # write MLIR to a file
+#WAVE_USE_SCHED_BARRIERS=1           # enable scheduling barriers
+#WAVE_CHECK_LEAKS=1                  # enable leak detection in tests
+#WAVE_CHECK_INDIV_KERNS=1            # check individual kernels
+#WAVE_JIT_OPT_LEVEL=3                # JIT codegen optimization level (0-3)
+#WAVE_ENABLE_OBJECT_CACHE=1          # enable execution engine object cache
+#WAVE_ENABLE_GDB_LISTENER=1          # enable GDB notification listener
+#WAVE_ENABLE_PERF_LISTENER=1         # enable perf notification listener
+#KEEP_TEMP_FILES=1                   # keep temporary build artifacts in ASM tests
+#TEST_PARAMS_PATH=params.json        # custom test parameterization shapes
+#WAVEASM_DEBUG=1                     # extra debug output during MLIR capture
 EOF
 }
 
