@@ -14,6 +14,7 @@ import torch.fx as fx
 from wave_lang.kernel.wave.utils.graph_utils import propagate_loop_carried_vars
 from wave_lang.support.ir_imports import (
     Attribute,
+    BF16Type,
     DenseElementsAttr,
     IndexType,
     InsertionPoint,
@@ -31,6 +32,7 @@ from wave_lang.support.ir_imports import (
     gpu_d,
     llvm_d,
     memref_d,
+    rocdl_d,
     vector_d,
 )
 from .ir_utils import (
@@ -1308,6 +1310,24 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     )
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
+
+    is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+    is_bf16 = isinstance(element_type, BF16Type)
+
+    if not is_shared and is_bf16 and getattr(node, "_permlane_pack_global", False):
+        _write_permlane_pack_to_global(
+            emitter,
+            insert_vector,
+            kb_dest,
+            output_shape,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            get_custom(memory),
+            index,
+        )
+        return
+
     if use_llvm_store:
         _create_llvm_read_write(
             kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
@@ -1327,6 +1347,99 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             node_index=index,
         )
+
+
+def _write_permlane_pack_to_global(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    kb_dest: Value,
+    output_shape: tuple,
+    start_indices: tuple,
+    start_indices_wg: tuple,
+    start_indices_th: tuple,
+    memory_custom,
+    index: dict,
+):
+    """Pack two lanes' bf16 values via permlane16_swap for wide global stores.
+
+    MMA accumulator layout (F32_16x16x128_F8F6F4) gives each thread 4
+    consecutive M values.  Lanes are grouped by 16: lanes 0-15 own M=0-3,
+    lanes 16-31 own M=4-7, etc.  ``v_permlane16_swap_b32`` exchanges data
+    between paired groups, giving each lane 8 consecutive M values that
+    can be written as a single ``buffer_store_dwordx4`` (128 bits).
+
+    Both lane halves produce identical data at the same address (benign
+    duplicate store):
+
+      - Lower half (lanes 0-15 in each 32-lane group):
+        data = [own, partner], address = thread's original M index.
+      - Upper half (lanes 16-31):
+        data = [partner, own], address = original M index - 4.
+
+    This dual-write avoids divergent control flow (no scf.if / exec
+    masking needed).  The buffer descriptor's ``valid_bytes`` handles
+    out-of-bounds suppression for dynamic shapes.
+
+    Precondition: M must be the innermost (last) memory dimension with
+    stride 1 (i.e. transpose_output=True, shape [N, M]).
+    """
+    bf16_type = BF16Type.get()
+    i32_type = IntegerType.get_signless(32)
+    idx_type = IndexType.get()
+    v2i32_type = VectorType.get([2], i32_type)
+    v4i32_type = VectorType.get([4], i32_type)
+    v8bf16_type = VectorType.get([8], bf16_type)
+
+    i32_vec = vector_d.bitcast(v2i32_type, insert_vector)
+    own_lo = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
+    own_hi = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
+
+    swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
+    partner_lo = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_lo, own_lo, False, False), [0]
+    )
+    partner_hi = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_hi, own_hi, False, False), [0]
+    )
+
+    lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
+    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
+    is_lower = arith_d.cmpi(
+        arith_d.CmpIPredicate.ult, half_pos, arith_d.constant(idx_type, 16)
+    )
+
+    d0 = arith_d.select(is_lower, own_lo, partner_lo)
+    d1 = arith_d.select(is_lower, own_hi, partner_hi)
+    d2 = arith_d.select(is_lower, partner_lo, own_lo)
+    d3 = arith_d.select(is_lower, partner_hi, own_hi)
+
+    wide_i32 = vector_d.from_elements(v4i32_type, [d0, d1, d2, d3])
+    wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
+
+    four = arith_d.constant(idx_type, 4)
+
+    adj_th = list(start_indices_th)
+    adj_th[-1] = arith_d.select(is_lower, adj_th[-1], arith_d.subi(adj_th[-1], four))
+
+    adj_full = list(start_indices)
+    adj_full[-1] = arith_d.select(
+        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], four)
+    )
+
+    _create_vec_read_write(
+        emitter,
+        output_shape,
+        kb_dest,
+        wide_vec,
+        None,
+        tuple(adj_full),
+        start_indices_wg,
+        tuple(adj_th),
+        8,
+        memory_custom,
+        None,
+        node_index=index,
+    )
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:

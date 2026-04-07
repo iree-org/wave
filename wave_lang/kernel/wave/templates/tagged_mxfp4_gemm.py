@@ -387,6 +387,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     reorder_workgroups=True,
     group_size_n=32,
     output_dtype=tkl.f32,
+    transpose_output: bool = False,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
@@ -516,13 +517,26 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         outputs={K: k_s, N: n_s},
     )
 
+    c_dim_0, c_dim_1 = (N, M) if transpose_output else (M, N)
+
+    if transpose_output:
+        c_it_m = tkw.IndexMapping.iterator(0)
+        c_it_n = tkw.IndexMapping.iterator(1)
+        c_write_mapping = tkw.IndexMapping(
+            num_iterators=2,
+            inputs={M: c_it_m, N: c_it_n},
+            outputs={N: c_it_n, M: c_it_m},
+        )
+    else:
+        c_write_mapping = None
+
     @tkw.wave(constraints)
     def gemm(
         a: tkl.Memory[M, K / 2, A_ADDRESS_SPACE, tkl.i8],
         a_scale: tkl.Memory[M, K / 32, A_ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, GLOBAL_ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
+        c: tkl.Memory[c_dim_0, c_dim_1, C_ADDRESS_SPACE, output_dtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
@@ -545,7 +559,11 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
 
         if output_dtype == tkl.bf16:
             repeat = tkw.cast(repeat, tkl.bf16)
-        tkw.write(repeat, c)
+
+        if c_write_mapping is not None:
+            tkw.write(repeat, c, mapping=c_write_mapping, elements_per_thread=4)
+        else:
+            tkw.write(repeat, c)
 
     hyperparams = {
         A_ADDRESS_SPACE: a_address_space,
