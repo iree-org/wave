@@ -685,12 +685,15 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    # With the waveasm backend, allow masked loads even with buffer ops.
-    # The mask computation may fail to translate (vector<Nxindex> ops are
-    # unsupported), but the backend loads unconditionally in that case,
-    # relying on hardware OOB checking (SRD boundsCheck) to return zero.
-    no_masked_load_store_ops = (
-        buffer_ops_enabled and emitter.options.backend != "asm"
+    # With the waveasm backend (non-water path), allow masked loads even
+    # with buffer ops.  The mask computation may fail to translate
+    # (vector<Nxindex> ops are unsupported), but the backend loads
+    # unconditionally in that case, relying on hardware OOB checking
+    # (SRD boundsCheck) to return zero.  The water+waveasm path goes
+    # through TranslateFromLLVMDialect which lacks vector op support,
+    # so masked loads must stay disabled there.
+    no_masked_load_store_ops = buffer_ops_enabled and (
+        emitter.options.backend != "asm" or emitter.options.use_water_backend
     )
 
     mask_splat = _get_splat_input(mask)
