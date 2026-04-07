@@ -28,7 +28,7 @@ from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
 from ...lang.wave_types import Memory, Register
-from ..constraints import HardwareConstraint, TilingConstraint
+from ..constraints import HardwareConstraint, TilingConstraint, WaveConstraint
 from ...ops.wave_ops import (
     MMA,
     Allocate,
@@ -195,7 +195,7 @@ def _apply_subs(
 def _check_expr_equivalent(
     lhs: IndexSequence | sympy.Basic | int,
     rhs: IndexSequence | sympy.Basic | int,
-    subs: Optional[dict[IndexSymbol, int]],
+    subs: Optional[dict[IndexSymbol, int]] = None,
 ) -> Result:
     """Check symbolic equivalence after substitution and simplification."""
     if _expr_symbols(lhs) != _expr_symbols(rhs):
@@ -214,6 +214,14 @@ def _check_expr_equivalent(
         return Success() if lhs == rhs else Failure(f"int mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, sympy.Basic) and isinstance(rhs, sympy.Basic):
         if sympy.simplify(lhs - rhs) == 0:
+            return Success()
+        # The affine type system lacks exact division, so the emitter wraps
+        # divisions in ceiling(). Accept ceiling(X) as equivalent to X: if
+        # the original trace has X without ceiling, the ceiling was only
+        # introduced for affine compatibility and not present in the source.
+        if isinstance(rhs, sympy.ceiling) and sympy.simplify(rhs.args[0] - lhs) == 0:
+            return Success()
+        if isinstance(lhs, sympy.ceiling) and sympy.simplify(lhs.args[0] - rhs) == 0:
             return Success()
         return Failure(f"symbolic expr mismatch: {lhs} vs {rhs}")
     if isinstance(lhs, (int, sympy.Basic)) and isinstance(rhs, (int, sympy.Basic)):
@@ -385,6 +393,13 @@ def _check_payloads_equivalent(
             return Failure(f"expr mismatch: {check_result.error}")
         return Success()
 
+    # Type object comparison (Memory, Register)
+    # Memory[M, K] and Register[M, K] are classes (created by a metaclass),
+    # not instances, so we use issubclass to detect them.
+    if isinstance(lhs, type) and isinstance(rhs, type):
+        if issubclass(lhs, (Memory, Register)) or issubclass(rhs, (Memory, Register)):
+            return _check_result_types_equivalent(lhs, rhs, subs)
+
     # DataType comparison
     if isinstance(lhs, DataType) or isinstance(rhs, DataType):
         if not (isinstance(lhs, DataType) and isinstance(rhs, DataType)):
@@ -403,7 +418,11 @@ def _check_payloads_equivalent(
     return Success() if lhs == rhs else Failure(f"value mismatch: {lhs} vs {rhs}")
 
 
-def _check_result_types_equivalent(lhs: ResultType, rhs: ResultType) -> Result:
+def _check_result_types_equivalent(
+    lhs: ResultType,
+    rhs: ResultType,
+    subs: Optional[dict[IndexSymbol, int]] = None,
+) -> Result:
     """Compare result types by shape, dtype, and address space."""
     if lhs == rhs:
         return Success()
@@ -414,12 +433,35 @@ def _check_result_types_equivalent(lhs: ResultType, rhs: ResultType) -> Result:
     if rhs is None:
         return Failure("type lost: present in reference but absent in actual")
 
-    # Compare attributes that define type equivalence
-    for attr in ("symbolic_shape", "dtype", "address_space"):
-        lhs_val = getattr(lhs, attr, None)
-        rhs_val = getattr(rhs, attr, None)
-        if lhs_val != rhs_val:
-            return Failure(f"{attr} mismatch: {lhs_val} vs {rhs_val}")
+    if (lhs_shape := getattr(lhs, "symbolic_shape", None)) != (
+        rhs_shape := getattr(rhs, "symbolic_shape", None)
+    ) and not (
+        lhs_shape
+        and rhs_shape
+        and len(lhs_shape) == len(rhs_shape)
+        and all(
+            _check_expr_equivalent(a, b, subs) for a, b in zip(lhs_shape, rhs_shape)
+        )
+    ):
+        return Failure(f"symbolic_shape mismatch: {lhs_shape} vs {rhs_shape}")
+
+    if (lhs_dtype := getattr(lhs, "dtype", None)) != (
+        rhs_dtype := getattr(rhs, "dtype", None)
+    ):
+        return Failure(f"dtype mismatch: {lhs_dtype} vs {rhs_dtype}")
+
+    # Some passes substitute hyperparameters in the FX type (producing an
+    # integer), while the MLIR reimport always reconstructs the symbolic
+    # form. Resolve both sides through subs so e.g. GLOBAL_ADDRESS_SPACE
+    # and its concrete value 1 compare as equivalent.
+    if (lhs_addr_space := getattr(lhs, "address_space", None)) != (
+        rhs_addr_space := getattr(rhs, "address_space", None)
+    ) and (
+        not subs
+        or subs.get(lhs_addr_space, lhs_addr_space)
+        != subs.get(rhs_addr_space, rhs_addr_space)
+    ):
+        return Failure(f"address_space mismatch: {lhs_addr_space} vs {rhs_addr_space}")
 
     return Success()
 
@@ -494,7 +536,7 @@ def _check_nodes_equivalent(
     if not _skip_node_types:
         if not (
             check_result := _check_result_types_equivalent(
-                lhs_custom.type, rhs_custom.type
+                lhs_custom.type, rhs_custom.type, subs
             )
         ):
             return Failure(
@@ -1001,7 +1043,7 @@ def compare_tiling_constraints_for_mlir_roundtrip(
     """
     if source.dim != roundtripped.dim:
         return False
-    if source.tile_size != roundtripped.tile_size:
+    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size):
         return False
     # These fields are populated by `create_induction_vars`, a
     # accept None on the source side
@@ -1010,6 +1052,23 @@ def compare_tiling_constraints_for_mlir_roundtrip(
     ):
         return False
     if source.iters is not None and source.iters != roundtripped.iters:
+        return False
+    return True
+
+
+def compare_wave_constraints_for_mlir_roundtrip(
+    source: WaveConstraint, roundtripped: WaveConstraint
+) -> bool:
+    """Directional comparison for WaveConstraint during MLIR roundtrip.
+
+    Tolerates ceiling wrappers on tile_size (the emitter wraps exact
+    divisions in ceiling for the affine type system).
+    """
+    if source.dim != roundtripped.dim:
+        return False
+    if not _check_expr_equivalent(source.tile_size, roundtripped.tile_size, None):
+        return False
+    if source.wave_id is not None and source.wave_id != roundtripped.wave_id:
         return False
     return True
 
