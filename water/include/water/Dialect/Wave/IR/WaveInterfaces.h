@@ -618,8 +618,8 @@ public:
 // Lattice for propagating index expressions across wave dialect operations.
 // In addition to the bottom and top states, it can represent a concrete state
 // including:
-//   - a dictionary attribute mapping symbol names to index mappings;
-//   - a dictionary attribute mapping symbol names to vector shapes;
+//   - an attribute mapping symbol names to index mappings;
+//   - an attribute mapping symbol names to vector shapes;
 //   - a priority for each symbol;
 //   - a separate, "source" vector shape and priority referring to the operation
 //     where the lattice initially originated.
@@ -630,8 +630,8 @@ public:
 // XXX: the latter is required for compatibility with the python prototype and
 // its propagation heuristic, it must be revised towards a more principled
 // approach.
-// TODO: consider using a single dictionary attribute with one entry per symbol
-// rather than separate ones for the three fields.
+// TODO: consider using a single mapping attribute with one entry per symbol
+// rather than separate ones for all fields.
 class IndexExprsLatticeStorage {
 public:
   // Priorities for specific operations that may be used.
@@ -755,7 +755,7 @@ public:
   LLVM_DUMP_METHOD void dump() const;
 
 private:
-  // The internal storage is either a dictionary attribute with one entry per
+  // The internal storage is either a mapping attribute with one entry per
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 

@@ -833,7 +833,7 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   // Join specific values per symbol using per-key priorities.
   IntegerType i32 = IntegerType::get(ctx, 32);
   llvm::MapVector<wave::WaveSymbolAttr, Attribute> result;
-  llvm::DenseMap<wave::WaveSymbolAttr, int32_t> resultPriorities;
+  llvm::MapVector<wave::WaveSymbolAttr, int32_t> resultPriorities;
   for (auto [key, val] :
        llvm::zip(lhsMapping.getKeys(), lhsMapping.getValues())) {
     result[key] = val;
