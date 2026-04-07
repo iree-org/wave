@@ -838,7 +838,7 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
 
   // Join specific values per symbol using per-key priorities.
   IntegerType i32 = IntegerType::get(ctx, 32);
-  llvm::DenseMap<wave::WaveSymbolAttr, Attribute> result;
+  llvm::MapVector<wave::WaveSymbolAttr, Attribute> result;
   llvm::DenseMap<wave::WaveSymbolAttr, int32_t> resultPriorities;
   for (auto [key, val] :
        llvm::zip(lhsMapping.getKeys(), lhsMapping.getValues())) {
@@ -857,7 +857,7 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
 
     int32_t lhsPriority = lhs.getPriorityForKey(key);
 
-    auto lhsIdx = llvm::cast<wave::WaveIndexMappingAttr>(it->getSecond());
+    auto lhsIdx = llvm::cast<wave::WaveIndexMappingAttr>(it->second);
     auto rhsIdx = llvm::cast<wave::WaveIndexMappingAttr>(val);
     if (lhsIdx == rhsIdx) {
       resultPriorities[key] = std::max(lhsPriority, rhsPriority);
@@ -879,6 +879,9 @@ wave::IndexExprsLatticeStorage::join(const IndexExprsLatticeStorage &lhs,
   if (!joinedVectorShape && (lhs.getVectorShape() || rhs.getVectorShape()))
     return IndexExprsLatticeStorage::top();
 
+  // Join source vector shapes using priority: higher priority wins. If
+  // priorities are equal, two different values cause top; two identical values
+  // join cleanly.
   auto joinedSVSResult = getJoinedSourceVectorShape(lhs, rhs);
   if (failed(joinedSVSResult))
     return IndexExprsLatticeStorage::top();
@@ -1670,7 +1673,7 @@ static void mixInThreadIndependentConstraints(
       std::is_same_v<std::decay_t<decltype(*std::declval<RangeT>().begin())>,
                      wave::WaveSymbolAttr>,
       "expected a range of WaveSymbolAttr");
-  assert(symbols.size() == symbols.size() &&
+  assert(symbols.size() == indexExprs.size() &&
          "symbols and expressions must have the same size");
 
   auto zero = AffineMap::get(/*dimCount=*/0, /*numSymbols=*/0,
@@ -1927,6 +1930,24 @@ LogicalResult MmaOp::initializeIndexExprsForward(
       "implied by MMA kind", emitError);
 }
 
+// Populate the filteredSymbols and filteredIndexExprs with the symbols and
+// index expressions except the excluded one.
+static void
+filterSymbol(const SmallVector<wave::WaveSymbolAttr> &symbols,
+             const SmallVector<wave::WaveIndexMappingAttr> &indexExprs,
+             WaveSymbolAttr exclude,
+             SmallVectorImpl<wave::WaveSymbolAttr> &filteredSymbols,
+             SmallVectorImpl<wave::WaveIndexMappingAttr> &filteredIndexExprs) {
+  filteredSymbols.reserve(filteredSymbols.size() + symbols.size());
+  filteredIndexExprs.reserve(filteredIndexExprs.size() + indexExprs.size());
+  for (auto &&[symbol, indexExpr] : llvm::zip_equal(symbols, indexExprs)) {
+    if (symbol != exclude) {
+      filteredSymbols.push_back(symbol);
+      filteredIndexExprs.push_back(indexExpr);
+    }
+  }
+}
+
 // Initialize the index expression lattices for the operands of the MMA
 // operation. This sets index expressions to values derived from the MMA
 // operation kind and wavefront-in-workgroup configuration (thread-dependent) as
@@ -1987,27 +2008,14 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
                                          ArrayRef{mSymbol, nSymbol}),
       initObject.symbolConstraints, accumulatorSymbols, accumulatorIndexExprs);
 
-  auto filterSymbol =
-      [](const SmallVector<wave::WaveSymbolAttr> &symbols,
-         const SmallVector<wave::WaveIndexMappingAttr> &indexExprs,
-         WaveSymbolAttr exclude) {
-        SmallVector<WaveSymbolAttr> filteredSymbols;
-        SmallVector<WaveIndexMappingAttr> filteredIndexExprs;
-        filteredSymbols.reserve(symbols.size());
-        filteredIndexExprs.reserve(indexExprs.size());
-        for (auto &&[symbol, indexExpr] :
-             llvm::zip_equal(symbols, indexExprs)) {
-          if (symbol != exclude) {
-            filteredSymbols.push_back(symbol);
-            filteredIndexExprs.push_back(indexExpr);
-          }
-        }
-        return std::make_pair(filteredSymbols, filteredIndexExprs);
-      };
-  auto [lhsSymbols, lhsIndexExprs] =
-      filterSymbol(operandSymbols, operandIndexExprs, nSymbol);
-  auto [rhsSymbols, rhsIndexExprs] =
-      filterSymbol(operandSymbols, operandIndexExprs, mSymbol);
+  SmallVector<wave::WaveSymbolAttr> lhsSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> lhsIndexExprs;
+  filterSymbol(operandSymbols, operandIndexExprs, nSymbol, lhsSymbols,
+               lhsIndexExprs);
+  SmallVector<wave::WaveSymbolAttr> rhsSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> rhsIndexExprs;
+  filterSymbol(operandSymbols, operandIndexExprs, mSymbol, rhsSymbols,
+               rhsIndexExprs);
 
   // Set the priority based on the order of operations: earlier MMAs have higher
   // priority.
@@ -2211,31 +2219,23 @@ LogicalResult wave::ScaledMmaOp::initializeIndexExprsBackward(
                                          ArrayRef{mSymbol, nSymbol}),
       initObject.symbolConstraints, accumulatorSymbols, accumulatorIndexExprs);
 
-  auto filterSymbol =
-      [](const SmallVector<wave::WaveSymbolAttr> &symbols,
-         const SmallVector<wave::WaveIndexMappingAttr> &indexExprs,
-         wave::WaveSymbolAttr exclude) {
-        SmallVector<wave::WaveSymbolAttr> filteredSymbols;
-        SmallVector<wave::WaveIndexMappingAttr> filteredIndexExprs;
-        filteredSymbols.reserve(symbols.size());
-        filteredIndexExprs.reserve(indexExprs.size());
-        for (auto &&[symbol, indexExpr] :
-             llvm::zip_equal(symbols, indexExprs)) {
-          if (symbol != exclude) {
-            filteredSymbols.push_back(symbol);
-            filteredIndexExprs.push_back(indexExpr);
-          }
-        }
-        return std::make_pair(filteredSymbols, filteredIndexExprs);
-      };
-  auto [lhsSymbols, lhsIndexExprs] =
-      filterSymbol(operandSymbols, operandIndexExprs, nSymbol);
-  auto [rhsSymbols, rhsIndexExprs] =
-      filterSymbol(operandSymbols, operandIndexExprs, mSymbol);
-  auto [lhsScaleSymbols, lhsScaleIndexExprs] =
-      filterSymbol(scaleSymbols, scaleIndexExprs, nSymbol);
-  auto [rhsScaleSymbols, rhsScaleIndexExprs] =
-      filterSymbol(scaleSymbols, scaleIndexExprs, mSymbol);
+  SmallVector<wave::WaveSymbolAttr> lhsSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> lhsIndexExprs;
+  filterSymbol(operandSymbols, operandIndexExprs, nSymbol, lhsSymbols,
+               lhsIndexExprs);
+  SmallVector<wave::WaveSymbolAttr> rhsSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> rhsIndexExprs;
+  filterSymbol(operandSymbols, operandIndexExprs, mSymbol, rhsSymbols,
+               rhsIndexExprs);
+  SmallVector<wave::WaveSymbolAttr> lhsScaleSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> lhsScaleIndexExprs;
+  filterSymbol(scaleSymbols, scaleIndexExprs, nSymbol, lhsScaleSymbols,
+               lhsScaleIndexExprs);
+  SmallVector<wave::WaveSymbolAttr> rhsScaleSymbols;
+  SmallVector<wave::WaveIndexMappingAttr> rhsScaleIndexExprs;
+  filterSymbol(scaleSymbols, scaleIndexExprs, mSymbol, rhsScaleSymbols,
+               rhsScaleIndexExprs);
+
   // Set the priority based on the order of operations: earlier scaled MMAs have
   // higher priority.
   auto orderedAllMmas = llvm::make_filter_range(

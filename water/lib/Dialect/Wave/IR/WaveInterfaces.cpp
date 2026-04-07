@@ -114,8 +114,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   }
 
   for (wave::WaveSymbolMappingAttr indexMapping : mappings) {
-    for (auto [key, val] :
-         llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
+    for (auto &&[key, val] : indexMapping.getMapping()) {
       if (!isa<wave::WaveIndexMappingAttr>(val))
         return op->emitError("'index' attribute value for key ")
                << key.getName() << " must be WaveIndexMappingAttr, got " << val;
@@ -161,8 +160,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   wave::WaveHyperparameterAttr hyperparams = wave::getHyperparameters(op);
   for (wave::WaveSymbolMappingAttr indexMapping : mappings) {
     int nonUnitCount = 0;
-    for (auto [key, val] :
-         llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
+    for (auto &&[key, val] : indexMapping.getMapping()) {
       auto mapping = dyn_cast<wave::WaveIndexMappingAttr>(val);
       if (!mapping)
         continue;
@@ -276,8 +274,7 @@ void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
   auto printOne = [&](wave::WaveSymbolMappingAttr mapping) {
     printer.getStream() << "{";
     llvm::interleaveComma(
-        llvm::zip(mapping.getKeys(), mapping.getValues()), printer.getStream(),
-        [&](auto pair) {
+        mapping.getMapping(), printer.getStream(), [&](auto pair) {
           auto [key, value] = pair;
           printer.getStream() << key.getName() << " : ";
           if (auto mappingAttr =

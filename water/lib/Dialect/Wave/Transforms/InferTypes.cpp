@@ -808,8 +808,7 @@ public:
         auto indexMapping = cast<wave::WaveSymbolMappingAttr>(index);
         std::optional<int64_t> elementsPerThread = std::nullopt;
         llvm::StringSet<> visitedSymbols;
-        for (auto [key, val] :
-             llvm::zip(indexMapping.getKeys(), indexMapping.getValues())) {
+        for (auto &&[key, val] : indexMapping.getMapping()) {
           visitedSymbols.insert(key.getName());
           auto mapping = cast<wave::WaveIndexMappingAttr>(val);
           ArrayRef<Attribute> symbols = mapping.getSymbols();
