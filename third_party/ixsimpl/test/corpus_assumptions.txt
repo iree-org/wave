@@ -1,0 +1,26 @@
+$T0 >= 0
+$T0 < 256
+$T1 >= 0
+$T1 < 4
+$T2 >= 0
+$WG0 >= 0
+$WG1 >= 0
+$GPR_NUM >= 0
+M >= 1
+N >= 1
+K >= 1
+_M_div_32 >= 0
+_N_div_32 >= 0
+_K_div_256 >= 0
+$ARGK >= 0
+$MMA_ACC >= 0
+$MMA_LHS_SCALE >= 0
+$MMA_RHS_SCALE >= 0
+$MMA_SCALE_FP4 >= 0
+$index0 >= 0
+$index1 >= 0
+_aligned >= 0
+Mod(M, 32) == 0
+Mod(N, 32) == 0
+Mod(K, 256) == 0
+BLOCK_K >= 1

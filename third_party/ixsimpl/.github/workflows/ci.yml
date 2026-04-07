@@ -1,0 +1,103 @@
+# SPDX-FileCopyrightText: 2026 ixsimpl contributors
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release
+            build_type: Release
+            asan: OFF
+          - name: Debug + ASAN
+            build_type: Debug
+            asan: ON
+    name: ${{ matrix.name }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DENABLE_ASAN=${{ matrix.asan }}
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  amalgamation:
+    runs-on: ubuntu-latest
+    name: Amalgamated build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DUSE_AMALGAMATION=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  python:
+    runs-on: ubuntu-latest
+    name: Python bindings + fuzz
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install hatchling "scikit-build-core~=0.12.0" sympy hypothesis pytest pytest-xdist
+
+      - name: Build extension (ASAN)
+        env:
+          CC: gcc
+          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer -g"
+          LDFLAGS: "-fsanitize=address"
+        run: pip install --no-build-isolation .
+
+      - name: Python tests
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          LD_PRELOAD=$(gcc -print-file-name=libasan.so) python -m pytest --quick -n auto
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    name: Lint
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: pre-commit/action@v3.0.1
+
+  reuse:
+    runs-on: ubuntu-latest
+    name: REUSE compliance
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: fsfe/reuse-action@v5

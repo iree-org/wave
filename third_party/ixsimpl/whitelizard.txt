@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 ixsimpl contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Grandfathered functions that exceed CCN 50.
+# Reduce this list over time; do not add new entries without discussion.
+# (none)

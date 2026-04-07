@@ -1,0 +1,13 @@
+version = 1
+
+[[annotations]]
+path = [
+    "*.md",
+    ".clang-format",
+    ".gitignore",
+    "ixsimpl_amalg.c",
+    "test/corpus*.txt",
+    "scripts/requirements-gen.txt",
+]
+SPDX-FileCopyrightText = "2026 ixsimpl contributors"
+SPDX-License-Identifier = "Apache-2.0"
