@@ -146,16 +146,19 @@ def test_gather_to_shared_wave_tile_aligned_coalescing():
 
     # CHECK-LABEL:    test_gather_to_shared_wave_tile_aligned_coalescing
     # CHECK-DAG:      #[[MAP_LDS_ROW:.*]] = affine_map<()[s0, s1] -> (s1 * 16 + (s0 floordiv 64) * 8 - ((s1 * 2 + s0 floordiv 64) floordiv 4) * 32)>
-    # CHECK-DAG:      #[[MAP_SRC_IDX:.*]] = affine_map<()[s0, s1, s2, s3] -> (s0 * 2048 + s1 * 1024 + s2 * 2 + s3 * 16 + (s2 floordiv 8) * 48 - ((s1 * 16 + s2 floordiv 8) floordiv 32) * 2048)>
+    # CHECK-DAG:      #[[MAP_SRC_IDX:.*]] = affine_map<()[s0, s1, s2] -> (s0 * 2048 + s1 * 1024 + s2 * 2 + (s2 floordiv 8) * 48 - ((s1 * 16 + s2 floordiv 8) floordiv 32) * 2048)>
     # CHECK-DAG:      #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
     # CHECK:          func.func @gemm
     # CHECK:            %[[BIDX:.+]] = gpu.block_id  x
     # CHECK:            %[[BIDY:.+]] = gpu.block_id  y
     # CHECK:            %[[TIDX:.+]] = gpu.thread_id  x
     # CHECK:            %[[TIDY:.+]] = gpu.thread_id  y
+    # CHECK:            affine.apply #[[MAP_SRC_IDX]]()[%[[BIDX]], %[[TIDY]], %[[TIDX]]]
+    # CHECK:            affine.apply #[[MAP_SRC_IDX]]()[%[[BIDY]], %[[TIDY]], %[[TIDX]]]
     # CHECK:            scf.for %[[IND_VAR:.+]] = %c0
     # CHECK:              amdgpu.lds_barrier
-    # CHECK:              affine.apply #[[MAP_SRC_IDX]]()[%[[BIDX]], %[[TIDY]], %[[TIDX]], %[[IND_VAR]]]
+    # CHECK:              arith.muli %[[IND_VAR]], %c16 overflow<nsw, nuw> : index
+    # CHECK:              arith.addi {{.*}}, {{.*}} overflow<nsw, nuw> : index
     # CHECK:              amdgpu.gather_to_lds
 
 

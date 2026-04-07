@@ -808,27 +808,30 @@ def test_dynamic_copy():
     print(dynamic_copy.asm)
 
     # CHECK-LABEL:    test_dynamic_copy
-    # CHECK-DAG:        #[[map1:.*]] = affine_map<()[s0] -> (s0 * 16)>
-    # CHECK-DAG:        #[[map2:.*]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 64) * 48)>
+    # CHECK-DAG:        #[[dc_map_ceildiv:.*]] = affine_map<()[s0] -> (s0 ceildiv 16)>
+    # CHECK-DAG:        #[[dc_map_row:.*]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 64) * 48)>
+    # CHECK-DAG:        #[[dc_map_colbase:.*]] = affine_map<()[s0] -> (s0 * 16)>
+    # CHECK-DAG:        #[[dc_map_linear:.*]] = affine_map<()[s0, s1, s2, s3] -> ((s0 * s1) * 16 + s0 * s2 + s3 * 16 - ((s2 floordiv 64) * s0) * 48)>
     # CHECK:          func.func @dynamic_copy
-    # CHECH-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
+    # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
     # CHECK-DAG:        %[[CST:.*]] = arith.constant dense<0.000000e+00> : vector<16xf16>
     # CHECK-DAG:        %[[CST_0:.*]] = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : vector<16xindex>
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:        %[[WORKGROUP_ID_0:.*]] = gpu.block_id x
     # CHECK-DAG:        %[[WORKGROUP_ID_1:.*]] = gpu.block_id y
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x
-    # CHECK:            %[[D1:.*]] = affine.apply #[[map1]]()[%[[WORKGROUP_ID_1]]]
-    # CHECK:            %[[D2:.*]] = vector.broadcast %[[D1]] : index to vector<16xindex>
-    # CHECK:            %[[D3:.*]] = arith.addi %[[D2]], %[[CST_0]] overflow<nsw, nuw> : vector<16xindex>
-    # CHECK:            %[[D4:.*]] = vector.broadcast %{{.*}} : index to vector<16xindex>
-    # CHECK:            %[[D5:.*]] = arith.cmpi slt, %[[D3]], %[[D4]] : vector<16xindex>
-    # CHECK:            %[[D6:.*]] = affine.apply #[[map2]]()[%[[THREAD_ID_X]], %[[WORKGROUP_ID_0]]]
-    # CHECK:            %[[D7:.*]] = arith.cmpi slt, %[[D6]], %{{.*}} : index
-    # CHECK:            %[[D8:.*]] = vector.broadcast %[[D7]] : i1 to vector<16xi1>
-    # CHECK:            %[[D9:.*]] = arith.andi %[[D5]], %[[D8]] : vector<16xi1>
-    # CHECK:            %[[D10:.*]] = vector.maskedload %{{.*}}[%{{.*}}], %[[D9]], %[[CST]] : memref<1073741822xf16, strided<[1]>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
-    # CHECK:            vector.maskedstore {{.*}}[{{.*}}], %[[D9]], %[[D10]] : memref<{{.*}}xf16{{.*}}>, vector<16xi1>, vector<16xf16>
+    # CHECK:            %[[D1:.*]] = affine.apply #[[dc_map_row]]()[%[[THREAD_ID_X]], %[[WORKGROUP_ID_0]]]
+    # CHECK:            %[[D2:.*]] = arith.cmpi slt, %[[D1]], %arg1 : index
+    # CHECK:            %[[D3:.*]] = vector.broadcast %[[D2]] : i1 to vector<16xi1>
+    # CHECK:            %[[D4:.*]] = affine.apply #[[dc_map_colbase]]()[%[[WORKGROUP_ID_1]]]
+    # CHECK:            %[[D5:.*]] = vector.broadcast %[[D4]] : index to vector<16xindex>
+    # CHECK:            %[[D6:.*]] = arith.addi %[[D5]], %[[CST_0]] overflow<nsw, nuw> : vector<16xindex>
+    # CHECK:            %[[D7:.*]] = vector.broadcast %arg2 : index to vector<16xindex>
+    # CHECK:            %[[D8:.*]] = arith.cmpi slt, %[[D6]], %[[D7]] : vector<16xindex>
+    # CHECK:            %[[D9:.*]] = arith.andi %[[D3]], %[[D8]] : vector<16xi1>
+    # CHECK:            %[[D10:.*]] = affine.apply #[[dc_map_linear]]()[%arg2, %[[WORKGROUP_ID_0]], %[[THREAD_ID_X]], %[[WORKGROUP_ID_1]]]
+    # CHECK:            %[[D11:.*]] = vector.maskedload %{{.*}}[%[[D10]]], %[[D9]], %[[CST]] : memref<1073741822xf16, strided<[1]>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
+    # CHECK:            vector.maskedstore {{.*}}[{{.*}}], %[[D9]], %[[D11]] : memref<{{.*}}xf16{{.*}}>, vector<16xi1>, vector<16xf16>
     # CHECK:          func.func @isolated_benchmark$async(%[[ARG:.*]]: !hal.buffer_view, %[[FENCE:.*]]: !hal.fence, %{{.*}}: !hal.fence)
     # CHECK:            %[[D0:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[0] : index
     # CHECK:            %[[D1:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[1] : index
@@ -1632,20 +1635,26 @@ def test_tiled_reduce_min_unaligned():
     print(test.asm)
 
     # CHECK-LABEL: test_tiled_reduce_min_unaligned
-    # CHECK-DAG:     #[[map1:.*]] = affine_map<()[s0, s1] -> (s0 * 128 + s1 * 2 - (s1 floordiv 64) * 128)>
+    # CHECK-DAG:     #[[tr_map_lane:.*]] = affine_map<()[s0] -> (s0 * 2 - (s0 floordiv 64) * 128)>
+    # CHECK-DAG:     #[[tr_map_blk:.*]] = affine_map<()[s0, s1] -> (s0 * 527 + s1 * 2 - (s1 floordiv 64) * 128)>
     # CHECK:       func @tiled_reduce_min_unaligned
     # CHECK-DAG:     %[[cst_0:.*]] = arith.constant dense<527> : vector<2xindex>
     # CHECK-DAG:     %[[cst_1:.*]] = arith.constant dense<[0, 1]> : vector<2xindex>
     # CHECK-DAG:     %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:     %[[C1:.*]] = arith.constant 1 : index
     # CHECK-DAG:     %[[C5:.*]] = arith.constant 5 : index
+    # CHECK-DAG:     %[[C128:.*]] = arith.constant 128 : index
+    # CHECK-DAG:     %[[BLK_Y:.+]] = gpu.block_id  y
     # CHECK:         %[[THREAD_ID_X:.+]] = gpu.thread_id  x
+    # CHECK:         %{{.*}} = affine.apply #[[tr_map_lane]]()[%[[THREAD_ID_X]]]
+    # CHECK:         %{{.*}} = affine.apply #[[tr_map_blk]]()[%[[BLK_Y]], %[[THREAD_ID_X]]]
     # Tiled Reduction Loop
     # CHECK:         scf.for %[[ITER:.*]] = %[[C0]] to %[[C5]] step %[[C1]]
-    # CHECK:           %[[D6:.*]] = affine.apply #[[map1]]()[%[[ITER]], %[[THREAD_ID_X]]]
-    # CHECK:           %[[D7:.*]] = vector.broadcast %[[D6]] : index to vector<2xindex>
-    # CHECK:           %[[D8:.*]] = arith.addi %[[D7]], %[[cst_1]] overflow<nsw, nuw> : vector<2xindex>
-    # CHECK:           %[[D9:.*]] = arith.cmpi slt, %[[D8]], %[[cst_0]] : vector<2xindex>
+    # CHECK:           %[[MUL_K:.*]] = arith.muli %[[ITER]], %[[C128]] overflow<nsw, nuw> : index
+    # CHECK:           vector.broadcast %[[MUL_K]] : index to vector<2xindex>
+    # CHECK:           arith.addi {{.*}}, {{.*}} overflow<nsw, nuw> : vector<2xindex>
+    # CHECK:           %[[D9:.*]] = arith.cmpi slt, {{.*}}, %[[cst_0]] : vector<2xindex>
+    # CHECK:           arith.addi {{.*}}, %[[MUL_K]] overflow<nsw, nuw> : index
     # CHECK-COUNT-2:   vector.maskedload %{{.*}}[%{{.*}}], %[[D9]]
 
 
