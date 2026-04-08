@@ -105,6 +105,7 @@ class WaveEmitter:
         self.dynamic_symbols = self.options.dynamic_symbols
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
+        self.iv_offset_cache: dict[sympy.Expr, Value] = {}
 
     def emit_program_invariants(self):
         grid = self.grid
@@ -669,8 +670,13 @@ def _group_same_denom_fractions(expr):
     return sympy.Add(*new_terms)
 
 
-def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Value:
-    use_affine_expr = _use_affine_expr
+def gen_sympy_index(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+    *,
+    use_affine: bool | None = None,
+) -> Value:
+    use_affine_expr = use_affine if use_affine is not None else _use_affine_expr
     stack: list[OpResult] = []
 
     def _get_ir_value(arg) -> Value:
@@ -1232,6 +1238,7 @@ def gen_sympy_index_hoisted(
     iv_stride: sympy.Expr | None = None,
     hoist_ip: InsertionPoint | None = None,
     all_iv_syms: set[IndexSymbol] | None = None,
+    iv_offset_cache: dict[sympy.Expr, Value] | None = None,
 ) -> Value:
     """Loop-aware variant of ``gen_sympy_index`` that hoists the base.
 
@@ -1245,6 +1252,10 @@ def gen_sympy_index_hoisted(
     If *iv_stride* is given (from ``annotate_iv_strides``), it is used
     directly.  Otherwise the stride is extracted via ``sympy.expand`` /
     ``coeff``.
+
+    *iv_offset_cache*, when provided, deduplicates the ``iv * stride``
+    product across calls that share the same stride coefficient within
+    a single loop body.
 
     Falls back to ``gen_sympy_index`` when not inside a loop or when the
     expression does not depend on the IV.
@@ -1284,11 +1295,41 @@ def gen_sympy_index_hoisted(
     with hoist_ip:
         base_val = gen_sympy_index(dynamics, base_expr)
 
-    stride_val = gen_sympy_index(dynamics, coeff)
-    iv_offset = arith_d.muli(iv_val, stride_val, overflow_flags=overflow_flags)
+    coeff_key = sympy.sympify(coeff)
+    if iv_offset_cache is not None and coeff_key in iv_offset_cache:
+        iv_offset = iv_offset_cache[coeff_key]
+    else:
+        stride_val = gen_sympy_index(dynamics, coeff)
+        iv_offset = arith_d.muli(iv_val, stride_val, overflow_flags=overflow_flags)
+        if iv_offset_cache is not None:
+            iv_offset_cache[coeff_key] = iv_offset
 
     base_val, iv_offset = _broadcast_pair(base_val, iv_offset)
     return arith_d.addi(base_val, iv_offset, overflow_flags=overflow_flags)
+
+
+def gen_sympy_index_no_affine(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+) -> Value:
+    """Like ``gen_sympy_index`` but forces arith-only mode (no affine.apply).
+
+    Use inside loop bodies to avoid ``affine.apply`` without hoisting,
+    which would extend live ranges and increase register pressure.
+    """
+    return gen_sympy_index(dynamics, expr, use_affine=False)
+
+
+def gen_sympy_index_no_affine(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+) -> Value:
+    """Like ``gen_sympy_index`` but forces arith-only mode (no affine.apply).
+
+    Use inside loop bodies to avoid ``affine.apply`` without hoisting,
+    which would extend live ranges and increase register pressure.
+    """
+    return gen_sympy_index(dynamics, expr, use_affine=False)
 
 
 def get_constant_attr(value: Any, element_type: IrType) -> Attribute:

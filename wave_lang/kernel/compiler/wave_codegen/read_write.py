@@ -74,6 +74,7 @@ from .emitter import (
     cast_vector,
     gen_sympy_index,
     gen_sympy_index_hoisted,
+    gen_sympy_index_no_affine,
     get_constant_attr,
     get_type_or_element_type,
     handle_op,
@@ -145,9 +146,8 @@ def _gen_linear_index_offset(
     flat_offset = idx_seq.start
     stride = idx_seq.stride if idx_seq.stride != sympy.Integer(1) else None
     iv_sym, iv_val, all_iv_syms = _iv_context(emitter, flat_offset)
-    hoist_ip = (
-        _hoist_before_loop(emitter) if _get_enclosing_scf_for() is not None else None
-    )
+    in_loop = _get_enclosing_scf_for() is not None
+    hoist_ip = _hoist_before_loop(emitter) if in_loop else None
     return gen_sympy_index_hoisted(
         subs_map,
         flat_offset,
@@ -156,6 +156,7 @@ def _gen_linear_index_offset(
         iv_stride=stride,
         hoist_ip=hoist_ip,
         all_iv_syms=all_iv_syms,
+        iv_offset_cache=emitter.iv_offset_cache,
     )
 
 
@@ -323,11 +324,8 @@ def _build_mask(
             cond = gen_sympy_index(subs_map, start < bound)
         else:
             iv_sym, iv_val, all_iv_syms = _iv_context(emitter, key)
-            hoist_ip = (
-                _hoist_before_loop(emitter)
-                if _get_enclosing_scf_for() is not None
-                else None
-            )
+            in_loop = _get_enclosing_scf_for() is not None
+            hoist_ip = _hoist_before_loop(emitter) if in_loop else None
             key_val = gen_sympy_index_hoisted(
                 subs_map,
                 key,
@@ -335,6 +333,7 @@ def _build_mask(
                 iv_val=iv_val,
                 hoist_ip=hoist_ip,
                 all_iv_syms=all_iv_syms,
+                iv_offset_cache=emitter.iv_offset_cache,
             )
             bound_val = gen_sympy_index(subs_map, bound)
             if isinstance(key_val.type, VectorType) and not isinstance(
@@ -637,7 +636,11 @@ def _compute_branchless_valid_bytes(
     )
     zero_valid = arith_d.constant(uint64, get_constant_attr(0, uint64))
 
-    cond_val = gen_sympy_index(add_emitter_subs(emitter), guard_condition)
+    subs_map = add_emitter_subs(emitter)
+    if _get_enclosing_scf_for() is not None:
+        cond_val = gen_sympy_index_no_affine(subs_map, guard_condition)
+    else:
+        cond_val = gen_sympy_index(subs_map, guard_condition)
     i1 = IntegerType.get_signless(1)
     if cond_val.type != i1:
         zero_idx = arith_d.constant(cond_val.type, 0)
