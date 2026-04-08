@@ -387,7 +387,7 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     reorder_workgroups=True,
     group_size_n=32,
     output_dtype=tkl.f32,
-    transpose_output: bool = False,
+    wide_stores: bool = False,
 ):
     """Return a tagged MXFP4 scaled GEMM kernel with preshuffled B and B_scale.
 
@@ -408,10 +408,6 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     Returns:
         (kernel_function, WaveCompileOptions)
     """
-    
-    m_symbol = tkl.sym.m_symbol
-    n_symbol = tkl.sym.n_symbol
-    
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -423,6 +419,10 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
     C_ADDRESS_SPACE = tkl.sym.C_ADDRESS_SPACE
     K_PACKED = tkl.sym.K_PACKED
     K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
+
+    if wide_stores:
+        m_symbol = tkl.sym.m_symbol
+        n_symbol = tkl.sym.n_symbol
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -440,9 +440,9 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
 
     # K is always large enough for software pipelining.
     constraints += [tkw.Assumption(K > BLOCK_K * 6)]
-    
-    constraints += [tkw.IteratorBindings({m_symbol: M, n_symbol: N})]
 
+    if wide_stores:
+        constraints += [tkw.IteratorBindings({m_symbol: M, n_symbol: N})]
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(
@@ -524,18 +524,10 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         outputs={K: k_s, N: n_s},
     )
 
-    c_dim_0, c_dim_1 = (N, M) if transpose_output else (M, N)
-
-    if transpose_output:
-        c_it_m = tkw.IndexMapping.iterator(0)
-        c_it_n = tkw.IndexMapping.iterator(1)
-        c_write_mapping = tkw.IndexMapping(
-            num_iterators=2,
-            inputs={M: c_it_m, N: c_it_n},
-            outputs={N: c_it_n, M: c_it_m},
-        )
+    if wide_stores:
+        reg_dim_0, reg_dim_1 = N, M
     else:
-        c_write_mapping = None
+        reg_dim_0, reg_dim_1 = M, N
 
     @tkw.wave(constraints)
     def gemm(
@@ -545,14 +537,12 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
         b_scale: tkl.Memory[N, K / 32, GLOBAL_ADDRESS_SPACE, tkl.i8],
         c: tkl.Memory[M, N, C_ADDRESS_SPACE, output_dtype],
     ):
-        # c_reg = tkl.Register[M, N, tkl.f32](0.0)
-        c_reg = tkl.Register[N, M, tkl.f32](0.0)
+        c_reg = tkl.Register[reg_dim_0, reg_dim_1, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
         def repeat(
-            # acc: tkl.Register[M, N, tkl.f32],
-            acc: tkl.Register[N, M, tkl.f32],
-        ) -> tkl.Register[N, M, tkl.f32]:
+            acc: tkl.Register[reg_dim_0, reg_dim_1, tkl.f32],
+        ) -> tkl.Register[reg_dim_0, reg_dim_1, tkl.f32]:
             a_reg = tkw.read(a, tag="read_a")
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn, tag="bitcast_a")
             a_scale_reg = tkw.read(a_scale, mapping=a_scale_mapping, tag="read_a_scale")
@@ -561,20 +551,25 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
             b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn, tag="bitcast_b")
             b_scale_reg = tkw.read(b_scale, mapping=b_scale_mapping, tag="read_b_scale")
             b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu, tag="bitcast_b_scale")
-            acc = tkw.scaled_mma(
-                b_reg, b_scale_reg, a_reg, a_scale_reg, acc, tag="scaled_mma"
-            )
+            if wide_stores:
+                acc = tkw.scaled_mma(
+                    b_reg, b_scale_reg, a_reg, a_scale_reg, acc, tag="scaled_mma"
+                )
+            else:
+                acc = tkw.scaled_mma(
+                    a_reg, a_scale_reg, b_reg, b_scale_reg, acc, tag="scaled_mma"
+                )
             return acc
 
         if output_dtype == tkl.bf16:
             repeat = tkw.cast(repeat, tkl.bf16)
 
-        # if c_write_mapping is not None:
-        #     tkw.write(repeat, c, mapping=c_write_mapping, elements_per_thread=4)
-        # else:
-        #     tkw.write(repeat, c)
-        tkw.write(repeat, c, source=(n_symbol, m_symbol), target=(m_symbol, n_symbol))
-
+        if wide_stores:
+            tkw.write(
+                repeat, c, source=(n_symbol, m_symbol), target=(m_symbol, n_symbol)
+            )
+        else:
+            tkw.write(repeat, c)
 
     hyperparams = {
         A_ADDRESS_SPACE: a_address_space,

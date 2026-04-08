@@ -482,15 +482,17 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // assigns them the same physical register, the original value is lost.
   // Extend the src's live range to match the dst's end point so the
   // allocator cannot reuse src's register for dst.
-  program.walk([&](V_PERMLANE16_SWAP_B32 swapOp) {
-    Value src = swapOp.getSrc();
-    Value dst = swapOp.getDst();
-    auto srcIt = info.ranges.find(src);
-    auto dstIt = info.ranges.find(dst);
-    if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
-      srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
+  for (auto *op : ops) {
+    if (auto swapOp = dyn_cast<V_PERMLANE16_SWAP_B32>(op)) {
+      Value src = swapOp.getSrc();
+      Value dst = swapOp.getDst();
+      auto srcIt = info.ranges.find(src);
+      auto dstIt = info.ranges.find(dst);
+      if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
+        srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
+      }
     }
-  });
+  }
 
   // Note: Pass 3 (CFG-based backward dataflow liveness extension) has been
   // removed. It was needed for the old label-based control flow path where
@@ -565,6 +567,33 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
     }
   });
+
+  // Pass 3a1: Extend pack result ranges to cover downstream users of extracted
+  // sub-values. When an ExtractOp extracts from a pack result, its physical
+  // register is assigned post-hoc as pack_base + index. The main allocator
+  // doesn't see this register as occupied. If a downstream op (e.g.,
+  // v_permlane16_swap_b32) has its result allocated to the same register,
+  // it clobbers the extract's value.
+  // Fix: extend the pack result's range to cover ALL users of ExtractOps
+  // that reference the pack.
+  for (auto *op : ops) {
+    auto extractOp = dyn_cast<ExtractOp>(op);
+    if (!extractOp)
+      continue;
+    Value source = extractOp.getVector();
+    // Find the pack result that owns this extract's source.
+    auto sourceIt = info.ranges.find(source);
+    if (sourceIt == info.ranges.end())
+      continue;
+    // Extend pack result's range to cover all uses of the extract result.
+    Value extractResult = extractOp.getResult();
+    auto useIt = info.usePoints.find(extractResult);
+    if (useIt != info.usePoints.end()) {
+      for (int64_t use : useIt->second) {
+        sourceIt->second.end = std::max(sourceIt->second.end, use);
+      }
+    }
+  }
 
   // Pass 3a2: InsertOp pass -- treat insert result as an alias of the source
   // vector, but keep the inserted value in the allocator worklist.

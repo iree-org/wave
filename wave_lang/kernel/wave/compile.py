@@ -589,7 +589,7 @@ def build_graph_passes(
                 options.minimize_shared_allocs,
             ),
         ]
-    if options.coalesce_epilogue_stores:
+    if getattr(options, "coalesce_epilogue_stores", False):
         from .coalesce_epilogue_stores import coalesce_epilogue_stores
 
         graph_passes.append(partial(coalesce_epilogue_stores, trace))
@@ -1378,7 +1378,11 @@ def _generate_asm_code(mb, options):
             "--waveasm-scc-spill-reload",
             "--waveasm-scc-verifier",
             "--waveasm-linear-scan=max-vgprs=256 max-agprs=256",
-            *(["--waveasm-vgpr-compaction"] if not getattr(options, 'coalesce_epilogue_stores', False) else []),
+            *(
+                ["--waveasm-vgpr-compaction"]
+                if not getattr(options, "coalesce_epilogue_stores", False)
+                else []
+            ),
             waitcnt_flag,
             f"--waveasm-hazard-mitigation=target={options.target}",
             "--emit-assembly",

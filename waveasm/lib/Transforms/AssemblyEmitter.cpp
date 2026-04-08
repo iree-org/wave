@@ -972,18 +972,30 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           })
 
       // V_PERMLANE16_SWAP_B32: swap lanes 16 apart.
-      // The hardware clobbers BOTH dst and src. To preserve the original
-      // src value (which may be needed by downstream selects), copy src
-      // to scratch, then swap through scratch. This leaves src untouched.
+      // The hardware clobbers BOTH dst and src. When the allocator assigns
+      // dst==src, we must save the original to a scratch register, swap
+      // through another scratch, then restore the original.
       .Case<V_PERMLANE16_SWAP_B32>(
           [&](V_PERMLANE16_SWAP_B32 swapOp) -> std::optional<std::string> {
             std::string dst = resolveValue(swapOp.getDst());
             std::string src = resolveValue(swapOp.getSrc());
-            std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+            if (dst != src) {
+              llvm::SmallVector<std::string> operands = {dst, src};
+              return formatter.format("v_permlane16_swap_b32", operands);
+            }
+            // dst==src: save original, swap through scratch, restore original
+            std::string scratch0 = formatVGPRRange(kScratchVGPR, 1);
+            std::string scratch1 = formatVGPRRange(kScratchVGPR - 1, 1);
             peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
             invalidateScratchCache();
-            return "  v_mov_b32 " + scratch + ", " + src + "\n" +
-                   "  v_permlane16_swap_b32 " + dst + ", " + scratch;
+            // 1. Save original src to scratch0
+            // 2. Copy src to scratch1 for the swap
+            // 3. Swap: dst gets partner's scratch1, scratch1 clobbered
+            // 4. Restore original from scratch0 back to src
+            return "  v_mov_b32 " + scratch0 + ", " + src + "\n" +
+                   "  v_mov_b32 " + scratch1 + ", " + src + "\n" +
+                   "  v_permlane16_swap_b32 " + dst + ", " + scratch1 + "\n" +
+                   "  v_mov_b32 " + src + ", " + scratch0;
           })
 
       // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops
