@@ -1375,6 +1375,21 @@ LogicalResult handleMemRefAtomicRMW(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleROCDLSchedBarrier(Operation *op, TranslationContext &ctx) {
+  auto schedBarrierOp = cast<ROCDL::SchedBarrier>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  // Scheduling barriers are compiler hints.
+  // Preserve the source position in emitted assembly with a comment.
+  int32_t mask = schedBarrierOp.getMask();
+  CommentOp::create(builder, loc,
+                    "s_sched_barrier 0x" +
+                        llvm::utohexstr(static_cast<uint32_t>(mask)) +
+                        " (not emitted)");
+  return success();
+}
+
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx) {
   auto &builder = ctx.getBuilder();
   auto loc = op->getLoc();

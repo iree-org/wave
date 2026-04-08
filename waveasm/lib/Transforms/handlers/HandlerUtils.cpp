@@ -20,6 +20,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
@@ -51,9 +52,9 @@ bool isLDSMemRef(MemRefType memrefType) {
 
 int64_t getElementBytes(Type type) {
   if (auto floatType = dyn_cast<FloatType>(type))
-    return floatType.getWidth() / 8;
+    return llvm::divideCeil<int64_t>(floatType.getWidth(), 8);
   if (auto intType = dyn_cast<IntegerType>(type))
-    return (intType.getWidth() + 7) / 8;
+    return llvm::divideCeil<int64_t>(intType.getWidth(), 8);
   return 4;
 }
 
