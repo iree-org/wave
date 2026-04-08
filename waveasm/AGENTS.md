@@ -13,6 +13,15 @@ pip install -e ".[dev]"   # re-links extension, skips CMake
 
 Set `WAVE_WAVEASM_DIR=waveasm/build` after first build to avoid full rebuilds on pip install. CLI tool: `waveasm-translate`.
 
+## Formatting
+
+C++ code is formatted with `clang-format`. Run via pre-commit or directly:
+
+```bash
+clang-format -i <file>          # format a single file in-place
+pre-commit run clang-format     # format all staged files
+```
+
 ## Testing
 
 ```bash

@@ -15,6 +15,15 @@ pip install -e ".[dev]"       # re-links Python extension (fast, skips CMake)
 
 LLVM is pinned at `water/llvm-sha.txt`. CLI tool: `water-opt` (analogous to `mlir-opt`).
 
+## Formatting
+
+C++ code is formatted with `clang-format`. Run via pre-commit or directly:
+
+```bash
+clang-format -i <file>          # format a single file in-place
+pre-commit run clang-format     # format all staged files
+```
+
 ## Testing
 
 ```bash
