@@ -111,9 +111,9 @@ def test_dynamic_preshuffle_b_mxfp4_eliminate_epilogue():
     # 5. Loop carries vector iter_args (epilogue folded in).
     # CHECK-SAME: vector<4xf32>
 
-    # 6. OOB guard: arith.select chooses clamped validBytes vs 0 for
-    #    out-of-range iterations, so the hardware returns zeros on OOB loads.
-    # CHECK: arith.select %{{.*}}, %{{.*}}, %c0_i64 : i64
+    # 6. OOB guard: arith.select clamps the gather index to an
+    #    out-of-bounds sentinel so the hardware returns zeros on OOB loads.
+    # CHECK: arith.select %{{.*}}, %{{.*}}, %c2147483647 : index
 
     # 7. fat_raw_buffer_cast uses the dynamically selected validBytes.
     # CHECK: amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}})
