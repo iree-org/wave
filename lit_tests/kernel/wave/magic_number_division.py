@@ -101,7 +101,6 @@ def test_magic_number_div():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        magic_number_div=True,
     )
 
     options.dynamic_symbols = [M, N, K]
