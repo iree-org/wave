@@ -153,8 +153,7 @@ WaveIndexMappingAttr applyConstraint(WaveConstraintAttr constraint,
 WaveIndexMappingAttr applyConstraint(TilingConstraintAttr constraint,
                                      WaveIndexMappingAttr baseMapping) {
   llvm::SmallVector<Attribute> symbols =
-      llvm::map_to_vector(constraint.getTileSize().getSymbols(),
-                          [](Attribute symbol) { return symbol; });
+      llvm::to_vector(constraint.getTileSize().getSymbols());
 
   MLIRContext *context = constraint.getContext();
   AffineExpr symbolExpr = getOrInsertSymbolExpr(
