@@ -1194,7 +1194,7 @@ def mlir_converter_matmul():
     # CHECK-SAME: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
     # CHECK-SAME: #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 2)>>
     # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], mma_type = <f32_32x32x8_f16>>
-    # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 32 : i64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, K = 640 : i64, M = 1024 : i64, N = 5120 : i64}>
+    # CHECK-SAME: #wave.hyperparameters<@BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64, @BLOCK_K = 32 : i64, @M = 1024 : i64, @N = 5120 : i64, @K = 640 : i64>
     #
     # With minimize_shared_allocs enabled, the first allocate is the parent (combined buffer)
     # and subsequent allocates reference it with "in %parent" and an offset attribute.
@@ -1475,7 +1475,7 @@ def mlir_converter_mixed_memory_spaces():
     # All function arguments should be <global>
     # CHECK: func.func @kernel(
     # Verify that ADDRESS_SPACE_* are NOT in hyperparameters but others are
-    # CHECK-SAME: #wave.hyperparameters<{BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, M = 128 : i64, N = 128 : i64}>
+    # CHECK-SAME: #wave.hyperparameters<@M = 128 : i64, @N = 128 : i64, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
     # CHECK-NOT: ADDRESS_SPACE_A
     # CHECK-NOT: ADDRESS_SPACE_B
 
@@ -1980,7 +1980,7 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     # CHECK-SAME: #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
     # CHECK-SAME: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = <f32_16x16x128_f8f6f4>>
-    # CHECK-SAME: #wave.hyperparameters<{BLOCK_K = 128 : i64, BLOCK_M = 16 : i64, BLOCK_N = 16 : i64, K = 16384 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>, M = 16384 : i64, N = 16384 : i64}>
+    # CHECK-SAME: #wave.hyperparameters<@BLOCK_M = 16 : i64, @BLOCK_N = 16 : i64, @BLOCK_K = 128 : i64, @M = 16384 : i64, @N = 16384 : i64, @K = 16384 : i64, @K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>, @K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>>
     #
     # CHECK:     %[[ITERATE:.*]] = wave.iterate @K
     # Global reads promoted through shared memory.

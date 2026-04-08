@@ -131,10 +131,10 @@ with ir.Context() as ctx:
     # CHECK: #wave.index_mapping<[] -> (1, <NULL>, <NULL>)>
     print(mapping)
 
-    # CHECK: #wave.hyperparameters<{A = 1 : i64, B = 2 : i64, C = 3 : i64}>
+    # CHECK: #wave.hyperparameters<@A = 1 : i64, @B = 2 : i64, @C = 3 : i64>
     hyper_param = wave.WaveHyperparameterAttr.get({"A": 1, "B": 2, "C": 3})
     print(hyper_param)
-    # CHECK: {A = 1 : i64, B = 2 : i64, C = 3 : i64}
+    # CHECK: #wave.symbol_mapping<@A = 1 : i64, @B = 2 : i64, @C = 3 : i64>
     print(hyper_param.mapping)
 
     try:
@@ -166,7 +166,7 @@ with ir.Context() as ctx:
     k_div_2_expr = wave.WaveExprListAttr.get(
         [wave.WaveSymbolAttr.get("K")], k_div_2_map
     )
-    # CHECK: #wave.hyperparameters<{K = 128 : i64, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>
+    # CHECK: #wave.hyperparameters<@K = 128 : i64, @K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>>
     hyper_with_expr = wave.WaveHyperparameterAttr.get({"K": 128, "K2": k_div_2_expr})
     print(hyper_with_expr)
 
@@ -530,7 +530,7 @@ module attributes {transform.with_named_sequence} {
     bitcast_test_module = ir.Module.parse(
         """
 func.func @bitcast_test(%arg0: !wave.tensor<[@M, @K2] of i8, <register>>) -> !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, K = 128, K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>}>} {
+    attributes {wave.hyperparameters = #wave.hyperparameters<@M = 16, @K = 128, @K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>>} {
   %0 = wave.bitcast %arg0 : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
   return %0 : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
 }

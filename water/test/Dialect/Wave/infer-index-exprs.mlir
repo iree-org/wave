@@ -101,7 +101,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
         mma_type = #wave.mma_kind<f32_16x16x16_f16>,
         vector_shapes = #wave.symbol_mapping<@M = 1 : i64, @N = 1 : i64, @K = 8 : i64>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @K = 64>
   } {
     // CHECK: wave.mma
     // Four per-value dicts: lhs (M,K), rhs (K,N), acc (M,N), result (M,N); MMA
@@ -166,7 +166,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     #wave.hardware_constraint<threads_per_wave = 64,
                               waves_per_block = [2, 3, 4]>,
     #wave.tiling_constraint<dim = <"B">, tile_size = <[#wave.symbol<"BLOCK_B">] -> (BLOCK_B)>>
-  ], wave.hyperparameters = #wave.hyperparameters<{BLOCK_B = 2 : i64, B = 10, M = 16, N = 16, K = 16}>} {
+  ], wave.hyperparameters = #wave.hyperparameters<@BLOCK_B = 2 : i64, @B = 10, @M = 16, @N = 16, @K = 16>} {
     // CHECK: wave.mma
     // LHS
     // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
@@ -261,7 +261,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>,
     #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 4)>>,
     #wave.wave_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K floordiv 4)>>
-  ], wave.hyperparameters = #wave.hyperparameters<{M = 256 : i64, N = 256 : i64, K = 128 : i64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, BLOCK_K = 32 : i64}>} {
+  ], wave.hyperparameters = #wave.hyperparameters<@M = 256 : i64, @N = 256 : i64, @K = 128 : i64, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64, @BLOCK_K = 32 : i64>} {
     // CHECK: wave.mma
     // CHECK-SAME: index
     // CHECK-DAG: K : <[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
@@ -957,7 +957,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
       #wave.device_constraint<dim = <"M">, tile_size = <[] -> (42)>, device_dim = 0>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 100}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 100>
   } {
     return
   }
@@ -1003,7 +1003,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>,
       #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64, BLOCK_M = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@K = 128 : i64, @M = 256 : i64, @N = 1024 : i64, @BLOCK_K = 32 : i64, @BLOCK_M = 64 : i64>
   } {
     // The computation below is bogus and is generally dead code (writing to a local allocation),
     // its point is to only access the values defined inside the loop so no propagation of
@@ -1057,7 +1057,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
       #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@K = 128 : i64, @M = 256 : i64, @N = 1024 : i64, @BLOCK_K = 32 : i64>
   } {
     %cst = arith.constant 0.0 : f32
     %acc_init = wave.register %cst : !wave.tensor<[@M, @N] of f32>
@@ -1089,7 +1089,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>,
       #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{K = 128 : i64, M = 256 : i64, N = 1024 : i64, BLOCK_K = 32 : i64, BLOCK_M = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@K = 128 : i64, @M = 256 : i64, @N = 1024 : i64, @BLOCK_K = 32 : i64, @BLOCK_M = 64 : i64>
   } {
     wave.iterate @K iter_args() {
       wave.iterate @M iter_args() {
@@ -1303,7 +1303,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
@@ -1345,7 +1345,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     %cst = arith.constant 0.0 : f32
     %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
@@ -1372,7 +1372,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     %cst = arith.constant 0.0 : f32
     %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
@@ -1402,7 +1402,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{B = 8, M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@B = 8, @M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // Read should get default index expression for B dimension (no constraints)
     // and computed expressions for M and N dimensions
@@ -1444,7 +1444,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // CHECK: wave.read
     // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
@@ -1493,7 +1493,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_16x16x16_f16>, vector_shapes = #wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{P = 8 : i64, Q = 16 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@P = 8 : i64, @Q = 16 : i64>
   } {
     // CHECK: wave.read
     // CHECK-DAG: P : <[] -> (0, 1, 1)>
@@ -1531,7 +1531,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>,
       #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, K = 64, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @K = 64, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // CHECK: wave.read
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @K = 16 : i64>]
@@ -1650,7 +1650,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128, BLOCK_M = 64 : i64, BLOCK_N = 64 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // Add (identity trait) gets result index exprs from init (thread-independent constraints).
     // CHECK: wave.add
@@ -1697,7 +1697,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
       #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <x>>
     ],
-    wave.hyperparameters = #wave.hyperparameters<{N = 128, M = 64, BLOCK_N = 32 : i64}>
+    wave.hyperparameters = #wave.hyperparameters<@N = 128, @M = 64, @BLOCK_N = 32 : i64>
   } {
     // Reduction result has shape [@N]; init has shape [@N]; input has [@N, @M].
     // CHECK: wave.max_element

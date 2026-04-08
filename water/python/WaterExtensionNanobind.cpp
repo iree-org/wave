@@ -302,20 +302,22 @@ struct PyWaveHyperparameterAttr
         [](const nb::dict &symbolDict,
            mlir::python::MLIR_BINDINGS_PYTHON_DOMAIN::DefaultingPyMlirContext
                context) {
-          std::vector<MlirNamedAttribute> namedAttrs;
-          namedAttrs.reserve(symbolDict.size());
+          std::vector<MlirAttribute> keys;
+          std::vector<MlirAttribute> values;
+          keys.reserve(symbolDict.size());
+          values.reserve(symbolDict.size());
 
           for (auto item : symbolDict) {
-            // Get the key (symbol name)
             nb::handle key_handle = item.first;
             if (!nb::isinstance<nb::str>(key_handle)) {
               throw nb::type_error("Symbol dictionary key must be a string");
             }
             std::string symbolName = nb::cast<std::string>(key_handle);
 
-            MlirIdentifier ident = mlirIdentifierGet(
+            MlirAttribute keyAttr = mlirWaveSymbolAttrGet(
                 context->get(),
                 mlirStringRefCreate(symbolName.data(), symbolName.size()));
+            keys.push_back(keyAttr);
 
             nb::handle value_handle = item.second;
             MlirAttribute valueAttr;
@@ -337,8 +339,6 @@ struct PyWaveHyperparameterAttr
                     "Attribute (e.g. WaveExprListAttr)");
               }
 
-              // Only accept IntegerAttr or WaveExprListAttr to avoid
-              // constructing invalid #wave.hyperparameters mappings.
               if (!mlirAttributeIsAInteger(valueAttr) &&
                   !mlirAttributeIsAWaveExprListAttr(valueAttr)) {
                 throw nb::type_error(
@@ -347,13 +347,14 @@ struct PyWaveHyperparameterAttr
               }
             }
 
-            namedAttrs.push_back(mlirNamedAttributeGet(ident, valueAttr));
+            values.push_back(valueAttr);
           }
 
+          MlirAttribute symMapping = mlirWaveSymbolMappingAttrGet(
+              context->get(), keys.size(), keys.data(), values.data());
+
           return PyWaveHyperparameterAttr(
-              context->getRef(),
-              mlirWaveHyperparameterAttrGet(mlirDictionaryAttrGet(
-                  context->get(), namedAttrs.size(), namedAttrs.data())));
+              context->getRef(), mlirWaveHyperparameterAttrGet(symMapping));
         },
         nb::arg("symbol_dict"), nb::arg("context") = nb::none(),
         "Gets a wave.WaveHyperparameterAttr from parameters.");

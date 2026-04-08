@@ -4,7 +4,7 @@
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_basic_alloc
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_basic_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+  func.func @resolve_basic_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
     %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
@@ -19,7 +19,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_alloc_with_expr
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_alloc_with_expr() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 28, M = 128, K = 64}>} {
+  func.func @resolve_alloc_with_expr() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 28, @M = 128, @K = 64>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
     %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
@@ -34,7 +34,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_child_alloc
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_child_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64, SIZE = 8192}>} {
+  func.func @resolve_child_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64, @SIZE = 8192>} {
     // CHECK: %[[PARENT:.*]] = wave.allocate {distributed_shape = #wave.expr_list<[] -> (8192)>}
     // CHECK-SAME: memref<8192xi8, #gpu.address_space<workgroup>>
     %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (8192)> }
@@ -56,7 +56,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_alloc_with_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_alloc_with_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+  func.func @resolve_alloc_with_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64}
     // CHECK-SAME: memref<64x36xbf16, #gpu.address_space<workgroup>>
     %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64}
@@ -72,7 +72,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_alloc_with_tail_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_alloc_with_tail_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+  func.func @resolve_alloc_with_tail_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, tail_padding = 128 : i64}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
     %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, tail_padding = 128 : i64}
@@ -88,7 +88,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 // CHECK-LABEL: func.func @resolve_alloc_with_both_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @resolve_alloc_with_both_padding() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
+  func.func @resolve_alloc_with_both_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64, tail_padding = 128 : i64}
     // CHECK-SAME: memref<64x36xbf16, #gpu.address_space<workgroup>>
     %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>, padding = 4 : i64, tail_padding = 128 : i64}
@@ -112,7 +112,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // Test that resolved_allocations is set on a module without existing normal form.
 // CHECK: normalform.module [#wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
 normalform.module [] {
-  func.func @resolve_without_existing_normal_form() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32}>} {
+  func.func @resolve_without_existing_normal_form() attributes {wave.hyperparameters = #wave.hyperparameters<@M = 32>} {
     // CHECK: wave.allocate
     // CHECK-SAME: memref<32xf32, #gpu.address_space<workgroup>>
     %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
@@ -129,7 +129,7 @@ normalform.module [] {
 // CHECK-LABEL: func.func @read_ordered_syms
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @read_ordered_syms(%mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
-      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, K = 32, N = 128, T0 = 64}>} {
+      attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.read
     // CHECK-SAME: ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">, #wave.symbol<"N">]
     %0 = wave.read %mem index [{
@@ -147,7 +147,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // CHECK-LABEL: func.func @write_ordered_syms
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @write_ordered_syms(%val: vector<8xf16>, %mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
-      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, K = 32, N = 128, T0 = 64}>} {
+      attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.write
     // CHECK-SAME: ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">, #wave.symbol<"N">]
     wave.write %val, %mem index [{

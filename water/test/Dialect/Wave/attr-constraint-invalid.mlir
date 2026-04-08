@@ -25,7 +25,7 @@ func.func private @test_repeated_hw_constraint() attributes { wave.constraints =
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, K = 1024, BLOCK_M = 128, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @K = 1024, @BLOCK_M = 128, @BLOCK_K = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{missing corresponding workgroup constraint for dimension: #wave.symbol<"M">}}
@@ -33,21 +33,21 @@ func.func private @test_wrong_wg_dim() attributes { wave.hyperparameters = #hype
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{missing corresponding workgroup constraint for dimension: #wave.symbol<"M">}}
 func.func private @test_missing_wg_dim() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>, primary=false>
 // expected-error @below {{missing primary workgroup constraint for workgroup dimension: #wave.workgroup_dim<x>}}
 func.func private @test_no_primary_wg_dim() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{K = 512, M = 1024, BLOCK_K = 64, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@K = 512, @M = 1024, @BLOCK_K = 64, @BLOCK_M = 128>
 #wg_constraint1 = #wave.workgroup_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wg_constraint2 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>, workgroup_dim = <x>>
 // expected-error @below {{workgroup dimension #wave.workgroup_dim<x> has more than one primary workgroup constraint}}
@@ -55,21 +55,21 @@ func.func private @test_duplicate_primary_wg_dim() attributes { wave.hyperparame
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, DEVICE_M = 2048}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @DEVICE_M = 2048>
 #dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 // expected-error @below {{invalid number of devices: 0 for dimension: #wave.symbol<"M">}}
 func.func private @test_wrong_device_size() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#dv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 2048}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 2048>
 #constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
 // expected-error @below {{invalid number of workgroups: 0 for dimension: #wave.symbol<"M">}}
 func.func private @test_wrong_wg_size() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
 // expected-error @below {{invalid number of waves: 0 for dimension: #wave.symbol<"M">}}
@@ -77,14 +77,14 @@ func.func private @test_wrong_wave_size() attributes { wave.hyperparameters = #h
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 2048}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 2048>
 #constraint = #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
 // expected-error @below {{invalid number of tiles: 0 for dimension: #wave.symbol<"M">}}
 func.func private @test_wrong_tile_size() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, DEVICE_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @DEVICE_M = 128>
 #dv_constraint1 = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 #dv_constraint2 = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M floordiv 4)>, device_dim = 0>
 // expected-error @below {{more than one device constraint for dimension: #wave.symbol<"M">}}
@@ -92,7 +92,7 @@ func.func private @test_duplicate_device_dim() attributes { wave.hyperparameters
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>, workgroup_dim = <x>>
 #wg_constraint2 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>, workgroup_dim = <x>>
 // expected-error @below {{more than one workgroup constraint for dimension: #wave.symbol<"M">}}
@@ -100,7 +100,7 @@ func.func private @test_duplicate_wg_dim() attributes { wave.hyperparameters = #
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wv_constraint1 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 #wv_constraint2 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
@@ -109,7 +109,7 @@ func.func private @test_duplicate_wave_dim() attributes { wave.hyperparameters =
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #tl_constraint1 = #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
 #tl_constraint2 = #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{more than one tiling constraint for dimension: #wave.symbol<"M">}}
@@ -142,73 +142,73 @@ func.func private @test_tile_missing_hyperparams1() attributes { wave.constraint
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@K = 1024, @BLOCK_K = 128>
 #dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 // expected-error @below {{uses symbolic value #wave.symbol<"M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, K}}
+// expected-note @below {{available symbols: K, BLOCK_K}}
 func.func private @test_dev_missing_hyperparams2() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#dv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@K = 1024, @BLOCK_K = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>, workgroup_dim = <x>>
 // expected-error @below {{uses symbolic value #wave.symbol<"M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, K}}
+// expected-note @below {{available symbols: K, BLOCK_K}}
 func.func private @test_wg_missing_hyperparams2() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@K = 1024, @BLOCK_K = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{uses symbolic value #wave.symbol<"M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, K}}
+// expected-note @below {{available symbols: K, BLOCK_K}}
 func.func private @test_wave_missing_hyperparams2() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint, #wv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@K = 1024, @BLOCK_K = 128>
 #tl_constraint = #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
 // expected-error @below {{uses symbolic value #wave.symbol<"M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, K}}
+// expected-note @below {{available symbols: K, BLOCK_K}}
 func.func private @test_tile_missing_hyperparams2() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#tl_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_K = 128>
 #dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
 // expected-error @below {{uses symbolic value #wave.symbol<"DEVICE_M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, M}}
+// expected-note @below {{available symbols: M, BLOCK_K}}
 func.func private @test_dev_missing_hyperparams3() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#dv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_K = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>, workgroup_dim = <x>>
 // expected-error @below {{uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, M}}
+// expected-note @below {{available symbols: M, BLOCK_K}}
 func.func private @test_wg_missing_hyperparams3() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_K = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, M}}
+// expected-note @below {{available symbols: M, BLOCK_K}}
 func.func private @test_wave_missing_hyperparams3() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint, #wv_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_K = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_K = 128>
 #tl_constraint = #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>>
 // expected-error @below {{uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
-// expected-note @below {{available symbols: BLOCK_K, M}}
+// expected-note @below {{available symbols: M, BLOCK_K}}
 func.func private @test_tile_missing_hyperparams3() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#tl_constraint] }
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 3)>>
 // expected-error @below {{wave constraint tile size 42 does not evenly divide workgroup constraint tile size 128 for dimension: #wave.symbol<"M">}}
@@ -216,7 +216,7 @@ func.func private @test_wave_not_divisible_by_workgroup() attributes { wave.hype
 
 // -----
 
-#hyperparams = #wave.hyperparameters<{N = 512, BLOCK_N = 64}>
+#hyperparams = #wave.hyperparameters<@N = 512, @BLOCK_N = 64>
 #wg_constraint = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
 #wv_constraint = #wave.wave_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N floordiv 5)>>
 // expected-error @below {{wave constraint tile size 12 does not evenly divide workgroup constraint tile size 64 for dimension: #wave.symbol<"N">}}
@@ -224,7 +224,7 @@ func.func private @test_wave_not_divisible_by_workgroup2() attributes { wave.hyp
 
 // -----
 
-#hyperparams_wpb1 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams_wpb1 = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint_wpb1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wv_constraint_wpb1 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
 #hw_constraint_wpb1 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 1, 1]>
@@ -233,7 +233,7 @@ func.func private @test_waves_per_block_mismatch_single_dim() attributes { wave.
 
 // -----
 
-#hyperparams_wpb2 = #wave.hyperparameters<{M = 1024, N = 512, BLOCK_M = 128, BLOCK_N = 64}>
+#hyperparams_wpb2 = #wave.hyperparameters<@M = 1024, @N = 512, @BLOCK_M = 128, @BLOCK_N = 64>
 #wg_constraint_wpb2_m = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wg_constraint_wpb2_n = #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
 #wv_constraint_wpb2_m = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
@@ -244,7 +244,7 @@ func.func private @test_waves_per_block_mismatch_multi_dim() attributes { wave.h
 
 // -----
 
-#hyperparams_wpb3 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
+#hyperparams_wpb3 = #wave.hyperparameters<@M = 1024, @BLOCK_M = 128>
 #wg_constraint_wpb3 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <y>>
 #wv_constraint_wpb3 = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 2)>>
 #hw_constraint_wpb3 = #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 4, 1]>

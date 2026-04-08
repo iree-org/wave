@@ -41,12 +41,12 @@ void wave::WaveDialect::initialize() {
 static void
 attachAvailableSymbolsNote(InFlightDiagnostic &diag,
                            wave::WaveHyperparameterAttr hyperparam) {
-  std::string availableSymbols =
-      llvm::join(llvm::map_range(hyperparam.getMapping(),
-                                 [](const NamedAttribute namedAttr) {
-                                   return namedAttr.getName().getValue();
-                                 }),
-                 ", ");
+  std::string availableSymbols = llvm::join(
+      llvm::map_range(hyperparam.getMapping().getKeys(),
+                      [](wave::WaveSymbolAttr sym) -> llvm::StringRef {
+                        return sym.getName();
+                      }),
+      ", ");
   diag.attachNote() << "available symbols: " << availableSymbols;
 }
 
@@ -62,10 +62,9 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
     if (!tensorType || !tensorType.getFullySpecified())
       continue;
 
-    // TODO: we want symbol attrs rather than strings in hyperparam.
     for (wave::WaveSymbolAttr symbol : tensorType.getShape()) {
       usedSymbols.insert(symbol.getName());
-      if (hyperparam.getMapping().contains(symbol.getName()))
+      if (hyperparam.hasSymbol(symbol))
         continue;
 
       InFlightDiagnostic diag =
@@ -93,7 +92,7 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
-        if (hyperparam.getMapping().contains(symbolAttr.getName()))
+        if (hyperparam.hasSymbol(symbolAttr))
           return WalkResult::advance();
 
         InFlightDiagnostic diag = emitError()
@@ -364,21 +363,22 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
     // Verify expr_list values in the hyperparameters: each value must be an
     // integer or a valid expr_list, and all referenced symbols must exist as
     // entries in the same mapping.
-    for (const NamedAttribute &entry : hyperparams.getMapping()) {
-      if (llvm::isa<IntegerAttr>(entry.getValue()))
+    for (auto [key, value] : hyperparams.getMapping().getMapping()) {
+      if (llvm::isa<IntegerAttr>(value))
         continue;
 
       wave::WaveExprListAttr exprList =
-          llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+          llvm::dyn_cast<wave::WaveExprListAttr>(value);
       if (!exprList)
-        return op->emitError() << "hyperparameter " << entry.getName()
-                               << " must either be an integer or an expr_list";
+        return op->emitError()
+               << "hyperparameter \"" << key.getName()
+               << "\" must either be an integer or an expr_list";
 
       // Each expr_list must be a single-result affine map.
       if (exprList.getMap().getNumResults() != 1) {
         return op->emitError()
-               << "hyperparameter " << entry.getName()
-               << " must be a single-result expr_list, but has "
+               << "hyperparameter \"" << key.getName()
+               << "\" must be a single-result expr_list, but has "
                << exprList.getMap().getNumResults() << " results";
       }
       for (Attribute symAttr : exprList.getSymbols()) {
@@ -386,14 +386,14 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
             llvm::dyn_cast<wave::WaveSymbolAttr>(symAttr);
         if (!waveSym) {
           return op->emitError()
-                 << "hyperparameter " << entry.getName()
-                 << " expr_list may only contain wave symbols: " << symAttr;
+                 << "hyperparameter \"" << key.getName()
+                 << "\" expr_list may only contain wave symbols: " << symAttr;
         }
         usedSymbols.insert(waveSym.getName());
-        if (!hyperparams.getMapping().contains(waveSym.getName())) {
+        if (!hyperparams.hasSymbol(waveSym)) {
           return op->emitError()
-                 << "hyperparameter " << entry.getName()
-                 << " references symbol " << waveSym
+                 << "hyperparameter \"" << key.getName()
+                 << "\" references symbol " << waveSym
                  << " not defined in the same hyperparameters mapping";
         }
       }
@@ -404,9 +404,9 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
             hyperparams, op->getContext(), [&]() { return op->emitError(); })))
       return llvm::failure();
 
-    for (const NamedAttribute &entry : hyperparams.getMapping()) {
+    for (auto [key, value] : hyperparams.getMapping().getMapping()) {
       wave::WaveExprListAttr exprList =
-          llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+          llvm::dyn_cast<wave::WaveExprListAttr>(value);
       if (!exprList)
         continue;
 
@@ -417,20 +417,20 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       AffineBinaryOpExpr divExpr = llvm::dyn_cast<AffineBinaryOpExpr>(result);
       if (!divExpr || divExpr.getKind() != AffineExprKind::CeilDiv) {
         return op->emitError()
-               << "hyperparameter " << entry.getName()
-               << " expr_list must be a ceiling division expression";
+               << "hyperparameter \"" << key.getName()
+               << "\" expr_list must be a ceiling division expression";
       }
       if (!llvm::isa<AffineSymbolExpr>(divExpr.getLHS())) {
-        return op->emitError() << "hyperparameter " << entry.getName()
-                               << " expr_list dividend must be a symbol";
+        return op->emitError() << "hyperparameter \"" << key.getName()
+                               << "\" expr_list dividend must be a symbol";
       }
       if (!llvm::isa<AffineConstantExpr>(divExpr.getRHS())) {
-        return op->emitError() << "hyperparameter " << entry.getName()
-                               << " expr_list divisor must be a constant";
+        return op->emitError() << "hyperparameter \"" << key.getName()
+                               << "\" expr_list divisor must be a constant";
       }
 
       Attribute symAttr = exprList.getSymbols().back();
-      StringRef dep = llvm::cast<wave::WaveSymbolAttr>(symAttr).getName();
+      wave::WaveSymbolAttr dep = llvm::cast<wave::WaveSymbolAttr>(symAttr);
       int64_t lhs = hyperparams.getKnownSymbolValue(dep);
 
       AffineExpr rhsExpr = divExpr.getRHS();
@@ -439,7 +439,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       // The dividend must be evenly divisible by the divisor.
       if (rhs != 0 && lhs % rhs != 0) {
         return op->emitError()
-               << "hyperparameter " << entry.getName() << " has dividend ("
+               << "hyperparameter \"" << key.getName() << "\" has dividend ("
                << lhs << ") that is not evenly divisible by the divisor ("
                << rhs << ")";
       }
@@ -469,6 +469,10 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       }
 
       for (const NamedAttribute &namedAttr : op->getAttrs()) {
+        // Skip the hyperparameters attribute itself: its WaveSymbolAttr keys
+        // are definitions, not uses.
+        if (namedAttr.getName() == kHyperparameterAttrName)
+          continue;
         if (llvm::failed(verifyAttributeHyperparamUses(
                 hyperparams, namedAttr, usedSymbols, [&]() {
                   return op->emitOpError()
@@ -485,10 +489,9 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       return llvm::failure();
 
     llvm::SmallVector<StringRef> unusedNames;
-    for (const NamedAttribute &namedAttr :
-         hyperparams.getMapping().getValue()) {
-      if (!usedSymbols.contains(namedAttr.getName().getValue()))
-        unusedNames.push_back(namedAttr.getName().getValue());
+    for (wave::WaveSymbolAttr key : hyperparams.getMapping().getKeys()) {
+      if (!usedSymbols.contains(key.getName()))
+        unusedNames.push_back(key.getName());
     }
     if (!unusedNames.empty()) {
       // XXX: cannot use op->emitWarning as that triggers the op verifier

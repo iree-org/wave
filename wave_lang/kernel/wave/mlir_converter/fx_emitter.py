@@ -1274,9 +1274,9 @@ def _handle_reshape_op(
     source_nodes = [parse_ctx.resolve_operand(v) for v in op.source]
 
     target_vector_shape = {}
-    for named_attr in op.target_vector_shape:
-        sym = index_symbol(named_attr.name)
-        target_vector_shape[sym] = int(named_attr.attr.value)
+    for named in op.target_vector_shape:
+        sym = index_symbol(named.name)
+        target_vector_shape[sym] = int(named.attr.value)
 
     logical_slice = op.logical_slice.value if op.logical_slice is not None else 0
     num_slices = op.num_slices.value if op.num_slices is not None else 1
@@ -1686,8 +1686,8 @@ def convert_mlir_to_trace(
         options = WaveCompileOptions()
         if (hyper := func_op.attributes.get("wave.hyperparameters")) is not None:
             subs: dict = {}
-            for named in hyper.mapping:
-                subs[index_symbol(named.name)] = named.attr.value
+            for sym_attr, value_attr in hyper.mapping:
+                subs[index_symbol(sym_attr.name)] = value_attr.value
             options.subs = subs
         constraints = _convert_constraints(func_op)
 

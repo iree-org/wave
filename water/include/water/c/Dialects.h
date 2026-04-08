@@ -189,15 +189,14 @@ mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr, intptr_t index);
 MLIR_CAPI_EXPORTED bool
 mlirAttributeIsAWaveHyperparameterAttr(MlirAttribute attr);
 
-/// Creates a new WaveHyperparameterAttr with the given mapping from symbol
-/// names to their concrete integer values.
+/// Creates a new WaveHyperparameterAttr from a WaveSymbolMappingAttr.
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 
 /// Returns the typeID of a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
 
-/// Gets the underlying dictionary mapping from a WaveHyperparameterAttr.
+/// Gets the underlying WaveSymbolMappingAttr from a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveHyperparameterAttrGetMapping(MlirAttribute attr);
 

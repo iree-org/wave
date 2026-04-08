@@ -483,41 +483,83 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
 // WaveHyperparameterAttr
 //===----------------------------------------------------------------------===//
 
-std::optional<int64_t>
-WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
-  DictionaryAttr mapping = getMapping();
-  llvm::StringMap<int64_t> resolved;
+Attribute WaveHyperparameterAttr::parse(AsmParser &parser, Type) {
+  auto loc = parser.getCurrentLocation();
 
-  // Iterative worklist: each entry is a symbol name still to resolve.
-  // When we pop a name whose dependencies are all resolved we can evaluate
+  if (parser.parseLess())
+    return {};
+
+  SmallVector<WaveSymbolAttr> keys;
+  SmallVector<Attribute> values;
+
+  if (failed(parser.parseOptionalGreater())) {
+    do {
+      StringAttr nameAttr;
+      Attribute value;
+      if (failed(parser.parseSymbolName(nameAttr)) || parser.parseEqual() ||
+          failed(parser.parseAttribute(value)))
+        return {};
+      keys.push_back(WaveSymbolAttr::get(parser.getContext(), nameAttr));
+      values.push_back(value);
+    } while (succeeded(parser.parseOptionalComma()));
+
+    if (parser.parseGreater())
+      return {};
+  }
+
+  auto mappingAttr =
+      WaveSymbolMappingAttr::getChecked([&]() { return parser.emitError(loc); },
+                                        parser.getContext(), keys, values);
+  if (!mappingAttr)
+    return {};
+
+  return get(parser.getContext(), mappingAttr);
+}
+
+void WaveHyperparameterAttr::print(AsmPrinter &printer) const {
+  printer << "<";
+  llvm::interleaveComma(getMapping().getMapping(), printer, [&](auto pair) {
+    printer.printSymbolName(std::get<0>(pair).getName());
+    printer << " = ";
+    printer.printAttribute(std::get<1>(pair));
+  });
+  printer << ">";
+}
+
+std::optional<int64_t>
+WaveHyperparameterAttr::getSymbolValue(WaveSymbolAttr symbol) const {
+  WaveSymbolMappingAttr mapping = getMapping();
+  llvm::DenseMap<WaveSymbolAttr, int64_t> resolved;
+
+  // Iterative worklist: each entry is a symbol still to resolve.
+  // When we pop a symbol whose dependencies are all resolved we can evaluate
   // its expression; otherwise we push it back followed by its unresolved
   // dependencies (topological-sort style).
-  llvm::SmallVector<StringRef> worklist({symbolName});
+  llvm::SmallVector<WaveSymbolAttr> worklist({symbol});
 
   while (!worklist.empty()) {
-    StringRef name = worklist.back();
+    WaveSymbolAttr current = worklist.back();
 
-    if (resolved.contains(name)) {
+    if (resolved.contains(current)) {
       worklist.pop_back();
       continue;
     }
 
-    Attribute attr = mapping.get(name);
+    Attribute attr = mapping.lookup(current);
     if (!attr)
       return std::nullopt;
 
     if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
-      resolved[name] = intAttr.getInt();
+      resolved[current] = intAttr.getInt();
       worklist.pop_back();
       continue;
     }
 
     auto exprList = cast<WaveExprListAttr>(attr);
 
-    // Push unresolved dependencies so they get processed first.
     bool pushedDeps = false;
     for (Attribute symAttr : exprList.getSymbols()) {
-      StringRef dep = cast<WaveSymbolAttr>(symAttr).getName();
+      WaveSymbolAttr dep = cast<WaveSymbolAttr>(symAttr);
       if (!resolved.contains(dep)) {
         worklist.push_back(dep);
         pushedDeps = true;
@@ -527,12 +569,11 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
     if (pushedDeps)
       continue;
 
-    // All deps resolved -- evaluate the affine expression.
     AffineMap map = exprList.getMap();
     llvm::SmallVector<AffineExpr> replacements;
     replacements.reserve(map.getNumSymbols());
     for (Attribute symAttr : exprList.getSymbols()) {
-      int64_t val = resolved[cast<WaveSymbolAttr>(symAttr).getName()];
+      int64_t val = resolved[cast<WaveSymbolAttr>(symAttr)];
       replacements.push_back(getAffineConstantExpr(val, mapping.getContext()));
     }
 
@@ -542,25 +583,25 @@ WaveHyperparameterAttr::getSymbolValue(StringRef symbolName) const {
     if (!constExpr)
       return std::nullopt;
 
-    resolved[name] = constExpr.getValue();
+    resolved[current] = constExpr.getValue();
     worklist.pop_back();
   }
 
-  auto it = resolved.find(symbolName);
+  auto it = resolved.find(symbol);
   if (it == resolved.end())
     return std::nullopt;
   return it->second;
 }
 
 int64_t
-WaveHyperparameterAttr::getKnownSymbolValue(StringRef symbolName) const {
-  std::optional<int64_t> value = getSymbolValue(symbolName);
+WaveHyperparameterAttr::getKnownSymbolValue(WaveSymbolAttr symbol) const {
+  std::optional<int64_t> value = getSymbolValue(symbol);
   assert(value && "expected symbol to exist and be resolvable");
   return *value;
 }
 
-bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
-  return getMapping().get(symbolName) != nullptr;
+bool WaveHyperparameterAttr::hasSymbol(WaveSymbolAttr symbol) const {
+  return getMapping().hasSymbol(symbol);
 }
 
 //===----------------------------------------------------------------------===//

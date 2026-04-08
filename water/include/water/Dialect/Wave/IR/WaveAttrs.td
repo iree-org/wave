@@ -491,54 +491,6 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
   }];
 }
 
-def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
-  let mnemonic = "hyperparameters";
-  let description = [{
-    This attribute contains a dictionary mapping from symbol parameters (strings)
-    to either concrete integer values or affine expressions over other symbols.
-    It is used to resolve symbolic shapes in wave.tensor types when converting
-    to memref or vector types.
-
-    Values can be:
-    - `IntegerAttr`: a concrete integer value for a base symbol.
-    - `WaveExprListAttr`: an affine expression over other symbols defined in
-      the same mapping, for derived symbols.  The expression must be a
-      single-result affine map whose sole result is a `ceildiv` of a symbol
-      by an integer constant.  All symbols referenced by the expression must
-      be defined in the same mapping, and the dividend must be evenly
-      divisible by the divisor after resolving all symbols to their concrete
-      values.
-
-    Example:
-    ```
-    #wave.hyperparameters<{M = 16 : i64, K = 128 : i64,
-      K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>,
-      K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>}>
-    ```
-  }];
-
-  let parameters = (ins "::mlir::DictionaryAttr":$mapping);
-  let assemblyFormat = "`<` $mapping `>`";
-
-  let extraClassDeclaration = [{
-    /// Get the concrete value for a symbol name, returns std::nullopt if not
-    /// found. For derived symbols (WaveExprListAttr values), the expression is
-    /// evaluated by recursively resolving the referenced symbols.
-    std::optional<int64_t> getSymbolValue(::llvm::StringRef symbolName) const;
-
-    /// Like getSymbolValue, but asserts that the symbol exists and can be
-    /// resolved.  Use when the caller has already verified the symbol is
-    /// present.
-    int64_t getKnownSymbolValue(::llvm::StringRef symbolName) const;
-
-    /// Check if a symbol exists in the mapping
-    bool hasSymbol(::llvm::StringRef symbolName) const;
-
-    /// Get the number of symbols in the mapping
-    size_t getNumSymbols() const { return getMapping().size(); }
-  }];
-}
-
 def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
   let mnemonic = "expr_list";
   let description = [{
@@ -709,6 +661,58 @@ class WaveSymbolMappingToNResultExprListAttr<int n> : Attr<
   "symbol mapping with " # n # "-result expr list values"> {
   let storageType = WaveSymbolMappingAttr.cppType;
   let returnType = WaveSymbolMappingAttr.returnType;
+}
+
+//-----------------------------------------------------------------------------
+// Hyperparameter attribute
+//-----------------------------------------------------------------------------
+
+def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
+  let mnemonic = "hyperparameters";
+  let description = [{
+    This attribute contains a mapping from `WaveSymbolAttr` keys to either
+    concrete integer values or affine expressions over other symbols.
+    It is used to resolve symbolic shapes in wave.tensor types when converting
+    to memref or vector types.
+
+    Values can be:
+    - `IntegerAttr`: a concrete integer value for a base symbol.
+    - `WaveExprListAttr`: an affine expression over other symbols defined in
+      the same mapping, for derived symbols.  The expression must be a
+      single-result affine map whose sole result is a `ceildiv` of a symbol
+      by an integer constant.  All symbols referenced by the expression must
+      be defined in the same mapping, and the dividend must be evenly
+      divisible by the divisor after resolving all symbols to their concrete
+      values.
+
+    Example:
+    ```
+    #wave.hyperparameters<@M = 16 : i64, @K = 128 : i64,
+      @K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>,
+      @K32 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 32)>>
+    ```
+  }];
+
+  let parameters = (ins "::wave::WaveSymbolMappingAttr":$mapping);
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    /// Get the concrete value for a symbol, returns std::nullopt if not
+    /// found. For derived symbols (WaveExprListAttr values), the expression is
+    /// evaluated by recursively resolving the referenced symbols.
+    std::optional<int64_t> getSymbolValue(::wave::WaveSymbolAttr symbol) const;
+
+    /// Like getSymbolValue, but asserts that the symbol exists and can be
+    /// resolved.  Use when the caller has already verified the symbol is
+    /// present.
+    int64_t getKnownSymbolValue(::wave::WaveSymbolAttr symbol) const;
+
+    /// Check if a symbol exists in the mapping.
+    bool hasSymbol(::wave::WaveSymbolAttr symbol) const;
+
+    /// Get the number of symbols in the mapping.
+    size_t getNumSymbols() const { return getMapping().getNumEntries(); }
+  }];
 }
 
 #endif // WATER_DIALECT_WAVE_WAVEATTRS

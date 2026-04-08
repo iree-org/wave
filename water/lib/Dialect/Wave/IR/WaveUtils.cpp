@@ -82,7 +82,7 @@ wave::resolveSymbolNames(llvm::ArrayRef<Attribute> symbols,
   symVals.reserve(symbols.size());
   for (Attribute attr : symbols) {
     wave::WaveSymbolAttr symbol = cast<wave::WaveSymbolAttr>(attr);
-    auto value = hyper.getSymbolValue(symbol.getName());
+    auto value = hyper.getSymbolValue(symbol);
     if (!value)
       return std::nullopt;
     symVals.push_back(*value);
@@ -108,8 +108,7 @@ wave::evaluateMapWithHyperparams(AffineMap map, ArrayRef<Attribute> symbols,
       return std::nullopt;
 
     std::optional<int64_t> value =
-        hyperparams ? hyperparams.getSymbolValue(symbol.getName())
-                    : std::nullopt;
+        hyperparams ? hyperparams.getSymbolValue(symbol) : std::nullopt;
     if (!value)
       return std::nullopt;
     symReplacements.push_back(getAffineConstantExpr(*value, map.getContext()));
@@ -265,12 +264,10 @@ LogicalResult wave::verifyHyperparameterAcyclicity(
     wave::WaveHyperparameterAttr hyperparams, MLIRContext *ctx,
     llvm::function_ref<InFlightDiagnostic()> emitError) {
   HyperparamDepGraph graph;
-  for (const NamedAttribute &entry : hyperparams.getMapping()) {
-    auto exprList = llvm::dyn_cast<wave::WaveExprListAttr>(entry.getValue());
+  for (auto [key, value] : hyperparams.getMapping().getMapping()) {
+    auto exprList = llvm::dyn_cast<wave::WaveExprListAttr>(value);
     if (!exprList)
       continue;
-    wave::WaveSymbolAttr key =
-        wave::WaveSymbolAttr::get(ctx, entry.getName().getValue());
     graph.exprListKeys.push_back(key);
     auto &edges = graph.deps[key];
     for (Attribute symAttr : exprList.getSymbols())

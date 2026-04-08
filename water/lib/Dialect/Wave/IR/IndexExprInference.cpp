@@ -2752,8 +2752,9 @@ llvm::FailureOr<ChangeResult> wave::PermuteOp::propagateIndexExprsBackward(
 // BitcastOp index expression propagation
 //-----------------------------------------------------------------------------
 
-static bool isExprListDim(DictionaryAttr mapping, wave::WaveSymbolAttr sym) {
-  Attribute attr = mapping.get(sym.getName());
+static bool isExprListDim(wave::WaveSymbolMappingAttr mapping,
+                          wave::WaveSymbolAttr sym) {
+  Attribute attr = mapping.lookup(sym);
   return llvm::isa_and_nonnull<wave::WaveExprListAttr>(attr);
 }
 
@@ -2771,7 +2772,7 @@ static SmallVector<unsigned> getScaledDimensions(wave::BitcastOp op) {
   ArrayRef<wave::WaveSymbolAttr> dstShape = dstType.getShape();
   assert(srcShape.size() == dstShape.size() &&
          "bitcast shapes must have equal rank");
-  DictionaryAttr mapping = hyper.getMapping();
+  wave::WaveSymbolMappingAttr mapping = hyper.getMapping();
   SmallVector<unsigned> scaledDims;
   for (unsigned i = 0, e = srcShape.size(); i < e; ++i) {
     if (isExprListDim(mapping, srcShape[i]) ||

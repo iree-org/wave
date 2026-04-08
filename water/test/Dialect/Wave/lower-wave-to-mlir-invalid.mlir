@@ -15,7 +15,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // expected-error @below {{LowerWaveToMLIRPass pass expects the root operation or its ancestor to guarantee the index_exprs normal form}}
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
   func.func @missing_index_exprs_normal_form(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
+    attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128>} {
     %result = wave.read %mem : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
     return
   }
@@ -26,7 +26,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @write_pattern_failure(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
+    attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128>} {
 
     %cst = arith.constant 0.0 : f16
     %reg = wave.register %cst : vector<8xf16>
@@ -50,7 +50,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
   // expected-error @below {{failed to convert starting at this operation}}
   func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
-    attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>} {
+    attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>} {
     // expected-error @below {{failed to legalize}}
     %0 = wave.read %mem index [{
       M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , <NULL>, 64)>,
