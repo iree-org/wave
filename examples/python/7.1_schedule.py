@@ -434,7 +434,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_wide_stores(
 
     Uses wide_stores=True to swap MFMA operands (B as LHS, A as RHS),
     aligning the accumulator's contiguous values with the output's stride-1
-    dimension. The coalesce_epilogue_stores pass emits v_permlane16_swap_b32
+    dimension. The coalesce_wide_stores pass emits v_permlane16_swap_b32
     + buffer_store_dwordx4 (8 bf16 per store) instead of buffer_store_short.
     """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(

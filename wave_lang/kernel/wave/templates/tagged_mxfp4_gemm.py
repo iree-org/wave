@@ -443,6 +443,8 @@ def get_tagged_mxfp4_gemm_preshuffle_b(
 
     if wide_stores:
         constraints += [tkw.IteratorBindings({m_symbol: M, n_symbol: N})]
+        constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
+        constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]
 
     if reorder_workgroups:
         new_wg0, new_wg1 = _reorder_mxfp4_workgroups(

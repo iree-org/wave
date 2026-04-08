@@ -5,7 +5,7 @@ Test wide store coalescing for preshuffle-B MXFP4 GEMM with bf16 output.
 
 When wide_stores=True, the kernel swaps MFMA operands (B as LHS, A as RHS)
 so the accumulator's 4-contiguous values align with the output's stride-1
-dimension. The coalesce_epilogue_stores pass tags eligible bf16 global
+dimension. The coalesce_wide_stores pass tags eligible bf16 global
 writes, and the codegen emits v_permlane16_swap_b32 to exchange data
 between lane pairs 16 apart, producing 8 consecutive bf16 values written
 as a single buffer_store_dwordx4.

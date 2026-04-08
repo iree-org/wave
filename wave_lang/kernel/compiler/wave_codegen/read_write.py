@@ -689,7 +689,16 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    no_masked_load_store_ops = buffer_ops_enabled
+    # With the waveasm backend (non-water path), allow masked loads even
+    # with buffer ops.  The mask computation may fail to translate
+    # (vector<Nxindex> ops are unsupported), but the backend loads
+    # unconditionally in that case, relying on hardware OOB checking
+    # (SRD boundsCheck) to return zero.  The water+waveasm path goes
+    # through TranslateFromLLVMDialect which lacks vector op support,
+    # so masked loads must stay disabled there.
+    no_masked_load_store_ops = buffer_ops_enabled and (
+        emitter.options.backend != "asm" or emitter.options.use_water_backend
+    )
 
     mask_splat = _get_splat_input(mask)
     splatted_mask = mask_splat is not None
@@ -1378,7 +1387,7 @@ def _write_permlane_pack_to_global(
         so the accumulator's 4-contiguous values align with the output
         memory's stride-1 dimension.
       - The Write node must be tagged with ``_permlane_pack_global=True``
-        by the ``coalesce_epilogue_stores`` pass.
+        by the ``coalesce_wide_stores`` pass.
 
     .. note::
         Currently assumes F32_16x16x128_F8F6F4 MMA layout (4 values
@@ -1386,6 +1395,14 @@ def _write_permlane_pack_to_global(
         MMA types requires parameterizing the lane group size and
         elements per thread.
     """
+    vec_type = insert_vector.type
+    num_elems = vec_type.shape[0] if hasattr(vec_type, "shape") else 1
+    assert num_elems == 4, (
+        f"_write_permlane_pack_to_global expects 4 bf16 elements per thread "
+        f"(F32_16x16x128_F8F6F4 MMA layout), got {num_elems}. "
+        f"Other MMA types are not yet supported."
+    )
+
     bf16_type = BF16Type.get()
     i32_type = IntegerType.get_signless(32)
     idx_type = IndexType.get()

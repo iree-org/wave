@@ -304,6 +304,7 @@ def mxfp4_gemm_progressive_roundtrip():
             "guard_g2s_with_bounds_check",
             "schedule_reordering",
             "minimize_shared_allocs",
+            "coalesce_wide_stores",
             "add_shared_memory_barriers",
             "add_cluster_barriers",
             "compute_shared_memory_usage",
