@@ -895,7 +895,7 @@ LogicalResult WaveSymbolMappingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<std::pair<WaveSymbolAttr, Attribute>> mapping) {
   llvm::SmallPtrSet<Attribute, 8> seen;
-  for (auto &[key, value] : mapping) {
+  for (auto &&[key, value] : mapping) {
     if (!seen.insert(key).second)
       return emitError() << "duplicate key: " << key;
   }
