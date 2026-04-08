@@ -15,11 +15,12 @@ Set `WAVE_WAVEASM_DIR=waveasm/build` after first build to avoid full rebuilds on
 
 ## Formatting
 
-C++ code is formatted with `clang-format`. Run via pre-commit or directly:
+C++ code is formatted with `git clang-format` which formats only the lines changed relative to a commit (default: `HEAD`)
 
 ```bash
-clang-format -i <file>          # format a single file in-place
-pre-commit run clang-format     # format all staged files
+git clang-format                # format staged changes
+git clang-format HEAD~1         # also include most recent commit
+git clang-format main           # format everything touched on your branch
 ```
 
 ## Testing

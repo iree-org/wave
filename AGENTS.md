@@ -21,13 +21,12 @@ pytest -s tests/ --run-e2e                             # GPU tests (requires har
 
 ### Linting
 ```bash
-mypy                        # type check wave_lang
-pre-commit run --all-files  # Black, Ruff, clang-format
+mypy               # type check wave_lang
+pre-commit run     # run Black, Ruff, clang-format against currently staged files
 ```
 
 ### Gotchas
 - **Always set `WAVE_CACHE_ON=0`** when testing code changes — stale cache entries hide the effect of edits: `WAVE_CACHE_ON=0 pytest ...`
-- DCO sign-off required on commits: `git commit -s`
 - Dump MLIR for debugging: `pytest --dump-mlir-files-path=/tmp/mlir tests/`
 
 ## Architecture

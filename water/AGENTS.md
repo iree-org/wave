@@ -2,26 +2,57 @@ Water is an optional MLIR layer in the Wave compiler stack that replaces IREE's 
 
 ## Building
 
-```bash
-# First build — builds LLVM from source, takes a while
-WAVE_WATER_DIR=water/build pip install -e ".[dev]"
-
-# Iterating on C++ changes
-ninja -C water/build          # rebuild changed targets only
-pip install -e ".[dev]"       # re-links Python extension (fast, skips CMake)
-```
-
-`WAVE_WATER_DIR` tells the Wave build system to use an existing build directory instead of rebuilding from scratch. Without it, the full LLVM + Water CMake build runs on every `pip install`.
+Water must be built with CMake first. `pip install` alone does not build Water — `WAVE_WATER_DIR` is required to point Wave at an existing Water build.
 
 LLVM is pinned at `water/llvm-sha.txt`. CLI tool: `water-opt` (analogous to `mlir-opt`).
 
-## Formatting
+### Step 1: Build Water with CMake
 
-C++ code is formatted with `clang-format`. Run via pre-commit or directly:
+Requires a pre-built LLVM/MLIR. Set `$BUILD_DIR` to your LLVM build or install tree.
 
 ```bash
-clang-format -i <file>          # format a single file in-place
-pre-commit run clang-format     # format all staged files
+# Configure
+cmake -G Ninja \
+      -B water/build \
+      water/ \
+      -DMLIR_DIR=$BUILD_DIR/lib/cmake/mlir \
+      -DBUILD_SHARED_LIBS=ON \
+      -DPython3_EXECUTABLE="$(which python)" \
+      -DWATER_ENABLE_PYTHON=ON
+
+# Optional: faster builds with clang + ccache + lld
+cmake -B water/build \
+      -DCMAKE_C_COMPILER=clang \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+      -DLLVM_USE_LINKER=lld
+
+# Build
+cmake --build water/build
+```
+
+### Step 2: Install Wave with Water bindings
+
+```bash
+WAVE_WATER_DIR=water/build pip install -e ".[dev]"
+```
+
+`WAVE_WATER_DIR` tells Wave where to find the Water build. Without it, Water is not included.
+
+### Iterating on C++ changes
+
+```bash
+ninja -C water/build          # rebuild changed C++ targets and Python bindings
+```
+
+## Formatting
+
+C++ code is formatted with `git clang-format` which formats only the lines changed relative to a commit (default: `HEAD`)
+```bash
+git clang-format                # format staged changes
+git clang-format HEAD~1         # also include most recent commit
+git clang-format main           # format everything touched on your branch
 ```
 
 ## Testing
