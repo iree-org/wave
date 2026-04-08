@@ -543,10 +543,6 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
-    graph_passes.append(
-        partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
-    )
-
     graph_passes += [
         partial(simplify_indices, trace, launchable.constraints),
         partial(
@@ -624,6 +620,10 @@ def build_graph_passes(
                 options.multi_buffer_count,
             )
         )
+
+    graph_passes.append(
+        partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
+    )
 
     if options.optimization_level:
         graph_passes += [
